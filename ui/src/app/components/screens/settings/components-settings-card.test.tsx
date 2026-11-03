@@ -26,6 +26,8 @@ vi.mock("../../../lib/api/health", () => ({
 }));
 
 import { HttpError } from "../../../lib/api/core";
+import { unsavedSnapshot } from "../../../lib/unsaved-registry";
+import { COMPONENTS_ADMIN as C } from "../../wardyn/copy/components-admin";
 import { ComponentsSettingsCard, settingsBody } from "./components-settings-card";
 
 const TITLE = /^Custom components/;
@@ -154,6 +156,65 @@ describe("ComponentsSettingsCard", () => {
     await userEvent.click(screen.getByRole("button", { name: TITLE }));
     await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("radio", { name: /^No restriction/ })).toBeChecked();
+  });
+
+  // UXA-74: the same compact failure block as every other Settings card, named for this card.
+  it("a failed read is a compact error block naming the card, with Retry", async () => {
+    snapshotMock.mockRejectedValue(new Error("down"));
+    renderCard();
+    await userEvent.click(screen.getByRole("button", { name: TITLE }));
+    expect(await screen.findByRole("heading", { name: "Couldn't load custom components.", level: 4 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(document.querySelector('[data-size="compact"]')).not.toBeNull();
+  });
+
+  // UXA-80: the loading spinner has a name.
+  it("the loading spinner is named", async () => {
+    snapshotMock.mockReturnValue(new Promise(() => {}));
+    renderCard();
+    await userEvent.click(screen.getByRole("button", { name: TITLE }));
+    expect(await screen.findByRole("status", { name: "Loading" })).toBeInTheDocument();
+  });
+
+  // UXA-37: leaving with an unsaved edit asks first, like Branding.
+  it("registers an unsaved edit with the leave guard, and clears it on save", async () => {
+    const card = await open();
+    expect(unsavedSnapshot()).toBeNull();
+    await userEvent.click(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" }));
+    expect(unsavedSnapshot()).toContain("Strongest sandbox required");
+    await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
+    await waitFor(() => expect(unsavedSnapshot()).toBeNull());
+  });
+
+  // UXA-7: the ETag covers the whole site-config document, so a save from another card makes this one's stale.
+  it("a 412 where this card's own settings did not change keeps the edit and says the page changed", async () => {
+    const card = await open();
+    putSiteConfigMock.mockRejectedValue(new HttpError(412, "stale"));
+    // Another card saved: the fresh document has a new ETag and the same components block.
+    snapshotMock.mockResolvedValue({ siteConfig: { upstream_proxy_url: "http://p", macos_vm: { max_base_age_days: 9 } }, etag: '"v3"' });
+    await userEvent.click(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
+    expect(await within(card).findByRole("status")).toHaveTextContent(C.SETTINGS_STALE_KEPT);
+    expect(within(card).queryByText(C.SETTINGS_SAVED_ELSEWHERE)).toBeNull();
+    // The edit is still there and still unsaved, and saving again goes out on the new ETag.
+    expect(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" })).toBeChecked();
+    putSiteConfigMock.mockClear();
+    putSiteConfigMock.mockImplementation((cfg: object) => Promise.resolve({ siteConfig: cfg, etag: '"v4"', danglingSecretRefs: [], onboardingCompletedAtIgnored: false, appliesFrom: "", sourcesNoLongerAdmitted: null }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
+    await waitFor(() => expect(putSiteConfigMock).toHaveBeenCalledTimes(1));
+    expect(putSiteConfigMock.mock.calls[0][1]).toBe('"v3"');
+    expect(putSiteConfigMock.mock.calls[0][0].components).toEqual({ require_vault_for_credentials: true });
+  });
+
+  it("a 412 where this card's own settings really changed still says someone else changed them, and shows theirs", async () => {
+    const card = await open();
+    putSiteConfigMock.mockRejectedValue(new HttpError(412, "stale"));
+    snapshotMock.mockResolvedValue({ siteConfig: { components: { autonomy_cap: "L0" } }, etag: '"v3"' });
+    await userEvent.click(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
+    expect(await within(card).findByRole("status")).toHaveTextContent(C.SETTINGS_SAVED_ELSEWHERE);
+    expect(within(card).getByRole("radio", { name: /^Never/ })).toBeChecked();
+    expect(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" })).not.toBeChecked();
   });
 
   it("who may define their own is a link to Permissions, not a second switch", async () => {

@@ -58,9 +58,10 @@ export function MacOSVMSettingsCard() {
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
+  const [staleKept, setStaleKept] = React.useState(false);
 
-  // The 412 path reloads too, which also drops the stale draft.
-  const load = React.useCallback(() => {
+  // The 412 path reloads too. It resolves to the card's settings just read, or null if the read failed.
+  const load = React.useCallback((): Promise<{ text: string; watch: boolean } | null> => {
     return health
       .getSiteConfigSnapshot()
       .then(({ siteConfig, etag: tag }) => {
@@ -72,8 +73,12 @@ export function MacOSVMSettingsCard() {
         setSavedWatch(watchOf(siteConfig.macos_vm));
         setWatch(watchOf(siteConfig.macos_vm));
         setState("ready");
+        return { text: next, watch: watchOf(siteConfig.macos_vm) };
       })
-      .catch(() => setState("failed"));
+      .catch(() => {
+        setState("failed");
+        return null;
+      });
   }, []);
   React.useEffect(() => {
     void load();
@@ -88,6 +93,7 @@ export function MacOSVMSettingsCard() {
     setSaving(true);
     setRefused(null);
     setSavedElsewhere(false);
+    setStaleKept(false);
     try {
       const result = await health.putSiteConfig({ ...base, macos_vm: macosVMBody(base.macos_vm, parsed, watch) }, etag);
       const next = textOf(result.siteConfig.macos_vm);
@@ -100,8 +106,16 @@ export function MacOSVMSettingsCard() {
       toast.success(T.SAVED_TOAST);
     } catch (e) {
       if (e instanceof HttpError && e.status === 412) {
-        await load();
-        setSavedElsewhere(true);
+        // The ETag covers the whole site-config document, so another card's save also lands here. Only a change to
+        // THIS card's block is "someone else"; otherwise the person's edit goes back on the fresh document.
+        const fresh = await load();
+        if (fresh && fresh.text === saved && fresh.watch === savedWatch) {
+          setDraft(draft);
+          setWatch(watch);
+          setStaleKept(true);
+        } else {
+          setSavedElsewhere(true);
+        }
       } else if (e instanceof HttpError && e.status === 400) {
         setRefused(e.message);
       } else {
@@ -159,6 +173,11 @@ export function MacOSVMSettingsCard() {
           {savedElsewhere && (
             <p role="status" className="my-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
               {C.SETTINGS_SAVED_ELSEWHERE}
+            </p>
+          )}
+          {staleKept && (
+            <p role="status" className="my-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+              {C.SETTINGS_STALE_KEPT}
             </p>
           )}
           {refused && (

@@ -322,8 +322,9 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
     const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
     const card = within(heading.closest("section")!);
     await expandCard(ADMIN_SSH_KEYS.TITLE);
-    expect(await card.findByText("Something went wrong")).toBeInTheDocument();
-    expect(card.getAllByText("Something went wrong")).toHaveLength(1);
+    expect(await card.findByText(ADMIN_SSH_KEYS.LOAD_FAILED_TITLE)).toBeInTheDocument();
+    expect(card.getAllByText(ADMIN_SSH_KEYS.LOAD_FAILED_TITLE)).toHaveLength(1);
+    expect(card.queryByText("Something went wrong")).toBeNull();
   });
 });
 
@@ -644,5 +645,89 @@ describe("AdminSettingsScreen — the shell's no-barrier Re-check (#3342)", () =
     const reads = getSetupStatusMock.mock.calls.length;
     await userEvent.setup({ pointerEventsCheck: 0 }).click(screen.getByRole("button", { name: HOST_CARD.RECHECK }));
     await waitFor(() => expect(getSetupStatusMock.mock.calls.length).toBeGreaterThan(reads));
+  });
+});
+
+// rc.12 admin settings pass: UXA-2, 32, 34, 39, 77.
+describe("AdminSettingsScreen — an unreachable daemon is an error, not host facts (UXA-2)", () => {
+  it("shows Couldn't reach Wardyn with Retry, and none of the made-up Host facts", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ unreachable: true, runner: { driver: "none", confinement_classes: [] } }));
+    renderScreen();
+    expect(await screen.findByText(HOST_CARD.UNREACHABLE_TITLE)).toBeInTheDocument();
+    expect(HOST_CARD.UNREACHABLE_TITLE).toBe("Couldn't reach Wardyn");
+    expect(screen.getByText("Settings didn't get an answer, so nothing here would be accurate. Try again in a moment.")).toBeInTheDocument();
+    expect(screen.queryByText(HOST_CARD.CANT_LAUNCH)).toBeNull();
+    expect(screen.queryByText(/No barrier installed/)).toBeNull();
+    expect(screen.queryByTestId("host-card")).toBeNull();
+    // Retry reads again and the page comes back once the daemon answers.
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { name: startsWith("Host"), level: 3 })).toBeInTheDocument();
+  });
+});
+
+describe("AdminSettingsScreen — the Host card on Kubernetes (UXA-32)", () => {
+  it("a k8s cluster with no barrier gets the k8s fix line, not the Docker daemon one", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "k8s", confinement_classes: [] } }));
+    renderScreen();
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
+    expect(screen.getByText(/this cluster reports no barrier/)).toBeInTheDocument();
+    expect(screen.queryByText(/start the Docker daemon/)).toBeNull();
+  });
+});
+
+describe("AdminSettingsScreen — Re-check says it is working (UXA-34)", () => {
+  it("asks with recheck:true, disables the button while it runs, then says Checked just now", async () => {
+    renderScreen();
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
+    let release: (s: unknown) => void = () => {};
+    getSetupStatusMock.mockReturnValue(new Promise((r) => (release = r)));
+    await userEvent.click(screen.getByRole("button", { name: HOST_CARD.RECHECK }));
+    expect(getSetupStatusMock).toHaveBeenLastCalledWith({ recheck: true });
+    const busy = screen.getByRole("button", { name: HOST_CARD.RECHECKING });
+    expect(busy).toBeDisabled();
+    expect(screen.queryByText(HOST_CARD.CHECKED_JUST_NOW)).toBeNull();
+    await act(async () => release(baseStatus()));
+    expect(await screen.findByText(HOST_CARD.CHECKED_JUST_NOW)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: HOST_CARD.RECHECK })).toBeEnabled();
+  });
+
+  it("the first load does not ask for a fresh read", async () => {
+    renderScreen();
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    expect(getSetupStatusMock).toHaveBeenCalledWith();
+    expect(getSetupStatusMock).not.toHaveBeenCalledWith({ recheck: true });
+  });
+});
+
+describe("AdminSettingsScreen — a failing notification channel stands out while collapsed (UXA-39)", () => {
+  it("shows the Needs attention pill on Approval notifications only when a channel is failing", async () => {
+    getApprovalNotifyStatusMock.mockResolvedValue({
+      channels: [{ id: "slack", kind: "slack", failed_last_hour: 2, last_error: "boom" }],
+    });
+    renderScreen();
+    expect(await screen.findByTestId("approval-notify-card-status")).toHaveTextContent(CARD_STATUS.NEEDS_ATTENTION);
+  });
+
+  it("shows no pill when every channel is healthy", async () => {
+    getApprovalNotifyStatusMock.mockResolvedValue({
+      channels: [{ id: "slack", kind: "slack", failed_last_hour: 0 }],
+    });
+    renderScreen();
+    await screen.findByTestId("approval-notify-card");
+    await waitFor(() => expect(getApprovalNotifyStatusMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("approval-notify-card-status")).toBeNull();
+  });
+});
+
+describe("AdminSettingsScreen — group names are headings (UXA-77)", () => {
+  it("renders each group name as an h2, above the h3 card titles", async () => {
+    renderScreen();
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    for (const name of [SETTINGS_GROUPS.HOST, SETTINGS_GROUPS.CONNECTIONS, SETTINGS_GROUPS.PEOPLE]) {
+      expect(screen.getByRole("heading", { name, level: 2 })).toBeInTheDocument();
+    }
   });
 });
