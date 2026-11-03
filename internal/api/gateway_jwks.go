@@ -6,13 +6,16 @@ package api
 import (
 	"log/slog"
 	"net/http"
-	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 )
 
+// wellKnownPrefix is the path mountUI answers with a plain 404 for anything the
+// console's directory does not hold.
+const wellKnownPrefix = "/.well-known"
+
 // gatewayJWKSRoute is the key set's path. Experimental until 0.11.
-const gatewayJWKSRoute = "/.well-known/wardyn-experimental/gateway-jwks.json"
+const gatewayJWKSRoute = wellKnownPrefix + "/wardyn-experimental/gateway-jwks.json"
 
 // handleGatewayJWKS serves the public keys an AI gateway verifies a run identity
 // token with. Anonymous by design: the gateway holds no Wardyn credential, and
@@ -48,15 +51,10 @@ func (s *Server) handleGatewayJWKS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if signer == nil {
-		// What mountUI's GET /* gives a path naming no file, or the router's 404
-		// without a console. Other methods never reach here: chi's 405 with a
-		// console, mountUI's NotFound without one.
-		if s.cfg.UIDir == "" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Cache-Control", "no-cache")
-		s.serveIndex(w, r, filepath.Join(s.cfg.UIDir, "index.html"))
+		// What mountUI's GET /* gives any /.well-known/ path naming no file, or the
+		// router's 404 without a console. Other methods never reach here: chi's
+		// 405 with a console, mountUI's NotFound without one.
+		http.NotFound(w, r)
 		return
 	}
 	body, err := signer.JWKS()
