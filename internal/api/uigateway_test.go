@@ -271,7 +271,11 @@ func newUIHarness(t *testing.T, backend http.Handler) *uiHarness {
 	})
 
 	h.runner.execFn = func(spec runner.ExecSpec) (*runner.ExecSession, error) {
-		switch spec.Argv[0] {
+		relay := spec.Argv[0]
+		if len(spec.Argv) > 1 && spec.Argv[1] == "forward" {
+			relay = "socat" // a VM's relay: the guest agent's forward mode
+		}
+		switch relay {
 		case "sh": // the launcher probe
 			code := h.launcher
 			return &runner.ExecSession{Wait: func() (int, error) { return code, nil }}, nil
