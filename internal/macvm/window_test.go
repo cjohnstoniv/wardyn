@@ -522,6 +522,7 @@ func TestWindowLockDuringOpenIsRefusedAsALock(t *testing.T) {
 	}{
 		{fmt.Errorf("check: %w", macvm.ErrNotAtMac), macvm.WindowCodeNotAtMac, macvm.WindowNotAtMacSentence},
 		{fmt.Errorf("check: %w", macvm.ErrLockUnknown), macvm.WindowCodeLockUnknown, macvm.WindowLockUnknownSentence},
+		{fmt.Errorf("check: %w", macvm.ErrConsoleUnreadable), macvm.WindowCodeNotAtMac, macvm.WindowUnreadableSentence},
 	} {
 		w := startWindowRun(t, true, func(_ *windowEngine, s *fakeScreen) { s.openErr = tc.err })
 		_, err := w.client(t).Window(context.Background(), "grant-1", "")
