@@ -402,8 +402,8 @@ type Sandbox struct {
 	// (macvm.RFBShim.DesktopForcedViewOnly), not an echo of SandboxSpec.DesktopViewOnly. False from
 	// anything else, or a runner or helper that predates it.
 	DesktopForcedViewOnly bool `json:",omitempty"`
-	// KeptScrub is what the stop scrub made of a kept machine's disk, set on the stop that ends its
-	// session; nil for any other sandbox, or a runner that predates kept machines.
+	// KeptScrub is what the boot scrub made of a kept machine's disk, set at create from the boot scrub;
+	// nil for any other sandbox, or a runner that predates kept machines.
 	KeptScrub *KeptScrub `json:",omitempty"`
 }
 
