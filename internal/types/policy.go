@@ -211,9 +211,9 @@ type RunPolicySpec struct {
 	AzureDevOpsCapabilities []adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
 	// GitHubCapabilities is AzureDevOpsCapabilities' GitHub twin, with the same meaning: THIS
 	// run's GitHub capabilities in place of the GitHub provider row's default_profile, chosen only
-	// within the row's capability_ceiling. Empty/absent keeps the row's default_profile. Nothing
-	// reads it yet — the row block and the lanes that honour it land after this field — so today
-	// it is stored, narrowed and compared, and inert at dispatch.
+	// within the row's capability_ceiling. Empty/absent keeps the row's default_profile. The git
+	// lane reads it: a list without code_write withholds the run's pushes to github.com (its tokens
+	// are read-only and the proxy refuses the push).
 	GitHubCapabilities []ghscope.Capability `json:"github_capabilities,omitempty"`
 	// HarnessInnerWalls chooses the harness's own walls inside Wardyn's: its sandbox and where its
 	// approvals happen (#2822). Nil keeps what the run's harness, lane and autonomy level give today.

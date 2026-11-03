@@ -19,10 +19,12 @@ import (
 // GitHub, or for Azure DevOps, leave out code_write.
 type gitPushWithheld struct{ github, ado bool }
 
-// gitPushWithheldFor reads the decision at create and at the queue's start. Effective is the
-// policy's list as the run owner's walls met it, or the walls' own list where the policy names
-// none: the git lanes have no provider default the walls could meet instead. Walls that cannot be
-// read refuse the run, as the capability meet's do.
+// gitPushWithheldFor reads the decision at create and at the queue's start (wireRunGrants runs at
+// both, so the walls read here are the run owner's current ones). Effective is the policy's list
+// where it names one, else the walls' own list: the git lanes have no provider default the walls
+// could meet instead. Where both name a list the push needs code_write in both, which at create is
+// the meet personalWallsRunStep already made and at the queue's start catches walls saved since.
+// Walls that cannot be read refuse the run, as the capability meet's do.
 func (s *Server) gitPushWithheldFor(ctx context.Context, run types.AgentRun, spec types.RunPolicySpec) (gitPushWithheld, *runRefusal) {
 	walls, err := s.personalWalls(ctx, run.CreatedBy)
 	if err != nil {
@@ -37,13 +39,10 @@ func (s *Server) gitPushWithheldFor(ctx context.Context, run types.AgentRun, spe
 }
 
 func pushWithheldBy[C ~string](policy []C, wall *[]C, write C) bool {
-	switch {
-	case len(policy) > 0:
-		return !slices.Contains(policy, write)
-	case wall != nil:
-		return !slices.Contains(*wall, write)
+	if len(policy) > 0 && !slices.Contains(policy, write) {
+		return true
 	}
-	return false
+	return wall != nil && !slices.Contains(*wall, write)
 }
 
 // hosts is the proxy's GitPushWithheld: github.com for the GitHub App lane, and each Azure DevOps

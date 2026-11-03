@@ -71,7 +71,7 @@ func TestWallsWithoutCodeWriteWithholdGitHubPushes(t *testing.T) {
 	}
 }
 
-// The policy's list decides where it names one; the walls' list only where it names none.
+// A push needs code_write in the policy's list where it names one and in the walls' list where they name one.
 func TestPushWithheldBy(t *testing.T) {
 	read, write := adoscope.CapCodeRead, adoscope.CapCodeWrite
 	for _, tc := range []struct {
@@ -82,7 +82,10 @@ func TestPushWithheldBy(t *testing.T) {
 	}{
 		{"neither names a list", nil, nil, false},
 		{"the policy leaves out code_write", []adoscope.Capability{read}, nil, true},
-		{"the policy keeps code_write", []adoscope.Capability{read, write}, &[]adoscope.Capability{read}, false},
+		{"the policy keeps code_write but the walls leave it out", []adoscope.Capability{read, write}, &[]adoscope.Capability{read}, true},
+		{"the policy and the walls both keep code_write", []adoscope.Capability{read, write}, &[]adoscope.Capability{read, write}, false},
+		{"the queue's start finds walls saved since create without code_write", []adoscope.Capability{write}, &[]adoscope.Capability{}, true},
+		{"the policy keeps code_write and no walls name a list", []adoscope.Capability{read, write}, nil, false},
 		{"the walls leave it out where the policy names none", nil, &[]adoscope.Capability{read}, true},
 		{"the walls keep it", nil, &[]adoscope.Capability{write}, false},
 	} {
