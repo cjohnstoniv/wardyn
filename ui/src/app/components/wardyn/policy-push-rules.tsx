@@ -10,10 +10,10 @@
 // than tool_rules' object rows, so each gets its own add/remove list rather
 // than tool_rules' named-vs-default split.
 //
-// The two reserved PushRulesSpec fields (deny_new_executables,
-// max_file_size_mib) are not on the wire type yet — its own Go doc comment
-// says so — so this editor never authors them. When they land, they get their
-// own mock round rather than a quiet addition here.
+// This editor authors deny_paths, require_review_paths, max_inspect_pack_mib
+// and hold_seconds only. Every other PushRulesSpec field (deny_new_executables,
+// max_file_size_mib, deny_all) is kept as stored: an edit here never drops a
+// rule the card does not show.
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { GrantSpec, PushRulesSpec, RunPolicySpec } from "../../lib/types";
@@ -189,7 +189,12 @@ function withPushRules(
   hold: number,
 ): RunPolicySpec {
   const nonBlank = (list: readonly string[]) => list.filter((p) => p.trim() !== "");
-  const pr: PushRulesSpec = {};
+  // Start from what is stored, so a field this card does not edit survives.
+  const pr: PushRulesSpec = { ...spec.push_rules };
+  delete pr.deny_paths;
+  delete pr.require_review_paths;
+  delete pr.max_inspect_pack_mib;
+  delete pr.hold_seconds;
   const cleanDeny = nonBlank(deny);
   const cleanReview = nonBlank(review);
   if (cleanDeny.length) pr.deny_paths = cleanDeny;

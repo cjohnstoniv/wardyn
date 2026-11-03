@@ -249,6 +249,15 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(current.push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
   });
 
+  it("keeps the fields it does not edit: a stored deny_all, deny_new_executables and max_file_size_mib survive an added deny path", async () => {
+    let current: RunPolicySpec = BASE;
+    const stored = { deny_all: true, deny_new_executables: true, max_file_size_mib: 8 };
+    render(<Harness initial={{ ...BASE, push_rules: stored }} capture={(next) => (current = next)} />);
+    await user.click(within(denySection()).getByRole("button", { name: "Add path" }));
+    setField(screen.getByLabelText("Deny path 1"), "secrets/**");
+    expect(current.push_rules).toEqual({ ...stored, deny_paths: ["secrets/**"] });
+  });
+
   it("removes a row and drops the key entirely when the document is back to nothing", async () => {
     let current: RunPolicySpec = BASE;
     render(
