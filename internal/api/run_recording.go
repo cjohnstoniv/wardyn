@@ -91,17 +91,34 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 // recordingChoice is what applyRunRecording resolves the run's level from: its policy's level (already
 // raised to its ceiling's), its ceiling, and the organisation's level. A member's run with no stored
 // policy runs their inline policy (or the ceiling itself). An organisation document that cannot be read
-// is taken as terminal, locked: the run is recorded at least as it was before levels.
-func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) types.RecordingChoice {
+// is taken as terminal, locked: the run is recorded at least as it was before levels. wallsFloor is the
+// run owner's walls' recording floor (wallsRecordingFloor), applied after the organisation's default.
+func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error, wallsFloor types.RecordingLevel) types.RecordingChoice {
 	org := site.Recording
 	if siteErr != nil {
 		org = &types.SiteRecording{Level: types.RecordingTerminal, Locked: true}
 	}
-	choice := types.RecordingChoice{Policy: policy.Recording, MemberAuthored: c.recordingBound && run.PolicyID == nil, Org: org}
+	choice := types.RecordingChoice{Policy: policy.Recording, MemberAuthored: c.recordingBound && run.PolicyID == nil, Org: org, WallsFloor: wallsFloor}
 	if c.recordingBound {
 		choice.Ceiling, choice.CeilingBy = c.recording, c.profile
 	}
 	return choice
+}
+
+// applyDispatchRecording is applyRunRecording over recordingChoice with the run owner's walls' recording
+// floor read in. Walls that cannot be read refuse the run (false, the run failed): it is never recorded
+// at a lower level than they ask.
+func (s *Server) applyDispatchRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) bool {
+	floor, err := s.wallsRecordingFloor(ctx, *run)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read the run owner's walls for the recording floor; the run is refused",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "your walls could not be read, so the run's recording level cannot be set; walls that cannot be read refuse the run")
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "read the run owner's walls"})))
+		return false
+	}
+	return s.applyRunRecording(ctx, run, spec, recordingChoice(*run, policy, c, site, siteErr, floor))
 }
 
 // keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit.
@@ -320,6 +337,8 @@ func macOSVMRecordingRefusal(choice types.RecordingChoice) string {
 		return "Recording is required" + tail
 	case types.RecordingFloorOrgLocked:
 		return fmt.Sprintf("Your organisation's recording level, %s, is locked%s", recordingLevelLabel(choice.Org.OrgLevel()), tail)
+	case types.RecordingFloorWalls:
+		return fmt.Sprintf("Your walls set recording to at least %s%s", recordingLevelLabel(choice.WallsFloor), tail)
 	}
 	if choice.CeilingBy == "" {
 		return fmt.Sprintf("Your organisation's default policy sets recording to %s%s", recordingLevelLabel(choice.Ceiling), tail)

@@ -209,6 +209,44 @@ func TestApplyRunRecording_MacOSVMIsANonRecordingTarget(t *testing.T) {
 	}
 }
 
+// A run under its owner's recording wall is never started below it: a container or a Linux VM run on a
+// runner that records is raised to the wall's level, and a macOS VM run, which cannot be recorded, is
+// held at dispatch with the walls' sentence.
+func TestApplyRunRecording_WallsFloorByMachineKind(t *testing.T) {
+	records := uuid.New()
+	for _, tc := range []struct {
+		name string
+		kind types.MachineKind
+		held bool
+	}{
+		{"a container", types.MachineContainer, false},
+		{"a Linux VM", types.MachineLinuxVM, false},
+		{"a macOS VM", types.MachineMacOSVM, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &recordingReadFake{}
+			s := &Server{cfg: Config{RecordingStore: fsRecordingStore(t), Store: st,
+				Runner: &poolRunner{fakeRunner: &fakeRunner{}, runnerFacts: map[string]runner.TargetFacts{records.String(): {Records: true}}}}}
+			run := types.AgentRun{ID: uuid.New(), RunnerID: &records, MachineKind: tc.kind}
+			choice := types.RecordingChoice{Policy: types.RecordingOff, WallsFloor: types.RecordingScreenActions}
+			if tc.held {
+				// The hold applyRunRecording takes for a macOS VM (its failAndRevoke is pinned elsewhere).
+				if msg, held := s.macOSVMRecordingHold(context.Background(), &run, choice); !held || !strings.HasPrefix(msg, "Your walls set recording to at least Screen and actions") {
+					t.Fatalf("(%q, %v), want held with the walls' sentence", msg, held)
+				}
+				return
+			}
+			var spec runner.SandboxSpec
+			if !s.applyRunRecording(context.Background(), &run, &spec, choice) {
+				t.Fatal("dispatch held a run that can be recorded")
+			}
+			if spec.Record == nil || !*spec.Record || run.RecordingLevel != types.RecordingScreenActions {
+				t.Fatalf("record=%v level=%q, want recorded at %q", spec.Record, run.RecordingLevel, types.RecordingScreenActions)
+			}
+		})
+	}
+}
+
 // A macOS VM run is held at dispatch under the same causes create refuses it for, with the same
 // sentence, and a requirement that cannot be read holds it too. Nothing that is only a default holds it.
 func TestMacOSVMRecordingHold(t *testing.T) {
@@ -227,6 +265,8 @@ func TestMacOSVMRecordingHold(t *testing.T) {
 			"Your organisation's recording level, Terminal, is locked" + macOSNoRecording},
 		{"ceiling level", recordingReadFake{}, types.RecordingChoice{Ceiling: types.RecordingTerminal, CeilingBy: "Platform"},
 			"Your governance profile Platform sets recording to Terminal" + macOSNoRecording},
+		{"the owner's walls", recordingReadFake{}, types.RecordingChoice{WallsFloor: types.RecordingTerminal},
+			"Your walls set recording to at least Terminal" + macOSNoRecording},
 		{"requirement unreadable", recordingReadFake{orgErr: boom}, types.RecordingChoice{}, runnerpool.RecordingSettingUnreadableMsg()},
 	} {
 		s := &Server{cfg: Config{Store: &tc.fake}}

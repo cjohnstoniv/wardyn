@@ -68,7 +68,8 @@
 # docs/POLICIES.md 21137 = 21087 + 50, measured: the unattended cut and the git-printed refusal (#3921)
 # docs/POLICIES.md 21212 = 21137 + 75, measured: deletions at a review path are not held (#3921)
 # docs/POLICIES.md 21248 over 21212: measured, review-path removals named at the rc.10 W2+ merge.
-docs/POLICIES.md=21248 share=12
+# docs/POLICIES.md 21487 adds 239 over 21248, measured: personal walls gain six narrowing knobs (capability lists, tool rules, push deny paths, recording floor, auto-stop cap).
+docs/POLICIES.md=21491 share=12
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.

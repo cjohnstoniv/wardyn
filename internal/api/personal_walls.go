@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -39,6 +40,11 @@ const (
 	maxWallsDomains = 64
 	// maxWallsWithheld caps the credentials a person keeps out.
 	maxWallsWithheld = 16
+	// maxWallsDenyPaths caps the push deny list a person adds.
+	maxWallsDenyPaths = 64
+	// maxWallsCapabilities caps each capability list; the closed sets are far smaller, so this only
+	// bounds a list that repeats itself.
+	maxWallsCapabilities = 64
 
 	auditWallsSet    = "person.walls.set"
 	auditWallsDelete = "person.walls.delete"
@@ -188,12 +194,28 @@ func wallsAuditData(sp types.PersonalWallsSpec) map[string]any {
 		knobs = append(knobs, "denied_domains")
 		data["denied_domains"] = len(*sp.DeniedDomains)
 	}
+	for _, l := range []struct {
+		name string
+		n    int
+		set  bool
+	}{
+		{"azure_devops_capabilities", wallsLen(sp.AzureDevOpsCapabilities), sp.AzureDevOpsCapabilities != nil},
+		{"github_capabilities", wallsLen(sp.GitHubCapabilities), sp.GitHubCapabilities != nil},
+		{"tool_rules", wallsLen(sp.ToolRules), sp.ToolRules != nil && len(*sp.ToolRules) > 0},
+		{"push_rules.deny_paths", wallsLen(sp.AddedDenyPaths()), sp.AddedDenyPaths() != nil},
+	} {
+		if l.set {
+			knobs = append(knobs, l.name)
+			data[l.name] = l.n
+		}
+	}
 	for _, k := range []struct {
 		name string
 		set  bool
 	}{
 		{"allow_all_egress", sp.AllowAllEgress != nil}, {"first_use_approval", sp.FirstUseApproval != nil},
 		{"min_confinement_class", sp.MinConfinementClass != nil}, {"desktop", sp.Desktop != nil},
+		{"recording", sp.Recording != nil}, {"auto_stop_after_sec", sp.AutoStopAfterSec != nil},
 	} {
 		if k.set {
 			knobs = append(knobs, k.name)
@@ -252,6 +274,9 @@ func validatePersonalWalls(sp types.PersonalWallsSpec) error {
 			}
 		}
 	}
+	if err := validateWallsNarrowing(sp); err != nil {
+		return err
+	}
 	if len(sp.WithheldGrants) > maxWallsWithheld {
 		return fmt.Errorf("withheld_grants: %d entries exceeds the %d-entry limit", len(sp.WithheldGrants), maxWallsWithheld)
 	}
@@ -268,6 +293,68 @@ func validatePersonalWalls(sp types.PersonalWallsSpec) error {
 		}
 	}
 	return nil
+}
+
+// validateWallsNarrowing is validatePersonalWalls for the capability lists, tool rules, push deny paths,
+// recording floor and auto-stop cap, each held to what the composer's meet can only narrow with. It
+// reuses the policy writer's own checks (capability catalogues, validateToolRules, validatePushRules).
+func validateWallsNarrowing(sp types.PersonalWallsSpec) error {
+	if l := sp.AzureDevOpsCapabilities; l != nil {
+		if len(*l) == 0 || len(*l) > maxWallsCapabilities {
+			return fmt.Errorf("azure_devops_capabilities: name between 1 and %d capabilities, or leave it out", maxWallsCapabilities)
+		}
+		if err := validateADOCapabilities(*l); err != nil {
+			return err
+		}
+	}
+	if l := sp.GitHubCapabilities; l != nil {
+		if len(*l) == 0 || len(*l) > maxWallsCapabilities {
+			return fmt.Errorf("github_capabilities: name between 1 and %d capabilities, or leave it out", maxWallsCapabilities)
+		}
+		for i, c := range *l {
+			if !c.Grantable() {
+				return fmt.Errorf("github_capabilities[%d]: %q is not a grantable GitHub capability — want one of: %s", i, string(c), ghscope.GrantableCapabilityList())
+			}
+		}
+	}
+	if sp.ToolRules != nil {
+		if err := validateToolRules(*sp.ToolRules); err != nil {
+			return err
+		}
+		for i, r := range *sp.ToolRules {
+			if r.Effect == types.ToolAllow {
+				return fmt.Errorf("tool_rules[%d]: walls only hold or deny a tool; %q cannot be allowed", i, r.Tool)
+			}
+		}
+	}
+	if sp.PushRules != nil && sp.PushRules.DenyPaths != nil {
+		if len(*sp.PushRules.DenyPaths) > maxWallsDenyPaths {
+			return fmt.Errorf("push_rules.deny_paths: %d entries exceeds the %d-entry limit", len(*sp.PushRules.DenyPaths), maxWallsDenyPaths)
+		}
+		if err := validatePushRulePaths("deny_paths", *sp.PushRules.DenyPaths); err != nil {
+			return err
+		}
+	}
+	if r := sp.Recording; r != nil {
+		switch {
+		case r.Rank() == 0:
+			return fmt.Errorf("recording: %q is not terminal or screen_actions", string(*r))
+		case *r == types.RecordingOff:
+			return errors.New("recording: off is no floor, so it narrows nothing; set terminal or screen_actions, or leave it out")
+		}
+	}
+	if v := sp.AutoStopAfterSec; v != nil && *v <= 0 {
+		return fmt.Errorf("auto_stop_after_sec: %d is not a cap; use a number of seconds above zero (zero or less means never stop)", *v)
+	}
+	return nil
+}
+
+// wallsLen is the length of a typed-presence list, 0 when it is absent.
+func wallsLen[T any](l *[]T) int {
+	if l == nil {
+		return 0
+	}
+	return len(*l)
 }
 
 // wallsHost is a site a person may list: the hosts.add_denied rule (run_contract.go), a DNS name or a
@@ -346,21 +433,72 @@ func (s *Server) personalWallsRunStep(ctx context.Context, spec *types.RunPolicy
 			}
 		}
 		met.EligibleGrants = kept
+		s.wallsBeyondMeet(&met, *spec, walls)
 		*spec = met
 	})
+	var unmet *composer.OverlayError
+	if errors.As(err, &unmet) && unmet.Reason == composer.ReasonOverlayUnsatisfiable {
+		return nil, runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
+			"Your walls and this run's policy leave "+unmet.Field+" nothing in common: "+unmet.Detail+". Change your walls with `wardyn walls`, or in Settings.")
+	}
 	if err != nil {
 		return nil, runServerError("meet your walls", err)
 	}
-	rec := newWallsSource(before, *spec)
-	if rec == nil {
-		return nil, nil
+	var warns []string
+	if rec := newWallsSource(before, *spec); rec != nil {
+		source.PersonalWalls = rec
+		for _, knob := range rec.Narrowed {
+			warns = append(warns, "your walls narrowed "+knob)
+		}
 	}
-	source.PersonalWalls = rec
-	warns := make([]string, 0, len(rec.Narrowed))
-	for _, knob := range rec.Narrowed {
-		warns = append(warns, "your walls narrowed "+knob)
+	return append(warns, wallsCapabilityNoOps(before, walls)...), nil
+}
+
+// wallsCapabilityNoOps names a capability list in the walls that did nothing because the run's policy
+// names no list to narrow (the provider row's default profile applies, which a list cannot be proven
+// within). before is the policy the meet started from.
+func wallsCapabilityNoOps(before types.RunPolicySpec, walls types.PersonalWallsSpec) []string {
+	var warns []string
+	if walls.AzureDevOpsCapabilities != nil && len(before.AzureDevOpsCapabilities) == 0 {
+		warns = append(warns, "your walls' azure_devops_capabilities did not apply: this run's policy names no list")
 	}
-	return warns, nil
+	if walls.GitHubCapabilities != nil && len(before.GitHubCapabilities) == 0 {
+		warns = append(warns, "your walls' github_capabilities did not apply: this run's policy names no list")
+	}
+	return warns
+}
+
+// wallsBeyondMeet applies to met what the meet alone would place wrongly; before is the policy the meet
+// started from.
+//   - tool_rules: each rule is ADDED by narrowToolRule, as a run override's is (a hold or deny only, and
+//     only where it is stricter than the tool's effect today). The meet would spell out the "*" default
+//     as hold, which tightens every tool the person did not name on a run whose lane lets them run.
+//   - recording: a policy that names no level reads as the organisation's, so a floor met into it would
+//     replace that default with the lower floor. It is left naming none, and the floor is applied at
+//     dispatch (wallsRecordingFloor), after the organisation's default is known. A policy that names a
+//     level keeps the meet's: the higher of the two.
+func (s *Server) wallsBeyondMeet(met *types.RunPolicySpec, before types.RunPolicySpec, walls types.PersonalWallsSpec) {
+	if walls.ToolRules != nil {
+		for _, nr := range *walls.ToolRules {
+			if next, _, applied := narrowToolRule(met.ToolRules, nr); applied {
+				met.ToolRules = next
+			}
+		}
+	}
+	if walls.Recording != nil && before.Recording == "" {
+		met.Recording = ""
+	}
+}
+
+// wallsRecordingFloor is the recording level the run owner's walls ask for, read at dispatch; empty when
+// they name none or the run has no owner. An error means the walls cannot be read: the caller refuses the
+// run, as the create does.
+func (s *Server) wallsRecordingFloor(ctx context.Context, run types.AgentRun) (types.RecordingLevel, error) {
+	walls, err := s.personalWalls(ctx, run.CreatedBy)
+	if err != nil || walls.Recording == nil {
+		return "", err
+	}
+	return *walls.Recording, nil
 }
 
 // personalWallsSealLayer is the run owner's walls as a seal layer: their denies, the desktop

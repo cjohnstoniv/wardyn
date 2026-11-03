@@ -49,7 +49,16 @@ interface Form {
   blocked: Record<Direction, boolean>;
   withheld: WithheldGrant[];
   allowAllOff: boolean;
+  // The knobs the card has no control for (capability lists, tool and push rules, recording, auto-stop):
+  // kept as fetched, since a save replaces the whole document.
+  carried: PersonalWallsSpec;
 }
+
+const carriedKnobs = (s: PersonalWallsSpec): PersonalWallsSpec => {
+  const { azure_devops_capabilities, github_capabilities, tool_rules, push_rules, recording, auto_stop_after_sec } = s;
+  const carried = { azure_devops_capabilities, github_capabilities, tool_rules, push_rules, recording, auto_stop_after_sec };
+  return Object.fromEntries(Object.entries(carried).filter(([, v]) => v !== undefined));
+};
 
 function toForm(s: PersonalWallsSpec): Form {
   const d = s.desktop;
@@ -64,6 +73,7 @@ function toForm(s: PersonalWallsSpec): Form {
     blocked: { paste_in: d?.paste_in === "blocked", copy_out: d?.copy_out === "blocked", upload: d?.upload === "blocked", download: d?.download === "blocked" },
     withheld: s.withheld_grants ?? [],
     allowAllOff: s.allow_all_egress === false,
+    carried: carriedKnobs(s),
   };
 }
 
@@ -74,7 +84,7 @@ const withText = (list: string[], text: string): string[] => {
 };
 
 function toSpec(f: Form): PersonalWallsSpec {
-  const spec: PersonalWallsSpec = {};
+  const spec: PersonalWallsSpec = { ...f.carried };
   if (f.only) spec.allowed_domains = withText(f.allowed, f.allowedText);
   const denied = withText(f.denied, f.deniedText);
   if (denied.length > 0) spec.denied_domains = denied;
