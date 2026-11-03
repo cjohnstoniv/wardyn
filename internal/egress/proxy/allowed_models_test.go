@@ -157,15 +157,12 @@ func TestAllowedModels_EncodedBodyRefused(t *testing.T) {
 	}
 }
 
-// A read, and a named model-free route, are left alone with the list set: the body is not read and
-// the request is forwarded as ever.
+// A read is left alone with the list set: the body is not read and the request is forwarded as ever.
 func TestAllowedModels_OtherRoutesUntouched(t *testing.T) {
 	for _, tc := range []struct{ method, route, body string }{
 		{http.MethodGet, llmAnthropicPrefix + "models", ""},
 		{http.MethodGet, llmOpenAIPrefix + "models", ""},
 		{http.MethodHead, llmOpenAIPrefix + "models", ""},
-		{http.MethodPost, llmAnthropicPrefix + "files", `not json at all`},
-		{http.MethodPost, llmAnthropicPrefix + "skills", `not json at all`},
 		{http.MethodGet, llmAnthropicPrefix + "messages", ""},
 	} {
 		t.Run(tc.method+" "+tc.route, func(t *testing.T) {
@@ -220,7 +217,6 @@ func TestAllowedModels_NonModelRequestsReadNothing(t *testing.T) {
 		{"registry.npmjs.org", http.MethodPost, "/v1/messages"},
 		{"s3.us-east-1.amazonaws.com", http.MethodPost, "/model/x/invoke"},
 		{anthropicHost, http.MethodGet, "/v1/messages"},
-		{anthropicHost, http.MethodPost, "/v1/files"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, failReader{t})
 		rec := httptest.NewRecorder()
@@ -477,7 +473,7 @@ func TestAllowedModels_EmptyListRefusesEveryModel(t *testing.T) {
 }
 
 // With the list set, a request on a model host that carries no checked model is refused unless it is
-// a read or a named model-free route; with the list unset every one of them is forwarded as ever.
+// a read; with the list unset every one of them is forwarded as ever.
 func TestAllowedModels_UncheckedRoutes(t *testing.T) {
 	const body = `{"model":"gpt-5"}`
 	for _, tc := range []struct {
@@ -500,8 +496,8 @@ func TestAllowedModels_UncheckedRoutes(t *testing.T) {
 		{"get models", http.MethodGet, llmOpenAIPrefix + "models", false},
 		{"get a batch", http.MethodGet, llmOpenAIPrefix + "batches/batch_1", false},
 		{"head", http.MethodHead, llmOpenAIPrefix + "models", false},
-		{"anthropic files", http.MethodPost, llmAnthropicPrefix + "files", false},
-		{"anthropic skills", http.MethodPost, llmAnthropicPrefix + "skills", false},
+		{"anthropic files", http.MethodPost, llmAnthropicPrefix + "files", true},
+		{"anthropic skills", http.MethodPost, llmAnthropicPrefix + "skills", true},
 		{"openai files stay batch input", http.MethodPost, llmOpenAIPrefix + "files", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -605,7 +601,6 @@ func TestAllowedModels_BatchRoutesRefused(t *testing.T) {
 		{"openai upload complete", http.MethodPost, llmOpenAIPrefix + "uploads/upload_abc/complete", true},
 		{"anthropic batch read", http.MethodGet, llmAnthropicPrefix + "messages/batches/msgbatch_1", false},
 		{"openai batch read", http.MethodGet, llmOpenAIPrefix + "batches/batch_1", false},
-		{"anthropic files untouched", http.MethodPost, llmAnthropicPrefix + "files", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, list := range [][]string{{"gpt-5"}, nil} {
@@ -725,25 +720,29 @@ func TestAllowedModels_PlainLane(t *testing.T) {
 	}
 }
 
-// A named route that carries no model is let through while the list is set, and writes an allow row
-// under the gate's rule source so the console can say why it passed; a read writes none of its own.
-func TestAllowedModels_NamedModelFreeRouteWritesAnAllowRow(t *testing.T) {
-	buf := &bytes.Buffer{}
-	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
-		Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{}})
-	p.allowedModels = modelSet([]string{"model-a"})
-	req := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/files", strings.NewReader(`not json`))
-	if _, refused := p.allowedModelRefused(httptest.NewRecorder(), req, anthropicHost, 443, "v1/files"); refused {
-		t.Fatal("a named model-free route was refused")
-	}
-	d := lastDecision(t, buf)
-	if d.Decision != egress.Allow || d.RuleSource != ruleSourceAllowedModels || d.Cause != namedModelFreeCause {
-		t.Fatalf("decision = %+v, want an allow row under %s", d, ruleSourceAllowedModels)
-	}
-	buf.Reset()
-	get := httptest.NewRequest(http.MethodGet, "https://"+anthropicHost+"/v1/models", nil)
-	if _, refused := p.allowedModelRefused(httptest.NewRecorder(), get, anthropicHost, 443, "v1/models"); refused || buf.Len() != 0 {
-		t.Fatalf("a read was refused=%v or wrote %q", refused, buf.String())
+// No route that names no model is let through while the list is set: a file or skill upload to a
+// model host is refused, unread, with a deny row under the gate's rule source, until a capture of
+// real harness traffic backs an exact path. A read still writes no row of its own.
+func TestAllowedModels_FileAndSkillUploadsRefused(t *testing.T) {
+	for _, rest := range []string{"v1/files", "v1/skills"} {
+		buf := &bytes.Buffer{}
+		p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
+			Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{}})
+		p.allowedModels = modelSet([]string{"model-a"})
+		req := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/"+rest, failReader{t})
+		rec := httptest.NewRecorder()
+		if _, refused := p.allowedModelRefused(rec, req, anthropicHost, 443, rest); !refused || rec.Code != http.StatusForbidden {
+			t.Fatalf("POST %s: refused = %v status = %d, want a 403", rest, refused, rec.Code)
+		}
+		d := lastDecision(t, buf)
+		if d.Decision != egress.Deny || d.RuleSource != ruleSourceAllowedModels {
+			t.Fatalf("POST %s: decision = %+v, want a deny row under %s", rest, d, ruleSourceAllowedModels)
+		}
+		buf.Reset()
+		get := httptest.NewRequest(http.MethodGet, "https://"+anthropicHost+"/"+rest, nil)
+		if _, refused := p.allowedModelRefused(httptest.NewRecorder(), get, anthropicHost, 443, rest); refused || buf.Len() != 0 {
+			t.Fatalf("GET %s was refused=%v or wrote %q", rest, refused, buf.String())
+		}
 	}
 }
 

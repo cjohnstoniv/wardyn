@@ -33,7 +33,8 @@ const maxModelNameShown = 100
 // "v1/" or Codex "backend-api/codex/" lead-in do not matter.
 //
 // Every other non-GET, non-HEAD request on a model host is refused while the list is set
-// (uncheckedRouteRefusal), unless it is a named model-free route. That includes the routes that
+// (uncheckedRouteRefusal). That includes the routes that name no model, such as file and skill
+// uploads, until a capture of real harness traffic backs an exact path; and the routes that
 // also carry a model but are not chat models: embeddings, images, audio, moderations, assistants
 // and thread runs, fine-tuning, realtime sessions, the legacy completion route, and on Bedrock
 // rerank, the agent runtime and model customisation jobs.
@@ -41,9 +42,6 @@ var (
 	anthropicModelRoutes = []string{"messages", "messages/count_tokens"}
 	openaiModelRoutes    = []string{"completions", "responses", "responses/compact"} // "completions" is also chat/completions; "responses/compact" is Codex remote compaction
 )
-
-// anthropicModelFree are the Anthropic routes that take a file or a skill and name no model.
-var anthropicModelFree = []string{"files", "skills"}
 
 // The batch routes carry a model per request inside the body, or a file of requests uploaded
 // beforehand, so they cannot be checked against the list and are refused while it is set. They
@@ -68,9 +66,6 @@ const (
 
 // opaqueModelTunnelRefusal is the sentence a refused opaque tunnel to a model host carries.
 const opaqueModelTunnelRefusal = "this run limits the models it may use, and this connection to a model host can't be checked against them"
-
-// namedModelFreeCause is the cause on the allow row a named model-free route writes.
-const namedModelFreeCause = "a named route that carries no model"
 
 // bedrockModelOps are the Bedrock runtime operations whose path is /model/<id>/<op>.
 var bedrockModelOps = map[string]bool{
@@ -204,7 +199,6 @@ type modelCheck int
 
 const (
 	checkPass       modelCheck = iota // not a request the limit governs
-	checkNamedFree                    // a named route that carries no model: let through, with an allow row
 	checkBatch                        // a batch route: refused
 	checkUnchecked                    // a request with no model to check: refused
 	checkUnreadable                   // a model route whose model cannot be found: refused
@@ -251,8 +245,6 @@ func (p *Proxy) hostedCheck(r *http.Request, host, cleaned string) modelCheck {
 		return checkBodyModel
 	case bodiless(r.Method):
 		return checkPass
-	case post && shape == shapeAnthropic && routeCarriesModel(path, anthropicModelFree):
-		return checkNamedFree
 	}
 	return checkUnchecked
 }
@@ -330,8 +322,8 @@ func (p *Proxy) refuseOpaqueModelTunnel(w http.ResponseWriter, r *http.Request, 
 // allowedModelRefused is the gate: true when it refused (and answered) the request. A request it
 // lets through keeps its body, charged to the retained budget until the caller's deferred
 // release. rest is the request path after the host, as proxyLLMRequest has it. With the list set,
-// a non-read request on a model host is refused unless its model is read and listed, or it is a
-// named model-free route; with the list unset (nil) it returns before touching the request.
+// a non-read request on a model host is refused unless its model is read and listed; with the list
+// unset (nil) it returns before touching the request.
 func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string) (func(), bool) {
 	if p.allowedModels == nil || !p.isLLMHost(host) {
 		return noopRelease, false
@@ -363,13 +355,6 @@ func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host
 	release := noopRelease
 	switch check {
 	case checkPass:
-		return noopRelease, false
-	case checkNamedFree:
-		if p.sink != nil {
-			log := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceAllowedModels)
-			log.Cause = namedModelFreeCause
-			p.sink.emit(log)
-		}
 		return noopRelease, false
 	case checkBatch:
 		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied, batchRefusal)

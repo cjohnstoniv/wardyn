@@ -134,7 +134,7 @@ derives its role.
   - `limits.allowed_models` lists the hosted models a run may ask for, exactly as the provider names them (`model-a`, `small-model-a`). Empty is no limit; there is no deny-all.
   - A run is held to the list it started with, kept on a revive. The run's proxy intercepts the vendor hosts and refuses any other model.
   - A harness's small model is not added for you. Local models keep their own lists.
-  - Other writes to a model host are refused, except Anthropic's `files` and `skills` routes, each audited as allowed under `brokered:allowed-models`.
+  - Other writes to a model host are refused under `brokered:allowed-models`, file and skill uploads included.
   - A provider whose calls the proxy cannot read is refused with `403 allowed_models_unchecked`.
   - An admin run that stands outside governance is not bound by this list. Test with a governed run.
 - *Worked example.*
