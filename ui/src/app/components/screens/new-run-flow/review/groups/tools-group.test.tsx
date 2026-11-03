@@ -145,7 +145,14 @@ describe("Review: a provider that is not bound to the person's sign-in", () => {
     h.providers = [sso("console")];
     show();
     expect(screen.queryByText(/not bound to your sign-in/)).toBeNull();
-    // The line reads as it does today: the harness starts with the run, and the provider is named beside it, by the id this line has always used.
+    // The harness line names the provider by its display name from setup status, as the frame does.
+    expect(screen.getByText(/Corp SSO/)).toBeInTheDocument();
+    expect(screen.queryByText(/corp-sso/)).toBeNull();
+  });
+
+  it("names the provider by its id while setup status does not list it", () => {
+    h.providers = [];
+    show();
     expect(screen.getByText(/corp-sso/)).toBeInTheDocument();
   });
 });

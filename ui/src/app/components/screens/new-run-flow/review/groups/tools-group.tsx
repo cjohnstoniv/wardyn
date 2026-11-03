@@ -87,7 +87,9 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
   else if (n === 0) detail = NR_REVIEW.TOOLS_NONE;
   else if (interactive) {
     const t = harnesses.find((h) => h.id === starter);
-    const provider = providerOf(t);
+    // The provider by the name setup status gives it, as the frame names it; its id until that answers.
+    const id = providerOf(t);
+    const provider = id ? status?.model_providers?.find((p) => p.id === id)?.name || id : id;
     const starts = t ? name(t.id) : NR_REVIEW.TOOLS_NO_HARNESS;
     detail = provider ? NR_REVIEW.TOOLS_STARTS(starts, provider) : NR_SHARED.JOIN(starts, NR_REVIEW.HARNESS_STARTS_LONG);
   } else {
