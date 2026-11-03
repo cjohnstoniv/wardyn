@@ -631,8 +631,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
-	choice, ok := s.dispatchRecordingChoice(ctx, run, policy, ceiling, siteCfg, siteCfgErr)
-	if !ok || !s.applyRunRecording(ctx, &run, &spec, choice) {
+	if !s.applyDispatchRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

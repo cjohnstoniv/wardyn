@@ -105,20 +105,20 @@ func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchC
 	return choice
 }
 
-// dispatchRecordingChoice is recordingChoice with the run owner's walls' recording floor read in. Walls
-// that cannot be read refuse the run (false, the run failed): it is never recorded at a lower level than
-// they ask.
-func (s *Server) dispatchRecordingChoice(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) (types.RecordingChoice, bool) {
-	floor, err := s.wallsRecordingFloor(ctx, run)
+// applyDispatchRecording is applyRunRecording over recordingChoice with the run owner's walls' recording
+// floor read in. Walls that cannot be read refuse the run (false, the run failed): it is never recorded
+// at a lower level than they ask.
+func (s *Server) applyDispatchRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) bool {
+	floor, err := s.wallsRecordingFloor(ctx, *run)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: read the run owner's walls for the recording floor; the run is refused",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "your walls could not be read, so the run's recording level cannot be set; walls that cannot be read refuse the run")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "read the run owner's walls"})))
-		return types.RecordingChoice{}, false
+		return false
 	}
-	return recordingChoice(run, policy, c, site, siteErr, floor), true
+	return s.applyRunRecording(ctx, run, spec, recordingChoice(*run, policy, c, site, siteErr, floor))
 }
 
 // keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit.
