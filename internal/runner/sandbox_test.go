@@ -240,6 +240,18 @@ func TestBuildProxyConfig_VMAndPortRule(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_ForgeHosts: the deny_all guard's code hosts reach the
+// sidecar's config, and a run without them writes no key an older proxy refuses.
+func TestBuildProxyConfig_ForgeHosts(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ForgeHosts: []string{"ghe.corp.example"}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"forge_hosts":["ghe.corp.example"]`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "forge_hosts") {
+		t.Fatalf("a run without code hosts names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_LocalModels: a local_model run's allowlist reaches the
 // sidecar's config, and a run without one writes no key an older proxy refuses.
 func TestBuildProxyConfig_LocalModels(t *testing.T) {

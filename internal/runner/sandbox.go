@@ -224,6 +224,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,
+		ForgeHosts:           pc.ForgeHosts,
 		HarnessToolRules:     pc.HarnessToolRules,
 		ViaOrgRoutes:         pc.ViaOrgRoutes,
 		HarnessCredentials:   pc.HarnessCredentials,

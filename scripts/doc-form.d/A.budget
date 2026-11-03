@@ -402,6 +402,7 @@
 # docs/AUDIT-ACTIONS.md 56716, measured at the rc.12 merge of presets-apply into the keep-create lane (ours 56697, theirs 56715, base 56696).
 # docs/AUDIT-ACTIONS.md 56964, measured: the machine.keep, machine.scrub and machine.delete rows and the kept-machine fields of person.deprovision and person.erasure.
 # docs/AUDIT-ACTIONS.md 57173, measured at the rc.12 merge of keep-refs into the keep-create lane (ours 56716, theirs 56964), plus the machine.create and machine.resume rows and the boot scrub on machine.scrub.
+# docs/AUDIT-ACTIONS.md 56760 adds 63 over 56697, measured (rc.12): the brokered:git:push-deny-all-forge rule_source row.
 docs/AUDIT-ACTIONS.md=57173 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
