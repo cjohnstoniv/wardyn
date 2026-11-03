@@ -617,6 +617,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	defer s.dropUncreatedMacKeptDrive(ctx, run, &created) // after the lease release below: defers run last-in first-out
 	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
+	// The run's kept machine: inserted or claimed here, before any runner work, and given back if no
+	// sandbox is created (run_kept_machine.go).
+	kept, ok := s.keptMachineAtDispatch(ctx, run, p.Machine)
+	if !ok {
+		return
+	}
+	defer s.releaseUnstartedKeptMachine(ctx, run, kept, &created)
+	spec.KeptMachine = kept.spec()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
@@ -670,6 +678,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	created = true
+	s.keptMachineUp(ctx, run, kept)
 
 	// Drives attached — a no-op for the runs (most of them) that carry none.
 	// See auditDriveMount.

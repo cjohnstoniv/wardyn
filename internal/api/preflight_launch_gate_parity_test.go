@@ -153,6 +153,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepMacOSHold", foldCreate | foldPreflight | foldPreview},
 	{"stepMacWindow", foldCreate | foldPreflight | foldPreview},
+	{"stepKeptMachine", foldCreate | foldPreflight | foldPreview},
 	{"stepGitHubCLIRepo", foldCreate | foldPreflight},
 	{"stepADOStanding", foldCreate | foldPreflight | foldPreview},
 	{"stepPATNarrowing", foldPreflight | foldPreview},

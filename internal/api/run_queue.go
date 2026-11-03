@@ -459,9 +459,10 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), DriveRunner: drivesBoundRunner(q.f.drives, q.f.keep),
-		NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
+		Barrier: q.f.enforced, NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
 	}
+	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
+	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID

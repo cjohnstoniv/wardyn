@@ -45,7 +45,9 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.CLIKubectl]():   strings.Fields("Server CAPEM ServiceAccount Namespaces Access"),
 	reflect.TypeFor[dispatchCeiling]():    strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives MainDrive Components " +
-		"GitPushWithheld PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
+		"GitPushWithheld PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart Machine"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
+	// keptMachinePlan: which kept machine dispatch inserts or claims, on which Mac, from which base; names and ids, no credential.
+	reflect.TypeFor[keptMachinePlan]():      strings.Fields("mode id name owner runner mac base prepared limit idleDays"),
 	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),

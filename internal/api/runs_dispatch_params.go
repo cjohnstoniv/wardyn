@@ -143,4 +143,7 @@ type dispatchParams struct {
 	// DesktopWindowAtStart: the request asked for a window onto the run on its own Mac as it comes up
 	// (CreateRunRequest.DesktopWindow); dispatch asks for it once the run is RUNNING.
 	DesktopWindowAtStart bool
+	// Machine is the kept machine stepKeptMachine planned (a keep or a resume); dispatch inserts or claims
+	// it before any runner work. nil for a run that keeps none. Set only by finishCreateRunLaunch.
+	Machine *keptMachinePlan
 }

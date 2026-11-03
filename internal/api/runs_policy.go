@@ -307,6 +307,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
 		// WallPreset is the wall preset the run was launched with, never its spec (runWallPresetView).
 		WallPreset *client.RunWallPreset `json:"wall_preset,omitempty"`
+		// Machine is the kept machine the run kept or resumed, read now (run_kept_machine.go); absent on
+		// every other run.
+		Machine *runMachineView `json:"machine,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -324,6 +327,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		MacOSPreparing:  macOSPrepRunning(stored),
 		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
 		WallPreset:      runWallPresetView(r, run),
+		Machine:         s.runMachineOf(r.Context(), run),
 	})
 }
 
