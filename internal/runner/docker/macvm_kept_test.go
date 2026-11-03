@@ -750,3 +750,89 @@ func TestKeptMachineIdleDaysDefaultToThirty(t *testing.T) {
 		t.Fatal("the expiry sentence does not name the default")
 	}
 }
+
+// The helper's recorded refusal code is read first and worded; with no code, an older helper's error text
+// is matched; a code wins over the text.
+func TestKeptStartErrReadsTheHelpersCodeFirst(t *testing.T) {
+	r, _ := newKeptRig(t)
+	id := uuid.New()
+	spec := keptSpec(id, macvm.KeptResume)
+	dir, err := r.c.makeRunDir(spec.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := func(c string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, macvm.KeptRefusalFile), []byte(`{"kept_refusal":"`+c+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notFound := fmt.Sprintf("You have no kept machine %s.", id)
+	plain := errors.New("docker: the macOS VM helper did not start: the helper exited before it started the VM")
+	for c, want := range map[string]string{macvm.KeptRefusalLocked: keptSaidLocked, macvm.KeptRefusalOwner: notFound,
+		macvm.KeptRefusalIDMismatch: notFound, macvm.KeptRefusalIncomplete: keptSaidIncomplete} {
+		code(c)
+		if err := r.c.keptStartErr(spec, plain); err == nil || err.Error() != want {
+			t.Errorf("code %s: %v, want %q", c, err, want)
+		}
+	}
+	code(macvm.KeptRefusalIncomplete)
+	if err := r.c.keptStartErr(spec, fmt.Errorf("x: %w", macvm.ErrKeptLocked)); err == nil || err.Error() != keptSaidIncomplete {
+		t.Fatalf("the code did not win over the text: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, macvm.KeptRefusalFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.c.keptStartErr(spec, fmt.Errorf("x: %w", macvm.ErrKeptIDMismatch)); err == nil || err.Error() != notFound {
+		t.Fatalf("an older helper's text: %v", err)
+	}
+	if err := r.c.keptStartErr(spec, plain); err == nil || err.Error() != plain.Error() {
+		t.Fatalf("an error that is no refusal was reworded: %v", err)
+	}
+}
+
+// A helper that refuses a kept machine's boot ends the create at once with the refusal's sentence, not at
+// the control socket's two-minute wait; the machine stays.
+func TestKeptCreateStopsWaitingForARefusingHelper(t *testing.T) {
+	r, _ := newKeptRig(t)
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	if err := os.Remove(filepath.Join(dir, macvm.AuxFile)); err != nil { // the helper finds the machine incomplete
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptResume)); err == nil || err.Error() != keptSaidIncomplete {
+		t.Fatalf("an incomplete machine: %v", err)
+	}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Fatalf("the create waited %s for a helper that had refused", d)
+	}
+	if _, err := os.Stat(filepath.Join(dir, macvm.DiskFile)); err != nil {
+		t.Fatalf("the refused machine was deleted: %v", err)
+	}
+}
+
+// A helper this runnerd started that exits before its control socket ends the wait at once.
+func TestMacVMHelperWaitEndsWhenTheHelperExits(t *testing.T) {
+	r, _ := newKeptRig(t)
+	runID := uuid.New()
+	dir, err := r.c.makeRunDir(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exits := &sync.Map{}
+	gone := make(chan struct{})
+	close(gone)
+	exits.Store(dir, gone)
+	r.c.helperExits = exits
+	start := time.Now()
+	if err := r.c.waitMacVMHelper(context.Background(), dir, runID); err == nil || !strings.Contains(err.Error(), "exited") {
+		t.Fatalf("wait: %v", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the wait took %s", d)
+	}
+	if _, ok := exits.Load(dir); ok {
+		t.Fatal("the wait left the run dir's exit channel behind")
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -93,6 +94,9 @@ type MacVMConfig struct {
 	// (zero is macHelperExitWait); tests replace both.
 	removeAll  func(path string) error
 	helperWait time.Duration
+	// helperExits holds, per run dir, a channel the default spawn closes when the helper it started exits,
+	// so a create stops waiting for a helper that is gone (waitMacVMHelper).
+	helperExits *sync.Map
 }
 
 // runDir is the run's directory, named by its run key (the run id's first 12 hex digits).
@@ -118,7 +122,16 @@ func (d *Driver) EnableMacVM(c *MacVMConfig) error {
 			c.BootTimeout = 10 * time.Minute
 		}
 		if c.spawn == nil {
-			c.spawn = func(dir string) error { return startHelper(c.Helper, dir) }
+			c.helperExits = &sync.Map{}
+			c.spawn = func(dir string) error {
+				exited := make(chan struct{})
+				c.helperExits.Store(dir, exited)
+				err := startHelper(c.Helper, dir, func() { close(exited) })
+				if err != nil {
+					c.helperExits.Delete(dir)
+				}
+				return err
+			}
 		}
 		if c.signal == nil {
 			c.signal = syscall.Kill
@@ -161,15 +174,51 @@ func (d *Driver) ReclaimMacVMs() error {
 }
 
 // startHelper starts `wardyn-macvm run --dir <runDir>` in a new session: launchd ends the job's process
-// group when runnerd's job ends, and the VM must outlive that.
-func startHelper(helper, runDir string) error {
+// group when runnerd's job ends, and the VM must outlive that. exited is called when it exits while this
+// runnerd lives.
+func startHelper(helper, runDir string, exited func()) error {
 	cmd := exec.Command(helper, "run", "--dir", runDir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("docker: start the macOS VM helper: %w", err)
 	}
-	go func() { _ = cmd.Wait() }() // reaped here while this runnerd lives; launchd adopts it after
+	go func() { _ = cmd.Wait(); exited() }() // reaped here while this runnerd lives; launchd adopts it after
 	return nil
+}
+
+// macHelperStartWait bounds the wait for a new helper's control socket.
+const macHelperStartWait = 2 * time.Minute
+
+// waitMacVMHelper waits for the helper started for dir to make its control socket. It stops early when that
+// helper has exited (one this runnerd started), or has refused a kept machine's boot, which it records in
+// the run dir before it exits (macvm.ReadKeptRefusal); keptStartErr words that refusal.
+func (c *MacVMConfig) waitMacVMHelper(ctx context.Context, dir string, runID uuid.UUID) error {
+	var exited <-chan struct{}
+	if c.helperExits != nil {
+		if ch, ok := c.helperExits.LoadAndDelete(dir); ok {
+			exited = ch.(chan struct{})
+		}
+	}
+	sock := filepath.Join(c.sockDir(runID), macvm.ControlSock)
+	deadline := time.Now().Add(macHelperStartWait)
+	for {
+		if fi, err := os.Stat(sock); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			return nil
+		}
+		if code, _ := macvm.ReadKeptRefusal(dir); code != "" {
+			return fmt.Errorf("the helper refused the kept machine (%s)", code)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no socket at %s after %s", sock, macHelperStartWait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-exited:
+			return errors.New("the helper exited before it started the VM")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // newMacVMRun is a macOS VM run's handle: its guest agent is dialled on agent.sock in the run's socket
@@ -444,7 +493,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	}
 	// The clone comes first. The socket is waited for where the helper makes it, and its directory is
 	// checked before the dial (dialControl).
-	if err := waitForSocket(ctx, filepath.Join(c.sockDir(spec.RunID), macvm.ControlSock), 2*time.Minute); err != nil {
+	if err := c.waitMacVMHelper(ctx, dir, spec.RunID); err != nil {
 		return fail(fmt.Errorf("docker: the macOS VM helper did not start: %w", err))
 	}
 	cc, err := c.dialControl(ctx, spec.RunID)

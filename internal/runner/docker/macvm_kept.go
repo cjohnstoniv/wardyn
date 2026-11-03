@@ -239,25 +239,41 @@ func (c *MacVMConfig) updateKeptTools(ctx context.Context, spec runner.SandboxSp
 	return nil
 }
 
-// keptStartErr words the helper's refusal of a kept machine's boot, which reaches the runner as the
-// helper's status text; any other error is answered as it is. An expired machine is deleted.
+// keptStartErr words the helper's refusal of a kept machine's boot; any other error is answered as it is.
+// The helper records its refusal's code in the run dir (macvm.ReadKeptRefusal); an older helper says it
+// only in its error's text, which is matched when there is no code. An expired machine is deleted.
 func (c *MacVMConfig) keptStartErr(spec runner.SandboxSpec, err error) error {
 	k := spec.KeptMachine
 	if k == nil || err == nil {
 		return err
 	}
-	switch said := err.Error(); {
-	case strings.Contains(said, macvm.ErrKeptLocked.Error()):
+	code, _ := macvm.ReadKeptRefusal(c.runDir(spec.RunID))
+	if code == "" {
+		code = keptRefusalInText(err)
+	}
+	switch code {
+	case macvm.KeptRefusalLocked:
 		return keptRefusal(keptSaidLocked)
-	case strings.Contains(said, macvm.ErrKeptOwner.Error()):
+	case macvm.KeptRefusalOwner, macvm.KeptRefusalIDMismatch:
 		return keptSaidNotFound(k.ID)
-	case strings.Contains(said, macvm.ErrKeptIncomplete.Error()):
+	case macvm.KeptRefusalIncomplete:
 		return keptRefusal(keptSaidIncomplete)
-	case strings.Contains(said, macvm.ErrKeptExpired.Error()):
+	case macvm.KeptRefusalExpired:
 		c.removeExpiredKept(c.keptDir(k.ID), k.ID)
 		return keptSaidExpired(keptIdleDays(k.IdleDays))
 	}
 	return err
+}
+
+// keptRefusalInText is the refusal code an older helper's error names in its text, or "".
+func keptRefusalInText(err error) string {
+	said := err.Error()
+	for _, e := range []error{macvm.ErrKeptLocked, macvm.ErrKeptOwner, macvm.ErrKeptIncomplete, macvm.ErrKeptExpired, macvm.ErrKeptIDMismatch} {
+		if strings.Contains(said, e.Error()) {
+			return macvm.KeptRefusalCode(e)
+		}
+	}
+	return ""
 }
 
 // undoKeptNew deletes a new kept machine whose create failed: the clone this create's helper made, and
