@@ -1158,11 +1158,15 @@ func authzMatrixSiteConfig() types.SiteConfig {
 
 // TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
 // /runs/{id}/desktop/window on the matrix server: with the site switch at its default (off) a 403
-// mac_window_site_off, and with it on, the handler's own answer (the matrix's switch-on rows).
+// mac_window_site_off, and with it on, the handler's own answer (the matrix's switch-on rows). Entry
+// authorization answers before the switch, so with it off a super admin still gets run_owner_only and a
+// non-owning member the run-not-found 404: the switch never tells a non-owner whether the run exists.
 func TestAuthzMatrixMacWindowSiteSwitch(t *testing.T) {
 	srv, ast, _, _ := newAuthzMatrixServer(t)
 	const owner = "sub-member"
 	memberSess := ssoSession(t, owner, "member@corp.example", oidc.RoleUser)
+	adminSess := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	otherSess := ssoSession(t, "sub-other-member", "other@corp.example", oidc.RoleUser)
 	id := uuid.New()
 	on := true
 	ast.mu.Lock()
@@ -1174,6 +1178,14 @@ func TestAuthzMatrixMacWindowSiteSwitch(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodPost, path, memberSess, body); w.Code != http.StatusForbidden ||
 		!strings.Contains(w.Body.String(), `"reason":"`+reasonMacWindowSiteOff+`"`) {
 		t.Errorf("switch off: owning member: status = %d, want 403 %s; body=%s", w.Code, reasonMacWindowSiteOff, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodPost, path, adminSess, body); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), `"reason":"run_owner_only"`) {
+		t.Errorf("switch off: super admin: status = %d, want 403 run_owner_only; body=%s", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodPost, path, otherSess, body); w.Code != http.StatusNotFound ||
+		strings.Contains(w.Body.String(), reasonMacWindowSiteOff) {
+		t.Errorf("switch off: non-owning member: status = %d, want the run-not-found 404; body=%s", w.Code, w.Body.String())
 	}
 	ast.mu.Lock()
 	ast.siteCfg.MacOSVM = &types.SiteMacOSVM{AllowAttendedWindow: &on}
