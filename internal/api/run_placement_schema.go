@@ -32,7 +32,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts signing"),
 	reflect.TypeFor[chosenProvider]():        strings.Fields("provider owner"),
 	reflect.TypeFor[componentConfig]():       strings.Fields("ordinal source selfDefined env"),
-	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed Launch EnvNames"), // Launch/EnvNames: a self-defined row's command is the person's own; an org row's MCP server that runs in the sandbox is refused on a local runner (localMCPOrgServerMsg); values are judged as componentConfig env
+	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed Launch EnvNames GatewayAudience GatewayUID"), // Launch/EnvNames: a self-defined row's command is the person's own; an org row's MCP server that runs in the sandbox is refused on a local runner (localMCPOrgServerMsg); values are judged as componentConfig env
 	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config GitHubAPI AWSCLI AzureCLI KubectlCLI MCP"),
 	reflect.TypeFor[awsCLIDispatch]():        strings.Fields("ComponentID AWS Hosts"),
 	reflect.TypeFor[awsSigV4Why]():           strings.Fields("Code Host"),
@@ -43,7 +43,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.CLIKubectl]():      strings.Fields("Server CAPEM ServiceAccount Namespaces Access"),
 	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives MainDrive Components " +
-		"PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted"),
+		"PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
 	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),
@@ -68,7 +68,9 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.IntegrationDelivery](): strings.Fields("Mode Header Format Path Var"),
 	reflect.TypeFor[types.IntegrationSecret]():   strings.Fields("Role SecretName Delivery"),
 	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
-	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses"),
+	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses OIDC"),
+	reflect.TypeFor[types.ProviderOIDC]():        strings.Fields("Issuer AuthorizeURL TokenURL ClientID ClientSecretRef Scopes IdentityBinding"), // ClientSecretRef names an operator secret, never its value
+	reflect.TypeFor[types.SiteImages]():          strings.Fields("RequireDigest"),
 	reflect.TypeFor[types.LocalModelSettings]():  strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
@@ -77,7 +79,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
 	reflect.TypeFor[types.SiteBranding]():        strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress " +
-		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM"),
+		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM Images"),
 	reflect.TypeFor[types.SiteEgress]():         strings.Fields("BaselineHosts"),
 	reflect.TypeFor[types.SiteMacOSVM]():        strings.Fields("MaxBaseAgeDays AllowBackgroundWatch AllowAttendedWindow"), // a placement limit and two switches, no credential
 	reflect.TypeFor[types.SiteRecording]():      strings.Fields("Level Locked"),
@@ -86,7 +88,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.WithheldScmHost]():    strings.Fields("Host ProviderID ProviderKind"),
 	reflect.TypeFor[types.WorkspaceProviders](): strings.Fields("Git Storage GitPatBrokerEnabled"),
 
-	reflect.TypeFor[types.ModelProviderGatewayIdentity](): strings.Fields("Audience"),
+	reflect.TypeFor[types.ModelProviderGatewayIdentity](): strings.Fields("Audience TokenLifetimeSeconds"),
 }
 
 // localDispatchOpaque names the non-data interface values of the private
