@@ -22,6 +22,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -30,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -45,6 +47,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -157,17 +160,6 @@ const (
 	endpointOIDCPKCECookie  = "wardyn_poidc_pkce"
 )
 
-// The reasons these doors answer with. Kept here, beside the doors.
-const (
-	reasonModelProviderCredentialSignsIn = "model_provider_credential_signs_in" // the paste door's 409 for a row that signs people in
-	reasonEndpointOIDCUnconfigured       = "endpoint_oidc_unconfigured"         // the process offers no endpoint sign-in
-	reasonEndpointOIDCUnknownRow         = "endpoint_oidc_unknown_row"          // the uid is not a custom_endpoint that signs people in
-	reasonEndpointOIDCNoSession          = "endpoint_oidc_no_session"           // no session subject to bind the capture to
-	reasonEndpointOIDCAuthority          = "endpoint_oidc_authority_unavailable"
-	reasonEndpointOIDCCallbackInvalid    = "endpoint_oidc_callback_invalid" // the state, a one-time cookie or the stamped row is missing, repeated, replayed or malformed
-	reasonEndpointOIDCMissingCode        = "endpoint_oidc_callback_missing_code"
-)
-
 const (
 	endpointOIDCNoSessionRefusal = "An endpoint sign-in must be started from a signed-in browser session: " +
 		"the sign-in is stored under your own identity, and an admin-token caller has none"
@@ -274,13 +266,22 @@ type endpointOIDCDiscovery struct {
 	basicAuth     bool
 }
 
-// endpointOIDCURLUsable holds a discovered endpoint to the posture the row's own URLs are held to.
-func endpointOIDCURLUsable(raw string, allowHTTP bool) bool {
+// endpointOIDCURLUsable holds a discovered endpoint to the posture the row's own URLs are held to: https, no
+// userinfo, a host, no fragment, and no IP literal of a kind a gateway can never be (validateOneLLMGateway's
+// rule 4, the same ipguard predicate). allowTest lifts the scheme rule and the literal rule together, for a
+// deployment that runs against a loopback fake.
+func endpointOIDCURLUsable(raw string, allowTest bool) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.Hostname() == "" || u.Fragment != "" {
 		return false
 	}
-	return u.Scheme == "https" || (allowHTTP && u.Scheme == "http")
+	if allowTest {
+		return u.Scheme == "https" || u.Scheme == "http"
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil && ipguard.GatewayIPRefused(ip) {
+		return false
+	}
+	return u.Scheme == "https"
 }
 
 // discoverEndpointOIDC resolves the authority from the row's issuer. The issuer in the document must be the
@@ -292,6 +293,7 @@ func (s *Server) discoverEndpointOIDC(ctx context.Context, o *types.ProviderOIDC
 	}
 	var meta struct {
 		Revocation  string   `json:"revocation_endpoint"`
+		JWKSURI     string   `json:"jwks_uri"`
 		AuthMethods []string `json:"token_endpoint_auth_methods_supported"`
 	}
 	if err := provider.Claims(&meta); err != nil {
@@ -307,14 +309,23 @@ func (s *Server) discoverEndpointOIDC(ctx context.Context, o *types.ProviderOIDC
 		// methods that leave it out and name the form.
 		basicAuth: len(meta.AuthMethods) == 0 || slices.Contains(meta.AuthMethods, "client_secret_basic") || !slices.Contains(meta.AuthMethods, "client_secret_post"),
 	}
-	allowHTTP := s.cfg.AllowTestEndpoints
-	if !endpointOIDCURLUsable(d.authorizeURL, allowHTTP) || !endpointOIDCURLUsable(d.tokenURL, allowHTTP) {
-		return endpointOIDCDiscovery{}, errors.New("the endpoint's authority names an authorize or token URL this deployment will not use")
-	}
-	if !endpointOIDCURLUsable(d.revocationURL, allowHTTP) {
-		d.revocationURL = ""
+	if err := checkEndpointOIDCURLs(&d, meta.JWKSURI, s.cfg.AllowTestEndpoints); err != nil {
+		return endpointOIDCDiscovery{}, err
 	}
 	return d, nil
+}
+
+// checkEndpointOIDCURLs holds every URL a discovery document hands over to endpointOIDCURLUsable: the
+// authorization, token and key-set URLs refuse the whole discovery, and a revocation URL that fails is dropped,
+// since nothing but a best-effort disconnect would ever call it.
+func checkEndpointOIDCURLs(d *endpointOIDCDiscovery, jwksURI string, allowTest bool) error {
+	if !endpointOIDCURLUsable(d.authorizeURL, allowTest) || !endpointOIDCURLUsable(d.tokenURL, allowTest) || !endpointOIDCURLUsable(jwksURI, allowTest) {
+		return errors.New("the endpoint's authority names an authorize, token or key-set URL this deployment will not use")
+	}
+	if !endpointOIDCURLUsable(d.revocationURL, allowTest) {
+		d.revocationURL = ""
+	}
+	return nil
 }
 
 // endpointOIDCClientSecret reads the client secret from the operator namespace by the row's ref; "" for a
@@ -465,36 +476,64 @@ func (s *Server) bindEndpointOIDCConsole(ctx context.Context, b *endpointOIDCBin
 
 // ── the door and its callback ───────────────────────────────────────────────
 
-// endpointOIDCStamp is what the start leg stamps in the state cookie beside the random state. The cookie is
-// not signed, so the callback treats every field but State as a claim to re-check against the live row.
+// endpointOIDCStamp is what the start leg stamps in the state cookie beside the random state. It is signed
+// (endpointOIDCSealStamp), so the callback trusts nothing in it that a signature does not vouch for: Person is
+// the digest of the session subject the sign-in was started in, so cookies planted in another person's browser
+// session are refused; Expires bounds the attempt, and with it how long its state must be remembered as spent.
 type endpointOIDCStamp struct {
-	State  string `json:"s"`
-	RowUID string `json:"u"`
-	Digest string `json:"d"`
+	State   string `json:"s"`
+	RowUID  string `json:"u"`
+	Digest  string `json:"d"`
+	Person  string `json:"p"`
+	Expires int64  `json:"x"`
 }
 
-func (st endpointOIDCStamp) encode() string {
+// endpointOIDCStampPurpose keys the stamp's signature apart from every other use of the console's shared key.
+const endpointOIDCStampPurpose = "endpoint-oidc-state/v1"
+
+// endpointOIDCPersonDigest is the stamp's name for a session subject: a digest, so the cookie does not carry it.
+func endpointOIDCPersonDigest(subject string) string {
+	sum := sha256.Sum256([]byte(subject))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// endpointOIDCSealStamp is the cookie value: the stamp's JSON and a signature over it under the console's shared
+// session key, which every replica holds. ok=false when this process has no such key.
+func (s *Server) endpointOIDCSealStamp(st endpointOIDCStamp) (string, bool) {
+	if s.cfg.OIDC == nil {
+		return "", false
+	}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		panic(fmt.Errorf("api: encode the endpoint sign-in state: %w", err))
 	}
-	return base64.RawURLEncoding.EncodeToString(raw)
+	mac := s.cfg.OIDC.PurposeMAC(endpointOIDCStampPurpose, raw)
+	return base64.RawURLEncoding.EncodeToString(raw) + "." + base64.RawURLEncoding.EncodeToString(mac), true
 }
 
-func decodeEndpointOIDCStamp(v string) (endpointOIDCStamp, bool) {
-	raw, err := base64.RawURLEncoding.DecodeString(v)
-	if err != nil {
+// endpointOIDCOpenStamp verifies the signature BEFORE anything is parsed or remembered, so a forged cookie
+// costs one MAC and nothing else.
+func (s *Server) endpointOIDCOpenStamp(v string) (endpointOIDCStamp, bool) {
+	body, sig, found := strings.Cut(v, ".")
+	if !found || s.cfg.OIDC == nil {
+		return endpointOIDCStamp{}, false
+	}
+	raw, err1 := base64.RawURLEncoding.DecodeString(body)
+	got, err2 := base64.RawURLEncoding.DecodeString(sig)
+	if err1 != nil || err2 != nil || !hmac.Equal(got, s.cfg.OIDC.PurposeMAC(endpointOIDCStampPurpose, raw)) {
 		return endpointOIDCStamp{}, false
 	}
 	var st endpointOIDCStamp
-	if err := json.Unmarshal(raw, &st); err != nil || st.State == "" || st.RowUID == "" {
+	if err := json.Unmarshal(raw, &st); err != nil || st.State == "" || st.RowUID == "" || st.Person == "" {
 		return endpointOIDCStamp{}, false
 	}
 	return st, true
 }
 
 // endpointOIDCSpent holds the states this process has seen come back, so a state is single use even when a
-// browser replays its cookies. An unbounded table would be a memory lever, so a full one refuses.
+// browser replays its cookies. Only a state with a valid signature is ever put here, so a caller cannot grow it
+// without first completing a start leg. A full table drops its oldest entry rather than refuse: refusing would
+// let whoever fills it lock everyone out, and an entry is only needed until its attempt has expired anyway.
 var endpointOIDCSpent = struct {
 	sync.Mutex
 	until map[[sha256.Size]byte]time.Time
@@ -502,21 +541,31 @@ var endpointOIDCSpent = struct {
 
 const endpointOIDCSpentMax = 10000
 
-// spendEndpointOIDCState records state as used and reports whether it was unused. False when it was spent
-// already, or when the table is full.
-func spendEndpointOIDCState(state string, now time.Time) bool {
+// spendEndpointOIDCState records state as used until the attempt that carries it expires, and reports whether
+// it was unused.
+func spendEndpointOIDCState(state string, until, now time.Time) bool {
 	key := sha256.Sum256([]byte(state))
 	endpointOIDCSpent.Lock()
 	defer endpointOIDCSpent.Unlock()
-	for k, until := range endpointOIDCSpent.until {
-		if now.After(until) {
+	for k, u := range endpointOIDCSpent.until {
+		if now.After(u) {
 			delete(endpointOIDCSpent.until, k)
 		}
 	}
-	if _, used := endpointOIDCSpent.until[key]; used || len(endpointOIDCSpent.until) >= endpointOIDCSpentMax {
+	if _, used := endpointOIDCSpent.until[key]; used {
 		return false
 	}
-	endpointOIDCSpent.until[key] = now.Add(2 * adoCookieMaxAge * time.Second)
+	if len(endpointOIDCSpent.until) >= endpointOIDCSpentMax {
+		var oldest [sha256.Size]byte
+		var first time.Time
+		for k, u := range endpointOIDCSpent.until {
+			if first.IsZero() || u.Before(first) {
+				oldest, first = k, u
+			}
+		}
+		delete(endpointOIDCSpent.until, oldest)
+	}
+	endpointOIDCSpent.until[key] = until
 	return true
 }
 
@@ -579,18 +628,26 @@ func (s *Server) handleEndpointOIDCSignIn(w http.ResponseWriter, r *http.Request
 		writeServerError(w, r, "composing the authorization request failed", err)
 		return
 	}
-	stamp := endpointOIDCStamp{State: state, RowUID: row.UID, Digest: providerAddressDigest(row)}
-	http.SetCookie(w, s.adoCookie(endpointOIDCStateCookie, stamp.encode()))
+	sealed, keyed := s.endpointOIDCSealStamp(endpointOIDCStamp{
+		State: state, RowUID: row.UID, Digest: providerAddressDigest(row),
+		Person: endpointOIDCPersonDigest(oidcHumanFromContext(ctx)), Expires: s.cfg.Now().Add(adoCookieMaxAge * time.Second).Unix(),
+	})
+	if !keyed {
+		writeErrorReason(w, http.StatusNotFound, reasonEndpointOIDCUnconfigured, endpointOIDCUnconfiguredRefusal)
+		return
+	}
+	http.SetCookie(w, s.adoCookie(endpointOIDCStateCookie, sealed))
 	http.SetCookie(w, s.adoCookie(endpointOIDCNonceCookie, nonce))
 	http.SetCookie(w, s.adoCookie(endpointOIDCPKCECookie, verifier))
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// endpointOIDCCallbackFlow proves this redirect is the attempt THIS browser started and spends it. The state
-// must appear exactly once in the query and equal the one in the state cookie, the nonce and verifier cookies
-// must be there, and the state must not have come back before. Only then are the cookies cleared. Any failure
-// answers one in-band 400 that says nothing about which check failed.
-func (s *Server) endpointOIDCCallbackFlow(w http.ResponseWriter, r *http.Request) (stamp endpointOIDCStamp, nonce, verifier string, ok bool) {
+// endpointOIDCCallbackFlow proves this redirect is the attempt THIS person started, in this session, and spends
+// it. The state cookie must carry a valid signature, be unexpired and name this session's subject; the state must
+// appear exactly once in the query and equal the cookie's; the nonce and verifier cookies must be there; and the
+// state must not have come back before. Nothing is spent until every one of those holds, and only then are the
+// cookies cleared. Any failure answers one in-band 400 that says nothing about which check failed.
+func (s *Server) endpointOIDCCallbackFlow(w http.ResponseWriter, r *http.Request, subject string) (stamp endpointOIDCStamp, nonce, verifier string, ok bool) {
 	bad := func() (endpointOIDCStamp, string, string, bool) {
 		writeErrorReason(w, http.StatusBadRequest, reasonEndpointOIDCCallbackInvalid, "invalid state parameter")
 		return endpointOIDCStamp{}, "", "", false
@@ -603,8 +660,11 @@ func (s *Server) endpointOIDCCallbackFlow(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return bad()
 	}
-	stamp, decoded := decodeEndpointOIDCStamp(stateCookie.Value)
-	if !decoded || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(stamp.State)) != 1 || !adoEntraValidRowID(stamp.RowUID) {
+	stamp, decoded := s.endpointOIDCOpenStamp(stateCookie.Value)
+	now := s.cfg.Now()
+	if !decoded || now.Unix() > stamp.Expires || !adoEntraValidRowID(stamp.RowUID) ||
+		subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(stamp.State)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(stamp.Person), []byte(endpointOIDCPersonDigest(subject))) != 1 {
 		return bad()
 	}
 	nonceCookie, nerr := r.Cookie(s.consoleCookieName(endpointOIDCNonceCookie))
@@ -612,7 +672,7 @@ func (s *Server) endpointOIDCCallbackFlow(w http.ResponseWriter, r *http.Request
 	if nerr != nil || perr != nil || nonceCookie.Value == "" || pkceCookie.Value == "" {
 		return bad()
 	}
-	if !spendEndpointOIDCState(stamp.State, s.cfg.Now()) {
+	if !spendEndpointOIDCState(stamp.State, time.Unix(stamp.Expires, 0), now) {
 		return bad()
 	}
 	s.clearADOCookie(w, endpointOIDCStateCookie)
@@ -633,7 +693,7 @@ func (s *Server) handleEndpointOIDCCallback(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusForbidden, reasonEndpointOIDCNoSession, endpointOIDCNoSessionRefusal)
 		return
 	}
-	stamp, nonce, verifier, ok := s.endpointOIDCCallbackFlow(w, r)
+	stamp, nonce, verifier, ok := s.endpointOIDCCallbackFlow(w, r, subject)
 	if !ok {
 		return
 	}

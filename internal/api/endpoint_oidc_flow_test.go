@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,8 +25,10 @@ import (
 	"testing"
 	"time"
 
+	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -136,10 +139,28 @@ func newOIDCFlow(t *testing.T, binding string) *oidcFlow {
 		AllowTestEndpoints: true,
 		EndpointOIDC:       func() (EndpointOIDCEnv, bool) { return f.env, true },
 	}}
+	f.srv.cfg.OIDC = newOIDCStampAuth(t, bytes.Repeat([]byte{9}, 32))
 	mux := chi.NewRouter()
 	f.srv.mountModelProviderCredentialRoutes(mux)
 	f.mux = mux
 	return f
+}
+
+// newOIDCStampAuth is a console authenticator over a throwaway discovery server, holding key: what signs the
+// sign-in's state cookie. Two of them with the same key are two replicas.
+func newOIDCStampAuth(t *testing.T, key []byte) *oidc.Authenticator {
+	t.Helper()
+	idp := &gooidctest.Server{}
+	srv := httptest.NewServer(idp)
+	idp.SetIssuer(srv.URL)
+	t.Cleanup(srv.Close)
+	auth, err := oidc.New(context.Background(), oidc.Config{
+		IssuerURL: srv.URL, ClientID: "console-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
+	}, key)
+	if err != nil {
+		t.Fatalf("oidc.New: %v", err)
+	}
+	return auth
 }
 
 func (f *oidcFlow) do(subject, path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
@@ -732,5 +753,201 @@ func TestEndpointOIDC_ALostRotationWriteFailsClosed(t *testing.T) {
 			}
 			f.assertEveryRefreshTokenDead(t)
 		})
+	}
+}
+
+// ── the state cookie is signed, bound to the session, and cannot be used to lock anyone out ─────────────────
+
+func withCookieValue(cookies []*http.Cookie, name, value string) []*http.Cookie {
+	out := without(cookies, name)
+	return append(out, &http.Cookie{Name: name, Value: value})
+}
+
+func oidcSpentLen() int {
+	endpointOIDCSpent.Lock()
+	defer endpointOIDCSpent.Unlock()
+	return len(endpointOIDCSpent.until)
+}
+
+func TestEndpointOIDC_ForgedCallbacksCannotFillTheSpentSet(t *testing.T) {
+	f := newOIDCFlow(t, "")
+	stateCookie := f.srv.consoleCookieName(endpointOIDCStateCookie)
+	base := oidcSpentLen()
+	for i := 0; i < endpointOIDCSpentMax+1; i++ {
+		state := fmt.Sprintf("forged-state-%d", i)
+		raw, _ := json.Marshal(endpointOIDCStamp{
+			State: state, RowUID: oidcUID, Digest: "d", Person: endpointOIDCPersonDigest(oidcPersonSub), Expires: adoTestNow.Add(time.Hour).Unix(),
+		})
+		forged := base64.RawURLEncoding.EncodeToString(raw) + "." + base64.RawURLEncoding.EncodeToString([]byte("not a signature"))
+		cookies := []*http.Cookie{
+			{Name: stateCookie, Value: forged},
+			{Name: f.srv.consoleCookieName(endpointOIDCNonceCookie), Value: "n"},
+			{Name: f.srv.consoleCookieName(endpointOIDCPKCECookie), Value: "v"},
+		}
+		if w := f.callback(oidcPersonSub, url.Values{"state": {state}, "code": {"c"}}, cookies); w.Code != http.StatusBadRequest {
+			t.Fatalf("forged callback %d: status %d; want 400", i, w.Code)
+		}
+	}
+	if got := oidcSpentLen(); got != base {
+		t.Fatalf("forged callbacks left %d entries in the spent set (was %d)", got, base)
+	}
+	if _, w := f.capture(t, oidcPersonSub); w.Code != http.StatusFound || w.Header().Get("Location") != f.doneRedirect() {
+		t.Fatalf("a genuine sign-in after the forgeries: status %d Location %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+func TestEndpointOIDC_SpentSetDropsItsOldestEntryWhenFull(t *testing.T) {
+	endpointOIDCSpent.Lock()
+	saved := endpointOIDCSpent.until
+	endpointOIDCSpent.until = map[[sha256.Size]byte]time.Time{}
+	endpointOIDCSpent.Unlock()
+	t.Cleanup(func() {
+		endpointOIDCSpent.Lock()
+		endpointOIDCSpent.until = saved
+		endpointOIDCSpent.Unlock()
+	})
+	now := adoTestNow
+	for i := 0; i < endpointOIDCSpentMax; i++ {
+		if !spendEndpointOIDCState(fmt.Sprintf("s%d", i), now.Add(time.Duration(i+1)*time.Second), now) {
+			t.Fatalf("state %d refused while the set was filling", i)
+		}
+	}
+	if !spendEndpointOIDCState("one-more", now.Add(time.Hour), now) {
+		t.Fatal("a full set refused a fresh state: whoever fills it could lock everyone out")
+	}
+	if got := oidcSpentLen(); got != endpointOIDCSpentMax {
+		t.Errorf("the set holds %d entries; want it capped at %d", got, endpointOIDCSpentMax)
+	}
+	if spendEndpointOIDCState("one-more", now.Add(time.Hour), now) {
+		t.Error("a state spent twice")
+	}
+	endpointOIDCSpent.Lock()
+	_, oldestKept := endpointOIDCSpent.until[sha256.Sum256([]byte("s0"))]
+	_, newerKept := endpointOIDCSpent.until[sha256.Sum256([]byte("s1"))]
+	endpointOIDCSpent.Unlock()
+	if oldestKept || !newerKept {
+		t.Errorf("eviction kept the oldest (%v) or dropped a newer one (kept=%v)", oldestKept, newerKept)
+	}
+	// An entry is forgotten once its attempt has expired.
+	if !spendEndpointOIDCState("s1", now.Add(time.Hour), now.Add(2*time.Hour)) {
+		t.Error("an expired entry still blocks its state")
+	}
+}
+
+func TestEndpointOIDC_StampIsSignedBoundToTheSessionAndExpires(t *testing.T) {
+	stateCookie := func(f *oidcFlow) string { return f.srv.consoleCookieName(endpointOIDCStateCookie) }
+	t.Run("cookies from one person's attempt are refused in another person's session", func(t *testing.T) {
+		f := newOIDCFlow(t, types.OIDCBindingNone)
+		at := f.begin(t, "person-x")
+		w := f.callback("person-y", at.q, at.cookies)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonEndpointOIDCCallbackInvalid) {
+			t.Fatalf("status %d body %q; want a 400 %s", w.Code, w.Body.String(), reasonEndpointOIDCCallbackInvalid)
+		}
+		for _, who := range []string{"person-x", "person-y"} {
+			if _, found := f.stored(t, who); found {
+				t.Errorf("%s holds a sign-in after the planted callback", who)
+			}
+		}
+		if w := f.callback("person-x", at.q, at.cookies); w.Header().Get("Location") != f.doneRedirect() {
+			t.Errorf("the owner's own callback after the refused one: %d %q", w.Code, w.Header().Get("Location"))
+		}
+	})
+	t.Run("a stamp with its body altered is refused", func(t *testing.T) {
+		f := newOIDCFlow(t, "")
+		at := f.begin(t, oidcPersonSub)
+		body, sig, _ := strings.Cut(f.cookie(t, at, endpointOIDCStateCookie), ".")
+		raw, _ := base64.RawURLEncoding.DecodeString(body)
+		var st endpointOIDCStamp
+		_ = json.Unmarshal(raw, &st)
+		st.Digest = "another-digest"
+		altered, _ := json.Marshal(st)
+		forged := base64.RawURLEncoding.EncodeToString(altered) + "." + sig
+		w := f.callback(oidcPersonSub, at.q, withCookieValue(at.cookies, stateCookie(f), forged))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status %d; want 400", w.Code)
+		}
+	})
+	t.Run("a stamp signed under another key is refused", func(t *testing.T) {
+		f := newOIDCFlow(t, "")
+		at := f.begin(t, oidcPersonSub)
+		other := newOIDCStampAuth(t, bytes.Repeat([]byte{3}, 32))
+		body, _, _ := strings.Cut(f.cookie(t, at, endpointOIDCStateCookie), ".")
+		raw, _ := base64.RawURLEncoding.DecodeString(body)
+		mac := other.PurposeMAC(endpointOIDCStampPurpose, raw)
+		forged := body + "." + base64.RawURLEncoding.EncodeToString(mac)
+		if w := f.callback(oidcPersonSub, at.q, withCookieValue(at.cookies, stateCookie(f), forged)); w.Code != http.StatusBadRequest {
+			t.Fatalf("status %d; want 400", w.Code)
+		}
+	})
+	t.Run("two replicas sharing the key accept each other's stamp", func(t *testing.T) {
+		f := newOIDCFlow(t, "")
+		at := f.begin(t, oidcPersonSub)
+		f.srv.cfg.OIDC = newOIDCStampAuth(t, bytes.Repeat([]byte{9}, 32))
+		if w := f.callback(oidcPersonSub, at.q, at.cookies); w.Header().Get("Location") != f.doneRedirect() {
+			t.Fatalf("status %d Location %q", w.Code, w.Header().Get("Location"))
+		}
+	})
+	t.Run("an expired attempt is refused", func(t *testing.T) {
+		f := newOIDCFlow(t, "")
+		at := f.begin(t, oidcPersonSub)
+		f.srv.cfg.Now = func() time.Time { return adoTestNow.Add(11 * time.Minute) }
+		if w := f.callback(oidcPersonSub, at.q, at.cookies); w.Code != http.StatusBadRequest {
+			t.Fatalf("status %d; want 400", w.Code)
+		}
+	})
+	t.Run("a process with no console key offers no sign-in", func(t *testing.T) {
+		f := newOIDCFlow(t, "")
+		f.srv.cfg.OIDC = nil
+		if w := f.do(oidcPersonSub, f.signInPath(), nil); w.Code != http.StatusNotFound {
+			t.Fatalf("status %d; want 404", w.Code)
+		}
+	})
+}
+
+// ── discovery documents may not name an address a gateway can never be ──────────────────────────────────────
+
+func TestEndpointOIDC_DiscoveredURLsRefuseUnsafeIPLiterals(t *testing.T) {
+	for _, tc := range []struct {
+		url       string
+		allowTest bool
+		want      bool
+	}{
+		{"https://idp.example/oauth/token", false, true},
+		{"https://10.1.2.3/oauth/token", false, true}, // an internal authority is expected on RFC 1918
+		{"https://169.254.169.254/latest", false, false},
+		{"https://127.0.0.1/oauth/token", false, false},
+		{"https://[::1]/oauth/token", false, false},
+		{"https://0.0.0.0/oauth/token", false, false},
+		{"https://user:pw@idp.example/token", false, false},
+		{"http://idp.example/token", false, false},
+		{"https://idp.example/token#frag", false, false},
+		{"", false, false},
+		{"http://127.0.0.1:8080/token", true, true},
+	} {
+		if got := endpointOIDCURLUsable(tc.url, tc.allowTest); got != tc.want {
+			t.Errorf("endpointOIDCURLUsable(%q, %v) = %v, want %v", tc.url, tc.allowTest, got, tc.want)
+		}
+	}
+	good := endpointOIDCDiscovery{authorizeURL: "https://idp.example/a", tokenURL: "https://idp.example/t", revocationURL: "https://idp.example/r"}
+	const metadata = "https://169.254.169.254/latest"
+	for name, edit := range map[string]func(*endpointOIDCDiscovery, *string){
+		"authorization_endpoint": func(d *endpointOIDCDiscovery, _ *string) { d.authorizeURL = metadata },
+		"token_endpoint":         func(d *endpointOIDCDiscovery, _ *string) { d.tokenURL = metadata },
+		"jwks_uri":               func(_ *endpointOIDCDiscovery, j *string) { *j = metadata },
+	} {
+		d, jwks := good, "https://idp.example/keys"
+		edit(&d, &jwks)
+		if err := checkEndpointOIDCURLs(&d, jwks, false); err == nil {
+			t.Errorf("a discovery document with a metadata-address %s was accepted", name)
+		}
+	}
+	d := good
+	d.revocationURL = metadata
+	if err := checkEndpointOIDCURLs(&d, "https://idp.example/keys", false); err != nil || d.revocationURL != "" {
+		t.Errorf("a metadata-address revocation_endpoint: err=%v kept=%q; want it dropped and the rest accepted", err, d.revocationURL)
+	}
+	d = good
+	if err := checkEndpointOIDCURLs(&d, "https://idp.example/keys", false); err != nil || d.revocationURL == "" {
+		t.Errorf("a clean document: err=%v revocation=%q", err, d.revocationURL)
 	}
 }

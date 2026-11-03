@@ -305,7 +305,7 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 	})
 	if err != nil {
 		reason := adoCaptureErrorCode(err)
-		slog.WarnContext(ctx, "wardynd: the azure sign-in code exchange failed",
+		slog.WarnContext(ctx, "wardynd: the "+ec.label()+" sign-in code exchange failed",
 			slog.String("row", ec.rowUID), slog.String("reason", reason), slog.Any("err", err))
 		return entraCodeGrant{}, reason
 	}
@@ -317,7 +317,7 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 		return entraCodeGrant{}, reasonStoreError
 	}
 	if reason, ok := s.bindEntraIdentity(ctx, cfg, ec, resp.IDToken, nonce, subject); !ok {
-		slog.WarnContext(ctx, "wardynd: azure sign-in identity binding failed",
+		slog.WarnContext(ctx, "wardynd: "+ec.label()+" sign-in identity binding failed",
 			slog.String("row", ec.rowUID), slog.String("reason", reason))
 		return entraCodeGrant{}, reasonADOCallbackIdentityBinding
 	}
