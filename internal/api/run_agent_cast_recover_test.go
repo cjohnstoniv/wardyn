@@ -326,7 +326,7 @@ func TestAgentCastSweep_APartialReadIsSavedCut(t *testing.T) {
 				t.Fatal(err)
 			}
 			row := waitCastRow(t, f, agentCastRecoveredSession)
-			if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != context.DeadlineExceeded.Error() {
+			if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != true {
 				t.Fatalf("row %v, want a saved cast marked incomplete with the read's error", row)
 			}
 			out := readCast(t, casts, f.run.ID, agentCastRecoveredSession)

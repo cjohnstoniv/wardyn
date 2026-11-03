@@ -251,9 +251,10 @@ func (c *agentCast) flush() (had, maskGap bool) {
 }
 
 // save stores the cast with its session.recording.write row: a success, once the row is durably
-// accepted, clears the run's obligation and any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed). A copy
-// cut short by readErr says so on its row: incomplete, with the read's error; one with bytes the masker
-// dropped says incomplete and mask_gap.
+// accepted, clears the run's obligation and any runner_declined mark; a failure leaves the run
+// unrecorded (declineAgentOutput, save_failed). A copy cut short by readErr says so on its row:
+// incomplete, read_error (the error itself only in the log); one with bytes the masker dropped says
+// incomplete and mask_gap. The same marks go in the cast's header (stampCastFlags).
 func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readErr error, maskGap bool) error {
 	s, runID := c.s, c.run.ID
 	key := recording.CastKey(runID.String(), c.session)
@@ -265,7 +266,10 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 		flags["gap_bytes"] = gap
 	}
 	if readErr != nil {
-		flags["incomplete"], flags["read_error"] = true, readErr.Error()
+		// The error's text goes only to the log: the cast and its row are kept, and it is not masked.
+		flags["incomplete"], flags["read_error"] = true, true
+		slog.WarnContext(ctx, "wardynd: a run's agent output copy ended in an error; its cast is saved incomplete",
+			slog.String("run_id", runID.String()), slog.String("session", c.session), slog.Any("err", readErr))
 	}
 	if maskGap {
 		flags["incomplete"], flags["mask_gap"] = true, true

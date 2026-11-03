@@ -536,7 +536,7 @@ func TestAgentCast_SaveFailureMarksTheRunAndSilenceKeepsItRecorded(t *testing.T)
 		_, _ = tw.Write([]byte("the first half\n"))
 		tw.EndDrain(errors.New("output ack lost"))
 		row := waitCastRow(t, f, agentCastSession)
-		if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != "output ack lost" {
+		if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != true {
 			t.Fatalf("row %v, want a saved cast marked incomplete with the copy's error", row)
 		}
 		if out := readCast(t, casts, f.run.ID, agentCastSession); !strings.Contains(out, "the first half") || !strings.HasSuffix(out, agentCastCutMarker) {
