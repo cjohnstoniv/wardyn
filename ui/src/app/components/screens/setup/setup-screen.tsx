@@ -188,6 +188,7 @@ export function SetupScreen({
   const {
     workspaces,
     loading: wsLoading,
+    error: wsError,
     reload: loadWorkspaces,
   } = useWorkspaceList();
   // Site config feeds the Integrations step's own derivation (SCM/mirror/proxy
@@ -581,16 +582,21 @@ export function SetupScreen({
     );
   }, [status, stepId]);
 
-  const finish = React.useCallback(() => {
+  const finish = React.useCallback(async () => {
     // The INSTALL records completion (POST /setup/onboarding-complete,
     // idempotent, audited). The per-browser flag is still written as a legacy
     // fallback: an older daemon omits onboarding_complete from /setup/status,
     // and firstRunLanding treats absent as not-onboarded — without the local
     // flag such a daemon would re-open the tour on every visit forever.
-    void setupApi.completeOnboarding();
+    // Awaited, then the shell's own copy of /setup/status is re-read: the shell
+    // reads it once and then every few minutes, so without this the logo (or
+    // /admin) sends the admin straight back into this funnel. completeOnboarding
+    // never rejects.
+    await setupApi.completeOnboarding();
     dismissSetup();
+    await refreshShellStatus();
     onDone();
-  }, [onDone]);
+  }, [onDone, refreshShellStatus]);
 
   // M-6 (QM-8/§4.8): the Finish step's own offer — the admin's own model
   // connection and first run are in the User view, so Finish hands off there.
@@ -606,6 +612,7 @@ export function SetupScreen({
     // request short. completeOnboarding never rejects.
     await setupApi.completeOnboarding();
     dismissSetup();
+    await refreshShellStatus();
     if (viewAccess === "session-admin") {
       try {
         await switchView("user", "/setup");
@@ -615,7 +622,7 @@ export function SetupScreen({
       }
     }
     void navigate("/setup");
-  }, [viewAccess, navigate]);
+  }, [viewAccess, navigate, refreshShellStatus]);
 
   const readiness = status ? deriveReadiness(status) : null;
   // Effective default-barrier selection: the explicit click this session if
@@ -655,15 +662,8 @@ export function SetupScreen({
           <p className="text-sm text-foreground">Couldn&apos;t reach Wardyn.</p>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             The setup status request didn&apos;t get an answer, so nothing on
-            this page would be trustworthy. Check that wardynd is running (
-            <code className="rounded bg-background/70 px-1 py-0.5 text-xs">
-              make setup
-            </code>
-            , logs in{" "}
-            <code className="rounded bg-background/70 px-1 py-0.5 text-xs">
-              ~/.wardyn/host-wardynd.log
-            </code>
-            ), then re-check.
+            this page would be accurate. Check that the Wardyn service is
+            running and reachable from this browser, then re-check.
           </p>
           <button
             className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted disabled:opacity-50"
@@ -914,6 +914,7 @@ export function SetupScreen({
           <WorkspacesStep
             workspaces={workspaces}
             loading={wsLoading}
+            error={wsError}
             onReload={loadWorkspaces}
           />
         )}

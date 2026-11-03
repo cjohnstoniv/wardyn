@@ -19,6 +19,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Finish setup now sticks: the console re-reads its setup status right after the install records completion, so the logo or the Admin home no longer sends the admin back into Getting started for up to five minutes.
+- Getting started no longer says the wrong thing in several places: an SSO install whose SSO side does not answer shows "SSO · not answering" instead of "isn't configured", a failed workspace list says so with a Retry instead of "No workspaces onboarded yet", Review no longer shows two verdicts when the barrier is ready and only a model provider is missing, a Kubernetes cluster with no barrier is pointed at the chart settings instead of the Docker daemon, and the welcome screen says "Couldn't reach Wardyn" instead of "Checking…" forever.
 - Docs no longer say a gateway run identity token always lives 10 minutes. It lives 60 to 600 seconds, and 600 by default.
 - A macOS VM run's screen no longer locks while it sits idle: the guest turns the screen lock off at the start of each run. Not yet run on a real Mac.
 - Review now refuses a macOS VM run that starts its terminal in the agent CLI, or whose profile pauses idle runs, instead of failing at start or showing a pause that never happened. A macOS VM is never paused when idle.
