@@ -15,6 +15,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A member policy with no desktop setting now gets the ceiling's desktop controls (for example, copy out opens where the ceiling allows it). Set `desktop` on the policy to keep the narrower defaults.
 
+### Fixed
+
+- A macOS VM run's screen no longer locks while it sits idle: the guest turns the screen lock off at the start of each run. Not yet run on a real Mac.
+- Review now refuses a macOS VM run that starts its terminal in the agent CLI, or whose profile pauses idle runs, instead of failing at start or showing a pause that never happened. A macOS VM is never paused when idle.
+- A macOS VM run whose disk drive is still held by a run that just ended now waits for it, up to 90 seconds, instead of failing at once. 0.10.0-rc.11 refused at once while the earlier run's VM was still shutting down. A run whose drive a live run still holds now also waits up to 90 seconds before it fails, where 0.10.0-rc.11 failed at once.
+
+## [0.10.0-rc.11] — 2026-11-02
+
 ### Added
 
 - A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
@@ -44,7 +52,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Opening a desktop's Files panel on a paused run no longer wakes it. Only a transfer the rules allow does.
 - A BYOI interactive run with a task on a runner skips its warn-only selftest, as one with no task does, so it shows fewer selftest rows.
 - Setup and Claude sign-in no longer accept Wardyn's `agent-base` image as a sign-in image. A one-line install shows Claude sign-in as not ready until you supply a Claude Code image; [the steps](docs/operations/build-images.md#claude-sign-in-image) are in the docs.
-- macOS VMs: a run on a view-only base can be watched from the run page with Watch desktop. Keys, pointer moves and paste never reach the guest. The console's viewer sends no input on a view-only desktop; a new `ui.input.drop` audit row records the first dropped key and pointer move each time the desktop socket opens, and a paste is recorded as a denied `ui.clipboard.transfer`. Built and unit-tested; not yet run on a real Mac ([#3922](https://github.com/cjohnstoniv/wardyn/issues/3922)). This
+- macOS VMs: a run on a view-only base can be watched from the run page with Watch desktop. Keys, pointer moves and paste never reach the guest. The console's viewer sends no input on a view-only desktop; a new `ui.input.drop` audit row records the first dropped key and pointer move each time the desktop socket opens, and a paste is recorded as a denied `ui.clipboard.transfer`. Built and unit-tested; not yet run on a real Mac ([#3922](https://github.com/cjohnstoniv/wardyn/issues/3922)).
 - macOS VMs: a background run's desktop can now be watched, view only, from its run page. Typing, clicking, pasting and clipboard copy are disabled, and watching neither wakes a run nor keeps it alive. A screen can show what the run keeps out of its logs. It's on by default; a site switch or the governance limit `deny_background_desktop_watch` turns it off, and an open view ends within a minute. A run started before the upgrade can't be watched. Built and unit-tested; not yet run on a real Mac.
 - A run's memory and disk on the sandbox card read in GB from 1 GiB, as MB below that. An egress row no longer says "Recorded offline"; a decision that reached Wardyn a minute or more after the runner made it shows "Reached Wardyn later" and the time it was decided.
 - When a member's folder mount is refused for being outside the member workspace roots, the message now names `WARDYN_USER_WORKSPACE_ROOTS` and says an operator sets it.
@@ -53,8 +61,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A background run shows no Take over button, no Attach tile, and no Watch button in the terminal notice. A background run's takeover request shows no Take over in the approval card, the toast or the runs list. Decline and the toast itself stay.
 
 ### Fixed
-- A macOS VM run's screen no longer locks while it sits idle: the guest turns the screen lock off at the start of each run. Not yet run on a real Mac.
-- Review now refuses a macOS VM run that starts its terminal in the agent CLI, or whose profile pauses idle runs, instead of failing at start or showing a pause that never happened. A macOS VM is never paused when idle.
 - A macOS VM run's desktop is no longer recorded, as Review already said. Earlier 0.10.0 prereleases may have stored its screen frames, unmasked, at the Screen and actions level; `desktop.recording.write` on a macOS VM run shows whether they did. Recordings already stored are kept forever by default, unless `WARDYN_RECORDING_RETENTION_DAYS` is set.
 - Review and the docs now say that console and SSH terminal sessions on a macOS VM run are recorded at this run's recording level, as they always were (`session.recording.write`).
 
@@ -72,8 +78,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Docs: what a policy's `github_token` grant needs before a runner's first run.
 - A governance write that clears the UI gateway's caches is no longer undone by a check already in flight: the next request on that replica, warm connections included, meets the change, and the caches clear before the write's success reaches the client. Other replicas keep their existing 30 seconds.
 - A run waiting on its runners' limits now names the same limit on the Launched screen and on the run page, and the sentence follows the runners as they change. With several runners it gives an example runner instead of calling one the nearest, and a single runner reads "<runner> is at a limit: <limit>." It names the limit that holds the run: Runs at once, or the CPU, memory or disk total. A launch into a capped pool with room whose runners were full named the pool's limit; it now names the runner's. The wait reason token is unchanged.
-- A macOS VM run that asks for a disk drive still being released now waits up to 90 seconds in total for all its drives, and the failure after the wait states the wait.
-- A macOS VM run whose disk drive is still held by a run that just ended now waits for it, up to 90 seconds, instead of failing at once. 0.10.0-rc.11 refused at once while the earlier run's VM was still shutting down. A run whose drive a live run still holds now also waits up to 90 seconds before it fails, where 0.10.0-rc.11 failed at once.
+- A macOS VM run that asks for a disk drive still being released now waits up to 90 seconds in total for all its drives, and the failure after the wait states the wait. A drive held by a live run still refuses at once.
 - A macOS VM run's drives now show at the guest's path under `/Users/agent` in the `run.create`, `drive.member.create` and `run.drive.mount` audit rows and in the mount map the dry runs return, instead of the container path under `/home/agent`.
 - The console's terminal reconnect budget is no longer reset by a socket that opens and says nothing: the first terminal byte, or 15 seconds open, resets it. The runner no longer logs an ordinary detach as a "session read failed" warning, and names which side failed when it does warn.
 - The governance admin view no longer says the deployment default set a wall that a standalone profile sets itself. A size the profile omits still follows, and is credited to, the deployment default. No resolved value changes.
