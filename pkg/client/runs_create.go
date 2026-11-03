@@ -507,6 +507,10 @@ type PreflightResult struct {
 	// for an unlisted host and the setup still needed. The policy preview
 	// answers the same block for the same request.
 	Access *AccessFacts `json:"access,omitempty"`
+	// AllowedModels is the governed list of hosted models a run under the caller's profile may ask
+	// for, and AllowedModelsProfile the name of that profile; both absent when no limit binds it.
+	AllowedModels        []string `json:"allowed_models,omitempty"`
+	AllowedModelsProfile string   `json:"allowed_models_profile,omitempty"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy
