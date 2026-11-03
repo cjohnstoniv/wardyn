@@ -73,12 +73,13 @@ type Server struct {
 	mu      sync.Mutex
 	fence   PauseFence // the order of pauses and resumes, as the marker directory keeps it
 	inited  bool
-	// stopping is set by the stop scrub: the run's settings are gone, so no Init or exec starts.
-	stopping bool
 	env     []string // Init's Env and SecretEnv, KEY=VALUE
 	execs   map[string]*detached
 	latest  string
 	counter int
+
+	// stopping is set by the stop scrub: the run's settings are gone, so no Init or exec starts.
+	stopping bool
 }
 
 type detached struct {
