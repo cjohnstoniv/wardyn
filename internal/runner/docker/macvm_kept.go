@@ -133,6 +133,7 @@ func keptSaidExpired(days int, gone bool) error {
 type keptLimitRefusal struct{ error }
 
 func keptSaidMacLimit(limit, need int64) error {
+	//lint:ignore ST1005 the sentence the person reads, as it is
 	return keptLimitRefusal{fmt.Errorf("This Mac keeps machines up to %d GB, and another would need up to %d GB more. "+
 		"Delete one with `wardyn machines delete`, or raise the limit on that Mac.", limit>>30, (need+(1<<30)-1)>>30)}
 }
@@ -663,16 +664,6 @@ func keptWorstOf(dir string) int64 {
 	return keptWorst(man)
 }
 
-// keptWorstBytes is the worst case of every kept machine on this Mac, what the limit is checked against.
-func (c *MacVMConfig) keptWorstBytes() (int64, error) {
-	folders, err := c.keptFolders()
-	var n int64
-	for _, f := range folders {
-		n += keptWorstOf(f.dir)
-	}
-	return n, err
-}
-
 // keptRunsByMachine maps each kept machine a live VM boots to that VM's run id, from the run folders.
 func (c *MacVMConfig) keptRunsByMachine() map[string]string {
 	des, _ := os.ReadDir(c.Layout.RunsDir())
@@ -882,6 +873,7 @@ func (c *MacVMConfig) keptDiskSaid(err error) error {
 	if n == 0 {
 		return err
 	}
+	//lint:ignore ST1005 the sentence the person reads after the admission's own
 	return fmt.Errorf("%w. Its kept machines hold %d GB (`wardyn-runnerd macos-vm machines`).", err, n>>30)
 }
 
