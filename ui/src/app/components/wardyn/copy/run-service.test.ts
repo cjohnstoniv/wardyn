@@ -159,7 +159,7 @@ describe("worseHealth: Go's WorseServiceHealth", () => {
   });
 
   it("counts a missing check reading only for a service that opted in: Starting inside the grace, unknown after it", () => {
-    const NOW = Date.parse("2020-10-29T12:00:00Z");
+    const NOW = Date.now();
     const at = (agoMs: number) => new Date(NOW - agoMs).toISOString();
     const probed = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
     const run = (service: typeof probed | { restart: "on_failure" }, startedAgo: number, withStatus = true) => ({
@@ -175,7 +175,7 @@ describe("worseHealth: Go's WorseServiceHealth", () => {
 
 // The lease line's "Not renewed now" comes from this rule alone, Go's renewableServiceHealth over the served readings.
 describe("serviceHealthRenews", () => {
-  const NOW = Date.parse("2020-10-29T12:00:00Z");
+  const NOW = Date.now();
   const iso = (agoMs: number) => new Date(NOW - agoMs).toISOString();
   const states = ["starting", "healthy", "unhealthy", "unknown"] as const;
   const renews = (h: string) => h === "starting" || h === "healthy";

@@ -22,22 +22,22 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// probeRunner answers each exec by its argv, so a test gives the state file and the port check their own answers.
-type probeRunner struct {
+// portCheckRunner answers each exec by its argv, so a test gives the state file and the port check their own answers.
+type portCheckRunner struct {
 	*fakeRunner
 	mu     sync.Mutex
 	answer func(spec runner.ExecSpec) (*runner.ExecSession, error)
 	execs  [][]string
 }
 
-func (r *probeRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+func (r *portCheckRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	r.mu.Lock()
 	r.execs = append(r.execs, slices.Clone(spec.Argv))
 	r.mu.Unlock()
 	return r.answer(spec)
 }
 
-func (r *probeRunner) argvs() [][]string {
+func (r *portCheckRunner) argvs() [][]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.execs)
@@ -177,7 +177,7 @@ func TestCheckServicePort_NotRunAndTimeout(t *testing.T) {
 	run := serviceRun(time.Now(), "ref", time.Minute)
 	run.Service = probedService("/healthz")
 	f := newServiceHealthFixture(t, nil, func(c *Config) {
-		c.Runner = &probeRunner{fakeRunner: &fakeRunner{}, answer: func(runner.ExecSpec) (*runner.ExecSession, error) {
+		c.Runner = &portCheckRunner{fakeRunner: &fakeRunner{}, answer: func(runner.ExecSpec) (*runner.ExecSession, error) {
 			return nil, errors.New("exec refused")
 		}}
 	})
@@ -188,7 +188,7 @@ func TestCheckServicePort_NotRunAndTimeout(t *testing.T) {
 	pr, pw := io.Pipe()
 	closed := make(chan struct{})
 	f = newServiceHealthFixture(t, nil, func(c *Config) {
-		c.Runner = &probeRunner{fakeRunner: &fakeRunner{}, answer: func(runner.ExecSpec) (*runner.ExecSession, error) {
+		c.Runner = &portCheckRunner{fakeRunner: &fakeRunner{}, answer: func(runner.ExecSpec) (*runner.ExecSession, error) {
 			return &runner.ExecSession{
 				Stdin: &writeLog{}, Stdout: pr, Stderr: strings.NewReader(""),
 				Wait:  func() (int, error) { return 0, nil },
@@ -260,9 +260,9 @@ func TestServiceProbeObservation_Counts(t *testing.T) {
 
 // probeSweepFixture is a health fixture whose runner answers the state file with stateFile and the port check
 // with port(); run is a fresh service that opted in to Wardyn's check.
-func probeSweepFixture(t *testing.T, stateFile string, port func() (string, int), sv *types.RunService) (*serviceHealthFixture, *probeRunner, types.AgentRun) {
+func probeSweepFixture(t *testing.T, stateFile string, port func() (string, int), sv *types.RunService) (*serviceHealthFixture, *portCheckRunner, types.AgentRun) {
 	t.Helper()
-	pr := &probeRunner{fakeRunner: &fakeRunner{}, answer: func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+	pr := &portCheckRunner{fakeRunner: &fakeRunner{}, answer: func(spec runner.ExecSpec) (*runner.ExecSession, error) {
 		if spec.Argv[0] == "cat" {
 			return portAnswer(stateFile, 0, nil), nil
 		}
