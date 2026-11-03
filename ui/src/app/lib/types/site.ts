@@ -555,4 +555,10 @@ export interface SiteMacOSVM {
   allow_background_watch?: boolean;
   /** A person may open a window onto their own macOS VM run from its Mac. Absent reads off; only true turns it on. */
   allow_attended_window?: boolean;
+  /** A person may keep a macOS VM on their own Mac between interactive runs. Absent reads off; only true turns it on. */
+  allow_kept_machines?: boolean;
+  /** A kept machine nobody has used for this many days is deleted. 1 to 90; absent reads 30. */
+  kept_machine_idle_days?: number;
+  /** Kept machines one person may have. 1 to 4; absent reads 1. */
+  max_kept_machines_per_person?: number;
 }

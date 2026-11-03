@@ -242,12 +242,24 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
-  // The macOS VM block of the site config: max_base_age_days, the background-watch switch and the window switch.
+  // The macOS VM block of the site config: max_base_age_days, the background-watch and window switches, and the three kept-machine keys.
   it("SiteMacOSVM (`macos_vm` in site config): full parity with the TS mirror", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteMacOSVM");
-    expect(goTags).toEqual(["max_base_age_days", "allow_background_watch", "allow_attended_window"]);
+    expect(goTags).toEqual(["max_base_age_days", "allow_background_watch", "allow_attended_window", "allow_kept_machines", "kept_machine_idle_days", "max_kept_machines_per_person"]);
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteMacOSVM");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
+  // The kept machine's state and the reason a delete is under way are closed sets the console words each of.
+  it("KeptMachineState and KeptMachineDeleteReason are the Go constants", () => {
+    const goState = readFileSync(join(root, "internal/types/kept_machine.go"), "utf8");
+    const states = [...goState.matchAll(/KeptMachineState = "([a-z_]+)"/g)].map((m) => m[1]);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/kept-machine.ts"), "utf8");
+    const union = (name: string) => [...(new RegExp(`type ${name} = ([^;]+);`).exec(ts)?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(new Set(union("KeptMachineState"))).toEqual(new Set(states));
+    const goReasons = readFileSync(join(root, "pkg/client/machines.go"), "utf8");
+    const reasons = [...goReasons.matchAll(/KeptMachineDeletedBy\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(new Set(union("KeptMachineDeleteReason"))).toEqual(new Set(reasons));
   });
 
   // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
@@ -311,6 +323,11 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
     // #1991: the drive catalogue's create block, keep_work_folder and enforcement included.
     ["MemberDriveCreate", "pkg/client/me_drives.go", "MemberDriveCreate", "ui/src/app/lib/api/me-drives.ts"],
+    // Kept macOS VM machines: the person's list, its envelope, the create request's machine and the run read's.
+    ["KeptMachine", "pkg/client/machines.go", "KeptMachine", "ui/src/app/lib/types/kept-machine.ts"],
+    ["MyMachines", "pkg/client/machines.go", "MyMachines", "ui/src/app/lib/types/kept-machine.ts"],
+    ["RunMachine", "pkg/client/machines.go", "RunMachineRequest", "ui/src/app/lib/types/kept-machine.ts"],
+    ["runMachineView", "internal/api/run_kept_machine.go", "RunMachine", "ui/src/app/lib/types/kept-machine.ts"],
     // GET /me's `service` block, present only for a service identity's token.
     ["meServiceReach", "internal/api/me_service_reach.go", "ServiceReach", "ui/src/app/lib/api/health.ts"],
     ["meReachPreset", "internal/api/me_service_reach.go", "ServiceReachPreset", "ui/src/app/lib/api/health.ts"],

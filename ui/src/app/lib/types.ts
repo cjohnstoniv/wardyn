@@ -14,6 +14,7 @@ export * from "./types/runs";
 export * from "./types/run-policy-wall-preset";
 export * from "./types/preflight";
 export * from "./types/run-create";
+export * from "./types/kept-machine";
 export * from "./types/policy";
 export * from "./types/workspaces";
 export * from "./types/profile";

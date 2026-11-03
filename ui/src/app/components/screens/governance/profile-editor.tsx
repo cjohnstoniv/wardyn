@@ -25,6 +25,7 @@ import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
+import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
@@ -418,6 +419,13 @@ export function ProfileEditor({
           checked={!!limits.deny_background_desktop_watch}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_background_desktop_watch: v }))}
+        />
+        <LimitRow
+          label={KEEP_POLICY.LABEL}
+          hint={KEEP_POLICY.HINT}
+          checked={!!limits.deny_kept_machines}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, deny_kept_machines: v }))}
         />
         {/* The user-drive door (0.7 user drives, §5 #5). Its two strings live
             in governance-prompt.md §7.2 and governance-copy.ts, never in the

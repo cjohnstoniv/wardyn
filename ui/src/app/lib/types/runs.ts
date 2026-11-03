@@ -16,6 +16,7 @@ import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
 import type { RunnerPoolSelection } from "./runner-pools";
+import type { RunMachine } from "./kept-machine";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
@@ -587,6 +588,8 @@ export interface RunDetail extends AgentRun {
   macos_disk?: RunMacOSDisk;
   // The wall preset the run was launched with, never its spec (GET /runs/{id} only).
   wall_preset?: RunWallPreset;
+  // The kept machine the run keeps or resumed (GET /runs/{id} only); absent for a run that keeps none.
+  machine?: RunMachine;
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing

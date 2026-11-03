@@ -35,6 +35,7 @@ import { MyComponentsCard } from "./my-components-card";
 import { WallPresetsCard } from "./wall-presets-card";
 import { YourWallsCard } from "./your-walls-card";
 import { MyRunnerAndPoolsCards } from "./my-pools-card";
+import { KeptMachinesCard } from "./kept-machines-card";
 import { InvitationsCard } from "./invitations-card";
 import { ApiTokensCard } from "./api-tokens-card";
 import { ServiceIdentitiesCard } from "./service-identities-card";
@@ -98,6 +99,9 @@ export function YourAccountScreen() {
           {/* 0.9 (M-RN-2): the person's own computer that runs their runs. User view only; renders
               nothing while runners are off. */}
           {!adminView && <MyRunnerAndPoolsCards />}
+          {/* rc.12: the macOS VMs the person keeps on their own Mac between runs. User view only; renders nothing while
+              nothing is kept and keeping is not allowed to them. */}
+          {!adminView && <KeptMachinesCard />}
           <SshKeysPane heading="h3" />
           {/* ATT-LOGIN-UI: the computers signed in with the Wardyn CLI, each with its own Sign out. Absent where
               CLI sign-in is not served. */}
