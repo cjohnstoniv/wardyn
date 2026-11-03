@@ -14,7 +14,7 @@ const (
 	keptMachineKeepOrResume   = "Ask for one of machine.keep and machine.resume, not both."
 	keptMachineFreshNeedsMsg  = "machine.fresh starts a kept machine again, so it needs machine.resume."
 	keptMachineNameNeedsKeep  = "machine.name names a new kept machine, so it needs machine.keep."
-	keptMachineNothingAsked   = "machine asks for nothing: set machine.keep, or machine.resume."
+	keptMachineNothingAsked   = "Set machine.keep, or machine.resume: machine asks for nothing."
 	keptMachineSiteOffMsg     = "Kept machines are turned off for this install. An admin can turn on macos_vm.allow_kept_machines."
 	keptMachineInteractiveMsg = "Only an interactive macOS VM run can keep or resume a machine."
 	keptMachineGovernanceMsg  = "Your organisation's governance profile doesn't allow kept machines."
@@ -39,7 +39,8 @@ func keptMachineResidentSecretsMsg(kinds []string) string {
 // keptSecretKinds is the {kinds} word list, in the order the sentence names them.
 var keptSecretKinds = []string{keptKindEnv, keptKindFile, keptKindSSH, keptKindGit}
 
-const (
+// The words, never a sentence's start, so vars: the sentence census reads every string const.
+var (
 	keptKindEnv  = "environment secrets"
 	keptKindFile = "file secrets"
 	keptKindSSH  = "SSH keys"
