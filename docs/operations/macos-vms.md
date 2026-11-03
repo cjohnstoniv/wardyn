@@ -100,7 +100,8 @@ A run's VM is deleted when the run ends. To keep it on your own Mac, an admin tu
 | List your kept machines | `wardyn machines` (`--json` for JSON) |
 | Delete one, with its files, tools and sign-ins | `wardyn machines delete <id\|name>`. It asks first; without a terminal, add `--yes` |
 
-- A resumed machine is kept again when the run stops. A machine a run holds cannot be deleted until that run ends.
+- A resumed machine is kept again when the run stops. A machine a run holds is in use and cannot be deleted.
+- A machine stops being in use when the Mac records the run's stop. If the Mac could not save the stop, the machine shows in use until the Mac saves it, usually at the Mac's next sweep a few minutes later.
 - `--keep-machine` and `--resume-machine` do not go together, `--machine-name` needs `--keep-machine`, and `--fresh` needs `--resume-machine`. None of them works with `--file`.
 - Kept machines are folders in `macos-vm.noindex/kept/` on the Mac.
 
@@ -143,7 +144,7 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 #### Deleting a kept machine
 
 - `wardyn machines delete <id|name>` asks first. Without a terminal it refuses, and `--yes` deletes without asking. An admin deletes someone's machine with `DELETE /machines/kept/{id}` ([sdk.md](../sdk.md#kept-machines)).
-- **In use.** A machine a run holds is refused (`409`, `kept_machine_in_use`) until that run ends.
+- **In use.** A machine a run holds is refused (`409`, `kept_machine_in_use`) until the Mac records the run's stop, or saves it at its next sweep when it could not at the stop.
 - **The Mac is offline.** The delete is accepted (`202`) and waits. It finishes when the Mac is back, and `wardyn machines` shows the machine as deleting. If the Mac is no longer registered, Wardyn only records the delete (`record_only`).
 - **Unconfirmed.** If the Mac's answer is lost, Wardyn cannot tell whether the machine is gone (`503`, `kept_machine_delete_unconfirmed`). The delete stays pending and is retried until the Mac confirms. You cannot resume the machine meanwhile.
 - **Refused by the Mac.** If the Mac refuses before removing anything (`503`, `kept_machine_delete_failed`), the machine is kept. Run the delete again.
