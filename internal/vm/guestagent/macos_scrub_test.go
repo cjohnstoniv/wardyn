@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every value below is fake: the scrub's tests never hold a real credential.
@@ -440,5 +441,59 @@ func TestScrubClientRoundTrip(t *testing.T) {
 	b, _ := json.Marshal(InitResult{Scrub: &want})
 	if !strings.Contains(string(b), `"scrub":{"when":"stop","outcome":"failed","removed":{"ca_untrust_refused":1},"ca_sha256":[`) {
 		t.Errorf("InitResult JSON = %s", b)
+	}
+}
+
+// Only Wardyn's reserved sections leave ~/.aws/config; the person's stay byte for byte.
+func TestScrubAWSConfigKeepsAPersonsSections(t *testing.T) {
+	wardyn := "[sso-session wardyn]\nsso_start_url = https://start.example/\nsso_region = us-east-1\n\n" +
+		"[profile wardyn]\nsso_session = wardyn\noutput = json\n"
+	person := "# mine\n[profile personal]\nregion = eu-west-1\nrole_arn = arn:aws:iam::000000000000:role/fake\n\n[default]\r\nregion = us-west-2"
+	for _, when := range []string{ScrubAtStop, ScrubAtBoot} {
+		for _, tc := range []struct {
+			name, conf, want string
+			gone             bool
+		}{
+			{"mixed", "[profile personal]\nregion = eu-west-1\n\n" + wardyn + "[default]\r\nregion = us-west-2",
+				"[profile personal]\nregion = eu-west-1\n\n[default]\r\nregion = us-west-2", false},
+			{"wardyn first", wardyn + person[len("# mine\n"):], person[len("# mine\n"):], false},
+			{"only wardyn's", "# written by a run\n" + wardyn, "", true},
+			{"none", person, person, false},
+			{"malformed", "region = eu-west-1\n" + wardyn, "region = eu-west-1\n" + wardyn, false},
+			{"unclosed header", wardyn + "[profile personal\nregion = x\n", wardyn + "[profile personal\nregion = x\n", false},
+		} {
+			t.Run(when+"/"+tc.name, func(t *testing.T) {
+				m, root := scrubOn(t, &fakeRunner{})
+				put(t, root, homePath(awsConfig), tc.conf)
+				p := filepath.Join(root, homePath(awsConfig))
+				if err := os.Chmod(p, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				old := time.Now().Add(-time.Hour).Truncate(time.Second)
+				if err := os.Chtimes(p, old, old); err != nil {
+					t.Fatal(err)
+				}
+				rep := m.Scrub(context.Background(), when)
+				if tc.gone {
+					if exists(root, homePath(awsConfig)) {
+						t.Fatal("a config holding only Wardyn's sections is left")
+					}
+					return
+				}
+				if got := read(t, root, homePath(awsConfig)); got != tc.want {
+					t.Fatalf("config =\n%q\nwant\n%q", got, tc.want)
+				}
+				fi, _ := os.Stat(p)
+				if fi.Mode().Perm() != 0o600 {
+					t.Errorf("mode = %v, want the old 0600", fi.Mode().Perm())
+				}
+				if untouched := tc.conf == tc.want; untouched != fi.ModTime().Equal(old) {
+					t.Errorf("untouched = %v but mtime moved = %v", untouched, !fi.ModTime().Equal(old))
+				}
+				if rep.Outcome != ScrubDone {
+					t.Errorf("report = %+v", rep)
+				}
+			})
+		}
 	}
 }

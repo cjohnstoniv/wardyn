@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // The strings that mark a file in the agent's home as Wardyn's placeholder, never a person's own
@@ -41,9 +42,9 @@ var ScrubSentinels = []string{ScrubSentinelClaude, ScrubSentinelProxyInjected, S
 	ScrubSentinelKubectl, ScrubSentinelAWSAccessKeyID, ScrubSentinelAWSSecretAccessKey}
 
 // MacScrubHomeFiles are the files under the agent's home a run's prep can write a credential
-// placeholder into. One is removed only when it holds a ScrubSentinels string (or, for .aws/config,
-// Wardyn's ScrubAWSProfile block); without one it is the person's own and stays. Artifact mirror
-// records are URL-only and not listed: they stay.
+// placeholder into. One is removed only when it holds a ScrubSentinels string; without one it is the
+// person's own and stays. .aws/config is the exception: only Wardyn's ScrubAWSProfile sections leave
+// it (scrubAWSConfig). Artifact mirror records are URL-only and not listed: they stay.
 var MacScrubHomeFiles = []string{
 	".claude/.credentials.json",
 	".claude-run/.credentials.json",
@@ -82,6 +83,7 @@ const (
 	ScrubGitRoutes        = "git_routes"
 	ScrubRunDirs          = "run_dirs"
 	ScrubDesktopPassword  = "desktop_password"
+	ScrubAWSProfiles      = "aws_profiles"
 )
 
 // scrubReadMax bounds a file the scrub reads: every file Wardyn writes is far smaller, and a larger
@@ -230,10 +232,14 @@ func (m MacScrub) scrubHome(s *scrubbing) {
 		}
 		s.fail(p, err)
 	}
+	m.scrubAWSConfig(home, s)
 	for _, rel := range MacScrubHomeFiles {
+		if rel == awsConfig {
+			continue
+		}
 		b, err := readHomeFile(home, rel)
 		s.fail(rel, err)
-		if err != nil || !wardynPlaceholder(rel, b) {
+		if err != nil || !wardynPlaceholder(b) {
 			continue
 		}
 		err = home.Remove(rel)
@@ -278,24 +284,92 @@ func readHomeFile(home *os.Root, rel string) ([]byte, error) {
 	return home.ReadFile(rel)
 }
 
-// wardynPlaceholder is the content rule: b holds a placeholder string, or it is ~/.aws/config with
-// Wardyn's profile or sso-session block.
-func wardynPlaceholder(rel string, b []byte) bool {
+// wardynPlaceholder is the content rule: b holds a placeholder string.
+func wardynPlaceholder(b []byte) bool {
 	for _, s := range ScrubSentinels {
 		if bytes.Contains(b, []byte(s)) {
 			return true
 		}
 	}
-	if rel != ".aws/config" {
+	return false
+}
+
+const awsConfig = ".aws/config"
+
+// scrubAWSConfig removes Wardyn's [profile wardyn] and [sso-session wardyn] sections from
+// ~/.aws/config and keeps every other section byte for byte; the file goes only when nothing but
+// blank lines and comments is left. A file it cannot read as sections is left whole.
+func (m MacScrub) scrubAWSConfig(home *os.Root, s *scrubbing) {
+	b, err := readHomeFile(home, awsConfig)
+	s.fail(awsConfig, err)
+	if err != nil || b == nil || !wellFormedINI(string(b)) {
+		return
+	}
+	drop := func(sec []string) bool { return wardynAWSSection(sec[0]) }
+	conf, n := dropSections(string(b), drop)
+	switch {
+	case n == 0:
+		return
+	case onlyComments(conf):
+		err = home.Remove(awsConfig)
+		if err == nil {
+			s.add(ScrubAWSProfiles, n)
+			s.add(ScrubPlaceholderFiles, 1)
+		}
+	default:
+		n, err = m.rewrite(home, awsConfig, drop)
+		s.add(ScrubAWSProfiles, n)
+	}
+	s.fail(awsConfig, err)
+}
+
+// wardynAWSSection is a [profile wardyn] or [sso-session wardyn] header: names Wardyn reserves.
+func wardynAWSSection(header string) bool {
+	h := strings.TrimSpace(header)
+	if !strings.HasPrefix(h, "[") || !strings.HasSuffix(h, "]") {
 		return false
 	}
-	for _, l := range strings.Split(string(b), "\n") {
-		switch strings.Join(strings.Fields(l), " ") {
-		case "[profile " + ScrubAWSProfile + "]", "[sso-session " + ScrubAWSProfile + "]":
-			return true
-		}
+	switch strings.Join(strings.Fields(h[1:len(h)-1]), " ") {
+	case "profile " + ScrubAWSProfile, "sso-session " + ScrubAWSProfile:
+		return true
 	}
 	return false
+}
+
+func iniComment(l string) bool {
+	t := strings.TrimSpace(l)
+	return t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";")
+}
+
+// wellFormedINI is text whose lines before the first section are blank or comments, and whose
+// every section header is closed.
+func wellFormedINI(conf string) bool {
+	if !utf8.ValidString(conf) {
+		return false
+	}
+	inSection := false
+	for _, l := range strings.Split(conf, "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(t, "["):
+			if !strings.HasSuffix(t, "]") {
+				return false
+			}
+			inSection = true
+		case !inSection && !iniComment(l):
+			return false
+		}
+	}
+	return true
+}
+
+func onlyComments(conf string) bool {
+	for _, l := range strings.Split(conf, "\n") {
+		if !iniComment(l) {
+			return false
+		}
+	}
+	return true
 }
 
 // rewrite drops from an INI- or TOML-shaped file in the agent's home every section drop names, and
@@ -341,29 +415,28 @@ func (m MacScrub) rewrite(home *os.Root, rel string, drop func(section []string)
 }
 
 // dropSections splits conf at its section headers (a line that starts with "[") and leaves out each
-// section drop names; the lines before the first header always stay.
+// section drop names; the lines before the first header always stay, and every kept line keeps its
+// bytes, its line ending included.
 func dropSections(conf string, drop func(section []string) bool) (string, int) {
 	secs := [][]string{nil}
-	for _, l := range splitLines(conf) {
+	for _, l := range strings.SplitAfter(conf, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(l), "[") {
 			secs = append(secs, nil)
 		}
 		secs[len(secs)-1] = append(secs[len(secs)-1], l)
 	}
-	var out []string
+	var out strings.Builder
 	n := 0
 	for i, sec := range secs {
 		if i > 0 && drop(sec) {
 			n++
 			continue
 		}
-		out = append(out, sec...)
+		for _, l := range sec {
+			out.WriteString(l)
+		}
 	}
-	kept := strings.Join(out, "\n")
-	if kept != "" {
-		kept += "\n"
-	}
-	return kept, n
+	return out.String(), n
 }
 
 // brokerRoute is a git [url "<base>/wardyn/gh/..."] or [url "<base>/wardyn/git/..."] header, the
