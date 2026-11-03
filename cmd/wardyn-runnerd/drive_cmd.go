@@ -730,12 +730,17 @@ func (j driveOpenJob) copyOut(ctx context.Context) (*driveOpenCopy, error) {
 	}
 	if code != 0 {
 		said0 := len(said.lines)
+		if said.more && said0 > 0 {
+			said.lines = said.lines[:said0-1] // the last kept line was cut where the 64 KiB ended
+		}
 		said.lines = driveOpenUnreadLines(said.lines)
 		switch {
 		case len(said.lines) > 0:
 			c.unread, c.unreadText = len(said.lines), said.shown(driveOpenUnreadShown)
 		case said0 == 0:
 			c.unread, c.unreadText = 1, []string{fmt.Sprintf("tar ended with code %d without saying why", code)}
+		case said.more:
+			c.unread, c.unreadText = 1, []string{"tar said more than was kept"}
 		}
 		// else: every line was about the volume's own folders or extended attributes, which are not items of the drive.
 	}
@@ -759,13 +764,16 @@ func driveOpenTarArgv() []string {
 // driveOpenTarNoise matches a tar complaint that names only one of driveOpenTarExcluded at the drive's root.
 var driveOpenTarNoise = regexp.MustCompile(`(^|[\s:])\./(` + strings.Join(driveOpenTarExcluded, "|") + `)(/\S*)?(:|$)`)
 
+// driveOpenTarXattr matches a complaint whose message, the part after the last colon, is about extended
+// attributes. A path that holds the words is followed by ": <message>", so it does not match.
+var driveOpenTarXattr = regexp.MustCompile(`(?i)(extended attribute|xattr)[^:]*$`)
+
 // driveOpenUnreadLines is lines without the ones that are not unread items of the drive: a complaint about
 // one of driveOpenTarExcluded, and one about extended attributes.
 func driveOpenUnreadLines(lines []string) []string {
 	var kept []string
 	for _, l := range lines {
-		low := strings.ToLower(l)
-		if driveOpenTarNoise.MatchString(l) || strings.Contains(low, "extended attribute") || strings.Contains(low, "xattr") {
+		if driveOpenTarNoise.MatchString(l) || driveOpenTarXattr.MatchString(l) {
 			continue
 		}
 		kept = append(kept, l)

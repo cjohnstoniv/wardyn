@@ -78,7 +78,9 @@ func (g *driveOpenGuest) handle(w http.ResponseWriter, r *http.Request) {
 			rest = rest[n:]
 		}
 		if g.tarErr != "" {
-			_ = guestagent.WriteFrame(w, guestagent.FrameStderr, []byte(g.tarErr))
+			for b := []byte(g.tarErr); len(b) > 0; b = b[min(len(b), 16<<10):] {
+				_ = guestagent.WriteFrame(w, guestagent.FrameStderr, b[:min(len(b), 16<<10)])
+			}
 		}
 		code = g.tarExit
 	} else if text, bad := g.failing[req.Argv[0]]; bad {
@@ -912,6 +914,8 @@ func TestDriveOpenUnreadItemsLeaveOutVolumeNoise(t *testing.T) {
 		{"nothing on stderr", "", "1 item could not be read", "tar ended with code 1 without saying why"},
 		{"one real among the noise", noise + "tar: ./secret: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./secret: Cannot open: Permission denied"},
 		{"a nested folder of the same name is a real item", "tar: ./docs/.Trashes: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./docs/.Trashes: Cannot open: Permission denied"},
+		{"only noise, but more than was kept", strings.Repeat(noise, 300), "1 item could not be read", "tar said more than was kept"},
+		{"a file named for extended attributes is a real item", noise + "tar: ./reports/xattr-notes.txt: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./reports/xattr-notes.txt: Cannot open: Permission denied"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j, g, _, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
@@ -926,7 +930,7 @@ func TestDriveOpenUnreadItemsLeaveOutVolumeNoise(t *testing.T) {
 			if tc.unread != "" && (!strings.Contains(out.String(), tc.unread) || !strings.Contains(out.String(), tc.line)) {
 				t.Fatalf("output lacks %q and %q:\n%s", tc.unread, tc.line, out)
 			}
-			if strings.Contains(out.String(), "Spotlight") || strings.Contains(out.String(), "xattr") {
+			if strings.Contains(out.String(), "Spotlight") || strings.Contains(out.String(), "Couldn't read xattr") {
 				t.Fatalf("noise shown:\n%s", out)
 			}
 		})
