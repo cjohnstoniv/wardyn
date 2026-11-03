@@ -621,8 +621,9 @@ describe("Run step: machine kind (M5-Revised)", () => {
     expect(intentNow().machine_kind).toBe("linux_vm");
     expect(intentNow().confinement_class).toBeUndefined();
     expect(screen.getByText(NR_MACHINE.VM_HELP)).toBeInTheDocument();
+    expect(screen.getByText(NR_MACHINE.OS_LINUX_HELP)).toBeInTheDocument();
     expect(within(screen.getByRole("group", { name: NR_MACHINE.OS_LABEL })).getByRole("button", { name: NR_MACHINE.OS_LINUX })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText(NR_MACHINE.OS_LATER)).toBeInTheDocument();
+    expect(screen.getByText(NR_MACHINE.OS_WINDOWS_LATER)).toBeInTheDocument();
     const fact = screen.getByTestId("nr-vm-barrier");
     expect(within(fact).getByText(NR_MACHINE.BARRIER_VM)).toBeInTheDocument();
     expect(within(fact).getByText(NR_MACHINE.BARRIER_VM_WHY)).toBeInTheDocument();

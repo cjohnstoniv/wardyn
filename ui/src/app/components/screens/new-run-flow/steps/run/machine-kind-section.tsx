@@ -36,6 +36,8 @@ export function MachineKindSection({ kind, agents = [], macosBase, onChoose, onC
   const offer = useMacOSOffer();
   const macOSOn = macOSVMsEnabled(status);
   const vm = isVMKind(kind);
+  // The site's window switch (setup features); absent reads off.
+  const windowOn = (status?.features as { mac_window?: boolean } | undefined)?.mac_window === true;
   const macOS = kind === "macos_vm";
   const refused = macOSOn && offer && !offer.ok ? refusalText(offer.refusal) : undefined;
   // The draft's first agent whose admin disallows sign-ins in a desktop (the setup status's own harness row):
@@ -67,7 +69,7 @@ export function MachineKindSection({ kind, agents = [], macosBase, onChoose, onC
               ]}
             />
             {refused && <p className={note}>{withCode(refused)}</p>}
-            <MacOSLines on={macOSOn} chosen={macOS} offer={offer} />
+            <MacOSLines loaded={status !== null} on={macOSOn} chosen={macOS} offer={offer} windowOn={windowOn} />
           </div>
           {macOS && offer?.ok && hasBaseChoice(offer, macosBase) && <MacOSBasePicker offer={offer} value={macosBase} onChoose={onChooseBase} />}
           <dl data-testid="nr-vm-barrier" className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
@@ -91,13 +93,24 @@ export function MachineKindSection({ kind, agents = [], macosBase, onChoose, onC
   );
 }
 
-/** What stands under the OS row: the Windows line, or for a chosen macOS what it sets up and starts with. */
-function MacOSLines({ on, chosen, offer }: { on: boolean; chosen: boolean; offer: MacOSOffer | undefined }) {
-  if (!on) return <p className={note}>{NR_MACHINE.OS_LATER}</p>;
-  if (!chosen) return <p className={note}>{NR_MACHINE.OS_WINDOWS_LATER}</p>;
+/**
+ * What stands under the OS row: Linux's help, the Windows line (or, with macOS off, the line that says so), or for a
+ * chosen macOS what it gives and starts with. Before the setup status has loaded the macOS part is unknown, so only the
+ * Windows line shows.
+ */
+function MacOSLines({ loaded, on, chosen, offer, windowOn }: { loaded: boolean; on: boolean; chosen: boolean; offer: MacOSOffer | undefined; windowOn: boolean }) {
+  if (!chosen) {
+    return (
+      <>
+        <p className={note}>{NR_MACHINE.OS_LINUX_HELP}</p>
+        <p className={note}>{loaded && !on ? NR_MACHINE.OS_LATER : NR_MACHINE.OS_WINDOWS_LATER}</p>
+      </>
+    );
+  }
   return (
     <>
-      <p className={note}>{NR_MACHINE.MACOS_VIEW_ONLY}</p>
+      <p className={note}>{NR_MACHINE.MACOS_GIVES}</p>
+      <p className={note}>{windowOn ? NR_MACHINE.MACOS_VIEW_ONLY_WINDOW : NR_MACHINE.MACOS_VIEW_ONLY}</p>
       {offer?.ok && offer.guestOS && <p className={note}>{NR_MACHINE.MACOS_ABOUT(offer.guestOS)}</p>}
       {offer?.ok && <p className={note}>{NR_MACHINE.MACOS_SIZE(String(offer.minCPUs), String(offer.minMemoryMiB))}</p>}
     </>
