@@ -178,8 +178,8 @@ func (c *agentCast) endRead(reason string, err error) {
 	}
 }
 
-// errAgentCastRowRejected is a decline whose failure row the audit recorder did not accept: the
-// obligation stays, and the next sweep writes the row again.
+// errAgentCastRowRejected is a decline's failure row, or a stored cast's success row, that the audit
+// recorder did not accept: the obligation stays, and the next sweep writes the row again.
 var errAgentCastRowRejected = errors.New("the audit recorder did not accept the agent output's failure row")
 
 // errAgentCastUnread is a re-read that failed before its first byte: the run's obligation stays for the
@@ -244,8 +244,8 @@ func (c *agentCast) flush() (had, maskGap bool) {
 	return c.cast.HadOutput(), c.mw.capture.dropped
 }
 
-// save stores the cast with its session.recording.write row: a success clears the run's obligation and
-// any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed). A copy
+// save stores the cast with its session.recording.write row: a success, once the row is durably
+// accepted, clears the run's obligation and any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed). A copy
 // cut short by readErr says so on its row: incomplete, with the read's error; one with bytes the masker
 // dropped says incomplete and mask_gap.
 func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readErr error, maskGap bool) error {
@@ -274,10 +274,15 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
 	}
-	s.recordStreamAudit(ctx, c.run.SandboxRef, s.auditEvent(&runID, types.ActorSystem, "wardynd", "session.recording.write",
-		key, outcome, mustJSON(data)))
-	if err != nil {
+	accepted := s.recordStreamAuditDurably(ctx, c.run.SandboxRef, s.auditEvent(&runID, types.ActorSystem, "wardynd",
+		"session.recording.write", key, outcome, mustJSON(data)))
+	switch {
+	case err != nil:
 		return s.declineAgentOutput(ctx, c.run, "save_failed")
+	case !accepted:
+		// The run page finds a cast by its row: the obligation stays, and the sweep writes the row from
+		// the stored cast (settleStoredAgentCasts).
+		return agentCastStoreErr(ctx, runID, "record a run's stored agent output cast", errAgentCastRowRejected)
 	}
 	return s.settleAgentCast(ctx, runID)
 }
@@ -288,8 +293,8 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 // the obligation for the next sweep. The row must be durably accepted before the clear: a rejected row
 // keeps the obligation, and the next sweep writes it again, so a row is never lost; a crash between the
 // row and the clear leaves a second row, which is the price of that. A run that owes no cast (it has
-// one, or was settled) is left as it is. The run is not stopped, under a requirement too: it was admitted recorded, and a recording lost to
-// a restart is a gap on every kind, not a kill.
+// one, or was settled) is left as it is. The run is not stopped, under a requirement too: it was
+// admitted recorded, and a recording lost to a restart is a gap on every kind, not a kill.
 func (s *Server) declineAgentOutput(ctx context.Context, run types.AgentRun, reason string) error {
 	st, ok := s.cfg.Store.(store.RunAgentCastStore)
 	if !ok || !s.agentOutputRecorded(run) {
@@ -337,9 +342,9 @@ const agentCastReadGiveUp = 30 * time.Minute
 const agentCastSweepAge = runOutputPendingStale
 
 // sweepAgentCasts settles every terminal run that still owes its agent output cast, whatever its output
-// row says: a cast already stored settles it; else the runner's copy is re-read into an agent-recovered
-// cast; else the run is marked runner_declined with the failure row. A run this process still holds a
-// tail for is left to that tail. The first error is returned; the obligation stays for the next sweep.
+// row says: a cast already stored gets its row and settles it (settleStoredAgentCasts); else the
+// runner's copy is re-read into an agent-recovered cast; else the run is marked runner_declined with the
+// failure row. A run this process still holds a tail for is left to that tail. The first error is returned; the obligation stays for the next sweep.
 func (s *Server) sweepAgentCasts(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.RunAgentCastStore)
 	if !ok || s.cfg.RecordingStore == nil {
@@ -366,12 +371,14 @@ func (s *Server) sweepAgentCast(ctx context.Context, st store.RunAgentCastStore,
 	if err != nil {
 		return err
 	}
-	stored, err := s.agentCastStored(ctx, id)
+	stored, err := s.storedAgentCasts(ctx, id)
 	switch {
 	case err != nil:
 		return err
-	case stored || !s.agentOutputRecorded(run):
-		return st.ClearRunAgentCastOwed(ctx, id, stored)
+	case len(stored) > 0:
+		return s.settleStoredAgentCasts(ctx, st, run, stored)
+	case !s.agentOutputRecorded(run):
+		return st.ClearRunAgentCastOwed(ctx, id, false)
 	}
 	rec, ok := s.cfg.Runner.(runner.OutputRecoverer)
 	switch {
@@ -398,18 +405,45 @@ func runEnded(run types.AgentRun) time.Time {
 	return run.UpdatedAt
 }
 
-// agentCastStored is whether either agent output cast of the run is in the recording store.
-func (s *Server) agentCastStored(ctx context.Context, runID uuid.UUID) (bool, error) {
+// storedAgentCast is one agent output cast of a run found in the recording store, and its size.
+type storedAgentCast struct {
+	session string
+	size    int64
+}
+
+// storedAgentCasts is the run's agent output casts in the recording store.
+func (s *Server) storedAgentCasts(ctx context.Context, runID uuid.UUID) ([]storedAgentCast, error) {
+	var out []storedAgentCast
 	for _, session := range []string{agentCastSession, agentCastRecoveredSession} {
-		_, _, err := s.cfg.RecordingStore.StatAndTail(ctx, recording.CastKey(runID.String(), session), 0)
+		size, _, err := s.cfg.RecordingStore.StatAndTail(ctx, recording.CastKey(runID.String(), session), 0)
 		switch {
 		case err == nil:
-			return true, nil
+			out = append(out, storedAgentCast{session: session, size: size})
 		case !errors.Is(err, recording.ErrNotFound):
-			return false, err
+			return nil, err
 		}
 	}
-	return false, nil
+	return out, nil
+}
+
+// settleStoredAgentCasts settles a run whose agent output cast is stored while it still owes one: the
+// process that saved it went, or its recorder refused, before the row. The run page finds a cast by its
+// session.recording.write row, so a success row naming each stored cast, from what the store says of it
+// (swept: true; the saver's other marks went with it), is durably written first, then the obligation is
+// cleared with the run recorded. A crash between leaves a second row on the next sweep; never none.
+func (s *Server) settleStoredAgentCasts(ctx context.Context, st store.RunAgentCastStore, run types.AgentRun, stored []storedAgentCast) error {
+	for _, sc := range stored {
+		key := recording.CastKey(run.ID.String(), sc.session)
+		data := map[string]any{"session": sc.session, "key": key, "bytes": sc.size, "swept": true}
+		if sc.session == agentCastRecoveredSession {
+			data["recovered"] = true
+		}
+		if !s.recordStreamAuditDurably(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd",
+			"session.recording.write", key, "success", mustJSON(data))) {
+			return agentCastStoreErr(ctx, run.ID, "record a run's stored agent output cast", errAgentCastRowRejected)
+		}
+	}
+	return agentCastStoreErr(ctx, run.ID, "clear a run's agent output obligation after its cast", st.ClearRunAgentCastOwed(ctx, run.ID, true))
 }
 
 // castCopy is a sweep's re-read of the runner's copy straight into an agent cast, with no output tail:

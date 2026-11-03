@@ -37,10 +37,11 @@ type castStore struct {
 	mu         sync.Mutex
 	required   bool
 	mark       types.RunNotRecorded
-	declines   int   // runner_declined marks written
-	owed       bool  // agent_cast_owed_at is set
-	oweErr     error // SetRunAgentCastOwed fails with it
-	clearFails int   // the next N ClearRunAgentCastOwed calls fail
+	declines   int    // runner_declined marks written
+	owed       bool   // agent_cast_owed_at is set
+	oweErr     error  // SetRunAgentCastOwed fails with it
+	clearFails int    // the next N ClearRunAgentCastOwed calls fail
+	onClear    func() // called as ClearRunAgentCastOwed begins, outside the lock
 }
 
 func (c *castStore) SetRunAgentCastOwed(context.Context, uuid.UUID) error {
@@ -65,6 +66,9 @@ func (c *castStore) DeclineRunAgentCast(context.Context, uuid.UUID) (bool, error
 }
 
 func (c *castStore) ClearRunAgentCastOwed(_ context.Context, _ uuid.UUID, recorded bool) error {
+	if c.onClear != nil {
+		c.onClear()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.clearFails > 0 {
@@ -564,10 +568,12 @@ func TestAgentCast_ACreateFailureOwesNothing(t *testing.T) {
 	}
 }
 
-// rejectingAudit is an audit recorder that accepts nothing, durably or into its spool.
-type rejectingAudit struct{}
+// rejectingAudit is an audit recorder that accepts nothing, durably or into its spool, and counts what it
+// refused.
+type rejectingAudit struct{ refused atomic.Int32 }
 
-func (rejectingAudit) Record(context.Context, types.AuditEvent) error {
+func (a *rejectingAudit) Record(context.Context, types.AuditEvent) error {
+	a.refused.Add(1)
 	return errors.New("audit store down and spool full")
 }
 
@@ -626,7 +632,7 @@ func TestAgentCast_AMarkWithNoRowGetsItsRowBeforeTheClear(t *testing.T) {
 // and the sweep says so. Once the recorder accepts again, the next sweep writes the row and clears it.
 func TestAgentCast_ARejectedRowKeepsTheObligation(t *testing.T) {
 	f, cs := agentCastDeclineFixture(t)
-	f.srv.cfg.Audit = rejectingAudit{}
+	f.srv.cfg.Audit = &rejectingAudit{}
 	if err := f.srv.SweepRunOutputs(t.Context()); !errors.Is(err, errAgentCastRowRejected) {
 		t.Fatalf("sweep: %v, want the rejected row", err)
 	}
@@ -704,4 +710,67 @@ func TestAgentCast_AMiddleChunkDroppedByTheMaskerIsSavedIncomplete(t *testing.T)
 		t.Fatalf("cast %q, want the first and last chunks without the middle one", out)
 	}
 	waitFor(t, "the obligation to settle", func() bool { return !cs.owing() && cs.marked() == "" })
+}
+
+// A process saved the agent cast and went before its session.recording.write row: the run still owes the
+// cast and the run page cannot find it. The sweep writes the success row naming the stored cast, then
+// clears the obligation with the run recorded.
+func TestAgentCast_AStoredCastWithNoRowGetsItsRowBeforeTheClear(t *testing.T) {
+	f, cs := agentCastDeclineFixture(t)
+	key := recording.CastKey(f.run.ID.String(), agentCastSession)
+	cast := "{\"version\": 2}\n[0.1, \"o\", \"agent output\\n\"]\n"
+	if err := f.srv.cfg.RecordingStore.SaveCastNamed(t.Context(), f.run.ID.String(), agentCastSession, strings.NewReader(cast)); err != nil {
+		t.Fatal(err)
+	}
+	rowsAtClear := -1
+	cs.onClear = func() { rowsAtClear = len(castRows(t, f, agentCastSession)) }
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows := castRows(t, f, agentCastSession)
+	if len(rows) != 1 || rows[0]["outcome"] != "success" || rows[0]["target"] != key || rows[0]["key"] != key || rows[0]["swept"] != true {
+		t.Fatalf("rows %v, want one success row naming %s", rows, key)
+	}
+	if rowsAtClear != 1 || cs.owing() || cs.marked() != "" {
+		t.Fatalf("rows at the clear %d, owed %v, mark %q: want the row written before the obligation cleared, the run recorded",
+			rowsAtClear, cs.owing(), cs.marked())
+	}
+}
+
+// A save that succeeds while the audit recorder refuses its row keeps the obligation: the cast is
+// stored but has no row yet. The next sweep, with the recorder back, writes the row and clears it.
+func TestAgentCast_ASavedCastWhoseRowIsRejectedKeepsTheObligation(t *testing.T) {
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
+	_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+	tw, _ := spec.ExecOutput.(*tailWriter)
+	if !ok || tw == nil || tw.cast == nil {
+		t.Fatalf("started=%v, want started with a cast", ok)
+	}
+	rej := &rejectingAudit{}
+	f.srv.cfg.Audit = rej
+	tw.BeginDrain()
+	_, _ = tw.Write([]byte("agent output\n"))
+	tw.EndDrain(nil)
+	key := recording.CastKey(f.run.ID.String(), agentCastSession)
+	waitFor(t, "the save and its refused row", func() bool {
+		_, _, err := casts.StatAndTail(context.Background(), key, 0)
+		return err == nil && rej.refused.Load() > 0
+	})
+	if !cs.owing() || cs.marked() != "" {
+		t.Fatalf("owed %v mark %q, want the obligation kept with the run recorded", cs.owing(), cs.marked())
+	}
+
+	f.srv.cfg.Audit = f.audit
+	ended := time.Now()
+	f.st.mu.Lock()
+	f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
+	f.st.mu.Unlock()
+	dropTail(f)
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows := castRows(t, f, agentCastSession)
+	if len(rows) != 1 || rows[0]["outcome"] != "success" || rows[0]["key"] != key || cs.owing() || cs.marked() != "" {
+		t.Fatalf("rows %v owed %v mark %q, want the sweep's success row and the obligation cleared", rows, cs.owing(), cs.marked())
+	}
 }
