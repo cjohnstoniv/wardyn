@@ -71,6 +71,8 @@ func TestAllowedModels_BrokeredRoutes(t *testing.T) {
 		{"count_tokens refused", llmAnthropicPrefix + "messages/count_tokens", `{"model":"claude-opus-9"}`, 403, `"claude-opus-9" is not on`},
 		{"openai chat refused", llmOpenAIPrefix + "chat/completions", `{"model":"gpt-4"}`, 403, `"gpt-4" is not on`},
 		{"openai responses refused", llmOpenAIPrefix + "responses", `{"model":"gpt-4"}`, 403, `"gpt-4" is not on`},
+		{"codex compaction allowed", llmOpenAIPrefix + "responses/compact", `{"model":"gpt-5","input":"x"}`, 200, ""},
+		{"codex compaction refused", llmOpenAIPrefix + "responses/compact", `{"model":"gpt-4"}`, 403, `"gpt-4" is not on`},
 		{"case sensitive", llmAnthropicPrefix + "messages", `{"model":"Claude-Sonnet-5"}`, 403, `"Claude-Sonnet-5" is not on`},
 		{"no prefix match", llmAnthropicPrefix + "messages", `{"model":"claude-sonnet-5-20260101"}`, 403, "is not on"},
 		{"padded name", llmAnthropicPrefix + "messages", `{"model":" claude-sonnet-5"}`, 403, "is not on"},

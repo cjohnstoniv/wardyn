@@ -39,7 +39,7 @@ const maxModelNameShown = 100
 // rerank, the agent runtime and model customisation jobs.
 var (
 	anthropicModelRoutes = []string{"messages", "messages/count_tokens"}
-	openaiModelRoutes    = []string{"completions", "responses"} // "completions" is also chat/completions
+	openaiModelRoutes    = []string{"completions", "responses", "responses/compact"} // "completions" is also chat/completions; "responses/compact" is Codex remote compaction
 )
 
 // anthropicModelFree are the Anthropic routes that take a file or a skill and name no model.
