@@ -337,6 +337,9 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 	if err != nil {
 		return false, err
 	}
+	// A prefix allow does not open another tag or digest of a restricted
+	// repository (capRead.granted).
+	prefixBlocked := kind == capImage && batch.imageSiblingRestricted(value)
 	sub = types.CanonicalUserSubject(sub)
 	allow := false
 	for _, g := range grants {
@@ -344,13 +347,14 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 			continue
 		}
 		if g.Effect == types.CapabilityDeny {
-			if capValueOverlaps(kind, g.Value, value) {
+			if capDenyOverlaps(kind, g.Value, value) {
 				return false, nil
 			}
 			continue
 		}
 		if capValueMatches(kind, g.Value, value) &&
 			(!restricted || strings.TrimSpace(g.Value) == strings.TrimSpace(value)) &&
+			(!prefixBlocked || !isImagePrefixGrant(g.Value)) &&
 			(g.SubjectType == types.CapabilitySubjectAll || (g.SubjectType == types.CapabilitySubjectUser && g.Subject == sub) ||
 				(g.SubjectType == types.CapabilitySubjectUserType && g.Subject == userType)) {
 			allow = true

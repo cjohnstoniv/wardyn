@@ -14,12 +14,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - A member policy with no desktop setting now gets the ceiling's desktop controls (for example, copy out opens where the ceiling allows it). Set `desktop` on the policy to keep the narrower defaults.
+- Existing `image` capability grants whose value ends in `/*` (for example `registry.example.com/team/*`, which matched nothing until now) now match every image under that path. Review them before upgrading. A stored image value with any other `*`, or a prefix without a registry host, still matches nothing.
 
 ### Fixed
 
 - A macOS VM run's screen no longer locks while it sits idle: the guest turns the screen lock off at the start of each run. Not yet run on a real Mac.
 - Review now refuses a macOS VM run that starts its terminal in the agent CLI, or whose profile pauses idle runs, instead of failing at start or showing a pause that never happened. A macOS VM is never paused when idle.
 - A macOS VM run whose disk drive is still held by a run that just ended now waits for it, up to 90 seconds, instead of failing at once. 0.10.0-rc.11 refused at once while the earlier run's VM was still shutting down. A run whose drive a live run still holds now also waits up to 90 seconds before it fails, where 0.10.0-rc.11 failed at once.
+
+### Added
+
+- An `image` capability grant may be a registry or path prefix ending in `/*` (for example `registry.example.com/team/*`), so one grant covers every image under it. A deny on an image also covers its other spellings, such as capitals in the host, `:443` and Docker Hub short names.
 
 ## [0.10.0-rc.11] — 2026-11-02
 

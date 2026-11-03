@@ -62,6 +62,9 @@ func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value str
 	if err == nil && value == capWildcard {
 		err = fmt.Errorf("value: name one resource, not every one")
 	}
+	if err == nil && kind == capImage && isImagePrefixGrant(value) {
+		err = fmt.Errorf("value: name one image, not a prefix")
+	}
 	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityTargetInvalid, "Invalid availability target: "+err.Error())
 		return "", "", false

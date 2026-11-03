@@ -61,7 +61,7 @@ func (s *Server) seededImageRefusal(r *http.Request, seededOwner, image string) 
 	// only the door differs, and the message says which one.
 	return runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image",
 		"image "+image+" comes from your own workspace's base image and is not granted to you — "+
-			"ask an admin to grant the exact image ref, or launch with the agent's convention image"))
+			"ask an admin for an image grant that covers it, or launch with the agent's convention image"))
 }
 
 func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (governanceCeiling, *runRefusal) {
@@ -85,7 +85,7 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 		}
 		if !granted {
 			return governanceCeiling{}, runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image",
-				"image "+req.Image+" is not granted to you — ask an admin to grant the exact image ref, "+
+				"image "+req.Image+" is not granted to you — ask an admin for an image grant that covers it, "+
 					"or launch with the agent's convention image or an onboarded workspace's base image"))
 		}
 	}

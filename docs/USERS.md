@@ -475,7 +475,7 @@ resolves your drive the same way, in a dry run too:
   - If
     instead the refusal says your work may not come from that provider, ask for a
     `workspace_provider` capability grant naming it.
-- **A custom sandbox image** — an `image` capability grant.
+- **A custom sandbox image** — an `image` capability grant, for that exact image or for a registry prefix such as `registry.example.com/team/*`.
 - **A workspace root**, if you don't have one yet.
 - **A wider egress ceiling** — the stored policy is your admin's to change,
   not yours.
