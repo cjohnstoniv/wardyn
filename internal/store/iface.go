@@ -509,6 +509,45 @@ var _ MemberDriveStore = PG{}
 type KeptMachineStore interface {
 	// ListRunnerPoolsWithMember returns every pool, of any scope and state, that holds runnerID.
 	ListRunnerPoolsWithMember(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPool, error)
+	// CreateKeptMachine inserts m (creating, for run m.RunID) unless its owner keeps limit rows:
+	// ErrKeptMachineLimit, or ErrKeptMachineNameTaken.
+	CreateKeptMachine(ctx context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error)
+	// GetKeptMachine returns machine id whoever owns it (the admin routes), or ErrNotFound.
+	GetKeptMachine(ctx context.Context, id uuid.UUID) (types.KeptMachine, error)
+	// FindKeptMachineOf returns owner's machine whose id or name is ref, else ErrNotFound.
+	FindKeptMachineOf(ctx context.Context, owner, ref string) (types.KeptMachine, error)
+	// GetKeptMachineByRun returns the machine run runID has or last had, or ErrNotFound.
+	GetKeptMachineByRun(ctx context.Context, runID uuid.UUID) (types.KeptMachine, error)
+	// ListKeptMachinesOf returns owner's machines, tombstoned ones included.
+	ListKeptMachinesOf(ctx context.Context, owner string) ([]types.KeptMachine, error)
+	// ListKeptMachines returns one page of every person's machines that f matches, and the total.
+	ListKeptMachines(ctx context.Context, f KeptMachineFilter, p Page) ([]types.KeptMachine, int, error)
+	// BeginKeptMachineUse gives owner's machine to runID in one owner-bound compare-and-swap.
+	BeginKeptMachineUse(ctx context.Context, id uuid.UUID, owner string, runID uuid.UUID) (types.KeptMachine, error)
+	// RecordKeptMachineStop keeps the machine the reporting run holds; ErrNotFound when it does not.
+	RecordKeptMachineStop(ctx context.Context, st KeptMachineStop) (types.KeptMachine, error)
+	// DropUnstartedKeptMachine removes a creating machine of a run that never started.
+	DropUnstartedKeptMachine(ctx context.Context, id, runID uuid.UUID) error
+	// BeginKeptMachineDelete tombstones owner's kept machine (an empty owner means any owner).
+	BeginKeptMachineDelete(ctx context.Context, owner string, id uuid.UUID, by string) (KeptMachineDeletion, error)
+	// AbortKeptMachineDelete puts a machine back to kept while it carries started (never a kill's).
+	AbortKeptMachineDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// FinishKeptMachineDelete removes the row only while it carries started.
+	FinishKeptMachineDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// ListKeptMachineDeletes returns every tombstoned machine, for the reconnect and the sweep.
+	ListKeptMachineDeletes(ctx context.Context) ([]KeptMachineDeletion, error)
+	// ListExpiredKeptMachines returns the kept machines past expiry with no delete started or intended.
+	ListExpiredKeptMachines(ctx context.Context) ([]types.KeptMachine, error)
+	// SetKeptMachineDeleteIntent records, before a kill's claim, that the kill deletes runID's machine.
+	SetKeptMachineDeleteIntent(ctx context.Context, runID uuid.UUID, by, killer string) (KeptMachineDeletion, error)
+	// ClearKeptMachineDeleteIntent drops the intent set at at when its kill did not happen.
+	ClearKeptMachineDeleteIntent(ctx context.Context, id uuid.UUID, at time.Time) error
+	// ListKeptMachineDeleteIntents returns the intents no delete has started from, for reconcile.
+	ListKeptMachineDeleteIntents(ctx context.Context) ([]KeptMachineDeletion, error)
+	// BeginKeptMachineDeleteForKill tombstones the machine from its intent set at at.
+	BeginKeptMachineDeleteForKill(ctx context.Context, id uuid.UUID, at time.Time) (KeptMachineDeletion, error)
+	// CloseKeptMachinesOfRunner removes a revoked runner's machine rows and returns them.
+	CloseKeptMachinesOfRunner(ctx context.Context, runnerID uuid.UUID) ([]types.KeptMachine, error)
 }
 
 // Compile-time assertion: PG satisfies KeptMachineStore.
