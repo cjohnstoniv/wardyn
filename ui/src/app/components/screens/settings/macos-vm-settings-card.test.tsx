@@ -151,6 +151,27 @@ describe("MacOSVMSettingsCard", () => {
     expect(field(card)).toHaveValue("14");
   });
 
+  // UXA-7: a 412 caused by another card's save is not "someone else changed these settings".
+  it("a stale save where this card's own block did not change keeps the edit and says the page changed", async () => {
+    putSiteConfigMock.mockRejectedValue(new HttpError(412, "stale"));
+    snapshotMock.mockResolvedValueOnce({ siteConfig: {}, etag: '"v1"' }).mockResolvedValueOnce({ siteConfig: { components: { autonomy_cap: "L1" } }, etag: '"v3"' });
+    const card = await open();
+    await userEvent.type(field(card), "5");
+    await userEvent.click(saveBtn(card));
+    expect(await within(card).findByRole("status")).toHaveTextContent(C.SETTINGS_STALE_KEPT);
+    expect(within(card).queryByText(C.SETTINGS_SAVED_ELSEWHERE)).toBeNull();
+    expect(field(card)).toHaveValue("5");
+    expect(saveBtn(card)).toBeEnabled();
+  });
+
+  // UXA-25: the hint says who can watch, and what never can be watched.
+  it("the watch switch names the person who started the run and says a controlled Mac is never watched", () => {
+    expect(T.WATCH_LABEL).toBe("Allow watching background desktops");
+    expect(T.WATCH_HINT).toBe(
+      "On by default. The person who started a background macOS run can watch its desktop, view only, unless a governance profile denies it. A Mac that allows desktop control is never watched. Turn this off to stop all watching on this install. A watch that is open ends within a minute.",
+    );
+  });
+
   it("a failed load offers a retry", async () => {
     snapshotMock.mockRejectedValueOnce(new Error("down"));
     render(<MacOSVMSettingsCard />);
