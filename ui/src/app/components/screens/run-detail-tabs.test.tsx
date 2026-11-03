@@ -406,6 +406,19 @@ describe("RunDetailScreen — Audit tab wording", () => {
     expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
   });
 
+  it("says a declined agent output cast could not be saved, with a failure badge and its reason; a saved session is unchanged", async () => {
+    const [failed, saved] = await openAuditTab([
+      { ...base, id: "e6", action: "session.recording.write", target: "run-1~agent", outcome: "failure", data: { session: "agent", reason: "no_tail" } },
+      { ...base, id: "e7", action: "session.recording.write", target: "run-1~console-1", data: { session: "console-1" } },
+    ]);
+    expect(within(failed).getByTestId("run-audit-action")).toHaveTextContent("Could not save the terminal recording");
+    expect(within(failed).getByTestId("run-audit-outcome")).toHaveTextContent("failure");
+    expect(within(failed).getByTestId("run-audit-detail")).toHaveTextContent("reason: no_tail");
+    expect(within(saved).getByTestId("run-audit-action")).toHaveTextContent("Recorded the terminal session");
+    expect(within(saved).queryByTestId("run-audit-outcome")).toBeNull();
+    expect(within(saved).queryByTestId("run-audit-detail")).toBeNull();
+  });
+
   it("reads an egress row with no target as the Audit screen does", async () => {
     const [row] = await openAuditTab([{ ...base, id: "e3", action: "egress.deny", target: "", actor_type: "proxy", outcome: "deny" }]);
     expect(within(row).getByTestId("run-audit-action")).toHaveTextContent("Denied egress to");

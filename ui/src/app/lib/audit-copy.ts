@@ -97,6 +97,11 @@ const ACTION_VERB: Record<string, string> = {
 const SKIPPED_BUILD = "Skipped part of the sandbox image build";
 const isSkippedBuild = (e: AuditEvent): boolean => e.action === "run.build" && e.data?.skipped === true;
 
+// A session.recording.write failure row: a recording that was owed and not stored (an agent output cast that was
+// declined or could not be saved). Its reason is the row's detail line (inboundDetail), and the failure badge shows.
+const AUDIT_RECORDING_NOT_SAVED = "could not save the terminal recording";
+export const isFailedRecordingWrite = (e: AuditEvent): boolean => e.action === "session.recording.write" && e.outcome === "failure";
+
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
@@ -160,6 +165,7 @@ function describeParts(e: AuditEvent): AuditParts {
   if (e.action === "run.build" && e.data?.cache_hit === true) {
     return { lead: AUDIT.REUSED_IMAGE, sep: " — ", object: e.target ?? "" };
   }
+  if (isFailedRecordingWrite(e)) return { lead: capitalize(AUDIT_RECORDING_NOT_SAVED), sep: " — ", object: e.target ?? "" };
   const verb = ACTION_VERB[e.action];
   return { lead: verb ? capitalize(verb) : e.action, sep: " — ", object: e.target ?? "" };
 }
@@ -193,10 +199,12 @@ export function serviceSource(e: AuditEvent): string | null {
 // inboundDetail is the second line of an inbound.allow / inbound.deny row, from what the row recorded: the request
 // (method and path, never the query), how the caller came (a token or a session) and who they matched, or why they
 // were refused. `withRun` ends the line with the run's short id, for the Audit page, which lists several runs; a run's
-// own Audit tab leaves it off. A skipped run.build row's line is its recorded reason. Null for any other row; a field
+// own Audit tab leaves it off. A skipped run.build row's line is its recorded reason, and so is a failed
+// session.recording.write row's ("reason: mask_gap"). Null for any other row; a field
 // the row lacks is left out, never guessed.
 export function inboundDetail(e: AuditEvent, withRun = false): string | null {
   if (isSkippedBuild(e)) return typeof e.data?.reason === "string" && e.data.reason ? e.data.reason : null;
+  if (isFailedRecordingWrite(e)) return typeof e.data?.reason === "string" && e.data.reason ? `reason: ${e.data.reason}` : null;
   if (!isInbound(e)) return null;
   const d = e.data ?? {};
   const text = (k: string) => (typeof d[k] === "string" && d[k] ? (d[k] as string) : "");

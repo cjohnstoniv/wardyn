@@ -78,14 +78,18 @@ func (s *Server) recordMacOSAgent(ctx context.Context, run *types.AgentRun, spec
 	if !run.MachineKind.IsMacOSVM() || interactive || run.NotRecorded != "" {
 		return true
 	}
+	// The reason a declined run's failure row gives (keepRunNotRecorded): no cast opened on its tail, or its
+	// obligation could not be stored.
+	declined := "no_tail"
 	if tw, ok := spec.ExecOutput.(*tailWriter); ok && s.attachAgentCast(*run, tw, agentCastSession) {
 		if s.oweAgentCast(ctx, run.ID) {
 			return true
 		}
 		tw.cast = nil
+		declined = "save_failed"
 	}
 	run.NotRecorded = types.NotRecordedRunnerDeclined
-	return s.keepOrHoldNotRecorded(ctx, run, macOSAgentOutputRequiredMsg)
+	return s.keepOrHoldNotRecorded(ctx, run, macOSAgentOutputRequiredMsg, declined)
 }
 
 // agentOutputRecorded is whether the organisation records run's agent output: a macOS VM task run above

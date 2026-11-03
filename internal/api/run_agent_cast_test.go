@@ -370,7 +370,7 @@ func TestAgentCast_AnObligationThatCannotBeStoredIsNoCast(t *testing.T) {
 		if tw, _ := spec.ExecOutput.(*tailWriter); tw == nil || tw.cast != nil {
 			t.Fatalf("required=%v: the tail kept a cast with no obligation behind it", required)
 		}
-		assertNoCastDecision(t, f, cs, run, ok, required)
+		assertNoCastDecision(t, f, cs, run, ok, required, "save_failed")
 	}
 }
 
@@ -414,7 +414,7 @@ func TestAgentCast_MacOSVMWithNoCastFollowsTheRequiredRule(t *testing.T) {
 				if spec.ExecOutput != nil {
 					t.Fatalf("exec output %T, want none", spec.ExecOutput)
 				}
-				assertNoCastDecision(t, f, cs, run, ok, sc.required)
+				assertNoCastDecision(t, f, cs, run, ok, sc.required, "no_tail")
 			})
 		}
 	}
@@ -429,13 +429,32 @@ func TestAgentCast_MacOSVMWithNoCastFollowsTheRequiredRule(t *testing.T) {
 			f.srv.cfg.RecordingStore = nil // what the recorder needs; the mark was settled before
 			run := f.run
 			ok := f.srv.recordMacOSAgent(context.Background(), &run, &spec, false)
-			assertNoCastDecision(t, f, cs, run, ok, sc.required)
+			assertNoCastDecision(t, f, cs, run, ok, sc.required, "no_tail")
 		})
 	}
 }
 
-func assertNoCastDecision(t *testing.T, f *outputFixture, cs *castStore, run types.AgentRun, started, required bool) {
+// assertNoCastDecision also checks the failure row a decline leaves in Audit: one session.recording.write
+// failure row for the run's agent cast naming wantReason when the run started (a run that failed at start
+// has its run.create failure row instead and no cast row).
+func assertNoCastDecision(t *testing.T, f *outputFixture, cs *castStore, run types.AgentRun, started, required bool, wantReason string) {
 	t.Helper()
+	defer func() {
+		rows := f.audit.eventsFor(f.run.ID, "session.recording.write")
+		if required {
+			if len(rows) != 0 {
+				t.Errorf("a run that failed at start wrote %d agent cast rows, want none", len(rows))
+			}
+			return
+		}
+		var d map[string]any
+		if len(rows) == 1 {
+			_ = json.Unmarshal(rows[0].Data, &d)
+		}
+		if len(rows) != 1 || rows[0].Outcome != "failure" || rows[0].Target != recording.CastKey(f.run.ID.String(), agentCastSession) || d["reason"] != wantReason {
+			t.Errorf("decline rows = %+v, want one failure row for the agent cast with reason %q", rows, wantReason)
+		}
+	}()
 	if run.NotRecorded != types.NotRecordedRunnerDeclined {
 		t.Fatalf("not_recorded = %q, want runner_declined", run.NotRecorded)
 	}
