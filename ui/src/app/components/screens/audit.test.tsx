@@ -279,12 +279,31 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(actors[1]).toHaveTextContent(/system/i);
   });
 
+  it("lets the admin isolate service activity, and names the search box", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "s1", actor_type: "service", action: "token.create" }),
+      ev({ id: "h1", actor_type: "human", action: "person.create", run_id: "run_333" }),
+    ]);
+    renderScreen();
+    await screen.findByText("Created an API token");
+    expect(screen.getByLabelText("Search events")).toBeInTheDocument();
+    // The raw key stays in the row's title; the sentence is the text.
+    expect(screen.getByText("Added a person").getAttribute("title")).toContain("person.create");
+    const actors = screen.getAllByTestId("audit-actor-cell");
+    expect(actors[0]).toHaveTextContent(/service/i);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("combobox", { name: "Actor" }));
+    await user.click(await screen.findByRole("option", { name: "Service" }));
+    await waitFor(() => expect(screen.queryByText("Added a person")).toBeNull());
+    expect(screen.getByText("Created an API token")).toBeInTheDocument();
+  });
+
   it("shows a truncation indicator when the global window is capped at 1000", async () => {
     const many = Array.from({ length: 1000 }, (_, i) => ev({ id: `e${i}`, action: `act.${i}` }));
     listAuditMock.mockResolvedValue(many);
     renderScreen();
 
-    await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Showing the newest 1000 events\. Older events aren't shown here/)).toBeInTheDocument());
   }, 30_000);
 
   it("does not cry truncation at the old 500 cap the console no longer asks for", async () => {
@@ -297,7 +316,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
 
     await screen.findByText(/500 events/);
-    expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing the newest/)).not.toBeInTheDocument();
   });
 
   it("does not show the truncation indicator below the cap", async () => {

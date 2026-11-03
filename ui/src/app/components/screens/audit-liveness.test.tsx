@@ -85,7 +85,7 @@ describe("AuditScreen — the liveness chip stops claiming a feed that stopped a
       }),
     ]);
     renderScreen();
-    expect(await screen.findByText("person.create — Erased")).toBeInTheDocument();
+    expect(await screen.findByText("Added a person — Erased")).toBeInTheDocument();
     const field = screen.getByText("email: Erased");
     expect(field).toHaveAttribute("title", "Erased on request. The event and its place in the log remain.");
     expect(field).toHaveClass("text-muted-foreground");
@@ -110,6 +110,7 @@ describe("AuditScreen — the liveness chip stops claiming a feed that stopped a
       await vi.advanceTimersByTimeAsync(6000);
     });
     expect(screen.queryByText("Live · appending")).toBeNull();
+    expect(screen.getByText("Not updating — retrying")).toBeInTheDocument();
     // The last good view is still there — the fix removes the CLAIM, not the data.
     expect(screen.getByText("1 event")).toBeInTheDocument();
 
