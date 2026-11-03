@@ -13,7 +13,7 @@ import { HeartPulse } from "lucide-react";
 import type { RunDetail, RunService, RunServiceProbe, RunServiceStatus } from "../../../lib/types";
 import { cn } from "../../ui/utils";
 import {
-  DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_HEALTH, SERVICE_PANEL as T, agoText, probeOn, serviceHealthRenews,
+  DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_HEALTH, SERVICE_PANEL as T, agoText, probeOn, serviceHealthRenews, shownProbeHealth,
 } from "../../wardyn/copy/run-service";
 import { Chip, WidgetCard } from "../../wardyn/primitives";
 import { keptUntilText } from "./run-ends-row";
@@ -80,7 +80,9 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
   const reason = reasonOf(s, st);
   const checked = probeOn(s);
   const probe = st?.probe;
-  const probeHealth = SERVICE_HEALTH[probe?.health ?? "starting"] ?? SERVICE_HEALTH.unknown;
+  // With no reading yet: Starting inside the supervisor's grace, Health unknown after it, as renewal reads it.
+  const probeState = shownProbeHealth(run, now) ?? "starting";
+  const probeHealth = SERVICE_HEALTH[probeState];
   // The notes name only the two combinations they describe; any other pair says nothing more than its rows.
   const disagreement =
     checked && st?.health === "healthy" && probe?.health === "unhealthy" ? T.DISAGREE_PROBE_FAILS(s.port ?? 0)
@@ -111,8 +113,12 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
               <Chip tone={probeHealth.tone} dot>
                 {probeHealth.word}
               </Chip>{" "}
-              <span className="text-muted-foreground">· {probe ? T.CHECKED(agoText(probe.observed_at, now)) : T.WAITING_FIRST_CHECK}</span>
-              {probe && <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">{probeDetail(s, probe)}</span>}
+              {(probe || probeState === "starting") && (
+                <span className="text-muted-foreground">· {probe ? T.CHECKED(agoText(probe.observed_at, now)) : T.WAITING_FIRST_CHECK}</span>
+              )}
+              {(probe || probeState !== "starting") && (
+                <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">{probe ? probeDetail(s, probe) : T.PROBE_NONE_YET}</span>
+              )}
             </dd>
           </>
         )}

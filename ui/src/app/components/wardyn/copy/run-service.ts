@@ -76,6 +76,7 @@ export const SERVICE_PANEL = {
   PROBE_BAD_ANSWER: "The answer was not an HTTP status line Wardyn could read.",
   PROBE_FIRST_FAIL: (why: string, n: number) => `The last check failed: ${why} Unhealthy after ${n} in a row.`,
   PAUSED: "Not checked while the run is paused.",
+  PROBE_NONE_YET: "No result of Wardyn's check has been received yet.",
   DISAGREE_PROBE_FAILS: (port: number) => `The sandbox says the service is healthy, but Wardyn's check of port ${port} failed. The lease is not renewed while the two disagree.`,
   DISAGREE_SANDBOX_FAILS: (port: number) => `The sandbox says the service is unhealthy, but port ${port} answers Wardyn's check. The lease is not renewed while the two disagree.`,
   LEASE_BOTH: (ends: string) => `Renewed while both checks say healthy or starting · ends ${ends} if renewal stops`,
@@ -100,16 +101,33 @@ export function worseHealth(a: string, b: string | undefined): ServiceHealthStat
 export const SERVICE_SUPERVISOR_GRACE_MS = 10 * 60_000;
 export const SERVICE_STATUS_STALE_MS = 15 * 60_000;
 
+type ServiceRunTimes = Partial<Pick<AgentRun, "created_at" | "admitted_at">>;
+
+/** A reading not yet made: starting inside the supervisor's grace from the run's start, unknown after it (Go's rule). */
+function missingHealth(run: ServiceRunTimes, now: number): ServiceHealthState {
+  const since = Date.parse(run.admitted_at ?? run.created_at ?? "");
+  return now - since < SERVICE_SUPERVISOR_GRACE_MS ? "starting" : "unknown";
+}
+
+/**
+ * Wardyn's check as it is shown, for a spec that opted in: its reading, or with none yet the grace rule renewal reads
+ * (Go's probeRenewalHealth). Undefined when the spec did not opt in.
+ */
+export function shownProbeHealth(run: ServiceRunTimes & Pick<AgentRun, "service" | "service_status">, now: number): ServiceHealthState | undefined {
+  if (!probeOn(run.service)) return undefined;
+  const p = run.service_status?.probe;
+  return p ? worseHealth(p.health, undefined) : missingHealth(run, now);
+}
+
 /**
  * Whether the service's health lets its lease renew now: Go's renewableServiceHealth over the readings the API serves
  * (a paused or stale one already reads unknown). Each reading must be starting or healthy; a missing one counts as
  * starting inside the supervisor's grace from the run's start and unknown after it; Wardyn's check counts only when
  * the spec opted in. The lease line's "Not renewed now" is this function's false, nothing else.
  */
-export function serviceHealthRenews(run: Pick<AgentRun, "created_at" | "admitted_at" | "service" | "service_status">, now: number): boolean {
-  const since = Date.parse(run.admitted_at ?? run.created_at);
+export function serviceHealthRenews(run: ServiceRunTimes & Pick<AgentRun, "service" | "service_status">, now: number): boolean {
   const read = (r: { health: string; observed_at: string } | undefined): string => {
-    if (!r) return now - since < SERVICE_SUPERVISOR_GRACE_MS ? "starting" : "unknown";
+    if (!r) return missingHealth(run, now);
     return now - Date.parse(r.observed_at) > SERVICE_STATUS_STALE_MS ? "unknown" : r.health;
   };
   const renews = (h: string) => h === "starting" || h === "healthy";
@@ -156,13 +174,14 @@ export const SERVICE_HEALTH: Record<"starting" | "healthy" | "unhealthy" | "unkn
 /**
  * What a live service's chip says in place of "Running", on the run list and the run page: its health, then
  * "· 1 restart" or "· N restarts". A service with no observation yet reads as starting, the way wardynd counts it.
- * With a reading of Wardyn's own check, the word is the worse of the two. Absent for any other run, and for a run
- * that is not RUNNING.
+ * With Wardyn's own check opted in, the word is the worse of the two, a missing check reading counted as the panel
+ * shows it (shownProbeHealth). Absent for any other run, and for a run that is not RUNNING.
  */
-export function serviceBadge(run: Pick<AgentRun, "state" | "service" | "service_status">): ServiceBadge | undefined {
+export function serviceBadge(run: ServiceRunTimes & Pick<AgentRun, "state" | "service" | "service_status">, now = Date.now()): ServiceBadge | undefined {
   if (run.state !== "RUNNING" || !run.service) return undefined;
   const st = run.service_status;
-  const base = st ? SERVICE_HEALTH[worseHealth(st.health, st.probe?.health)] : SERVICE_HEALTH.starting;
+  const sandbox = st ? st.health : "starting";
+  const base = SERVICE_HEALTH[worseHealth(sandbox, probeOn(run.service) ? shownProbeHealth(run, now) : st?.probe?.health)];
   const n = st?.restarts ?? 0;
   return n > 0 ? { ...base, word: `${base.word} · ${n} ${n === 1 ? "restart" : "restarts"}` } : base;
 }

@@ -935,6 +935,19 @@ describe("SummaryHeader — a live service's badge", () => {
     expect(screen.queryByText("Interactive")).toBeNull();
   });
 
+  it("with Wardyn's check opted in, a missing check reading reads Starting inside the grace and Health unknown after it", () => {
+    const probe = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
+    const healthy = { health: "healthy" as const, restarts: 0, observed_at: aheadByHours(-0.01) };
+    show(svc({ service: probe, service_status: healthy, created_at: aheadByHours(-0.01), admitted_at: aheadByHours(-0.01) }));
+    expect(screen.getByText("Starting")).toBeInTheDocument();
+    cleanup();
+    show(svc({ service: probe, service_status: healthy, created_at: aheadByHours(-2), admitted_at: aheadByHours(-2) }));
+    expect(screen.getByText("Health unknown")).toBeInTheDocument();
+    cleanup();
+    show(svc({ service_status: healthy, created_at: aheadByHours(-2), admitted_at: aheadByHours(-2) }));
+    expect(screen.getByText("Healthy")).toBeInTheDocument();
+  });
+
   it("reads Starting before the first health read, and plain Running for a run that is not a service", () => {
     show(svc({ service_status: undefined }));
     expect(screen.getByText("Starting")).toBeInTheDocument();

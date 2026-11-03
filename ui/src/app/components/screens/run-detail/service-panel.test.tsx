@@ -162,9 +162,10 @@ describe("ServicePanel", () => {
       expect(row(T.LEASE)).toHaveTextContent("Renewed while both checks say healthy or starting");
     });
 
-    it("a check with no reading past the grace is unknown to renewal, so the lease says not now", () => {
+    it("a check with no reading past the grace reads Health unknown, as renewal reads it, so the lease says not now", () => {
       showProbe({ health: "healthy" }, undefined);
-      expect(row(T.PROBE)).toHaveTextContent("Starting · waiting for the first check");
+      expect(row(T.PROBE)).toHaveTextContent(new RegExp(`^Health unknown ${T.PROBE_NONE_YET.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+      expect(row(T.PROBE)).not.toHaveTextContent(T.WAITING_FIRST_CHECK);
       expect(row(T.LEASE)).toHaveTextContent("Not renewed now");
     });
 

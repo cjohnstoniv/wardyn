@@ -115,6 +115,7 @@ describe("Wardyn's check strings", () => {
     expect(T.PROBE_BAD_ANSWER).toBe("The answer was not an HTTP status line Wardyn could read.");
     expect(T.PROBE_FIRST_FAIL("GET /healthz answered 503.", 3)).toBe("The last check failed: GET /healthz answered 503. Unhealthy after 3 in a row.");
     expect(T.PAUSED).toBe("Not checked while the run is paused.");
+    expect(T.PROBE_NONE_YET).toBe("No result of Wardyn's check has been received yet.");
     expect(T.DISAGREE_PROBE_FAILS(8080)).toBe("The sandbox says the service is healthy, but Wardyn's check of port 8080 failed. The lease is not renewed while the two disagree.");
     expect(T.DISAGREE_SANDBOX_FAILS(8080)).toBe("The sandbox says the service is unhealthy, but port 8080 answers Wardyn's check. The lease is not renewed while the two disagree.");
     expect(T.LEASE_BOTH("Fri 14:20")).toBe("Renewed while both checks say healthy or starting · ends Fri 14:20 if renewal stops");
@@ -155,6 +156,20 @@ describe("worseHealth: Go's WorseServiceHealth", () => {
     expect(chip("unhealthy", "healthy")).toBe("Unhealthy");
     expect(chip("healthy", "unknown")).toBe("Health unknown");
     expect(chip("healthy", "healthy")).toBe("Healthy");
+  });
+
+  it("counts a missing check reading only for a service that opted in: Starting inside the grace, unknown after it", () => {
+    const NOW = Date.parse("2020-10-29T12:00:00Z");
+    const at = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+    const probed = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
+    const run = (service: typeof probed | { restart: "on_failure" }, startedAgo: number, withStatus = true) => ({
+      state: "RUNNING", service, created_at: at(startedAgo), admitted_at: at(startedAgo),
+      service_status: withStatus ? { health: "healthy" as const, restarts: 0, observed_at: at(0) } : undefined,
+    });
+    expect(serviceBadge(run(probed, 60_000), NOW)?.word).toBe("Starting");
+    expect(serviceBadge(run(probed, SERVICE_SUPERVISOR_GRACE_MS + 1000), NOW)?.word).toBe("Health unknown");
+    expect(serviceBadge(run(probed, SERVICE_SUPERVISOR_GRACE_MS + 1000, false), NOW)?.word).toBe("Health unknown");
+    expect(serviceBadge(run({ restart: "on_failure" }, SERVICE_SUPERVISOR_GRACE_MS + 1000), NOW)?.word).toBe("Healthy");
   });
 });
 
