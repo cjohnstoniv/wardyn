@@ -143,6 +143,8 @@ func (s *Server) ownSecret(ctx context.Context, owner, name string) ([]byte, boo
 func (s *Server) mountModelProviderCredentialRoutes(r chi.Router) {
 	r.Put("/model-providers/{id}/credential", s.handlePutProviderCredential)
 	r.Delete("/model-providers/{id}/credential", s.handleDeleteProviderCredential)
+	r.Get(endpointOIDCSignInRoute, s.handleEndpointOIDCSignIn)     // endpoint_oidc.go
+	r.Get(endpointOIDCCallbackRoute, s.handleEndpointOIDCCallback) // endpoint_oidc.go
 }
 
 // credentialOwner is the namespace the caller's own model credential lives in
@@ -309,6 +311,9 @@ func (s *Server) handleDeleteProviderCredential(w http.ResponseWriter, r *http.R
 	p, ok := s.providerForCredential(w, r, owner, false)
 	if !ok {
 		return
+	}
+	if p.OIDC != nil {
+		s.revokeEndpointOIDC(r.Context(), owner, p)
 	}
 	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), providerCredentialName(p)); err != nil {
 		writeServerError(w, r, "delete model provider credential", err)

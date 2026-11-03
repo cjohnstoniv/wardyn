@@ -451,6 +451,9 @@ type Config struct {
 	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
 	// AzureCLIEntra is that same console application, keyed to an Azure CLI component's id (Server.azureCLIEntra).
 	AzureCLIEntra func(componentID string) ADOEntraConfig
+	// EndpointOIDC reports the console login's issuer and the callback URL the console registers for a custom
+	// endpoint's own sign-in; ok=false means this deployment offers none (endpoint_oidc.go).
+	EndpointOIDC func() (EndpointOIDCEnv, bool)
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// HostResolver is how the model-provider write boundary resolves an azure_foundry endpoint host for its
