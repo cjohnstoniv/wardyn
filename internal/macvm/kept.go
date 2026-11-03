@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -70,8 +71,10 @@ type KeptRecord struct {
 	StopKind string    `json:"stop_kind,omitempty"`
 	// ActiveRun is the run id that booted the machine and has not yet stopped it (KeptStopUpdate clears it);
 	// a stop that is not that run's changes nothing. LastUsed is the latest boot or stop.
-	ActiveRun string    `json:"active_run,omitempty"`
-	LastUsed  time.Time `json:"last_used,omitzero"`
+	ActiveRun string `json:"active_run,omitempty"`
+	// IdleDays is the allowance the latest boot or stop gave ExpiresAt (KeptRecordIdleDays reads it).
+	IdleDays int       `json:"idle_days,omitempty"`
+	LastUsed time.Time `json:"last_used,omitzero"`
 	// Scrubbed is true only when the latest stop ran the guest's scrub; a boot sets it false.
 	Scrubbed  bool      `json:"scrubbed"`
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
@@ -335,11 +338,29 @@ func openKept(e Engine, cfg RunConfig, dir string, now time.Time) (man Manifest,
 // KeptDefaultIdleDays is the idle allowance when a boot or stop is given none.
 const KeptDefaultIdleDays = 30
 
-func keptExpiry(now time.Time, idleDays int) time.Time {
+// keptIdleDays is idleDays with the default for a value that is not positive.
+func keptIdleDays(idleDays int) int {
 	if idleDays <= 0 {
-		idleDays = KeptDefaultIdleDays
+		return KeptDefaultIdleDays
 	}
-	return now.AddDate(0, 0, idleDays)
+	return idleDays
+}
+
+func keptExpiry(now time.Time, idleDays int) time.Time {
+	return now.AddDate(0, 0, keptIdleDays(idleDays))
+}
+
+// KeptRecordIdleDays is the idle allowance rec was last given, for a runner that recovers a stop with no
+// network: the stored IdleDays, else the span from LastUsed to ExpiresAt in whole days (1 to 90) for a record
+// written before the field, else KeptDefaultIdleDays.
+func KeptRecordIdleDays(rec KeptRecord) int {
+	switch {
+	case rec.IdleDays > 0:
+		return rec.IdleDays
+	case !rec.LastUsed.IsZero() && !rec.ExpiresAt.IsZero():
+		return min(max(int(math.Round(rec.ExpiresAt.Sub(rec.LastUsed).Hours()/24)), 1), 90)
+	}
+	return KeptDefaultIdleDays
 }
 
 // markKeptBoot is what every boot writes before its VM starts, after the expiry check: the run that holds the
@@ -347,6 +368,7 @@ func keptExpiry(now time.Time, idleDays int) time.Time {
 // the run is about to write what a scrub removes.
 func markKeptBoot(rec *KeptRecord, runID string, now time.Time, idleDays int) {
 	rec.ActiveRun, rec.LastUsed, rec.ExpiresAt, rec.Scrubbed = runID, now, keptExpiry(now, idleDays), false
+	rec.IdleDays = keptIdleDays(idleDays)
 }
 
 // KeptStopUpdate is the stop's change to rec, for the runner to make under LockKept: it returns false and
@@ -357,7 +379,7 @@ func KeptStopUpdate(rec *KeptRecord, runID string, now time.Time, idleDays int) 
 	if runID == "" || rec.ActiveRun != runID {
 		return false
 	}
-	rec.ActiveRun, rec.LastUsed, rec.ExpiresAt = "", now, keptExpiry(now, idleDays)
+	rec.ActiveRun, rec.LastUsed, rec.ExpiresAt, rec.IdleDays = "", now, keptExpiry(now, idleDays), keptIdleDays(idleDays)
 	return true
 }
 
