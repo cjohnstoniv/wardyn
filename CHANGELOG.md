@@ -23,6 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A browser desktop of a macOS VM run that had control now says so when a window opens on the Mac: the gateway closes it with code `4006` ("A window is open on the Mac…"), not `4001`, which the viewer read as the session's time limit, and it no longer reconnects view only without a word. Open the desktop again from the run page to watch. The desktop's page also links back to its run when the console's URL (`WARDYN_OIDC_REDIRECT_URL`) is set. The window's refusals for a site switch that is off (`mac_window_site_off`), a runner too old (`mac_window_runner_too_old`) and a runner on another server (`mac_window_not_here`) are reworded. Not yet run on a real Mac.
 - Docs no longer say a gateway run identity token always lives 10 minutes. It lives 60 to 600 seconds, and 600 by default.
 - A window onto a macOS VM run no longer opens when the Mac can't tell whether its screen is locked: it refuses with `mac_window_lock_unknown`, and an open window closes as soon as the Mac locks or its lock can no longer be told. Reopening after a lock needs a new `wardyn window`. Not yet run on a real Mac.
 - A macOS VM run's screen no longer locks while it sits idle: the guest turns the screen lock off at the start of each run. Not yet run on a real Mac.
