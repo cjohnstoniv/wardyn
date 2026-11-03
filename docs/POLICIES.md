@@ -1293,8 +1293,9 @@ So an entry a pattern matches is judged one of two ways:
 | `deny_all` | `bool` | `false` | Refuses every push to every remote before it is read: content, ref updates and deletes, and Azure DevOps REST repository writes. Reads pass. A meet ORs it and a ceiling's `true` is kept. Read-only and Sealed set it. |
 | | | | `deny_all` is enforced where Wardyn brokers the traffic. Wardyn refuses unbrokered connections to the code hosts it knows, on any port. |
 | | | | A code host allowed as a plain domain on a self-hosted forge Wardyn doesn't know is a tunnel, and a token kept as an environment or file secret can push through it. |
-| | | | Known code hosts: `github.com` with its `api.`, `uploads.`, `gist.` and `ssh.` hosts, hosted Azure DevOps, the site's SCM hosts and Git provider rows, and each `git_pat` and `ssh_key` grant's host. |
+| | | | Known code hosts: `github.com` with its `api.`, `uploads.`, `gist.` and `ssh.` hosts, hosted Azure DevOps (not `marketplace.visualstudio.com`, the extension gallery), the site's SCM hosts and Git provider rows, and each `git_pat` and `ssh_key` grant's host. |
 | | | | A wildcard, `allow_all_egress` or a first-use approval does not reopen one. |
+| | | | Signing in to a known code host in the desktop browser is refused too, since a code host's web pages can commit. |
 | | | | With an environment or file secret on the run, Review adds: "A push token you add as a secret could still push to a code host Wardyn doesn't recognize, if this run can reach it." |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |

@@ -38,6 +38,12 @@ func pushDenyAllForgeRefusal(host string) string {
 // rest of hosted Azure DevOps (*.dev.azure.com and *.visualstudio.com).
 var publicForgeHosts = forgeHostSet(types.PublicForgeHosts)
 
+// adoExtensionGallery is the editor extension gallery: under *.visualstudio.com
+// but not a code host, so the guard leaves it reachable. Every other
+// *.visualstudio.com host (an Azure DevOps organization's older address) stays
+// refused.
+const adoExtensionGallery = "marketplace.visualstudio.com"
+
 // forgeHostSet compiles Config.ForgeHosts: the code hosts dispatch knows from
 // site config and the run's git_pat and ssh_key grants, and the public ones.
 // Nil when there are none.
@@ -95,7 +101,7 @@ func (p *Proxy) pushDenyAllInForce() bool {
 // Wardyn knows for this run: a public one, one dispatch named, or one the
 // run's own broker lanes, held pushes, resident mints or push rule sets name.
 func (p *Proxy) knownForgeHost(key string) bool {
-	if publicForgeHosts[key] || adoHostedHost(key) || p.forgeHosts[key] {
+	if publicForgeHosts[key] || (adoHostedHost(key) && key != adoExtensionGallery) || p.forgeHosts[key] {
 		return true
 	}
 	if _, ok := p.patGrants[key]; ok {

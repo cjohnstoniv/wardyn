@@ -4,14 +4,17 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -308,5 +311,53 @@ func TestForgeHostKey(t *testing.T) {
 		if got := forgeHostKey(in); got != want {
 			t.Errorf("forgeHostKey(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The editor extension gallery sits under *.visualstudio.com but is not a code
+// host: under deny_all it stays reachable, in any spelling, while an Azure
+// DevOps organization's *.visualstudio.com address is refused.
+func TestPushDenyAllForge_ExtensionGalleryStaysOpen(t *testing.T) {
+	r := newForgeRig(t, denyAllAllowing("*.visualstudio.com"), nil)
+	for _, hostport := range []string{"marketplace.visualstudio.com:443", "Marketplace.VisualStudio.com.:443"} {
+		r.openedConnect(t, hostport)
+	}
+	if rec := r.plain(t, "http://marketplace.visualstudio.com/"); rec.Code != http.StatusOK {
+		t.Errorf("plain marketplace.visualstudio.com: status %d body %q, want 200", rec.Code, rec.Body)
+	}
+	r.refusedConnect(t, "acme.visualstudio.com:443", "acme.visualstudio.com")
+}
+
+// A signed-in browser can commit through a code host's web pages, so the
+// desktop sign-in listener refuses a known code host under deny_all too, while
+// another allowed sign-in host still tunnels.
+func TestPushDenyAllForge_SigninLaneRefused(t *testing.T) {
+	rig := newSigninLaneRig(t, func(o *Options) {
+		o.Policy = CompilePolicy(denyAllAllowing("site.test", "github.com", "dev.azure.com"))
+	})
+	for _, host := range []string{"github.com", "dev.azure.com"} {
+		c, err := net.Dial("tcp", rig.signinAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// An opened tunnel would hold the body open: fail on the deadline instead.
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		_, _ = io.WriteString(c, "CONNECT "+host+":443 HTTP/1.1\r\nHost: "+host+":443\r\nProxy-Authorization: "+
+			signinAuth(rig.goodCred)+"\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			t.Fatalf("read CONNECT %s response: %v", host, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = c.Close()
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body)+resp.Header.Get(egressHeaderDetail), pushDenyAllForgeRefusal(host)) {
+			t.Errorf("sign-in CONNECT %s = %d %q, want the deny_all code host refusal", host, resp.StatusCode, body)
+		}
+	}
+	if !strings.Contains(rig.logs.String(), ruleSourceGitPushDenyAllForge) {
+		t.Errorf("no %s decision row: %s", ruleSourceGitPushDenyAllForge, rig.logs.String())
+	}
+	if _, _, status := rig.connect(t, rig.signinAddr, "site.test:443", signinAuth(rig.goodCred)); status != http.StatusOK {
+		t.Fatalf("sign-in CONNECT to an allowed host = %d, want 200", status)
 	}
 }
