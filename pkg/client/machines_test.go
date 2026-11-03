@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -45,7 +46,7 @@ func TestKeptMachineReadsAndAdminRoutes(t *testing.T) {
 		calls = append(calls, r.Method+" "+r.URL.RequestURI())
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runs/"+run.String():
-			_, _ = w.Write([]byte(`{"id":"` + run.String() + `","machine":{"id":"` + mid.String() + `","name":"dev","mode":"resumed","keep_at_end":true,"state":"in_use","scrubbed":false,"runner_name":"studio","holder_run_id":"` + holder.String() + `","base":"macos-26","disk_bytes":42,"expires_at":"2026-12-01T00:00:00Z","deleted":false}}`))
+			_, _ = w.Write([]byte(`{"id":"` + run.String() + `","machine":{"id":"` + mid.String() + `","name":"dev","mode":"resumed","keep_at_end":true,"state":"in_use","scrubbed":false,"runner_name":"studio","holder_run_id":"` + holder.String() + `","base":"macos-26","disk_bytes":42,"expires_at":"` + time.Now().UTC().Add(72*time.Hour).Format(time.RFC3339) + `","deleted":false}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runs/"+holder.String():
 			_, _ = w.Write([]byte(`{"id":"` + holder.String() + `"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/machines/kept":
