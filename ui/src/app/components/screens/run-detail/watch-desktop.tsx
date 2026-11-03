@@ -12,8 +12,8 @@ import { entryErrorMessage, isBackgroundRun } from "../../../lib/run-entry";
 import type { RunDetail } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { DESKTOP } from "../../wardyn/copy/desktop";
-import { UI_APPS_LANE } from "../../wardyn/copy";
-import { DESKTOP_APP, enterUIApp, type UISandboxEnter } from "../run-detail-ssh";
+import { RUN_SSH, UI_APPS_LANE } from "../../wardyn/copy";
+import { DESKTOP_APP, enterUIApp, openEnterTab, type UISandboxEnter } from "../run-detail-ssh";
 
 export function WatchDesktopButton({ run }: { run: RunDetail }) {
   const [gateway, setGateway] = React.useState<UISandboxEnter>(null);
@@ -35,9 +35,15 @@ export function WatchDesktopButton({ run }: { run: RunDetail }) {
 
   async function watch() {
     setError(null);
+    // The tab opens inside the click; enterUIApp sends the desktop into it and closes it on failure.
+    const tab = openEnterTab();
+    if (!tab) {
+      setError(RUN_SSH.POPUP_BLOCKED);
+      return;
+    }
     setOpening(true);
     try {
-      await enterUIApp(run.id, DESKTOP_APP.name, gateway);
+      await enterUIApp(run.id, DESKTOP_APP.name, gateway, { tab });
     } catch (err) {
       setError(entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e)), run));
     } finally {
