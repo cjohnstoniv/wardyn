@@ -537,8 +537,13 @@ type wallPresetSourceRecord struct {
 	Scope   types.WallPresetScope `json:"scope"`
 	GroupID string                `json:"group_id,omitempty"`
 	Version int                   `json:"version"`
-	*wallsSourceRecord
+	*WallsSourceRecord
 }
+
+// WallsSourceRecord is wallsSourceRecord under an exported name, for wallPresetSourceRecord's embed: the
+// record's fields stay at wall_preset's top level, and encoding/json can only allocate an embedded pointer
+// when it decodes through an exported field (an unexported one fails the whole run.create row's decode).
+type WallsSourceRecord = wallsSourceRecord
 
 // wallPresetProvenance is the record of a value a run's wall preset decided. A personal preset's name
 // is its owner's to see, so its record names none.
@@ -590,7 +595,7 @@ func (s *Server) wallPresetRunStep(spec *types.RunPolicySpec, source *policySour
 	if err != nil {
 		return nil, wallsMeetRefusal(err, label, labelStart, "Pick another preset, or launch with Open.", open)
 	}
-	source.WallPreset = &wallPresetSourceRecord{ID: p.ID, Name: p.Name, Scope: p.Scope, GroupID: p.GroupID, Version: p.Version, wallsSourceRecord: rec}
+	source.WallPreset = &wallPresetSourceRecord{ID: p.ID, Name: p.Name, Scope: p.Scope, GroupID: p.GroupID, Version: p.Version, WallsSourceRecord: rec}
 	source.wallPreset = p
 	return wallsWarnings(label, rec), nil
 }
