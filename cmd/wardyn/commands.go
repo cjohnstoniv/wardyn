@@ -227,6 +227,7 @@ func runCmd(client clientFn) *cobra.Command {
 				}
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
+				printMachineCreatedLine(cmd, client(), body.Machine)
 				fmt.Fprintf(cmd.OutOrStdout(), "  spiffe id: %s\n", run.SPIFFEID)
 				fmt.Fprintln(cmd.OutOrStdout(), endLine(run.AgentRun))
 				// The image is resolved after the 201 (the build runs server-side),
