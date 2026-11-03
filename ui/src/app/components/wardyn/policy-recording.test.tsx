@@ -60,7 +60,7 @@ describe("RecordingSection (#2968, M7 Knobs-B and States)", () => {
   it("a profile ceiling's section says what a level does to a macOS VM run; the stored-policy editor's does not", () => {
     const { rerender } = render(<RecordingSection spec={spec("terminal")} onSpecChange={vi.fn()} ceiling />);
     expect(screen.getByTestId("policy-recording-macos")).toHaveTextContent(
-      "Recording never stops a macOS VM run from starting. At Terminal, the VM's desktop isn't recorded; its terminal sessions and a task run's agent output are, with secrets masked. At Screen and actions, the desktop is also recorded while someone watches it, and that screen recording isn't masked.",
+      "Choosing a recording level doesn't by itself rule out macOS VMs. At Terminal a macOS VM's desktop isn't recorded; at Screen and actions it is, unmasked, while someone watches. A task run's agent output is recorded when output capture is on; if recording is required and that can't be done, the run doesn't start.",
     );
     rerender(<RecordingSection spec={spec("terminal")} onSpecChange={vi.fn()} />);
     expect(screen.queryByTestId("policy-recording-macos")).toBeNull();

@@ -101,6 +101,6 @@ describe("ProfileCeilingPolicy — Recording", () => {
   it("opens the editor with the macOS VM sentence under the recording levels", async () => {
     render(<Ceiling />);
     await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
-    expect(screen.getByTestId("policy-recording-macos")).toHaveTextContent("Recording never stops a macOS VM run from starting.");
+    expect(screen.getByTestId("policy-recording-macos")).toHaveTextContent("Choosing a recording level doesn't by itself rule out macOS VMs.");
   });
 });
