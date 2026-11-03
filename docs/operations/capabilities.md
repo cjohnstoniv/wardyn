@@ -18,7 +18,7 @@ the ADMIN pre-authorized.
 | `egress_host` | host (`:port` dropped) or `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, [`internal/api/approvals.go`](../../internal/api/approvals.go)), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, [`internal/api/inline_policy_bounds.go`](../../internal/api/inline_policy_bounds.go)) |
 | `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, [`internal/api/secrets.go`](../../internal/api/secrets.go)) |
 | `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../../internal/api/runs_create_validate.go)) |
-| `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
+| `image` | exact image ref, or a registry prefix `host/path/*` | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) below |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) below |
@@ -58,7 +58,13 @@ the ADMIN pre-authorized.
 - **The widening kind reads the same rows the other way.**
 - For `image` (`capGranted`) an unenforced kind is *refused*, not permitted, because 0.5 refused it too.
 - Both directions obey "an upgrade with no configuration changes nothing".
-- So `image` needs *both* the switch on and an exact-ref grant; the other nine need only the absence of a deny until you enforce them (a value an admin restricted, as a new organisation component is, also needs an allow row naming it).
+- So `image` needs *both* the switch on and an exact-ref grant or a registry-prefix grant (or `*`); the other nine need only the absence of a deny until you enforce them (a value an admin restricted, as a new organisation component is, also needs an allow row naming it).
+- **An `image` grant may be a registry prefix**, such as `registry.example.com/team/*`: a prefix of the reference as typed.
+- It matches `registry.example.com/team/app:1`, `…/app@sha256:…` and `…/sub/app:1`, but not `registry.example.com/team`, `…/teamx/app` or `…/Team/app`. Whole path segments, case-sensitive, nothing normalised: `docker.io/library/*` does not cover `nginx:1`.
+- It must start with a registry host and end in one `/*`, with no tag, digest, uppercase letter, `..` segment or other `*`; anything else is refused `400`. A stored row that breaks these rules matches nothing.
+- A deny prefix overlaps every ref it matches and every prefix above or below it.
+- "Available to" stays exact: a prefix never opens a restricted image, only an allow naming it does.
+- A prefix over mutable tags is weaker than an exact digest ref.
 - That rule is also why `agent` narrows rather than widens:
   - launching an agent is something every member could already do,
   - so a widening kind would refuse every member run on every deployment that has not enforced it — i.e. all of them on upgrade day.

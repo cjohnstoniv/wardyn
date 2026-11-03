@@ -476,6 +476,11 @@ func (s *Server) capUnresolvableGroupDeny(ctx context.Context, kind, value strin
 // Deliberately not a second host matcher: two matchers that disagree is how a
 // deny gets bypassed by a port suffix.
 //
+// An image grant may also be a registry prefix ("registry.example.com/team/*",
+// imagePrefixGrant): it matches a ref whose repository, as typed, sits under
+// the prefix at a segment boundary. Every other image value is exact, and an
+// image value with any other "*" matches nothing.
+//
 // Every other kind is an exact, case-sensitive compare. A secret name, a
 // workspace uuid, an image ref, an agent id, an integration id and a git
 // provider row id are all identifiers where a near-miss must not match; only
@@ -487,6 +492,14 @@ func capValueMatches(kind, grantValue, want string) bool {
 	}
 	if capKinds[kind].hostSet {
 		return entryCoversAny(grantValue, map[string]bool{egressEntryHost(want): true})
+	}
+	if kind == capImage {
+		if prefix, ok := imagePrefixGrant(grantValue); ok {
+			return imagePrefixCovers(prefix, want)
+		}
+		if imageStarRow(grantValue) {
+			return false
+		}
 	}
 	return grantValue == strings.TrimSpace(want)
 }
@@ -510,6 +523,9 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 	}
 	// Only host-set kinds have set-valued entries; every other kind is an exact
 	// identifier, where "want covers deny" is the same compare reversed.
+	if kind == capImage {
+		return imagePrefixOverlaps(grantValue, want)
+	}
 	return capKinds[kind].hostSet && capValueMatches(kind, want, grantValue)
 }
 

@@ -77,6 +77,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - An approval rule no longer approves a host a person denied on that run after the run's proxy is replaced. The approval waits for a person, and a person's later allow undoes the deny.
 
+### Before you upgrade
+
+- Existing `image` capability grants whose value ends in `/*` (for example `registry.example.com/team/*`, which matched nothing until now) now match every image under that path. Review them before upgrading. A stored image value with any other `*`, or a prefix without a registry host, still matches nothing.
+
 ## [0.10.0-rc.10] — 2026-11-01
 
 ### Before you upgrade

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -73,6 +74,129 @@ func imageRefPathSafe(ref string) bool {
 		}
 	}
 	return true
+}
+
+// image400Prefix — %s is the quoted value. A `*` in an image grant is only ever the registry-prefix form.
+const image400Prefix = `%s is not an image prefix — a prefix grant is "<registry host>/<path>/*": a lowercase registry host (a first segment holding a "." or ":", or "localhost"), plain path segments, and one "*" as the whole last segment, with no tag, digest, whitespace, "." or ".." segment`
+
+// imagePrefixSuffix ends an image capability value that grants a registry
+// prefix instead of one exact reference.
+const imagePrefixSuffix = "/*"
+
+// imagePrefixGrant reports whether an image capability value is a well-formed
+// prefix grant ("registry.example.com/team/*") and returns the part before
+// "/*". Any other value holding a "*" besides the bare wildcard is not a
+// grant of any kind: capValueMatches gives it no match at all (imageStarRow),
+// so a row stored before this form existed cannot start matching by accident.
+func imagePrefixGrant(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if !strings.HasSuffix(v, imagePrefixSuffix) {
+		return "", false
+	}
+	prefix := strings.TrimSuffix(v, imagePrefixSuffix)
+	return prefix, validImagePrefix(prefix)
+}
+
+// imageStarRow: an image value with a "*" that is neither the bare wildcard nor
+// a well-formed prefix. The write boundary refuses it; a row stored earlier
+// matches nothing.
+func imageStarRow(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == capWildcard || !strings.Contains(v, "*") {
+		return false
+	}
+	_, ok := imagePrefixGrant(v)
+	return !ok
+}
+
+// validImagePrefix: a path-safe, lowercase "host/seg/..." with no tag, digest,
+// whitespace or "*", whose first segment is a registry host by the same test
+// github.com/distribution/reference uses for a domain (a "." or ":" in it, or
+// exactly "localhost"). Without that, "team/*" would name a Docker Hub
+// namespace by accident. Nothing is normalised: the prefix is compared as typed.
+func validImagePrefix(prefix string) bool {
+	for _, r := range prefix {
+		if unicode.IsSpace(r) || unicode.IsUpper(r) || r == '*' || r == '@' {
+			return false
+		}
+	}
+	if !imageRefPathSafe(prefix) {
+		return false
+	}
+	segs := strings.Split(prefix, "/")
+	host := segs[0]
+	if !strings.ContainsAny(host, ".:") && host != "localhost" || strings.Count(host, ":") > 1 {
+		return false
+	}
+	if _, port, hasPort := strings.Cut(host, ":"); hasPort && !allASCIIDigits(port) {
+		return false
+	}
+	for _, seg := range segs[1:] {
+		if strings.Contains(seg, ":") {
+			return false
+		}
+	}
+	return true
+}
+
+// allASCIIDigits: a registry port is one or more ASCII digits.
+func allASCIIDigits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// imageRepoAsTyped is a reference with its @digest and :tag removed, cut on
+// the string as typed (no normalisation: a bare "nginx" stays "nginx", a host
+// keeps its case). ok is false for a reference that cannot be an image: any
+// whitespace, a "*", a "." or ".." or empty segment, a digest holding a "/", or
+// a ":" outside the host and the last segment.
+func imageRepoAsTyped(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if strings.ContainsFunc(ref, unicode.IsSpace) || strings.Contains(ref, "*") || !imageRefPathSafe(ref) {
+		return "", false
+	}
+	if at := strings.Index(ref, "@"); at >= 0 {
+		if strings.Contains(ref[at:], "/") {
+			return "", false
+		}
+		ref = ref[:at]
+	}
+	segs := strings.Split(ref, "/")
+	last := len(segs) - 1
+	for i := 1; i < last; i++ {
+		if strings.Contains(segs[i], ":") {
+			return "", false
+		}
+	}
+	if last > 0 {
+		segs[last], _, _ = strings.Cut(segs[last], ":")
+	}
+	return strings.Join(segs, "/"), true
+}
+
+// imagePrefixCovers: a prefix grant matches want only when want's repository,
+// as typed, starts with prefix + "/" and has at least one more segment. The
+// tag and digest play no part; a want that is not a plausible reference
+// matches nothing.
+func imagePrefixCovers(prefix, want string) bool {
+	repo, ok := imageRepoAsTyped(want)
+	return ok && len(repo) > len(prefix)+1 && strings.HasPrefix(repo, prefix+"/")
+}
+
+// imagePrefixOverlaps is the prefix half of capValueOverlaps, asked only after
+// capValueMatches said no: two prefixes overlap when one is a segment-boundary
+// prefix of the other (or they are equal), and an exact value overlaps a
+// prefix that would match it. A prefix grant against an exact want is
+// capValueMatches' own question, so it is not repeated here.
+func imagePrefixOverlaps(grantValue, want string) bool {
+	wp, wantIsPrefix := imagePrefixGrant(want)
+	if !wantIsPrefix {
+		return false
+	}
+	gp, grantIsPrefix := imagePrefixGrant(grantValue)
+	if !grantIsPrefix {
+		return imagePrefixCovers(wp, grantValue)
+	}
+	return gp == wp || strings.HasPrefix(gp, wp+"/") || strings.HasPrefix(wp, gp+"/")
 }
 
 // handleListBaseImages returns the catalog. A security admin sees the prewrapped rows only: the
