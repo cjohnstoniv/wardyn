@@ -117,6 +117,35 @@ type runPolicyResponse struct {
 	// that predates it and for a run restarted since: a restart rebuilds the proxy from a
 	// config that can drop hosts, and writes no envelope of its own.
 	HostMarks *hostMarks `json:"host_marks,omitempty"`
+	// WallPreset is the wall preset the run was launched with and what it narrowed, removed and added
+	// (policy_source.wall_preset). A personal preset read by anyone but the run's owner is its scope alone.
+	WallPreset *runPolicyWallPreset `json:"wall_preset,omitempty"`
+}
+
+type runPolicyWallPreset struct {
+	ID       string              `json:"id,omitempty"`
+	Name     string              `json:"name,omitempty"`
+	Scope    string              `json:"scope"`
+	GroupID  string              `json:"group_id,omitempty"`
+	Version  int                 `json:"version,omitempty"`
+	Narrowed []string            `json:"narrowed,omitempty"`
+	Removed  map[string][]string `json:"removed,omitempty"`
+	Added    map[string][]string `json:"added,omitempty"`
+}
+
+// runPolicyWallPresetOf is the policy view's wall_preset, read as runWallPresetView reads the run's.
+func runPolicyWallPresetOf(r *http.Request, run types.AgentRun, rec *wallPresetSourceRecord) *runPolicyWallPreset {
+	if rec == nil {
+		return nil
+	}
+	if rec.Scope == types.WallPresetScopePerson && principalFromRequest(r) != run.CreatedBy {
+		return &runPolicyWallPreset{Scope: string(rec.Scope)}
+	}
+	out := &runPolicyWallPreset{ID: rec.ID, Name: rec.Name, Scope: string(rec.Scope), GroupID: rec.GroupID, Version: rec.Version}
+	if w := rec.wallsSourceRecord; w != nil {
+		out.Narrowed, out.Removed, out.Added = w.Narrowed, w.Removed, w.Added
+	}
+	return out
 }
 
 type runPolicySource struct {
@@ -178,6 +207,9 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	create := runCreateFacts(events)
 	resp := runPolicyResponse{RunID: run.ID, Changes: []runPolicyChange{}, Complete: create.Source != nil}
 	resp.Source = s.runPolicySourceOf(ctx, run, create)
+	if create.Source != nil {
+		resp.WallPreset = runPolicyWallPresetOf(r, run, create.Source.WallPreset)
+	}
 
 	envelope, at, found := latestPolicyResolve(events)
 	if !found {
@@ -201,6 +233,9 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	ev.bounded = create.Source != nil && create.Source.Bounded
 	if create.Source != nil {
 		ev.clamp, ev.overlay, ev.walls = create.ClampWarnings, create.Source.Overlay, create.Source.PersonalWalls
+		if p := create.Source.WallPreset; p != nil {
+			ev.preset = p.wallsSourceRecord
+		}
 	} else {
 		ev.legacyGitBroker = s.holdsGitHubGrant(ctx, run.ID)
 	}

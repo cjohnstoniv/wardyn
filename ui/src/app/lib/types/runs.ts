@@ -9,6 +9,7 @@
 
 import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
+import type { RunPolicyWallPreset } from "./run-policy-wall-preset";
 import type { PolicyContact } from "./site";
 import type { RunWallPreset } from "./wall-presets";
 import type { Experience, RunOverrides } from "./new-run-contract";
@@ -20,13 +21,7 @@ import type { RunnerPoolSelection } from "./runner-pools";
 // Older mock data used "claude_code" / "codex". Keep the union open
 // (string) so label mapping can tolerate both forms; the literals below
 // are kept for editor hints / autocomplete only.
-export type Agent =
-  | "claude-code"
-  | "codex-cli"
-  | "claude_code"
-  | "codex"
-  | "cursor"
-  | (string & {});
+export type Agent = "claude-code" | "codex-cli" | "claude_code" | "codex" | "cursor" | (string & {});
 
 export type ConfinementClass = "CC1" | "CC2" | "CC3";
 
@@ -732,6 +727,7 @@ export interface RunPolicyView {
   // Which allowed hosts the run's proxy opened at launch; every other allowed
   // host passed through unread. Absent for a run recorded before it existed.
   host_marks?: RunPolicyHostMarks;
+  wall_preset?: RunPolicyWallPreset; // run-policy-wall-preset.ts
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

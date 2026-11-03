@@ -99,6 +99,9 @@ type queueEnd struct {
 	hint  string
 	extra map[string]any
 	wait  runnerpool.WaitReason
+	// wallPreset is what the run's wall preset had become, when its change ended the run; it is kept on
+	// the run (types.WallPresetOnRun.Changed).
+	wallPreset *types.WallPresetChange
 }
 
 // queuedStart is one promoted run's start: the run and its queue row, the owner's identity, and the
@@ -213,9 +216,10 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if end != nil {
 		return end
 	}
-	if end := s.queuePolicyUnchanged(st, req); end != nil {
+	if end := s.queuePolicyUnchanged(st, req, nil); end != nil {
 		return end
 	}
+	s.queueRaceAt(queueRaceStartAfterPrecheck)
 	reqCC, refusal := runRequestEnums(req)
 	if refusal.write(s, st.cw, st.r) {
 		return st.refusalEnd()
@@ -238,6 +242,11 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 		}
 	}
 	st.f = f
+	// The fold read the wall preset again: it starts with the copy it froze only if that is the one the
+	// run was reviewed under, checked before anything is minted or written.
+	if end := s.queuePolicyUnchanged(st, req, f.source.wallPreset); end != nil {
+		return end
+	}
 	if end := s.queueNarrowOnly(st); end != nil {
 		return end
 	}
@@ -406,17 +415,42 @@ func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
 	return ceiling.Unit.ID == *recorded
 }
 
-// queuePolicyUnchanged is step 5 (Q7-A): the stored policy or launch preset the run was reviewed under
-// is the one it would start under. An edit fails the run, so nothing starts that nobody reviewed.
-func (s *Server) queuePolicyUnchanged(st *queuedStart, req createRunRequest) *queueEnd {
-	now, err := s.queuePolicyRef(st.ctx, req)
+// queuePolicyUnchanged is step 5 (Q7-A): the stored policy, launch preset or wall preset the run was
+// reviewed under is the one it would start under. An edit fails the run, so nothing starts that nobody
+// reviewed. frozen is the wall preset the start's fold froze (queuePolicyRef), nil before the fold, when
+// a preset the owner can no longer read counts as gone.
+func (s *Server) queuePolicyUnchanged(st *queuedStart, req createRunRequest, frozen *types.WallPresetOnRun) *queueEnd {
+	now, err := s.queuePolicyRef(st.ctx, st.r, req, frozen)
 	if err != nil {
 		return &queueEnd{hint: queueStartFailedHint}
 	}
 	if !jsonEqual(now, st.entry.PolicyRef) {
-		return &queueEnd{token: string(types.RunEndQueuePolicyChanged), hint: types.RunEndQueuePolicyChanged.Sentence()}
+		end := &queueEnd{token: string(types.RunEndQueuePolicyChanged), hint: types.RunEndQueuePolicyChanged.Sentence()}
+		if queued, c := queueWallPresetChange(st.entry.PolicyRef, now); c != nil {
+			end.wallPreset = c
+			end.extra = map[string]any{"wall_preset": map[string]any{"queued_version": queued, "version": c.Version, "gone": c.Gone}}
+		}
+		return end
 	}
 	return nil
+}
+
+// queueWallPresetChange is what the run's wall preset became between the reference recorded at enqueue
+// and the one read now, with the version it was queued under; nil when that part did not change.
+func queueWallPresetChange(recorded, now json.RawMessage) (queued int, change *types.WallPresetChange) {
+	type part struct {
+		ID      string `json:"wall_preset"`
+		Version int    `json:"wall_preset_version"`
+		Gone    bool   `json:"wall_preset_gone"`
+	}
+	var was, is part
+	if json.Unmarshal(recorded, &was) != nil || json.Unmarshal(now, &is) != nil || was.ID == "" || was == is {
+		return 0, nil
+	}
+	if is.Gone || is.ID != was.ID {
+		return was.Version, &types.WallPresetChange{Gone: true}
+	}
+	return was.Version, &types.WallPresetChange{Version: is.Version}
 }
 
 func jsonEqual(a, b json.RawMessage) bool {
@@ -557,6 +591,15 @@ func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 		if qs, ok := s.queueStore(); ok {
 			if err := qs.SetPromotedStatusDetail(st.base, run.ID, statusDetailQueuePrefix+end.token); err != nil {
 				slog.WarnContext(st.base, queueStartFailedLogName+": record end reason", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			}
+		}
+	}
+	if end.wallPreset != nil {
+		if ws, ok := s.cfg.Store.(interface {
+			SetRunWallPresetChange(ctx context.Context, id uuid.UUID, c types.WallPresetChange) error
+		}); ok {
+			if err := ws.SetRunWallPresetChange(st.base, run.ID, *end.wallPreset); err != nil {
+				slog.WarnContext(st.base, queueStartFailedLogName+": record the wall preset change", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 			}
 		}
 	}
