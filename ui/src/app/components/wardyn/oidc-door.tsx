@@ -12,6 +12,7 @@ import { Loader2 } from "lucide-react";
 import { apiURL } from "../../lib/base-path";
 import type { SetupModelProvider, SetupStatus } from "../../lib/types";
 import { Button } from "../ui/button";
+import { INLINE_ACTIONS, STICKY_FOOTER } from "./form-actions";
 import { CONNECTIONS } from "./copy/door";
 import { OIDC_RETURN, OIDC_SIGN_IN as T, oidcFailureKind, type OidcFailure } from "./copy/oidc-signin";
 
@@ -19,8 +20,14 @@ const POLL_MS = 1500;
 const GIVE_UP_MS = 5 * 60 * 1000;
 const CLOSE_GRACE_MS = 4000;
 const WINDOW_FEATURES = "popup,width=520,height=720";
+const WINDOW_NAME = "wardyn-provider-oidc";
 
 type Phase = { name: "connect" } | { name: "waiting" } | { name: "blocked" } | { name: "fail"; failure: OidcFailure };
+
+/** A per-attempt nonce. getRandomValues, since randomUUID exists only in secure contexts and a console can be served over http. */
+function attemptNonce(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** A sign-in made since `baseline`: live, and stored after the one that was there when the door opened. */
 function signedInSince(access: SetupStatus["provider_access"], id: string, baseline: string): boolean {
@@ -51,6 +58,8 @@ export function OidcDoor({
   // The stored sign-in's stamp when this attempt began: "Sign in again" starts from a live state.
   const baseline = React.useRef("");
   const popup = React.useRef<Window | null>(null);
+  // This attempt's own name for its window, carried in the window's name: the return page echoes it.
+  const attempt = React.useRef("");
   const finished = React.useRef(false);
   const url = apiURL(`/model-providers/${encodeURIComponent(provider.id)}/oidc/sign-in`);
   const waiting = phase.name === "waiting" || phase.name === "blocked";
@@ -67,8 +76,13 @@ export function OidcDoor({
     const started = Date.now();
     let closedAt: number | undefined;
     const onMessage = (e: MessageEvent) => {
-      const d = e.data as { type?: string; ok?: boolean; reason?: string } | null;
+      const d = e.data as { type?: string; ok?: boolean; reason?: string; attempt?: string } | null;
       if (e.origin !== window.location.origin || d?.type !== OIDC_RETURN.MESSAGE || finished.current) return;
+      // Only this attempt's window speaks for it: an earlier or another window of this origin is ignored. The
+      // echoed name is checked too, but only when it came back (a browser may clear a window's name when it
+      // crosses sites), since the window itself already says whose word this is.
+      if (!popup.current || e.source !== popup.current) return;
+      if (d.attempt && d.attempt !== attempt.current) return;
       if (d.ok) void calls.current.onRecheck?.();
       else fail(oidcFailureKind(d.reason ?? ""));
     };
@@ -106,7 +120,10 @@ export function OidcDoor({
   const start = () => {
     baseline.current = access?.find((x) => x.provider === provider.id)?.added_at ?? "";
     finished.current = false;
-    popup.current = window.open(url, "wardyn-provider-oidc", WINDOW_FEATURES);
+    // An earlier attempt's window goes, so its late word has nowhere to land.
+    popup.current?.close();
+    attempt.current = `${WINDOW_NAME}-${attemptNonce()}`;
+    popup.current = window.open(url, attempt.current, WINDOW_FEATURES);
     setPhase(popup.current ? { name: "waiting" } : { name: "blocked" });
   };
 
@@ -135,7 +152,7 @@ export function OidcDoor({
         </div>
       )}
       <p className="text-xs text-muted-foreground">{CONNECTIONS.SENT_TO(provider.host)}</p>
-      <div className="flex flex-wrap justify-end gap-2">
+      <div data-testid="oidc-door-footer" className={`${INLINE_ACTIONS} ${STICKY_FOOTER}`}>
         <Button type="button" variant="ghost" onClick={onCancel}>
           {T.CANCEL}
         </Button>

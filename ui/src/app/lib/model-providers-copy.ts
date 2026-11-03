@@ -138,6 +138,7 @@ export const PROVIDER_EDITOR = {
     KEY_ADDRESS_OTHER: "If your gateway reaches Wardyn at another address, use that address with this path.",
     KEY_ADDRESS_UNSAVED: "Available after identity is saved; it can take up to 30 seconds.",
     COPY: "Copy",
+    COPIED: "Copied",
     COPY_ISSUER: "Copy issuer",
     COPY_KEY_ADDRESS: "Copy key address",
     OFF_NOTE:

@@ -22,6 +22,7 @@ import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import type { HarnessLoginPaneHandle } from "../screens/settings/harness-login-pane";
 import { modelProviderCredentials } from "../../lib/api/model-provider-credentials";
+import { HttpError } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
 import type { DoorTarget } from "../../lib/model-access";
 import { modelConnectionCause } from "../../lib/model-connection-cause";
@@ -42,6 +43,8 @@ const HarnessLoginPane = React.lazy(() =>
 // The id focus goes to when an entrance asks for the door while it is already
 // open (context focusSeq): DialogContent takes no ref in React 18.
 const DOOR_ID = "model-access-door";
+/** The server's refusal of a pasted token for a provider that signs people in (409). */
+const SIGNS_IN_REASON = "model_provider_credential_signs_in";
 
 const providerName = (p: SetupModelProvider) => p.name || p.id;
 
@@ -121,6 +124,7 @@ function KeyDoor({
   onCancel,
   onSaved,
   onRemoved,
+  onSignsIn,
 }: {
   target: DoorTarget & { kind: "key" };
   /** /setup/status's credential_storage (design F-3) — which store-mode line
@@ -134,6 +138,8 @@ function KeyDoor({
   onSaved: () => void;
   /** Fires with the toast the confirm earns (packet F §3). */
   onRemoved: (toast: string) => void;
+  /** The server refused the token because this provider now signs people in. */
+  onSignsIn: () => void;
 }) {
   const [value, setValue] = React.useState("");
   const [error, setError] = React.useState("");
@@ -146,6 +152,10 @@ function KeyDoor({
       await write();
       after();
     } catch (e) {
+      if (e instanceof HttpError && e.status === 409 && e.reason === SIGNS_IN_REASON) {
+        onSignsIn();
+        return;
+      }
       // The server's refusal, verbatim — Wardyn never dials the provider to
       // test a key, so this is the only verdict there is.
       setError(getErrorMessage(e));
@@ -328,7 +338,14 @@ export function DoorDialog({
   // not blank while the dialog fades out.
   const shown = React.useRef(target);
   if (target) shown.current = target;
-  const t = target ?? shown.current;
+  const shownTarget = target ?? shown.current;
+  // A key door whose provider now signs people in (a stale tab: the server refused the pasted token) becomes that
+  // provider's sign-in door, in place. Per open: a new target starts from what it is.
+  const [swappedTo, setSwappedTo] = React.useState<string | null>(null);
+  const swapped = shownTarget?.kind === "key" && swappedTo === shownTarget.provider.id;
+  const t: DoorTarget | null = swapped
+    ? { kind: "signin", login: "oidc", provider: { ...shownTarget.provider, sign_in: "oidc" } }
+    : shownTarget;
 
   // Lifted out of KeyDoor: the confirm needs its OWN
   // DialogTitle, which only THIS component can set (KeyDoor sits below it).
@@ -344,6 +361,7 @@ export function DoorDialog({
   const targetKeyDoorId = target?.kind === "key" ? target.provider.id : null;
   React.useEffect(() => {
     setConfirmingRemove(false);
+    setSwappedTo(null);
   }, [targetKeyDoorId]);
 
   // A second entrance while the door is open: no second door, the open one
@@ -419,8 +437,10 @@ export function DoorDialog({
             onCancel={onCancel}
             onSaved={() => onDone(doorToast(t))}
             onRemoved={onRemoved}
+            onSignsIn={() => setSwappedTo(t.provider.id)}
           />
         )}
+        {swapped && !unreadable && <p role="status" className="text-body text-warning">{OIDC_SIGN_IN.PASTE_REFUSED}</p>}
         {signIn && !unreadable && <SignInHeader target={signIn} forHarnesses={forHarnesses} />}
         {oidc && target && !unreadable && (
           <OidcDoor

@@ -116,7 +116,9 @@ export function capabilityLabel(kind: ApprovalKind, scope: Scope): string | unde
   return undefined;
 }
 
-export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
+/** `signIn` is the provider's name for an endpoint sign-in's hold, when the caller has mapped the scope's provider
+ *  uid to it; without it the title reads as the unnamed provider. */
+export function deriveTitle(kind: ApprovalKind, scope: Scope, signIn?: string): string {
   switch (kind) {
     case "egress_domain": {
       const host = str(scope, "host", "domain");
@@ -143,7 +145,7 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
     // painted a blast-radius banner over a row that grants nothing.
     case "credential_reauth":
       // An endpoint's sign-in is not AWS's: its hold names its own lane.
-      return scope.lane === OIDC_HOLD_LANE ? OIDC_SIGN_IN.APPROVAL_LABEL(OIDC_SIGN_IN.APPROVAL_UNNAMED) : REAUTH_TITLE;
+      return scope.lane === OIDC_HOLD_LANE ? OIDC_SIGN_IN.APPROVAL_LABEL(signIn || OIDC_SIGN_IN.APPROVAL_UNNAMED) : REAUTH_TITLE;
     // Only reached by DecidedRow — ApprovalCard's own push_content branch
     // returns before this function is ever called (it renders PUSH.CARD_TITLE
     // directly, which is PENDING-tense and would read wrong on a decided row).
@@ -162,7 +164,7 @@ interface Banner {
 }
 
 // The fail-closed audience: no viewer in hand is "this is not yours to clear".
-const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false, oidc: false };
+const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false, oidc: false, holdUID: "" };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
 // ApprovalCard calls it before any scope has been chosen (the picker lives

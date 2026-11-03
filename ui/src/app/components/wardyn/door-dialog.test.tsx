@@ -47,6 +47,7 @@ import { DoorDialog } from "./door-dialog";
 import { useModelAccessDoor, type OpenDoorOptions } from "./model-access-context";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, KEY_DOOR, REMOVE_CONFIRM } from "./copy/door";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import { HttpError } from "../../lib/api/core";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../lib/test-fixtures";
 import type { DoorTarget } from "../../lib/model-access";
@@ -167,6 +168,22 @@ describe("the key and token door (case c)", () => {
     expect(success).not.toHaveBeenCalled();
   });
 
+  it("a stale Add-your-token door whose provider now signs people in becomes Sign in, with no Save to retry", async () => {
+    putCredential.mockRejectedValue(
+      new HttpError(409, '"corp-gateway" signs people in, so a token cannot be pasted for it. Use Sign in', "model_provider_credential_signs_in"),
+    );
+    renderDoor(providerStatus([{ provider: gateway }]), { for: { provider: gateway.id } });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    await userEvent.type(await screen.findByLabelText("Token"), "abc12");
+    await userEvent.click(screen.getByRole("button", { name: KEY_DOOR.SAVE }));
+    const dialog = await screen.findByRole("dialog", { name: OIDC_SIGN_IN.DOOR_TITLE("Corp gateway") });
+    expect(within(dialog).getByText(OIDC_SIGN_IN.PASTE_REFUSED)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: OIDC_SIGN_IN.CONTINUE })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: KEY_DOOR.SAVE })).toBeNull();
+    expect(within(dialog).queryByLabelText("Token")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("with a token stored, Remove lives in the door (opened from Replace), and asks to confirm first", async () => {
     const onRefresh = renderDoor(providerStatus([{ provider: gateway, state: "live" }]), { for: { provider: gateway.id } });
     await userEvent.click(screen.getByRole("button", { name: "entrance" }));
@@ -274,6 +291,20 @@ describe("the key and token door (case c)", () => {
 // #548: a sign-in is always a provider's. A login request with no provider
 // of its kind — or in the Admin view, where no provider door mounts — opens
 // nothing rather than a door no sign-in could complete.
+describe("the sign-in door on a phone", () => {
+  it("keeps its Cancel and Continue in a footer that stays at the bottom of the dialog's scroll", async () => {
+    const sso = { ...gateway, sign_in: "oidc" as const };
+    renderDoor(providerStatus([{ provider: sso }]), { for: { provider: sso.id } });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    const dialog = await screen.findByRole("dialog", { name: OIDC_SIGN_IN.DOOR_TITLE("Corp gateway") });
+    const footer = within(dialog).getByTestId("oidc-door-footer");
+    expect(footer).toHaveClass("sticky", "bottom-0", "bg-background");
+    expect(within(footer).getByRole("button", { name: OIDC_SIGN_IN.CONTINUE })).toBeInTheDocument();
+    expect(within(footer).getByRole("button", { name: OIDC_SIGN_IN.CANCEL })).toBeInTheDocument();
+    expect(dialog).toHaveClass("overflow-y-auto");
+  });
+});
+
 describe("no provider of the kind, no door", () => {
   it("a login request with no provider of its kind opens nothing", async () => {
     renderDoor(baseStatus(), { for: { login: "aws" } });

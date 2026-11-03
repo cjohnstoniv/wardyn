@@ -39,7 +39,7 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
-import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../wardyn/form-actions";
+import { DANGER_OUTLINE, INLINE_ACTIONS, STICKY_FOOTER } from "../../wardyn/form-actions";
 import { Checkbox } from "../../ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../ui/dialog";
 import { Input } from "../../ui/input";
@@ -311,7 +311,8 @@ export function ModelProviderEditor({
               </div>
             )}
             {stale && <SavedElsewhereBanner documentText={stale} onDiscard={discard} />}
-            <div className={`${INLINE_ACTIONS} pt-2`}>
+            {/* Sticky: on a phone the sign-in fields make this dialog scroll, and Save must stay in reach. */}
+            <div data-testid="provider-editor-footer" className={`${INLINE_ACTIONS} ${STICKY_FOOTER}`}>
               {editing && (
                 <Button type="button" variant="outline" className={`mr-auto ${DANGER_OUTLINE}`} disabled={busy} onClick={() => setConfirm("remove")}>
                   {PROVIDER_EDITOR.REMOVE}

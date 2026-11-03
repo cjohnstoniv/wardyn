@@ -9,14 +9,14 @@
 // them through (providerFrom). The server's refusals are shown by the editor as sent; the field one names is
 // outlined here.
 import * as React from "react";
-import { AlertTriangle, Check } from "lucide-react";
+import { AlertTriangle, Check, Copy } from "lucide-react";
 import { secrets } from "../../../lib/api/secrets";
 import { apiURL } from "../../../lib/base-path";
 import { PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
 import { cn } from "../../ui/utils";
 import { Input } from "../../ui/input";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
-import { CopyButton } from "../../wardyn/copy-button";
+import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { ModelChips, type ChipCopy } from "./model-chips";
@@ -104,6 +104,26 @@ export function OidcChoice({
         </p>
       )}
     </Field>
+  );
+}
+
+/** Copy callback URL: the button says Copied, with a check, once the address is on the clipboard. */
+function CallbackCopy({ text }: { text: string }) {
+  const { copied, copy } = useCopyToClipboard();
+  const Icon = copied ? Check : Copy;
+  return (
+    <button
+      type="button"
+      onClick={() => copy(text)}
+      aria-label={T.COPY_CALLBACK}
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
+    >
+      {copied ? PROVIDER_EDITOR.GATEWAY.COPIED : PROVIDER_EDITOR.GATEWAY.COPY}
+      <Icon className={copied ? "size-3.5 text-success" : "size-3.5"} aria-hidden="true" />
+      <span aria-live="polite" className="sr-only">
+        {copied ? PROVIDER_EDITOR.GATEWAY.COPIED : ""}
+      </span>
+    </button>
   );
 }
 
@@ -199,13 +219,7 @@ export function OidcFields({
       <Field label={T.CALLBACK} hint={T.CALLBACK_HINT}>
         <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-input-background px-3 py-2">
           <code className="min-w-0 break-all font-mono text-xs">{callback}</code>
-          <CopyButton
-            text={callback}
-            label={T.COPY_CALLBACK}
-            className="shrink-0 gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
-          >
-            {PROVIDER_EDITOR.GATEWAY.COPY}
-          </CopyButton>
+          <CallbackCopy text={callback} />
         </div>
       </Field>
       <div className="space-y-2" data-invalid={bad("oidc.identity_binding")}>

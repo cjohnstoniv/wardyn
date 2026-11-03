@@ -241,11 +241,8 @@ export function ReauthRow({
   request,
   runId,
   adminView = false,
-  runProvider,
 }: {
   request: ApprovalRequest;
-  /** The provider the strip's run uses: an endpoint sign-in's hold names its row by uid, which only this names. */
-  runProvider?: string;
   /** This strip's own run — the switch link's target on the admin's own row
    *  (§below) needs no `useLocation()`: it is always this exact run's user
    *  twin, `/runs/{id}`, whatever admin subpath this strip happens to be
@@ -273,7 +270,7 @@ export function ReauthRow({
   // alone, never a button that opens nothing (#543) — the sentence stays
   // `mayAct`'s, as /approvals' card keeps it.
   const { status } = useShellSetupStatus();
-  const oidcHold = oidcHoldProvider(audience, status, runProvider);
+  const oidcHold = oidcHoldProvider(audience, status);
   const holdName = oidcHold ? oidcHold.name || oidcHold.id : undefined;
   const canAct =
     mayAct &&

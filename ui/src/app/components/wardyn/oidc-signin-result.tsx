@@ -9,18 +9,20 @@
 // the door) it is a strip, as the Azure DevOps sign-in's is. The query is read once and taken off the address.
 import * as React from "react";
 import { AlertTriangle, CheckCircle2, X } from "lucide-react";
+import { useShellSetupStatus } from "./model-access-context";
 import { OIDC_RETURN, OIDC_SIGN_IN as T, oidcFailureKind } from "./copy/oidc-signin";
 
-type Result = { ok: true } | { ok: false; reason: string };
+type Result = ({ ok: true } | { ok: false; reason: string }) & { uid: string };
 
 function readAndClearResult(): Result | null {
   const url = new URL(window.location.href);
   const reason = url.searchParams.get(OIDC_RETURN.ERROR_PARAM);
   const done = url.searchParams.get(OIDC_RETURN.DONE_PARAM);
   if (!reason && done !== OIDC_RETURN.DONE_VALUE) return null;
+  const uid = url.searchParams.get(OIDC_RETURN.PROVIDER_PARAM) ?? "";
   for (const p of [OIDC_RETURN.ERROR_PARAM, OIDC_RETURN.DONE_PARAM, OIDC_RETURN.PROVIDER_PARAM]) url.searchParams.delete(p);
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-  return reason ? { ok: false, reason } : { ok: true };
+  return reason ? { ok: false, reason, uid } : { ok: true, uid };
 }
 
 export function OidcSignInResult() {
@@ -32,7 +34,8 @@ export function OidcSignInResult() {
     if (opener && opener !== window) {
       try {
         opener.postMessage(
-          { type: OIDC_RETURN.MESSAGE, ok: r.ok, reason: r.ok ? "" : r.reason },
+          // The window's name is the door's per-attempt name for it: echoed so the door can tell this attempt's word.
+          { type: OIDC_RETURN.MESSAGE, ok: r.ok, reason: r.ok ? "" : r.reason, attempt: window.name },
           window.location.origin,
         );
         window.close();
@@ -43,11 +46,19 @@ export function OidcSignInResult() {
     }
     setResult(r);
   }, []);
+  const { status } = useShellSetupStatus();
   if (!result) return null;
-  const sentence = result.ok ? T.BANNER_OK : T.FAIL[oidcFailureKind(result.reason)](T.BANNER_FAIL_NAME);
+  const named = result.uid ? status?.model_providers?.find((p) => p.sign_in === "oidc" && p.uid === result.uid) : undefined;
+  const name = named ? named.name || named.id : "";
+  const sentence = result.ok
+    ? name
+      ? T.BANNER_OK_NAMED(name)
+      : T.BANNER_OK
+    : T.FAIL[oidcFailureKind(result.reason)](name || T.BANNER_FAIL_NAME);
   const Icon = result.ok ? CheckCircle2 : AlertTriangle;
   return (
     <div
+      role={result.ok ? "status" : "alert"}
       className={`relative z-50 flex shrink-0 items-start gap-2 border-b border-border px-4 py-2 text-sm ${result.ok ? "bg-success-subtle text-success" : "bg-danger-subtle text-danger"}`}
     >
       <Icon className="mt-0.5 size-4 shrink-0" aria-hidden />

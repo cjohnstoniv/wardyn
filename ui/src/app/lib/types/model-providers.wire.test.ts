@@ -66,7 +66,7 @@ describe("local_model wire", () => {
     expect(goJSONTags(goType, "ModelProvider")).toContain("oidc");
   });
 
-  it("the setup status row carries sign_in and identity_binding as the server writes them", () => {
+  it("the setup status row carries uid, sign_in and identity_binding as the server writes them", () => {
     const ts = read("ui/src/app/lib/types/setup.ts");
     const goSetup = read("internal/api/model_providers_api.go");
     expect([...tsKeys(ts, "SetupModelProvider")].sort()).toEqual([...goJSONTags(goSetup, "SetupModelProvider")].sort());

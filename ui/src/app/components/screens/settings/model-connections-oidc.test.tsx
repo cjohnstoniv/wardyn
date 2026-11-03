@@ -34,6 +34,15 @@ const SSO: SetupModelProvider = {
   identity_binding: "console",
 };
 
+/** A real Window to stand for the sign-in window: a message's source must be one. */
+function fakeWindow(): Window {
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const w = frame.contentWindow as Window;
+  w.close = vi.fn();
+  return w;
+}
+
 function renderCard(status: SetupStatus, onChanged = vi.fn(), onRefresh: () => void | Promise<unknown> = () => {}) {
   return render(
     <WithDoor status={status} path="/account" operator={false} onRefresh={onRefresh}>
@@ -129,7 +138,8 @@ it("a blocked window gives a link to open it", async () => {
 });
 
 it("the window's failure word is shown as its own sentence, with one retry", async () => {
-  vi.spyOn(window, "open").mockReturnValue({ closed: false, close: vi.fn() } as unknown as Window);
+  const win = fakeWindow();
+  vi.spyOn(window, "open").mockReturnValue(win);
   renderCard(providerStatus([{ provider: SSO, state: "not_configured" }]));
   await expandCard(CONNECTIONS.TITLE);
   await userEvent.click(screen.getByRole("button", { name: T.SIGN_IN }));
@@ -137,7 +147,7 @@ it("the window's failure word is shown as its own sentence, with one retry", asy
   await screen.findByText(T.WAITING);
   act(() => {
     window.dispatchEvent(
-      new MessageEvent("message", { origin: window.location.origin, data: { type: OIDC_RETURN.MESSAGE, ok: false, reason: "identity_binding" } }),
+      new MessageEvent("message", { origin: window.location.origin, source: win, data: { type: OIDC_RETURN.MESSAGE, ok: false, reason: "identity_binding" } }),
     );
   });
   const alert = await screen.findByRole("alert");
@@ -162,6 +172,66 @@ it("a message from another origin is ignored", async () => {
   expect(screen.getByText(T.WAITING)).toBeInTheDocument();
 });
 
+async function openDoor() {
+  const wins: Window[] = [];
+  const names: string[] = [];
+  vi.spyOn(window, "open").mockImplementation((_u, name) => {
+    const w = fakeWindow();
+    wins.push(w);
+    names.push(String(name));
+    return w;
+  });
+  renderCard(providerStatus([{ provider: SSO, state: "not_configured" }]));
+  await expandCard(CONNECTIONS.TITLE);
+  await userEvent.click(screen.getByRole("button", { name: T.SIGN_IN }));
+  await userEvent.click(await screen.findByRole("button", { name: T.CONTINUE }));
+  await screen.findByText(T.WAITING);
+  return { wins, names };
+}
+const word = (source: Window | null, extra: Record<string, unknown> = {}) =>
+  act(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: window.location.origin,
+        source,
+        data: { type: OIDC_RETURN.MESSAGE, ok: false, reason: "identity_binding", ...extra },
+      }),
+    );
+  });
+
+it("each attempt names its window with its own nonce, and only that window's word counts", async () => {
+  const { wins, names } = await openDoor();
+  expect(names[0]).toMatch(/^wardyn-provider-oidc-[0-9a-f]{16}$/);
+  // Another window of this origin, and a message with no window at all: ignored.
+  word(fakeWindow());
+  word(null);
+  expect(screen.queryByRole("alert")).toBeNull();
+  // The right window echoing another attempt's name: ignored. Echoing its own, or none (a cleared name): heard.
+  word(wins[0], { attempt: "wardyn-provider-oidc-0000000000000000" });
+  expect(screen.queryByRole("alert")).toBeNull();
+  word(wins[0], { attempt: names[0] });
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+});
+
+it("a window cleared of its name still speaks for its own attempt", async () => {
+  const { wins } = await openDoor();
+  word(wins[0]);
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+});
+
+it("a retry closes the earlier window and a late word from it is ignored", async () => {
+  const { wins, names } = await openDoor();
+  word(wins[0]);
+  await userEvent.click(await screen.findByRole("button", { name: T.RETRY }));
+  await screen.findByText(T.WAITING);
+  expect(wins[0].close).toHaveBeenCalled();
+  expect(names[1]).not.toBe(names[0]);
+  word(wins[0], { attempt: names[0] });
+  expect(screen.queryByRole("alert")).toBeNull();
+  word(wins[1], { attempt: names[1] });
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+});
+
 it("closes the door with a toast once the person's own state shows a new sign-in", async () => {
   vi.spyOn(window, "open").mockReturnValue({ closed: false, close: vi.fn() } as unknown as Window);
   const before = providerStatus([{ provider: SSO, state: "live", addedAt: "2026-11-01T10:00:00Z" }]);
@@ -180,6 +250,11 @@ it("closes the door with a toast once the person's own state shows a new sign-in
   rerender(view(after));
   await waitFor(() => expect(toast.success).toHaveBeenCalledWith(T.DONE_TOAST("Corp SSO")), { timeout: 4000 });
   await waitFor(() => expect(screen.queryByText(T.WAITING)).toBeNull());
+  // The row after it: signed in, with Sign in again and Disconnect beside it.
+  const card = screen.getByTestId("model-connections-card");
+  expect(within(card).getByText(CONNECTIONS.SIGNED_IN)).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: T.SIGN_IN_AGAIN })).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: T.DISCONNECT })).toBeInTheDocument();
 });
 
 it("a window closed with no sign-in ends the wait as too long or closed", async () => {

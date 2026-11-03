@@ -27,7 +27,7 @@ import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
-import { REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
+import { OIDC_HOLD_LANE, REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
 import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { resolveDoor } from "../../lib/model-access";
@@ -99,9 +99,9 @@ export function ApprovalCard({
   const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const run = runProp ?? fetchedRun;
   const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
-  // An endpoint sign-in's hold names its provider row by uid, which this console cannot read: the provider is the
-  // run's own, and until the run is read the card says what it can and offers no door.
-  const oidcHold = oidcHoldProvider(reauth, status, run?.model_provider_id);
+  // An endpoint sign-in's hold names its provider row by uid, which setup status maps to the provider: no match
+  // (not loaded, removed, or not this person's) reads as the generic wording with no door.
+  const oidcHold = oidcHoldProvider(reauth, status);
   const holdAudience = oidcHold ? { ...reauth, signIn: oidcHold.name || oidcHold.id } : reauth;
   // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
   // personal reauth door either, even on the admin's own row — same rule as
@@ -450,11 +450,16 @@ export function DecidedRow({
   // an expiry is a sweep nobody decided) and for every other kind.
   const scopeBadge = approvalScopeBadge(item);
   const view = useConsoleMode();
+  // A decided endpoint sign-in names its provider like the pending one does: the scope's uid, through setup status.
+  const { status } = useShellSetupStatus();
+  const hold = oidcHoldProvider({ oidc: scope.lane === OIDC_HOLD_LANE, holdUID: String(scope.provider_id ?? "") }, status);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} scope={scope} />
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+        {deriveTitle(item.kind, scope, hold ? hold.name || hold.id : undefined)}
+      </span>
       {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}

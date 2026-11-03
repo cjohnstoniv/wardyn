@@ -146,6 +146,16 @@ describe("HarnessSetup", () => {
       expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "corp-sso" } }));
     });
 
+    it("offers Sign in to {name} on an endpoint sign-in the person has not made, and it opens that provider's door", async () => {
+      const sso = { id: "corp-sso", name: "Corp SSO", kind: "custom_endpoint", harnesses: ["claude-code"], host: "llm.contoso.example", sign_in: "oidc" };
+      h.providers = [...MODEL_PROVIDERS, sso];
+      h.access = [{ provider: "corp-sso", state: "not_configured" }];
+      show([CLAUDE_UNGATED], { tools: [{ id: "claude-code", kind: "harness", model_provider: "corp-sso" }] });
+      await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_TO("Corp SSO") }));
+      expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "corp-sso" } }));
+      expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_AGAIN })).toBeNull();
+    });
+
     it("gives an ordinary endpoint no sign-in button when its token is stored", () => {
       const plain = { id: "corp-gw", name: "Corp gateway", kind: "custom_endpoint", harnesses: ["claude-code"], host: "gw.example" };
       h.providers = [...MODEL_PROVIDERS, plain];

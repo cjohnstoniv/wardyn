@@ -18,7 +18,7 @@
 // the agent on every mutating tool call), which is why some rows here have no
 // scope caret — see decide().
 import * as React from "react";
-import { ShieldAlert, Clock, Check, Loader2, X } from "lucide-react";
+import { AlertTriangle, ShieldAlert, Clock, Check, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   canDecideApproval,
@@ -447,7 +447,12 @@ export function LiveApprovals({
   const allAwsReauth =
     pending.length > 0 && pending.every((a) => a.kind === "credential_reauth" && !isAdoConsentRequest(a) && !isOidcHold(a));
   const allAdoConsent = pending.length > 0 && pending.every((a) => isAdoConsentRequest(a));
-  const oidcName = setupStatus?.model_providers?.find((p) => p.id === run?.model_provider_id && p.sign_in === "oidc");
+  // The heading names the provider only when every held request is for the same one; two providers read as unnamed.
+  const holdUIDs = new Set(pending.map((a) => String(a.requested_scope?.provider_id ?? "")));
+  const oidcName =
+    allOidcReauth && holdUIDs.size === 1
+      ? setupStatus?.model_providers?.find((p) => p.sign_in === "oidc" && p.uid === [...holdUIDs][0])
+      : undefined;
   const heading = allAwsReauth
     ? REAUTH_HEADING
     : allOidcReauth
@@ -466,6 +471,7 @@ export function LiveApprovals({
       data-testid="live-approvals"
     >
       <div className="flex items-center gap-2">
+        {allOidcReauth && <AlertTriangle className="size-4 shrink-0 text-warning" aria-hidden="true" />}
         <SectionLabel>{heading}</SectionLabel>
         {/* Named once for the whole panel, not per row — but only when it's
             actually true: F-12 fixed the row-level gate below to follow
@@ -552,7 +558,7 @@ export function LiveApprovals({
         const scoped = a.kind === "egress_domain";
         const telemetry = scoped && isKnownTelemetryHost(label);
         if (a.kind === "credential_reauth") {
-          return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} runProvider={run?.model_provider_id} />;
+          return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} />;
         }
         return (
           <div key={a.id} className="flex flex-wrap items-center gap-2" data-testid="live-approval-row">

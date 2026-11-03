@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The /approvals card for a held run's sign-in to an endpoint that signs people in: provider-named once the run's
-// own provider is read, the owner's door opens that provider's sign-in, and another person reads whose it is.
-import { describe, it, expect, vi } from "vitest";
+// The /approvals card for a held run's sign-in to an endpoint that signs people in: provider-named from the hold's
+// own uid (never the run's provider), the owner's door opens that provider's sign-in, and another person reads whose it is.
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -13,17 +13,19 @@ import type { ApprovalRequest, MeCapabilities, SetupModelProvider } from "../../
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { OIDC_SIGN_IN as T } from "../wardyn/copy/oidc-signin";
 import { OIDC_HOLD_LANE, REAUTH_ROW } from "../wardyn/model-access-copy";
-import { providerStatus } from "../../lib/test-fixtures";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock("./settings/harness-login-pane", () => ({ HarnessLoginPane: () => <div data-testid="fake-pane" /> }));
 
-const SCOPE = { lane: OIDC_HOLD_LANE, mechanism: "ado_entra", reason: "x", owner: "alice@corp", provider_id: "uid-1" };
+let holdUID = "uid-a";
+let runProvider = "corp-sso";
+const scope = () => ({ lane: OIDC_HOLD_LANE, mechanism: "ado_entra", reason: "x", owner: "alice@corp", provider_id: holdUID });
 vi.mock("../../lib/api/approvals", () => ({
   approvals: {
     listApprovals: async (state: string) =>
       state === "PENDING"
-        ? [{ id: "apr_1", run_id: "run_1", kind: "credential_reauth", requested_scope: SCOPE, state: "PENDING", requested_at: new Date().toISOString() } satisfies ApprovalRequest]
+        ? [{ id: "apr_1", run_id: "run_1", kind: "credential_reauth", requested_scope: scope(), state: "PENDING", requested_at: new Date().toISOString() } satisfies ApprovalRequest]
         : [],
     approve: vi.fn(),
     deny: vi.fn(),
@@ -36,7 +38,7 @@ vi.mock("../../lib/api/runs", () => ({
     getRun: () =>
       Promise.resolve({
         id: "run_1", agent: "claude-code", task: "t", confinement_class: "CC2", state: "RUNNING", created_by: "alice@corp",
-        model_provider_id: "corp-sso", model_provider_name: "Corp SSO",
+        model_provider_id: runProvider,
       }),
   },
 }));
@@ -45,14 +47,15 @@ import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider } from "../wardyn/operator-context";
 
 const SSO: SetupModelProvider = {
-  id: "corp-sso", name: "Corp SSO", kind: "custom_endpoint", harnesses: ["claude-code"], host: "llm.contoso.example", sign_in: "oidc",
+  id: "corp-sso", name: "Corp SSO", kind: "custom_endpoint", harnesses: ["claude-code"], host: "llm.contoso.example", sign_in: "oidc", uid: "uid-a",
 };
+const OTHER: SetupModelProvider = { ...SSO, id: "other-sso", name: "Other SSO", host: "llm.other.example", uid: "uid-b" };
 
-function mount(principal: string) {
+function mount(principal: string, rows: SetupModelProvider[] = [SSO]) {
   render(
     <OperatorProvider operator={false} securityOperator={false} principal={principal}>
       <MemoryRouter initialEntries={["/approvals"]}>
-        <ModelAccessProvider status={providerStatus([{ provider: SSO, state: "expired_signin" }])} onRefresh={() => {}}>
+        <ModelAccessProvider status={providerStatus(rows.map((provider) => ({ provider, state: "expired_signin" })))} onRefresh={() => {}}>
           <ApprovalsScreen />
         </ModelAccessProvider>
       </MemoryRouter>
@@ -61,6 +64,11 @@ function mount(principal: string) {
 }
 
 describe("/approvals — a held sign-in to an endpoint", () => {
+  beforeEach(() => {
+    holdUID = "uid-a";
+    runProvider = "corp-sso";
+  });
+
   it("the owner: a sign-in, not a decision; provider-named chip, what line and button; no AWS wording", async () => {
     mount("alice@corp");
     expect(await screen.findByText(T.APPROVAL_LABEL("Corp SSO"))).toBeInTheDocument();
@@ -78,5 +86,29 @@ describe("/approvals — a held sign-in to an endpoint", () => {
     mount("bob@corp");
     expect(await screen.findByText(T.APPROVAL_OTHER("alice@corp"))).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: T.BUTTON("Corp SSO") })).toBeNull();
+  });
+
+  it("a hold for a second harness's provider B opens B's door while the run's primary is OIDC provider A", async () => {
+    holdUID = "uid-b";
+    mount("alice@corp", [SSO, OTHER]);
+    expect(await screen.findByText(T.APPROVAL_LABEL("Other SSO"))).toBeInTheDocument();
+    expect(screen.queryByText(/Corp SSO/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: T.BUTTON("Other SSO") }));
+    expect(await screen.findByText(T.DOOR_TITLE("Other SSO"))).toBeInTheDocument();
+  });
+
+  it("a hold for OIDC provider B gets B's button when the run's primary is a typed-token provider A", async () => {
+    holdUID = "uid-b";
+    runProvider = "key-a";
+    mount("alice@corp", [{ ...MODEL_PROVIDERS.anthropicKey, id: "key-a" }, OTHER]);
+    await userEvent.click(await screen.findByRole("button", { name: T.BUTTON("Other SSO") }));
+    expect(await screen.findByText(T.DOOR_TITLE("Other SSO"))).toBeInTheDocument();
+  });
+
+  it("a uid with no match is the generic sign-in-needed with no door, even when the run's provider signs in", async () => {
+    holdUID = "uid-deleted";
+    mount("alice@corp", [SSO, OTHER]);
+    expect(await screen.findByText(T.APPROVAL_LABEL(T.APPROVAL_UNNAMED))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Sign in/ })).toBeNull();
   });
 });

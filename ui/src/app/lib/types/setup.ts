@@ -259,6 +259,8 @@ export interface SetupModelProvider {
   // The agents whose roster default it is.
   default_for?: string[];
   host: string;
+  // The row's own id, on a sign-in row only: the one a held run's sign-in request names (scope.provider_id).
+  uid?: string;
   // "oidc" for a custom endpoint that signs people in at its own authority; absent otherwise.
   sign_in?: "oidc" | (string & {});
   // With sign_in: "console" or "none". "none" is the "not bound to your sign-in" row.

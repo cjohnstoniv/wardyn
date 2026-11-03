@@ -11,7 +11,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
 import type { ModelProvidersList } from "../../../lib/api/model-providers";
-import { MODEL_PROVIDERS as M, PROVIDER_EDITOR as E } from "../../../lib/model-providers-copy";
+import { MODEL_PROVIDERS as M, PROVIDER_EDITOR as E, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
 import { setField } from "../../../../test/set-field";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -295,5 +295,88 @@ describe("the list's wording", () => {
   it("has the row line and chip words", () => {
     expect(M.PROVIDES.SIGN_IN).toBe("Each person signs in with their own account");
     expect(M.CHIP_UNBOUND).toBe("Not bound to sign-in");
+  });
+});
+
+describe("keyboard and form behaviour", () => {
+  it("the choice is one tab stop moved by the arrow keys, and the fields follow in reading order", async () => {
+    const { user } = renderEditor(PASTE);
+    const paste = choice(O.PASTE);
+    paste.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(choice(O.SIGN_IN)).toHaveAttribute("aria-checked", "true");
+    expect(choice(O.SIGN_IN)).toHaveFocus();
+    // Only the chosen radio is a tab stop.
+    expect(choice(O.PASTE)).toHaveAttribute("tabindex", "-1");
+    await user.keyboard("{ArrowLeft}");
+    expect(choice(O.PASTE)).toHaveAttribute("aria-checked", "true");
+    await user.keyboard("{ArrowRight}");
+    const order = [
+      screen.getByLabelText(new RegExp(`^${O.ISSUER}`)),
+      screen.getByLabelText(new RegExp(`^${O.CLIENT_ID}`)),
+      screen.getByPlaceholderText(O.SCOPES_PLACEHOLDER),
+      screen.getByRole("button", { name: O.COPY_CALLBACK }),
+      screen.getByRole("switch", { name: O.BIND }),
+    ];
+    // Tab through the form: the named controls come up in this order (the client secret's chooser and the scopes'
+    // Add button sit between them).
+    const seen: Element[] = [];
+    for (let i = 0; i < 12; i++) {
+      await user.tab();
+      if (document.activeElement) seen.push(document.activeElement);
+    }
+    const at = order.map((el) => seen.indexOf(el));
+    expect(at.every((n) => n >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((x, y) => x - y));
+  });
+
+  it("Save with the Issuer empty is the browser's own message: the field is required and the form is not novalidate", async () => {
+    const { user } = renderEditor(PASTE);
+    await user.click(choice(O.SIGN_IN));
+    const issuer = screen.getByLabelText(new RegExp(`^${O.ISSUER}`)) as HTMLInputElement;
+    expect(issuer).toBeRequired();
+    expect(issuer.closest("form")).not.toHaveAttribute("novalidate");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    expect(issuer.validity.valueMissing).toBe(true);
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("refusals the console cannot send are shown whole under the title, as the server worded them", async () => {
+    const sentence = 'model_providers: "claude-keys": oidc: is only for your own endpoint providers';
+    putMock.mockRejectedValue(new HttpError(400, sentence, "", "", "", "", undefined, "", "", "oidc"));
+    const { user } = renderEditor(SIGN_IN);
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(PROVIDERS.SAVE_REFUSED_TITLE_ONE)).toBeInTheDocument();
+    expect(within(alert).getByText(sentence)).toBeInTheDocument();
+  });
+
+  it("copying the callback URL puts it on the clipboard and the button says Copied", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    const { user } = renderEditor(PASTE);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: write }, configurable: true });
+    await user.click(choice(O.SIGN_IN));
+    await user.click(screen.getByRole("button", { name: O.COPY_CALLBACK }));
+    expect(write).toHaveBeenCalledWith(`${window.location.origin}/api/v1/auth/provider-oidc/callback`);
+    expect(await screen.findByText(E.GATEWAY.COPIED, { selector: "button" })).toBeInTheDocument();
+    // The gateway identity switch stays beside it, as it was.
+    expect(screen.getByRole("switch", { name: E.GATEWAY.SWITCH })).toBeInTheDocument();
+  });
+});
+
+describe("on a phone", () => {
+  it("the footer stays at the bottom of the dialog's scroll, with Save in it, while the fields scroll", async () => {
+    const { user } = renderEditor(PASTE);
+    await user.click(choice(O.SIGN_IN));
+    const footer = screen.getByTestId("provider-editor-footer");
+    expect(footer).toHaveClass("sticky", "bottom-0", "bg-background");
+    expect(within(footer).getByRole("button", { name: E.SAVE })).toBeInTheDocument();
+    expect(within(footer).getByRole("button", { name: E.CANCEL })).toBeInTheDocument();
+    // It is a child of the element that scrolls, and the fields are above it in that same element.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("overflow-y-auto", "max-h-[calc(100dvh-2rem)]");
+    expect(footer.closest("[role=dialog]")).toBe(dialog);
+    const issuer = screen.getByLabelText(new RegExp(`^${O.ISSUER}`));
+    expect(issuer.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
