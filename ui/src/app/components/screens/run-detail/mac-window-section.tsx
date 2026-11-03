@@ -36,14 +36,28 @@ export function lastCloseText(c: RunMacWindowClose, runner: string): string {
   }
 }
 
+/** The read an open was answered on: the button waits until a read of this run differs from it. */
+interface Asked {
+  runId: string;
+  state: string;
+  closedAt?: string;
+}
+/** How long the button waits for a read that shows the window, before it is offered again. */
+export const ASKED_MS = 45_000;
+
 /** The button and what it does, or the open window's lines; the refusal-only states are MacWindowRefusal's. */
 export function MacWindowButton({ run }: { run: RunDetail }) {
   const w = run.mac_window;
   const [opening, setOpening] = React.useState(false);
-  const [asked, setAsked] = React.useState(false);
+  const [asked, setAsked] = React.useState<Asked | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  // The answer comes when the window is up; the state changes on the next read. Until then the button stays busy.
-  React.useEffect(() => setAsked(false), [w?.state]);
+  // The answer comes when the window is up; a later read shows it open, or a newer last close when it opened and
+  // closed between two reads. Until one of those, for this run, the button stays busy, and never past ASKED_MS.
+  React.useEffect(() => {
+    if (!asked) return;
+    const t = setTimeout(() => setAsked(null), ASKED_MS);
+    return () => clearTimeout(t);
+  }, [asked]);
   if (!w || (!macWindowHasButton(w) && w.state !== "window_open")) return null;
   const named = run.runner_name;
   const runner = named || MAC_WINDOW.thisMac;
@@ -56,13 +70,13 @@ export function MacWindowButton({ run }: { run: RunDetail }) {
       </div>
     );
   }
-  const busy = opening || asked;
+  const busy = opening || (asked !== null && asked.runId === run.id && asked.state === w.state && asked.closedAt === w.last_close?.at);
   const open = async () => {
     setError(null);
     setOpening(true);
     try {
       await runsApi.openMacWindow(run.id);
-      setAsked(true);
+      setAsked({ runId: run.id, state: w.state, closedAt: w.last_close?.at });
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

@@ -6,7 +6,7 @@
 // The Desktop tile's window on the Mac (board WIN-1, and WIN-2's launch line W2-12): the button, its wait, the open
 // window, the refusals in the server's words, the after-click errors, the last close, and the runs that have none.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { RunDetail, RunMacWindow } from "../../lib/types";
@@ -20,6 +20,7 @@ vi.mock("../../lib/api/desktop-sign-ins", () => ({ desktopSignIns: { get: vi.fn(
 
 import { HttpError } from "../../lib/api/core";
 import { DesktopCard } from "./run-detail-desktop";
+import { ASKED_MS } from "./run-detail/mac-window-section";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
@@ -110,6 +111,52 @@ describe("DesktopCard: the window on the Mac", () => {
     expect(within(open).getByText(MAC_WINDOW.viewOnlyWhileOpen)).toBeInTheDocument();
     expect(within(open).queryByRole("button", { name: UI_APPS_LANE.ctaBusy })).toBeNull();
     expect(within(open).getByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
+  });
+
+  it("a window that opened and closed between two reads: the newer last close frees the button, and it opens again", async () => {
+    openMock.mockResolvedValue({});
+    const before = aheadByHours(-0.5);
+    const { rerender } = render(card({ state: "open", last_close: { reason: "person", at: before } }));
+    const d = await desk();
+    await userEvent.click(windowButton(d));
+    await waitFor(() => expect(within(d).getByRole("button", { name: UI_APPS_LANE.ctaBusy })).toBeDisabled());
+    // The same read again: still waiting.
+    rerender(card({ state: "open", last_close: { reason: "person", at: before } }));
+    expect(within(await desk()).getByRole("button", { name: UI_APPS_LANE.ctaBusy })).toBeDisabled();
+    // Open both times, but a newer close: the window came and went.
+    rerender(card({ state: "open", last_close: { reason: "host_locked", at: aheadByHours(-0.01) } }));
+    const after = await desk();
+    expect(windowButton(after)).toBeEnabled();
+    expect(within(after).getByText(MAC_WINDOW.closedLocked(MAC))).toBeInTheDocument();
+    await userEvent.click(windowButton(after));
+    expect(openMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("the wait belongs to the run it was asked on: another run's tile offers its own button", async () => {
+    openMock.mockResolvedValue({});
+    const { rerender } = render(card({ state: "open" }));
+    await userEvent.click(windowButton(await desk()));
+    await waitFor(async () => expect(within(await desk()).getByRole("button", { name: UI_APPS_LANE.ctaBusy })).toBeDisabled());
+    rerender(card({ state: "open" }, { id: "44444444-4444-4444-4444-444444444444" }));
+    expect(windowButton(await desk())).toBeEnabled();
+  });
+
+  it("a read that never shows the window: the button is offered again after the wait", async () => {
+    openMock.mockResolvedValue({});
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(card({ state: "open" }));
+      const d = await desk();
+      await user.click(windowButton(d));
+      await waitFor(() => expect(within(d).getByRole("button", { name: UI_APPS_LANE.ctaBusy })).toBeDisabled());
+      await act(async () => { vi.advanceTimersByTime(ASKED_MS - 1000); });
+      expect(within(d).getByRole("button", { name: UI_APPS_LANE.ctaBusy })).toBeDisabled();
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(windowButton(d)).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
