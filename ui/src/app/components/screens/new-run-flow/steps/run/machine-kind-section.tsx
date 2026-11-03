@@ -69,7 +69,7 @@ export function MachineKindSection({ kind, agents = [], macosBase, onChoose, onC
               ]}
             />
             {refused && <p className={note}>{withCode(refused)}</p>}
-            <MacOSLines loaded={status !== null} on={macOSOn} chosen={macOS} offer={offer} windowOn={windowOn} />
+            <MacOSLines loaded={status != null && !status.unreachable} on={macOSOn} chosen={macOS} offer={offer} windowOn={windowOn} />
           </div>
           {macOS && offer?.ok && hasBaseChoice(offer, macosBase) && <MacOSBasePicker offer={offer} value={macosBase} onChoose={onChooseBase} />}
           <dl data-testid="nr-vm-barrier" className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">

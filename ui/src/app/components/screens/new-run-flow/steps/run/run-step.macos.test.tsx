@@ -74,15 +74,15 @@ const changes = () => screen.getByRole("region", { name: NR_MACHINE.CHANGES_TITL
 
 describe("OS row: macOS offered (frames 1 and 3)", () => {
   it("is Linux only while the organisation switch is off or the status is absent; only a loaded status says macOS is off", async () => {
-    for (const status of [null, { features: { macos_vms: false } } as SetupStatus]) {
+    for (const status of [null, { unreachable: true } as SetupStatus, { features: { macos_vms: false } } as SetupStatus, { features: {} } as SetupStatus]) {
       show(AGENT, status);
       await chooseVM();
       expect(within(osGroup()).queryByRole("button", { name: NR_MACHINE.OS_MACOS })).toBeNull();
       expect(screen.getByText(NR_MACHINE.OS_LINUX_HELP)).toBeInTheDocument();
-      if (status) {
+      if (status && !status.unreachable) {
         expect(screen.getByText(NR_MACHINE.OS_LATER)).toBeInTheDocument();
       } else {
-        // Still loading: not told macOS is off, only that Windows is not available.
+        // Still loading, or the first read failed (unreachable): not told macOS is off, only that Windows is not available.
         expect(screen.queryByText(NR_MACHINE.OS_LATER)).toBeNull();
         expect(screen.getByText(NR_MACHINE.OS_WINDOWS_LATER)).toBeInTheDocument();
       }
