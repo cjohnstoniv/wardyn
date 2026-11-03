@@ -350,6 +350,9 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
 	}
+	if f := macOSVMRunShapeRefusal(req, demands); f != nil {
+		return f
+	}
 	if demands.LinuxVM && ask.KeepsWorkFolder {
 		// A kept work folder is a Docker or cluster volume, which a Linux VM can never open (it takes only a drive bound to its
 		// runner), so this answers at Review for every runner, whatever it reports, rather than failing the start.
@@ -390,6 +393,21 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 			// The field travels in errorBody.Field, so the sentence is the detail alone.
 			return placementRunRefusal(ref, ref.Detail)
 		}
+	}
+	return nil
+}
+
+// macOSVMRunShapeRefusal is the refusal of a macOS VM run shape the runner cannot honour, whichever Mac
+// it lands on: a terminal that opens the agent CLI (the runner's own sentence) and a profile that pauses
+// idle runs (a macOS VM has no pause; the runner's Freeze answers runner.ErrFreezeUnsupported).
+func macOSVMRunShapeRefusal(req createRunRequest, demands placementDemands) *runRefusal {
+	switch {
+	case !demands.MacOSVM:
+		return nil
+	case requestIsInteractive(req) && req.InteractiveStart == "agent":
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "interactive_start"}, runner.MacVMAgentStart)
+	case demands.IdlePause:
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "pause_idle_after_sec"}, runner.MacVMNoIdlePause)
 	}
 	return nil
 }
