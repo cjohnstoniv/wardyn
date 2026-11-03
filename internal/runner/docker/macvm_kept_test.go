@@ -640,6 +640,9 @@ func (k *keptTools) UpdateKeptTools(_ context.Context, dir string) error {
 // is not updated.
 func TestKeptResumeUpdatesToolsBeforeTheBootLock(t *testing.T) {
 	r, g := newKeptRig(t)
+	// The locked arm must try again inside lockWait; 100 ms can pass in the first try on a loaded runner.
+	// The fake answers locked until tools.err changes, so that arm takes the whole second, no more.
+	r.c.lockWait = time.Second
 	tools := &keptTools{}
 	r.c.Tools = tools
 	id := uuid.New()
