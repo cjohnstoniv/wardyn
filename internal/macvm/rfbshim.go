@@ -135,13 +135,21 @@ type RFBShim struct {
 }
 
 // BaseViewOnly says whether the run in runDir boots a base without desktop control, from the base's
-// own manifest rather than anything the gateway said. A run or base it cannot read counts as view only.
+// own manifest rather than anything the gateway said. A resumed kept machine boots its own disk, so it reads
+// the manifest copy in its kept folder: the Mac's base may since have been replaced or gone. A run or base it
+// cannot read counts as view only.
 func BaseViewOnly(runDir string) bool {
 	cfg, err := ReadRunConfig(runDir)
 	if err != nil {
 		return true
 	}
-	m, err := ReadManifest(cfg.BaseDir)
+	from := cfg.BaseDir
+	if k := cfg.Kept; k != nil && k.Mode == KeptResume {
+		if from, err = keptDirOf(runDir, k.ID); err != nil {
+			return true
+		}
+	}
+	m, err := ReadManifest(from)
 	return err != nil || m.Desktop != DesktopControl
 }
 
