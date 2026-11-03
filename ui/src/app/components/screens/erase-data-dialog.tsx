@@ -194,7 +194,7 @@ export function EraseDataDialog({
     <Dialog open onOpenChange={(o) => !o && !busy && close(!!result)}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{ERASE_DATA.BY_EMAIL_TITLE}</DialogTitle>
+          <DialogTitle>{securityOperator ? ERASE_DATA.BY_EMAIL_TITLE : ERASE.BY_EMAIL_TITLE}</DialogTitle>
         </DialogHeader>
 
         {result?.kind === "credentials" ? (
@@ -239,7 +239,7 @@ export function EraseDataDialog({
             {picked ? (
               <Field label={ERASE.FIELD} htmlFor="erase-data-person-chosen">
                 <div className="flex items-center justify-between gap-3">
-                  <span id="erase-data-person-chosen" className="text-sm text-foreground">
+                  <span id="erase-data-person-chosen" role="status" className="text-sm text-foreground">
                     {picked.label}
                   </span>
                   <Button
@@ -353,7 +353,7 @@ export function EraseDataDialog({
               </Button>
               <Button variant="destructive" disabled={busy || !canConfirm} onClick={doErase}>
                 {busy && <Loader2 className="size-3.5 animate-spin" />}
-                {ERASE_DATA.CONFIRM}
+                {securityOperator ? ERASE_DATA.CONFIRM : ERASE.CONFIRM}
               </Button>
             </DialogFooter>
           </>
