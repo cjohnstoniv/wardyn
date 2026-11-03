@@ -9,7 +9,7 @@
 #   - when BASE is a git rev (the lane check sets it to the commit before the key existed), the off render is
 #     byte-identical to that commit's chart under the same values;
 #   - on renders exactly: pods patch, a sandboxes create/get/list/delete rule, the env, and a
-#     ValidatingAdmissionPolicy + binding requiring the wardyn.dev/verify gate; still no CRD, no other new rule;
+#     ValidatingAdmissionPolicy + binding that selects the controller identity and requires the gate, a Sandbox owner and an empty nodeName;
 #   - on without k8s.enabled, or with the unenforced-NetworkPolicy override (value or env or extraEnv), is refused.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
@@ -101,21 +101,45 @@ diff "$TMP/key-absent.out" "$TMP/on.out" | grep '^<' | grep -v 'verbs: \["create
 [[ ! -s "$TMP/removed" ]] || { cat "$TMP/removed" >&2; die "on: the backend removed or changed lines other than the pods verbs"; }
 ok "on: the diff to off only adds lines (apart from the pods verb list)"
 
-# The policy: present only when on, with the expressions lane 0 passed on kind v1.30.
+# The policy: present only when on. This test reads the rendered CEL as text; it cannot evaluate it. The
+# decisions it must reach (kind job cases) are listed in the comment block below.
+#   admitted: controller identity, gate + Sandbox owner + empty nodeName
+#   denied:   controller identity, gate and owner reference both removed by a hook
+#   denied:   controller identity, gate kept, spec.nodeName set
+#   denied:   controller identity, owner kept, gate removed
+#   not selected: any other identity (wardynd's proxy and canary pods, kubectl), whatever the pod holds
 [[ "$(y 'select(.kind == "ValidatingAdmissionPolicy") | .metadata.name' "$TMP/on.out")" == "r-wardyn-sandbox-pod-gate" ]] \
   || die "on: no ValidatingAdmissionPolicy r-wardyn-sandbox-pod-gate"
 vap='select(.kind == "ValidatingAdmissionPolicy")'
 [[ "$(y "$vap | .spec.failurePolicy" "$TMP/on.out")" == "Fail" ]] || die "on: the policy does not fail closed"
 [[ "$(y "$vap | .spec.matchConstraints.resourceRules[0] | [.apiGroups[0], .apiVersions[0], .operations[0], .resources[0]] | join(\",\")" "$TMP/on.out")" == ",v1,CREATE,pods" ]] \
   || die "on: the policy does not match pod CREATE only"
-[[ "$(y "$vap | .spec.matchConditions[0].expression" "$TMP/on.out")" == "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/'))" ]] \
-  || die "on: the match condition is not the one lane 0 passed on kind"
+# Selection: the authenticated requester alone. A pod field in a match condition is one a hook can remove.
+[[ "$(y "$vap | .spec.matchConditions | length" "$TMP/on.out")" == 1 ]] || die "on: not exactly one match condition"
+[[ "$(y "$vap | .spec.matchConditions[0].expression" "$TMP/on.out")" == "request.userInfo.username == 'system:serviceaccount:agent-sandbox-system:agent-sandbox-controller'" ]] \
+  || die "on: the match condition is not the controller's authenticated identity alone"
+y "$vap | .spec.matchConditions[].expression" "$TMP/on.out" | grep -qE 'object\.' && die "on: a match condition reads the pod, which an admission hook can rewrite"
+# Validation: each field a hook could remove, checked after mutation.
+[[ "$(y "$vap | .spec.validations | length" "$TMP/on.out")" == 3 ]] || die "on: not exactly three validations"
 [[ "$(y "$vap | .spec.validations[0].expression" "$TMP/on.out")" == "has(object.spec.schedulingGates) && object.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')" ]] \
-  || die "on: the validation is not the one lane 0 passed on kind"
+  || die "on: validation 0 is not the wardyn.dev/verify gate"
+[[ "$(y "$vap | .spec.validations[1].expression" "$TMP/on.out")" == "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/'))" ]] \
+  || die "on: validation 1 is not the Sandbox owner reference"
+[[ "$(y "$vap | .spec.validations[2].expression" "$TMP/on.out")" == "!has(object.spec.nodeName) || object.spec.nodeName == ''" ]] \
+  || die "on: validation 2 is not an empty nodeName"
 bind='select(.kind == "ValidatingAdmissionPolicyBinding")'
 [[ "$(y "$bind | .spec.policyName + \" \" + .spec.validationActions[0] + \" \" + .spec.matchResources.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]" "$TMP/on.out")" == "r-wardyn-sandbox-pod-gate Deny wardyn-runs" ]] \
   || die "on: the binding is not Deny on the runs namespace for the policy"
-ok "on: ValidatingAdmissionPolicy + binding, fail closed, pod CREATE, the lane 0 expressions, bound to the runs namespace"
+ok "on: policy selects on the controller identity alone; gate, Sandbox owner and empty nodeName are validations; Deny, runs namespace"
+
+# The controller identity is a value, and may not be wardynd's own ServiceAccount.
+render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.controller.namespace=as-sys --set k8s.agentSandbox.controller.serviceAccount=ctl >"$TMP/ctl.out"
+[[ "$(y "$vap | .spec.matchConditions[0].expression" "$TMP/ctl.out")" == "request.userInfo.username == 'system:serviceaccount:as-sys:ctl'" ]] \
+  || die "on: controller.namespace and .serviceAccount do not reach the match condition"
+ok "on: the controller identity values reach the match condition"
+refused "controller identity is wardynd's own ServiceAccount" "is wardynd's own ServiceAccount" -f "$ALLON" --set k8s.agentSandbox.enabled=true \
+  --set k8s.agentSandbox.controller.namespace=default --set k8s.agentSandbox.controller.serviceAccount=wardyn-byo -n default
+refused "controller identity with a quote in it" "must be Kubernetes names" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set "k8s.agentSandbox.controller.serviceAccount=x' || true || '"
 
 # A second render in the release namespace (no runsNamespace) binds that namespace.
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.runsNamespace= --set k8s.allowRunsInReleaseNamespace=true -n relns >"$TMP/rel.out"
@@ -128,6 +152,10 @@ refused "on without k8s.enabled" "k8s.agentSandbox.enabled needs k8s.enabled=tru
 refused "on with k8s.allowUnenforcedNetPol" "refused with the unenforced-NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.allowUnenforcedNetPol=true
 refused "on with env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL" "refused with the unenforced-NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set-string env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1
 refused "on with extraEnv WARDYN_K8S_ALLOW_UNENFORCED_NETPOL" "refused with the unenforced-NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set 'extraEnv[0].name=WARDYN_K8S_ALLOW_UNENFORCED_NETPOL' --set-string 'extraEnv[0].value=true'
+refused "on with the override from a valueFrom configMapKeyRef" "set through extraEnv valueFrom" -f "$ALLON" --set k8s.agentSandbox.enabled=true \
+  --set 'extraEnv[0].name=WARDYN_K8S_ALLOW_UNENFORCED_NETPOL' --set 'extraEnv[0].valueFrom.configMapKeyRef.name=cm' --set 'extraEnv[0].valueFrom.configMapKeyRef.key=k'
+render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set 'extraEnv[0].name=SOMETHING_ELSE' --set 'extraEnv[0].valueFrom.configMapKeyRef.name=cm' --set 'extraEnv[0].valueFrom.configMapKeyRef.key=k' >/dev/null \
+  || die "a valueFrom on an unrelated variable refused an otherwise valid on render"
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set-string env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=0 >/dev/null \
   || die "an explicit false override refused an otherwise valid on render"
 ok "an explicit false override is not refused"

@@ -2,21 +2,37 @@
 Experimental agent-sandbox backend (#3863). Rendered ONLY when k8s.agentSandbox.enabled and k8s.enabled are
 both on; the default render has no admissionregistration object at all.
 
-The agent pod's scheduling gate (wardyn.dev/verify) is what keeps it unscheduled until wardynd has read the
-pod back and checked it. The agent-sandbox controller, not wardynd, creates that pod from the Sandbox's
-template, so a mutating admission hook (or a controller fault) that dropped the gate at create would start
-the pod before the check. This policy refuses such a create: a Sandbox-owned pod in the runs namespace must
-carry the gate. failurePolicy Fail, so an unavailable policy engine refuses the create too.
+The agent pod's scheduling gate (wardyn.dev/verify) keeps it unscheduled until wardynd has read the pod back
+and checked it. The agent-sandbox controller, not wardynd, creates that pod from the Sandbox's template, so
+a mutating admission hook that dropped the gate at create would start the pod before the check.
 
-Match conditions and expression are the ones lane 0 passed on kind v1.30 (a hook dropping the gate: denied;
-a normal Sandbox: admitted; a replacement of a normal pod: admitted; a replacement under the hook: denied; a
-plain non-Sandbox pod in the same namespace: unaffected). The controller retries a refused create, so a
-denied pod shows as repeated SandboxPodCreateFailed events on the Sandbox, not as a crash.
+What the policy SELECTS on is the authenticated requester, request.userInfo.username, which no admission
+hook can rewrite. It must not select on the pod's own fields (ownerReferences, schedulingGates, nodeName):
+a hook that removes the gate AND the owner reference would make such a match false and the pod would be
+admitted ungated. Every pod the controller creates in the runs namespace (the binding's namespace) must
+then PASS three validations, each a field a hook could have removed: the gate, a Sandbox owner reference,
+and an empty spec.nodeName (a pod bound to a node at create skips the scheduler and its gate).
 
-ValidatingAdmissionPolicy is GA in Kubernetes 1.30. The names carry the release fullname because both objects
-are cluster-scoped.
+Pods created by anyone else (wardynd's own proxy and canary pods, a person's kubectl) are not selected and
+are unaffected. The controller identity is a value because it is the installer's choice; the defaults are
+the upstream v1.0.9 manifest's ServiceAccount. Refused: the controller identity being wardynd's own
+ServiceAccount, which would put Wardyn's proxy and canary pods under the validations.
+
+failurePolicy Fail, so an unavailable policy engine refuses the create too. ValidatingAdmissionPolicy is GA
+in Kubernetes 1.30. The names carry the release fullname because both objects are cluster-scoped. The
+controller retries a refused create, so a denied pod shows as repeated SandboxPodCreateFailed events.
 */ -}}
 {{- if and .Values.k8s.enabled (.Values.k8s.agentSandbox | default dict).enabled }}
+{{- $ctl := (.Values.k8s.agentSandbox.controller | default dict) -}}
+{{- $ctlNs := $ctl.namespace | default "agent-sandbox-system" | toString -}}
+{{- $ctlSa := $ctl.serviceAccount | default "agent-sandbox-controller" | toString -}}
+{{- if not (and (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $ctlNs) (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $ctlSa)) -}}
+{{- fail (printf "wardyn: k8s.agentSandbox.controller.namespace and .serviceAccount must be Kubernetes names (lowercase letters, digits, '-' and '.'), got %q and %q." $ctlNs $ctlSa) -}}
+{{- end -}}
+{{- $ctlUser := printf "system:serviceaccount:%s:%s" $ctlNs $ctlSa -}}
+{{- if eq $ctlUser (printf "system:serviceaccount:%s:%s" .Release.Namespace (include "wardyn.serviceAccountName" .)) -}}
+{{- fail (printf "wardyn: k8s.agentSandbox.controller is wardynd's own ServiceAccount (%s): the policy would hold Wardyn's proxy and canary pods to the Sandbox gate. Set the identity the agent-sandbox controller runs as." $ctlUser) -}}
+{{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -32,11 +48,15 @@ spec:
         operations: ["CREATE"]
         resources: ["pods"]
   matchConditions:
-    - name: owned-by-sandbox
-      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/'))"
+    - name: created-by-agent-sandbox-controller
+      expression: {{ printf "request.userInfo.username == '%s'" $ctlUser | quote }}
   validations:
     - expression: "has(object.spec.schedulingGates) && object.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')"
-      message: "a Sandbox-owned pod in a Wardyn runs namespace must carry the wardyn.dev/verify scheduling gate"
+      message: "a pod the agent-sandbox controller creates in a Wardyn runs namespace must carry the wardyn.dev/verify scheduling gate"
+    - expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/'))"
+      message: "a pod the agent-sandbox controller creates in a Wardyn runs namespace must be owned by a Sandbox"
+    - expression: "!has(object.spec.nodeName) || object.spec.nodeName == ''"
+      message: "a pod the agent-sandbox controller creates in a Wardyn runs namespace must not name a node at create"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

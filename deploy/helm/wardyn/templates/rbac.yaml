@@ -103,6 +103,8 @@ The experimental agent-sandbox backend (#3863), off by default. `| default dict`
 --reuse-values map) or an explicit null read as OFF, the only direction this default may fail in. It runs on
 the k8s substrate only, and only over an enforced NetworkPolicy: the guards below read the effective env the
 way deployment.yaml renders it (.Values.env, then extraEnv, which wins), so extraEnv cannot slip past them.
+An extraEnv entry for the override with no literal value (valueFrom) is unreadable here, so it is refused
+rather than read as off.
 */}}
 {{- $agentSandbox := (.Values.k8s.agentSandbox | default dict) -}}
 {{- if $agentSandbox.enabled -}}
@@ -111,8 +113,11 @@ way deployment.yaml renders it (.Values.env, then extraEnv, which wins), so extr
 {{- end -}}
 {{- $effEnv := dict -}}
 {{- range $k, $v := .Values.env }}{{ $_ := set $effEnv $k (toString $v) }}{{ end -}}
-{{- range .Values.extraEnv }}{{ if .name }}{{ $_ := set $effEnv (.name | toString) (toString .value) }}{{ end }}{{ end -}}
-{{- $off := list "" "0" "false" "no" "off" "<nil>" "<no value>" -}}
+{{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $effEnv (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $effEnv (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
+{{- $off := list "" "0" "false" "no" "off" -}}
+{{- if eq (get $effEnv "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") "<valueFrom>" -}}
+{{- fail "wardyn: k8s.agentSandbox.enabled is refused while WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set through extraEnv valueFrom (a ConfigMap or Secret key): the chart cannot read the value, and the backend must not boot over the unenforced-NetworkPolicy override. Set it as a literal value, or remove it." -}}
+{{- end -}}
 {{- $unenforced := false -}}
 {{- if not (has (lower (toString (get .Values.k8s "allowUnenforcedNetPol"))) $off) }}{{ $unenforced = true }}{{ end -}}
 {{- if not (has (lower (toString (get $effEnv "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL"))) $off) }}{{ $unenforced = true }}{{ end -}}

@@ -411,10 +411,12 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `k8s.agentSandbox.enabled` (`WARDYN_K8S_AGENT_SANDBOX`, default `false`, **experimental**): creates each run's agent pod through a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox` instead of directly.
   - Off renders exactly what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
   - Tested against agent-sandbox v1.0.9 only (beta `agents.x-k8s.io/v1beta1`). Install its controller and CRD first: this chart installs neither.
-  - Needs `k8s.enabled=true` and an enforced NetworkPolicy; the chart refuses `k8s.allowUnenforcedNetPol` and `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`.
+  - Needs `k8s.enabled=true` and an enforced NetworkPolicy; the chart refuses `k8s.allowUnenforcedNetPol` and `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`, including one set through `extraEnv` `valueFrom`, which it cannot read.
   - Adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes.agents.x-k8s.io` to the runner Role, nothing to the ClusterRole.
-  - Also renders a `ValidatingAdmissionPolicy` and binding (`<release>-wardyn-sandbox-pod-gate`) that refuse a `Sandbox`-owned pod in the runs namespace without the `wardyn.dev/verify` scheduling gate.
-    - It needs Kubernetes 1.30+ and fails closed. It covers every `Sandbox`-owned pod in that namespace, so give the namespace to Wardyn alone.
+  - Also renders a `ValidatingAdmissionPolicy` and binding (`<release>-wardyn-sandbox-pod-gate`) for the runs namespace.
+    - It selects pod creates by the controller's identity (`k8s.agentSandbox.controller`, default the upstream ServiceAccount). It refuses one without the `wardyn.dev/verify` scheduling gate or a `Sandbox` owner, or one that names a node.
+    - It needs Kubernetes 1.30+ and fails closed. Other identities, Wardyn's own included, are not selected.
+    - The before-start guarantee depends on that identity being right, and is not yet proven on a live cluster.
     - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
   - Ships at 1000m/2048Mi so a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size.
