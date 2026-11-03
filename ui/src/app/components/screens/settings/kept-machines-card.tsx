@@ -9,6 +9,7 @@
 // denies it, no Mac of their own), nor for a caller who is no person. Machines already kept when the switch goes off stay
 // listed and deletable.
 import * as React from "react";
+import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { deleteMyMachine, myMachines } from "../../../lib/api/me-machines";
@@ -30,6 +31,9 @@ export function KeptMachinesCard() {
   const [busy, setBusy] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const labels = useHolderLabels(data?.machines ?? []);
+  const location = useLocation();
+  const ref = React.useRef<HTMLElement | null>(null);
+  const [open, setOpen] = React.useState(false);
 
   const load = React.useCallback(() => {
     setState((s) => (s === "ready" ? s : "loading"));
@@ -41,6 +45,16 @@ export function KeptMachinesCard() {
       .catch((e) => setState(e instanceof HttpError && (e.status === 403 || e.status === 404) ? "absent" : "failed"));
   }, []);
   React.useEffect(load, [load]);
+
+  const shown = !(state === "absent" || state === "loading" || (state === "ready" && data && data.machines.length === 0 && !data.allowed));
+  // The run page's Machine tile links here: open and focus the card once the list is drawn, once per navigation and never
+  // on a data refresh, so a person's later collapse stays.
+  React.useEffect(() => {
+    if (shown && location.hash === "#kept-machines") {
+      setOpen(true);
+      ref.current?.focus({ focusVisible: true } as FocusOptions);
+    }
+  }, [location.key, shown]); // eslint-disable-line react-hooks/exhaustive-deps -- location.key, not the hash
 
   const confirmDelete = async () => {
     if (!toDelete || busy) return;
@@ -60,12 +74,11 @@ export function KeptMachinesCard() {
     }
   };
 
-  if (state === "absent" || state === "loading") return null;
-  if (state === "ready" && data && data.machines.length === 0 && !data.allowed) return null;
+  if (!shown) return null;
   const machines = data?.machines ?? [];
   const now = Date.now();
   return (
-    <CollapsibleCard title={T.TITLE} summary={state === "ready" ? (machines.length ? T.SUMMARY(machines.length, macsOf(machines).join(", ")) : T.NONE) : undefined} testId="kept-machines-card" id="kept-machines">
+    <CollapsibleCard title={T.TITLE} summary={state === "ready" ? (machines.length ? T.SUMMARY(machines.length, macsOf(machines).join(", ")) : T.NONE) : undefined} testId="kept-machines-card" id="kept-machines" ref={ref} tabIndex={-1} open={open} onOpenChange={setOpen} className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]">
       {state === "failed" ? (
         <ErrorState size="compact" title={T.LOAD_FAILED} onRetry={load} />
       ) : (

@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
 import { shortDate } from "../../../lib/format";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -35,8 +36,15 @@ const reply = (machines: KeptMachine[], over: Partial<MyMachines> = {}): MyMachi
   machines, allowed: true, count: machines.length, limit: 2, worst_bytes: 51 * GB, ...over,
 });
 
+const renderCard = (hash = "") =>
+  render(
+    <MemoryRouter initialEntries={[`/account${hash}`]}>
+      <KeptMachinesCard />
+    </MemoryRouter>,
+  );
+
 const mount = async () => {
-  render(<KeptMachinesCard />);
+  renderCard();
   await screen.findByTestId("kept-machines-card");
   await expandCard(T.TITLE);
   return screen.getByTestId("kept-machines-card");
@@ -186,7 +194,7 @@ describe("Your kept machines", () => {
 
   it("the switch off and nothing kept: the card is not drawn", async () => {
     listMock.mockResolvedValue(reply([], { allowed: false, reason: "kept_machine_site_off", count: 0 }));
-    render(<KeptMachinesCard />);
+    renderCard();
     await waitFor(() => expect(listMock).toHaveBeenCalled());
     expect(screen.queryByTestId("kept-machines-card")).toBeNull();
   });
@@ -199,7 +207,7 @@ describe("Your kept machines", () => {
 
   it("a caller who is no person gets no card", async () => {
     listMock.mockRejectedValue(new HttpError(403, "no", undefined, "kept_machine_not_your_mac"));
-    render(<KeptMachinesCard />);
+    renderCard();
     await waitFor(() => expect(listMock).toHaveBeenCalled());
     expect(screen.queryByTestId("kept-machines-card")).toBeNull();
   });
@@ -208,5 +216,37 @@ describe("Your kept machines", () => {
     listMock.mockRejectedValueOnce(new HttpError(500, "boom"));
     const card = await mount();
     expect(within(card).getByText(T.LOAD_FAILED)).toBeInTheDocument();
+  });
+
+  it("the link from a run's Machine tile opens the card and focuses it once the list is drawn, and a refresh does not reopen it", async () => {
+    let release: (v: MyMachines) => void = () => undefined;
+    listMock.mockReset().mockImplementationOnce(() => new Promise<MyMachines>((r) => (release = r)));
+    renderCard("#kept-machines");
+    expect(screen.queryByTestId("kept-machines-card")).toBeNull();
+    release(reply([dev()]));
+    const card = await screen.findByTestId("kept-machines-card");
+    await waitFor(() => expect(card).toHaveFocus());
+    const head = within(card).getByRole("button", { name: new RegExp(`^${T.TITLE}`) });
+    expect(head).toHaveAttribute("aria-expanded", "true");
+    expect(within(card).getByRole("button", { name: `${T.DELETE} dev` })).toBeVisible();
+
+    // A delete reloads the list; the person collapsed the card meanwhile, and the answer does not reopen it.
+    let reload: (v: MyMachines) => void = () => undefined;
+    listMock.mockImplementationOnce(() => new Promise<MyMachines>((r) => (reload = r)));
+    await userEvent.click(within(card).getByRole("button", { name: `${T.DELETE} dev` }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.DELETE }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    await userEvent.click(head);
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    reload(reply([]));
+    await waitFor(() => expect(within(card).getByText(T.NONE)).toBeInTheDocument());
+    expect(head).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("without the hash the card stays collapsed", async () => {
+    renderCard();
+    const card = await screen.findByTestId("kept-machines-card");
+    expect(within(card).getByRole("button", { name: new RegExp(`^${T.TITLE}`) })).toHaveAttribute("aria-expanded", "false");
+    expect(card).not.toHaveFocus();
   });
 });
