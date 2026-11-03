@@ -293,6 +293,26 @@
       "path": "RunLocalFolder.runner_id",
       "excluded": "launch",
       "why": "Part of local_folder, which is named at each launch."
+    },
+    {
+      "path": "RunMachine.fresh",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
+    },
+    {
+      "path": "RunMachine.keep",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
+    },
+    {
+      "path": "RunMachine.name",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
+    },
+    {
+      "path": "RunMachine.resume",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
     }
   ],
   "policy": [
