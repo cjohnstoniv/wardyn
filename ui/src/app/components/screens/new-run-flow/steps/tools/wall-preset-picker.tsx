@@ -36,6 +36,9 @@ export function WallPresetPicker({
   onChange: (id: string) => void;
 }) {
   const [more, setMore] = React.useState(false);
+  // The control a pick or a clear unmounts is the one holding focus, so focus moves to one that stays.
+  const moreButton = React.useRef<HTMLButtonElement>(null);
+  const builtinGroup = React.useRef<HTMLDivElement>(null);
   const labels = list.publish.group_labels;
   const builtins = BUILT_IN_IDS.flatMap((id) => list.presets.filter((p) => p.id === id));
   const others = list.presets.filter((p) => p.scope !== "builtin");
@@ -55,11 +58,11 @@ export function WallPresetPicker({
     <div data-testid="wall-preset-picker" className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
       <h3 id="wall-preset-label" className="font-medium">{W.CONTROL}</h3>
       <div className="flex flex-wrap items-center gap-2">
-        <div role="group" aria-labelledby="wall-preset-label">
+        <div ref={builtinGroup} role="group" aria-labelledby="wall-preset-label">
           <Segmented<string> value={unavailable || custom ? "" : (value ?? "open")} options={builtins.map((p) => ({ value: p.id, label: p.name }))} onChange={(v) => (setMore(false), onChange(v))} />
         </div>
         {sections.length > 0 && (
-          <Button type="button" variant="outline" aria-expanded={more} onClick={() => setMore((m) => !m)}>
+          <Button ref={moreButton} type="button" variant="outline" aria-expanded={more} onClick={() => setMore((m) => !m)}>
             {W.MORE} <ChevronDown className="size-4" aria-hidden="true" />
           </Button>
         )}
@@ -67,7 +70,7 @@ export function WallPresetPicker({
           <span data-testid="wall-preset-pill" className={unavailable ? "inline-flex items-center gap-1.5 rounded-md border border-danger/40 bg-danger-subtle px-2.5 py-1 text-sm text-danger" : "inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2.5 py-1 text-sm"}>
             {unavailable && <CircleAlert className="size-3.5" aria-hidden="true" />}
             {pill}
-            <button type="button" aria-label={W.CLEAR_PRESET(name)} className="text-muted-foreground hover:text-foreground" onClick={() => onChange("open")}>
+            <button type="button" aria-label={W.CLEAR_PRESET(name)} className="-mr-1 inline-flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground" onClick={() => (builtinGroup.current?.querySelector("button")?.focus(), onChange("open"))}>
               <X className="size-3" aria-hidden="true" />
             </button>
           </span>
@@ -79,7 +82,7 @@ export function WallPresetPicker({
             <section key={s.heading} aria-label={s.heading} className="flex flex-col gap-1">
               <h4 className="label-eyebrow">{s.heading}</h4>
               {s.rows.map((p) => (
-                <button key={p.id} type="button" aria-pressed={p.id === value} className="flex flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-muted" onClick={() => (setMore(false), onChange(p.id))}>
+                <button key={p.id} type="button" aria-pressed={p.id === value} className="flex flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-muted" onClick={() => (moreButton.current?.focus(), setMore(false), onChange(p.id))}>
                   <span className="text-sm font-medium">{p.name}</span>
                   {p.description && <span className="text-xs text-muted-foreground">{p.description}</span>}
                 </button>

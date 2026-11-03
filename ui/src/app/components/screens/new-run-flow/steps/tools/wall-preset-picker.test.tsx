@@ -5,6 +5,7 @@
 
 // The Tools step's Wall preset control (boards WP-2) and its line: what is offered, what a pick sends, and that a
 // preset that is gone stays chosen as an error rather than falling back to Open.
+import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -72,6 +73,30 @@ describe("WallPresetPicker", () => {
     expect(within(screen.getByRole("group", { name: W.CONTROL })).queryByRole("button", { pressed: true })).toBeNull();
     await user.click(within(pill).getByRole("button", { name: W.CLEAR_PRESET("Docs triage") }));
     expect(onChange).toHaveBeenCalledWith("open");
+  });
+
+  it("returns focus to More presets after a saved preset is chosen, and to Open after the pill is cleared", async () => {
+    // A controlled parent: the pill shows once a saved preset is chosen.
+    function Host() {
+      const [value, setValue] = React.useState<string | undefined>("open");
+      return <WallPresetPicker list={LIST} value={value} onChange={setValue} />;
+    }
+    render(<Host />);
+    await user.click(screen.getByRole("button", { name: new RegExp(W.MORE) }));
+    await user.click(screen.getByRole("button", { name: /Release freeze/ }));
+    expect(screen.getByRole("button", { name: new RegExp(W.MORE) })).toHaveFocus();
+    expect(screen.getByTestId("wall-preset-pill")).toHaveTextContent("Release freeze");
+    // The same by keyboard: Enter on the focused list button.
+    await user.click(screen.getByRole("button", { name: new RegExp(W.MORE) }));
+    screen.getByRole("button", { name: /No pastebins/ }).focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: new RegExp(W.MORE) })).toHaveFocus();
+    const clear = screen.getByRole("button", { name: W.CLEAR_PRESET("No pastebins") });
+    expect(clear.className).toContain("size-6");
+    clear.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Open" })).toHaveFocus();
+    expect(screen.queryByTestId("wall-preset-pill")).toBeNull();
   });
 
   it("keeps an unavailable preset chosen as an error, presses nothing, and offers no fallback to Open", () => {
