@@ -165,6 +165,7 @@ export const TOKEN_DIALOG = {
   DETAIL_EXPIRES: "Expires",
   EXPIRY: (day: string, when: string) => `${day} (${when})`,
   NEVER: "Never",
+  NEVER_NOTE: "This token never expires.",
   CLAMPED: "The server's limit is shorter than the one you chose, so it expires sooner.",
   COPY: "Copy token",
   COPIED: "Copied",

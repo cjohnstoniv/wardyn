@@ -67,6 +67,17 @@ describe("SummaryHeader — a paused run (UXR-24)", () => {
   });
 });
 
+describe("SummaryHeader — a lost run is not Paused", () => {
+  it.each(["reboot", "outage", "gone"] as const)("%s with paused_at set does not read Paused", (lost_reason) => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="me">
+        <SummaryHeader run={{ ...runningInteractive, paused_at: aheadByHours(-1), paused_reason: "idle", lost_reason }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText("Paused")).toBeNull();
+  });
+});
+
 describe("SummaryHeader — attachable chip predicate", () => {
   // ticket: W25-1
   it("shows the plain 'Interactive' chip (no attachable claim) for a member", () => {

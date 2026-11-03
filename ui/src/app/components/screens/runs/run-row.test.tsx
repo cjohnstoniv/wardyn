@@ -246,7 +246,7 @@ describe("RunRow — a scheduled run", () => {
     expect(screen.queryByText(/started/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(killRunMock).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole("button", { name: "Kill run" }));
+    await user.click(await screen.findByRole("button", { name: "End run" }));
     await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9"));
   });
 

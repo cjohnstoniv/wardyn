@@ -91,4 +91,19 @@ describe("NeedsYouNotices", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(toast).not.toHaveBeenCalled();
   });
+
+  it("fetches a hold on someone else's run once, not on every poll", async () => {
+    vi.useFakeTimers();
+    try {
+      await mountWith([hold], { created_by: "someone-else" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getRun).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(listApprovals).toHaveBeenCalledTimes(2);
+      expect(getRun).toHaveBeenCalledTimes(1);
+      expect(toast).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

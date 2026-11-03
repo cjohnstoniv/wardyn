@@ -872,7 +872,7 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   const kill = page.getByRole("alertdialog");
   await expect(kill).toBeVisible({ timeout: 15_000 });
   await expect(kill).toContainText("tears down the sandbox");
-  await act(page, kill.getByRole("button", { name: "Kill run" }), "The sandbox goes with it — and its own disk."); // C47e
+  await act(page, kill.getByRole("button", { name: "End run" }), "The sandbox goes with it — and its own disk."); // C47e
   await expect(
     page.getByText(RUN_OVER).first(),
     "run A never went terminal — run B would then share one claim with a live pod, which is not what C48 says",

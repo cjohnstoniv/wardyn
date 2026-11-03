@@ -540,9 +540,9 @@ describe("RunFailureBlock: a run on a person's computer", () => {
     expect(screen.queryByText(/was told to stop its network/)).toBeNull();
   });
 
-  it("offers no Revive, Extend or Kill run", () => {
+  it("offers no Revive, Extend or End run", () => {
     renderLocal([revoked(true)]);
-    expect(screen.queryByRole("button", { name: /Revive|Extend|Kill run/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Revive|Extend|End run/ })).toBeNull();
     expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();
   });
 

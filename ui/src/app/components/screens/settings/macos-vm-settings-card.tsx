@@ -151,6 +151,7 @@ export function MacOSVMSettingsCard() {
               autoComplete="off"
               className="w-24 font-mono"
               value={draft}
+              disabled={saving}
               aria-invalid={invalid}
               aria-describedby="macos-max-base-age-hint"
               onChange={(e) => setDraft(e.target.value)}
@@ -166,7 +167,7 @@ export function MacOSVMSettingsCard() {
             </p>
           )}
           <div className="mt-5 flex items-center gap-2.5">
-            <Switch checked={watch} onChange={setWatch} label={T.WATCH_LABEL} />
+            <Switch disabled={saving} checked={watch} onChange={setWatch} label={T.WATCH_LABEL} />
             <span className="text-body font-medium text-foreground">{T.WATCH_LABEL}</span>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground">{T.WATCH_HINT}</p>

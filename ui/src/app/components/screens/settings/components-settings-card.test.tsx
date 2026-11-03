@@ -228,4 +228,45 @@ describe("ComponentsSettingsCard", () => {
     await userEvent.click(within(card).getByRole("button", { name: "Open Components" }));
     expect(await screen.findByText("components page")).toBeInTheDocument();
   });
+
+  describe("inputs are locked for the whole save", () => {
+    const VAULT = "Require the strongest sandbox for custom credentials";
+    const ok = (cfg: object) => ({ siteConfig: cfg, etag: '"v2"', danglingSecretRefs: [], onboardingCompletedAtIgnored: false, appliesFrom: "", sourcesNoLongerAdmitted: null });
+    const locked = (card: HTMLElement, on: boolean) => {
+      const els = [...within(card).getAllByRole("radio"), ...within(card).getAllByRole("switch")];
+      for (const el of els) {
+        if (on) expect(el).toBeDisabled();
+        else expect(el).toBeEnabled();
+      }
+    };
+
+    it("disables radios and switches while the PUT is pending, then frees them", async () => {
+      const card = await open();
+      let resolve!: (v: unknown) => void;
+      putSiteConfigMock.mockReturnValue(new Promise((r) => (resolve = r)));
+      await userEvent.click(within(card).getByRole("switch", { name: VAULT }));
+      await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
+      locked(card, true);
+      resolve(ok({ components: { require_vault_for_credentials: true } }));
+      await waitFor(() => locked(card, false));
+      expect(within(card).getByRole("switch", { name: VAULT })).toBeChecked();
+    });
+
+    it("keeps them disabled through a 412's reload and keeps the edit after", async () => {
+      const card = await open();
+      let reject!: (e: unknown) => void;
+      putSiteConfigMock.mockReturnValue(new Promise((_, r) => (reject = r)));
+      let release!: (v: unknown) => void;
+      await userEvent.click(within(card).getByRole("switch", { name: VAULT }));
+      await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
+      snapshotMock.mockReturnValue(new Promise((r) => (release = r)));
+      reject(new HttpError(412, "stale"));
+      await waitFor(() => expect(snapshotMock).toHaveBeenCalledTimes(2));
+      locked(card, true);
+      release({ siteConfig: { upstream_proxy_url: "http://p" }, etag: '"v3"' });
+      expect(await within(card).findByRole("status")).toHaveTextContent(C.SETTINGS_STALE_KEPT);
+      locked(card, false);
+      expect(within(card).getByRole("switch", { name: VAULT })).toBeChecked();
+    });
+  });
 });

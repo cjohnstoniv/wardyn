@@ -138,6 +138,7 @@ describe("Token dialog", () => {
     ["Expires", TOKEN_DIALOG.DETAIL_EXPIRES],
     ["11 Nov 2026 (in 30 days)", TOKEN_DIALOG.EXPIRY(dayOf("2026-11-11T09:00:00Z"), inWords("2026-11-11T09:00:00Z", Date.parse("2026-10-12T09:00:00Z")))],
     ["Never", TOKEN_DIALOG.NEVER],
+    ["This token never expires.", TOKEN_DIALOG.NEVER_NOTE],
     ["The server's limit is shorter than the one you chose, so it expires sooner.", TOKEN_DIALOG.CLAMPED],
     ["Copy token", TOKEN_DIALOG.COPY],
     ["Copied", TOKEN_DIALOG.COPIED],

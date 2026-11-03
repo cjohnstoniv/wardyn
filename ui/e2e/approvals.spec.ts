@@ -741,7 +741,7 @@ test.describe("killing a run cancels its still-PENDING approvals", () => {
       await killBtn.click();
       const confirm = page.getByRole("alertdialog");
       await expect(confirm).toBeVisible();
-      await confirm.getByRole("button", { name: "Kill run" }).click();
+      await confirm.getByRole("button", { name: "End run" }).click();
       await expect(page.getByText(/Ending |Couldn't end /).first()).toBeVisible({ timeout: 10_000 });
 
       // The run's own Approvals tab: CANCELLED, no Approve/Deny — `pending &&`
@@ -803,7 +803,7 @@ test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", (
       await killBtn.click();
       const confirm = page.getByRole("alertdialog");
       await expect(confirm).toBeVisible();
-      await confirm.getByRole("button", { name: "Kill run" }).click();
+      await confirm.getByRole("button", { name: "End run" }).click();
       await expect(page.getByText(/Ending |Couldn't end /).first()).toBeVisible({ timeout: 10_000 });
 
       // Killing the run cancels the still-open sign-in request — the same

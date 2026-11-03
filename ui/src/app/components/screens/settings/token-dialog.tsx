@@ -233,6 +233,7 @@ export function TokenDialog(props: TokenDialogProps) {
               <dt className="text-muted-foreground">{T.DETAIL_EXPIRES}</dt>
               <dd>{reveal.expiresAt ? T.EXPIRY(dayOf(reveal.expiresAt), inWords(reveal.expiresAt)) : T.NEVER}</dd>
             </dl>
+            {!reveal.expiresAt && <p className="text-sm text-foreground">{T.NEVER_NOTE}</p>}
             {reveal.clamped && <p className="text-sm text-foreground">{T.CLAMPED}</p>}
             <DialogFooter>
               <Button ref={copyRef} type="button" onClick={() => void copy(reveal.token)}>

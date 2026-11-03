@@ -129,7 +129,7 @@ describe("Launched: Waiting (U13)", () => {
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
     const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
     expect(killRun).not.toHaveBeenCalled();
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
   });
 });
@@ -230,7 +230,7 @@ describe("Launched: reload and identity", () => {
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
     const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "nightly build" })).toHaveFocus());
   });

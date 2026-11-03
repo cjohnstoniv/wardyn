@@ -799,7 +799,7 @@ test("V00 act 3 — secrets stay secret", async () => {
   const kill = page.getByRole("alertdialog");
   await expect(kill).toBeVisible({ timeout: 15_000 });
   await expect(kill).toContainText("tears down the sandbox");
-  await act(page, kill.getByRole("button", { name: "Kill run" }));
+  await act(page, kill.getByRole("button", { name: "End run" }));
   await expect(page.getByText(RUN_OVER).first()).toBeVisible({ timeout: 60_000 });
 });
 

@@ -58,7 +58,14 @@ export function NeedsYouNotices() {
         const host = typeof ap.requested_scope.host === "string" ? ap.requested_scope.host : "";
         if (!takeover && !(isHeld(ap) && host)) continue;
         const run = await runsApi.getRun(ap.run_id).catch(() => undefined);
-        if (!takeover && run?.created_by !== principal) continue; // not seen, so a later poll can raise it
+        if (!takeover && run?.created_by !== principal) {
+          // Someone else's run is final, so it is fetched once; a run that could not be fetched is retried.
+          if (run) {
+            seen.add(ap.id);
+            remember(seen);
+          }
+          continue;
+        }
         seen.add(ap.id);
         remember(seen);
         const name = run ? runHeadline(run) : ap.run_id;

@@ -61,9 +61,9 @@ export function isLiveRunState(state: RunState): boolean {
  * offers Review either way, and the decision card underneath is where the
  * real ceiling is enforced — same as today).
  */
-/** UXR-24: RUNNING with its agent frozen (paused_at set). A lease-ended run is over, not paused. */
+/** UXR-24: RUNNING with its agent frozen (paused_at set) and no lost reason. A lease-ended or lost run is not paused. */
 export function isPausedRun(run: Pick<AgentRun, "state" | "paused_at" | "lost_reason">): boolean {
-  return run.state === "RUNNING" && !!run.paused_at && run.lost_reason !== "ended";
+  return run.state === "RUNNING" && !!run.paused_at && !run.lost_reason;
 }
 
 export function rowPresentation(run: AgentRun, adminView = false): RowPresentation {

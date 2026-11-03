@@ -63,7 +63,7 @@ export function KillRunDialog({
             onClick={() => runId && onConfirm(runId)}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >
-            Kill run
+            End run
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

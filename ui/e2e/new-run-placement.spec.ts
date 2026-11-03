@@ -134,7 +134,7 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
     await press(page, NR_LAUNCH.CANCEL_RUN);
     const confirm = page.getByRole("alertdialog", { name: RUN_REF.killRun(shortRunId(RUN_ID)) });
     await expect(confirm).toBeVisible();
-    await confirm.getByRole("button", { name: "Kill run" }).click();
+    await confirm.getByRole("button", { name: "End run" }).click();
     await expect.poll(() => seen.killed).toEqual([RUN_ID]);
   });
 

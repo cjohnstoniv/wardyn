@@ -20,7 +20,7 @@ describe("KillRunDialog", () => {
     // #3036: the short id is the run reference's, so it copies the whole id.
     expect(within(dialog).getByRole("button", { name: "1697570d" })).toHaveAttribute("title", `${ID}\nClick to copy`);
     expect(dialog).toHaveTextContent("The kill is recorded in the audit trail.");
-    await userEvent.click(screen.getByRole("button", { name: "Kill run" }));
+    await userEvent.click(screen.getByRole("button", { name: "End run" }));
     expect(onConfirm).toHaveBeenCalledWith(ID);
   });
 

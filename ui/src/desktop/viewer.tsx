@@ -201,7 +201,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       )}
       {!viewOnly && phase === "connected" && (
         <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          {DESKTOP.noClipboard}
+          {boot.machine_kind === "macos_vm" ? DESKTOP.noClipboardMac : DESKTOP.noClipboard}
           {focused && <span className="block">{DESKTOP.escapeHint}</span>}
         </p>
       )}
