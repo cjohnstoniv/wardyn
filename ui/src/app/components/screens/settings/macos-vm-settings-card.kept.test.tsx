@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expandCard } from "../../../lib/test-dom";
+import { setField } from "../../../../test/set-field";
 import { FORM_ACTIONS } from "../../wardyn/copy/form-actions";
 import { KEEP_SETTINGS as K } from "../../wardyn/copy/keep-machine";
 import { MAC_SETTINGS as T } from "../../wardyn/copy/mac-settings";
@@ -68,8 +69,7 @@ describe("kept-machine settings", () => {
     expect(keptSwitch(card)).toBeChecked();
     expect(idle(card)).toHaveValue("14");
     expect(per(card)).toHaveValue("2");
-    await user.clear(per(card));
-    await user.type(per(card), "3");
+    setField(per(card), "3");
     await user.click(save(card));
     await waitFor(() => expect(putSiteConfigMock).toHaveBeenCalled());
     expect(putSiteConfigMock.mock.calls[0][0].macos_vm).toMatchObject({ allow_kept_machines: true, kept_machine_idle_days: 14, max_kept_machines_per_person: 3 });
@@ -89,7 +89,7 @@ describe("kept-machine settings", () => {
     const card = await open();
     await user.click(keptSwitch(card));
     await user.clear(idle(card));
-    await user.type(idle(card), "120");
+    setField(idle(card), "120");
     expect(within(card).getAllByRole("alert").map((a) => a.textContent)).toEqual([K.IDLE_INVALID]);
     expect(idle(card)).toHaveAttribute("aria-invalid", "true");
     expect(save(card)).toBeDisabled();
@@ -100,7 +100,7 @@ describe("kept-machine settings", () => {
     const card = await open();
     await user.click(keptSwitch(card));
     await user.clear(per(card));
-    await user.type(per(card), "5");
+    setField(per(card), "5");
     expect(within(card).getByRole("alert")).toHaveTextContent(K.PER_INVALID);
     expect(save(card)).toBeDisabled();
   });
