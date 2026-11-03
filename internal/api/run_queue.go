@@ -142,8 +142,8 @@ func queueWaitSec(req createRunRequest, interactive bool) (sec int, warning stri
 // default policy is the request's own, so nothing can change under it. A policy or preset that has gone
 // is recorded as gone. frozen is the wall preset a fold froze for req, nil for none: its id and version
 // are recorded, never a second read that an edit in between could answer differently. With no fold, the
-// preset is read as it is now.
-func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest, frozen *types.WallPresetOnRun) (json.RawMessage, error) {
+// preset is read as it is now, and one that r's caller can no longer read is gone (r nil: not asked).
+func (s *Server) queuePolicyRef(ctx context.Context, r *http.Request, req createRunRequest, frozen *types.WallPresetOnRun) (json.RawMessage, error) {
 	ref := map[string]any{}
 	if req.PolicyID != nil {
 		ref["policy_id"] = req.PolicyID.String()
@@ -175,7 +175,7 @@ func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest, froze
 			id, version = frozen.ID, frozen.Version
 		} else {
 			var err error
-			if id, version, err = s.wallPresetNow(ctx, req.WallPreset); err != nil {
+			if id, version, err = s.wallPresetNow(ctx, r, req.WallPreset); err != nil {
 				return nil, fmt.Errorf("read the wall preset: %w", err)
 			}
 		}
@@ -189,9 +189,9 @@ func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest, froze
 }
 
 // wallPresetNow is the id and version of the wall preset name names as it is now: a built-in's, or a
-// stored preset's. id is empty when it no longer exists; whether the run's owner may still read it is
-// the start's fold's to answer (launchWallPreset), which refuses the run when they may not.
-func (s *Server) wallPresetNow(ctx context.Context, name string) (id string, version int, err error) {
+// stored preset's. id is empty when it no longer exists or, with r, when r's caller may no longer read
+// it, judged as the fold judges it (launchWallPreset).
+func (s *Server) wallPresetNow(ctx context.Context, r *http.Request, name string) (id string, version int, err error) {
 	if p, ok := types.BuiltinWallPreset(name); ok {
 		return p.ID, p.Version, nil
 	}
@@ -201,17 +201,27 @@ func (s *Server) wallPresetNow(ctx context.Context, name string) (id string, ver
 		return "", 0, nil
 	}
 	p, err := ps.GetWallPreset(ctx, uid)
-	if errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return "", 0, nil
+	case err != nil || r == nil:
+		return p.ID, p.Version, err
+	}
+	c, err := s.wallPresetCaller(ctx, r, ps)
+	if err != nil {
+		return "", 0, err
+	}
+	if types.TemplateAuthorize(c.actor, p.Owner(), types.TemplateRead) != types.TemplateAllowed {
 		return "", 0, nil
 	}
-	return p.ID, p.Version, err
+	return p.ID, p.Version, nil
 }
 
 // The points a test edits a wall preset at (Server.queueRace): between the create's fold and the
 // queue row's reference, and between the start's check of the reference and its fold.
 const (
-	queueRaceEnqueueAfterFold   = "enqueue: after the fold"
-	queueRaceStartAfterPrecheck = "start: after the precheck"
+	queueRaceEnqueueAfterFold   = "enqueue_after_fold"
+	queueRaceStartAfterPrecheck = "start_after_precheck"
 )
 
 func (s *Server) queueRaceAt(point string) {
@@ -467,7 +477,7 @@ func (s *Server) projectQueueLimit(r *http.Request, run *types.AgentRun) {
 // entry is the run_queue row a launch is stored with.
 func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.RunQueueEntry, error) {
 	s.queueRaceAt(queueRaceEnqueueAfterFold)
-	ref, err := s.queuePolicyRef(ctx, q.req, q.f.source.wallPreset)
+	ref, err := s.queuePolicyRef(ctx, nil, q.req, q.f.source.wallPreset)
 	if err != nil {
 		return store.RunQueueEntry{}, err
 	}

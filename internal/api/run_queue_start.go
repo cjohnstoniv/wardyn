@@ -414,9 +414,10 @@ func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
 
 // queuePolicyUnchanged is step 5 (Q7-A): the stored policy, launch preset or wall preset the run was
 // reviewed under is the one it would start under. An edit fails the run, so nothing starts that nobody
-// reviewed. frozen is the wall preset the start's fold froze (queuePolicyRef), nil before the fold.
+// reviewed. frozen is the wall preset the start's fold froze (queuePolicyRef), nil before the fold, when
+// a preset the owner can no longer read counts as gone.
 func (s *Server) queuePolicyUnchanged(st *queuedStart, req createRunRequest, frozen *types.WallPresetOnRun) *queueEnd {
-	now, err := s.queuePolicyRef(st.ctx, req, frozen)
+	now, err := s.queuePolicyRef(st.ctx, st.r, req, frozen)
 	if err != nil {
 		return &queueEnd{hint: queueStartFailedHint}
 	}

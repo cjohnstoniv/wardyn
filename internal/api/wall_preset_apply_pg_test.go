@@ -165,3 +165,52 @@ func TestPG_QueueWallPresetEditedAfterTheStartPrecheck(t *testing.T) {
 		t.Errorf("the run's copy = %+v, want the reviewed version 1 kept, never the edit", got.WallPreset)
 	}
 }
+
+// TestPG_QueueWallPresetChangedWhileWaiting: a queued run whose wall preset is edited, deleted, or
+// no longer open to its owner while it waits ends queue_policy_changed at its start; it never starts
+// under the edit, nor without a preset.
+func TestPG_QueueWallPresetChangedWhileWaiting(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(t *testing.T, e *queueEnv, p types.WallPreset, run uuid.UUID)
+	}{
+		{"edited", func(t *testing.T, e *queueEnv, p types.WallPreset, _ uuid.UUID) {
+			p.Spec = types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example")}
+			if _, err := e.pg.UpdateWallPreset(context.Background(), p, 1, nil); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"deleted", func(t *testing.T, e *queueEnv, p types.WallPreset, _ uuid.UUID) {
+			if _, err := e.pg.DeleteWallPreset(context.Background(), uuid.MustParse(p.ID), nil); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"no longer open to the owner", func(_ *testing.T, e *queueEnv, _ types.WallPreset, run uuid.UUID) {
+			e.exec(`UPDATE run_queue SET authority = jsonb_set(authority, '{groups}', '[]'::jsonb) WHERE run_id = $1`, run)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newQueueEnv(t)
+			on := true
+			p, err := e.pg.CreateWallPreset(context.Background(), types.WallPreset{ID: uuid.NewString(), Scope: types.WallPresetScopeGroup,
+				GroupID: "eng", Name: "Eng no pushes", UpdatedBy: "sub-admin",
+				Spec: types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example"), PushRules: &types.PersonalWallsPushRules{DenyAll: &on}}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			member := ssoSessionWith(t, e.personP, types.UserTypeStandard, "eng")
+			pool := e.cappedPool("Busy", 1)
+			occupant := e.occupy(pool)
+			queued := e.queuedLaunch(member, pool, `,"wall_preset":"`+p.ID+`"`)
+			tc.change(t, e, p, queued.ID)
+			e.free(occupant)
+			got := e.waitFailed(queued.ID)
+			if got.StatusDetail != "queue: queue_policy_changed" || got.SPIFFEID != "" {
+				t.Errorf("%s: %s %q (identity %q), want queue_policy_changed and nothing minted", tc.name, got.State, got.StatusDetail, got.SPIFFEID)
+			}
+			if got.WallPreset == nil || got.WallPreset.Version != 1 || !got.WallPreset.Spec.DeniesAllPushes() {
+				t.Errorf("%s: the run's copy = %+v, want the reviewed version 1", tc.name, got.WallPreset)
+			}
+		})
+	}
+}
