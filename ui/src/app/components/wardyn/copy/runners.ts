@@ -185,8 +185,8 @@ export const RUN_RECORDING = {
   LABEL: "Recording",
   org_off: "Not recorded; the organization kept no recordings when it started.",
   runner_declined: "Not recorded by the runner; the organization kept recordings when it started.",
-  // A macOS VM run whose runner declined: the desktop is not recorded, its terminal sessions are.
-  macos_terminal: "Terminal sessions are recorded at this run's recording level. The desktop is not recorded.",
+  // A macOS VM run marked runner_declined: its terminal sessions are recorded, its agent's output is not.
+  macos_terminal: "Terminal sessions are recorded at this run's recording level. The agent's output isn't recorded.",
   // Not on the boards: M7-RunStrip state 4 in the Identity card's form.
   policy_off: "Recording off. Nothing is captured. The audit log still shows what happened.",
 } as const;

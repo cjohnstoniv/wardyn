@@ -174,6 +174,45 @@ describe("DesktopCard: macOS desktop", () => {
     expect(d.textContent).not.toContain("wardyn window");
   });
 
+  // At Screen and actions the tile says once what the screen recording keeps; the window refusal sits under the
+  // watch-only line, not in its place.
+  it("says the screen is recorded while watched at Screen and actions, on a Linux VM too, and nothing at Terminal", async () => {
+    const first = renderCard({ desktop: "observe" }, { recording_level: "screen_actions" });
+    expect(within(await desk()).getByTestId("desktop-recorded-line")).toHaveTextContent("Recorded while you watch; not masked");
+    first.unmount();
+    const linux = renderCard(undefined, { recording_level: "screen_actions", machine_kind: "linux_vm" });
+    expect(within(await desk()).getByTestId("desktop-recorded-line")).toHaveTextContent("Recorded while you watch; not masked");
+    linux.unmount();
+    const terminal = renderCard({ desktop: "observe" }, { recording_level: "terminal" });
+    await desk();
+    expect(screen.queryByTestId("desktop-recorded-line")).toBeNull();
+    terminal.unmount();
+    // A macOS run marked runner_declined (its agent's output) is still recorded on screen; a Linux VM so marked is not.
+    const declined = renderCard({ desktop: "observe" }, { recording_level: "screen_actions", not_recorded: "runner_declined" });
+    expect(within(await desk()).getByTestId("desktop-recorded-line")).toBeInTheDocument();
+    declined.unmount();
+    renderCard(undefined, { recording_level: "screen_actions", machine_kind: "linux_vm", not_recorded: "runner_declined" });
+    await desk();
+    expect(screen.queryByTestId("desktop-recorded-line")).toBeNull();
+  });
+
+  it("says no frames are kept while the agent is paused for a sign-in", async () => {
+    signInsGet.mockResolvedValue({ ...runDisk, paused: true });
+    renderCard(undefined, { recording_level: "screen_actions", machine_kind: "linux_vm" });
+    const d = await desk();
+    expect(await within(d).findByText("Recording paused while you sign in.")).toBeInTheDocument();
+    expect(within(d).queryByText("Recorded while you watch; not masked")).toBeNull();
+  });
+
+  it("an unrecorded window sentence stands under the macOS 26 watch-only line, and both stay", async () => {
+    const sentence = "This run's recording level is Screen and actions, and a window on your Mac isn't recorded, so Wardyn won't open one. Watch its desktop from the run page instead.";
+    renderCard({ desktop: "observe" }, { recording_level: "screen_actions", mac_window: { state: "unrecorded", message: sentence } });
+    const d = await desk();
+    const watchOnly = within(d).getByText(DESKTOP.observeOnlyMacOS);
+    const refusal = within(d).getByText(sentence);
+    expect(watchOnly.compareDocumentPosition(refusal) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   // UXR-45: no View only chip beside the Off sentence.
   it("a background run with an open watch and the gateway off draws Off, not View only", async () => {
     healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: false } });

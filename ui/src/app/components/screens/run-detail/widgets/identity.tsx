@@ -50,7 +50,7 @@ export function IdentityWidget({
   // before 0.9, or on a deployment that places nothing) has no such row. The runner and pool rows name where
   // it went, by id when no name is known.
   const local = run.placement === "local";
-  // A macOS VM run is marked runner_declined whenever it has a store, yet its terminal sessions are recorded.
+  // A macOS VM run marked runner_declined had its agent's output left unrecorded; its terminal sessions are recorded at its level.
   const macOSTerminalRecorded = isMacOSVM(run) && run.not_recorded === "runner_declined" && run.recording_level !== "off";
   const vmKind = isMacOSVM(run) ? RUN_VM_PAGE.machineMacOS : RUN_VM_PAGE.machineLinux;
   const machine = isMacOSVM(run) && run.vm_machine?.macos_base ? RUN_VM_PAGE.machineWithBase(vmKind, run.vm_machine.macos_base) : vmKind;

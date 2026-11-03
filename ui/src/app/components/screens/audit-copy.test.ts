@@ -25,6 +25,17 @@ describe("audit sentences", () => {
     expect(inboundDetail(failed)).toBeNull();
   });
 
+  it("says a failed session.recording.write row could not save the recording, with its reason as the detail; a success row is unchanged", () => {
+    const failed = ev("session.recording.write", "run-1~agent", { outcome: "failure", data: { session: "agent", reason: "mask_gap" } });
+    expect(describeTabEvent(failed)).toBe("Could not save the terminal recording — run-1~agent");
+    expect(describeTabAction(failed)).toBe("Could not save the terminal recording");
+    expect(inboundDetail(failed)).toBe("reason: mask_gap");
+    expect(inboundDetail(ev("session.recording.write", "run-1~agent", { outcome: "failure" }))).toBeNull();
+    const saved = ev("session.recording.write", "run-1~agent", { data: { session: "agent", reason: "ignored" } });
+    expect(describeTabEvent(saved)).toBe("Recorded the terminal session — run-1~agent");
+    expect(inboundDetail(saved)).toBeNull();
+  });
+
   it("words a gateway token mint row on both tables, and leaves an outcome it does not know as the raw action", () => {
     const signed = ev("gateway_identity.mint", "corp-gateway");
     const refused = ev("gateway_identity.mint", "old-gateway", { outcome: "denied" });
