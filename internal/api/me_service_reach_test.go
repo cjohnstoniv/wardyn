@@ -92,8 +92,8 @@ func TestMeServiceReach(t *testing.T) {
 	})
 	t.Run("routes_are_the_allow_list", func(t *testing.T) {
 		// TestServiceIdentity_AllowListRouteWalk pins serviceAllowed to its wantAllowed list.
-		if got, want := reachOf(t).Routes, slices.Sorted(maps.Keys(serviceAllowed)); !slices.Equal(got, want) || len(got) != 21 {
-			t.Errorf("routes = %v, want the 16 allow-list keys %v", got, want)
+		if got, want := reachOf(t).Routes, slices.Sorted(maps.Keys(serviceAllowed)); !slices.Equal(got, want) || len(got) != 22 {
+			t.Errorf("routes = %v, want the 22 allow-list keys %v", got, want)
 		}
 	})
 	t.Run("presets_equal_the_route", func(t *testing.T) {

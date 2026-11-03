@@ -59,7 +59,7 @@ intent:
 | Command | What it does |
 |---|---|
 | `wardyn apply -f FILE` | Stores each workload the file names, and starts a run when it is new or changed |
-| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing. A service identity's token gets `403` `service_scope` (exit `2`) |
+| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing. A service identity's token may run it |
 | `wardyn delete -f FILE` | Ends each workload's run and deletes the workload |
 | `wardyn workload list` | Lists `NAME`, `OWNER`, `SOURCE`, `STATE`, `GENERATION` (current/latest), `RUN` and `REFUSED` (the last refusal's reason) |
 | `wardyn workload get NAME` | Prints the workload, its document and status, as JSON |
@@ -69,13 +69,13 @@ intent:
 
 - `-f -` reads standard input. `FILE` is required.
 - `workload list|get|restart|delete` take `--owner` for an administrator, or a service identity's sponsor, who acts on another owner's workloads. A `security_admin` may list, get and delete them but not restart one (below). `list` takes `--limit`, `--offset` and `--json`.
-- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads. It can `apply`, but not `diff` or `apply --dry-run`; see [Apply from a pipeline](../CI.md#apply-from-a-pipeline).
+- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads. It can `apply`, `diff` and `apply --dry-run`; see [Apply from a pipeline](../CI.md#apply-from-a-pipeline).
 
 ### apply
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait`. A service identity's token gets the same `403` as `diff` |
+| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait`. A service identity's token may run it |
 | `--wait` | Follows each launched run: until it is running for a service, until it ends for any other workload |
 | `--timeout` | Gives up waiting after this long, `30m` by default. The run keeps going |
 | `--json` | Prints the results as a JSON array, with progress on stderr |
