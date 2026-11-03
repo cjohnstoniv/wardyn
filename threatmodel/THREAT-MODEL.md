@@ -466,6 +466,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 - A scheduling gate (`wardyn.dev/verify`) holds the pod. Wardynd reads it back and removes the gate only if it matches what Wardyn asked for.
 - The gate holds unless the controller or an admission hook removes it. Two admission policies now cover the create and the gate removal, only as far as the controller's identity and wardynd's are configured right.
 - A pod read back without its gate is refused and torn down with "may have started", never "nothing ran".
+- What backs these claims is the cases of the `conformance-k8s-agent-sandbox` CI job, which is new and not a required check. Treat them as true only while that job is green on the release you run.
 
 | Crossing | Guard | Residual |
 |---|---|---|

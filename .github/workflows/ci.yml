@@ -1393,8 +1393,9 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-26.04
-    # conformance-k8s's budget until measured: the Makefile's 30m suite timeout plus the bring-up.
-    timeout-minutes: 35
+    # Until measured: conformance-k8s's 35 (the Makefile's 30m suite timeout plus the bring-up) plus 10 for
+    # the controller fetch, two trivy scans, its install, the policies, can-i and six real-pod cases.
+    timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       AGENT_SANDBOX_CONTROLLER_IMAGE: registry.k8s.io/agent-sandbox/agent-sandbox-controller@sha256:ef1a1a3076afc996e711c44b388fbb7ffb7cd6858953d7e685166b299d77bd38
