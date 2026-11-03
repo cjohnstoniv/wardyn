@@ -376,6 +376,11 @@
   },
   {
     "reason": "governance_unit",
+    "target": "\"runs.kept_machine\"",
+    "sentence": "keptMachineGovernanceMsg"
+  },
+  {
+    "reason": "governance_unit",
     "target": "\"runs.placement\"",
     "sentence": "fmt.Sprintf(macOSBaseDenied, ceiling.Unit.Name, cmp.Or(base, types.MacOSStandardBase))"
   },
