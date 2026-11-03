@@ -153,7 +153,9 @@ func (macWindowScreen) Ready() error {
 func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) {
 	// since is read first and the console check runs again after it: a lock that lands after the check moves the
 	// count past since and ends the window at once, and one before it is refused by the check itself. The caller's
-	// own Ready ran before since was read, so it alone cannot cover that gap.
+	// own Ready ran before since was read, so it alone cannot cover that gap. The check after the window is up covers a
+	// lock before the observer existed (the first window): the observer installs after screenStart closes, and a
+	// notification is not replayed.
 	since := int64(C.wardynScreenLockNotices())
 	if err := screenReady(); err != nil {
 		return nil, err
@@ -179,6 +181,10 @@ func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) 
 	if C.wardynScreenUp() < 0 {
 		w.Close()
 		return nil, errors.New("macvm: the run's window could not be made")
+	}
+	if err := (macWindowScreen{}).Ready(); err != nil {
+		w.Close()
+		return nil, err
 	}
 	// ponytail: polled, as showScreen's is; the close-only delegate and the lock observer set the state to 0 on
 	// the main queue, and the lock observer counts its notification first.

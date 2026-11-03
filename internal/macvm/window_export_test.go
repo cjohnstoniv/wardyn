@@ -19,6 +19,9 @@ func SetWindowRecheck(d time.Duration) (restore func()) {
 	return func() { windowRecheck.Store(old) }
 }
 
+// ErrConsoleUnreadable is errConsoleUnreadable.
+var ErrConsoleUnreadable = errConsoleUnreadable
+
 // HasNativeWindowScreen says whether this build has the Mac's own window screen.
 func HasNativeWindowScreen() bool { return nativeWindowScreen != nil }
 
