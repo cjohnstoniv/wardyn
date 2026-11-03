@@ -61,7 +61,7 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 	pc := runner.ProxyConfig{
 		RunToken: c.RunToken, ControlPlaneURL: c.ControlPlaneURL, ControlPlaneCAPEM: c.ControlPlaneCAPEM,
 		Policy: c.Policy, MITMCACertPEM: c.MITMCACertPEM, MITMCAKeyPEM: c.MITMCAKeyPEM,
-		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, PATGrants: c.PATGrants,
+		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, GitPushWithheld: c.GitPushWithheld, PATGrants: c.PATGrants,
 		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4, KubeAPI: c.KubeAPI,
 		UpstreamProxyURL: c.UpstreamProxyURL, TrustedCAPEM: c.TrustedCAPEM, InternalHosts: c.InternalHosts,
 		UpstreamProxyNoProxy: c.UpstreamProxyNoProxy, LLMUpstreams: c.LLMUpstreams,

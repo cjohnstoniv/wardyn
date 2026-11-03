@@ -421,11 +421,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
 	req createRunRequest, comps runComponents, delivery localJudgement,
 ) (grantWiring, []string, bool) {
+	// A run whose capabilities leave out code_write gets read-only GitHub tokens, and its proxy
+	// refuses the push itself (gitPushWithheld).
+	withheld, refusal := s.gitPushWithheldFor(ctx, run, spec)
+	if refusal.write(s, w, r) {
+		return grantWiring{}, nil, false
+	}
+	if withheld.github {
+		spec.EligibleGrants = readOnlyGitHubGrants(spec.EligibleGrants)
+	}
 	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.
 	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
 		return grantWiring{}, nil, false
 	}
+	gw.gitPushWithheld = withheld.hosts(gw.adoGitHosts)
 	warnings := append([]string(nil), gw.warnings...)
 	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, run.ID, &gw)...)
 	return gw, warnings, true

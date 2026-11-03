@@ -25,6 +25,7 @@ type dispatchParams struct {
 	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
 	FirstGitHubGrantID *uuid.UUID           // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
 	GitGrants          map[string]uuid.UUID // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
+	GitPushWithheld    map[string]string    // broker hosts whose pushes the run's capabilities withhold (proxy.Config.GitPushWithheld)
 	// PATBroker reports whether the never-resident git_pat lane is on: the PAT is
 	// minted PROXY-SIDE and no grant id reaches the sandbox env.
 	//

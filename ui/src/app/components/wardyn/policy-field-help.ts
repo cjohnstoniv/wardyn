@@ -194,7 +194,7 @@ export const FIELD_HELP = {
   github_capabilities: {
     what: "This run's GitHub capabilities on the per-person lane, in place of the provider's default profile — a saved policy becomes a saved access profile.",
     values:
-      "A list of grantable capabilities: code_read, code_write, workflows_write, pr, issues_read, issues_write, repo_admin, … Only within the provider's capability_ceiling. Changing files, branches or tags through the API is never granted — push with git. Omitted keeps the provider's default. Not enforced yet: no GitHub lane reads it.",
+      "A list of grantable capabilities: code_read, code_write, workflows_write, pr, issues_read, issues_write, repo_admin, … Only within the provider's capability_ceiling. Changing files, branches or tags through the API is never granted — push with git. Omitted keeps the provider's default. A run whose list leaves out code_write can't push with git.",
     doc: "top-level",
     snippet: ["code_read", "code_write", "pr"],
   },

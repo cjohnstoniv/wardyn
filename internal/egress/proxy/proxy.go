@@ -109,6 +109,8 @@ type Proxy struct {
 	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
 	// no repo brokered (the route always 403s). See git_broker.go.
 	gitGrants map[string]uuid.UUID
+	// gitPushWithheld is Options.GitPushWithheld, keys lowercased (refuseWithheldPush).
+	gitPushWithheld map[string]string
 	// viaOrgRoutes are the destinations forwarded to the organisation (via_org.go).
 	viaOrgRoutes []ViaOrgRoute
 	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
@@ -388,6 +390,7 @@ func newProxy(opts Options) *Proxy {
 		mitmPlaintext:        mitm.plaintext,
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
+		gitPushWithheld:      canonicalHostKeys(opts.GitPushWithheld),
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,

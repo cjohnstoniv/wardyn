@@ -297,6 +297,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		MITMHosts:            cfg.MITMHosts,
 		MITMLLM:              cfg.MITMLLM,
 		GitGrants:            cfg.GitGrants,
+		GitPushWithheld:      cfg.GitPushWithheld,
 		PATGrants:            cfg.PATGrants,
 		BrokeredPATGrantIDs:  cfg.BrokeredPATGrantIDs,
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),

@@ -552,12 +552,13 @@ What the check does and does not settle:
 | `desktop` | **Clipboard and files** | `paste_in`, `copy_out`, `upload` and `download` each take `blocked`. A direction you leave out stays as the run has it |
 | `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
 | `azure_devops_capabilities` | | The run keeps only capabilities in both your list and its policy's list, or the provider's default profile where the policy names none. Nothing in common refuses the run (`403` `governance_overlay_unsatisfiable`) |
-| `github_capabilities` | | The same for GitHub: the GitHub CLI's capabilities keep only those in your list. Git pushes are not narrowed by it; `push_rules.deny_paths` and `withheld_grants` stop those |
+| `github_capabilities` | | The same for GitHub: the GitHub CLI keeps only your listed capabilities. Without `code_write` (yours or the policy's), git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only; `azure_devops_capabilities` does the same for Azure DevOps `git_pat` pushes. |
 | `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool that neither you nor the run's policy names. A rule never loosens one the run already has, and `allow` is refused |
 | `push_rules.deny_paths` | | Paths added to the run's push deny list. Only more is refused; a path the run already denies stays denied |
 | `recording` | | A floor: the run is recorded at least at `terminal` or `screen_actions`. It never lowers the run's level or your organisation's default; `off` is no floor and is refused |
 | `auto_stop_after_sec` | | A cap on the idle seconds before the sandbox is stopped. The shorter of the run's and yours stands; above zero, because zero or less means never stop |
 
+- With the git PAT broker off (WARDYN_GIT_PAT_BROKER=off), Azure DevOps git_pat pushes aren't stopped by the capability lists.
 - A knob you leave out is no limit. Every value only narrows: `allow_all_egress: true` and a direction set to anything but `blocked` are refused as `400` `walls_invalid`, naming the path.
 - A site is a DNS name or a `*.` wildcard, never an IP address, a port or a URL. A list holds at most 64 entries and `withheld_grants` at most 16.
 - A capability list names at least one grantable capability (an empty `[]` is refused), and never adds one.

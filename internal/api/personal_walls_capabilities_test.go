@@ -159,8 +159,8 @@ func (s *ghWallsStore) PutPrincipalPref(_ context.Context, principal, key string
 	return nil
 }
 
-// githubCLIWallsFixture is githubCLIFixture with a writable GitHub CLI row (code_read+code_write) and the
-// launching member's walls (nil for none).
+// githubCLIWallsFixture is githubCLIFixture with a writable GitHub CLI row (code_read+code_write), a
+// writable git lane, and the launching member's walls (nil for none).
 func githubCLIWallsFixture(t *testing.T, walls *types.PersonalWallsSpec) (*componentFixture, map[string]any) {
 	t.Helper()
 	cs := &capStore{}
@@ -176,7 +176,7 @@ func githubCLIWallsFixture(t *testing.T, walls *types.PersonalWallsSpec) (*compo
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = govDeployment()
-	cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/app"]}`)}}
+	cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/app"],"permissions":{"contents":"write"}}`)}}
 	f := &componentFixture{srv: New(cfg), st: st, cs: cs, rec: rec}
 	ref := f.org(ghCLIRowID, types.ComponentDefinition{CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub,
 		GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite}}}})
