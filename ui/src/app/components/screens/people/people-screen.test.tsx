@@ -247,6 +247,15 @@ describe("the person drawer", () => {
     await waitFor(() => expect(mock()).toHaveBeenCalledWith("sub-ana"));
   });
 
+  it.each([
+    ["idp|123", "wardyn invite -- 'idp|123'"],
+    ["a$b", "wardyn invite -- 'a$b'"],
+    ["o'neil", "wardyn invite -- 'o'\\''neil'"],
+    ["-x", "wardyn invite -- '-x'"],
+  ])("the invite command keeps the subject %s one shell word", (subject, command) => {
+    expect(P.INVITE_CMD(subject)).toBe(command);
+  });
+
   it("the sign-out copy names browser and CLI sessions and does not say CLI tokens keep working", () => {
     expect(P.SIGN_OUT_CONFIRM("ana")).toMatch(/^Sign ana out of every browser and CLI session\? Their personal API tokens and SSH keys keep working;/);
     expect(P.SIGN_OUT_CONFIRM("ana")).not.toContain("CLI's");
@@ -267,7 +276,7 @@ describe("the person drawer", () => {
 
   it("tells the admin how to let the person create a token", async () => {
     const { drawer } = await openAna();
-    expect(within(drawer).getByText("To let them create a token, invite them with wardyn invite sub-ana.")).toBeInTheDocument();
+    expect(within(drawer).getByText("wardyn invite -- 'sub-ana'")).toBeInTheDocument();
   });
 
   // The count beside the list is the server's active count (unrevoked, unexpired), so the list is too.
