@@ -614,7 +614,6 @@ describe("ALLOWED_MODELS", () => {
 
   it("words the audit chips", () => {
     expect(ALLOWED_MODELS.AUDIT_REFUSED).toBe("Refused: model limit");
-    expect(ALLOWED_MODELS.AUDIT_ALLOWED).toBe("Allowed: not a model request");
   });
 });
 

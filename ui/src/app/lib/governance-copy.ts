@@ -535,9 +535,8 @@ export const ALLOWED_MODELS = {
   CARD_REFUSED: "A request for any other model is refused by this run's proxy.",
   CARD_FIXED: "This is the list the run started with. Changing the profile does not change a run that is going.",
   OPEN_PROFILE: "Open profile",
-  /** An Audit row's chip: every refusal of this gate, whatever the cause text says; and a route the gate lets through. */
+  /** An Audit row's chip: every refusal of this gate, whatever the cause text says. */
   AUDIT_REFUSED: "Refused: model limit",
-  AUDIT_ALLOWED: "Allowed: not a model request",
 } as const;
 
 // §7.6-§7.7 — MEMBER

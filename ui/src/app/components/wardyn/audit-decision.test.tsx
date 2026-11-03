@@ -266,11 +266,9 @@ describe("RuleSourceChip", () => {
     expect(screen.getByText("Push refused — a denied path")).toBeInTheDocument();
     expect(screen.getByText(PUSH.DENIED_PATH_BODY)).toBeInTheDocument();
   });
-  // The allowed-models gate writes both its refusals and the model-free routes it lets through under one
-  // rule_source, so the row's own decision picks the chip. Every refusal reads the same, whatever its cause says.
-  it("names the allowed-models gate's refusals and allowed routes by the row's decision", () => {
-    expect(ruleSourceLabel("brokered:allowed-models", "egress.deny")).toEqual({ label: "Refused: model limit", tone: "danger" });
-    expect(ruleSourceLabel("brokered:allowed-models", "egress.allow")).toEqual({ label: "Allowed: not a model request", tone: "neutral" });
+  // The allowed-models gate writes only refusals under its rule_source. Every refusal reads the same, whatever its cause says.
+  it("names the allowed-models gate's refusals", () => {
+    expect(ruleSourceLabel("brokered:allowed-models")).toEqual({ label: "Refused: model limit", tone: "danger" });
     renderChip({ action: "egress.deny", data: { rule_source: "brokered:allowed-models", cause: "batch requests cannot be checked against this run's allowed models" } });
     expect(screen.getByText("Refused: model limit")).toBeInTheDocument();
     expect(screen.getByText("batch requests cannot be checked against this run's allowed models")).toBeInTheDocument();
