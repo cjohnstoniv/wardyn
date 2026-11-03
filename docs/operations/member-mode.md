@@ -94,11 +94,12 @@ an admin's run outside the view.
   User view the effective role is lowered, so the run takes the picked type's
   profile and grants.
 - A security admin is never ungoverned. Its runs resolve against its stamped type.
-- To make an admin's own runs member-bound everywhere, turn on
-  `WARDYN_GOVERN_ADMIN_RUNS` with the steps under
-  [Constrained-admin mode](#constrained-admin-mode). It refuses Record Mode. It
-  also governs admin-role personal tokens, so check CI first. Do not turn it on by
-  default.
+- A run that is ungoverned gets the deployment default only, not a member's profile or ceiling. The switch stays off by default, so an upgrade changes nothing.
+- Where admins sign in with SSO, we recommend turning on `WARDYN_GOVERN_ADMIN_RUNS`, with the steps under
+  [Constrained-admin mode](#constrained-admin-mode).
+  - It refuses Record Mode unless `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT=recording`.
+  - It also governs admin-role personal tokens, so check CI first.
+  - The admin token and local mode stay ungoverned either way.
 
 ## The no-credential preview — "Preview as a new user"
 

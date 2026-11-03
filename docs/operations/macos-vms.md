@@ -581,6 +581,16 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 
 ### Folders
 
+A shared folder needs three settings, in three places:
+
+| Setting | Where | Who sets it |
+|---|---|---|
+| The workspace roots, and the writable roots for a writable share | The organisation's server: `WARDYN_USER_WORKSPACE_ROOTS` (or a member's entry in `WARDYN_USER_WORKSPACE_ROOTS_MAP`), `WARDYN_USER_WRITABLE_ROOTS` | The server's operator |
+| The runner's drive roots | The Mac: `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` in a managed profile | The Mac's person, or the MDM |
+| Full Disk Access for the guest agent | The base image, once, in `edit-base` | Whoever edits the base |
+
+A folder has to pass all three. The rules and the failures are below.
+
 - Shared into the guest at `/Users/agent/…` (a workspace's `/home/agent/…` path), with the same rules and read-only or writable choice as a container.
 - A run reads a shared folder only once the guest agent has Full Disk Access in the base. macOS asks a privacy question for each network volume, and nobody can answer it inside a run. Grant it once in `edit-base` ([Editing a base](#editing-a-base)).
   - Without it, a run with a shared folder stops before it starts, within 10 seconds, and names this fix.
@@ -593,6 +603,7 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
   - On a Mac with no managed profile, the person sets them: `wardyn-runnerd setup --drive-root <dir>`.
   - The operator of the organisation's server sets the member workspace roots (`WARDYN_USER_WORKSPACE_ROOTS`, or a member's entry in `WARDYN_USER_WORKSPACE_ROOTS_MAP`) and the writable roots (`WARDYN_USER_WRITABLE_ROOTS`, less `WARDYN_USER_WRITABLE_DENY`, where deny wins). A folder refused for being outside the workspace roots names the first setting.
   - A member's folder has to pass both: the server's roots when the run is made, and the runner's own at the bind.
+  - Seen on one Mac: a writable folder bound to its runner worked both ways. The run read a file the Mac's person wrote, and the Mac saw a file the run wrote, owned by the Mac's user. One Mac and one macOS version is not every setup.
 
 ### Drives
 
@@ -623,16 +634,19 @@ The Mac never mounts, checks or repairs the volume. It hands the file to the VM 
 
 1. Run `wardyn-runnerd drive open <name>` in Terminal as the Mac's user. A name the Mac does not know is refused. A name two drives share is refused with the object names to use instead.
 2. Wait about a minute. The VM starts from the ready base with the drive and nothing else: no environment, secret, file or CA, and no agent.
-3. The files are copied to `~/Wardyn Drives/<name>`. The command prints how many files and bytes it copied, and what it skipped.
+3. The files are copied to `~/Wardyn Drives/<name>`. The command prints how many files and bytes it copied, and what it skipped. The volume's own folders (`.Trashes`, `.Spotlight-V100`, `.fseventsd`, `.TemporaryItems`) and extended attributes are left out of the copy and are not counted as unread.
 4. Change the files. Press Return to write the changes back, or Ctrl-C to discard them. A second Ctrl-C stops at once.
-5. The next run that uses the drive sees the written-back files, owned by `agent`.
+5. The command then removes the folder and says so: "The folder ~/Wardyn Drives/<name> was removed." Ctrl-C does the same after "Discarded: nothing was written back."
+6. The next run that uses the drive sees the written-back files, owned by `agent`.
 
 - **Network.** The VM's network device is wired to one end of a socket pair that carries nothing, so the guest has nothing to reach by design. The command says the VM has no internet. That has not been seen on a real Mac.
 - **What reaches the Mac.** Regular files and folders only. Links of both kinds, devices, pipes and set-id files are skipped and never followed. The closing line counts them, for example "Skipped 3: 2 links, 1 device."
   - Every file is written with mode 0644, so none can execute.
   - Wardyn sets the `com.apple.quarantine` attribute on every file and folder, which is what macOS reads to treat a file as downloaded. What macOS then does with it is not yet witnessed.
 - **Limits on a copy.** At most 250,000 files and folders, and no more bytes than the Mac has free less 5 GiB. A name part over 255 bytes, a path over 1,024 bytes, an absolute name or a `..` ends the copy and removes it.
-- **The folder.** A copy goes only into an empty folder, which the command makes private (mode 0700) under your home. A link in its place is refused. The folder stays after the command ends.
+- **The folder.** A copy goes only into an empty folder, which the command makes private (mode 0700) under your home. A link in its place is refused.
+  - After a discard, or a write-back that sent everything, the command removes what it copied, and the folder too if it made it. A folder that was already there stays, empty, and the closing line says so.
+  - The folder is kept when a write-back failed, or when some items (links, devices, pipes, set-id files) could not be written back, because it then holds the only copy of those changes. The closing line says which. Delete it yourself before the next `drive open` of that name.
   - A lock file, `.<name>.lock`, beside the folder keeps a second `drive open` of the same name out while the first runs. The lock goes with the command that holds it, even if that command is killed.
 - **A partial copy.** If the VM's `tar` could not read some items, the copy is kept and the command says how many are missing and what the VM said. Write back then replaces nothing, and `--delete` removes nothing, that the copy does not hold.
   - A damaged listing, a limit passed or Ctrl-C before the copy ends removes the copy and writes nothing.

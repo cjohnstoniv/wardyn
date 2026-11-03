@@ -88,7 +88,7 @@ docs/SSH.md=6974 share=35 # +13 (0.10.0 final docs): the Include stays outside a
 # docs/UI-SANDBOXES.md 8010 adds 31 over 7979, measured (rc.10): an app's own Origin check is not a per-run barrier in path mode.
 # docs/UI-SANDBOXES.md 8030 adds 20 over 8010, measured: the ui.input.drop row.
 # docs/UI-SANDBOXES.md 8077 adds 47 over 8030, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/UI-SANDBOXES.md=8166 share=35 # +89 (rc.11, measured 8166: the background desktop watch door and its exposure)
+docs/UI-SANDBOXES.md=8205 share=35 # +39 (rc.12, measured 8205: the watch-ticket door for a script); +89 (rc.11, measured 8166: the background desktop watch door and its exposure)
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

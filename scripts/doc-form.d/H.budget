@@ -15,4 +15,4 @@ deploy/kind/sso/README.md=557 share=35
 # Bedrock region or model — the false claim this replaces — and that the Bedrock model
 # provider is a console row the walk adds), 10 (05 keeps no state file: what is deployed
 # is read back off the cluster's image tag). The gate counts 54.
-deploy/azure-entra-sso/README.md=3178 share=30 # +40 (rc.11): test what a member gets in the User view, measured.
+deploy/azure-entra-sso/README.md=3207 share=30 # +29 (rc.12: recommend the admin-runs switch, measured 3207); +40 (rc.11): test what a member gets in the User view, measured.
