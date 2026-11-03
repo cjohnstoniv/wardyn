@@ -115,7 +115,7 @@
 | --- | --- |
 | The cluster changed the pod | k8s: agent sandbox: this run did not start: the cluster changed the pod Wardyn asked for (`<field>`). Nothing ran. Ask your administrator |
 | The pod was replaced after start | This run ended: its pod was replaced outside Wardyn, and Wardyn does not start a replacement. Files on your drives are kept. Start a new run. |
-| At boot, a placement label or annotation key in the controller's group (`agents.x-k8s.io/`) | k8s: WARDYN_K8S_SANDBOX_PLACEMENT: podLabels key "`<key>`" is refused: kubernetes.io/ and k8s.io/ keys can loosen confinement (only cluster-autoscaler.kubernetes.io/safe-to-evict is allowed) |
+| At boot, a placement label key (podLabels) in the controller's group (`agents.x-k8s.io/`) | k8s: WARDYN_K8S_SANDBOX_PLACEMENT: podLabels key "`<key>`" is refused: kubernetes.io/ and k8s.io/ keys can loosen confinement (only cluster-autoscaler.kubernetes.io/safe-to-evict is allowed) |
 | `linux_vm` | k8s: a "linux_vm" sandbox runs only on a registered runner that offers it |
 | Under `wardyn-runnerd`, at boot | k8s: the agent-sandbox backend does not run under wardyn-runnerd; unset WARDYN_K8S_AGENT_SANDBOX |
 
