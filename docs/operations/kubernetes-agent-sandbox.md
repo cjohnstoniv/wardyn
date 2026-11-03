@@ -125,7 +125,8 @@
 2. Confirm their Sandboxes are gone: `kubectl get sandboxes -l wardyn.managed=true` in the runs namespace.
 3. Or delete the survivors: `kubectl delete sandboxes -l wardyn.managed=true`.
 
-- A Sandbox left behind keeps the controller watching it. If its pod is ever replaced, the replacement carries the gate and stays held, so it never starts.
+- A Sandbox left behind keeps the controller watching it. If its pod is ever replaced, the controller makes the replacement from the template, which carries the gate, so it stays held and never starts.
+- Switching off also removes the two admission policies with the chart. After that, a replacement stays held only because the controller copies the template; no policy checks it.
 
 - Stop and kill delete the Sandbox before the pods, so the controller does not recreate the agent pod. A failed Sandbox delete returns an error and keeps the NetworkPolicies. The orphan sweep also lists Sandboxes.
 
