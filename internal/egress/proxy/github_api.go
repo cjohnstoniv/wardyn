@@ -112,6 +112,14 @@ func (p *Proxy) serveAPIDoor(w http.ResponseWriter, r *http.Request, host string
 	return false
 }
 
+// refuseGrantHostTunnel answers a CONNECT to a host one of the doors guards with
+// a refusal, in the order the doors were added, and reports whether it did.
+func (p *Proxy) refuseGrantHostTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	return p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
+		p.refuseKubeAPITunnel(w, r, host, port)
+}
+
 // isGitHubAPIHost reports whether host is the door's host on a run that has one.
 func (p *Proxy) isGitHubAPIHost(host string) bool {
 	return p.ghAPI != nil && patAPIHost(host) == ghscope.APIHost

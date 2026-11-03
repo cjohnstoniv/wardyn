@@ -341,6 +341,13 @@ type Config struct {
 	// the entries the run brought). A set only ever adds to it. Carried beside
 	// PushRuleSets and never beside Policy.PushRules.
 	PushRuleBase *types.PushRulesSpec `json:"push_rule_base,omitempty"`
+	// ForgeHosts are the self-hosted code hosts Wardyn knows for this run, from
+	// site config (SCM hosts and Git provider rows) and the run's git_pat and
+	// ssh_key grants. While deny_all is in force the proxy refuses a connection
+	// to one of them, or to a public code host, unless a door serves it
+	// (push_deny_all_forge.go). Set only when the run's push rules set
+	// deny_all, since an older proxy refuses the key.
+	ForgeHosts []string `json:"forge_hosts,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
 	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
 	// route evaluates the set of the harness that raised the call

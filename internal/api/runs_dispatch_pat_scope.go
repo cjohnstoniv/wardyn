@@ -115,6 +115,23 @@ func refusesEveryPush(policy types.RunPolicySpec, base *types.PushRulesSpec, set
 		slices.ContainsFunc(sets, func(s types.PushRuleSet) bool { return s.Rules.DenyAll })
 }
 
+// denyAllForgeHosts is proxy.Config.ForgeHosts: the self-hosted code hosts the proxy refuses while
+// the run refuses every push (types.DenyAllForgeHosts), nil when it does not.
+func denyAllForgeHosts(policy types.RunPolicySpec, sets []types.PushRuleSet, site types.SiteConfig, rows []types.CredentialGrant) []string {
+	if !refusesEveryPush(policy, nil, sets) {
+		return nil
+	}
+	return types.DenyAllForgeHosts(site, patGrantSpecs(rows))
+}
+
+// pushDenyAllSecrets is the preview's push_deny_all_secrets: the run refuses every push and carries
+// an environment or file secret of its own, which Wardyn can't read.
+func pushDenyAllSecrets(spec types.RunPolicySpec, sets []types.PushRuleSet) bool {
+	return refusesEveryPush(spec, nil, sets) && slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
+		return g.Kind == types.GrantEnvSecret || g.Kind == types.GrantFileSecret
+	})
+}
+
 // pushDenyAllRefusal refuses a run that refuses every push but would hold a credential that pushes
 // around the broker, where deny_all is enforced: a git_pat the broker-off lane puts in the sandbox,
 // a runner_resident one included, or an ssh_key. A credential withheld because its forge is

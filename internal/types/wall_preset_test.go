@@ -70,9 +70,15 @@ func TestWallPresetBuiltins(t *testing.T) {
 		if !strings.Contains(p.Description, "push") {
 			t.Errorf("%s's description %q does not say it refuses pushes", p.ID, p.Description)
 		}
+		if !strings.HasSuffix(p.Description, " "+PushDenyAllSecretsNote) {
+			t.Errorf("%s's description %q does not end with the note on secrets a person adds", p.ID, p.Description)
+		}
 	}
 	if got[0].Spec.DeniesAllPushes() {
 		t.Error("Open refuses every push")
+	}
+	if strings.Contains(got[0].Description, PushDenyAllSecretsNote) {
+		t.Error("Open, which refuses no push, carries the note on secrets")
 	}
 }
 

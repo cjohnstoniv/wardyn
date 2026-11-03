@@ -1082,6 +1082,7 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | Refusal | Status | `rule_source` | Remedy |
 |---|---|---|---|
 | The run's `push_rules.deny_all` refuses every push | `403` | `brokered:git:push-deny-all` | Launch without the preset or wall that refuses pushing. |
+| Under `push_rules.deny_all`, a connection on any port and either lane to a code host Wardyn knows that none of the run's doors serves | `403` | `brokered:git:push-deny-all-forge` | Reach the host through Wardyn's git broker or door, or launch without the preset or wall that refuses pushing. |
 | A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them and, for a path the broker compared with the forge, why it could not clear it. |
 | A file the push introduces is over `max_file_size_mib`, or its size is not carried by the pack and the forge cannot show it unchanged | `403` | `brokered:git:push-rules` | Remove or shrink those files, or have an operator raise `max_file_size_mib` (`0` turns it off; off github.com that is the only remedy besides pushing through a GitHub lane). Names up to ten files; a deny, so it wins over `require_review_paths`. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
@@ -1290,6 +1291,11 @@ So an entry a pattern matches is judged one of two ways:
 | `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
 | `deny_new_executables` | `bool` | `false` | Refuses a push that adds an executable file or makes a file executable. An edit to an executable passes unless a parent tree the push carries held it not executable; see [`push_rules`](#push_rules--pushrulesspec). `false`/absent is **off**. |
 | `deny_all` | `bool` | `false` | Refuses every push to every remote before it is read: content, ref updates and deletes, and Azure DevOps REST repository writes. Reads pass. A meet ORs it and a ceiling's `true` is kept. Read-only and Sealed set it. |
+| | | | `deny_all` is enforced where Wardyn brokers the traffic. Wardyn refuses unbrokered connections to the code hosts it knows, on any port. |
+| | | | A code host allowed as a plain domain on a self-hosted forge Wardyn doesn't know is a tunnel, and a token kept as an environment or file secret can push through it. |
+| | | | Known code hosts: `github.com` with its `api.`, `uploads.`, `gist.` and `ssh.` hosts, hosted Azure DevOps, the site's SCM hosts and Git provider rows, and each `git_pat` and `ssh_key` grant's host. |
+| | | | A wildcard, `allow_all_egress` or a first-use approval does not reopen one. |
+| | | | With an environment or file secret on the run, Review adds: "A push token you add as a secret could still push to a code host Wardyn doesn't recognize, if this run can reach it." |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |

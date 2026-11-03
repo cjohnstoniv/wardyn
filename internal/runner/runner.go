@@ -250,8 +250,8 @@ type ProxyConfig struct {
 	PortRule string
 	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for
 	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
-	DesktopSignins bool `json:"desktop_signins,omitempty"`
-
+	DesktopSignins  bool                                `json:"desktop_signins,omitempty"`
+	ForgeHosts      []string                            // self-hosted code hosts the deny_all guard refuses (proxy.Config.ForgeHosts)
 	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
 	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
 }

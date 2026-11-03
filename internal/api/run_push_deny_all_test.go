@@ -5,8 +5,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +72,71 @@ func TestRefusesEveryPushReadsEverySource(t *testing.T) {
 	}
 	if refusesEveryPush(types.RunPolicySpec{}, &types.PushRulesSpec{DenyPaths: []string{"a"}}, nil) {
 		t.Error("deny_all read where no source sets it")
+	}
+}
+
+// TestDispatchCarriesDenyAllForgeHosts: a dispatched run that refuses every push hands its proxy the
+// code host its git_pat grant names; a run without deny_all writes no key, which an older proxy would
+// refuse.
+func TestDispatchCarriesDenyAllForgeHosts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy types.RunPolicySpec
+		want   []string
+	}{
+		{"deny_all", denyAllPolicy(), []string{"gitlab.corp.io"}},
+		{"no deny_all", types.RunPolicySpec{}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fr := &fakeRunner{}
+			srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+			run.Task = ""
+			st.grants = []types.CredentialGrant{patRowWith(uuid.New(), run.ID, "gitlab.corp.io", nil)}
+			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{Operator: true}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+				RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: tc.policy,
+				GitPATGrants: winningByHost(st.grants),
+			})
+			if fr.createCalls != 1 {
+				t.Fatalf("createCalls = %d, want the run dispatched", fr.createCalls)
+			}
+			if got := fr.lastSpec.ProxyConfig.ForgeHosts; !slices.Equal(got, tc.want) {
+				t.Fatalf("ForgeHosts = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPushDenyAllSecretsPreviewFact: the preview's push_deny_all_secrets is set only when the draft
+// refuses every push and carries an environment or file secret of its own.
+func TestPushDenyAllSecretsPreviewFact(t *testing.T) {
+	env := types.GrantSpec{Kind: types.GrantEnvSecret}
+	file := types.GrantSpec{Kind: types.GrantFileSecret}
+	pat := types.GrantSpec{Kind: types.GrantGitPAT}
+	withGrants := func(s types.RunPolicySpec, g ...types.GrantSpec) types.RunPolicySpec { s.EligibleGrants = g; return s }
+	setOnly := []types.PushRuleSet{{Provider: "github", Org: "acme", Rules: types.PushRulesSpec{DenyAll: true}}}
+	for _, tc := range []struct {
+		name string
+		spec types.RunPolicySpec
+		sets []types.PushRuleSet
+		want bool
+	}{
+		{"deny_all and an env secret", withGrants(denyAllPolicy(), env), nil, true},
+		{"deny_all and a file secret", withGrants(denyAllPolicy(), pat, file), nil, true},
+		{"deny_all in an entry's set and an env secret", withGrants(types.RunPolicySpec{}, env), setOnly, true},
+		{"deny_all and no secret of its own", withGrants(denyAllPolicy(), pat), nil, false},
+		{"an env secret without deny_all", withGrants(types.RunPolicySpec{}, env, file), nil, false},
+	} {
+		if got := pushDenyAllSecrets(tc.spec, tc.sets); got != tc.want {
+			t.Errorf("%s: pushDenyAllSecrets = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	b, _ := json.Marshal(policyPreviewResponse{})
+	if strings.Contains(string(b), "push_deny_all_secrets") {
+		t.Errorf("an unset fact is on the wire: %s", b)
+	}
+	b, _ = json.Marshal(policyPreviewResponse{PushDenyAllSecrets: true})
+	if !strings.Contains(string(b), `"push_deny_all_secrets":true`) {
+		t.Errorf("a set fact is missing from the wire: %s", b)
 	}
 }
 

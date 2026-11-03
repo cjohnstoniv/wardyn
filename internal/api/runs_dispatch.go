@@ -544,6 +544,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
+			// The code hosts the proxy refuses while deny_all is in force (nil
+			// otherwise, since an older proxy refuses the key).
+			ForgeHosts:         denyAllForgeHosts(policy, p.PushRuleSets, siteCfg, grantRows),
 			HarnessToolRules:   p.HarnessToolRules,
 			HarnessCredentials: harnessCreds,
 			MCPServers:         mcp.servers, MCPBindings: mcp.bindings,

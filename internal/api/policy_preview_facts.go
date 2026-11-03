@@ -31,6 +31,11 @@ type policyPreviewResponse struct {
 	// decided by the resolver launch uses. Absent means no structural decline
 	// was reported; it is never set on a repository group.
 	ADOLaneDeclined string `json:"ado_lane_declined,omitempty"`
+	// PushDenyAllSecrets is set when the draft refuses every push and carries an
+	// environment or file secret of its own (pushDenyAllSecrets). Review then says:
+	// "A push token you add as a secret could still push to a code host Wardyn
+	// doesn't recognize, if this run can reach it." (types.PushDenyAllSecretsNote).
+	PushDenyAllSecrets bool `json:"push_deny_all_secrets,omitempty"`
 	// Components is what the draft is given access to (componentFacts): absent
 	// for an exec draft with no Git provider or attached component.
 	Components []componentFact `json:"components,omitempty"`

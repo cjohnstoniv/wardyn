@@ -67,6 +67,10 @@ export interface PolicyPreviewResult {
   // The run-level reason the per-person Azure DevOps credential would not be
   // given to this run's sandbox; absent when no structural decline was reported.
   ado_lane_declined?: string;
+  // Set when the draft refuses every push and carries an environment or file secret
+  // of its own. Review then says: "A push token you add as a secret could still push
+  // to a code host Wardyn doesn't recognize, if this run can reach it."
+  push_deny_all_secrets?: boolean;
   // Absent for a draft with no component and no GitHub or Azure DevOps repository.
   components?: ComponentFact[];
   // Why each entry is in `spec`, from the same fold as the launch. The server always

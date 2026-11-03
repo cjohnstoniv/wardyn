@@ -199,6 +199,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "DesktopSignins", Class: ClassPlatform, Rule: RuleRefuse, Reason: ReasonPlacementCredential, Variant: "opens the sign-in listener (port 3129), which admits a per-sign-in credential the organisation's control plane checks and carries the person's logins; refused, like signinTarget"},
 	{Struct: StructProxyConfig, Field: "PortRule", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's egress port rule; it only narrows egress, no credential"},
 	{Struct: StructProxyConfig, Field: "PushRuleBase", Class: ClassExempt, Rule: RuleExempt, Variant: "the run's push rules after the ceiling, for an entry with no set; policy content, no credential"},
+	{Struct: StructProxyConfig, Field: "ForgeHosts", Class: ClassExempt, Rule: RuleExempt, Variant: "the code hosts the deny_all guard refuses; it only narrows egress, no credential"},
 	{Struct: StructProxyConfig, Field: "PushRuleSets", Class: ClassExempt, Rule: RuleExempt, Variant: "push content rules per SCM entry; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "HarnessCredentials", Class: ClassExempt, Rule: RuleExempt, Variant: "SHA-256 of each harness's approval credential; a digest, never the plaintext, which goes to that harness as an agent-owned file its own launch reads into that one process"},
 	{Struct: StructProxyConfig, Field: "HarnessToolRules", Class: ClassExempt, Rule: RuleExempt, Variant: "tool rules per included harness; policy content, no credential"},

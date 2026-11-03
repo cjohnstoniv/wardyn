@@ -84,9 +84,9 @@ func BuiltinWallPresets() []WallPreset {
 		{ID: WallPresetOpen, Scope: WallPresetScopeBuiltin, Name: "Open", Version: builtinWallPresetVersion,
 			Description: "Your policy as it stands."},
 		{ID: WallPresetReadOnly, Scope: WallPresetScopeBuiltin, Name: "Read-only", Version: builtinWallPresetVersion, Spec: readOnly,
-			Description: "Keeps only the Azure DevOps and GitHub read capabilities and refuses every push, so the run can read but not push."},
+			Description: "Keeps only the Azure DevOps and GitHub read capabilities and refuses every push, so the run can read but not push. " + PushDenyAllSecretsNote},
 		{ID: WallPresetSealed, Scope: WallPresetScopeBuiltin, Name: "Sealed", Version: builtinWallPresetVersion, Spec: sealed,
-			Description: "Read-only, so every push is refused, plus only the sites the run's own setup needs; an unlisted site is refused, not asked about, and no desktop transfers."},
+			Description: "Read-only, so every push is refused, plus only the sites the run's own setup needs; an unlisted site is refused, not asked about, and no desktop transfers. " + PushDenyAllSecretsNote},
 	}
 }
 

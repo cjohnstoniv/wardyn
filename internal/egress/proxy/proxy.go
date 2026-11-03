@@ -268,6 +268,8 @@ type Proxy struct {
 	pushSets []types.PushRuleSet
 	// pushBase is Config.PushRuleBase compiled: the rules of an entry with no set.
 	pushBase *pushRuleSet
+	// forgeHosts is Config.ForgeHosts compiled (push_deny_all_forge.go).
+	forgeHosts map[string]bool
 	// harnessRules and harnessCreds are Config.HarnessToolRules and
 	// Config.HarnessCredentials, the per-harness regime of the approval route
 	// (tool_rules.go); empty means the older run-wide policy.ToolRules.
@@ -650,6 +652,10 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		log := decisionLog(req, egress.Deny, gate.refusal)
 		return egress.Deny, "", &log
 	}
+	// Under push_rules.deny_all, a code host no door serves (push_deny_all_forge.go).
+	if log := p.pushDenyAllForgeDeny(req, host, gate.verdict); log != nil {
+		return egress.Deny, "", log
+	}
 	verdict, portDryRun := gate.verdict, gate.portDryRun
 	// approvalID records whether (and via which approval) this request's verdict
 	// was RELEASED by the first-use approval flow, so the eventual Allow decision
@@ -788,14 +794,6 @@ func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.Decisi
 	log := decisionLog(req, egress.Allow, "approval:"+approvalID.String())
 	log.ApprovalID = &approvalID
 	return log
-}
-
-// refuseGrantHostTunnel answers a CONNECT to a host one of the doors guards with
-// a refusal, in the order the doors were added, and reports whether it did.
-func (p *Proxy) refuseGrantHostTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
-	return p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
-		p.refuseKubeAPITunnel(w, r, host, port)
 }
 
 // handleConnect establishes a raw TCP tunnel for CONNECT (TLS passthrough).
