@@ -451,6 +451,12 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	defer release()
+	// The run's allowed_models judges a model host's request before any door, gate or scan sees it.
+	releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+	defer releaseModels()
+	if modelRefused {
+		return
+	}
 	p.serveAdmittedMITMRequest(w, r, host, port)
 }
 

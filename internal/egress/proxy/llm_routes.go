@@ -151,6 +151,13 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		if refused {
 			return
 		}
+	} else {
+		// A hosted provider's model is judged against the run's allowed_models (allowed_models.go).
+		release, refused := p.allowedModelRefused(w, r, host, port, rest)
+		defer release()
+		if refused {
+			return
+		}
 	}
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok && lm == nil {
