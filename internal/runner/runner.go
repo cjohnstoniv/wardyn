@@ -520,6 +520,29 @@ var ErrAgentPauseUnsupported = errors.New("runner: this sandbox's agent cannot b
 // or from a router or runner that cannot open one.
 var ErrDesktopUnsupported = errors.New("runner: this sandbox has no desktop to open")
 
+// MacWindower is an OPTIONAL Runner capability: put an attended window (keyboard and pointer) on a macOS
+// VM run's live screen. The window lives exactly as long as the MacWindow returned; the VM and the run
+// are untouched either way. Refusals are the ErrMacWindow* of mac_window.go.
+type MacWindower interface {
+	OpenWindow(ctx context.Context, ref string, req MacWindowRequest) (MacWindow, error)
+}
+
+// MacWindowRequest is MacWindower's input: GrantID names the org's grant for this open, Title is the
+// window's title (it names the run and the person).
+type MacWindowRequest struct {
+	GrantID string
+	Title   string
+}
+
+// MacWindow is one open window. Ended is closed once the window is over, whoever ended it; Reason is
+// then why, one of MacWindowEnd*, or "" when Close ended it. Close closes the window; it is safe to call
+// more than once.
+type MacWindow interface {
+	Ended() <-chan struct{}
+	Reason() string
+	Close() error
+}
+
 // ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage).
 // The stopped proxy is removed, not kept: the config lives in the run's
