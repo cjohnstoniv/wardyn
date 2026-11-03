@@ -110,8 +110,12 @@ func (s *Server) stepKeptMachine(f *runFold, _ *foldRecorder) bool {
 	if f.req.Machine == nil {
 		return true
 	}
-	plan, rf := s.keptMachineDecision(f.r, keptMachineAsk{req: *f.req, ceiling: f.ceiling, place: f.place, spec: f.spec,
-		comps: f.comps, keepWork: f.keep != nil, queued: f.queued, create: f.mode == foldCreate})
+	ask := keptMachineAsk{req: *f.req, ceiling: f.ceiling, place: f.place, spec: f.spec,
+		comps: f.comps, keepWork: f.keep != nil, queued: f.queued}
+	if f.mode == foldCreate {
+		ask.create = true
+	}
+	plan, rf := s.keptMachineDecision(f.r, ask)
 	if rf == nil {
 		f.machine = plan
 		return true

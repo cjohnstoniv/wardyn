@@ -149,7 +149,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepMainDrive", foldCreate | foldPreflight | foldPreview},
 	{"stepModelProvider", foldCreate | foldPreflight | foldPreview},
 	{"stepAWSCLIProfile", foldCreate | foldPreflight | foldPreview},
-	{"stepAllowedModelsChecked", foldCreate | foldPreflight},
+	{"stepAllowedModelsChecked", foldCreate | foldPreflight | foldPreview},
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepMacOSHold", foldCreate | foldPreflight | foldPreview},
