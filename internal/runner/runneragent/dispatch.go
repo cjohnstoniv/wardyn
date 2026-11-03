@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -223,7 +224,8 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 	case err != nil:
 		return nil, err
 	case outcome != runnerwire.KeptMachineDeleted && outcome != runnerwire.KeptMachineAlreadyAbsent:
-		return nil, runnerwire.Refuse("kept_machine outcome %q is unknown", outcome)
+		// The delete ran: the machine may be gone, so this is no refusal (a refusal means nothing was removed).
+		return nil, fmt.Errorf("kept_machine outcome %q is unknown", outcome)
 	}
 	return runnerwire.KeptMachineResult{Outcome: outcome}, nil
 }

@@ -530,7 +530,7 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	gone, err := removeKept(dir, c.lockWaitOr())
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
-		return "", fmt.Errorf("docker: kept machine %s is running on this Mac", id)
+		return "", runnerwire.Refuse("docker: kept machine %s is running on this Mac", id) // nothing was removed
 	case err != nil:
 		return "", fmt.Errorf("docker: delete kept machine %s: %w", id, err)
 	case !gone:

@@ -303,6 +303,9 @@ var docTierRows = []struct{ route, token string }{
 	// Member drives (0.9): the admin list and delete of the drives people create are SUPER.
 	{"GET /api/v1/drives/member", "the `/drives/member` routes"},
 	{"DELETE /api/v1/drives/member/{id}", "the `/drives/member` routes"},
+	// Kept machines (0.10): the admin list and delete of the machines people keep are SUPER.
+	{"GET /api/v1/machines/kept", "the `/machines/kept` routes"},
+	{"DELETE /api/v1/machines/kept/{id}", "the `/machines/kept` routes"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each
@@ -313,10 +316,7 @@ var docTierRows = []struct{ route, token string }{
 // Every other gated route the completeness check has surfaced is rowed in
 // docs/OPERATIONS.md and listed in docTierRows above. What stays here is
 // admitted debt; there is none today.
-var docTierUndocumented = map[string]string{
-	"GET /api/v1/machines/kept":         "people's kept machines, new in this release: the tier table row lands with the kept-machine docs",
-	"DELETE /api/v1/machines/kept/{id}": "people's kept machines, new in this release: the tier table row lands with the kept-machine docs",
-}
+var docTierUndocumented = map[string]string{}
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
 // means" table — the section the doc's own intro sends a
