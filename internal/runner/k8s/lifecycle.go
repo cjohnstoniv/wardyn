@@ -73,15 +73,15 @@ func (d *Driver) replacedPodStatus(ctx context.Context, ns string, pod *corev1.P
 // pod is one the controller made again from the template), a label the run's NetworkPolicies select
 // is missing or changed (an unselected pod is default-allow), or a container or init container runs
 // an image other than the one the run's Sandbox template asked for, or the Sandbox's spec changed after
-// create (sandboxSpecChanged), or the Sandbox is being deleted (deleting is then true too). The
-// selected labels come from the run id, never from the Sandbox, whose template labels the controller
-// copies onto the live pod. A Sandbox already gone gives no images to compare: its pod is being
-// collected with it.
+// create (sandboxSpecChanged), or the Sandbox is being deleted or gone (deleting is then true too).
+// The selected labels come from the run id, never from the Sandbox, whose template labels the
+// controller copies onto the live pod.
 //
-// A Sandbox being deleted is not trusted: a finalizer can hold it, with its pod running, for as long
-// as it likes, and setting its deletion time adds one to its generation, so the generation can no
-// longer tell. Wardyn's own teardown ends the run before it deletes the Sandbox, so only a run
-// something else is deleting reads ended by it.
+// A Sandbox being deleted or gone is not trusted: a finalizer can hold a deletion, with the pod
+// running, for as long as it likes, and setting its deletion time adds one to its generation, so the
+// generation can no longer tell; a Sandbox deleted with the orphan policy leaves its pod running with
+// nothing to compare its images with. Wardyn's own teardown ends the run before it deletes the
+// Sandbox, so only a run something else deleted it under reads ended by it.
 func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Pod) (replaced, deleting bool, err error) {
 	runID, err := runIDFromAgentPodName(pod.Name)
 	if err != nil {
@@ -91,13 +91,10 @@ func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Po
 		return true, false, nil
 	}
 	sb, err := d.dynamic.Resource(sandboxesGVR).Namespace(ns).Get(ctx, pod.Name, metav1.GetOptions{})
-	if isNotFound(err) {
-		return false, false, nil
-	}
-	if err != nil {
+	if err != nil && !isNotFound(err) {
 		return false, false, fmt.Errorf("read agent sandbox: %w", err)
 	}
-	if sb.GetDeletionTimestamp() != nil {
+	if err != nil || sb.GetDeletionTimestamp() != nil {
 		return true, true, nil
 	}
 	if sandboxSpecChanged(sb) {

@@ -194,15 +194,35 @@ func TestAgentSandboxLifecycle_ExecRefusesAGatedPod(t *testing.T) {
 	}
 }
 
-// A pod whose Sandbox is already gone (Wardyn's own teardown deletes it first) has no images to be
-// compared with; it reads by its phase until it is collected.
-func TestAgentSandboxLifecycle_PodWithoutItsSandboxReadsByPhase(t *testing.T) {
-	d, _, dyn, ref := asAdmitted(t)
-	if err := dyn.Tracker().Delete(sandboxesGVR, testNamespace, ref); err != nil {
-		t.Fatalf("delete Sandbox: %v", err)
-	}
-	if st, err := d.Status(context.Background(), ref); err != nil || st.State != types.RunRunning {
-		t.Errorf("Status = %+v, %v; want RUNNING", st, err)
+// A running pod whose Sandbox is gone (deleted with the orphan policy, or not yet collected) has no
+// template to be compared with, so it reads ended, image changed or not. Wait reads it as a gone pod:
+// Wardyn's own teardown ends the run before it deletes the Sandbox, so that end is the only one.
+func TestAgentSandboxLifecycle_PodWithoutItsSandboxReadsFailed(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		d, cs, dyn, ref := asAdmitted(t)
+		changeAgentPod(t, cs, ref, func(p *corev1.Pod) {
+			p.Status.Phase = corev1.PodRunning
+			if changed {
+				p.Spec.Containers[0].Image = "registry.example/other:1"
+			}
+		})
+		if err := dyn.Tracker().Delete(sandboxesGVR, testNamespace, ref); err != nil {
+			t.Fatalf("delete Sandbox: %v", err)
+		}
+		ctx := context.Background()
+		for name, read := range map[string]func() (runner.Status, error){
+			"Status":      func() (runner.Status, error) { return d.Status(ctx, ref) },
+			"AgentStatus": func() (runner.Status, error) { return d.AgentStatus(ctx, ref, execContainerName) },
+		} {
+			if st, err := read(); err != nil || st.State != types.RunFailed || st.FailureHint != agentPodReplacedMessage {
+				t.Errorf("image changed %v: %s = %+v, %v; want FAILED with the replaced-pod sentence", changed, name, st, err)
+			}
+		}
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if code, err := d.Wait(wctx, ref); err != nil || code != notFoundExitCode {
+			t.Errorf("image changed %v: Wait = %d, %v; want %d, nil, as for a gone pod", changed, code, err, notFoundExitCode)
+		}
+		cancel()
 	}
 }
 

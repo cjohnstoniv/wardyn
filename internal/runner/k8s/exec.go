@@ -277,8 +277,8 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 		}
 		switch {
 		case deleting:
-			// The pod goes with its Sandbox: read as the gone pod below is, so a run Wardyn's own
-			// teardown already ended gets no second end, and one ended from outside fails.
+			// Its Sandbox is being deleted or gone: read as the gone pod below is, so a run Wardyn's
+			// own teardown already ended gets no second end, and one ended from outside fails.
 			return notFoundExitCode, nil
 		case replaced:
 			return 0, fmt.Errorf("k8s: exec wait: %s", agentPodReplacedMessage)
