@@ -4,10 +4,12 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -280,6 +282,160 @@ func TestGitHubAPIDoorRefusesContentWritesUnderDenyAll(t *testing.T) {
 				t.Fatalf("a refused write reached GitHub: mints %d seen %q", mints, seen)
 			}
 		})
+	}
+}
+
+// ghTunnelRequestBody is ghTunnelRequest carrying a JSON body, as gh sends a
+// GraphQL document.
+func ghTunnelRequestBody(t *testing.T, method, target, body string) *http.Request {
+	t.Helper()
+	raw := method + " " + target + " HTTP/1.1\r\nHost: api.github.com\r\nContent-Type: application/json\r\n" +
+		"Authorization: token wardyn-proxy-injects-github-token\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
+	req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return req
+}
+
+// denyAllGHDoor is the GitHub API door on a deny_all run whose grant holds
+// every grantable capability, so a refusal below is the catalogue's, not a
+// missing grant.
+func denyAllGHDoor(t *testing.T) (*Proxy, *GitHubAPIGrant, *ghUpstream) {
+	t.Helper()
+	up := newGHUpstream(t)
+	spec := denyAllSpec()
+	spec.AllowedDomains = []string{"api.github.com:443"}
+	p, g := newGHProxySpec(t, up, spec)
+	g.Capabilities = ghscope.GrantableCapabilities()
+	return p, g, up
+}
+
+// TestGitHubAPIDoorRefusesGraphQLUnderDenyAll: the door refuses the GraphQL
+// endpoint as a class (ghscope.CapDeniedGraphQL, never grantable, whatever the
+// method, query string or document), so every mutation that moves a ref or
+// writes a commit, and a read query too, is refused under deny_all before any
+// mint, even on a grant holding every grantable capability.
+func TestGitHubAPIDoorRefusesGraphQLUnderDenyAll(t *testing.T) {
+	docs := []struct{ name, doc string }{
+		{"createCommitOnBranch", `{"query":"mutation($i:CreateCommitOnBranchInput!){createCommitOnBranch(input:$i){commit{oid}}}"}`},
+		{"createRef", `{"query":"mutation($i:CreateRefInput!){createRef(input:$i){ref{id}}}"}`},
+		{"updateRef", `{"query":"mutation($i:UpdateRefInput!){updateRef(input:$i){ref{id}}}"}`},
+		{"mergePullRequest", `{"query":"mutation($i:MergePullRequestInput!){mergePullRequest(input:$i){pullRequest{id}}}"}`},
+		{"mergeBranch", `{"query":"mutation($i:MergeBranchInput!){mergeBranch(input:$i){mergeCommit{oid}}}"}`},
+		{"a read query", `{"query":"{repository(owner:\"acme\",name:\"app\"){defaultBranchRef{name}}}"}`},
+	}
+	for _, d := range docs {
+		for _, target := range []string{"/graphql", "/graphql?x=1"} {
+			t.Run(d.name+" "+target, func(t *testing.T) {
+				p, g, up := denyAllGHDoor(t)
+				v, why := gitHubAPIAdmit(ghTunnelRequestBody(t, http.MethodPost, target, d.doc), g)
+				if v.Capability != ghscope.CapDeniedGraphQL || v.Capability.Grantable() || why != gitHubAPIRESTOnly {
+					t.Fatalf("classified %q (grantable %v) with %q, want the never-grantable %s and the REST-only sentence",
+						v.Capability, v.Capability.Grantable(), why, ghscope.CapDeniedGraphQL)
+				}
+				rec := httptest.NewRecorder()
+				p.serveMITMRequest(rec, ghTunnelRequestBody(t, http.MethodPost, target, d.doc), ghscope.APIHost, 443)
+				ghRefused(t, rec)
+				if mints, seen := up.counts(); mints != 0 || len(seen) != 0 {
+					t.Fatalf("a refused GraphQL request reached GitHub: mints %d seen %q", mints, seen)
+				}
+			})
+		}
+	}
+}
+
+// TestGitHubAPIDoorRefusesReleaseAndTagWritesUnderDenyAll: a release or a tag
+// object is a git-data write the door never grants (CapRepoContentWriteREST),
+// so creating, editing or deleting a release, uploading or removing a release
+// asset through the API, and creating a tag object are refused under deny_all
+// before any mint. Reading releases and tags still passes.
+func TestGitHubAPIDoorRefusesReleaseAndTagWritesUnderDenyAll(t *testing.T) {
+	writes := []struct{ method, target string }{
+		{http.MethodPost, "/repos/acme/app/releases"},
+		{http.MethodPatch, "/repos/acme/app/releases/7"},
+		{http.MethodDelete, "/repos/acme/app/releases/7"},
+		{http.MethodPost, "/repos/acme/app/releases/7/assets"},
+		{http.MethodPatch, "/repos/acme/app/releases/assets/9"},
+		{http.MethodDelete, "/repos/acme/app/releases/assets/9"},
+		{http.MethodPost, "/repos/acme/app/git/tags"},
+	}
+	for _, w := range writes {
+		t.Run(w.method+" "+w.target, func(t *testing.T) {
+			p, g, up := denyAllGHDoor(t)
+			v, _ := gitHubAPIAdmit(ghTunnelRequest(t, w.method, w.target), g)
+			if v.Capability != ghscope.CapRepoContentWriteREST || v.Capability.Grantable() {
+				t.Fatalf("classified %q (grantable %v), want the never-grantable %s", v.Capability, v.Capability.Grantable(), ghscope.CapRepoContentWriteREST)
+			}
+			rec := httptest.NewRecorder()
+			p.serveMITMRequest(rec, ghTunnelRequest(t, w.method, w.target), ghscope.APIHost, 443)
+			ghRefused(t, rec)
+			if mints, seen := up.counts(); mints != 0 || len(seen) != 0 {
+				t.Fatalf("a refused write reached GitHub: mints %d seen %q", mints, seen)
+			}
+		})
+	}
+	for _, target := range []string{"/repos/acme/app/releases", "/repos/acme/app/git/tags/" + someOID} {
+		t.Run("GET "+target+" passes", func(t *testing.T) {
+			p, _, up := denyAllGHDoor(t)
+			rec := httptest.NewRecorder()
+			p.serveMITMRequest(rec, ghTunnelRequest(t, http.MethodGet, target), ghscope.APIHost, 443)
+			if mints, seen := up.counts(); rec.Code != http.StatusOK || mints != 1 || len(seen) != 1 {
+				t.Fatalf("status %d mints %d seen %q, want 200 and one forwarded read", rec.Code, mints, seen)
+			}
+		})
+	}
+}
+
+// TestGitHubUploadsHostIsNotOpenedByDenyAll: release assets upload to
+// uploads.github.com, which the door neither serves nor classifies. A run that
+// allows only the API host cannot open a tunnel there under deny_all, and
+// nothing reaches the forge.
+func TestGitHubUploadsHostIsNotOpenedByDenyAll(t *testing.T) {
+	p, _, up := denyAllGHDoor(t)
+	if p.isGitHubAPIHost("uploads.github.com") {
+		t.Fatal("the door serves uploads.github.com")
+	}
+	req := httptest.NewRequest(http.MethodConnect, "uploads.github.com:443", nil)
+	req.Host = "uploads.github.com:443"
+	rec := httptest.NewRecorder()
+	p.handleConnect(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"rule_source":"policy:default-deny"`) {
+		t.Fatalf("status %d body %s, want 403 from the default-deny policy", rec.Code, rec.Body)
+	}
+	if mints, seen := up.counts(); mints != 0 || len(seen) != 0 {
+		t.Fatalf("a refused tunnel reached upstream: mints %d seen %q", mints, seen)
+	}
+}
+
+// TestPushDenyAllRefusesLFSOnEveryLane: the git brokers serve the smart-HTTP
+// verbs only (info/refs, git-upload-pack, git-receive-pack), so the LFS batch
+// API, with upload or download, and an LFS object PUT never get past the
+// broker on any lane under deny_all: 403, and nothing reaches the forge or
+// mints a credential.
+func TestPushDenyAllRefusesLFSOnEveryLane(t *testing.T) {
+	const oid = "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393"
+	reqs := []struct{ name, method, tail, body string }{
+		{"batch upload", http.MethodPost, "/info/lfs/objects/batch",
+			`{"operation":"upload","transfers":["basic"],"objects":[{"oid":"` + oid + `","size":12}]}`},
+		{"batch download", http.MethodPost, "/info/lfs/objects/batch",
+			`{"operation":"download","transfers":["basic"],"objects":[{"oid":"` + oid + `","size":12}]}`},
+		{"object upload", http.MethodPut, "/info/lfs/objects/" + oid, "hello world!"},
+	}
+	for _, lane := range denyAllLanes() {
+		for _, c := range reqs {
+			t.Run(lane.name+"/"+c.name, func(t *testing.T) {
+				p, _, base, hits := lane.new(t)
+				rec := httptest.NewRecorder()
+				p.ServeHTTP(rec, mustLocalReq(t, c.method, base+c.tail, strings.NewReader(c.body)))
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("status = %d body %q, want 403", rec.Code, rec.Body.String())
+				}
+				if n := hits(); n != 0 {
+					t.Errorf("a refused LFS request reached the forge, minted or asked %d time(s)", n)
+				}
+			})
+		}
 	}
 }
 
