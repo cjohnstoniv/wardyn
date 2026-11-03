@@ -39,6 +39,11 @@ const SAVE_DEBOUNCE_MS = 800;
 // opposite sentences, so they cannot share a boolean.
 export type SaveResult = "ok" | "unsupported" | "failed";
 
+// What the person can be told about the last write: "saving" while it is pending or in flight, "saved" once the server
+// stored it, "failed" when it did not (retryable). Nothing is said before the first gesture, or when the deployment
+// cannot store layouts at all (that has its own standing note).
+export type SaveStatus = "idle" | "saving" | "saved" | "failed";
+
 export type RunLayoutState = {
   layout: RunLayoutWidget[];
   /** The GET has settled. The layout is usable before this (the preset
@@ -46,9 +51,11 @@ export type RunLayoutState = {
   loaded: boolean;
   /** False once the server answered 501: in-session only from here on. */
   persistable: boolean;
+  /** The state of the most recent write, so a failed one is never invisible. */
+  status: SaveStatus;
   /** Optimistic local update + a debounced PUT. */
   apply: (next: RunLayoutWidget[]) => void;
-  /** Flush now. Resolves true when the server stored it. */
+  /** Write the last arrangement now (also the retry after a failure). */
   save: () => Promise<SaveResult>;
   /** Back to the preset default, and clear the saved row (PUT []). */
   reset: () => void;
@@ -62,9 +69,14 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
   const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service, vm));
   const [loaded, setLoaded] = React.useState(false);
   const [persistable, setPersistable] = React.useState(true);
+  const [status, setStatus] = React.useState<SaveStatus>("idle");
 
   const layoutRef = React.useRef(layout);
   const persistRef = React.useRef(true);
+  // The body the last gesture meant to store (a reset is [], not the layout on screen), so a retry repeats THAT.
+  const lastBody = React.useRef<RunLayoutWidget[] | null>(null);
+  // Only the newest write may speak: a slow earlier PUT must not overwrite a later one's status.
+  const writeSeq = React.useRef(0);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Has the human arranged anything since this preset's GET was issued? A slow
   // control plane made the load's answer land AFTER a drag/remove/add, and the
@@ -99,14 +111,21 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
   const put = React.useCallback(
     async (body: RunLayoutWidget[]): Promise<SaveResult> => {
       if (!persistRef.current) return "unsupported";
+      const seq = ++writeSeq.current;
+      setStatus("saving");
+      const settle = (next: SaveStatus) => {
+        if (seq === writeSeq.current) setStatus(next);
+      };
       try {
         const markers = [...(serviceRemoved.current ? [SERVICE_REMOVED] : []), ...(desktopRemoved.current ? [DESKTOP_REMOVED] : [])];
         await runLayoutApi.putLayout(preset, [...body, ...markers]);
+        settle("saved");
         return "ok";
       } catch (err) {
         if (err instanceof HttpError && err.status === 501) {
           persistRef.current = false;
           setPersistable(false);
+          settle("idle");
           return "unsupported";
         }
         // Any other failure stays retryable: the next gesture writes again.
@@ -116,6 +135,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
         // network blip toasted "this deployment can't store layouts" — a
         // permanent fact about the server — while `persistable` stayed true and
         // the toolbar's own inline note said the opposite, one click apart.
+        settle("failed");
         return "failed";
       }
     },
@@ -132,6 +152,11 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       if (vm) desktopRemoved.current = !norm.some((w) => w.widget === "desktop");
       commit(norm);
       cancelPending();
+      lastBody.current = norm;
+      if (persistRef.current) {
+        writeSeq.current++;
+        setStatus("saving");
+      }
       timer.current = setTimeout(() => {
         timer.current = null;
         void put(norm);
@@ -142,7 +167,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
 
   const save = React.useCallback(async (): Promise<SaveResult> => {
     cancelPending();
-    return put(layoutRef.current);
+    return put(lastBody.current ?? layoutRef.current);
   }, [put]);
 
   const reset = React.useCallback(() => {
@@ -151,6 +176,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     serviceRemoved.current = false;
     desktopRemoved.current = false;
     commit(presetLayout(preset, service, vm));
+    lastBody.current = [];
     // PUT [] is the reset: there is no DELETE route, and storing today's
     // default as a personal choice would freeze this human out of every future
     // improvement to it. An empty saved layout reads as "never saved" on load.
@@ -163,6 +189,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     // against THIS load yet, so a gesture made under the previous preset must
     // not suppress this one's answer.
     dirty.current = false;
+    lastBody.current = null;
     serviceRemoved.current = false;
     desktopRemoved.current = false;
     setLoaded(false);
@@ -209,5 +236,5 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     [put],
   );
 
-  return { layout, loaded, persistable, apply, save, reset };
+  return { layout, loaded, persistable, status, apply, save, reset };
 }
