@@ -203,7 +203,8 @@ type ProxyConfig struct {
 	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
 	AzureGates []proxy.AzureGateConfig
 	// GitPushWithheld is the broker hosts whose pushes the run's capabilities withhold (proxy.Config.GitPushWithheld).
-	GitPushWithheld map[string]string
+	// omitempty: an older runner is sent the same bytes as before the field while none is withheld.
+	GitPushWithheld map[string]string `json:"git_push_withheld,omitempty"`
 	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
