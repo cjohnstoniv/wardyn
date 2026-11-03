@@ -167,6 +167,7 @@ type providerKeyLane struct {
 	format     string
 	upstream   string // BaseURL(+Path) when requests do not go to vendorHost
 	model      string
+	fast       string // custom_endpoint only: the claude-code small-model alias; "" leaves the haiku alias unset
 	owner      string // whose namespace the key is read from: the run owner's, always
 }
 
@@ -190,6 +191,9 @@ func providerKeyLaneFor(p types.ModelProvider, agent string) (providerKeyLane, b
 	base := p.BaseURL
 	if p.Kind == types.ModelProviderCustomEndpoint || p.Kind == types.ModelProviderLocalModel {
 		base += h.Path // always "" on a local model (validateProviderHarness)
+		if p.Kind == types.ModelProviderCustomEndpoint {
+			l.fast = h.FastModel
+		}
 		var auth types.ProviderAuth
 		if p.Auth != nil {
 			auth = *p.Auth
@@ -679,6 +683,9 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 					sandboxEnv[k] = model
 				}
 			}
+		}
+		if lane.key.fast != "" {
+			sandboxEnv[envDefaultHaikuModel] = lane.key.fast
 		}
 	case "codex-cli":
 		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes

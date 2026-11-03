@@ -238,8 +238,8 @@ type ProviderHarness struct {
 	// Model: model id this harness uses on this provider; admin-set, no member override. Required
 	// (an inference profile) on a Bedrock kind.
 	Model string `json:"model,omitempty"`
-	// FastModel is the deployment the Messages harness uses for its small-model alias; azure_foundry only,
-	// on that harness only. Unset means Model.
+	// FastModel is the model the Messages harness uses for its small-model alias; azure_foundry and
+	// custom_endpoint only, on that harness only. Unset means Model on azure_foundry, and no alias on custom_endpoint.
 	FastModel string `json:"fast_model,omitempty"`
 	Path      string `json:"path,omitempty"` // where a custom endpoint serves this harness's API dialect, under BaseURL; may not change the host
 	// AuthHeader and AuthFormat override the provider's Auth for this harness alone (custom_endpoint only).
