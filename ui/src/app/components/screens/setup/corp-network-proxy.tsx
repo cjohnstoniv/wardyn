@@ -11,7 +11,7 @@
 // its own import comment) so every existing importer (setup-screen.tsx, this
 // step's own tests) keeps working unchanged.
 import * as React from "react";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, Loader2, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import type { HostProxyDetection, HostProxySetting, SetupCheck, SiteConfig } from "../../../lib/types";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
@@ -245,6 +245,8 @@ export interface ProxyProbeBundle {
 
 export function HostProxyTab({
   siteConfig,
+  loadFailed = false,
+  onReload,
   detection,
   hostProxyCheck,
   secretNames,
@@ -255,6 +257,9 @@ export function HostProxyTab({
   probe,
 }: {
   siteConfig: SiteConfig | null;
+  /** The last site-config read failed; shown, with onReload as Try again, while nothing has loaded. */
+  loadFailed?: boolean;
+  onReload?: () => Promise<void>;
   detection: HostProxyDetection | undefined;
   /** See EvidenceBlock/HostProxyCheckNote — the server's graded verdict on this detection. */
   hostProxyCheck?: SetupCheck;
@@ -294,6 +299,8 @@ export function HostProxyTab({
     }
   }
   const canEdit = operator && seeded;
+  // Only an operator's view reads site-config, so a viewer's field is disabled for the role, not a load.
+  const proxyHint = !operator ? T.VIEWER_HINT : seeded || loadFailed ? T.PROXY_URL_HINT : SITE.PROXY_LOADING;
 
   const rows = evidenceRows(detection);
   const candidates = proxyCandidateValues(detection, true);
@@ -427,12 +434,24 @@ export function HostProxyTab({
           </div>
         )}
 
+        {operator && !seeded && loadFailed && (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-muted-foreground">{SITE.PROXY_LOAD_FAILED}</p>
+            {onReload && (
+              <Button variant="outline" size="sm" onClick={() => void onReload()}>
+                <RotateCw className="size-3.5" />
+                {SITE.PROXY_RETRY}
+              </Button>
+            )}
+          </div>
+        )}
+
         {!useSecret && (
           <>
             <Field
               label={candidates.length > 0 && !configured ? "Or enter the proxy URL yourself" : "Proxy URL"}
               htmlFor="corp-proxy-url"
-              hint={seeded || !operator ? T.PROXY_URL_HINT : "Loading the saved proxy settings…"}
+              hint={proxyHint}
             >
               <Input
                 id="corp-proxy-url"

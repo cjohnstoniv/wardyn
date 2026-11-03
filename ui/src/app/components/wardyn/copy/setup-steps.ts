@@ -56,6 +56,10 @@ export const SETUP = {
 } as const;
 
 export const SITE = {
+  // The Host proxy editor stays disabled until the first site-config read lands; these say why.
+  PROXY_LOADING: "Loading the saved proxy settings…",
+  PROXY_LOAD_FAILED: "Couldn't load the saved proxy settings. Retry to edit them.",
+  PROXY_RETRY: "Try again",
   // B2: the site-config save path's own note — a change here does not reach a
   // run already going (the egress sidecar compiles its config once at sandbox
   // start).

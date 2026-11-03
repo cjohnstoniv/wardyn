@@ -19,6 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { HostProxyDetection } from "../../../lib/types";
 import { T } from "../../../lib/integrations";
+import { SITE } from "../../wardyn/copy";
 import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { CorpNetworkStep } from "./corp-network-step";
@@ -145,14 +146,59 @@ describe("Host proxy tab — panel states", () => {
     const { rerender } = render(wrap(null));
     const field = screen.getByLabelText(/proxy url/i);
     expect(field).toBeDisabled();
-    expect(screen.getByText("Loading the saved proxy settings…")).toBeInTheDocument();
+    expect(screen.getByText(SITE.PROXY_LOADING)).toBeInTheDocument();
     await userEvent.type(field, "http://typed-too-early:8080");
     expect(field).toHaveValue("");
 
     rerender(wrap({ upstream_proxy_url: "http://proxy.corp.acme.com:8080" }));
     expect(field).toBeEnabled();
     expect(field).toHaveValue("http://proxy.corp.acme.com:8080");
-    expect(screen.queryByText("Loading the saved proxy settings…")).not.toBeInTheDocument();
+    expect(screen.queryByText(SITE.PROXY_LOADING)).not.toBeInTheDocument();
+  });
+
+  it("a failed first load says so with Try again; a retry that loads enables the editor with the stored value", async () => {
+    // The server answers only once the test lets it: every read before that fails, as setup-screen records it.
+    let serverUp = false;
+    function Loader() {
+      const [cfg, setCfg] = React.useState<ComponentProps<typeof CorpNetworkStep>["siteConfig"]>(null);
+      const [failed, setFailed] = React.useState(true);
+      const reload = async () => {
+        if (!serverUp) return setFailed(true);
+        setCfg({ upstream_proxy_url: "http://proxy.corp.acme.com:8080" });
+        setFailed(false);
+      };
+      return <Harness siteConfig={cfg} siteConfigFailed={failed} reloadSiteConfig={reload} />;
+    }
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator>
+          <Loader />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const field = screen.getByLabelText(/proxy url/i);
+    expect(field).toBeDisabled();
+    expect(screen.getByText(SITE.PROXY_LOAD_FAILED)).toBeInTheDocument();
+    expect(screen.queryByText(SITE.PROXY_LOADING)).not.toBeInTheDocument();
+
+    serverUp = true;
+    await userEvent.click(screen.getByRole("button", { name: SITE.PROXY_RETRY }));
+    await waitFor(() => expect(field).toBeEnabled());
+    expect(field).toHaveValue("http://proxy.corp.acme.com:8080");
+    expect(screen.queryByText(SITE.PROXY_LOAD_FAILED)).not.toBeInTheDocument();
+  });
+
+  it("a viewer, who never reads site-config, sees the field disabled for the role, never Loading", () => {
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false}>
+          <Harness siteConfig={null} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByLabelText(/proxy url/i)).toBeDisabled();
+    expect(screen.getAllByText(T.VIEWER_HINT).length).toBeGreaterThan(0);
+    expect(screen.queryByText(SITE.PROXY_LOADING)).not.toBeInTheDocument();
   });
 
   it("before the first load the secret switch and name are unavailable; the loaded secret ref is what shows", async () => {

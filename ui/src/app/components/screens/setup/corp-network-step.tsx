@@ -73,6 +73,7 @@ export interface CorpStepActions {
 export function CorpNetworkStep({
   status,
   siteConfig,
+  siteConfigFailed = false,
   reloadSiteConfig,
   saveSiteConfig,
   gate,
@@ -85,6 +86,8 @@ export function CorpNetworkStep({
 }: {
   status: SetupStatus;
   siteConfig: SiteConfig | null;
+  /** The last site-config read failed (setup-screen.tsx's reloadSiteConfig). */
+  siteConfigFailed?: boolean;
   reloadSiteConfig: () => Promise<void>;
   saveSiteConfig: (next: SiteConfig) => Promise<void>;
   /** The proof-of-connectivity facts that gate Next — held by the orchestrator
@@ -282,6 +285,8 @@ export function CorpNetworkStep({
         <TabsContent value="proxy">
         <HostProxyTab
           siteConfig={siteConfig}
+          loadFailed={siteConfigFailed}
+          onReload={reloadSiteConfig}
           detection={status.host_proxy}
           hostProxyCheck={hostProxyCheck}
           secretNames={secretNames}

@@ -204,6 +204,8 @@ export function SetupScreen({
   // already be stale (another tab's scm_hosts/egress_redirects save, or that
   // card's own sign_in_help_* save) and silently reverted it.
   const [siteConfigEtag, setSiteConfigEtag] = React.useState<string | null>(null);
+  // The last site-config read failed. The Host proxy editor shows it while no document has loaded yet.
+  const [siteConfigFailed, setSiteConfigFailed] = React.useState(false);
   // Role-mappings acting surface (0.7 SSO Phase 3) — People's multi-user
   // branch. Owned here, same split every other status-derived fetch on this
   // screen follows (siteConfig, secrets): DeploymentStep only renders it.
@@ -360,8 +362,9 @@ export function SetupScreen({
       .then(({ siteConfig, etag }) => {
         setSiteConfig(siteConfig);
         setSiteConfigEtag(etag);
+        setSiteConfigFailed(false);
       })
-      .catch(() => {});
+      .catch(() => setSiteConfigFailed(true));
   }, [adminReads]);
 
   // The one write path into SiteConfig from within Getting Started — today
@@ -886,6 +889,7 @@ export function SetupScreen({
           <CorpNetworkStep
             status={status}
             siteConfig={siteConfig}
+            siteConfigFailed={siteConfigFailed}
             reloadSiteConfig={reloadSiteConfig}
             saveSiteConfig={saveSiteConfig}
             gate={corpGate}
