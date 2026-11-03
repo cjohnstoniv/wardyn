@@ -360,10 +360,13 @@ func (s *Server) targetRecords(ctx context.Context, run types.AgentRun) (records
 // The notices of a macOS VM run, at Review and in the 201's warnings, by the level dispatch will resolve:
 // at Screen and actions its desktop is recorded while someone watches it, unmasked, and it gets no window
 // on the Mac; at Terminal its desktop is not recorded. Its terminal sessions and a task run's agent output
-// are recorded and masked at either.
+// are recorded and masked at either. The agent's output is named only where it is kept: not for an interactive
+// run (it has no agent exec) or where the output tail is off (openExecOutput), which leaves a task run with no
+// agent output cast.
 const (
-	macOSVMScreenNotice   = "This run's desktop is recorded while someone watches it from the run page. The screen recording isn't masked: anything the desktop shows, a secret included, is kept. A window on your Mac isn't recorded, so this run can't open one. Terminal sessions are recorded and masked."
-	macOSVMTerminalNotice = "At the Terminal level this run's desktop isn't recorded. Terminal sessions and the agent's output are recorded and masked."
+	macOSVMScreenNotice                = "This run's desktop is recorded while someone watches it from the run page. The screen recording isn't masked: anything the desktop shows, a secret included, is kept. A window on your Mac isn't recorded, so this run can't open one. Terminal sessions are recorded and masked."
+	macOSVMTerminalNotice              = "At the Terminal level this run's desktop isn't recorded. Terminal sessions and the agent's output are recorded and masked."
+	macOSVMTerminalNoticeNoAgentOutput = "At the Terminal level this run's desktop isn't recorded. Terminal sessions are recorded and masked."
 )
 
 // macOSVMRecordingNotice is a macOS VM run's recording notice at create and Review, by the level its
@@ -381,6 +384,9 @@ func (s *Server) macOSVMRecordingNotice(ctx context.Context, f *runFold) (string
 	case types.RecordingScreenActions:
 		return macOSVMScreenNotice, nil
 	case types.RecordingTerminal:
+		if f.req.Interactive || s.cfg.ExecOutputTailOff {
+			return macOSVMTerminalNoticeNoAgentOutput, nil
+		}
 		return macOSVMTerminalNotice, nil
 	}
 	return "", nil
