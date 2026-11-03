@@ -64,6 +64,7 @@ func TestModelProvidersRead_HasNoSecretBearingField(t *testing.T) {
 			// Names argued for, each holding no credential: token_lifetime_seconds is how long a gateway's run
 			// identity token lives (seconds); token_url is an endpoint sign-in's IdP token address; and
 			// client_secret_ref names the operator secret that holds a sign-in client's secret, never its value.
+			// GET /model-providers is admin-only; if it is ever opened beyond admins, this allowance goes back for review.
 			if name == "token_lifetime_seconds" || name == "token_url" || name == "client_secret_ref" {
 				walk(path+"."+f.Name, f.Type, seen)
 				continue
