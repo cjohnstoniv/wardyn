@@ -26,8 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
@@ -743,7 +741,8 @@ func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Ti
 // the guest agent build agentVersion, or its run launcher ("" skips both agent
 // checks: a base without the launcher cannot start a run). A harness
 // withheld at the current pin does not count for ToolsRetryAfter after the
-// attempt; a new pin counts at once.
+// attempt; a new pin counts at once. baseDir may as well be a kept machine's
+// folder, which holds its own tools.json: it is judged by that record alone.
 func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.Time) bool {
 	rec, err := ReadToolsRecord(baseDir)
 	if err != nil {
@@ -779,6 +778,12 @@ type UpdateOptions struct {
 	Layout Layout
 	Slot   int
 	Power  PowerSource
+	// KeptDir, when set, makes this the update of one kept machine instead of the base in Slot: its
+	// folder (Layout.KeptMachineDir), with its own disk and tools record. The update holds LockKept for
+	// its whole run (ErrKeptLocked if a boot, a delete or another update holds it, so the caller must
+	// not hold it) and never touches a base. A folder that is not a kept machine's of this Layout is
+	// refused.
+	KeptDir string
 	// Admit takes the host ledger entry and returns its release; the update
 	// is a VM like any other (nil: the caller already holds one).
 	Admit func(ctx context.Context) (release func(), err error)
@@ -809,12 +814,28 @@ type UpdateOptions struct {
 // shared) sees the old base or the new one, never a mix. A failed or
 // interrupted update leaves the old base as it was. It reports whether
 // anything changed.
+//
+// With KeptDir the same happens to one kept machine's folder, under LockKept:
+// its disk and machine identifier are cloned, stage 2 runs on the clone, and
+// the clone, with the machine's kept.json, is swapped in for the folder. The
+// machine keeps its identity, and a failed update leaves it as it was.
 func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if o.Engine == nil || o.Power == nil || o.Stage == nil || o.Layout.Root == "" {
 		return Manifest{}, false, errors.New("macvm: a tools update needs an engine, a power source, a stage 2 and a root")
 	}
 	o.setDefaults()
 	base := o.Layout.BaseDir(o.Slot)
+	kept := o.KeptDir != ""
+	var keptRec KeptRecord
+	if kept {
+		var unlock func()
+		var err error
+		if base, keptRec, unlock, err = o.lockKept(); err != nil {
+			return Manifest{}, false, err
+		}
+		// Dropped last: the old generation is deleted under the lock.
+		defer unlock()
+	}
 	nb, done, err := beginUpdate(ctx, base, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
@@ -858,7 +879,12 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseTools})
-	id, err := cloneStaging(o.Engine, base, nb)
+	var id Identity
+	if kept {
+		id, err = cloneKeptStaging(o.Engine, base, nb)
+	} else {
+		id, err = cloneStaging(o.Engine, base, nb)
+	}
 	if err != nil {
 		return m, false, err
 	}
@@ -889,7 +915,17 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err := writeJSONAtomic(filepath.Join(nb, ManifestFile), m, 0o600); err != nil {
 		return m, false, err
 	}
-	if err := swapBase(ctx, nb, base); err != nil {
+	if kept {
+		// The stage-2 boot wrote to the disk, which the next boot's scrub removes what it holds of.
+		keptRec.Scrubbed = false
+		if err := WriteKept(nb, keptRec); err != nil {
+			return m, false, err
+		}
+		err = swapKept(nb, base)
+	} else {
+		err = swapBase(ctx, nb, base)
+	}
+	if err != nil {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseReady, Fraction: 1})
@@ -911,90 +947,3 @@ func (o *UpdateOptions) setDefaults() {
 		o.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
 }
-
-// beginUpdate takes base's update lock for a tools update or a re-prepare and
-// sweeps what a crashed one left in the staging dir <base>.update (a half-built
-// base, or an old generation after a swap), whether or not the caller goes on
-// to build. It returns the staging dir; done deletes it (after a swap, the old
-// generation, so that goes once the base lock is released) and then drops the
-// update lock.
-//
-// A delete that fails is logged and the dir left, as a crash leaves it: one
-// staging dir per slot that no ledger entry reserves. It occupies live free
-// space, which admission reads at every start, so it only makes admission
-// refuse sooner, until the next prepare, tools update or runnerd start
-// deletes it.
-func beginUpdate(ctx context.Context, base string, log *slog.Logger) (staging string, done func(), err error) {
-	staging = base + ".update"
-	unlock, err := lockFile(ctx, updateLockPath(base), true)
-	if err != nil {
-		return "", nil, err
-	}
-	if err := os.RemoveAll(staging); err != nil {
-		unlock()
-		return "", nil, err
-	}
-	return staging, func() {
-		if err := os.RemoveAll(staging); err != nil {
-			log.Warn("macvm: the update's staging dir was not deleted; the next update sweeps it", "path", staging, "err", err.Error())
-		}
-		unlock()
-	}, nil
-}
-
-// swapBase exchanges the updated base nb with base while holding base's lock
-// exclusively; nb then holds the old generation.
-func swapBase(ctx context.Context, nb, base string) error {
-	unlock, err := lockFile(ctx, baseLockPath(base), true)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if err := swapFn(nb, base); err != nil {
-		if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.ENOSYS) {
-			return fmt.Errorf("macvm: the macOS VM directory must be on an APFS volume, which can swap two directories at once (%v); the base was left as it was", err)
-		}
-		return fmt.Errorf("macvm: swapping in the updated base: %w", err)
-	}
-	// The post-swap file-set check, still under the exclusive lock: the new
-	// base holds only a base's own files, so nothing a stage-2 boot left
-	// (a boot configuration, a socket, a log) reaches a run's clone. If it
-	// holds anything else, the old generation is swapped back.
-	if err := checkBaseFiles(base); err != nil {
-		if berr := swapFn(nb, base); berr != nil {
-			return fmt.Errorf("%w; swapping the old base back failed too: %v", err, berr)
-		}
-		return fmt.Errorf("%w; the old base was kept", err)
-	}
-	return nil
-}
-
-// baseFiles are the files a base dir holds, and requiredBaseFiles those it must (tools.json and admin-password may be absent).
-var baseFiles, requiredBaseFiles = []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile, AdminPasswordFile, ToolsRecordFile},
-	[]string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile}
-
-// checkBaseFiles fails unless dir holds the base's own files only, each a
-// regular file, with the disk, aux storage, identifier and manifest present.
-func checkBaseFiles(dir string) error {
-	des, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	seen := map[string]bool{}
-	for _, de := range des {
-		if !slices.Contains(baseFiles, de.Name()) || !de.Type().IsRegular() {
-			return fmt.Errorf("macvm: the new macOS base holds %q, which is not a base file", de.Name())
-		}
-		seen[de.Name()] = true
-	}
-	for _, f := range requiredBaseFiles {
-		if !seen[f] {
-			return fmt.Errorf("macvm: the new macOS base has no %s", f)
-		}
-	}
-	return nil
-}
-
-// swapFn is swapDirs; tests replace it to force a failing exchange. There is
-// no fallback to two renames: a base that is half swapped is not a base.
-var swapFn = swapDirs
