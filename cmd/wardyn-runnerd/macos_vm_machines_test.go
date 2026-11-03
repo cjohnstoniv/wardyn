@@ -605,3 +605,73 @@ func TestEraseKeptOnRevokeRetriesOnTheSweep(t *testing.T) {
 		t.Fatalf("after the erase worked: %d erases and %d sweeps, want 3 and 1", f.erases, f.sweeps)
 	}
 }
+
+// macos_vm_kept_disk_limit_gb is a runner setting: runnerd.json accepts it (and refuses a bad value), the
+// managed profile maps MacOSVMKeptDiskLimit, the managed value outranks the file, and "0" is a value (off),
+// never unset. No flag or environment variable sets it.
+func TestKeptDiskLimitIsARunnerSetting(t *testing.T) {
+	limit := func(in runnerInputs) (string, int64) {
+		f := resolveRunnerConfig(in).field(macOSVMKeptDiskLimitKey)
+		n, err := parseKeptDiskLimit(f.Value)
+		if err != nil {
+			t.Fatalf("%q: %v", f.Value, err)
+		}
+		return f.Source, n
+	}
+	if src, n := limit(inputs(nil, nil, nil, runnerFile{})); n != 110<<30 || src != sourceDefault {
+		t.Errorf("unset = %d from %q, want 110 GB from the default", n, src)
+	}
+	if src, n := limit(inputs(nil, nil, nil, runnerFile{MacOSVMKeptDiskLimit: "60"})); n != 60<<30 || !strings.HasPrefix(src, sourceFile) {
+		t.Errorf("file 60 = %d from %q", n, src)
+	}
+	if src, n := limit(inputs(nil, nil, nil, runnerFile{MacOSVMKeptDiskLimit: "0"})); n != 0 || !strings.HasPrefix(src, sourceFile) {
+		t.Errorf("file 0 = %d from %q: 0 must be off, not unset", n, src)
+	}
+	if src, n := limit(inputs(nil, nil, map[string]string{"MacOSVMKeptDiskLimit": "0"}, runnerFile{MacOSVMKeptDiskLimit: "60"})); n != 0 || !strings.HasPrefix(src, sourceManaged) {
+		t.Errorf("managed 0 over file 60 = %d from %q", n, src)
+	}
+	if src, n := limit(inputs(nil, nil, map[string]string{"MacOSVMKeptDiskLimit": "40"}, runnerFile{})); n != 40<<30 || !strings.HasPrefix(src, sourceManaged) {
+		t.Errorf("managed 40 = %d from %q", n, src)
+	}
+	// Through the file decode: the key is known to the strict decoder, and a bad value is refused naming it.
+	write := func(body string) (runnerFile, error) {
+		p := filepath.Join(t.TempDir(), "runnerd.json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return loadRunnerFile(p, true)
+	}
+	for body, want := range map[string]string{`{"macos_vm_kept_disk_limit_gb":"0"}`: "0", `{"macos_vm_kept_disk_limit_gb":"60"}`: "60", `{}`: ""} {
+		f, err := write(body)
+		if err != nil || f.MacOSVMKeptDiskLimit != want {
+			t.Errorf("%s: %q, %v", body, f.MacOSVMKeptDiskLimit, err)
+		}
+	}
+	for _, body := range []string{`{"macos_vm_kept_disk_limit_gb":"-5"}`, `{"macos_vm_kept_disk_limit_gb":"lots"}`, `{"macos_vm_kept_disk_limit_gb":"1.5"}`} {
+		if _, err := write(body); err == nil || !strings.Contains(err.Error(), macOSVMKeptDiskLimitKey) {
+			t.Errorf("%s: err %v, want a refusal naming the setting", body, err)
+		}
+	}
+	// The reader the handle uses resolves through the same config: runnerd.json in the user config folder.
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	t.Setenv("HOME", cfgHome)
+	if n, err := macOSVMKeptDiskLimit(); err != nil || n != 110<<30 {
+		t.Errorf("the reader's default = %d, %v", n, err)
+	}
+	cfgPath, err := defaultRunnerConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]int64{`{"macos_vm_kept_disk_limit_gb":"0"}`: 0, `{"macos_vm_kept_disk_limit_gb":"60"}`: 60 << 30} {
+		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := macOSVMKeptDiskLimit(); err != nil || n != want {
+			t.Errorf("%s: the reader gave %d, %v; want %d", body, n, err, want)
+		}
+	}
+}

@@ -8,12 +8,10 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 )
 
 // macOSVMLimitsName is the file in the runner's state directory that keeps the organisation's per-run
@@ -111,15 +109,6 @@ func prepareLimits(file string, cpu float64, memGB int64) (cpus int, memMiB uint
 	return cpus, uint64(mem), nil
 }
 
-// The disk this Mac's kept machines may take, in all (runner setting macos_vm_kept_disk_limit_gb): each
-// machine counts at its worst case, so the default holds two of them. Zero keeps no machines on this Mac.
-const (
-	macOSVMKeptDiskLimitKey       = "macos_vm_kept_disk_limit_gb"
-	macOSVMKeptDiskLimitDefaultGB = 110
-	// macOSVMKeptDiskLimitMaxGB keeps the byte count far from overflow; no Mac has a petabyte.
-	macOSVMKeptDiskLimitMaxGB = 1 << 20
-)
-
 // macOSVMKeptDiskLimit reads the runner setting macos_vm_kept_disk_limit_gb as bytes (tests replace it).
 var macOSVMKeptDiskLimit = func() (int64, error) {
 	c, err := effectiveRunnerConfig("", nil)
@@ -127,18 +116,4 @@ var macOSVMKeptDiskLimit = func() (int64, error) {
 		return 0, err
 	}
 	return parseKeptDiskLimit(c.get(macOSVMKeptDiskLimitKey))
-}
-
-// parseKeptDiskLimit is the setting's value as bytes: unset is the default, 0 is off, and anything but a
-// whole number of GB from 0 up is refused, naming the setting.
-func parseKeptDiskLimit(v string) (int64, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return macOSVMKeptDiskLimitDefaultGB << 30, nil
-	}
-	gb, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || gb < 0 || gb > macOSVMKeptDiskLimitMaxGB {
-		return 0, fmt.Errorf("%s: %q is not a whole number of GB from 0 to %d", macOSVMKeptDiskLimitKey, v, macOSVMKeptDiskLimitMaxGB)
-	}
-	return gb << 30, nil
 }

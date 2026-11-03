@@ -71,6 +71,9 @@ type runnerFile struct {
 	// MacOSVMBasesDir is the Mac's other macOS bases: a directory of <name>.json install lists, one per base,
 	// each derived from Standard (macvm.LoadBaseVariants); none when unset.
 	MacOSVMBasesDir string `json:"macos_vm_bases_dir,omitempty"`
+	// MacOSVMKeptDiskLimit is the disk, in whole GB as a string, this Mac's kept machines may take in all,
+	// each counted at its worst case; "0" keeps none, and unset is 110 (parseKeptDiskLimit).
+	MacOSVMKeptDiskLimit string `json:"macos_vm_kept_disk_limit_gb,omitempty"`
 	// DriveRoot lists the folders a drive bound to this runner may mount from, with everything under each:
 	// a JSON array of absolute, cleaned folder paths (parseDriveRoots). None when unset, so no drive mounts here.
 	DriveRoot []string `json:"drive_root,omitempty"`
@@ -133,6 +136,8 @@ var runnerFields = []runnerField{
 	{name: "macos_vm_image_sha256", flag: "sha256", managed: "MacOSVMImageHash", file: func(f *runnerFile) *string { return &f.MacOSVMImageHash }},
 	// No flag or environment variable sets it, as macos_vm_base_file.
 	{name: "macos_vm_bases_dir", managed: "MacOSVMBasesDir", file: func(f *runnerFile) *string { return &f.MacOSVMBasesDir }},
+	// No flag or environment variable sets it, as macos_vm_base_file. "0" is a value (off), not unset.
+	{name: macOSVMKeptDiskLimitKey, managed: "MacOSVMKeptDiskLimit", file: func(f *runnerFile) *string { return &f.MacOSVMKeptDiskLimit }},
 	{name: "drive_root", flag: "drive-root", env: []string{"WARDYN_DRIVE_ROOT"}, managed: "DriveRoot", locked: true, fileList: func(f *runnerFile) *[]string { return &f.DriveRoot }},
 	{name: "substrate", flag: "substrate", def: "docker", file: func(f *runnerFile) *string { return &f.Substrate }},
 }
@@ -144,6 +149,29 @@ var profileOnlyKeys = []struct{ managed, flag string }{
 	{managed: "MDMManaged"}, {managed: "DiskEncrypted"},
 	{managed: "MaxRuns", flag: "max-runs"}, {managed: "TotalCPU", flag: "total-cpu"}, {managed: "TotalMemoryGB", flag: "total-memory"},
 	{managed: "PerRunCPU", flag: "per-run-cpu"}, {managed: "PerRunMemoryGB", flag: "per-run-memory"},
+}
+
+// The disk this Mac's kept machines may take, in all (runner setting macos_vm_kept_disk_limit_gb): each
+// machine counts at its worst case, so the default holds two of them. Zero keeps no machines on this Mac.
+const (
+	macOSVMKeptDiskLimitKey       = "macos_vm_kept_disk_limit_gb"
+	macOSVMKeptDiskLimitDefaultGB = 110
+	// macOSVMKeptDiskLimitMaxGB keeps the byte count far from overflow; no Mac has a petabyte.
+	macOSVMKeptDiskLimitMaxGB = 1 << 20
+)
+
+// parseKeptDiskLimit is the setting's value as bytes: unset is the default, 0 is off, and anything but a
+// whole number of GB from 0 up is refused, naming the setting.
+func parseKeptDiskLimit(v string) (int64, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return macOSVMKeptDiskLimitDefaultGB << 30, nil
+	}
+	gb, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || gb < 0 || gb > macOSVMKeptDiskLimitMaxGB {
+		return 0, fmt.Errorf("%s: %q is not a whole number of GB from 0 to %d", macOSVMKeptDiskLimitKey, v, macOSVMKeptDiskLimitMaxGB)
+	}
+	return gb << 30, nil
 }
 
 // macOSVMOn reads the macos_vm setting.
@@ -512,6 +540,9 @@ func checkRunnerFile(f runnerFile) error {
 	}
 	if m := f.ProxyImageMirror; m != "" && strings.ContainsAny(path.Base(m), ":@") {
 		return errors.New("proxy_image_mirror: a repository without a tag or digest, such as registry.example/wardyn-proxy; the tag follows the organisation")
+	}
+	if _, err := parseKeptDiskLimit(f.MacOSVMKeptDiskLimit); err != nil {
+		return err
 	}
 	if _, err := parseRelayWant(f.RelayListen, f.RelayHostTarget); err != nil {
 		return fmt.Errorf("relay_listen / relay_host_target: %w", err)
