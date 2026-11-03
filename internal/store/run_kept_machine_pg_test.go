@@ -218,7 +218,7 @@ func TestConcurrentClaimsAfterAnUncertainResetOnlyTheFreshStartWins(t *testing.T
 	pg := store.NewPG(pool)
 	ctx := context.Background()
 	runner := claimedRunnerOf(t, pg, "sub-a")
-	for i := range 5 {
+	for i := range 4 { // keptMachineOf holds one person to four machines, and each round makes one
 		m := keptMachineOf(t, pg, "sub-a", runner, fmt.Sprintf("web-%d", i))
 		uncertainReset(t, pool, pg, m, runner)
 		resume, fresh := startingRun(t, pool, pg, "sub-a"), startingRun(t, pool, pg, "sub-a")

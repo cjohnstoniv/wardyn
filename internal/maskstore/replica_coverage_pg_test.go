@@ -42,6 +42,10 @@ func TestPG_AReplicaAppliesAnErasureBeforeItsManifestsHearOfIt(t *testing.T) {
 	ctx := t.Context()
 	const secret = "zq-throwaway-two-replicas-9"
 	run := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		VALUES ($1, 'sub', 'claude-code', 'a/b', 'CC2', 'RUNNING', 'spiffe://x/' || $2, 'docker')`, run, run.String()); err != nil {
+		t.Fatal(err) // run_mask_manifest references the run
+	}
 
 	regA, regB := secretmask.NewRegistry(), secretmask.NewRegistry()
 	New(pool, keys, regA) // attaches itself to regA as its Backend
