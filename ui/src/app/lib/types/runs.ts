@@ -729,6 +729,23 @@ export interface RunPolicyView {
   // Which allowed hosts the run's proxy opened at launch; every other allowed
   // host passed through unread. Absent for a run recorded before it existed.
   host_marks?: RunPolicyHostMarks;
+  // The wall preset the run was launched with and what it narrowed. A personal
+  // preset read by anyone but the run's owner carries its scope alone.
+  wall_preset?: RunPolicyWallPreset;
+}
+
+// internal/api/run_policy_view.go runPolicyWallPreset.
+export interface RunPolicyWallPreset {
+  id?: string;
+  name?: string;
+  scope: string;
+  group_id?: string;
+  version?: number;
+  // The knobs it narrowed.
+  narrowed?: string[];
+  // The list entries it took out or added, keyed by field.
+  removed?: Record<string, string[]>;
+  added?: Record<string, string[]>;
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

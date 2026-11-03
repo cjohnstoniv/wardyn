@@ -226,7 +226,7 @@ func TestWallPresetEditAfterLaunch(t *testing.T) {
 	if refusal != nil {
 		t.Fatalf("launch: %+v", refusal)
 	}
-	before, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, nil)
+	before, err := e.srv.queuePolicyRef(ctx, nil, createRunRequest{WallPreset: stored.ID}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,20 +235,20 @@ func TestWallPresetEditAfterLaunch(t *testing.T) {
 	edited := stored
 	edited.Spec, edited.Version = types.PersonalWallsSpec{DeniedDomains: wallsList("other.example")}, 2
 	e.wp.presets[stored.ID] = edited
-	after, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, nil)
+	after, err := e.srv.queuePolicyRef(ctx, nil, createRunRequest{WallPreset: stored.ID}, nil)
 	if err != nil || jsonEqual(before, after) {
 		t.Errorf("queue ref before %s after the edit %s (%v), want them to differ", before, after, err)
 	}
-	if pinned, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, frozen); err != nil || !jsonEqual(before, pinned) {
+	if pinned, err := e.srv.queuePolicyRef(ctx, nil, createRunRequest{WallPreset: stored.ID}, frozen); err != nil || !jsonEqual(before, pinned) {
 		t.Errorf("queue ref from the frozen copy after the edit = %s (%v), want the launch's %s: the copy is recorded, never a second read", pinned, err, before)
 	}
 	delete(e.wp.presets, stored.ID)
-	gone, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, nil)
+	gone, err := e.srv.queuePolicyRef(ctx, nil, createRunRequest{WallPreset: stored.ID}, nil)
 	if err != nil || !strings.Contains(string(gone), `"wall_preset_gone":true`) {
 		t.Errorf("queue ref after the delete = %s (%v), want wall_preset_gone", gone, err)
 	}
-	builtin, _ := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: types.WallPresetSealed}, nil)
-	if again, _ := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: types.WallPresetSealed}, nil); !jsonEqual(builtin, again) {
+	builtin, _ := e.srv.queuePolicyRef(ctx, nil, createRunRequest{WallPreset: types.WallPresetSealed}, nil)
+	if again, _ := e.srv.queuePolicyRef(ctx, nil, createRunRequest{WallPreset: types.WallPresetSealed}, nil); !jsonEqual(builtin, again) {
 		t.Errorf("a built-in's queue ref moved: %s then %s", builtin, again)
 	}
 
@@ -422,5 +422,145 @@ func TestWallPresetListGroupLabels(t *testing.T) {
 	bob := templateCookie(t, "bob", oidc.RoleUser, false, []string{}, false)
 	if got := list(bob); len(got.Publish.GroupLabels) != 0 {
 		t.Errorf("bob's group_labels = %v, want none", got.Publish.GroupLabels)
+	}
+}
+
+// TestWallPresetPersonalNameNeverKept: what a personal preset leaves on the run, which an admin reads
+// too, says only that a personal wall preset applied: the warnings (kept as clamp_warnings and shown by
+// the policy view), the refusals that become a queued run's end or a dispatch refusal, and the policy
+// view's wall_preset. Its name and its values never appear there; an org preset keeps both.
+func TestWallPresetPersonalNameNeverKept(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	mine := frozenPreset(tightPreset(types.WallPresetScopePerson, "Mine"))
+	never := func(where, text string, also ...string) {
+		t.Helper()
+		for _, s := range append([]string{"Mine"}, also...) {
+			if strings.Contains(text, s) {
+				t.Errorf("%s = %q, want no %q", where, text, s)
+			}
+		}
+	}
+
+	spec, source := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "pastebin.com"}, AutoStopAfterSec: 3600}, policySourceRecord{knobs: startProvenance(memberProvenance)}
+	warns, refusal := srv.wallPresetRunStep(&spec, &source, mine)
+	if refusal != nil || len(warns) == 0 {
+		t.Fatalf("warnings %v refusal %+v, want the knobs it narrowed", warns, refusal)
+	}
+	for _, w := range warns {
+		never("warning", w)
+		if !strings.HasPrefix(w, "a personal wall preset narrowed ") {
+			t.Errorf("warning %q, want it to name a personal wall preset", w)
+		}
+	}
+
+	on := true
+	bad := *mine
+	bad.Spec = types.PersonalWallsSpec{AllowAllEgress: &on}
+	spec = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	if _, refusal := srv.wallPresetRunStep(&spec, &policySourceRecord{knobs: startProvenance(memberProvenance)}, &bad); refusal == nil {
+		t.Error("a copy naming allow_all_egress true was applied")
+	} else {
+		never("invalid refusal", refusal.body.Error, "allow_all_egress")
+	}
+
+	unmet := *mine
+	unmet.Spec = types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapCodeWrite}}
+	spec = types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead}}
+	if _, refusal := srv.wallPresetRunStep(&spec, &policySourceRecord{knobs: startProvenance(memberProvenance)}, &unmet); refusal == nil ||
+		refusal.body.Reason != reasonGovernanceOverlayUnsatisfiable {
+		t.Errorf("a capability list sharing nothing: refusal %+v, want 403 %s", refusal, reasonGovernanceOverlayUnsatisfiable)
+	} else {
+		never("meet refusal", refusal.body.Error, "code_write")
+		if !strings.HasPrefix(refusal.body.Error, "A personal wall preset and this run's policy leave ") {
+			t.Errorf("meet refusal = %q, want it to name a personal wall preset", refusal.body.Error)
+		}
+	}
+
+	ghWall := func(w types.PersonalWallsSpec) *[]ghscope.Capability { return w.GitHubCapabilities }
+	caps := []ghscope.Capability{ghscope.CapCodeRead}
+	unmet.Spec = types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeWrite}}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: wallsSub, WallPreset: &unmet}
+	if _, refused := wallsCapabilityMeet(context.Background(), srv, run, "github_capabilities", caps, ghWall); refused == nil {
+		t.Error("a personal preset sharing no capability with the default was met")
+	} else {
+		never("capability refusal", refused.detail, "code_write")
+	}
+	org := frozenPreset(tightPreset(types.WallPresetScopeOrg, "Org tight"))
+	org.Spec = unmet.Spec
+	run.WallPreset = org
+	if _, refused := wallsCapabilityMeet(context.Background(), srv, run, "github_capabilities", caps, ghWall); refused == nil ||
+		!strings.Contains(refused.detail, "The Org tight wall preset") || !strings.Contains(refused.detail, "(code_write)") {
+		t.Errorf("an org preset's capability refusal = %+v, want its name and its list", refused)
+	}
+
+	runOf := types.AgentRun{ID: uuid.New(), CreatedBy: wallsSub}
+	rec := &wallPresetSourceRecord{ID: mine.ID, Name: "Mine", Scope: types.WallPresetScopePerson, Version: 1,
+		wallsSourceRecord: &wallsSourceRecord{Narrowed: []string{"first_use_approval"}}}
+	reader := func(sub string) *http.Request {
+		return httptest.NewRequest(http.MethodGet, "/api/v1/runs/x/policy", nil).WithContext(memberCtxFor(sub))
+	}
+	if v := runPolicyWallPresetOf(reader("sub-admin"), runOf, rec); v == nil || !reflect.DeepEqual(*v, runPolicyWallPreset{Scope: "person"}) {
+		t.Errorf("an admin's policy view wall_preset = %+v, want the scope alone", v)
+	}
+	if v := runPolicyWallPresetOf(reader(wallsSub), runOf, rec); v == nil || v.Name != "Mine" || !slices.Equal(v.Narrowed, []string{"first_use_approval"}) {
+		t.Errorf("the owner's policy view wall_preset = %+v, want the name and what it narrowed", v)
+	}
+}
+
+// TestWallPresetCapabilityMeetSecondList: the preset's list meets what the owner's walls kept, never
+// the provider default afresh, so a capability either leaves out is not given.
+func TestWallPresetCapabilityMeetSecondList(t *testing.T) {
+	srv, st, _ := uvServer(t)
+	saveWalls(t, st, wallsSub, types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead, ghscope.CapIssuesWrite}})
+	org := frozenPreset(tightPreset(types.WallPresetScopeOrg, "Org tight"))
+	org.Spec = types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite}}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: wallsSub, WallPreset: org}
+	ghWall := func(w types.PersonalWallsSpec) *[]ghscope.Capability { return w.GitHubCapabilities }
+	caps := []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite, ghscope.CapIssuesWrite}
+	kept, refused := wallsCapabilityMeet(context.Background(), srv, run, "github_capabilities", caps, ghWall)
+	if refused != nil || !slices.Equal(kept, []ghscope.Capability{ghscope.CapCodeRead}) {
+		t.Errorf("kept %v refused %+v, want [code_read]: the walls drop code_write, the preset issues_write", kept, refused)
+	}
+	run.WallPreset = nil
+	if kept, _ := wallsCapabilityMeet(context.Background(), srv, run, "github_capabilities", caps, ghWall); !slices.Equal(kept, []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapIssuesWrite}) {
+		t.Errorf("without a preset kept %v, want the walls' own [code_read issues_write]", kept)
+	}
+}
+
+// TestGitPushWithheldByThePreset: a preset whose capability list leaves out code_write withholds the
+// push on that forge even when neither the policy nor the walls name a list.
+func TestGitPushWithheldByThePreset(t *testing.T) {
+	read := frozenPreset(tightPreset(types.WallPresetScopeOrg, "Read"))
+	read.Spec = types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead}}
+	if w := gitPushWithheldBy(types.RunPolicySpec{}, types.PersonalWallsSpec{}, read); !w.github || w.ado {
+		t.Errorf("a preset listing github code_read only: %+v, want github withheld, ado not", w)
+	}
+	read.Spec = types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapCodeRead}}
+	if w := gitPushWithheldBy(types.RunPolicySpec{}, types.PersonalWallsSpec{}, read); w.github || !w.ado {
+		t.Errorf("a preset listing ado code_read only: %+v, want ado withheld, github not", w)
+	}
+	if w := gitPushWithheldBy(types.RunPolicySpec{}, types.PersonalWallsSpec{}, nil); w.github || w.ado {
+		t.Errorf("no preset, no lists: %+v, want nothing withheld", w)
+	}
+}
+
+// TestPolicyViewAttributesThePreset: a knob or entry the run's wall preset changed is the walls' cause
+// in the policy view, as one the person's own walls changed is; what neither changed is not.
+func TestPolicyViewAttributesThePreset(t *testing.T) {
+	x := &explainer{ev: auditEvidence{preset: &wallsSourceRecord{Narrowed: []string{"first_use_approval"},
+		Removed: map[string][]string{fieldAllowed: {"pypi.org"}}, Added: map[string][]string{fieldDenied: {"pastebin.com"}}}}}
+	for _, tc := range []struct {
+		field, entry string
+		added, want  bool
+	}{
+		{"first_use_approval", "", false, true},
+		{fieldAllowed, "pypi.org", false, true},
+		{fieldDenied, "pastebin.com", true, true},
+		{fieldAllowed, "github.com", false, false},
+		{"auto_stop_after_sec", "", false, false},
+	} {
+		if got := x.walled(tc.field, tc.entry, tc.added); got != tc.want {
+			t.Errorf("walled(%s, %q, %v) = %v, want %v", tc.field, tc.entry, tc.added, got, tc.want)
+		}
 	}
 }

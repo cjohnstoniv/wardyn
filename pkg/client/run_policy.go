@@ -44,6 +44,23 @@ type RunPolicyView struct {
 	// HostMarks is which allowed hosts the run's proxy opened at launch. Absent
 	// for a run recorded before it existed and for one restarted since.
 	HostMarks *RunPolicyHostMarks `json:"host_marks,omitempty"`
+	// WallPreset is the wall preset the run was launched with and what it
+	// narrowed, removed and added. A personal preset read by anyone but the
+	// run's owner carries its scope alone.
+	WallPreset *RunPolicyWallPreset `json:"wall_preset,omitempty"`
+}
+
+// RunPolicyWallPreset is a run's wall preset in its policy view: Narrowed names
+// the knobs it narrowed, Removed and Added the list entries it took out or added.
+type RunPolicyWallPreset struct {
+	ID       string              `json:"id,omitempty"`
+	Name     string              `json:"name,omitempty"`
+	Scope    string              `json:"scope"`
+	GroupID  string              `json:"group_id,omitempty"`
+	Version  int                 `json:"version,omitempty"`
+	Narrowed []string            `json:"narrowed,omitempty"`
+	Removed  map[string][]string `json:"removed,omitempty"`
+	Added    map[string][]string `json:"added,omitempty"`
 }
 
 // RunPolicyHostMarks lists the allowed_domains entries the proxy terminates TLS

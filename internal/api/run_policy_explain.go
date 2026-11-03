@@ -101,6 +101,7 @@ type auditEvidence struct {
 	diskDefaultSource                                                          types.LimitSource     // disk_mib_default_source, with basis default
 	legacyGitBroker                                                            bool                  // no confine row exists and the run holds a github grant
 	walls                                                                      *wallsSourceRecord    // what the launching person's walls narrowed (policy_source.personal_walls)
+	preset                                                                     *wallsSourceRecord    // what the run's wall preset narrowed (policy_source.wall_preset)
 }
 
 // explainRunPolicy attributes each difference between the policy a run started
@@ -127,7 +128,7 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 	put := func(field, entry string, added bool) {
 		cause, profile, at := x.cause(field, entry, added)
 		if field == fieldDesktop && cause != causeWalls {
-			return // only a person's own walls are said to narrow the desktop; any other layer's change stays unshown
+			return // only a person's walls or wall preset are said to narrow the desktop; any other layer's change stays unshown
 		}
 		k := changeKey{cause: cause, field: field, profile: profile}
 		if at != nil {
@@ -310,14 +311,18 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	return "", "", nil, false
 }
 
-// walled is the walls rule: the entry is one the person's walls took out of the run (an allowlist
-// entry or a grant) or added to it (a deny or a blocked desktop direction), as the run.create row
-// recorded, or the field is a scalar knob the walls narrowed. List entries are matched exactly, so
-// a knob the boundary also narrowed keeps each of its entries with the layer that changed it. A
-// scalar holds one value that both layers may have tightened; the walls step runs first and the record cannot tell the two apart, so
+// walled is the walls rule: the entry is one the person's walls or the run's wall preset took out of
+// the run (an allowlist entry or a grant) or added to it (a deny or a blocked desktop direction), as
+// the run.create row recorded, or the field is a scalar knob either narrowed. List entries are matched
+// exactly, so a knob the boundary also narrowed keeps each of its entries with the layer that changed
+// it. A scalar holds one value that several layers may have tightened; the walls steps run first and the record cannot tell them apart, so
 // it is the walls'.
 func (x *explainer) walled(field, entry string, added bool) bool {
-	w := x.ev.walls
+	return wallsRecordHas(x.ev.walls, field, entry, added) || wallsRecordHas(x.ev.preset, field, entry, added)
+}
+
+// wallsRecordHas is walled for one record: a person's walls or a wall preset.
+func wallsRecordHas(w *wallsSourceRecord, field, entry string, added bool) bool {
 	if w == nil {
 		return false
 	}
