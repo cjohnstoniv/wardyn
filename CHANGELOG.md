@@ -26,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - An `image` capability grant may be a registry or path prefix ending in `/*` (for example `registry.example.com/team/*`), so one grant covers every image under it. A deny on an image also covers its other spellings, such as capitals in the host, `:443` and Docker Hub short names.
 - An admin can set a model provider's run identity token to live 60 to 600 seconds (`gateway_identity.token_lifetime_seconds`; the default stays 10 minutes), so a killed run's tokens stop working sooner
+- `wardyn window <run>` opens a window onto your macOS VM run on your own Mac, `wardyn window <run> --status` shows whether one can open and why your last one closed, and `wardyn run --machine-kind macos_vm --window` asks for it as the VM comes up. A refusal prints the server's sentence and exits non-zero. Built and unit-tested; not yet run on a real Mac.
 
 ## [0.10.0-rc.11] — 2026-11-02
 
