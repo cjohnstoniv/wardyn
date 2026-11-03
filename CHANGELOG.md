@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- A member policy with no desktop setting now gets the ceiling's desktop controls (for example, copy out opens where the ceiling allows it). Set `desktop` on the policy to keep the narrower defaults.
+
 ### Added
 
 - A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
