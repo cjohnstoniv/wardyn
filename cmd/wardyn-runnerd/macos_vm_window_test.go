@@ -33,7 +33,7 @@ func TestUnexpectedWindowIsReportedToTheOrganisation(t *testing.T) {
 	t.Cleanup(func() { org.Close(); run.Close() })
 
 	t.Cleanup(func() { windowReport.Store(nil) })
-	runID, at := uuid.New(), time.Date(2026, 11, 3, 1, 2, 3, 0, time.UTC)
+	runID, at := uuid.New(), time.Now().UTC().Truncate(time.Second)
 
 	unexpectedWindow(runID, "before", at) // no reporter yet: logged only
 	reportWindowsOn(ctx, func() *runnerwire.Peer { return nil })

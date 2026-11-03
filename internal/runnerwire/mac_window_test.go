@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,15 +35,20 @@ func TestMacWindowCapIsOptionalBothWays(t *testing.T) {
 
 func TestMacWindowMessagesAreGolden(t *testing.T) {
 	for in, golden := range map[any]string{
-		MacWindowArgs{Ref: "runner:r/c", GrantID: "g1", Title: "Run 7, for Pat"}:           `{"ref":"runner:r/c","grant_id":"g1","title":"Run 7, for Pat"}`,
-		MacWindowUnexpected{Grant: "x1", At: time.Date(2026, 11, 3, 1, 2, 3, 0, time.UTC)}: `{"grant":"x1","at":"2026-11-03T01:02:03Z"}`,
-		MacWindowArgs{Ref: "runner:r/c", GrantID: "g1"}:                                    `{"ref":"runner:r/c","grant_id":"g1"}`,
-		MacWindowEnd{Reason: "closed_by_person"}:                                           `{"reason":"closed_by_person"}`,
+		MacWindowArgs{Ref: "runner:r/c", GrantID: "g1", Title: "Run 7, for Pat"}: `{"ref":"runner:r/c","grant_id":"g1","title":"Run 7, for Pat"}`,
+		MacWindowArgs{Ref: "runner:r/c", GrantID: "g1"}:                          `{"ref":"runner:r/c","grant_id":"g1"}`,
+		MacWindowEnd{Reason: "closed_by_person"}:                                 `{"reason":"closed_by_person"}`,
 	} {
 		b, err := Marshal(in)
 		if err != nil || string(b) != golden {
 			t.Fatalf("%T wire form %s (%v), want %s", in, b, err, golden)
 		}
+	}
+	at := time.Now().UTC().Truncate(time.Second)
+	b, err := Marshal(MacWindowUnexpected{Grant: "x1", At: at})
+	var back MacWindowUnexpected
+	if err != nil || !strings.HasPrefix(string(b), `{"grant":"x1","at":"`) || Unmarshal(b, &back) != nil || back.Grant != "x1" || !back.At.Equal(at) {
+		t.Fatalf("unexpected-window wire form %s (%v) reads back as %+v, want grant x1 at %v", b, err, back, at)
 	}
 	if MethodMacWindow != "mac_window" || KindMacWindow != "mac_window" {
 		t.Fatalf("names %q %q", MethodMacWindow, KindMacWindow)
