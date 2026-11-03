@@ -251,9 +251,10 @@ func (c *agentCast) flush() (had, maskGap bool) {
 }
 
 // save stores the cast with its session.recording.write row: a success, once the row is durably
-// accepted, clears the run's obligation and any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed). A copy
-// cut short by readErr says so on its row: incomplete, with the read's error; one with bytes the masker
-// dropped says incomplete and mask_gap.
+// accepted, clears the run's obligation and any runner_declined mark; a failure leaves the run
+// unrecorded (declineAgentOutput, save_failed). A copy cut short by readErr says so on its row:
+// incomplete, read_error (the error itself only in the log); one with bytes the masker dropped says
+// incomplete and mask_gap. The same marks go in the cast's header (stampCastFlags).
 func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readErr error, maskGap bool) error {
 	s, runID := c.s, c.run.ID
 	key := recording.CastKey(runID.String(), c.session)
@@ -265,7 +266,10 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 		flags["gap_bytes"] = gap
 	}
 	if readErr != nil {
-		flags["incomplete"], flags["read_error"] = true, readErr.Error()
+		// The error's text goes only to the log: the cast and its row are kept, and it is not masked.
+		flags["incomplete"], flags["read_error"] = true, true
+		slog.WarnContext(ctx, "wardynd: a run's agent output copy ended in an error; its cast is saved incomplete",
+			slog.String("run_id", runID.String()), slog.String("session", c.session), slog.Any("err", readErr))
 	}
 	if maskGap {
 		flags["incomplete"], flags["mask_gap"] = true, true
@@ -274,6 +278,9 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
 	err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, runID.String(), c.session, bytes.NewReader(snap))
 	cancel()
+	if errors.Is(err, recording.ErrErased) {
+		return s.dropErasedAgentCast(ctx, runID)
+	}
 	data := map[string]any{"session": c.session, "key": key, "bytes": len(snap)}
 	maps.Copy(data, flags)
 	if c.session == agentCastRecoveredSession {
@@ -331,6 +338,18 @@ func (s *Server) settleAgentCast(ctx context.Context, runID uuid.UUID) error {
 	return agentCastStoreErr(ctx, runID, "clear a run's agent output obligation after its cast", st.ClearRunAgentCastOwed(ctx, runID, true))
 }
 
+// dropErasedAgentCast clears the obligation of a run whose recordings were erased (the recording
+// store's fence, recording.ErrErased): nothing can be saved or re-read for it, so it owes nothing. No
+// row and no mark are written, and the fence stays. Without this the sweep would meet the fence on
+// every pass, and runs erased in numbers would hold the oldest places in its list.
+func (s *Server) dropErasedAgentCast(ctx context.Context, runID uuid.UUID) error {
+	st, ok := s.cfg.Store.(store.RunAgentCastStore)
+	if !ok {
+		return nil
+	}
+	return agentCastStoreErr(ctx, runID, "clear an erased run's agent output obligation", st.ClearRunAgentCastOwed(ctx, runID, false))
+}
+
 // agentCastStoreErr logs a failed obligation write, which the next sweep retries, and returns it.
 func agentCastStoreErr(ctx context.Context, runID uuid.UUID, what string, err error) error {
 	if err != nil {
@@ -382,6 +401,8 @@ func (s *Server) sweepAgentCast(ctx context.Context, st store.RunAgentCastStore,
 	}
 	stored, err := s.storedAgentCasts(ctx, id)
 	switch {
+	case errors.Is(err, recording.ErrErased):
+		return s.dropErasedAgentCast(ctx, id)
 	case err != nil:
 		return err
 	case len(stored) > 0:

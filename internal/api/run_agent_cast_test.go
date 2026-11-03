@@ -42,6 +42,8 @@ type castStore struct {
 	oweErr     error  // SetRunAgentCastOwed fails with it
 	clearFails int    // the next N ClearRunAgentCastOwed calls fail
 	onClear    func() // called as ClearRunAgentCastOwed begins, outside the lock
+	// others are further runs, like this one, that owe their cast (true while they do), listed after it.
+	others map[uuid.UUID]bool
 }
 
 func (c *castStore) SetRunAgentCastOwed(context.Context, uuid.UUID) error {
@@ -65,12 +67,16 @@ func (c *castStore) DeclineRunAgentCast(context.Context, uuid.UUID) (bool, error
 	return true, nil
 }
 
-func (c *castStore) ClearRunAgentCastOwed(_ context.Context, _ uuid.UUID, recorded bool) error {
+func (c *castStore) ClearRunAgentCastOwed(_ context.Context, id uuid.UUID, recorded bool) error {
 	if c.onClear != nil {
 		c.onClear()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, ok := c.others[id]; ok {
+		c.others[id] = false
+		return nil
+	}
 	if c.clearFails > 0 {
 		c.clearFails--
 		return errors.New("store unavailable")
@@ -87,10 +93,23 @@ func (c *castStore) ListRunsAgentCastOwed(context.Context, time.Duration, int) (
 	state := c.st.State()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.owed || slices.Contains(types.NonTerminalRunStates, state) {
-		return nil, nil
+	var ids []uuid.UUID
+	if c.owed && !slices.Contains(types.NonTerminalRunStates, state) {
+		ids = append(ids, c.st.run.ID)
 	}
-	return []uuid.UUID{c.st.run.ID}, nil
+	for id, owed := range c.others {
+		if owed {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// otherOwing is whether the further run id still owes its cast.
+func (c *castStore) otherOwing(id uuid.UUID) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.others[id]
 }
 
 func (c *castStore) owing() bool {
@@ -110,6 +129,13 @@ func (c *castStore) GetRunnerPoolOrgDefaults(context.Context) (types.RunnerPoolD
 
 func (c *castStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	run, err := c.memRunOutputs.GetRun(ctx, id)
+	c.mu.Lock()
+	_, other := c.others[id]
+	c.mu.Unlock()
+	if other {
+		run.ID = id // a further run, as this one is
+		return run, err
+	}
 	run.NotRecorded = c.marked()
 	return run, err
 }
@@ -536,7 +562,7 @@ func TestAgentCast_SaveFailureMarksTheRunAndSilenceKeepsItRecorded(t *testing.T)
 		_, _ = tw.Write([]byte("the first half\n"))
 		tw.EndDrain(errors.New("output ack lost"))
 		row := waitCastRow(t, f, agentCastSession)
-		if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != "output ack lost" {
+		if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != true {
 			t.Fatalf("row %v, want a saved cast marked incomplete with the copy's error", row)
 		}
 		if out := readCast(t, casts, f.run.ID, agentCastSession); !strings.Contains(out, "the first half") || !strings.HasSuffix(out, agentCastCutMarker) {
@@ -868,5 +894,46 @@ func TestAgentCast_AFailedCopyTheMaskerDroppedIsReRead(t *testing.T) {
 	}
 	if out := readCast(t, casts, f.run.ID, agentCastRecoveredSession); !strings.Contains(out, "re-read") {
 		t.Fatalf("recovered cast %q", out)
+	}
+}
+
+// A run whose recordings were erased (the recording store's fence) while it still owes its agent cast:
+// the sweep clears the obligation with no re-read, no cast and no row, and the fence stays. A run owing
+// its cast behind it is still swept.
+func TestAgentCast_AnErasedRunsObligationIsClearedAndTheNextIsSwept(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.log = "never read\n"
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.Runner = rr })
+	cs.owed = true
+	ended := time.Now()
+	f.st.mu.Lock()
+	f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
+	f.st.mu.Unlock()
+	next := uuid.New()
+	cs.others = map[uuid.UUID]bool{next: true}
+	cast := "{\"version\": 2, \"width\": 80, \"height\": 24}\n[0.1, \"o\", \"agent output\\n\"]\n"
+	if err := casts.SaveCastNamed(t.Context(), next.String(), agentCastSession, strings.NewReader(cast)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := casts.(recording.RunDeleter).DeleteRun(t.Context(), f.run.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rr.rmu.Lock()
+	reads := rr.recovers
+	rr.rmu.Unlock()
+	rows := len(castRows(t, f, agentCastSession)) + len(castRows(t, f, agentCastRecoveredSession))
+	if cs.owing() || cs.marked() != "" || reads != 0 || rows != 0 {
+		t.Fatalf("owed %v mark %q re-reads %d rows %d, want the obligation cleared with no re-read, mark or row",
+			cs.owing(), cs.marked(), reads, rows)
+	}
+	if _, _, err := casts.StatAndTail(t.Context(), recording.CastKey(f.run.ID.String(), agentCastRecoveredSession), 0); !errors.Is(err, recording.ErrErased) {
+		t.Fatalf("the erased run's recovered cast: %v, want the fence kept", err)
+	}
+	if cs.otherOwing(next) || !f.audit.has(next, "session.recording.write", "success") {
+		t.Fatalf("the next run: owed %v, want swept with its cast's row", cs.otherOwing(next))
 	}
 }
