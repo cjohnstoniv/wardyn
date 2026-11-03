@@ -584,7 +584,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 			if st.ExitCode != nil && *st.ExitCode == 0 {
 				final = types.RunCompleted
 			}
-			s.reconcileFinalize(ctx, run.ID, final, run.SandboxRef, "reconciled after watcher lease expired")
+			s.reconcileFinalizeHint(ctx, run.ID, final, run.SandboxRef, "reconciled after watcher lease expired", st.FailureHint)
 			finalized++
 			continue
 		}
@@ -908,7 +908,7 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				if st.ExitCode != nil && *st.ExitCode == 0 {
 					final = types.RunCompleted
 				}
-				s.reconcileFinalize(ctx, runID, final, ref, "reconciled exit")
+				s.reconcileFinalizeHint(ctx, runID, final, ref, "reconciled exit", st.FailureHint)
 				return
 			}
 		}
@@ -942,6 +942,13 @@ func (s *Server) runnerReceived(ctx context.Context, runID uuid.UUID) bool {
 // on it still being non-terminal so a concurrent kill/complete is never clobbered
 // — then runs the revoke cascade and (best-effort) tears the sandbox down.
 func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason string) {
+	s.reconcileFinalizeHint(ctx, runID, to, ref, reason, "")
+}
+
+// reconcileFinalizeHint is reconcileFinalize for a run finalized from a runner status: a failed run
+// records hint, the status's FailureHint, as its failure hint in place of reason, which the audit keeps.
+// An empty hint is reconcileFinalize exactly.
+func (s *Server) reconcileFinalizeHint(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason, hint string) {
 	// Bound the whole tail: the sweep loop and the boot pass call
 	// this SYNCHRONOUSLY, so an unbounded wedged StopSandbox would stall adoption
 	// for the process lifetime (or block boot from serving).
@@ -975,13 +982,16 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	if !applied {
 		return // someone else won the transition
 	}
-	if to == types.RunFailed && reason != "" {
+	if hint == "" {
+		hint = reason
+	}
+	if to == types.RunFailed && hint != "" {
 		// Optional-interface, best-effort, in the shape failAndRevoke already
 		// uses: reconcileFinalize also finalizes successful terminal states, so
 		// the hint write is gated strictly on the FAILED transition — writing it
 		// unconditionally would paint a red reason chip on a completed run.
 		if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
-			if herr := setter.SetRunFailureHint(ctx, runID, reason); herr != nil {
+			if herr := setter.SetRunFailureHint(ctx, runID, hint); herr != nil {
 				slog.WarnContext(ctx, "wardynd: could not persist reconciled run failure hint",
 					slog.String("run_id", runID.String()), slog.Any("err", herr))
 			}

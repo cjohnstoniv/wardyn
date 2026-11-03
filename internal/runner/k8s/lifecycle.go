@@ -65,7 +65,7 @@ func (d *Driver) replacedPodStatus(ctx context.Context, ns string, pod *corev1.P
 	if replaced, err = d.agentPodReplaced(ctx, ns, pod); err != nil || !replaced {
 		return runner.Status{}, false, err
 	}
-	return runner.Status{State: types.RunFailed, Message: agentPodReplacedMessage}, true, nil
+	return runner.Status{State: types.RunFailed, Message: agentPodReplacedMessage, FailureHint: agentPodReplacedMessage}, true, nil
 }
 
 // agentPodReplaced reports whether pod is no longer the one the agent-sandbox backend admitted: it

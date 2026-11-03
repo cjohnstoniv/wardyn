@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -143,8 +144,8 @@ func TestAgentSandboxLifecycle_ReplacedPodReadsFailed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d, cs, _, ref := asAdmitted(t)
 			ctx := context.Background()
-			if st, err := d.Status(ctx, ref); err != nil || st.State != types.RunRunning {
-				t.Fatalf("admitted pod Status = %+v, %v; want RUNNING before the change", st, err)
+			if st, err := d.Status(ctx, ref); err != nil || st.State != types.RunRunning || st.FailureHint != "" {
+				t.Fatalf("admitted pod Status = %+v, %v; want RUNNING with no failure hint before the change", st, err)
 			}
 			changeAgentPod(t, cs, ref, func(p *corev1.Pod) {
 				if len(p.Spec.InitContainers) == 0 {
@@ -154,20 +155,18 @@ func TestAgentSandboxLifecycle_ReplacedPodReadsFailed(t *testing.T) {
 			})
 			for _, read := range []struct {
 				name string
-				get  func() (string, types.RunState, error)
+				get  func() (runner.Status, error)
 			}{
-				{"Status", func() (string, types.RunState, error) {
-					st, err := d.Status(ctx, ref)
-					return st.Message, st.State, err
-				}},
-				{"AgentStatus", func() (string, types.RunState, error) {
-					st, err := d.AgentStatus(ctx, ref, execContainerName)
-					return st.Message, st.State, err
-				}},
+				{"Status", func() (runner.Status, error) { return d.Status(ctx, ref) }},
+				{"AgentStatus", func() (runner.Status, error) { return d.AgentStatus(ctx, ref, execContainerName) }},
 			} {
-				msg, state, err := read.get()
-				if err != nil || state != types.RunFailed || msg != agentPodReplacedMessage {
-					t.Errorf("%s = %s %q, %v; want FAILED with the replaced-pod sentence", read.name, state, msg, err)
+				st, err := read.get()
+				if err != nil || st.State != types.RunFailed || st.Message != agentPodReplacedMessage {
+					t.Errorf("%s = %s %q, %v; want FAILED with the replaced-pod sentence", read.name, st.State, st.Message, err)
+				}
+				// The run page shows a run's failure hint, never its status message.
+				if st.FailureHint != agentPodReplacedMessage {
+					t.Errorf("%s FailureHint = %q, want the replaced-pod sentence for the run page", read.name, st.FailureHint)
 				}
 			}
 			wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
