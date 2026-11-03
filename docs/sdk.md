@@ -625,7 +625,7 @@ The run's `machine` request field is `RunMachine`:
 
 | Field | Meaning |
 |---|---|
-| `machines` | The caller's machines, deleting ones included. Each has `id`, `name`, `owner_subject`, `runner_id`, `runner_name`, `base`, `base_prepared_at`, `state` (`creating`, `in_use`, `kept` or `deleting`), `run_id` while a run holds it, `scrubbed`, `disk_bytes`, `created_at`, `last_used_at`, `expires_at`, and `delete_started_at` with `delete_reason` while a delete is finishing |
+| `machines` | The caller's machines, deleting ones included. Each has `id`, `name`, `owner_subject`, `runner_id`, `runner_name`, `base`, `base_prepared_at`, `state` (`creating`, `in_use`, `kept` or `deleting`), `run_id`, the run that holds it now or held it last (a normal stop does not clear it, so use `state`, `creating` or `in_use`, to tell whether it is held), `scrubbed`, `disk_bytes`, `created_at`, `last_used_at`, `expires_at`, and `delete_started_at` with `delete_reason` while a delete is finishing |
 | `count` | How many machines the caller keeps |
 | `limit` | The most the caller may keep: `macos_vm.max_kept_machines_per_person` |
 | `idle_days` | The site's current idle limit in days: `macos_vm.kept_machine_idle_days`. It does not move a machine's own `expires_at`, which was set at its last stop |

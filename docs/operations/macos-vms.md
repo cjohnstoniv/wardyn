@@ -130,14 +130,14 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 | Event | What happens |
 |---|---|
 | Keep | `--keep-machine` makes the machine when the run starts, on your own Mac, from its base. The run must be an interactive macOS VM run you start yourself |
-| Stop | A normal stop scrubs the disk (up to 60 seconds) and keeps the machine. Its expiry date is the stop time plus the idle days then set |
+| Stop | A normal stop scrubs the disk (up to 60 seconds) and keeps the machine. Its expiry date is the stop time plus the idle days the run was admitted with, as the Mac recorded them |
 | A stop without a scrub | A kill by you, a restart of the Mac, lost network, a runner upgrade or a low disk keeps the machine too. The scrub did not run, so the machine shows `scrubbed: false` and is scrubbed when it next starts |
 | A kill by someone else | A kill by an admin or a service identity, who is not the run's owner, deletes the machine |
 | Resume | `--resume-machine` starts a new run from the disk. Before it boots, the Mac brings the machine's tools up to date if they are behind ([The tools update](#the-tools-update-of-a-kept-machine)) |
 | Fresh start | `--resume-machine <id\|name> --fresh` deletes what is on the machine and starts again from the Mac's current base, under the same name and base |
 | Idle expiry | A machine unused past its date is deleted. A resume of one past it is refused `410` and starts its delete. The Mac enforces the date too, offline included. A machine a run holds does not expire |
 
-- **Each machine has its own date.** The date is set at each stop. Changing `macos_vm.kept_machine_idle_days` does not move the date of a machine already kept. `wardyn machines` shows each machine's date.
+- **Each machine has its own date.** The date is counted from each stop, using the idle days the run was admitted with. Changing `macos_vm.kept_machine_idle_days` does not move the date of a machine already kept. `wardyn machines` shows each machine's date.
 - **Resume ends the old run.** A macOS run cannot be revived. If you resume a machine while its last run is still in its ended-run grace, that run ends at once. While the machine is still marked in use, the resume is refused (`kept_machine_in_use`). Stop the last run first.
 
 #### Deleting a kept machine
