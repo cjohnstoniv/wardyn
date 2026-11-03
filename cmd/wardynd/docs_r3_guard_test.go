@@ -794,6 +794,9 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 // audit action literal sitting in the same function.
 var llmScanAuditKey = regexp.MustCompile(`"([a-z][a-z_]*)":`)
 
+// llmScanAuditSetKey pulls a key ScanAudit adds to its fields map after the literal.
+var llmScanAuditSetKey = regexp.MustCompile(`fields\["([a-z][a-z_]*)"\] =`)
+
 // maxAuditFindingsConst pins the llm.scan.* doc row's truncation-bound prose
 // to the const it names, rather than a hand-typed number that can drift.
 var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\d+)`)
@@ -818,13 +821,13 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 			t.Fatal("direct and replay scan audit paths must use the shared builder")
 		}
 	}
-	mapStart := strings.Index(body, "json.Marshal(map[string]any{")
-	if mapStart < 0 {
-		t.Fatalf("ScanAudit's map[string]any literal not found — the guard's anchor moved")
+	mapStart := strings.Index(body, "fields := map[string]any{")
+	if mapStart < 0 || !strings.Contains(body, "json.Marshal(fields)") {
+		t.Fatalf("ScanAudit's fields map[string]any literal, marshalled as the row's data, not found — the guard's anchor moved")
 	}
-	mapEnd := strings.Index(body[mapStart:], "})")
+	mapEnd := strings.Index(body[mapStart:], "\n\t}")
 	if mapEnd < 0 {
-		t.Fatalf("ScanAudit's map[string]any literal has no closing '})' — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal has no closing '}' — the guard's anchor moved")
 	}
 	mapLiteral := body[mapStart : mapStart+mapEnd]
 
@@ -832,6 +835,8 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	if len(matches) == 0 {
 		t.Fatalf("ScanAudit's map[string]any literal has no quoted keys — the guard's anchor moved")
 	}
+	// A key set only on some scans (deferred_to) is written into fields after the literal.
+	matches = append(matches, llmScanAuditSetKey.FindAllStringSubmatch(body, -1)...)
 	seen := map[string]bool{}
 	var keys []string
 	for _, m := range matches {
