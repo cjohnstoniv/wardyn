@@ -193,6 +193,18 @@ describe("Your walls card", () => {
     expect(screen.getByText("b.example.com")).toBeInTheDocument();
   });
 
+  it("keeps the host of a typed site without its port, IPv6 brackets included", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const never = screen.getByPlaceholderText(YOUR_WALLS.ADD_SITE);
+    for (const typed of ["https://Example.com:8443/x", "internal.test:80", "[::1]:8080"]) {
+      setField(never, typed);
+      fireEvent.keyDown(never, { key: "Enter" });
+    }
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ denied_domains: ["example.com", "internal.test", "[::1]"] }));
+  });
+
   it("Remove all walls asks first, and Cancel removes nothing", async () => {
     getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"] } });
     render(<YourWallsCard />);

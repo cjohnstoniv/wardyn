@@ -88,8 +88,13 @@ function toForm(s: PersonalWallsSpec): Form {
   };
 }
 
-// A typed site is a bare host: lower-case, with any scheme and everything from the first "/", "?" or "#" dropped.
-const siteOf = (text: string): string => text.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/[/?#].*$/, "");
+// A typed site is a bare host: lower-case, with any scheme, everything from the first "/", "?" or "#", and a port dropped.
+// A bracketed IPv6 literal keeps its brackets and loses only the port after them; an unbracketed one has no port to drop.
+const siteOf = (text: string): string => {
+  const host = text.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/[/?#].*$/, "");
+  if (host.startsWith("[")) return host.replace(/^(\[[^\]]*\]).*$/, "$1");
+  return host.split(":").length === 2 ? host.replace(/:\d*$/, "") : host;
+};
 
 // A site typed and not yet entered still counts: Save folds it in.
 const withText = (list: string[], text: string): string[] => {
@@ -175,7 +180,7 @@ export function YourWallsCard() {
     setSaved(false);
   };
   const fail = (e: unknown) => setRefusal({ message: e instanceof HttpError ? e.message : T.SAVE_FAILED, reason: e instanceof HttpError ? e.reason : "" });
-  const run = async (act: () => Promise<void>) => {
+  const run = async (act: () => Promise<void>): Promise<void> => {
     setBusy(true);
     setRefusal(null);
     try {
