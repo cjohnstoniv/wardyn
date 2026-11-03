@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -248,4 +249,19 @@ func renewableServiceHealth(run types.AgentRun, now time.Time) bool {
 		return false
 	}
 	return !run.Service.ControlPlaneProbe() || renews(probeRenewalHealth(run, now))
+}
+
+// viewServiceHealth is the health a workload shows for its run's status st: the sandbox's reading, or for a spec that
+// opted in to Wardyn's own check the worse of it and that check, a check with no reading yet counted as renewal counts
+// it (starting inside the supervisor's grace, unknown after). Without the check it is st.Health.
+func viewServiceHealth(v store.WorkloadView, st *types.RunServiceStatus, now time.Time) types.ServiceHealthState {
+	h := st.CombinedHealth()
+	if v.ServiceProbeOn && st.Probe == nil {
+		since := now
+		if v.RunStartedAt != nil {
+			since = *v.RunStartedAt
+		}
+		h = types.WorseServiceHealth(h, missingServiceReading(since, now))
+	}
+	return h
 }
