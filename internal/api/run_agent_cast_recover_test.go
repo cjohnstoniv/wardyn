@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -230,5 +231,110 @@ func TestAgentCastRecover_OnlyAMacOSVMRunGetsACast(t *testing.T) {
 			t.Errorf("%s: cast attached = %v, want %v", kind, got, want)
 		}
 		tw.EndDrain(nil)
+	}
+}
+
+// agentCastSweepFixture is a macOS VM task run that ended at ended and still owes its agent cast, with no
+// tail in this process and no output row left to recover: only the sweep settles it, re-reading through
+// rr within a short bound.
+func agentCastSweepFixture(t *testing.T, rr *recoveringRunner, ended time.Time) (*outputFixture, *castStore, recording.Store) {
+	t.Helper()
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.Runner = rr })
+	f.srv.runOutputRecoverWaitOverride = 20 * time.Millisecond
+	cs.required, cs.owed = true, true
+	f.st.mu.Lock()
+	f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
+	f.st.mu.Unlock()
+	return f, cs, casts
+}
+
+// A re-read that times out before its first byte is no answer: the first sweep keeps the obligation and
+// writes nothing, and says so in its error; the next sweep, whose read works, saves the cast and settles
+// it. A restart's recovery that times out the same way keeps the obligation for that sweep too.
+func TestAgentCastSweep_AReadThatTimesOutEmptyIsRetried(t *testing.T) {
+	for _, path := range []string{"sweep", "recovery"} {
+		t.Run(path, func(t *testing.T) {
+			hung := newRecoveringRunner()
+			hung.hang = true
+			f, cs, casts := agentCastSweepFixture(t, hung, time.Now())
+			if path == "recovery" {
+				f.mem.rows[f.run.ID] = store.RunOutput{RunID: f.run.ID, Source: "stdout", ClaimedAt: time.Now().Add(-time.Hour)}
+				f.srv.recoverRunOutput(t.Context(), f.srv.runOutputStore(), f.run, "no_tail")
+				f.srv.FinishRunOutput(t.Context(), f.run.ID)
+			} else if err := f.srv.SweepRunOutputs(t.Context()); !errors.Is(err, errAgentCastUnread) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("first sweep: %v, want the unread error with the timeout", err)
+			}
+			if rows := castRows(t, f, agentCastRecoveredSession); len(rows) != 0 || !cs.owing() || cs.marked() != "" {
+				t.Fatalf("rows %v owed %v mark %q: want no row, the obligation kept and no mark", rows, cs.owing(), cs.marked())
+			}
+
+			f.srv.WaitBackground()
+			read := newRecoveringRunner()
+			read.log = "read on the next sweep\n"
+			f.srv.cfg.Runner = read
+			waitFor(t, "a sweep to save the cast", func() bool {
+				_ = f.srv.SweepRunOutputs(t.Context())
+				return len(castRows(t, f, agentCastRecoveredSession)) > 0
+			})
+			row := waitCastRow(t, f, agentCastRecoveredSession)
+			if row["outcome"] != "success" || row["incomplete"] != nil || cs.owing() || cs.marked() != "" {
+				t.Fatalf("row %v owed %v mark %q: want a complete saved cast and the obligation settled", row, cs.owing(), cs.marked())
+			}
+			if out := readCast(t, casts, f.run.ID, agentCastRecoveredSession); !strings.Contains(out, "read on the next sweep") {
+				t.Fatalf("cast %q", out)
+			}
+			notKilled(t, f)
+		})
+	}
+}
+
+// A run whose re-read keeps timing out empty past agentCastReadGiveUp after it ended is marked
+// runner_declined with a failure row saying read_failed, and its obligation is settled. No cast is stored.
+func TestAgentCastSweep_ATimeoutPastTheGiveUpMarksTheRun(t *testing.T) {
+	hung := newRecoveringRunner()
+	hung.hang = true
+	f, cs, casts := agentCastSweepFixture(t, hung, time.Now().Add(-agentCastReadGiveUp-time.Minute))
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	row := waitCastRow(t, f, agentCastSession)
+	if row["outcome"] != "failure" || row["reason"] != "read_failed" {
+		t.Fatalf("row %v, want a failure row with reason read_failed", row)
+	}
+	if cs.marked() != types.NotRecordedRunnerDeclined || cs.owing() {
+		t.Fatalf("not_recorded = %q, owed %v, want runner_declined and the obligation settled", cs.marked(), cs.owing())
+	}
+	if _, err := casts.OpenCast(context.Background(), recording.CastKey(f.run.ID.String(), agentCastRecoveredSession)); err == nil {
+		t.Fatal("a cast was stored for a read that gave nothing")
+	}
+	notKilled(t, f)
+}
+
+// A re-read that copies part of the output and then fails is saved as a cut copy: the marker ends the
+// cast and the row says incomplete with the read's error, on the sweep's path and a recovery's. It never
+// reads as complete, and the obligation is settled with the run recorded.
+func TestAgentCastSweep_APartialReadIsSavedCut(t *testing.T) {
+	for _, path := range []string{"sweep", "recovery"} {
+		t.Run(path, func(t *testing.T) {
+			rr := newRecoveringRunner()
+			rr.log, rr.hang = "the first half "+agentCastSecret+"\n", true
+			f, cs, casts := agentCastSweepFixture(t, rr, time.Now())
+			if path == "recovery" {
+				f.mem.rows[f.run.ID] = store.RunOutput{RunID: f.run.ID, Source: "stdout", ClaimedAt: time.Now().Add(-time.Hour)}
+				f.srv.recoverRunOutput(t.Context(), f.srv.runOutputStore(), f.run, "no_tail")
+			} else if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			row := waitCastRow(t, f, agentCastRecoveredSession)
+			if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != context.DeadlineExceeded.Error() {
+				t.Fatalf("row %v, want a saved cast marked incomplete with the read's error", row)
+			}
+			out := readCast(t, casts, f.run.ID, agentCastRecoveredSession)
+			if !strings.Contains(out, "the first half") || !strings.HasSuffix(out, agentCastCutMarker) {
+				t.Fatalf("cast %q, want the copied half then the cut marker", out)
+			}
+			waitFor(t, "the obligation to settle", func() bool { return !cs.owing() && cs.marked() == "" })
+			notKilled(t, f)
+		})
 	}
 }

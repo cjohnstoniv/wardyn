@@ -83,11 +83,13 @@ func (s *Server) recoverRunOutput(ctx context.Context, st store.RunOutputStore, 
 	s.endRecovery(run.ID, tw, s.readSubstrateOutput(ctx, rec, run.SandboxRef, tw))
 }
 
-// endRecovery ends a recovery's read: how it ended is noted (noteRecoveryEnd), a read that found nothing
-// to read leaves the run's agent output unrecorded (its cast declines), and the drain ends.
+// endRecovery ends a recovery's read: how it ended is noted (noteRecoveryEnd), and so is how the run's
+// agent cast ended (agentCast.endRead: a gap declines it, a failed read keeps or cuts it), and the drain
+// ends.
 func (s *Server) endRecovery(runID uuid.UUID, tw *tailWriter, err error) {
-	if reason := s.noteRecoveryEnd(runID, tw.t, err); reason != "" && tw.cast != nil {
-		tw.cast.decline(reason)
+	reason := s.noteRecoveryEnd(runID, tw.t, err)
+	if tw.cast != nil {
+		tw.cast.endRead(reason, err)
 	}
 	tw.EndDrain(recoveryDrainErr(err))
 }

@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -138,6 +140,7 @@ type agentCast struct {
 
 	mu       sync.Mutex
 	declined string // why a re-read found nothing to record (decline); seal then saves nothing
+	readErr  error  // how a re-read failed with no gap's reason (endRead); see take
 	once     sync.Once
 }
 
@@ -151,41 +154,80 @@ func (c *agentCast) decline(reason string) {
 	c.mu.Unlock()
 }
 
+// endRead notes how a re-read into the cast ended: a gap's reason (recoveryGapReason) declines it; any
+// other error (a timeout, a transport error) fails the read, which take tells apart from a clean end.
+func (c *agentCast) endRead(reason string, err error) {
+	switch {
+	case reason != "":
+		c.decline(reason)
+	case err != nil:
+		c.mu.Lock()
+		c.readErr = err
+		c.mu.Unlock()
+	}
+}
+
+// errAgentCastUnread is a re-read that failed before its first byte: the run's obligation stays for the
+// next sweep, which gives up at agentCastReadGiveUp.
+var errAgentCastUnread = errors.New("the runner's copy of the agent output could not be read")
+
+// agentCastCutMarker ends a cast whose re-read failed part way, so it never reads as complete.
+const agentCastCutMarker = "\n[Wardyn: the rest of this run's output is missing. The runner's copy could not be read to its end.]\n"
+
 // seal ends the cast once, after its copy ended (tailWriter.EndDrain), and returns what settles it, for
 // the caller to run once the tail's drain is released; nil when another call sealed it. A cast with no
-// output is not saved and its obligation is cleared with the run recorded: an agent that printed nothing
-// left nothing to record. The obligation is durable, so nothing need be written before the release.
+// output from a copy that ended cleanly is not saved and its obligation is cleared with the run recorded:
+// an agent that printed nothing left nothing to record (take). The obligation is durable, so nothing
+// need be written before the release.
 func (c *agentCast) seal() func() error {
 	var end func() error
 	c.once.Do(func() { end = c.take() })
 	return end
 }
 
-// take flushes and copies what the cast holds, and returns what settles it.
+// take flushes and copies what the cast holds, and returns what settles it. A copy with no output that
+// ended cleanly settles the obligation (nothing to record); one whose read failed keeps it
+// (errAgentCastUnread). A copy cut short by a failed read is saved with agentCastCutMarker at its end and
+// incomplete on its row.
 func (c *agentCast) take() func() error {
 	ctx := context.Background()
-	c.pipe.flush()
-	c.mw.mu.Lock()
-	c.mw.flushLocked()
-	had := c.cast.HadOutput()
-	snap := append([]byte(nil), c.buf.buf.Bytes()...)
-	truncated := c.buf.truncated
-	c.mw.mu.Unlock()
 	c.mu.Lock()
-	declined := c.declined
+	declined, readErr := c.declined, c.readErr
 	c.mu.Unlock()
+	had := c.flush()
 	switch {
 	case declined != "":
 		return func() error { return c.s.declineAgentOutput(ctx, c.run, declined) }
+	case !had && readErr != nil:
+		return func() error {
+			return agentCastStoreErr(ctx, c.run.ID, "re-read a run's agent output", fmt.Errorf("%w: %w", errAgentCastUnread, readErr))
+		}
 	case !had:
 		return func() error { return c.s.settleAgentCast(ctx, c.run.ID) }
+	case readErr != nil:
+		c.write([]byte(agentCastCutMarker))
+		c.flush()
 	}
-	return func() error { return c.save(ctx, snap, truncated) }
+	c.mw.mu.Lock()
+	snap := append([]byte(nil), c.buf.buf.Bytes()...)
+	truncated := c.buf.truncated
+	c.mw.mu.Unlock()
+	return func() error { return c.save(ctx, snap, truncated, readErr) }
+}
+
+// flush waits for every byte written to reach the cast, and reports whether any did.
+func (c *agentCast) flush() bool {
+	c.pipe.flush()
+	c.mw.mu.Lock()
+	defer c.mw.mu.Unlock()
+	c.mw.flushLocked()
+	return c.cast.HadOutput()
 }
 
 // save stores the cast with its session.recording.write row: a success clears the run's obligation and
-// any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed).
-func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool) error {
+// any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed). A copy
+// cut short by readErr says so on its row: incomplete, with the read's error.
+func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readErr error) error {
 	s, runID := c.s, c.run.ID
 	key := recording.CastKey(runID.String(), c.session)
 	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
@@ -200,6 +242,9 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool) error
 	}
 	if c.session == agentCastRecoveredSession {
 		data["recovered"] = true
+	}
+	if readErr != nil {
+		data["incomplete"], data["read_error"] = true, readErr.Error()
 	}
 	outcome := "success"
 	if err != nil {
@@ -252,6 +297,12 @@ func agentCastStoreErr(ctx context.Context, runID uuid.UUID, what string, err er
 	return err
 }
 
+// agentCastReadGiveUp is how long after a run ended (its ended_at, else its last update) the sweep keeps
+// retrying a re-read that fails before its first byte: about 25 sweeps (runOutputSweepInterval, one
+// minute, after agentCastSweepAge), each bounded by outputRecoverWait. Past it the run is marked
+// runner_declined, reason read_failed.
+const agentCastReadGiveUp = 30 * time.Minute
+
 // agentCastSweepAge is how long a terminal run's state must have stood before the sweep settles its
 // obligation: longer than a cast's save may take (sessionRecordingSaveWait), so a save in flight is
 // never raced.
@@ -302,10 +353,21 @@ func (s *Server) sweepAgentCast(ctx context.Context, st store.RunAgentCastStore,
 		return s.declineAgentOutput(ctx, run, "no_tail")
 	}
 	c := s.newAgentCast(run, agentCastRecoveredSession)
-	if reason := recoveryGapReason(s.readSubstrateOutput(ctx, rec, run.SandboxRef, castCopy{c})); reason != "" {
-		c.decline(reason)
+	readErr := s.readSubstrateOutput(ctx, rec, run.SandboxRef, castCopy{c})
+	c.endRead(recoveryGapReason(readErr), readErr)
+	err = c.seal()()
+	if errors.Is(err, errAgentCastUnread) && s.cfg.Now().Sub(runEnded(run)) >= agentCastReadGiveUp {
+		return s.declineAgentOutput(ctx, run, "read_failed")
 	}
-	return c.seal()()
+	return err
+}
+
+// runEnded is when run reached its terminal state: ended_at, else its last update.
+func runEnded(run types.AgentRun) time.Time {
+	if run.EndedAt != nil {
+		return *run.EndedAt
+	}
+	return run.UpdatedAt
 }
 
 // agentCastStored is whether either agent output cast of the run is in the recording store.
