@@ -14,6 +14,7 @@ import {
   Archive,
   AlertTriangle,
   Bot,
+  Server,
   User,
   Check,
   Cpu,
@@ -360,6 +361,7 @@ const actorMeta: Record<ActorType, { tone: Tone; Icon: React.ElementType; label:
   human: { tone: "info", Icon: User, label: "human" },
   agent: { tone: "primary", Icon: Bot, label: "agent" },
   system: { tone: "neutral", Icon: Cpu, label: "system" },
+  service: { tone: "warning", Icon: Server, label: "service" },
 };
 export function ActorTypeChip({ type }: { type: ActorType }) {
   const m = metaFor(actorMeta, type as string, { tone: "neutral", Icon: Cpu, label: String(type) });
