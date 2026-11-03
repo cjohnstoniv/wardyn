@@ -141,10 +141,17 @@ func (p ModelProvider) Serves(harness string) bool {
 // this provider's gateway looks for, and no other destination's. TokenLifetimeSeconds is how long each token
 // works: absent (0) is GatewayTokenLifetimeMax, and a set value runs from GatewayTokenLifetimeMin to
 // GatewayTokenLifetimeMax. It is not part of the route sealed into a run, so a change applies to the next token.
+// Inspection is who checks the prompts sent to this gateway: "" is Wardyn, with the run's policy, and
+// GatewayInspectionGateway leaves them to the gateway, except the exact match of the run's own secret
+// values, which only Wardyn can run. It is part of the sealed route, so a change refuses the next token.
 type ModelProviderGatewayIdentity struct {
 	Audience             string `json:"audience"`
 	TokenLifetimeSeconds int    `json:"token_lifetime_seconds,omitempty"`
+	Inspection           string `json:"inspection,omitempty"`
 }
+
+// GatewayInspectionGateway is ModelProviderGatewayIdentity.Inspection when the gateway checks prompts itself.
+const GatewayInspectionGateway = "gateway"
 
 // The bounds of ModelProviderGatewayIdentity.TokenLifetimeSeconds.
 const (

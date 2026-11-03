@@ -237,16 +237,24 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// injected credentials above). A global kill-switch
 	// (WARDYN_LLM_SCAN=off) is applied upstream by clearing cfg.Policy.LLMInspection.
 	var scanner *contentscan.Engine
+	var deferred *deferredScan
 	if spec := cfg.Policy.LLMInspection; spec != nil {
 		for _, v := range spec.WorkspaceSecretValues {
 			procMaskFor(hooks.maskKey, []byte(v))
 		}
-		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(hooks.maskKey))
+		corpus := procRegistry.Snapshot(hooks.maskKey)
+		eng, eerr := contentscan.NewEngine(*spec, corpus)
 		if eerr != nil {
 			_ = sink.close(context.Background())
 			return nil, fmt.Errorf("build content scanner: %w", eerr)
 		}
 		scanner = eng
+		// A gateway route that inspects prompts itself still gets the run's own
+		// secret values checked, from the same corpus (gateway_identity.go).
+		if deferred, eerr = deferredScanFor(eng, *spec, corpus, cfg.GatewayIdentity); eerr != nil {
+			_ = sink.close(context.Background())
+			return nil, fmt.Errorf("build the secret-value scanner for gateway routes: %w", eerr)
+		}
 		if eng == nil && spec.Mode != "" && spec.Mode != "off" {
 			// Configured to inspect but the effective secret corpus is empty —
 			// scanning is a no-op. Surface it so the operator is not misled.
@@ -330,6 +338,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	})
 	p.residentMints = residentMintsByGrant(cfg.ResidentMints)
 	p.allowedModels = compileAllowedModels(cfg.AllowedModels)
+	p.deferredScan = deferred
 	p.vm, p.portRule = cfg.VM, effectivePortRule(cfg.VM, cfg.PortRule)
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
 	if p.hardDeny, err = compileHardDeny(cfg.HardDeny); err != nil {

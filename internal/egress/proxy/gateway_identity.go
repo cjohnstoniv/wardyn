@@ -25,8 +25,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -56,6 +58,9 @@ type GatewayIdentityRoute struct {
 	// sealed, and a mint compares it to the live row's, so a provider deleted and
 	// recreated under the same id, or a component edited, fails closed.
 	ProviderUID string `json:"provider_uid,omitempty"`
+	// InspectionDeferred leaves the provider's prompts on this route to the gateway: the proxy
+	// checks them for the run's own secret values only (deferredScan). A provider route only.
+	InspectionDeferred bool `json:"inspection_deferred,omitempty"`
 }
 
 // holderKey is what names the route's token holder and its mint: the provider's id,
@@ -81,6 +86,8 @@ func (rt GatewayIdentityRoute) validate(earlier []GatewayIdentityRoute) error {
 		return errors.New("audience is required")
 	case rt.PathPrefix != "" && (!strings.HasPrefix(rt.PathPrefix, "/") || strings.ContainsAny(rt.PathPrefix, "?#\\")):
 		return fmt.Errorf("path_prefix %q is not a path", rt.PathPrefix)
+	case rt.InspectionDeferred && rt.ProviderID == "":
+		return errors.New("inspection_deferred is for a model provider's route only")
 	}
 	for _, o := range earlier {
 		if o.holderKey() == rt.holderKey() && o.Audience != rt.Audience {
@@ -127,6 +134,41 @@ func (p *Proxy) gatewayRouteFor(host string, port int, path string) *GatewayIden
 		}
 	}
 	return nil
+}
+
+// deferredScan is what a route that leaves prompt inspection to its gateway still
+// runs: eng checks the run's own secret values, exact match, and nothing else. A
+// nil eng is a policy with no such check, so nothing runs there.
+type deferredScan struct{ eng *contentscan.Engine }
+
+// deferredScanFor builds the cut engine when a route leaves inspection to its
+// gateway and the run inspects at all (full is the run's engine); nil otherwise,
+// and nil defers nothing.
+func deferredScanFor(full *contentscan.Engine, spec types.LLMInspectionSpec, corpus [][]byte, routes []GatewayIdentityRoute) (*deferredScan, error) {
+	if full == nil || !slices.ContainsFunc(routes, func(rt GatewayIdentityRoute) bool { return rt.InspectionDeferred }) {
+		return nil, nil
+	}
+	eng, err := contentscan.NewSecretsOnlyEngine(spec, corpus)
+	if err != nil {
+		return nil, err
+	}
+	return &deferredScan{eng: eng}, nil
+}
+
+// inspectionDeferredTo is the route a request to host, port and path carries the
+// token on, when that route leaves prompt inspection to its gateway; nil means the
+// run's whole policy applies. It reads the same match the token is attached by
+// (gatewayRouteFor), so only a call that goes to that gateway is left to it. A proxy
+// that never built the cut engine defers nothing: an unknown state is inspected.
+func (p *Proxy) inspectionDeferredTo(host string, port int, path string) *GatewayIdentityRoute {
+	if p.deferredScan == nil {
+		return nil
+	}
+	rt := p.gatewayRouteFor(host, port, path)
+	if rt == nil || !rt.InspectionDeferred || rt.ProviderID == "" {
+		return nil
+	}
+	return rt
 }
 
 // stripGatewayHeaders deletes what the sandbox sent under the gateway's header

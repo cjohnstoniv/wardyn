@@ -543,7 +543,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
 		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardBody(w, r, host, port)
 	} else {
-		bodyReader, scanSummary, releaseBody, blocked = p.inspectLLM(w, r, host, port, rest, channel)
+		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardedLLM(w, r, host, port, rest, channel)
 		// Honest coverage: say what happened instead of a bare scan:mitm allow for a channel we
 		// can't parse — same uninspected_channel skip the brokered route already emits.
 		if scanSummary == nil && channel == contentscan.ChannelGeneric && p.scanner != nil &&
