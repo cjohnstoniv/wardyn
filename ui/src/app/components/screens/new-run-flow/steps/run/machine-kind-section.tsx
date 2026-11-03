@@ -41,6 +41,7 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
   const { status } = useShellSetupStatus();
   const offer = useMacOSOffer();
   const macOSOn = macOSVMsEnabled(status);
+  // The site's window switch (setup features); absent reads off.
   const windowOn = macWindowOn(status);
   const vm = isVMKind(kind);
   const macOS = kind === "macos_vm";
@@ -74,7 +75,7 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
               ]}
             />
             {refused && <p className={note}>{withCode(refused)}</p>}
-            <MacOSLines loaded={!!status} on={macOSOn} chosen={macOS} windowOn={windowOn} offer={offer} />
+            <MacOSLines loaded={status != null && !status.unreachable} on={macOSOn} chosen={macOS} offer={offer} windowOn={windowOn} />
           </div>
           {macOS && offer?.ok && hasBaseChoice(offer, macosBase) && <MacOSBasePicker offer={offer} value={macosBase} onChoose={onChooseBase} />}
           {macOS && windowOn && windowChoice && (
@@ -102,15 +103,22 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
 }
 
 /**
- * What stands under the OS row: the Windows line, or for a chosen macOS what it sets up and starts with. "Turned off"
- * waits for the setup status, so a status still loading never reads as off. The view-only line names a window on the
- * Mac only while the site switch lets one open.
+ * What stands under the OS row: Linux's help, the Windows line (or, with macOS off, the line that says so), or for a
+ * chosen macOS what it gives and starts with. Before the setup status has loaded the macOS part is unknown, so only the
+ * Windows line shows.
  */
-function MacOSLines({ loaded, on, chosen, windowOn, offer }: { loaded: boolean; on: boolean; chosen: boolean; windowOn: boolean; offer: MacOSOffer | undefined }) {
-  if (!on) return loaded ? <p className={note}>{NR_WINDOW.OS_LATER}</p> : null;
-  if (!chosen) return <p className={note}>{NR_WINDOW.OS_WINDOWS_LATER}</p>;
+function MacOSLines({ loaded, on, chosen, offer, windowOn }: { loaded: boolean; on: boolean; chosen: boolean; offer: MacOSOffer | undefined; windowOn: boolean }) {
+  if (!chosen) {
+    return (
+      <>
+        <p className={note}>{NR_MACHINE.OS_LINUX_HELP}</p>
+        <p className={note}>{loaded && !on ? NR_WINDOW.OS_LATER : NR_WINDOW.OS_WINDOWS_LATER}</p>
+      </>
+    );
+  }
   return (
     <>
+      <p className={note}>{NR_MACHINE.MACOS_GIVES}</p>
       <p className={note}>{windowOn ? NR_WINDOW.VIEW_ONLY_WINDOW_ON : NR_WINDOW.VIEW_ONLY_WINDOW_OFF}</p>
       {offer?.ok && offer.guestOS && <p className={note}>{NR_MACHINE.MACOS_ABOUT(offer.guestOS)}</p>}
       {offer?.ok && <p className={note}>{NR_MACHINE.MACOS_SIZE(String(offer.minCPUs), String(offer.minMemoryMiB))}</p>}
