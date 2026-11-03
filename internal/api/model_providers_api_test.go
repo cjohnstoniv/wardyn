@@ -514,7 +514,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("model_providers =\n%+v\nwant\n%+v", got, want)
 	}
-	for _, leak := range []string{"awsapps.com", "123456789012", "BedrockUser", "/anthropic", "Authorization", `"uid"`} {
+	for _, leak := range []string{"awsapps.com", "123456789012", "BedrockUser", "/anthropic", "Authorization"} {
 		if strings.Contains(w.Body.String(), leak) {
 			t.Errorf("the member's /setup/status carries %q", leak)
 		}
@@ -528,7 +528,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		}
 	})
 
-	t.Run("a sign-in provider carries its row uid for a member, and no other row does", func(t *testing.T) {
+	t.Run("every row carries its own uid for a member, which is the id the sign-in URL takes", func(t *testing.T) {
 		in := endpointProvider()
 		in.ID, in.UID = "corp-sso", "uid-corp-sso"
 		in.OIDC = &types.ProviderOIDC{Issuer: "https://sso.corp.example", ClientID: "wardyn"}
@@ -538,11 +538,8 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		withSignIn.ModelProviders = providerBlock(in, plain)
 		w := doSSO(t, modelProvidersStatusSrv(t, withSignIn, &capStore{}), http.MethodGet, "/api/v1/setup/status", member, "")
 		got := statusModelProviders(t, w.Body.Bytes())
-		if len(got) != 2 || got[0].UID != "uid-corp-sso" || got[0].SignIn != "oidc" || got[1].UID != "" {
-			t.Errorf("model_providers = %+v; want the sign-in row to carry uid-corp-sso and the plain row none", got)
-		}
-		if strings.Contains(w.Body.String(), "uid-plain") {
-			t.Errorf("a row that does not sign people in published its uid: %s", w.Body.String())
+		if len(got) != 2 || got[0].UID != "uid-corp-sso" || got[0].SignIn != "oidc" || got[1].UID != "uid-plain" || got[1].SignIn != "" {
+			t.Errorf("model_providers = %+v; want each row to carry its uid and only the first to sign in", got)
 		}
 	})
 

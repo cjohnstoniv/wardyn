@@ -958,3 +958,32 @@ func TestEndpointOIDC_DiscoveredURLsRefuseUnsafeIPLiterals(t *testing.T) {
 		t.Errorf("a clean document: err=%v revocation=%q", err, d.revocationURL)
 	}
 }
+
+// A second sign-in leaves the stored credential's AddedAt where it was (a replaced value keeps it), so what tells a
+// console that a sign-in it started has landed is SignedInAt: it moves on every capture and the status reports it.
+func TestEndpointOIDC_SignedInAtMovesOnEverySignIn(t *testing.T) {
+	f := newOIDCFlow(t, "")
+	grade := func() SetupProviderAccess {
+		var row SetupProviderAccess
+		f.srv.gradeProviderEndpointOIDC(context.Background(), &row, f.row, oidcPersonSub)
+		return row
+	}
+	if got := grade(); got.SignedInAt != nil || got.State != modelAccessNotConfigured {
+		t.Fatalf("before any sign-in: %+v; want not_configured and no signed_in_at", got)
+	}
+	if _, w := f.capture(t, oidcPersonSub); w.Header().Get("Location") != f.doneRedirect() {
+		t.Fatalf("first sign-in: Location %q", w.Header().Get("Location"))
+	}
+	first := grade()
+	if first.State != modelAccessLive || first.SignedInAt == nil || !first.SignedInAt.Equal(adoTestNow) {
+		t.Fatalf("after the first sign-in: %+v; want live, signed in at %s", first, adoTestNow)
+	}
+	f.srv.cfg.Now = func() time.Time { return adoTestNow.Add(time.Hour) }
+	if _, w := f.capture(t, oidcPersonSub); w.Header().Get("Location") != f.doneRedirect() {
+		t.Fatalf("second sign-in: Location %q", w.Header().Get("Location"))
+	}
+	second := grade()
+	if second.SignedInAt == nil || !second.SignedInAt.Equal(adoTestNow.Add(time.Hour)) {
+		t.Fatalf("after the second sign-in: %+v; want signed in an hour later", second)
+	}
+}

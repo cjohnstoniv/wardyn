@@ -318,9 +318,9 @@ func authHeader(a *types.ProviderAuth) string {
 // nothing for the member redaction to strip.
 type SetupModelProvider struct {
 	ID string `json:"id"`
-	// UID is the row's own id, published for a sign-in row only: the one in its sign-in URL and in a held run's
-	// approval scope, so a person's console can name the provider such a request is for. Other rows keep it off
-	// the member-readable status.
+	// UID is the row's own id: the one in a sign-in URL and in a held run's approval scope, so a person's console can
+	// open a provider's sign-in and name the provider such a request is for. It names a row, not a secret, and a
+	// console that has not yet read a change from plain to sign-in still holds it.
 	UID  string `json:"uid,omitempty"`
 	Name string `json:"name,omitempty"`
 	Kind string `json:"kind"`
@@ -355,10 +355,10 @@ func (s *Server) setupModelProviders(ctx context.Context, sc types.SiteConfig) [
 	}
 	out := []SetupModelProvider{}
 	for _, p := range sc.ModelProviders.Providers {
-		row := SetupModelProvider{ID: p.ID, Name: p.Name, Kind: string(p.Kind), Disabled: p.Disabled,
+		row := SetupModelProvider{ID: p.ID, UID: p.UID, Name: p.Name, Kind: string(p.Kind), Disabled: p.Disabled,
 			Harnesses: []string{}, Host: providerHost(p)}
 		if p.OIDC != nil && p.Kind == types.ModelProviderCustomEndpoint {
-			row.SignIn, row.IdentityBinding, row.UID = "oidc", p.OIDC.Binding(), p.UID
+			row.SignIn, row.IdentityBinding = "oidc", p.OIDC.Binding()
 		}
 		for _, h := range p.Harnesses {
 			if !launchable(h.Harness) {
