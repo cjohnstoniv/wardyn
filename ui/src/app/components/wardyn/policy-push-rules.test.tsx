@@ -362,8 +362,7 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  // The mock's own header (packet script) carries this exact count next to
-  // the title in every one of its five "Try it" scenarios.
+  // The counts next to the title read "N denied path(s) · N path(s) held for review".
   it("the header states the deny/review counts, and they track the document", () => {
     const { rerender } = render(<PushRulesSection spec={BASE} onSpecChange={() => {}} />);
     expect(screen.getByText("0 denied paths · 0 paths held for review")).toBeInTheDocument();

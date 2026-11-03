@@ -259,7 +259,7 @@
 | `git_pat_narrowing_unsupported_host` | the host is served by a lane that does not read the axes. That is an Azure DevOps host, one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for |
 | `git_pat_api_forge_disabled` | the grant sets `api` for `bitbucket_server` and `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off. Also refused (`400`) when the policy or a governance profile is written |
 | `git_pat_broker_off_resident` | 0.10.0: `WARDYN_GIT_PAT_BROKER` is `off`, so the PAT would be minted into the sandbox, and the run is not an operator's (or `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is set). Narrowed or not; a `runner_resident` grant and a host another lane serves are not refused |
-| `push_deny_all_resident_pat` | the run's `push_rules` set `deny_all` and `WARDYN_GIT_PAT_BROKER` is `off`, so a `git_pat` (a `runner_resident` one included) would sit in the sandbox where no broker sees its pushes. Refused at Review, at dispatch and at revive, on an operator's run too |
+| `push_deny_all_resident_pat` | the run's `push_rules` set `deny_all` and `WARDYN_GIT_PAT_BROKER` is `off`, so a `git_pat` (`runner_resident` included) would sit in the sandbox, unseen by any broker. Refused at Review, dispatch and revive, operator's runs too; not when withheld because its forge is GitHub-brokered |
 | `push_deny_all_ssh_key` | the run's `push_rules` set `deny_all` and it holds an `ssh_key`, a push path the broker cannot see. An `ssh_key` withheld because its forge is GitHub-brokered is not refused |
 
 
