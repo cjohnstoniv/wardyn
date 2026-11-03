@@ -273,3 +273,52 @@ func TestEnrichRuns_AFenceDuringTheReadOrTheMaskingExportsNothing(t *testing.T) 
 		})
 	}
 }
+
+// Another replica's erasure reaches the registry as a dropped value before anything else tells the run's
+// coverage: the drop guard has the coverage answer false first, so an emit in flight exports nothing.
+func TestEnrichRuns_ADropAppliedFromAnotherReplicaUnholdsBeforeTheValueGoes(t *testing.T) {
+	const secret = "zq-throwaway-replica-8"
+	for _, global := range []bool{false, true} {
+		name := map[bool]string{false: "a run value", true: "a process-wide value"}[global]
+		t.Run(name, func(t *testing.T) {
+			run, rowID := uuid.New(), uuid.New()
+			reg := secretmask.NewRegistry()
+			if global {
+				reg.ApplyGlobal(rowID, "alice", "sso", []byte(secret), time.Time{}, time.Time{})
+			} else if err := reg.Add(run, []byte(secret)); err != nil {
+				t.Fatal(err)
+			}
+			var covered atomic.Bool
+			covered.Store(true)
+			reg.SetDropGuard(func(uuid.UUID) { covered.Store(false) }) // what maskmanifest registers
+			rows := &erasableRows{ids: map[uuid.UUID]string{run: secret}}
+			inside, release := make(chan struct{}), make(chan struct{})
+			sink := &lastEventSink{}
+			f := NewFanout(sink)
+			f.EnrichRuns(func(ctx context.Context, id uuid.UUID) (string, bool, error) {
+				v, ok, err := rows.lookup(ctx, id)
+				close(inside)
+				<-release
+				return v, ok, err
+			}, func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) },
+				func(uuid.UUID) bool { return covered.Load() })
+
+			done := make(chan struct{})
+			go func() { defer close(done); emitFor(t, f, run) }()
+			<-inside
+			if global {
+				reg.DropGlobalValue(rowID) // the tombstone another replica committed, applied here
+			} else {
+				reg.DropRunValue(run, []byte(secret))
+			}
+			close(release)
+			<-done
+
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if strings.Contains(string(sink.ev.Data), secret) || strings.Contains(string(sink.ev.Data), CorrelationKey) {
+				t.Errorf("the sink got %s after the drop", sink.ev.Data)
+			}
+		})
+	}
+}

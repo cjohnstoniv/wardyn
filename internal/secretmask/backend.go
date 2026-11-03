@@ -248,11 +248,28 @@ func (r *Registry) RetireGlobalValue(id uuid.UUID, at time.Time) {
 	}
 }
 
+// SetDropGuard registers f to run BEFORE a value another replica removed leaves this registry
+// (DropRunValue, with that run's id; DropGlobalValue, with uuid.Nil: every run's corpus holds the globals).
+// Whatever vouches that a run is fully masked here (maskmanifest's held manifest) uses it to stop
+// vouching first, so nothing reads "covered" while the value is already gone. f must not call back into r.
+func (r *Registry) SetDropGuard(f func(runID uuid.UUID)) {
+	if r != nil {
+		r.dropGuard.Store(&f)
+	}
+}
+
+func (r *Registry) guardDrop(runID uuid.UUID) {
+	if f := r.dropGuard.Load(); f != nil {
+		(*f)(runID)
+	}
+}
+
 // DropGlobalValue forgets committed row id's value, current or retired.
 func (r *Registry) DropGlobalValue(id uuid.UUID) {
 	if r == nil {
 		return
 	}
+	r.guardDrop(uuid.Nil)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.rows, id)
@@ -264,6 +281,7 @@ func (r *Registry) DropRunValue(runID uuid.UUID, value []byte) {
 	if r == nil {
 		return
 	}
+	r.guardDrop(runID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	vs := r.perRun[runID]

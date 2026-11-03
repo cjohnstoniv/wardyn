@@ -31,6 +31,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,6 +52,8 @@ var placeholder = []byte("<secret-hidden>")
 type Registry struct {
 	mu     sync.RWMutex
 	perRun map[uuid.UUID][][]byte // run id -> set of secret values
+	// dropGuard runs before DropRunValue or DropGlobalValue removes a value (backend.go), outside mu.
+	dropGuard atomic.Pointer[func(runID uuid.UUID)]
 	// globals is every process-wide value masked right now, on every run: the
 	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte

@@ -95,7 +95,19 @@ type entry struct {
 // New returns Manifests over pool whose values are sealed with keys and, once
 // opened, registered with reg.
 func New(pool *pgxpool.Pool, keys Keys, reg *secretmask.Registry) *Manifests {
-	return &Manifests{pool: pool, keys: keys, reg: reg, cache: map[uuid.UUID]*entry{}}
+	m := &Manifests{pool: pool, keys: keys, reg: reg, cache: map[uuid.UUID]*entry{}}
+	// Another replica's erasure reaches reg as a dropped value before DropFenced runs: Held must be false
+	// first, for that run, or for every run when a process-wide value goes.
+	reg.SetDropGuard(func(runID uuid.UUID) {
+		if runID == uuid.Nil {
+			m.mu.Lock()
+			clear(m.cache)
+			m.mu.Unlock()
+			return
+		}
+		m.ForgetCache(runID)
+	})
+	return m
 }
 
 // Start creates runID's manifest, incomplete, owned by owner (the run's secret

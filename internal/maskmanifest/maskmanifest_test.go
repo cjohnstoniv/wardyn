@@ -233,3 +233,40 @@ func TestCoveredLogsWhyItIsNotCovered(t *testing.T) {
 		t.Fatalf("log = %q, want the failed read named with the run id and no value", got)
 	}
 }
+
+// A value another replica removed leaves the registry only after the manifests stop vouching for the run it
+// belonged to, and a process-wide value only after they stop vouching for any run: Held is false by the time
+// the masker is short of it, with no DropFenced in between.
+func TestARegistryDropUnholdsBeforeTheValueGoes(t *testing.T) {
+	m, reg := newManifests(t, nil)
+	run, other := uuid.New(), uuid.New()
+	m.note(run, 1, true, nil)
+	m.note(other, 1, true, nil)
+	reg.Add(run, secretValue)
+
+	var heldWhenGone bool
+	reg.SetDropGuard(func(id uuid.UUID) { // wraps the manifests' guard to see the state at the moment the drop begins
+		heldWhenGone = m.Held(run)
+		m.ForgetCache(id)
+	})
+	reg.DropRunValue(run, secretValue)
+	if !heldWhenGone {
+		t.Fatal("the guard did not run before the value was removed")
+	}
+	if m.Held(run) || !m.Held(other) || len(reg.Snapshot(run)) != 0 {
+		t.Fatalf("after a run value drop: run held %v, other held %v, values %d", m.Held(run), m.Held(other), len(reg.Snapshot(run)))
+	}
+}
+
+func TestADroppedProcessWideValueUnholdsEveryRun(t *testing.T) {
+	m, reg := newManifests(t, nil)
+	a, b := uuid.New(), uuid.New()
+	m.note(a, 1, true, nil)
+	m.note(b, 1, true, nil)
+	id := uuid.New()
+	reg.ApplyGlobal(id, "alice", "sso", secretValue, time.Time{}, time.Time{})
+	reg.DropGlobalValue(id)
+	if m.Held(a) || m.Held(b) {
+		t.Fatalf("a dropped process-wide value left runs held: %v %v", m.Held(a), m.Held(b))
+	}
+}
