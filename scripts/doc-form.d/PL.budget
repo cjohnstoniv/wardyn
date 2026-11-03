@@ -22,5 +22,5 @@ docs/adoption/README.md=249 share=35
 # docs/operations/ai-gateway.md 1900 adds 125 over 1775, measured: the defaults table for a route that carries the token, egress.deny in the join step, the MCP sentence and the run-keeps-its-routes effect.
 # docs/operations/ai-gateway.md 1915 adds 15 over 1900, measured: which refused rows carry the call id
 # docs/operations/ai-gateway.md 1941 adds 26 over 1915, measured: two providers on one gateway need paths apart
-# docs/operations/ai-gateway.md 2355 adds 414 over 1941, measured: the unserved-path line under the key set's address, and the TLS chain section (hop table, the inspector warning, the bypass recipe).
-docs/operations/ai-gateway.md=2355 share=35
+# docs/operations/ai-gateway.md 2351 adds 410 over 1941, measured: the unserved-path line under the key set's address, and the TLS chain section (hop table, the inspector warning, the bypass recipe).
+docs/operations/ai-gateway.md=2351 share=35
