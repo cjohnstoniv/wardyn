@@ -127,8 +127,13 @@ func outputGapMarker(skipped int64) string {
 // of them: the end waits for that on its own goroutine. The agent output cast is
 // sealed before the drain ends and settled after, so its store wait never holds
 // the finisher; its obligation, stored at dispatch, outlives a process that dies
-// in between (sweepAgentCasts).
+// in between (sweepAgentCasts). A copy that ends in an error ends the cast's
+// read the same way (agentCast.endRead): nothing copied keeps the obligation for
+// the sweep, and a partial copy is saved cut, as the output row is incomplete.
 func (w *tailWriter) EndDrain(err error) {
+	if err != nil && w.cast != nil {
+		w.cast.endRead("", err)
+	}
 	go func() {
 		w.t.in.flush()
 		var end func() error

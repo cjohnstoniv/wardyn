@@ -124,6 +124,17 @@ func (s *Server) oweAgentCast(ctx context.Context, runID uuid.UUID) bool {
 	return true
 }
 
+// unoweAgentCast clears the agent output obligation of a macOS VM run whose sandbox was never created:
+// it never ran, so it owes no recording, and gets neither a runner_declined mark nor a failure row. A
+// failed clear is logged and left to the sweep.
+func (s *Server) unoweAgentCast(ctx context.Context, run types.AgentRun) {
+	st, ok := s.cfg.Store.(store.RunAgentCastStore)
+	if !ok || !run.MachineKind.IsMacOSVM() {
+		return
+	}
+	_ = agentCastStoreErr(ctx, run.ID, "clear the agent output obligation of a run that never started", st.ClearRunAgentCastOwed(ctx, run.ID, false))
+}
+
 // agentCast is one agent output cast: the masking pipe the tail's bytes are teed into, the cast it
 // writes, held to maxSessionCastBytes (capBuffer keeps the head and says truncated), and what its row
 // says about it.
@@ -261,21 +272,24 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 // declineAgentOutput is a macOS VM task run that still owes its agent output cast and will get none,
 // reason saying why: the run is marked runner_declined, a session.recording.write failure row for the
 // agent session says why, then the obligation is cleared, in that order, so an error at any step leaves
-// the obligation for the next sweep. A run that owes no cast (it has one, or was settled) is left as it
-// is. The run is not stopped, under a requirement too: it was admitted recorded, and a recording lost to
+// the obligation for the next sweep. Only the call that marks the run writes the row: a retry after a
+// failed clear finds it marked and only clears, so the run never gets a second row. A run that owes no
+// cast (it has one, or was settled) is left as it is. The run is not stopped, under a requirement too: it was admitted recorded, and a recording lost to
 // a restart is a gap on every kind, not a kill.
 func (s *Server) declineAgentOutput(ctx context.Context, run types.AgentRun, reason string) error {
 	st, ok := s.cfg.Store.(store.RunAgentCastStore)
 	if !ok || !s.agentOutputRecorded(run) {
 		return nil
 	}
-	declined, err := st.DeclineRunAgentCast(ctx, run.ID)
-	if err != nil || !declined {
+	marked, err := st.DeclineRunAgentCast(ctx, run.ID)
+	if err != nil {
 		return agentCastStoreErr(ctx, run.ID, "mark a run not recorded for want of its agent output", err)
 	}
-	key := recording.CastKey(run.ID.String(), agentCastSession)
-	s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "session.recording.write",
-		key, "failure", mustJSON(map[string]any{"session": agentCastSession, "key": key, "reason": reason})))
+	if marked {
+		key := recording.CastKey(run.ID.String(), agentCastSession)
+		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "session.recording.write",
+			key, "failure", mustJSON(map[string]any{"session": agentCastSession, "key": key, "reason": reason})))
+	}
 	return agentCastStoreErr(ctx, run.ID, "clear a run's agent output obligation", st.ClearRunAgentCastOwed(ctx, run.ID, false))
 }
 

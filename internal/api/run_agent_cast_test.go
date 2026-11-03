@@ -33,12 +33,13 @@ type castStore struct {
 	store.RunnerPoolStore
 	st *dispatchTestStore
 
-	mu       sync.Mutex
-	required bool
-	mark     types.RunNotRecorded
-	declines int   // runner_declined marks written
-	owed     bool  // agent_cast_owed_at is set
-	oweErr   error // SetRunAgentCastOwed fails with it
+	mu         sync.Mutex
+	required   bool
+	mark       types.RunNotRecorded
+	declines   int   // runner_declined marks written
+	owed       bool  // agent_cast_owed_at is set
+	oweErr     error // SetRunAgentCastOwed fails with it
+	clearFails int   // the next N ClearRunAgentCastOwed calls fail
 }
 
 func (c *castStore) SetRunAgentCastOwed(context.Context, uuid.UUID) error {
@@ -54,7 +55,7 @@ func (c *castStore) SetRunAgentCastOwed(context.Context, uuid.UUID) error {
 func (c *castStore) DeclineRunAgentCast(context.Context, uuid.UUID) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.owed {
+	if !c.owed || c.mark == types.NotRecordedRunnerDeclined {
 		return false, nil
 	}
 	c.mark = types.NotRecordedRunnerDeclined
@@ -65,6 +66,10 @@ func (c *castStore) DeclineRunAgentCast(context.Context, uuid.UUID) (bool, error
 func (c *castStore) ClearRunAgentCastOwed(_ context.Context, _ uuid.UUID, recorded bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.clearFails > 0 {
+		c.clearFails--
+		return errors.New("store unavailable")
+	}
 	c.owed = false
 	if recorded && c.mark == types.NotRecordedRunnerDeclined {
 		c.mark = ""
@@ -491,4 +496,93 @@ func TestAgentCast_SaveFailureMarksTheRunAndSilenceKeepsItRecorded(t *testing.T)
 			t.Fatalf("rows %v mark %q, want no row and the run recorded", rows, cs.marked())
 		}
 	})
+	t.Run("the copy ends in an error with nothing copied", func(t *testing.T) {
+		rr := newRecoveringRunner()
+		rr.log = "agent output, re-read\n"
+		f, cs, casts := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.Runner = rr })
+		_, spec, _ := startDispatch(f, types.SiteConfig{}, false)
+		tw := spec.ExecOutput.(*tailWriter)
+		tw.BeginDrain()
+		tw.EndDrain(errors.New("output ack lost"))
+		ended := time.Now()
+		f.st.mu.Lock()
+		f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
+		f.st.mu.Unlock()
+		f.srv.FinishRunOutput(t.Context(), f.run.ID)
+		if rows := castRows(t, f, agentCastSession); len(rows) != 0 || !cs.owing() || cs.marked() != "" {
+			t.Fatalf("rows %v owed %v mark %q, want no row and the obligation kept for the sweep", rows, cs.owing(), cs.marked())
+		}
+		dropTail(f)
+		if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if row := waitCastRow(t, f, agentCastRecoveredSession); row["outcome"] != "success" || cs.owing() || cs.marked() != "" {
+			t.Fatalf("row %v owed %v mark %q, want the sweep's cast and the run recorded", row, cs.owing(), cs.marked())
+		}
+		if out := readCast(t, casts, f.run.ID, agentCastRecoveredSession); !strings.Contains(out, "re-read") {
+			t.Fatalf("recovered cast %q", out)
+		}
+	})
+	t.Run("the copy ends in an error part way", func(t *testing.T) {
+		f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
+		_, spec, _ := startDispatch(f, types.SiteConfig{}, false)
+		tw := spec.ExecOutput.(*tailWriter)
+		tw.BeginDrain()
+		_, _ = tw.Write([]byte("the first half\n"))
+		tw.EndDrain(errors.New("output ack lost"))
+		row := waitCastRow(t, f, agentCastSession)
+		if row["outcome"] != "success" || row["incomplete"] != true || row["read_error"] != "output ack lost" {
+			t.Fatalf("row %v, want a saved cast marked incomplete with the copy's error", row)
+		}
+		if out := readCast(t, casts, f.run.ID, agentCastSession); !strings.Contains(out, "the first half") || !strings.HasSuffix(out, agentCastCutMarker) {
+			t.Fatalf("cast %q, want the copied half then the cut marker", out)
+		}
+		waitFor(t, "the obligation to settle", func() bool { return !cs.owing() && cs.marked() == "" })
+	})
+}
+
+// A macOS VM run whose sandbox create fails after its cast was owed never ran: dispatch clears the
+// obligation as not owed (unoweAgentCast, on both create-failure returns), so the sweep finds nothing,
+// and the run gets no runner_declined mark and no failure row.
+func TestAgentCast_ACreateFailureOwesNothing(t *testing.T) {
+	f, cs, _ := agentCastFixture(t, types.MachineMacOSVM)
+	cs.required = true
+	run, _, ok := startDispatch(f, types.SiteConfig{}, false)
+	if !ok || !cs.owing() {
+		t.Fatalf("started=%v owed=%v, want started with a cast owed", ok, cs.owing())
+	}
+	f.srv.unoweAgentCast(t.Context(), run) // dispatchRun, when the create fails
+	f.st.mu.Lock()
+	f.st.state = types.RunFailed
+	f.st.mu.Unlock()
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if rows := castRows(t, f, agentCastSession); len(rows) != 0 || cs.owing() || cs.marked() != "" || cs.declineCount() != 0 {
+		t.Fatalf("rows %v owed %v mark %q, want nothing owed, no mark and no row", rows, cs.owing(), cs.marked())
+	}
+}
+
+// A decline whose clear fails is retried by the next sweep, which finds the run already marked and only
+// clears: one failure row, not two.
+func TestAgentCast_ADeclineRetriedAfterAFailedClearWritesOneRow(t *testing.T) {
+	f, cs, _ := agentCastFixture(t, types.MachineMacOSVM) // its runner keeps no copy: the sweep declines, no_tail
+	cs.owed, cs.clearFails = true, 1
+	ended := time.Now()
+	f.st.mu.Lock()
+	f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
+	f.st.mu.Unlock()
+	if err := f.srv.SweepRunOutputs(t.Context()); err == nil {
+		t.Fatal("the first sweep hid the failed clear")
+	}
+	if !cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("owed %v mark %q, want the run marked and the obligation kept", cs.owing(), cs.marked())
+	}
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows := castRows(t, f, agentCastSession)
+	if len(rows) != 1 || rows[0]["reason"] != "no_tail" || cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("rows %v owed %v mark %q, want one no_tail row, the run marked and nothing owed", rows, cs.owing(), cs.marked())
+	}
 }

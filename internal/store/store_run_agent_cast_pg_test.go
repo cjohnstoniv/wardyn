@@ -13,7 +13,7 @@ import (
 )
 
 // TestPG_RunAgentCastObligation: a run owes its agent cast once it is set; a decline marks only a run
-// that owes one; clearing with a cast stored clears runner_declined too; and the sweep lists a run only
+// that owes one, once; clearing with a cast stored clears runner_declined too; and the sweep lists a run only
 // once it is terminal and still owes it.
 func TestPG_RunAgentCastObligation(t *testing.T) {
 	ctx := context.Background()
@@ -49,6 +49,9 @@ func TestPG_RunAgentCastObligation(t *testing.T) {
 	}
 	if got, _ := pg.GetRun(ctx, run.ID); got.NotRecorded != types.NotRecordedRunnerDeclined {
 		t.Fatalf("not_recorded = %q, want runner_declined", got.NotRecorded)
+	}
+	if ok, err := pg.DeclineRunAgentCast(ctx, run.ID); err != nil || ok {
+		t.Fatalf("a second decline = %v, %v; want nothing marked (the run is already)", ok, err)
 	}
 	if err := pg.ClearRunAgentCastOwed(ctx, run.ID, true); err != nil {
 		t.Fatal(err)

@@ -653,6 +653,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	endStartWait()
 	stopCreateLease()
 	if refused {
+		s.unoweAgentCast(ctx, run)
 		return // deliverResident failed the run and recorded why; no create was asked for
 	}
 	if err != nil {
@@ -663,6 +664,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
+		s.unoweAgentCast(ctx, run)
 		return
 	}
 	created = true
