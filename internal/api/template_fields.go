@@ -216,6 +216,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"The time zone only means something beside a start time."),
 	excludedField("keep_work_folder", templateExcludeLaunch,
 		"Keeping the work folder makes a drive for the person launching, so it is chosen at each launch."),
+	excludedField("machine", templateExcludeLaunch,
+		"Whether to keep a macOS VM's machine is chosen at each launch; a template never keeps one for whoever uses it."),
 	carriedField("no_end", partRunner, templateOmitBaseline, templateEmptySame,
 		"The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission."),
 	// The run-mode carriers (run_mode.go): what a person is starting. A new client

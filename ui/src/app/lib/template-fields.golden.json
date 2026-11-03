@@ -791,6 +791,11 @@
       "why": "Keeping the work folder makes a drive for the person launching, so it is chosen at each launch."
     },
     {
+      "name": "machine",
+      "excluded": "launch",
+      "why": "Whether to keep a macOS VM's machine is chosen at each launch; a template never keeps one for whoever uses it."
+    },
+    {
       "name": "no_end",
       "part": "runner",
       "omitted": "baseline",
