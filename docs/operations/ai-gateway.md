@@ -29,6 +29,8 @@
 2. Give wardynd the certificate authority. Set the Helm value `trustedCA`, or `WARDYN_TRUSTED_CA_FILE` outside Helm. The run's proxy and the sandbox's own TLS clients then trust it.
 3. Add a `custom_endpoint` provider whose `base_url` is the model hostname and port, for example `https://llm-gw.wardyn.svc.cluster.local:8443`. A person's credential is stored as for any provider.
    - Two providers with identity on can share one gateway only on paths apart, such as `/anthropic` and `/openai`. A run that uses both on one path is refused.
+   - A Bedrock provider with a bearer key can send identity too. Put the gateway in its `bedrock.base_url`, and each person's key goes to the gateway.
+   - A Bedrock provider with SSO sign-in cannot, because AWS signs the `Host` header. Use a bearer key row, or the gateway as a custom endpoint.
 4. Add the model hostname to the policy's `allowed_domains`. The model route needs no `internal_hosts` entry, and adding one lifts the private-address guard for that host on every path ([Internal model gateway](../OPERATIONS.md#internal-model-gateway)).
 5. Allow the MCP hostname in the run's policy, and add it to `internal_hosts` when it names a private address. Wardyn then governs whether a run reaches the gateway, and the gateway decides which tools a caller gets.
 6. To have the gateway know which run and person made an MCP call, set `mcp.gateway_audience` on the organisation's MCP component (its `url` is the gateway's MCP address). Run identity is turned on per model provider and makes the signing key, so turn it on for a provider first.
