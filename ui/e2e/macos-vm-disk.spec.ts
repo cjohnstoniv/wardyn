@@ -6,6 +6,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect, sql, gotoConsole } from "./fixtures";
 import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
+import { RUN_VM_PAGE } from "../src/app/components/wardyn/copy/run-cockpit";
 import { aheadByHours } from "../src/app/lib/test-clock";
 
 // ============================================================================
@@ -18,6 +19,8 @@ import { aheadByHours } from "../src/app/lib/test-clock";
 const RUN_TASK = "e2e fixture 4";
 const AT = aheadByHours(-1);
 const FAILED_PREFIX = "The macOS VM's disk could not be removed";
+/** The alert: what failed and why, then what to do next. */
+const failedLine = (reason: string) => `${DESKTOP.diskRemoveFailed(reason)} ${RUN_VM_PAGE.diskKeptNextStep}`;
 
 function runIdByTask(task: string): string {
   const id = sql(`SELECT id FROM agent_runs WHERE task = '${task}' LIMIT 1`);
@@ -72,14 +75,14 @@ test.describe("Run detail: a finished macOS VM run's disk", () => {
     const id = runIdByTask(RUN_TASK);
     await patchRun(page, id, () => ({ machine_kind: "macos_vm", macos_disk: { state: "kept", reason: "helper_alive" } }));
     await openRun(page, id);
-    await expect(desktop(page).getByRole("alert")).toHaveText(DESKTOP.diskRemoveFailed(DESKTOP.diskReasonInUse));
+    await expect(desktop(page).getByRole("alert")).toHaveText(failedLine(DESKTOP.diskReasonInUse));
   });
 
   test("a reason code the console doesn't know says the Mac didn't say why", async ({ page }) => {
     const id = runIdByTask(RUN_TASK);
     await patchRun(page, id, () => ({ machine_kind: "macos_vm", macos_disk: { state: "kept", reason: "future_code" } }));
     await openRun(page, id);
-    await expect(desktop(page).getByRole("alert")).toHaveText(DESKTOP.diskRemoveFailed(DESKTOP.diskReasonUnknown));
+    await expect(desktop(page).getByRole("alert")).toHaveText(failedLine(DESKTOP.diskReasonUnknown));
   });
 
   test("removing turns into removed on the page's own poll, with no reload", async ({ page }) => {
@@ -133,7 +136,7 @@ test.describe("Run detail: a finished macOS VM run's disk", () => {
       macos_disk: swept ? { state: "removed", at: AT } : { state: "kept", reason: "remove_failed" },
     }));
     await openRun(page, id);
-    await expect(desktop(page).getByRole("alert")).toHaveText(DESKTOP.diskRemoveFailed(DESKTOP.diskReasonDeleteFailed));
+    await expect(desktop(page).getByRole("alert")).toHaveText(failedLine(DESKTOP.diskReasonDeleteFailed));
     swept = true;
     await page.reload();
     await expect(page.getByRole("heading", { name: RUN_TASK, level: 1 })).toBeVisible();
