@@ -25,6 +25,7 @@ import { flowSteps, StepShell } from "../step-shell";
 import { BarrierSection } from "./barrier-section";
 import { CommandSection } from "./command-section";
 import { MachineKindSection } from "./machine-kind-section";
+import { KEEP_NEW_RUN } from "../../../../wardyn/copy/keep-machine";
 import { keptChoiceOf, keptReadRetry, useDropProvenMachine } from "./kept-machine-choice";
 import { useKeptMachines } from "./kept-machines-provider";
 import { useMacOSOffer } from "./macos-offer";
@@ -102,7 +103,11 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
       primary={{ label: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES), onActivate: () => go({ screen: "step", step: "harnesses" }) }}
       issues={stepIssues("run", intent, { poolDefault: list ? !!list.default?.pool_id : undefined })}
     >
-      {agent && <ModeSection mode={modeOf(intent) ?? fallback} onChange={(mode) => edit((i) => chooseMode(i, mode))} />}
+      {agent && <ModeSection mode={modeOf(intent) ?? fallback} onChange={(mode) => {
+          // The machine goes with an interactive run: leaving it says so.
+          if (intent.machine && mode !== "interactive") dispatch({ type: "guided", patch: { machineCleared: KEEP_NEW_RUN.INTERACTIVE_ONLY } });
+          edit((i) => chooseMode(i, mode));
+        }} />}
       {agent && modeOf(intent) === "autonomous" && <TimingSection schedule={draft.schedule} onSchedule={(schedule) => dispatch({ type: "schedule", schedule })} />}
       {intent.shape === "application" && (
         <CommandSection

@@ -43,6 +43,7 @@ export function KeptMachineSection({ choice, machine, onDelete, onKeep, onName, 
   const labelId = React.useId();
   const nameId = React.useId();
   const freshId = React.useId();
+  const countId = React.useId();
   const labels = useHolderLabels(choice.machines);
   return (
     <div role="group" aria-labelledby={labelId} data-testid="nr-kept-machine" className="flex flex-col gap-2">
@@ -54,8 +55,8 @@ export function KeptMachineSection({ choice, machine, onDelete, onKeep, onName, 
         className="gap-2"
       >
         <Option value={DELETE} label={T.DELETE} />
-        <Option value={KEEP} label={T.KEEP} disabled={choice.atLimit} selected={!!machine?.keep}>
-          <p className={note}>{T.KEEP_DETAIL(choice.mac, choice.gb)}</p>
+        <Option value={KEEP} label={T.KEEP} disabled={choice.atLimit} reasonId={choice.atLimit ? countId : undefined} selected={!!machine?.keep}>
+          <p className={note}>{T.KEEP_DETAIL(choice.mac, choice.gb, choice.days)}</p>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={nameId} className="text-xs">{T.NAME}</Label>
             <Input id={nameId} value={machine?.name ?? ""} aria-describedby={`${nameId}-hint`} className="max-w-72" onChange={(e) => onName(e.target.value)} />
@@ -82,30 +83,38 @@ export function KeptMachineSection({ choice, machine, onDelete, onKeep, onName, 
           </Option>
         ))}
       </RadioGroup>
-      <p className={note}>{keptCount(choice.count, choice.limit)}</p>
+      <p id={countId} className={note}>{keptCount(choice.count, choice.limit)}</p>
     </div>
   );
 }
 
 /** One radio row; its detail (the children) shows while it is the chosen one. */
-function Option({ value, label, meta, warn, disabled, selected, children }: {
+function Option({ value, label, meta, warn, disabled, reasonId, selected, children }: {
   value: string;
   label: string;
   meta?: string;
   warn?: string;
   disabled?: boolean;
+  /** The element that says why the option is disabled, when it is not the row's own meta or warning. */
+  reasonId?: string;
   selected?: boolean;
   children?: React.ReactNode;
 }) {
   const id = React.useId();
+  const metaId = `${id}-meta`;
+  const describedBy = [meta || warn ? metaId : undefined, reasonId].filter(Boolean).join(" ") || undefined;
   return (
     <div className={`flex flex-col gap-2 rounded-lg border p-3 ${selected ? "border-primary/50 bg-surface-2" : "border-border"}`}>
       <div className="flex items-start gap-2.5">
-        <RadioGroupItem id={id} value={value} disabled={disabled} className="mt-0.5" />
+        <RadioGroupItem id={id} value={value} disabled={disabled} aria-describedby={describedBy} className="mt-0.5" />
         <div className="flex min-w-0 flex-col gap-0.5">
           <Label htmlFor={id} className="text-sm font-medium">{label}</Label>
-          {meta && <span className={note}>{meta}</span>}
-          {warn && <span className={note}>{warn}</span>}
+          {(meta || warn) && (
+            <span id={metaId} className="flex flex-col gap-0.5">
+              {meta && <span className={note}>{meta}</span>}
+              {warn && <span className={note}>{warn}</span>}
+            </span>
+          )}
         </div>
       </div>
       {selected && children && <div className="ml-7 flex flex-col gap-2">{children}</div>}

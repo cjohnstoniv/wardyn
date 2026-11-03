@@ -75,6 +75,10 @@ describe("Review: where it runs, the machine", () => {
     );
     expect(screen.getByText(KEEP_NEW_RUN.GONE)).toBeInTheDocument();
   });
+  it("a draft that is no longer interactive says nothing of a machine it held", () => {
+    view({ ...BASE, experience: "background", machine: { keep: true } });
+    expect(screen.queryByText(/^Machine · /)).toBeNull();
+  });
   it("km2-none: no machine line when the run keeps nothing, or the machine is no longer listed, or the read isn't in", () => {
     view(BASE);
     view({ ...BASE, machine: { resume: "m-gone" } });

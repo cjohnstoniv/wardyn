@@ -26,7 +26,6 @@ import { usePrincipal } from "../../../wardyn/operator-context";
 import { WidgetCard } from "../../../wardyn/primitives";
 import { innerWallsText } from "../../new-run-flow/review/format";
 import { IDENTITY_POLICY_VIEW } from "../policy-tab-copy";
-import { MachineCard } from "./machine-card";
 import { ComputerFolderRows } from "./identity-computer-folder";
 import { SyncRows } from "./identity-sync";
 
@@ -92,7 +91,6 @@ export function IdentityWidget({
           )}
         </div>
       )}
-      <MachineCard run={run} />
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
         <dt className="text-muted-foreground">Run</dt>
         <dd className="flex min-w-0 justify-end">

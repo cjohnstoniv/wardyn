@@ -70,7 +70,7 @@ export function KeptMachinesCard() {
         <ErrorState size="compact" title={T.LOAD_FAILED} onRetry={load} />
       ) : (
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">{T.LEDE}</p>
+          <p className="text-xs text-muted-foreground">{T.LEDE(data?.idle_days)}</p>
           {machines.length === 0 ? (
             <p className="text-sm text-muted-foreground">{T.EMPTY}</p>
           ) : (

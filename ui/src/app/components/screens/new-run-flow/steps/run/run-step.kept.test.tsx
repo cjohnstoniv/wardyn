@@ -112,6 +112,12 @@ describe("Run step: Between runs", () => {
     expect(screen.queryByText(NR_MACHINE.CHANGES_SIGN_INS_RUN_DISK)).toBeNull();
   });
 
+  it("km1-keep: the idle days show when the server sends them", async () => {
+    await show(ready([machine()], { idle_days: 7 }));
+    await userEvent.click(radio(T.KEEP));
+    expect(within(group()!).getByText(T.KEEP_DETAIL(MAC, gbOf(51 * GB), 7))).toBeInTheDocument();
+  });
+
   it("km1-keep-name: a typed name rides the draft; emptied, it is dropped", async () => {
     await show(ready());
     await userEvent.click(radio(T.KEEP));
@@ -159,6 +165,15 @@ describe("Run step: Between runs", () => {
     await show(ready([machine({ state: "in_use", run_id: "run_1234567890" })]));
     expect(radio(T.RESUME("dev"))).toBeDisabled();
     expect(await within(group()!).findByText(T.IN_USE("ui-polish"))).toBeInTheDocument();
+  });
+
+  it("a disabled option is described by the line that says why", async () => {
+    await show(ready([machine({ state: "in_use", run_id: "run_1234567890" })]));
+    const why = await within(group()!).findByText(T.IN_USE("ui-polish"));
+    expect(radio(T.RESUME("dev"))).toHaveAccessibleDescription(why.parentElement!.textContent ?? "");
+    cleanup();
+    await show(ready([machine()], { allowed: false, reason: "kept_machine_person_limit", limit: 1 }));
+    expect(radio(T.KEEP)).toHaveAccessibleDescription(keptCount(1, 1));
   });
 
   it("a machine being made can't be resumed either", async () => {

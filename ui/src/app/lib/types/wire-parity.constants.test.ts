@@ -10,6 +10,7 @@
 import { it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { KEPT_START_FAILURES } from "../../components/screens/run-detail/widgets/machine-card";
 import { CONNECTIONS } from "../../components/wardyn/copy/door";
 import { APP_NAME_RE } from "../../components/screens/new-run-flow/lenses/apps-lens";
 
@@ -48,4 +49,13 @@ it("KeptMachineState and KeptMachineDeleteReason are the Go constants", () => {
   const goReasons = readFileSync(join(root, "pkg/client/machines.go"), "utf8");
   const reasons = [...goReasons.matchAll(/KeptMachineDeletedBy\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1]);
   expect(new Set(union("KeptMachineDeleteReason"))).toEqual(new Set(reasons));
+});
+
+// The two sentences a Mac's runner fails a run with when its kept machine did not start: the Machine tile shows the run's
+// failure line when it carries one of them.
+it("the Machine tile's start failures are the runner's sentences", () => {
+  const src = readFileSync(join(repoRoot(), "internal/runner/docker/macvm_kept.go"), "utf8");
+  const said = (name: string) => new RegExp(`${name}\\s*=\\s*"([^"]+)"`).exec(src)?.[1];
+  expect(said("keptSaidLocked")).toContain(KEPT_START_FAILURES[0]);
+  expect(said("keptSaidTools")).toContain(KEPT_START_FAILURES[1]);
 });

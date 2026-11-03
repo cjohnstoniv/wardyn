@@ -14,6 +14,9 @@ export const gbOf = (bytes: number): number => Math.round(bytes / 1024 ** 3);
 /** "{n} of {limit} kept machines used" (K-12 and KS-16), singular at a limit of one. */
 export const keptCount = (n: number, limit: number): string => `${n} of ${limit} kept ${limit === 1 ? "machine" : "machines"} used`;
 
+/** "{n} days" for the idle limit the server states; without it, the sentences name no number. */
+const afterDays = (days: number | undefined): string => (days === undefined ? "after it goes unused for the time your admin sets" : `${days} ${days === 1 ? "day" : "days"} after its last use`);
+
 /** KM-1: New Run, the machine section. */
 export const KEEP_NEW_RUN = {
   /** K-01 */
@@ -23,8 +26,8 @@ export const KEEP_NEW_RUN = {
   /** K-03 */
   KEEP: "Keep this machine for next time",
   /** K-04 */
-  KEEP_DETAIL: (mac: string, gb: number) =>
-    `Kept on ${mac}, up to ${gb} GB. It stays until you delete it, or until it has gone unused for the time your admin sets. Your files, tools and sign-ins stay. Wardyn cleans up the settings and certificates it added when the run stops, or before the machine's next run if the stop was abrupt. The run page says if anything was left.`,
+  KEEP_DETAIL: (mac: string, gb: number, days?: number) =>
+    `Kept on ${mac}, up to ${gb} GB. It stays until you delete it, or ${days === undefined ? "until it has gone unused for the time your admin sets" : `${days} ${days === 1 ? "day" : "days"} after its last use`}. Your files, tools and sign-ins stay. Wardyn cleans up the settings and certificates it added when the run stops, or before the machine's next run if the stop was abrupt. The run page says if anything was left.`,
   /** K-05 */
   NAME: "Name",
   /** K-06 */
@@ -53,6 +56,8 @@ export const KEEP_NEW_RUN = {
   UNAVAILABLE: "Keeping a machine isn't available for this run, so its machine is deleted when the run ends.",
   /** A keep at the person's limit. */
   AT_LIMIT: "You've reached your limit of kept machines, so this run's machine is deleted when it ends.",
+  /** A keep or resume that the shape or mode chosen since can no longer have. */
+  INTERACTIVE_ONLY: "Only an interactive macOS VM run can keep or resume a machine, so this run's machine is deleted when it ends.",
   RETRY: "Try again",
   /** K-15 */
   NOT_SCRUBBED: "Its last run didn't stop normally; Wardyn cleans it when it starts.",
@@ -82,12 +87,15 @@ export const KEEP_RUN = {
   /** The card's two rows, as the board draws them. */
   ROW_NAME: "Name",
   ROW_MAC: "Mac",
+  ROW_BASE: "Base",
+  ROW_WRITTEN: "Written",
+  ROW_EXPIRES: "Expires",
   /** K-31 */
   WHILE_RUNNING: "Kept when this run stops",
   /** K-32 */
   NEW: (mac: string) => `New on ${mac} for this run.`,
-  /** K-33 */
-  RESUMED: (date: string) => `Resumed. Last used ${date}.`,
+  /** K-33 without its date: a claim overwrites the machine's last-used time, so the run read cannot say when it was last used before this run. */
+  RESUMED: "Resumed.",
   /** K-34 */
   FRESH: (mac: string) => `Started fresh from ${mac}'s current base.`,
   /** K-35 */
@@ -120,9 +128,6 @@ export const KEEP_RUN = {
   /** K-45, the Desktop tile's sign-in note on a run that keeps its machine (replaces DESKTOP.signInsNoteRunDisk there) */
   SIGN_INS_NOTE: (mac: string) =>
     `Sign-ins you make in this desktop stay on this kept machine on ${mac} while this machine is kept. The Mac's own snapshots or backups may keep a copy for a while. While the run goes on, the agent can use them too. Closing this tab doesn't remove them.`,
-  /** The runner's code words for a run that did not start (KS-19, KS-20): the Machine card names them. */
-  TOOLS_FAILED: "This machine's tools couldn't be updated, so it didn't start. Start it fresh, or try again.",
-  LOCKED: (mac: string) => `This machine is already running on ${mac}.`,
 } as const;
 
 /** KM-4: Your settings, Your kept machines. */
@@ -132,7 +137,7 @@ export const KEEP_LIST = {
   /** K-51 */
   SUMMARY: (n: number, mac: string) => `${n} on ${mac}`,
   /** K-52 */
-  LEDE: "macOS VMs kept on your own Mac between runs, with your files, tools and sign-ins. Wardyn deletes one after it goes unused for the time your admin sets.",
+  LEDE: (days?: number) => `macOS VMs kept on your own Mac between runs, with your files, tools and sign-ins. Wardyn deletes one ${afterDays(days)}.`,
   /** K-53 */
   META: (mac: string, base: string, gb: number) => `${mac} · ${base} base · ${gb} GB written`,
   /** K-54 */

@@ -205,7 +205,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
   const vm = isVMKind(ctx.run.machine_kind);
-  const { layout, persistable, status, failedPreset, retry, apply, reset } = useRunLayout(preset, !!ctx.run.service, vm);
+  const { layout, persistable, status, failedPreset, retry, apply, reset } = useRunLayout(preset, !!ctx.run.service, vm, !!ctx.run.machine);
   const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through
@@ -341,10 +341,10 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // #3038: a finished run nobody has rearranged reads at its content's size: each tile is as tall as what it holds, so
   // Identity is never cut off and an emptier tile is shorter. The terminal keeps its rows, and an arrangement the
   // person made, or one being edited, is shown exactly as stored.
-  const fitOn = ctx.finished && !editing && sameLayout(layout, presetLayout("finished", false, vm));
+  const fitOn = ctx.finished && !editing && sameLayout(layout, presetLayout("finished", false, vm, !!ctx.run.machine));
   // The default rail, unarranged, closes the rows of a tile this viewer can't see (Desktop and Attach on a run they did
   // not start). An arrangement the person made, or one being edited, is shown exactly as stored.
-  const settleOn = !fitOn && !editing && sameLayout(layout, presetLayout(preset, !!ctx.run.service, vm));
+  const settleOn = !fitOn && !editing && sameLayout(layout, presetLayout(preset, !!ctx.run.service, vm, !!ctx.run.machine));
   const [fitted, setFitted] = React.useState<Record<string, number>>({});
   const visibleKey = visible.map((w) => w.widget).join();
   React.useLayoutEffect(() => {

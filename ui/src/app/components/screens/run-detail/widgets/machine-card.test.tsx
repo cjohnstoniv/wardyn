@@ -3,55 +3,66 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// KM-3: the run page's Machine card, one test per frame the board draws. The run read carries the name, the Mac and the
-// stop's result only, so those are the rows; each frame's test names it.
+// KM-3: the run page's Machine tile, one test per frame the board draws. The run read is the machine's row as it is now,
+// shared by every run that used it, and names the run that holds it (or held it last): only that run's page says what a
+// stop did to the machine.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { shortDate } from "../../../../lib/format";
+import { aheadByHours } from "../../../../lib/test-clock";
 import type { RunDetail, RunMachine } from "../../../../lib/types";
 import { KEEP_LIST, KEEP_RUN as T } from "../../../wardyn/copy/keep-machine";
-import { IdentityWidget } from "./identity";
-import { MachineCard } from "./machine-card";
+import { MachineWidget } from "./machine-card";
 
 afterEach(cleanup);
 
 const MAC = "Maya's MacBook";
-const machine = (over: Partial<RunMachine> = {}): RunMachine => ({ id: "m-dev", name: "dev", mode: "new", keep_at_end: true, state: "in_use", scrubbed: false, runner_name: MAC, deleted: false, ...over });
-type Facts = Pick<RunDetail, "machine" | "state" | "failure_hint">;
-const show = (f: Facts) => {
+const A = "run-a";
+const B = "run-b";
+const EXPIRES = aheadByHours(24 * 28);
+const machine = (over: Partial<RunMachine> = {}): RunMachine => ({
+  id: "m-dev", name: "dev", mode: "new", keep_at_end: true, state: "in_use", scrubbed: false, runner_name: MAC, holder_run_id: A,
+  base: "Standard", disk_bytes: 12 * 1024 ** 3, expires_at: EXPIRES, deleted: false, ...over,
+});
+type Facts = Pick<RunDetail, "id" | "machine" | "state" | "failure_hint">;
+const show = (f: Partial<Facts> & Pick<Facts, "state">) => {
   render(
     <MemoryRouter>
-      <MachineCard run={f} />
+      <MachineWidget run={{ id: A, ...f }} />
     </MemoryRouter>,
   );
   return screen.queryByTestId("run-machine-card");
 };
 const text = (card: HTMLElement | null) => card?.textContent ?? "";
+const row = (card: HTMLElement, label: string) => within(card).getByText(label).nextSibling;
 
-describe("Run page: the Machine card", () => {
+describe("Run page: the Machine tile", () => {
   it("draws nothing for a run that keeps no machine", () => {
     expect(show({ state: "RUNNING" })).toBeNull();
   });
 
-  it("km3-running-new: Keeps, K-31 and K-32, the name and the Mac", () => {
+  it("km3-running-new: Keeps, K-31 and K-32, with the name, Mac and base rows", () => {
     const card = show({ state: "RUNNING", machine: machine() })!;
-    expect(within(card).getByRole("heading", { name: T.TITLE })).toBeInTheDocument();
+    expect(within(card).getByText(T.TITLE)).toBeInTheDocument();
     expect(within(card).getByText(T.CHIP_KEEPS)).toBeInTheDocument();
     expect(within(card).getByText(T.WHILE_RUNNING)).toBeInTheDocument();
     expect(within(card).getByText(T.NEW(MAC))).toBeInTheDocument();
-    expect(within(card).getByText(T.ROW_NAME).nextSibling).toHaveTextContent("dev");
-    expect(within(card).getByText(T.ROW_MAC).nextSibling).toHaveTextContent(MAC);
+    expect(row(card, T.ROW_NAME)).toHaveTextContent("dev");
+    expect(row(card, T.ROW_MAC)).toHaveTextContent(MAC);
+    expect(row(card, T.ROW_BASE)).toHaveTextContent("Standard");
   });
 
   it("km3-running-picked-name: the server-picked name shows", () => {
     const card = show({ state: "RUNNING", machine: machine({ name: "mac-7f3a" }) })!;
-    expect(within(card).getByText(T.ROW_NAME).nextSibling).toHaveTextContent("mac-7f3a");
+    expect(row(card, T.ROW_NAME)).toHaveTextContent("mac-7f3a");
   });
 
-  it("km3-running-resumed: K-31 with no 'last used' date, which the run read doesn't carry", () => {
+  it("km3-running-resumed: K-33 without its date, which a claim overwrites", () => {
     const card = show({ state: "RUNNING", machine: machine({ mode: "resumed" }) })!;
     expect(within(card).getByText(T.WHILE_RUNNING)).toBeInTheDocument();
+    expect(within(card).getByText(T.RESUMED)).toBeInTheDocument();
     expect(text(card)).not.toMatch(/Last used/);
   });
 
@@ -60,35 +71,27 @@ describe("Run page: the Machine card", () => {
     expect(within(card).getByText(T.FRESH(MAC))).toBeInTheDocument();
   });
 
-  it("km3-kept: an ended run's card says Kept and K-35, and as the machine is now, with no stop result", () => {
+  it("km3-stopping: this run holds the machine, has ended, and the Mac has not reported the stop: K-44", () => {
+    const card = show({ state: "STOPPED", machine: machine() })!;
+    expect(within(card).getByText(T.STOPPING)).toBeInTheDocument();
+    expect(within(card).getByText(T.CHIP_KEEPS)).toBeInTheDocument();
+  });
+
+  it("km3-kept: this run held it and stopped: Kept, K-35, the Written and Expires rows and K-36", () => {
     const card = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: true }) })!;
     expect(within(card).getByText(T.CHIP_KEPT)).toBeInTheDocument();
     expect(within(card).getByText(T.KEPT(MAC))).toBeInTheDocument();
-    expect(within(card).getByText(T.AS_NOW)).toBeInTheDocument();
-    expect(within(card).queryByText(T.SCRUBBED)).toBeNull();
-    expect(within(card).queryByText(T.NOT_SCRUBBED)).toBeNull();
+    expect(row(card, T.ROW_WRITTEN)).toHaveTextContent("12 GB");
+    expect(row(card, T.ROW_EXPIRES)).toHaveTextContent(shortDate(EXPIRES));
+    expect(within(card).getByText(T.SCRUBBED)).toBeInTheDocument();
+    expect(within(card).queryByText(T.AS_NOW)).toBeNull();
   });
 
-  it("km3-kept-hard: an unscrubbed machine is flagged as needing cleanup, amber, without saying which run stopped badly", () => {
+  it("km3-kept-hard: this run held it and stopped abruptly: K-37 with the Kept chip", () => {
     const card = show({ state: "KILLED", machine: machine({ state: "kept", scrubbed: false }) })!;
     expect(within(card).getByText(T.KEPT(MAC))).toBeInTheDocument();
-    expect(within(card).getByText(T.NEEDS_CLEANUP)).toBeInTheDocument();
-    expect(within(card).getByText(KEEP_LIST.CHIP_NOT_CLEANED)).toBeInTheDocument();
-    expect(within(card).queryByText(T.CHIP_KEPT)).toBeNull();
-    expect(text(card)).not.toMatch(/didn't stop normally|this run/i);
-  });
-
-  it("run A then run B on the same machine: A's page never says Stopping, nor that A stopped badly", () => {
-    // B resumed the machine A had kept: its row is B's now, in use.
-    const whileB = show({ state: "STOPPED", machine: machine({ state: "in_use", scrubbed: true }) })!;
-    expect(within(whileB).getByText(T.BUSY)).toBeInTheDocument();
-    expect(text(whileB)).not.toMatch(/Stopping|stop normally|settings/);
-    cleanup();
-    // B stopped abruptly: the machine is kept and not scrubbed, and that is B's stop, not A's.
-    const afterB = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: false }) })!;
-    expect(text(afterB)).not.toMatch(/stop normally|removes its settings/);
-    expect(within(afterB).getByText(T.NEEDS_CLEANUP)).toBeInTheDocument();
-    expect(within(afterB).getByText(T.AS_NOW)).toBeInTheDocument();
+    expect(within(card).getByText(T.NOT_SCRUBBED)).toBeInTheDocument();
+    expect(within(card).getByText(T.CHIP_KEPT)).toBeInTheDocument();
   });
 
   it("km3-grace: the run still RUNNING with its machine already kept: K-38 names the machine, and K-36 or K-37 is this run's own stop", () => {
@@ -114,24 +117,52 @@ describe("Run page: the Machine card", () => {
     expect(text(card)).not.toMatch(/offline/);
   });
 
-  it("a run whose machine's tools could not be updated, or that is locked, says so in the card", () => {
-    expect(within(show({ state: "FAILED", machine: machine({ state: "kept" }), failure_hint: "kept_machine_tools_update_failed" })!).getByText(T.TOOLS_FAILED)).toBeInTheDocument();
+  it("a run whose machine's tools could not be updated, or that is locked, shows the runner's own sentence in the tile", () => {
+    const tools = "This machine's tools couldn't be updated, so it didn't start. Start it fresh, or try again.";
+    const locked = "This machine is already running on this Mac.";
+    expect(within(show({ state: "FAILED", machine: machine({ state: "kept" }), failure_hint: tools })!).getByText(tools)).toBeInTheDocument();
     cleanup();
-    expect(within(show({ state: "FAILED", machine: machine({ state: "kept" }), failure_hint: "kept_machine_locked" })!).getByText(T.LOCKED(MAC))).toBeInTheDocument();
+    expect(within(show({ state: "FAILED", machine: machine({ state: "kept" }), failure_hint: locked })!).getByText(locked)).toBeInTheDocument();
+    cleanup();
+    expect(text(show({ state: "FAILED", machine: machine({ state: "kept", scrubbed: true, holder_run_id: A }), failure_hint: "the image could not be pulled" }))).not.toContain("image could not");
   });
 
   it("K-42: the link goes to Your kept machines in settings", () => {
     const card = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: true }) })!;
     expect(within(card).getByRole("link", { name: T.LINK })).toHaveAttribute("href", "/account#kept-machines");
   });
+});
 
-  it("km3-page: the card sits in the Identity tile of a run that keeps a machine, and not in one that keeps none", () => {
-    const run = { id: "run-1", created_at: "", updated_at: "", created_by: "a@b.c", agent: "claude-code", repo: "r", task: "t", confinement_class: "CC2", state: "RUNNING", spiffe_id: "spiffe://x", runner_target: "docker", placement: "local" } as RunDetail;
-    const view = (r: RunDetail) => render(<MemoryRouter><IdentityWidget run={r} onGoPolicy={() => {}} /></MemoryRouter>);
-    view({ ...run, machine: machine() });
-    expect(screen.getByTestId("run-machine-card")).toBeInTheDocument();
+// Run A stopped cleanly and kept dev; run B then resumed it. The row is B's now: A's page says the machine as it is now.
+describe("Run page: a run that no longer holds the machine", () => {
+  it("while B holds it, A's page never says Stopping, nor anything of A's stop", () => {
+    const card = show({ state: "STOPPED", machine: machine({ state: "in_use", scrubbed: true, holder_run_id: B }) })!;
+    expect(within(card).getByText(T.BUSY)).toBeInTheDocument();
+    expect(within(card).getByText(KEEP_LIST.CHIP_IN_USE)).toBeInTheDocument();
+    expect(text(card)).not.toMatch(/Stopping|stop normally|settings/);
+  });
+
+  it("after B stopped abruptly, A's page flags the machine as needing cleanup, amber, without saying which run stopped badly", () => {
+    const card = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: false, holder_run_id: B }) })!;
+    expect(within(card).getByText(T.NEEDS_CLEANUP)).toBeInTheDocument();
+    expect(within(card).getByText(KEEP_LIST.CHIP_NOT_CLEANED)).toBeInTheDocument();
+    expect(within(card).getByText(T.AS_NOW)).toBeInTheDocument();
+    expect(within(card).queryByText(T.NOT_SCRUBBED)).toBeNull();
+    expect(text(card)).not.toMatch(/didn't stop normally|this run/i);
+  });
+
+  it("after B stopped cleanly, A's page says Kept as the machine is now, with no stop result", () => {
+    const card = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: true, holder_run_id: B }) })!;
+    expect(within(card).getByText(T.CHIP_KEPT)).toBeInTheDocument();
+    expect(within(card).getByText(T.AS_NOW)).toBeInTheDocument();
+    expect(within(card).queryByText(T.SCRUBBED)).toBeNull();
+    expect(row(card, T.ROW_WRITTEN)).toHaveTextContent("12 GB");
+  });
+
+  it("a server that names no holder leaves only a live run sure of it: an ended run says the machine as it is now", () => {
+    const card = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: true, holder_run_id: undefined }) })!;
+    expect(within(card).getByText(T.AS_NOW)).toBeInTheDocument();
     cleanup();
-    view(run);
-    expect(screen.queryByTestId("run-machine-card")).toBeNull();
+    expect(within(show({ state: "RUNNING", machine: machine({ holder_run_id: undefined }) })!).getByText(T.WHILE_RUNNING)).toBeInTheDocument();
   });
 });

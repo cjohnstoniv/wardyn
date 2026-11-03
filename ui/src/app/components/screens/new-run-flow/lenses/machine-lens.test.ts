@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { RunIntent } from "../draft/run-intent";
 import { deleteMachine, keepMachine, nameKeptMachine, resumeMachine, startFresh } from "./machine-lens";
 import { chooseMachineKind, chooseMode } from "./run-lens";
+import { chooseShape } from "./shape-lens";
 
 const MAC: RunIntent = { shape: "agent_task", experience: "interactive", machine_kind: "macos_vm" };
 
@@ -42,5 +43,13 @@ describe("machine lens", () => {
     expect(chooseMachineKind(kept, "macos_vm").machine).toEqual({ keep: true });
     expect("machine" in chooseMode(kept, "autonomous")).toBe(false);
     expect(chooseMode(kept, "interactive").machine).toEqual({ keep: true });
+  });
+
+  it("goes with a background shape, and stays with an interactive one or one whose mode is not chosen yet", () => {
+    const kept = { ...keepMachine(MAC), shape: "environment" as const };
+    expect("machine" in chooseShape(kept, "application")).toBe(false);
+    expect(chooseShape(kept, "agent_task").machine).toEqual({ keep: true });
+    expect(chooseShape(kept, "environment")).toBe(kept);
+    expect(chooseShape({ ...kept, shape: "application" }, "environment").machine).toEqual({ keep: true });
   });
 });

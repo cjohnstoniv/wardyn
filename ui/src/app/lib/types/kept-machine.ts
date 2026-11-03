@@ -45,6 +45,8 @@ export interface MyMachines {
   reason?: string;
   count: number;
   limit: number;
+  /** Days a machine may sit unused before Wardyn deletes it: the site's setting. Absent from a server that does not say. */
+  idle_days?: number;
   /** The most disk one new kept machine can take, in bytes. */
   worst_bytes: number;
 }
@@ -68,6 +70,12 @@ export interface RunMachine {
   state?: KeptMachineState;
   scrubbed: boolean;
   runner_name?: string;
+  /** The run that holds the machine now, or held it last (a stop does not clear it). The row is shared by every run that used the machine. */
+  holder_run_id?: string;
+  base?: string;
+  /** What the last stop wrote, in bytes. */
+  disk_bytes?: number;
+  expires_at?: string;
   /** The machine's row is gone: who deleted it, and why, stays in the audit log. */
   deleted: boolean;
 }

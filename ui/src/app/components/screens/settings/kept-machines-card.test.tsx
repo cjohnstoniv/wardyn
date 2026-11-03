@@ -54,7 +54,7 @@ describe("Your kept machines", () => {
   it("km4-list: one kept and one in use, each with its Mac, base, size and dates", async () => {
     const card = await mount();
     expect(within(card).getByRole("heading", { name: new RegExp(`^${T.TITLE}`) })).toHaveTextContent(T.SUMMARY(2, "Maya's MacBook"));
-    expect(within(card).getByText(T.LEDE)).toBeInTheDocument();
+    expect(within(card).getByText(T.LEDE())).toBeInTheDocument();
     const a = rowOf(card, "dev");
     expect(within(a).getByText(T.CHIP_KEPT)).toBeInTheDocument();
     expect(within(a).getByText(T.META("Maya's MacBook", "Standard", 12))).toBeInTheDocument();
@@ -65,6 +65,13 @@ describe("Your kept machines", () => {
     expect(await within(b).findByText(T.IN_USE("ui-polish"))).toBeInTheDocument();
     expect(within(b).getByRole("button", { name: `${T.DELETE} design-review` })).toBeDisabled();
     expect(within(a).getByRole("button", { name: `${T.DELETE} dev` })).toBeEnabled();
+  });
+
+  it("km4-list: the lede states the idle days when the server sends them, else names no number", async () => {
+    listMock.mockResolvedValue(reply([dev()], { idle_days: 7 }));
+    const card = await mount();
+    expect(within(card).getByText(T.LEDE(7))).toBeInTheDocument();
+    expect(card.textContent).toContain("7 days after its last use");
   });
 
   it("km4-list: a run with no title is named by its short id", async () => {
@@ -174,7 +181,7 @@ describe("Your kept machines", () => {
     const card = await mount();
     expect(within(card).getByRole("heading", { name: new RegExp(`^${T.TITLE}`) })).toHaveTextContent(T.NONE);
     expect(within(card).getByText(T.EMPTY)).toBeInTheDocument();
-    expect(within(card).getByText(T.LEDE)).toBeInTheDocument();
+    expect(within(card).getByText(T.LEDE())).toBeInTheDocument();
   });
 
   it("the switch off and nothing kept: the card is not drawn", async () => {

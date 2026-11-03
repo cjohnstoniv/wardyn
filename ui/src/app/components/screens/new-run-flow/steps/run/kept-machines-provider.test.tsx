@@ -54,9 +54,17 @@ describe("kept machines provider", () => {
     await waitFor(() => expect(status()).toBe("ready"));
   });
 
-  it("a caller the server says has no list is absent", async () => {
-    mount(ON, async () => { throw new HttpError(403, "no"); });
+  it("a caller who is no person (403 kept_machine_not_your_mac) is absent", async () => {
+    mount(ON, async () => { throw new HttpError(403, "no", "kept_machine_not_your_mac"); });
     await waitFor(() => expect(status()).toBe("absent"));
+  });
+
+  it("any other refusal is failed, never absent: another 403, a 401, a 404", async () => {
+    for (const e of [new HttpError(403, "no", "forbidden"), new HttpError(401, "no"), new HttpError(404, "no")]) {
+      mount(ON, async () => { throw e; });
+      await waitFor(() => expect(status()).toBe("failed"));
+      cleanup();
+    }
   });
 
   it("any other failure is failed, never absent, and its retry reads again", async () => {

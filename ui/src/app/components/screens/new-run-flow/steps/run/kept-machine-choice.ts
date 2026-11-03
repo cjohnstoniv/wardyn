@@ -26,6 +26,8 @@ export interface KeptChoice {
   mac: string;
   /** The most disk one new kept machine takes, whole GB. */
   gb: number;
+  /** Days a machine may sit unused before Wardyn deletes it, when the server says. */
+  days?: number;
   count: number;
   limit: number;
   /** Keep is offered but disabled: the person keeps their limit already. */
@@ -44,7 +46,7 @@ export function keptChoiceOf(read: KeptMachinesRead, offer: MacOSOffer | undefin
   const { data } = read;
   const atLimit = data.reason === KEPT_MACHINE_REASON.PERSON_LIMIT;
   if (!data.allowed && !atLimit) return undefined;
-  return { mac: offer.runner, gb: gbOf(data.worst_bytes), count: data.count, limit: data.limit, atLimit, machines: resumable(data, offer.runner) };
+  return { mac: offer.runner, gb: gbOf(data.worst_bytes), days: data.idle_days, count: data.count, limit: data.limit, atLimit, machines: resumable(data, offer.runner) };
 }
 
 /** Where a kept machine could be offered, if only the read had answered: an interactive macOS VM on the person's own Mac. */

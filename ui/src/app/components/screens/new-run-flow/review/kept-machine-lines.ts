@@ -9,6 +9,7 @@
 import { shortDate } from "../../../../lib/format";
 import { gbOf, KEEP_REVIEW } from "../../../wardyn/copy/keep-machine";
 import type { RunIntent } from "../draft/run-intent";
+import { modeOf } from "../lenses/shape-lens";
 import type { KeptMachinesRead } from "../steps/run/kept-machines-provider";
 
 export interface KeptReviewLines {
@@ -20,7 +21,7 @@ export interface KeptReviewLines {
 
 export function keptReviewLines(intent: RunIntent, read: KeptMachinesRead, mac: string | undefined): KeptReviewLines | undefined {
   const asked = intent.machine;
-  if (!asked || intent.machine_kind !== "macos_vm" || read.status !== "ready") return undefined;
+  if (!asked || intent.machine_kind !== "macos_vm" || modeOf(intent) !== "interactive" || read.status !== "ready") return undefined;
   if (asked.keep) {
     return {
       machine: KEEP_REVIEW.MACHINE(asked.name?.trim() || KEEP_REVIEW.NEW_UNNAMED),
