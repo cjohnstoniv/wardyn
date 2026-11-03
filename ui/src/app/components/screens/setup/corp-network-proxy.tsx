@@ -278,9 +278,10 @@ export function HostProxyTab({
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
   // never stomp an in-progress edit. Seeded during render, so no commit shows
-  // an editable field before the seed. Until then the editor is disabled: a
-  // draft typed before the first load would be overwritten by the seed, and a
-  // save needs the loaded document and its ETag.
+  // an editable field before the seed. Until then the whole editor (URL, the
+  // secret switch, the secret name, every save) is disabled: a draft typed
+  // before the first load would be overwritten by the seed, and a save needs
+  // the loaded document and its ETag. The connectivity test stays available.
   const [seeded, setSeeded] = React.useState(false);
   if (!seeded && siteConfig) {
     setSeeded(true);
@@ -498,6 +499,7 @@ export function HostProxyTab({
           <div className="space-y-2.5">
             <button
               type="button"
+              disabled={!seeded}
               className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
               onClick={() => setDisclosureOpen((o) => !o)}
             >
@@ -510,6 +512,7 @@ export function HostProxyTab({
                   <Field label="Secret name" htmlFor="corp-proxy-secret" className="flex-1">
                     <Input
                       id="corp-proxy-secret"
+                      disabled={!seeded}
                       value={secretName}
                       onChange={(e) => setSecretName(e.target.value)}
                       placeholder="upstream-proxy-url"
@@ -527,6 +530,7 @@ export function HostProxyTab({
                   </Button>
                   <button
                     type="button"
+                    disabled={!seeded}
                     className="text-xs text-muted-foreground hover:text-foreground"
                     onClick={() => {
                       setUseSecret(false);
@@ -542,6 +546,7 @@ export function HostProxyTab({
         ) : (
           <button
             type="button"
+            disabled={!seeded}
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
             onClick={() => {
               setUseSecret(true);

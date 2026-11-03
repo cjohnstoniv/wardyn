@@ -155,6 +155,29 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.queryByText("Loading the saved proxy settings…")).not.toBeInTheDocument();
   });
 
+  it("before the first load the secret switch and name are unavailable; the loaded secret ref is what shows", async () => {
+    const wrap = (siteConfig: ComponentProps<typeof CorpNetworkStep>["siteConfig"]) => (
+      <MemoryRouter>
+        <OperatorProvider operator>
+          <Harness siteConfig={siteConfig} />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(wrap(null));
+    const toSecret = screen.getByRole("button", { name: /use a stored secret instead/i });
+    expect(toSecret).toBeDisabled();
+    await userEvent.click(toSecret);
+    expect(screen.queryByLabelText(/secret name/i)).not.toBeInTheDocument();
+
+    rerender(wrap({ upstream_proxy_secret_ref: "corp-proxy" }));
+    const name = screen.getByLabelText(/secret name/i);
+    expect(name).toBeEnabled();
+    expect(name).toHaveValue("corp-proxy");
+    await userEvent.clear(name);
+    await userEvent.type(name, "other-proxy");
+    expect(name).toHaveValue("other-proxy");
+  });
+
   it("cred: typing a URL with a username/password auto-switches the field to masked input and shows CRED_URL_NOTE", async () => {
     renderStep();
     const field = screen.getByLabelText(/proxy url/i);
