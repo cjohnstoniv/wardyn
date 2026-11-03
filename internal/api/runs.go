@@ -223,17 +223,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	runID := uuid.New()
 	// The run's one target is chosen from its own id, before an identity exists to leak on a refusal.
 	placed := types.AgentRun{ID: runID}
-	if f.place.apply(&placed, enforced).write(s, w, r) {
+	// A window at start is opened under the grant this create leaves (macWindowRecordPending), judged again at the open.
+	if f.place.apply(&placed, enforced).write(s, w, r) || s.macWindowRecordPending(w, r, runID, req.DesktopWindow, createdByType, createdBy) {
 		return
 	}
 	intent := launchIntentFor(asked)
-	// A window at start is opened under the grant this create leaves, judged again at the open (run_mac_window.go).
-	if req.DesktopWindow != "" {
-		if err := s.macWindowStorePending(ctx, runID, macWindowAuthorityFrom(ctx, createdByType, createdBy, s.cfg.Now().UTC())); err != nil {
-			writeServerError(w, r, "record the window's grant", err)
-			return
-		}
-	}
 	// A run bound for a capped pool waits for a slot instead of starting: nothing is minted, renewed or
 	// delivered for it, and the start does all of that when the pool has room.
 	if f.queued {

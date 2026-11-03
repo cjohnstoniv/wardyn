@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -72,6 +73,27 @@ func (s *Server) macWindowLoadPending(ctx context.Context, run types.AgentRun) (
 	}
 	return macWindowAuthority{ActorType: p.ActorType, Principal: p.Principal, Email: p.Email,
 		Issue: oidc.Issue{At: p.AuthorizedAt, Seq: p.RevSeq}, Token: p.Token, Via: p.Via}, true, nil
+}
+
+// macWindowRecordPending stores the grant of a create that asks for desktop_window, and says true after writing the
+// refusal when it cannot: a create must not go on to ask for a window the launch could not open.
+func (s *Server) macWindowRecordPending(w http.ResponseWriter, r *http.Request, runID uuid.UUID, window string, actorType types.ActorType, actor string) bool {
+	if window == "" {
+		return false
+	}
+	if err := s.macWindowStorePending(r.Context(), runID, macWindowAuthorityFrom(r.Context(), actorType, actor, s.cfg.Now().UTC())); err != nil {
+		writeServerError(w, r, "record the window's grant", err)
+		return true
+	}
+	return false
+}
+
+// macWindowAtStartIfAsked opens the window a create asked for as the run starts: in the background, so the start
+// of the agent does not wait for the Mac. A refusal is audited and the run goes on (macWindowAtStart).
+func (s *Server) macWindowAtStartIfAsked(ctx context.Context, runID uuid.UUID, asked bool) {
+	if asked {
+		s.goBackground(func() { s.macWindowAtStart(context.WithoutCancel(ctx), runID) })
+	}
 }
 
 // macWindowAtStart is the launch trigger: the run was created with desktop_window at_start and has just come
