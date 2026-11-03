@@ -46,6 +46,8 @@ type KeptConfig struct {
 	Tools KeptToolsUpdater
 	// keptNow is the clock expiries are read and written with; nil is the wall clock (tests set it).
 	keptNow func() time.Time
+	// keptListed, if set, runs between keptMacBytes's listing of the kept folder and its reads (tests set it).
+	keptListed func()
 }
 
 // keptClock is now, by keptNow.
@@ -531,18 +533,24 @@ func (c *MacVMConfig) keptFolders() ([]keptFolder, error) {
 		if !de.IsDir() || !isKeptKey(de.Name()) {
 			continue
 		}
-		dir := filepath.Join(c.Layout.KeptDir(), de.Name())
-		var probe macvm.KeptRecord
-		if b, err := os.ReadFile(filepath.Join(dir, macvm.KeptFile)); err != nil || json.Unmarshal(b, &probe) != nil {
-			continue
+		if f, ok := c.keptFolderAt(filepath.Join(c.Layout.KeptDir(), de.Name())); ok {
+			out = append(out, f)
 		}
-		rec, err := macvm.ReadKept(dir, probe.ID)
-		if err != nil || c.Layout.KeptMachineDir(rec.ID) != dir {
-			continue
-		}
-		out = append(out, keptFolder{dir: dir, rec: rec})
 	}
 	return out, nil
+}
+
+// keptFolderAt is the kept machine in dir by its record; false when it has none that names dir.
+func (c *MacVMConfig) keptFolderAt(dir string) (keptFolder, bool) {
+	var probe macvm.KeptRecord
+	if b, err := os.ReadFile(filepath.Join(dir, macvm.KeptFile)); err != nil || json.Unmarshal(b, &probe) != nil {
+		return keptFolder{}, false
+	}
+	rec, err := macvm.ReadKept(dir, probe.ID)
+	if err != nil || c.Layout.KeptMachineDir(rec.ID) != dir {
+		return keptFolder{}, false
+	}
+	return keptFolder{dir: dir, rec: rec}, true
 }
 
 // isKeptKey reports whether name is a kept machine's folder: its key, 12 hex digits (macvm.RunKey). The
@@ -807,182 +815,4 @@ func keptBootScrub(spec runner.SandboxSpec, res guestagent.InitResult) *runner.K
 	}
 	s := runner.KeptScrub(*res.Scrub)
 	return &s
-}
-
-// The Mac's kept limit is reserved, not only checked: a new machine or a reset writes <key>.reserve, under
-// one lock for the whole Mac (kept/.reserve.lock), holding the worst case it adds, before its helper starts.
-// Every check counts the recorded machines and every other start's reservation, so two starts cannot both
-// fit in the same room. A new machine's reservation stops counting once its record exists (the record
-// counts it); the create drops it as it ends, and a sweep drops one whose create is gone.
-const (
-	keptReserveSuffix = ".reserve"
-	keptReserveLock   = ".reserve"
-	// keptReserveWait bounds the wait for the Mac's reservation lock.
-	keptReserveWait = 10 * time.Second
-)
-
-// keptReservation is a <key>.reserve file.
-type keptReservation struct {
-	// Bytes is the worst case the start adds; Prior, for a reset, the worst case of the disk it replaces.
-	Bytes int64 `json:"bytes"`
-	Prior int64 `json:"prior,omitempty"`
-	New   bool  `json:"new,omitempty"`
-	// RunDir is the run folder of the create that holds it.
-	RunDir string `json:"run_dir"`
-}
-
-// lockKeptReserve takes the Mac's reservation lock, waiting up to keptReserveWait for another start.
-func (c *MacVMConfig) lockKeptReserve() (func(), error) {
-	deadline := time.Now().Add(keptReserveWait)
-	for {
-		unlock, err := macvm.LockKept(filepath.Join(c.Layout.KeptDir(), keptReserveLock))
-		if !errors.Is(err, macvm.ErrKeptLocked) || time.Now().After(deadline) {
-			return unlock, err
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
-// keptReservations reads every reservation on the Mac, by the machine folder it is for. A new machine's
-// reservation whose record exists is left out: the record counts it.
-func (c *MacVMConfig) keptReservations() map[string]keptReservation {
-	des, _ := os.ReadDir(c.Layout.KeptDir())
-	out := map[string]keptReservation{}
-	for _, de := range des {
-		key, ok := strings.CutSuffix(de.Name(), keptReserveSuffix)
-		if !ok || !isKeptKey(key) {
-			continue
-		}
-		dir := filepath.Join(c.Layout.KeptDir(), key)
-		var r keptReservation
-		if b, err := os.ReadFile(dir + keptReserveSuffix); err != nil || json.Unmarshal(b, &r) != nil {
-			continue
-		}
-		if _, err := os.Lstat(filepath.Join(dir, macvm.KeptFile)); r.New && err == nil {
-			continue
-		}
-		out[dir] = r
-	}
-	return out
-}
-
-// keptReservedBytes is what the recorded machines and every reservation but dir's take at their worst.
-func (c *MacVMConfig) keptReservedBytes(dir string) (int64, error) {
-	held, err := c.keptWorstBytes()
-	for d, r := range c.keptReservations() {
-		if d != dir {
-			held += r.Bytes
-		}
-	}
-	return held, err
-}
-
-// reserveKept reserves what spec's new machine or reset adds to the Mac's kept disk at its worst, against
-// the limit: a new machine's worst case, or for a reset the base's worst case less the disk it replaces.
-// It refuses a start that would pass the limit. The base is read again under the lock, into man, and
-// pinned in kept by its digest: the helper clones only that base and refuses the boot, before it touches a
-// reset's old disk, when the base has changed since (macvm.ErrKeptBaseChanged). release drops the
-// reservation.
-func (c *MacVMConfig) reserveKept(spec runner.SandboxSpec, man *macvm.Manifest, kept *macvm.KeptRun) (release func(), err error) {
-	k := spec.KeptMachine
-	dir := c.keptDir(k.ID)
-	unlock, err := c.lockKeptReserve()
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-	if err := c.pinKeptBase(spec, man, kept); err != nil {
-		return nil, err
-	}
-	r := keptReservation{Bytes: keptWorst(*man), New: k.Mode == macvm.KeptNew, RunDir: c.runDir(spec.RunID)}
-	if !r.New {
-		r.Prior = keptWorstOf(dir)
-		r.Bytes = max(0, r.Bytes-r.Prior)
-	}
-	held, err := c.keptReservedBytes(dir)
-	if err != nil {
-		return nil, err
-	}
-	if held+r.Bytes > c.LimitBytes {
-		return nil, keptSaidMacLimit(c.LimitBytes, r.Bytes)
-	}
-	b, _ := json.Marshal(r)
-	if err := os.WriteFile(dir+keptReserveSuffix, b, 0o600); err != nil {
-		return nil, fmt.Errorf("docker: reserve the kept machine's disk: %w", err)
-	}
-	return func() { _ = os.Remove(dir + keptReserveSuffix) }, nil
-}
-
-// pinKeptBase reads the run's base, its digest before and after, into man and kept.BaseDigest; a base
-// replaced while it is read is refused as changed. The base is checked against the run again.
-func (c *MacVMConfig) pinKeptBase(spec runner.SandboxSpec, man *macvm.Manifest, kept *macvm.KeptRun) error {
-	base, err := c.Layout.NamedBaseDir(spec.MacOSBase)
-	if err != nil {
-		return fmt.Errorf("docker: %w", err)
-	}
-	digest, err := macvm.BaseDigest(base)
-	if err != nil {
-		return fmt.Errorf("docker: %w", err)
-	}
-	m, err := macvm.ReadyBase(base)
-	if err != nil {
-		return fmt.Errorf("docker: %w", err)
-	}
-	if again, err := macvm.BaseDigest(base); err != nil || again != digest {
-		return keptRefusal(keptSaidBase)
-	}
-	if err := macVMFits(spec, m); err != nil {
-		return err
-	}
-	*man, kept.BaseDigest = m, digest
-	return nil
-}
-
-// keptConfirmReserve checks, once a new machine's or a reset's helper has cloned, the disk it cloned
-// against the limit, as a second line behind the pinned base digest (pinKeptBase): a clone that needs more
-// than was reserved and no longer fits is refused, and the create's rollback drops a new machine.
-func (c *MacVMConfig) keptConfirmReserve(runDir string, runID uuid.UUID) error {
-	cfg, err := readMacRun(runDir, runID)
-	if err != nil || cfg.Kept == nil || cfg.Kept.Mode == macvm.KeptResume {
-		return nil
-	}
-	dir := c.Layout.KeptMachineDir(cfg.Kept.ID)
-	unlock, err := c.lockKeptReserve()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	var r keptReservation
-	if b, err := os.ReadFile(dir + keptReserveSuffix); err != nil || json.Unmarshal(b, &r) != nil {
-		return nil // not this create's to confirm
-	}
-	cloned := keptWorstOf(dir)
-	if need := max(0, cloned-r.Prior); need <= r.Bytes {
-		return nil
-	}
-	held, err := c.keptReservedBytes(dir) // the machine's record now counts the disk it cloned
-	if err != nil || held <= c.LimitBytes {
-		return err
-	}
-	return keptSaidMacLimit(c.LimitBytes, max(0, cloned-r.Prior))
-}
-
-// sweepKeptReservations drops a reservation whose create is gone: its run folder is not on the Mac and
-// it is older than a create's wait for its helper.
-func (c *MacVMConfig) sweepKeptReservations() error {
-	if _, err := os.Lstat(c.Layout.KeptDir()); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	unlock, err := c.lockKeptReserve()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	for dir, r := range c.keptReservations() {
-		fi, err := os.Lstat(dir + keptReserveSuffix)
-		if _, rerr := os.Lstat(r.RunDir); err == nil && errors.Is(rerr, fs.ErrNotExist) && time.Since(fi.ModTime()) > macHelperStartWait {
-			_ = os.Remove(dir + keptReserveSuffix)
-		}
-	}
-	return nil
 }

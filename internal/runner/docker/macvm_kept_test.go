@@ -1154,3 +1154,68 @@ func TestKeptRecoveryKeepsTheMachinesIdleDays(t *testing.T) {
 		}
 	}
 }
+
+// A start's record published between another start's listing of the kept folder and its reads never
+// hides that start: its key counts its reservation while it has one, and counts it once.
+func TestKeptReservationCountsARecordPublishedMeanwhile(t *testing.T) {
+	r, _ := newKeptRig(t)
+	man, err := r.d.refuseMacVMSpec(macSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := uuid.New()
+	if _, err := r.c.reserveKept(keptSpec(a, macvm.KeptNew), &man, &macvm.KeptRun{}); err != nil {
+		t.Fatal(err)
+	}
+	r.c.keptListed = func() { // A's helper publishes its record as B reads
+		r.c.keptListed = nil
+		writeKeptFolder(t, r, macvm.KeptRecord{ID: a.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a"})
+	}
+	r.c.LimitBytes = 60 << 30
+	if _, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), &man, &macvm.KeptRun{}); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 60 GB") {
+		t.Fatalf("B beside A's published record: %v", err)
+	}
+	if !keptExists(r.c.Layout.KeptMachineDir(a.String())) {
+		t.Fatal("the barrier did not publish A's record")
+	}
+	r.c.LimitBytes = 110 << 30
+	if _, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), &man, &macvm.KeptRun{}); err != nil {
+		t.Fatalf("A's key counted twice: %v", err)
+	}
+}
+
+// A clone that no longer fits the Mac's total when its helper has made it is refused: a new machine is
+// dropped before its reservation goes, and a reset's replaced disk stays counted, by its record, once the
+// reservation is gone.
+func TestKeptConfirmRefusesACloneOverTheMacTotal(t *testing.T) {
+	r, _ := newKeptRig(t)
+	ctx := context.Background()
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	spawn := r.c.spawn
+	r.c.spawn = func(run string) error {
+		r.c.LimitBytes = 10 << 30 // the Mac's room shrinks after the reservation, before the confirm
+		return spawn(run)
+	}
+	for _, mode := range []string{macvm.KeptNew, macvm.KeptFresh} {
+		r.c.LimitBytes = 110 << 30
+		kid := id
+		if mode == macvm.KeptNew {
+			kid = uuid.New()
+		}
+		if _, err := r.d.CreateSandbox(ctx, keptSpec(kid, mode)); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 10 GB") {
+			t.Fatalf("%s: a clone over the Mac's total: %v", mode, err)
+		}
+		kdir := r.c.Layout.KeptMachineDir(kid.String())
+		if keptExists(kdir + keptReserveSuffix) {
+			t.Fatalf("%s: the reservation outlived the create", mode)
+		}
+		if mode == macvm.KeptNew && keptExists(kdir) {
+			t.Fatal("the refused new machine was kept")
+		}
+	}
+	held, err := r.c.keptMacBytes("")
+	if err != nil || held < keptWorstOf(dir) || !keptExists(filepath.Join(dir, macvm.DiskFile)) {
+		t.Fatalf("the reset disk is not counted: %d, %v", held, err)
+	}
+}
