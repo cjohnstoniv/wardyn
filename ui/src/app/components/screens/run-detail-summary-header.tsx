@@ -6,6 +6,7 @@
 // SummaryHeader — run-detail's header, directly above run-detail-command-bar.tsx's
 // tabs row. Two rows: the title with its actions, then the run's state once
 // and the facts about it as plain, visible text (nothing hides in a tooltip).
+import { WallPresetQueuedChanged } from "./run-detail/wall-preset-run-lines";
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { ChevronDown, Laptop, Layers, MoreHorizontal, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
@@ -316,6 +317,8 @@ export function SummaryHeader({
             <span className="block min-w-0 truncate">{run.failure_hint}</span>
           </Chip>
         )}
+        {/* P-85: under the queued run's end sentence, when its wall preset changed or went while it waited. */}
+        <WallPresetQueuedChanged preset={run.wall_preset} className="basis-full" />
         {run.model_provider_id && <RunProviderChip run={run} />}
         <ConfinementChip value={run.confinement_class} />
         {workload && (

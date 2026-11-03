@@ -46,6 +46,7 @@ describe("wall presets wire", () => {
     ["internal/types/wall_preset.go", "WallPreset", "WallPreset"],
     ["pkg/client/wall_presets.go", "WallPresetList", "WallPresetList"],
     ["pkg/client/wall_presets.go", "WallPresetSaveRequest", "WallPresetSaveRequest"],
+    ["internal/types/wall_preset.go", "WallPresetChange", "WallPresetChange"],
   ])("%#: %s has full parity with its TS mirror", (file, goName, tsName) => {
     const tags = goJSONTags(read(file), goName);
     expect(tags.length).toBeGreaterThanOrEqual(2);

@@ -48,9 +48,17 @@ export interface WallPresetSaveRequest {
  * read by anyone but the run's owner carries its scope alone: no id, name or version.
  */
 export interface RunWallPreset {
+  /** What the preset became while the run waited, once that ended it queue_policy_changed. */
+  changed?: WallPresetChange;
   id?: string;
   name?: string;
   scope: WallPresetScope;
   group_id?: string;
   version?: number;
+}
+
+/** Mirrors Go's types.WallPresetChange: a wall preset as a queued run's start found it, at a version or gone. */
+export interface WallPresetChange {
+  version?: number;
+  gone?: boolean;
 }

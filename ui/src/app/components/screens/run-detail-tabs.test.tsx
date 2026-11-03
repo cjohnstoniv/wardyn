@@ -212,6 +212,31 @@ describe("RunDetailScreen — failure-hint chip", () => {
   });
 });
 
+// P-85: the queued run's end sentence, then a muted line saying which wall preset version changed. Rendered whole page.
+describe("RunDetailScreen — a queued run whose wall preset changed (P-85)", () => {
+  const ended = { ...RUN, state: "FAILED", failure_hint: "The policy this run used changed while it waited. Start it again to review it." };
+  const line = () => screen.queryByTestId("wall-preset-queued-changed");
+
+  it("names the preset and both versions when its version changed", async () => {
+    renderRun({ ...ended, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 3, changed: { version: 4 } } } as typeof RUN);
+    expect(await screen.findByText(/The policy this run used changed/)).toBeInTheDocument();
+    expect(line()).toHaveTextContent("The run was queued with the Docs triage wall preset, version 3. It was at version 4 when the run would have started.");
+  });
+
+  it("says the preset is no longer available when it went", async () => {
+    renderRun({ ...ended, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 3, changed: { gone: true } } } as typeof RUN);
+    await screen.findByText(/The policy this run used changed/);
+    expect(line()).toHaveTextContent("The run was queued with the Docs triage wall preset, version 3. It is no longer available.");
+  });
+
+  it("names nothing for a personal preset read by a non-owner, which carries its scope alone", async () => {
+    renderRun({ ...ended, wall_preset: { scope: "person", changed: { version: 5 } } } as typeof RUN);
+    await screen.findByText(/The policy this run used changed/);
+    expect(line()).toBeNull();
+    expect(document.body).not.toHaveTextContent(/queued with the/);
+  });
+});
+
 // review U-01: onClone shares run-card.tsx's cloneRun refusal via
 // cloneFromAudit — an unreadable run.create row (here, listAuditMock's own
 // default: an empty trail) must toast and never navigate, exactly like the

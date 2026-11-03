@@ -118,6 +118,7 @@ export const WALL_PRESETS = {
   PUSH_REFUSED_BY: (name: string) => `Refused by this run's ${name} wall preset.`,
   QUEUED_CHANGED: (name: string, queued: string | number, now: string | number) =>
     `The run was queued with the ${name} wall preset, version ${queued}. It was at version ${now} when the run would have started.`,
+  QUEUED_GONE: (name: string, queued: string | number) => `The run was queued with the ${name} wall preset, version ${queued}. It is no longer available.`,
   CHANGE_HEADING: (name: string) => `Wall preset: ${name}`,
   CHANGE_HEADING_PERSONAL: "A personal wall preset",
   // The Why card's wall_preset arm.
