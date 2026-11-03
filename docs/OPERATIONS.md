@@ -5589,7 +5589,7 @@ What the switch needs, and refuses to render or boot without:
     The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
     credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.
