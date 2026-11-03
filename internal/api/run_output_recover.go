@@ -49,55 +49,75 @@ func (s *Server) outputRecoverWait() time.Duration {
 // substrate into a fresh tail, which the finisher then persists, or writes the
 // capture-gap row. reason is the gap's audited reason when there is nothing to
 // recover from at all (no recoverer, no sandbox). A final row is never replaced.
+//
+// A macOS VM task run's agent output is recorded from the re-read (openRecoveryTail); where the re-read
+// gives nothing (erased, not covered, nothing to read from, or a read that found nothing), the run is
+// marked not recorded with the same reason (declineAgentOutput) and keeps running.
 func (s *Server) recoverRunOutput(ctx context.Context, st store.RunOutputStore, run types.AgentRun, reason string) {
-	if !s.recoveryOwed(ctx, st, run) {
+	owed, erased := s.recoveryOwed(ctx, st, run)
+	if erased {
+		s.declineAgentOutput(ctx, run, "erased")
+	}
+	if !owed {
 		return
 	}
 	rec, ok := s.cfg.Runner.(runner.OutputRecoverer)
 	switch {
 	case !s.maskCovered(ctx, run.ID):
 		s.writeGapRow(ctx, st, run.ID, "mask_uncovered")
+		s.declineAgentOutput(ctx, run, "mask_uncovered")
 		return
 	case !ok || run.SandboxRef == "":
 		s.writeGapRow(ctx, st, run.ID, reason)
+		s.declineAgentOutput(ctx, run, reason)
 		return
 	}
 	tw := s.openRecoveryTail(run)
 	if tw == nil {
 		// Erased, or coverage lost between the check and the open.
 		s.writeGapRow(ctx, st, run.ID, "mask_uncovered")
+		s.declineAgentOutput(ctx, run, "mask_uncovered")
 		return
 	}
-	err := s.readSubstrateOutput(ctx, rec, run.SandboxRef, tw)
-	s.noteRecoveryEnd(run.ID, tw.t, err)
+	s.endRecovery(run.ID, tw, s.readSubstrateOutput(ctx, rec, run.SandboxRef, tw))
+}
+
+// endRecovery ends a recovery's read: how it ended is noted (noteRecoveryEnd), a read that found nothing
+// to read leaves the run's agent output unrecorded (its cast declines), and the drain ends.
+func (s *Server) endRecovery(runID uuid.UUID, tw *tailWriter, err error) {
+	if reason := s.noteRecoveryEnd(runID, tw.t, err); reason != "" && tw.cast != nil {
+		tw.cast.decline(reason)
+	}
 	tw.EndDrain(recoveryDrainErr(err))
 }
 
 // recoveryOwed reports whether a recovery may run at all: no final row exists
-// (a recovery would replace it) and the run was not erased. A run with no row
-// of any kind and no sandbox never reached dispatch's output step (it failed
-// while STARTING): nothing was owed, so it gets no gap row.
-func (s *Server) recoveryOwed(ctx context.Context, st store.RunOutputStore, run types.AgentRun) bool {
+// (a recovery would replace it) and the run was not erased (erased says it was).
+// A run with no row of any kind and no sandbox never reached dispatch's output
+// step (it failed while STARTING): nothing was owed, so it gets no gap row.
+func (s *Server) recoveryOwed(ctx context.Context, st store.RunOutputStore, run types.AgentRun) (owed, erased bool) {
 	runID := run.ID
 	row, found, err := st.GetRunOutput(ctx, runID)
 	switch {
 	case errors.Is(err, store.ErrRunOutputErased):
 		s.fenceRunOutput(runID)
-		return false
+		return false, true
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: could not read a run's output row before recovering it",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
-		return false
+		return false, false
 	}
 	if !found && run.SandboxRef == "" {
-		return false
+		return false, false
 	}
-	return !found || row.CapturedAt == nil
+	return !found || row.CapturedAt == nil, false
 }
 
 // openRecoveryTail opens a fresh tail for run, marks it recovered and opens its
 // drain, or returns nil when the run keeps none. A fresh ring is what makes a
-// re-read replace the capture, never append to one.
+// re-read replace the capture, never append to one. A macOS VM task run's re-read
+// is recorded as agent-recovered (attachAgentCast), beside any agent cast the
+// process that dispatched it saved.
 func (s *Server) openRecoveryTail(run types.AgentRun) *tailWriter {
 	w := s.openExecOutput(run, false)
 	tw, _ := w.(*tailWriter)
@@ -109,6 +129,7 @@ func (s *Server) openRecoveryTail(run types.AgentRun) *tailWriter {
 	tw.t.recovered = true
 	tw.t.fmu.Unlock()
 	tw.BeginDrain()
+	s.attachAgentCast(run, tw, agentCastRecoveredSession)
 	return tw
 }
 
@@ -130,9 +151,10 @@ func (s *Server) readSubstrateOutput(ctx context.Context, rec runner.OutputRecov
 }
 
 // noteRecoveryEnd records a recovery that found nothing to read as a gap, which
-// the finisher writes in place of the tail. Any other error leaves the tail, and
-// its drain ends in that error, so the row is incomplete.
-func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) {
+// the finisher writes in place of the tail, and returns the gap's reason. Any
+// other error leaves the tail, and its drain ends in that error, so the row is
+// incomplete; the reason is then "".
+func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) string {
 	reason := ""
 	switch {
 	case errors.Is(err, runner.ErrOutputUnrecoverable):
@@ -148,11 +170,12 @@ func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) 
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
 	if reason == "" {
-		return
+		return ""
 	}
 	e.fmu.Lock()
 	e.gapReason = reason
 	e.fmu.Unlock()
+	return reason
 }
 
 // recoveryDrainErr is the error a recovery's drain ends with: none for a gap
@@ -179,7 +202,11 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.Interactive || runIsUnrecordable(run) || s.execOutputUncaptured(ctx, run) || !s.recoveryOwed(ctx, st, run) || !s.maskCovered(ctx, runID) {
+	if err != nil || run.Interactive || runIsUnrecordable(run) || s.execOutputUncaptured(ctx, run) {
+		return
+	}
+	// A live adoption that cannot start records nothing about the run: the finaliser decides at its end.
+	if owed, _ := s.recoveryOwed(ctx, st, run); !owed || !s.maskCovered(ctx, runID) {
 		return
 	}
 	tw := s.openRecoveryTail(run)
@@ -187,8 +214,6 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 		return
 	}
 	s.goBackground(func() {
-		err := rec.RecoverOutput(runner.WithOutputRun(ctx, runID), ref, tw)
-		s.noteRecoveryEnd(runID, tw.t, err)
-		tw.EndDrain(recoveryDrainErr(err))
+		s.endRecovery(runID, tw, rec.RecoverOutput(runner.WithOutputRun(ctx, runID), ref, tw))
 	})
 }

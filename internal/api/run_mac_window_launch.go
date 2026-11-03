@@ -149,7 +149,8 @@ func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 // at_start: rows 1, 4, 5 and 6, and the part of row 3 that is about who asks (a human with a principal, no
 // delegated token, not an operator's run), so Review shows a refusal before launch. The rest need a run, a runner or a
 // registry, and the launch hook asks the whole of macWindowRefusal again once the run is up. The recording level
-// is resolved at dispatch, so the level the request's policy sets is read here.
+// is resolved at dispatch; it is resolved here from the same layers (createRecordingChoice), so a locked
+// organisation level or the caller's walls refuse the window at create, not at launch.
 func (s *Server) macWindowCreateRefusal(ctx context.Context, f *runFold) *runRefusal {
 	if rf := s.macWindowSiteRefusal(ctx); rf != nil {
 		return rf
@@ -161,7 +162,11 @@ func (s *Server) macWindowCreateRefusal(ctx context.Context, f *runFold) *runRef
 	if rf := s.macWindowGovernanceRefusal(ctx, f.ceiling.Limits, f.ceiling.Unit, uuid.Nil); rf != nil {
 		return rf
 	}
-	if f.spec.Recording == types.RecordingScreenActions {
+	choice, rf := s.createRecordingChoice(ctx, f)
+	if rf != nil {
+		return rf
+	}
+	if choice.Resolve() == types.RecordingScreenActions {
 		return runError(http.StatusForbidden, reasonMacWindowUnrecorded, macWindowUnrecordedMsg)
 	}
 	if s.macOSDesktopSignInsOff(ctx, types.AgentRun{MachineKind: types.MachineKind(f.req.MachineKind), Agent: f.req.Agent}) {

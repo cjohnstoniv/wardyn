@@ -643,10 +643,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
-	if !s.applyDispatchRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr) {
+	if !s.startRunRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr, p.Interactive) {
 		return
 	}
-	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.

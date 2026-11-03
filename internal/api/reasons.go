@@ -253,7 +253,7 @@ const (
 	reasonMacWindowSiteOff        = "mac_window_site_off"        // macos_vm.allow_attended_window is not true: no window on this install
 	reasonMacWindowNotMacOSVM     = "mac_window_not_macos_vm"    // the run is not a macOS VM run
 	reasonMacWindowNotYourMac     = "mac_window_not_your_mac"    // the run is not on a Mac whose runner the caller registered
-	reasonMacWindowUnrecorded     = "mac_window_unrecorded"      // the run's recording level is Screen and actions, which a macOS VM's screen can't meet
+	reasonMacWindowUnrecorded     = "mac_window_unrecorded"      // the run's recording level is Screen and actions, and a window on the Mac isn't recorded
 	reasonMacWindowOffline        = "mac_window_offline"         // the run's runner is not connected
 	reasonMacWindowRunnerTooOld   = "mac_window_runner_too_old"  // the runner's caps say it can't open a window
 	reasonMacWindowDesktopControl = "mac_window_desktop_control" // a browser desktop that had control of the run did not close in time: one keyboard at a time

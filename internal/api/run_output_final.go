@@ -85,13 +85,22 @@ func (c *outputCapture) dropSealed() (late func(), sealed bool) {
 // tailWriter is what the runner receives as SandboxSpec.ExecOutput: the masking
 // writer's pipe, plus runner.OutputDrainer so the drivers report the start and
 // end of each copy into it and the finisher can wait for the last bytes.
+//
+// cast, when set (attachAgentCast), is a macOS VM task run's agent output recording: every byte the tail
+// takes, the gap marker included, is masked into it too, and it is saved when the copy ends. It is set
+// before the writer is handed to a runner, and never changed after.
 type tailWriter struct {
-	t *execOutputTail
+	t    *execOutputTail
+	cast *agentCast
 }
 
 func (w *tailWriter) Write(p []byte) (int, error) {
 	w.t.arrived.Store(w.t.ring.now().UnixNano())
-	return w.t.in.Write(p)
+	n, err := w.t.in.Write(p)
+	if w.cast != nil {
+		w.cast.write(p)
+	}
+	return n, err
 }
 
 func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
@@ -99,6 +108,9 @@ func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
 // OutputGap (runner.OutputGapMarker): a recovered copy starts after skipped bytes the runner had
 // already discarded. The row says so where they would have been and is marked incomplete.
 func (w *tailWriter) OutputGap(skipped int64) {
+	if w.cast != nil {
+		w.cast.gapBytes.Store(skipped)
+	}
 	w.t.mw.mu.Lock()
 	w.t.mw.capture.dropped = true
 	w.t.mw.mu.Unlock()
@@ -112,11 +124,15 @@ func outputGapMarker(skipped int64) string {
 
 // EndDrain must not block (runner.OutputDrainer), and the drain may end only
 // once the copy's bytes are through the masker, or the finisher would seal ahead
-// of them: the end waits for that on its own goroutine.
+// of them: the end waits for that on its own goroutine. The agent output cast is
+// saved after the drain ends, so its store wait never holds the finisher.
 func (w *tailWriter) EndDrain(err error) {
 	go func() {
 		w.t.in.flush()
 		w.t.endDrain(err)
+		if w.cast != nil {
+			w.cast.finish()
+		}
 	}()
 }
 
