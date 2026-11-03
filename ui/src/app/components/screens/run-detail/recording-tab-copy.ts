@@ -12,7 +12,7 @@ import { clockTime } from "../../../lib/format";
 import type { AuditEvent } from "../../../lib/types";
 
 export function sessionOptionLabel(e: AuditEvent): string {
-  return `Session ended ${clockTime(e.time)} · ${e.actor}`;
+  return `Session ended ${clockTime(e.time)} · ${e.actor}${e.data?.incomplete === true ? " · incomplete" : ""}`;
 }
 
 // F1-F11: picking an attach session whose cast is

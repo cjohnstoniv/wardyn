@@ -4,11 +4,15 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -215,12 +219,14 @@ func (c *agentCast) take() func() error {
 	switch {
 	case declined != "":
 		return func() error { return c.s.declineAgentOutput(ctx, c.run, declined) }
-	case !had && maskGap:
-		return func() error { return c.s.declineAgentOutput(ctx, c.run, "mask_gap") }
 	case !had && readErr != nil:
+		// Before mask_gap: the sweep's re-read masks afresh and may keep what this copy dropped, and its
+		// give-up (agentCastReadGiveUp) still bounds it.
 		return func() error {
 			return agentCastStoreErr(ctx, c.run.ID, "re-read a run's agent output", fmt.Errorf("%w: %w", errAgentCastUnread, readErr))
 		}
+	case !had && maskGap:
+		return func() error { return c.s.declineAgentOutput(ctx, c.run, "mask_gap") }
 	case !had:
 		return func() error { return c.s.settleAgentCast(ctx, c.run.ID) }
 	case readErr != nil:
@@ -251,24 +257,27 @@ func (c *agentCast) flush() (had, maskGap bool) {
 func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readErr error, maskGap bool) error {
 	s, runID := c.s, c.run.ID
 	key := recording.CastKey(runID.String(), c.session)
+	flags := map[string]any{}
+	if truncated {
+		flags["truncated"], flags["limit_bytes"] = true, maxSessionCastBytes
+	}
+	if gap := c.gapBytes.Load(); gap > 0 {
+		flags["gap_bytes"] = gap
+	}
+	if readErr != nil {
+		flags["incomplete"], flags["read_error"] = true, readErr.Error()
+	}
+	if maskGap {
+		flags["incomplete"], flags["mask_gap"] = true, true
+	}
+	snap = stampCastFlags(snap, flags)
 	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
 	err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, runID.String(), c.session, bytes.NewReader(snap))
 	cancel()
 	data := map[string]any{"session": c.session, "key": key, "bytes": len(snap)}
-	if truncated {
-		data["truncated"], data["limit_bytes"] = true, maxSessionCastBytes
-	}
-	if gap := c.gapBytes.Load(); gap > 0 {
-		data["gap_bytes"] = gap
-	}
+	maps.Copy(data, flags)
 	if c.session == agentCastRecoveredSession {
 		data["recovered"] = true
-	}
-	if readErr != nil {
-		data["incomplete"], data["read_error"] = true, readErr.Error()
-	}
-	if maskGap {
-		data["incomplete"], data["mask_gap"] = true, true
 	}
 	outcome := "success"
 	if err != nil {
@@ -428,13 +437,20 @@ func (s *Server) storedAgentCasts(ctx context.Context, runID uuid.UUID) ([]store
 
 // settleStoredAgentCasts settles a run whose agent output cast is stored while it still owes one: the
 // process that saved it went, or its recorder refused, before the row. The run page finds a cast by its
-// session.recording.write row, so a success row naming each stored cast, from what the store says of it
-// (swept: true; the saver's other marks went with it), is durably written first, then the obligation is
-// cleared with the run recorded. A crash between leaves a second row on the next sweep; never none.
+// session.recording.write row, so a success row naming each stored cast is durably written first, then
+// the obligation is cleared with the run recorded. A crash between leaves a second row on the next
+// sweep; never none. The row (swept: true) carries the completeness the saver stamped in the cast's
+// header (storedCastFlags); a header that cannot be read says incomplete, completeness unknown, so a
+// cast is never called complete on no evidence.
 func (s *Server) settleStoredAgentCasts(ctx context.Context, st store.RunAgentCastStore, run types.AgentRun, stored []storedAgentCast) error {
 	for _, sc := range stored {
 		key := recording.CastKey(run.ID.String(), sc.session)
 		data := map[string]any{"session": sc.session, "key": key, "bytes": sc.size, "swept": true}
+		if flags, known := s.storedCastFlags(ctx, key); known {
+			maps.Copy(data, flags)
+		} else {
+			data["incomplete"], data["completeness"] = true, "unknown"
+		}
 		if sc.session == agentCastRecoveredSession {
 			data["recovered"] = true
 		}
@@ -458,4 +474,41 @@ func (w castCopy) Write(p []byte) (int, error) {
 func (w castCopy) OutputGap(skipped int64) {
 	w.c.gapBytes.Store(skipped)
 	w.c.write([]byte(outputGapMarker(skipped)))
+}
+
+// agentCastFlagsKey is the asciicast header key a saved agent cast keeps its completeness under: the
+// marks its row carries (truncated, gap_bytes, incomplete, read_error, mask_gap), absent when it has
+// none. Players ignore a header key they do not know.
+const agentCastFlagsKey = "wardyn_completeness"
+
+// stampCastFlags is snap with flags in its header line, or snap as it is when there are none.
+func stampCastFlags(snap []byte, flags map[string]any) []byte {
+	head, rest, ok := bytes.Cut(snap, []byte("\n"))
+	var h map[string]any
+	if len(flags) == 0 || !ok || json.Unmarshal(head, &h) != nil {
+		return snap
+	}
+	h[agentCastFlagsKey] = flags
+	b, err := json.Marshal(h)
+	if err != nil {
+		return snap
+	}
+	return append(append(b, '\n'), rest...)
+}
+
+// storedCastFlags reads the completeness a stored cast's header keeps (stampCastFlags): known is false
+// when the header cannot be read, and flags is nil for a cast saved with none.
+func (s *Server) storedCastFlags(ctx context.Context, key string) (flags map[string]any, known bool) {
+	rc, err := s.cfg.RecordingStore.OpenCast(ctx, key)
+	if err != nil {
+		return nil, false
+	}
+	defer rc.Close()
+	line, err := bufio.NewReader(io.LimitReader(rc, 64<<10)).ReadBytes('\n')
+	var h map[string]any
+	if (err != nil && !errors.Is(err, io.EOF)) || json.Unmarshal(bytes.TrimSpace(line), &h) != nil {
+		return nil, false
+	}
+	flags, _ = h[agentCastFlagsKey].(map[string]any)
+	return flags, true
 }
