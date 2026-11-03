@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -91,11 +93,29 @@ func (d *Driver) OpenWindow(ctx context.Context, ref string, req runner.MacWindo
 	issueMacWindow(v.runID, req.GrantID)
 	w, err := startMacWindow(ctx, conn, req)
 	if err != nil {
-		forgetMacWindow(v.runID, req.GrantID)
+		c.forgetMacWindowAfter(v.runID, req.GrantID, err)
 		return nil, err
 	}
-	go func() { <-w.Ended(); forgetMacWindow(v.runID, req.GrantID) }()
+	if c.OnUnexpectedWindow == nil { // no watcher to forget it on the helper's closed event
+		go func() { <-w.Ended(); forgetMacWindow(v.runID, req.GrantID) }()
+	}
 	return w, nil
+}
+
+// macWindowGrace is how long a grant stays issued after an open that failed without the helper refusing
+// it: the helper may have opened the window just as the open gave up, and its open event must not read as a
+// stranger's. The helper's closed event (the connection is gone) forgets it sooner.
+const macWindowGrace = time.Minute
+
+// forgetMacWindowAfter forgets the grant of a failed open: at once when the helper refused it (no window
+// was opened), after macWindowGrace when it may have opened one and a watcher will hear of it.
+func (c *MacVMConfig) forgetMacWindowAfter(runID uuid.UUID, grant string, err error) {
+	var refusal *runner.MacWindowRefusal
+	if c.OnUnexpectedWindow == nil || errors.As(err, &refusal) || errors.Is(err, runner.ErrMacWindowOpen) || errors.Is(err, runner.ErrMacWindowHelperOld) {
+		forgetMacWindow(runID, grant)
+		return
+	}
+	time.AfterFunc(macWindowGrace, func() { forgetMacWindow(runID, grant) })
 }
 
 // startMacWindow asks the helper on conn for a window and, once it is up, holds conn as the window. conn

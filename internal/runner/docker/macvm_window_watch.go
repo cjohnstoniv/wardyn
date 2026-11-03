@@ -41,32 +41,38 @@ func issuedMacWindow(runID uuid.UUID, grant string) bool {
 const (
 	macWindowEventType    = "window"
 	macWindowEventOpen    = "open"
+	macWindowEventShut    = "closed"
 	macWindowWatchBackoff = 30 * time.Second
 )
 
-// watchWindows keeps one events connection to runID's helper until ctx ends, redialling after a loss
-// (the helper may not be up yet, or restarted) with a growing wait.
+// watchWindows keeps one events connection to runID's helper until ctx ends. A helper that is not up yet
+// (the dial fails) or whose stream ended cleanly is tried again every second; one that fails the
+// protocol is tried again after a growing wait.
 func (c *MacVMConfig) watchWindows(ctx context.Context, runID uuid.UUID) {
-	wait := time.Second
+	backoff := time.Second
 	for ctx.Err() == nil {
+		delay := time.Second
 		if path, err := c.sockPath(runID, macvm.ControlSock); err == nil {
 			var nd net.Dialer
 			if conn, err := nd.DialContext(ctx, "unix", path); err == nil {
-				if watchWindowEvents(ctx, conn, runID, c.OnUnexpectedWindow) == nil {
-					wait = time.Second
+				if err := watchWindowEvents(ctx, conn, runID, c.OnUnexpectedWindow); err != nil {
+					delay, backoff = backoff, min(backoff*2, macWindowWatchBackoff)
+				} else {
+					backoff = time.Second
 				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(wait):
+		case <-time.After(delay):
 		}
-		wait = min(wait*2, macWindowWatchBackoff)
 	}
 }
 
 // watchWindowEvents subscribes on conn to the helper's events and reports each window open whose grant
-// was not issued here. It closes conn and returns when the stream ends or ctx does; nil means the
+// was not issued here. A report runs on its own goroutine, so a slow receiver never stops the read (the
+// helper drops events for a reader that falls behind). An issued grant is forgotten when the helper says
+// that window closed, not before. It closes conn and returns when the stream ends or ctx does; nil means the
 // subscription was made, so the caller may redial at once.
 func watchWindowEvents(ctx context.Context, conn net.Conn, runID uuid.UUID, report func(uuid.UUID, string, time.Time)) error {
 	defer conn.Close()
@@ -94,8 +100,17 @@ func watchWindowEvents(ctx context.Context, conn net.Conn, runID uuid.UUID, repo
 		if err := readLine(rd, &r); err != nil {
 			return nil
 		}
-		if e := r.Event; e != nil && e.Type == macWindowEventType && e.Detail == macWindowEventOpen && !issuedMacWindow(runID, e.Grant) && report != nil {
-			report(runID, e.Grant, time.Now())
+		e := r.Event
+		if e == nil || e.Type != macWindowEventType {
+			continue
+		}
+		switch e.Detail {
+		case macWindowEventOpen:
+			if report != nil && !issuedMacWindow(runID, e.Grant) {
+				go report(runID, e.Grant, time.Now())
+			}
+		case macWindowEventShut:
+			forgetMacWindow(runID, e.Grant)
 		}
 	}
 }

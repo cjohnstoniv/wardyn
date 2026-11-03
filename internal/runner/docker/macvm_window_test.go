@@ -13,8 +13,8 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -198,27 +198,14 @@ func TestMacWindowStuckHelperFailsClosed(t *testing.T) {
 	}
 }
 
-// The events watcher reports a window open whose grant this runner did not issue (someone ran the op
-// on the Mac), never one it issued, never a close, and keeps watching after each.
-func TestMacWindowWatcherReportsOnlyStrangers(t *testing.T) {
+// watchFeed starts watchWindowEvents on one end of a pipe, answers its hello and events requests, and
+// returns the helper's end and the watcher's result.
+func watchFeed(t *testing.T, runID uuid.UUID, report func(uuid.UUID, string, time.Time)) (net.Conn, <-chan error) {
+	t.Helper()
 	a, b := net.Pipe()
-	defer b.Close()
-	runID := uuid.New()
-	issueMacWindow(runID, "ours")
-	defer forgetMacWindow(runID, "ours")
-	var mu sync.Mutex
-	var seen []string
+	t.Cleanup(func() { _ = b.Close() })
 	done := make(chan error, 1)
-	go func() {
-		done <- watchWindowEvents(t.Context(), a, runID, func(id uuid.UUID, grant string, at time.Time) {
-			if id != runID || at.IsZero() {
-				t.Errorf("report for %s at %v", id, at)
-			}
-			mu.Lock()
-			seen = append(seen, grant)
-			mu.Unlock()
-		})
-	}()
+	go func() { done <- watchWindowEvents(t.Context(), a, runID, report) }()
 	rd := bufio.NewReader(b)
 	for _, want := range []string{macvm.OpHello, macvm.OpEvents} {
 		line, err := rd.ReadBytes('\n')
@@ -232,24 +219,99 @@ func TestMacWindowWatcherReportsOnlyStrangers(t *testing.T) {
 			_, _ = b.Write([]byte(`{"ok":true}` + "\n"))
 		}
 	}
+	return b, done
+}
+
+func windowEvent(detail, grant string) string {
+	return `{"ok":true,"event":{"type":"window","detail":"` + detail + `","grant":"` + grant + `"}}` + "\n"
+}
+
+// The events watcher reports a window open whose grant this runner did not issue (someone ran the op on
+// the Mac), never one it issued, never a close, and keeps watching after each.
+func TestMacWindowWatcherReportsOnlyStrangers(t *testing.T) {
+	runID := uuid.New()
+	issueMacWindow(runID, "ours")
+	defer forgetMacWindow(runID, "ours")
+	seen := make(chan string, 4)
+	b, done := watchFeed(t, runID, func(id uuid.UUID, grant string, at time.Time) {
+		if id != runID || at.IsZero() {
+			t.Errorf("report for %s at %v", id, at)
+		}
+		seen <- grant
+	})
 	for _, ev := range []string{
-		`{"ok":true,"event":{"type":"guest_agent","detail":"connected"}}`,
-		`{"ok":true,"event":{"type":"window","detail":"open","grant":"ours"}}`,
-		`{"ok":true,"event":{"type":"window","detail":"closed","grant":"ours","reason":"person"}}`,
-		`{"ok":true,"event":{"type":"window","detail":"closed","grant":"stranger","reason":"person"}}`,
-		`{"ok":true,"event":{"type":"window","detail":"open","grant":"stranger"}}`,
-		`{"ok":true,"event":{"type":"window","detail":"open"}}`,
+		`{"ok":true,"event":{"type":"guest_agent","detail":"connected"}}` + "\n",
+		windowEvent("open", "ours"),
+		windowEvent("closed", "stranger"),
+		windowEvent("open", "stranger"),
+		`{"ok":true,"event":{"type":"window","detail":"open"}}` + "\n",
 	} {
-		_, _ = b.Write([]byte(ev + "\n"))
+		_, _ = b.Write([]byte(ev))
 	}
 	_ = b.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(seen) != 2 || seen[0] != "stranger" || seen[1] != "" {
-		t.Fatalf("reported grants %q, want [stranger, \"\"]", seen)
+	got := []string{<-seen, <-seen}
+	slices.Sort(got)
+	if got[0] != "" || got[1] != "stranger" {
+		t.Fatalf("reported grants %q, want [\"\", stranger]", got)
+	}
+	select {
+	case g := <-seen:
+		t.Fatalf("a third report: %q", g)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A report that never returns does not stop the events read: later events are still read, and the helper
+// (which drops events for a reader that falls behind) is never kept waiting.
+func TestMacWindowWatcherReportNeverBlocksTheRead(t *testing.T) {
+	runID := uuid.New()
+	issueMacWindow(runID, "ours")
+	defer forgetMacWindow(runID, "ours")
+	stall := make(chan struct{})
+	defer close(stall)
+	b, done := watchFeed(t, runID, func(uuid.UUID, string, time.Time) { <-stall })
+	wrote := make(chan struct{})
+	go func() {
+		defer close(wrote)
+		for _, ev := range []string{windowEvent("open", "stranger"), windowEvent("closed", "ours"), windowEvent("open", "another")} {
+			_, _ = b.Write([]byte(ev)) // a pipe write returns only once the watcher has read it
+		}
+	}()
+	select {
+	case <-wrote:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watcher stopped reading while a report was stalled")
+	}
+	if issuedMacWindow(runID, "ours") {
+		t.Fatal("an issued grant outlived the helper's closed event for it")
+	}
+	_ = b.Close()
+	<-done
+}
+
+// An issued grant is forgotten on the helper's closed event for it, not before: its open is not reported,
+// and a later open with the same grant, once it has closed, is.
+func TestMacWindowWatcherForgetsAGrantOnTheHelpersClose(t *testing.T) {
+	runID := uuid.New()
+	issueMacWindow(runID, "g1")
+	defer forgetMacWindow(runID, "g1")
+	seen := make(chan string, 2)
+	b, done := watchFeed(t, runID, func(_ uuid.UUID, grant string, _ time.Time) { seen <- grant })
+	_, _ = b.Write([]byte(windowEvent("open", "g1")))
+	_, _ = b.Write([]byte(windowEvent("closed", "g1")))
+	_, _ = b.Write([]byte(windowEvent("open", "g1")))
+	_ = b.Close()
+	<-done
+	if g := <-seen; g != "g1" {
+		t.Fatalf("reported %q", g)
+	}
+	select {
+	case g := <-seen:
+		t.Fatalf("the open before the close was reported too: %q", g)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

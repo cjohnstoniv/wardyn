@@ -65,7 +65,9 @@ func TestMacWindowSentencesArePinned(t *testing.T) {
 	}
 }
 
-// The tripwire is an event kind the org's validation accepts, and an older org reads it as unknown.
+// The tripwire is an event kind this build's validation accepts. An organisation that predates it fails
+// validation on the kind and ends the link (the event is replayed on resume), so the organisation must be
+// upgraded before any runner that sends it.
 func TestMacWindowUnexpectedIsAnEventKind(t *testing.T) {
 	if EventMacWindowUnexpected != "mac_window_unexpected" {
 		t.Fatalf("kind %q", EventMacWindowUnexpected)
@@ -87,7 +89,7 @@ func TestMacWindowStreamEndsEitherWay(t *testing.T) {
 		t.Fatalf("mac_window to an older runner = %v, online %v", err, p.org.Online())
 	}
 
-	_, org, run, err := openTee(t, KindMacWindow)
+	_, org, run, err := openWindowStream(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestMacWindowStreamEndsEitherWay(t *testing.T) {
 		t.Fatalf("the end line %q = %+v, %v", b, end, err)
 	}
 
-	_, org, run, err = openTee(t, KindMacWindow)
+	_, org, run, err = openWindowStream(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,4 +121,84 @@ func TestMacWindowStreamEndsEitherWay(t *testing.T) {
 	case <-ctxT(t).Done():
 		t.Fatal("the org's close did not reach the runner's end")
 	}
+}
+
+// A mac_window stream is the runner's reply to the org's mac_window call, and nothing else.
+func TestMacWindowOpenIsRefusedOutsideAMacWindowCall(t *testing.T) {
+	refused := func(t *testing.T, r *rawPeer, call uint32) {
+		t.Helper()
+		open, _ := json.Marshal(Open{Kind: KindMacWindow, Call: call})
+		r.write(t, Frame{Type: TypeOpen, Stream: 1, Payload: open})
+		rst := r.readType(t, TypeReset)
+		if code, _ := DecodeReset(rst.Payload); rst.Stream != 1 || code != ResetRefused {
+			t.Fatalf("RESET = stream %d code %d, want stream 1 refused", rst.Stream, code)
+		}
+	}
+	t.Run("no call", func(t *testing.T) { refused(t, newRaw(t, PeerConfig{Org: true}), 0) })
+	t.Run("another call", func(t *testing.T) {
+		r := newRaw(t, PeerConfig{Org: true})
+		go func() { _ = r.p.Call(ctxT(t), MethodLocalAttach, nil, nil) }()
+		call := r.readType(t, TypeCall)
+		refused(t, r, call.Stream)
+	})
+	t.Run("runner side", func(t *testing.T) {
+		r := newRaw(t, PeerConfig{Org: false, OnOpen: func(*Stream, Open) error { return nil }})
+		go func() { _ = r.p.Call(ctxT(t), MethodMacWindow, nil, nil) }()
+		call := r.readType(t, TypeCall)
+		open, _ := json.Marshal(Open{Kind: KindMacWindow, Call: call.Stream})
+		r.write(t, Frame{Type: TypeOpen, Stream: 2, Payload: open})
+		rst := r.readType(t, TypeReset)
+		if code, _ := DecodeReset(rst.Payload); code != ResetRefused {
+			t.Fatalf("RESET code %d, want refused", code)
+		}
+	})
+	t.Run("mac_window call", func(t *testing.T) {
+		r := newRaw(t, PeerConfig{Org: true})
+		go func() { _ = r.p.Call(ctxT(t), MethodMacWindow, nil, nil) }()
+		call := r.readType(t, TypeCall)
+		open, _ := json.Marshal(Open{Kind: KindMacWindow, Call: call.Stream})
+		r.write(t, Frame{Type: TypeOpen, Stream: 1, Payload: open})
+		if ok := r.readType(t, TypeOpenOK); ok.Stream != 1 {
+			t.Fatalf("OPEN_OK for stream %d, want 1", ok.Stream)
+		}
+	})
+}
+
+// The org never writes a window's stream: its own Write is refused, and DATA it sends anyway resets the
+// stream at the runner.
+func TestMacWindowStreamTakesNothingFromTheOrg(t *testing.T) {
+	_, org, run, err := openWindowStream(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := org.Write([]byte("in")); err == nil {
+		t.Fatal("the org wrote to a mac_window stream")
+	}
+	var re *ResetError
+	if _, err := run.Read(make([]byte, 1)); !errors.As(err, &re) || re.Code != ResetRefused {
+		t.Fatalf("runner read after an org write = %v, want reset refused", err)
+	}
+}
+
+// openWindowStream runs a mac_window call whose runner end opens a mac_window stream, and returns both ends.
+func openWindowStream(t *testing.T) (p *pair, org, run *Stream, err error) {
+	t.Helper()
+	runSide := make(chan *Stream, 1)
+	var runPeer *Peer
+	h := func(ctx context.Context, id uint32, _ string, _ json.RawMessage) (any, error) {
+		s, oerr := runPeer.Open(ctx, Open{Kind: KindMacWindow, Call: id})
+		if oerr != nil {
+			return nil, oerr
+		}
+		runSide <- s
+		return StreamResult{Stream: s.ID()}, nil
+	}
+	p = newPair(t, PeerConfig{}, PeerConfig{OnCall: h})
+	runPeer = p.run
+	var res StreamResult
+	if err = p.org.Call(ctxT(t), MethodMacWindow, MacWindowArgs{Ref: "r", GrantID: "g"}, &res); err != nil {
+		return p, nil, nil, err
+	}
+	org, err = p.org.TakeStream(res.Stream)
+	return p, org, <-runSide, err
 }

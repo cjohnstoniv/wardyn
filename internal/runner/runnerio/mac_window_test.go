@@ -353,3 +353,36 @@ func TestMacWindowLinkLossClosesTheHelperConnection(t *testing.T) {
 		t.Fatalf("%d windows still registered after the link dropped", n)
 	}
 }
+
+// The runner's link going while the helper is still being asked must not leave the window open with
+// nobody owning it: Offline ends the (still empty) session, the helper then opens the window, and the
+// call closes that window itself and leaves no slot taken.
+func TestMacWindowOfflineWhileTheHelperIsBeingAskedClosesTheWindow(t *testing.T) {
+	gate := make(chan struct{})
+	r := newWindowRig(t, plainWindowSub)
+	slow := &slowWindowSub{windowSub: r.sub, gate: gate, asked: make(chan struct{}, 1)}
+	r.server.mu.Lock()
+	r.server.sub = slow
+	r.server.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		st, err := r.open(t, r.refs[0], "g1")
+		if st != nil {
+			_ = st.Close()
+		}
+		done <- err
+	}()
+	<-slow.asked
+	r.server.Offline(r.rp)
+	close(gate)
+	if err := <-done; err == nil {
+		t.Fatal("a window opened across the link going down")
+	}
+	waitClosed(t, r.sub.win(0), "the link went while the helper was asked")
+	r.server.mu.Lock()
+	n := len(r.server.windows)
+	r.server.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d windows registered after the failed open", n)
+	}
+}

@@ -96,16 +96,20 @@ func (s *Server) macWindow(ctx context.Context, peer *runnerwire.Peer, id uint32
 	}
 	st, err := peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindMacWindow, Target: ref, Call: id})
 	if err != nil {
-		m.release()
 		_ = win.Close()
+		m.release()
 		return nil, err
 	}
 	m.mu.Lock()
 	m.win, m.st = win, st
 	dead := m.dead
 	m.mu.Unlock()
-	if dead || life.Err() != nil { // the link went (and Offline ended this window) while it opened
-		m.end("", false)
+	if dead || life.Err() != nil || !peer.Online() {
+		// The link went while the helper was being asked. Offline may already have ended this session
+		// (end runs once, before there was a window to close), so close what this call holds directly.
+		_ = win.Close()
+		m.release()
+		_ = st.Close()
 		return nil, runner.ErrRunnerOffline
 	}
 	go m.run()
@@ -138,12 +142,12 @@ func (m *macWindowSession) run() {
 	}
 }
 
-// end ends the window once: the run's slot first (a reopen right after the org hears of this must not
-// meet it), then the helper's connection, then the stream. tell writes the reason to the org and
+// end ends the window once: the helper's connection first, then the run's slot (a reopen must not reach a
+// helper that still holds the old window, nor meet a slot that is still taken once the org hears of this),
+// then the stream. tell writes the reason to the org and
 // half-closes the stream; otherwise the stream is closed (the org already ended it, or its link is gone).
 func (m *macWindowSession) end(reason string, tell bool) {
 	m.once.Do(func() {
-		m.release()
 		m.mu.Lock()
 		m.dead = true
 		win, st := m.win, m.st
@@ -151,6 +155,7 @@ func (m *macWindowSession) end(reason string, tell bool) {
 		if win != nil {
 			_ = win.Close()
 		}
+		m.release()
 		if st == nil {
 			return
 		}
