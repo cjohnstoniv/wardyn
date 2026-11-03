@@ -49,6 +49,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -154,7 +155,7 @@ const (
 	endpointOIDCErrorPath = "/?provider_oidc_error="
 
 	// endpointOIDCCapturedAction is the one audit action a capture owns, on both outcomes.
-	endpointOIDCCapturedAction = "provider.oidc.signin.capture"
+	endpointOIDCCapturedAction = "provider_oidc.signin.capture"
 
 	endpointOIDCStateCookie = "wardyn_poidc_state"
 	endpointOIDCNonceCookie = "wardyn_poidc_nonce"
@@ -728,7 +729,7 @@ func (s *Server) handleEndpointOIDCCallback(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonEndpointOIDCMissingCode, "missing code parameter")
 		return
 	}
-	ta, disc, err := s.endpointOIDCAuthority(ctx, row.OIDC)
+	ta, disc, err := s.endpointOIDCAuthority(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), row.OIDC)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: resolving an endpoint sign-in authority failed", slog.String("row", row.UID), slog.Any("err", err))
 		fail(adoCaptureExchangeFailed)
@@ -862,7 +863,7 @@ func (s *Server) RedeemEndpointOIDCAccess(ctx context.Context, owner string, row
 // revocation endpoint. Best effort: a person's disconnect deletes the stored sign-in whether or not this
 // worked, and nothing it logs carries a token.
 func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types.ModelProvider) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), 5*time.Second)
 	defer cancel()
 	blob, found, err := s.endpointOIDCBlob(ctx, owner, row)
 	if err != nil || !found {

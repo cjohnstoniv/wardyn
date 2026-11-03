@@ -384,7 +384,7 @@
 # docs/AUDIT-ACTIONS.md 56013 = ours 55885 + theirs 55974 - base 55846 at the 0.10 W7 merge of rc11-w4.
 # docs/AUDIT-ACTIONS.md 56132 = ours 56013 + theirs 55931 - base 55812 at the 0.10 W7 merge of rc11-w4.
 # docs/AUDIT-ACTIONS.md 56135 adds 3 over 56132, measured: person.walls.set names the new knobs it counts.
-# docs/AUDIT-ACTIONS.md 56296 = 56132 + the provider.oidc.signin.capture row and the model_provider.write oidc_unbound datum.
+# docs/AUDIT-ACTIONS.md 56296 = 56132 + the provider_oidc.signin.capture row and the model_provider.write oidc_unbound datum.
 # docs/AUDIT-ACTIONS.md 56300 = ours 56135 + theirs 56296 - base 56132 + 1 at the rc.12 w2 merge of oidc-core, measured.
 # docs/AUDIT-ACTIONS.md 56382 = 56300 + the mac_window takeover rows (window lanes), measured at the rc.12 w2 merge of window-remote.
 docs/AUDIT-ACTIONS.md=56382 share=8
