@@ -521,6 +521,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 	}
 	base := s.watcherBaseCtx()
 	var reattached, finalized int
+	runs = s.failInterruptedMacPreps(ctx, runs) // a macOS VM run whose prep a restart cut short is ended, not adopted
 	for _, run := range runs {
 		// Strand guard: a crash between SetSandboxRef and Exec
 		// leaves a non-interactive task run with a sandbox_ref but no persisted

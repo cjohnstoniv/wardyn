@@ -492,17 +492,46 @@ func TestAgentRunPrepareSucceeds(t *testing.T) {
 	}
 }
 
-// A run that starts no harness is still prepared: its repo is cloned, and no harness's files are written.
+// A run that starts as a shell names no start harness, yet its harnesses are set up: the credentials file
+// is in place so `claude` in the shell is signed in. A harness a macOS VM does not serve is skipped, and a
+// run that lists none is still cloned.
 func TestAgentRunPrepareWithoutAStartHarness(t *testing.T) {
-	r := newLaunchRig(t, map[string]string{"WARDYN_HARNESSES": "claude-code codex-cli", "WARDYN_REPO_URL": "https://github.com/o/r.git"})
+	r := newLaunchRig(t, map[string]string{
+		"WARDYN_HARNESSES": "claude-code gemini-cli", "WARDYN_START_HARNESS": "",
+		"WARDYN_CLAUDE_MANAGED_B64": base64.StdEncoding.EncodeToString([]byte(`{"k":"v"}`)),
+		"WARDYN_REPO_URL":           "https://github.com/o/r.git",
+	})
 	if code := r.a.Main([]string{"--prepare"}); code != 0 {
 		t.Fatalf("exit %d: %s", code, r.stderr.String())
+	}
+	cred := filepath.Join(r.home, ".claude", ".credentials.json")
+	if b, err := os.ReadFile(cred); err != nil || string(b) != `{"k":"v"}` {
+		t.Errorf("credentials %q, %v", b, err)
+	}
+	if st, err := os.Stat(cred); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("credentials mode %v, %v", st, err)
+	}
+	if _, err := os.Stat(filepath.Join(r.home, ".claude.json")); err != nil {
+		t.Errorf("claude-code was not set up: %v", err)
 	}
 	if !slices.ContainsFunc(r.ran, func(a []string) bool { return len(a) > 1 && a[1] == "clone" }) {
 		t.Errorf("no clone: %q", r.ran)
 	}
+
+	r = newLaunchRig(t, map[string]string{"WARDYN_HARNESSES": "codex-cli", "WARDYN_REPO_URL": "https://github.com/o/r.git"})
+	if code := r.a.Main([]string{"--prepare"}); code != 0 {
+		t.Fatalf("codex-cli: exit %d: %s", code, r.stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(r.home, ".codex")); err != nil {
+		t.Errorf("codex-cli was not set up: %v", err)
+	}
+
+	r = newLaunchRig(t, map[string]string{"WARDYN_REPO_URL": "https://github.com/o/r.git"})
+	if code := r.a.Main([]string{"--prepare"}); code != 0 || !slices.ContainsFunc(r.ran, func(a []string) bool { return len(a) > 1 && a[1] == "clone" }) {
+		t.Errorf("a run listing no harness: exit %d, ran %q", code, r.ran)
+	}
 	if _, err := os.Stat(filepath.Join(r.home, ".claude.json")); err == nil {
-		t.Error("a harness the run did not start was set up")
+		t.Error("claude-code was set up for a run that lists none")
 	}
 }
 

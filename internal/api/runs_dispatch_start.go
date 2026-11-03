@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -164,6 +163,14 @@ func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harn
 // reaches a client.
 const statusDetailMacPrepDone = "prep: done"
 
+// statusDetailMacPrepRunning is written before the prep starts, so a restart of the control plane during it
+// leaves a mark: sweepRunWatchers fails a run adopted with it (failInterruptedMacPrep) instead of leaving it
+// RUNNING with its window refused for good. macPrepDone stays an equality check on statusDetailMacPrepDone.
+const statusDetailMacPrepRunning = "prep: running"
+
+// macPrepInterruptedMsg is the sentence of a run whose prep a restart of the control plane cut short.
+const macPrepInterruptedMsg = "This run's setup was interrupted when the server restarted. Start a new run."
+
 // macPrepDone says an interactive macOS VM run's prep (repo clone and harness setup) has finished. It is
 // written only after `agent-run --prepare` exits 0, and reads the stored row: a run read back through the
 // serving projection is never done. The attended window must not open before it is true.
@@ -175,7 +182,7 @@ const macPrepareTimeout = 20 * time.Minute
 // macPrepareArgv is the guest launcher's prep-only mode (macos_agentrun.go, prepareOnly).
 var macPrepareArgv = []string{"/usr/local/bin/agent-run", "--prepare"}
 
-// launcherSentenceMax bounds the launcher output kept to read its sentence from.
+// launcherSentenceMax bounds the tail of the launcher output kept to read its sentence from.
 const launcherSentenceMax = 64 << 10
 
 // prepareMacOSInteractive gives an interactive macOS VM run the prep a task run gets before the person
@@ -188,9 +195,13 @@ const launcherSentenceMax = 64 << 10
 func (s *Server) prepareMacOSInteractive(ctx context.Context, run types.AgentRun, ref string) bool {
 	pctx, cancel := context.WithTimeout(ctx, macPrepareTimeout)
 	defer cancel()
-	exit, sentence := s.runMacPrepare(pctx, ref)
+	exit := 0
+	sentence := s.recordMacPrepStage(ctx, run.ID, statusDetailMacPrepRunning)
 	if sentence == "" {
-		sentence = s.recordMacPrepDone(ctx, run.ID)
+		exit, sentence = s.runMacPrepare(pctx, ref)
+	}
+	if sentence == "" {
+		sentence = s.recordMacPrepStage(ctx, run.ID, statusDetailMacPrepDone)
 	}
 	if sentence != "" {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
@@ -218,11 +229,11 @@ func (s *Server) runMacPrepare(ctx context.Context, ref string) (exit int, sente
 	if sess.Stdin != nil {
 		_ = sess.Stdin.Close()
 	}
-	var out, errOut string
+	var out, errOut tailBuffer
 	var wg sync.WaitGroup
 	for _, d := range []struct {
 		r   io.Reader
-		dst *string
+		dst *tailBuffer
 	}{{sess.Stdout, &out}, {sess.Stderr, &errOut}} {
 		if d.r == nil {
 			continue
@@ -230,10 +241,7 @@ func (s *Server) runMacPrepare(ctx context.Context, ref string) (exit int, sente
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			var b bytes.Buffer
-			_, _ = io.Copy(&b, io.LimitReader(d.r, launcherSentenceMax))
-			_, _ = io.Copy(io.Discard, d.r) // an undrained stream blocks the exec's Wait
-			*d.dst = b.String()
+			_, _ = io.Copy(d.dst, d.r) // drained to the end: an undrained stream blocks the exec's Wait
 		}()
 	}
 	wg.Wait()
@@ -246,10 +254,21 @@ func (s *Server) runMacPrepare(ctx context.Context, ref string) (exit int, sente
 	case exit == 0:
 		return 0, ""
 	}
-	if line := launcherSentence(errOut + "\n" + out); line != "" {
+	if line := launcherSentence(string(errOut.b) + "\n" + string(out.b)); line != "" {
 		return exit, line
 	}
 	return exit, "the machine's preparation failed (agent-run --prepare exited " + strconv.Itoa(exit) + "), so the run was not started."
+}
+
+// tailBuffer keeps the last launcherSentenceMax bytes written to it: the launcher's sentence is its last line.
+type tailBuffer struct{ b []byte }
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.b = append(t.b, p...)
+	if len(t.b) > launcherSentenceMax {
+		t.b = append(t.b[:0], t.b[len(t.b)-launcherSentenceMax:]...)
+	}
+	return len(p), nil
 }
 
 // launcherSentence is the last "agent-run: <sentence>" line of the launcher's output, without its prefix.
@@ -263,21 +282,70 @@ func launcherSentence(output string) string {
 	return sentence
 }
 
-// recordMacPrepDone writes macPrepDone, once more on a failed write, and returns the sentence the start
-// fails with when it cannot: a run whose prep is not on record would keep its window closed for good.
-func (s *Server) recordMacPrepDone(ctx context.Context, runID uuid.UUID) string {
+// recordMacPrepStage writes detail (a prep stage) to the run's status_detail, once more on a failed write, and
+// returns the sentence the start fails with when it cannot: a prep that is not on record would keep the window
+// closed for good (done) or leave a restart nothing to find (running).
+func (s *Server) recordMacPrepStage(ctx context.Context, runID uuid.UUID, detail string) string {
 	setter, ok := s.cfg.Store.(runStatusDetailSetter)
 	if !ok {
-		return "the machine was prepared but this store cannot record it, so the run was not started."
+		return "the machine's preparation can't be recorded in this store, so the run was not started."
 	}
-	err := setter.SetRunStatusDetail(ctx, runID, statusDetailMacPrepDone)
+	err := setter.SetRunStatusDetail(ctx, runID, detail)
 	if err != nil {
-		err = setter.SetRunStatusDetail(ctx, runID, statusDetailMacPrepDone)
+		err = setter.SetRunStatusDetail(ctx, runID, detail)
 	}
 	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: could not record a macOS VM's prep; failing the run",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
-		return "the machine was prepared but that could not be recorded, so the run was not started."
+		slog.ErrorContext(ctx, "wardynd: could not record a macOS VM's prep stage; failing the run",
+			slog.String("run_id", runID.String()), slog.String("stage", detail), slog.Any("err", err))
+		return "the machine's preparation could not be recorded, so the run was not started."
 	}
 	return ""
+}
+
+// macPrepInterrupted says a run adopted after a restart was an interactive macOS VM run whose prep was
+// under way when the control plane stopped.
+func macPrepInterrupted(run types.AgentRun) bool {
+	return run.Interactive && run.MachineKind.IsMacOSVM() && run.State == types.RunRunning &&
+		run.StatusDetail == statusDetailMacPrepRunning
+}
+
+// failInterruptedMacPreps ends each run of runs that macPrepInterrupted names and returns the rest. The sweep
+// that adopts runs calls it first: an interrupted run has no setup to wait for, and left adopted it would
+// stay RUNNING with its window refused as "preparing" for good.
+func (s *Server) failInterruptedMacPreps(ctx context.Context, runs []types.AgentRun) []types.AgentRun {
+	rest := make([]types.AgentRun, 0, len(runs))
+	for _, run := range runs {
+		if macPrepInterrupted(run) {
+			s.failInterruptedMacPrep(ctx, run)
+			continue
+		}
+		rest = append(rest, run)
+	}
+	return rest
+}
+
+// failInterruptedMacPrep ends a run macPrepInterrupted names, as reconcileFinalize ends a stranded one: the
+// RUNNING -> FAILED transition, the sentence as its failure hint, then the shared terminal tail (run.reconcile
+// audit, revoke cascade, sandbox teardown). reconcileFinalize itself leaves a run its runner holds to the
+// runner, and an interactive macOS VM run has no execution row to receive an exit from, so this ends it here.
+func (s *Server) failInterruptedMacPrep(ctx context.Context, run types.AgentRun) {
+	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+	defer cancel()
+	applied, err := s.casRunState(ctx, run.ID, types.RunRunning, types.RunFailed)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: reconcile finalize failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return
+	}
+	if !applied {
+		return // someone else won the transition
+	}
+	if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
+		if herr := setter.SetRunFailureHint(ctx, run.ID, macPrepInterruptedMsg); herr != nil {
+			slog.WarnContext(ctx, "wardynd: could not persist reconciled run failure hint",
+				slog.String("run_id", run.ID.String()), slog.Any("err", herr))
+		}
+	}
+	s.finalizeRunTail(ctx, run.ID, run.SandboxRef, "run.reconcile", "success",
+		map[string]any{"to": string(types.RunFailed), "reason": macPrepInterruptedMsg})
 }

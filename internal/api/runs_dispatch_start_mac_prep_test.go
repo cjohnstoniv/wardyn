@@ -59,18 +59,22 @@ func (r *macPrepRunner) argvs() [][]string {
 // reads it back.
 type macPrepStore struct {
 	*dispatchTestStore
-	dmu    sync.Mutex
-	detail string
+	dmu     sync.Mutex
+	detail  string
+	history []string
+	// setErr fails the write of failOn (every write when failOn is empty).
 	setErr error
+	failOn string
 }
 
 func (s *macPrepStore) SetRunStatusDetail(_ context.Context, _ uuid.UUID, detail string) error {
 	s.dmu.Lock()
 	defer s.dmu.Unlock()
-	if s.setErr != nil {
+	if s.setErr != nil && (s.failOn == "" || s.failOn == detail) {
 		return s.setErr
 	}
 	s.detail = detail
+	s.history = append(s.history, detail)
 	return nil
 }
 
@@ -131,6 +135,9 @@ func TestStartAgentsOrIdle_MacOSInteractiveRunsPrepareOverExecStream(t *testing.
 	if got := rig.st.State(); got != types.RunRunning {
 		t.Fatalf("run state = %q, want RUNNING", got)
 	}
+	if !slices.Equal(rig.st.history, []string{statusDetailMacPrepRunning, statusDetailMacPrepDone}) {
+		t.Fatalf("status_detail writes = %v, want running then done", rig.st.history)
+	}
 	done := rig.run
 	done.StatusDetail = rig.st.Detail()
 	if !macPrepDone(done) {
@@ -169,8 +176,8 @@ func TestStartAgentsOrIdle_MacOSInteractivePrepFailureFailsTheStart(t *testing.T
 	if rig.audit.has(rig.run.ID, "run.interactive.start", "success") {
 		t.Error("a failed prep went on to await attach")
 	}
-	if d := rig.st.Detail(); d != "" {
-		t.Errorf("status_detail = %q after a failed prep, want none", d)
+	if d := rig.st.Detail(); macPrepDone(types.AgentRun{StatusDetail: d}) {
+		t.Errorf("status_detail = %q after a failed prep, want it not done", d)
 	}
 }
 
@@ -194,25 +201,42 @@ func TestStartAgentsOrIdle_MacOSInteractivePrepFailsWithoutALauncherSentence(t *
 			if got := rig.st.FailureHint(); got != tc.want {
 				t.Fatalf("failure reason = %q, want %q", got, tc.want)
 			}
-			if rig.st.Detail() != "" || !rig.audit.has(rig.run.ID, "run.exec", "failure") {
+			if macPrepDone(types.AgentRun{StatusDetail: rig.st.Detail()}) || !rig.audit.has(rig.run.ID, "run.exec", "failure") {
 				t.Errorf("detail %q, run.exec failure row %v", rig.st.Detail(), rig.audit.has(rig.run.ID, "run.exec", "failure"))
 			}
 		})
 	}
 }
 
-// A prep that succeeded but could not be put on record fails the start: a window held for a marker that
-// never lands would stay closed for good.
+// A prep stage that cannot be put on record fails the start: a done marker that never lands would keep the
+// window closed for good, and a running marker that never lands leaves a restart nothing to find. A failed
+// running write never reaches the guest.
 func TestStartAgentsOrIdle_MacOSInteractivePrepNotRecordedFailsTheStart(t *testing.T) {
-	rig := newMacPrepRig(t, types.MachineMacOSVM)
-	rig.st.setErr = errors.New("store down")
-	rig.start()
+	for _, tc := range []struct {
+		failOn  string
+		streams int
+	}{
+		{statusDetailMacPrepRunning, 0},
+		{statusDetailMacPrepDone, 1},
+	} {
+		t.Run(tc.failOn, func(t *testing.T) {
+			rig := newMacPrepRig(t, types.MachineMacOSVM)
+			rig.st.setErr, rig.st.failOn = errors.New("store down"), tc.failOn
+			rig.start()
 
-	if got := rig.st.State(); got != types.RunFailed {
-		t.Fatalf("run state = %q, want FAILED", got)
-	}
-	if rig.audit.has(rig.run.ID, "run.interactive.start", "success") || !rig.audit.has(rig.run.ID, "run.exec", "failure") {
-		t.Error("an unrecorded prep was not audited as a failed start")
+			if got := rig.st.State(); got != types.RunFailed {
+				t.Fatalf("run state = %q, want FAILED", got)
+			}
+			if n := len(rig.rn.argvs()); n != tc.streams {
+				t.Errorf("ExecStream calls = %d, want %d", n, tc.streams)
+			}
+			if rig.audit.has(rig.run.ID, "run.interactive.start", "success") || !rig.audit.has(rig.run.ID, "run.exec", "failure") {
+				t.Error("an unrecorded prep was not audited as a failed start")
+			}
+			if macPrepDone(types.AgentRun{StatusDetail: rig.st.Detail()}) {
+				t.Error("an unrecorded prep is marked done")
+			}
+		})
 	}
 }
 
@@ -230,8 +254,8 @@ func TestStartAgentsOrIdle_NonMacOSInteractiveIsUnchanged(t *testing.T) {
 			if got := rig.st.State(); got != types.RunRunning {
 				t.Fatalf("run state = %q, want RUNNING", got)
 			}
-			if rig.st.Detail() != "" {
-				t.Errorf("status_detail = %q, want none", rig.st.Detail())
+			if rig.st.Detail() != "" || len(rig.st.history) != 0 {
+				t.Errorf("status_detail = %q (writes %v), want none", rig.st.Detail(), rig.st.history)
 			}
 			rows := rig.audit.eventsFor(rig.run.ID, "run.interactive.start")
 			if len(rows) != 1 || rows[0].Outcome != "success" || strings.Contains(string(rows[0].Data), "prepared") {
@@ -241,6 +265,17 @@ func TestStartAgentsOrIdle_NonMacOSInteractiveIsUnchanged(t *testing.T) {
 				t.Error("a run.exec row for a run that execs nothing")
 			}
 		})
+	}
+}
+
+// The launcher's sentence is read from the tail of its output, however much the launcher said before it.
+func TestRunMacPrepareReadsTheTailOfTheOutput(t *testing.T) {
+	rig := newMacPrepRig(t, types.MachineMacOSVM)
+	rig.rn.exit = 1
+	rig.rn.stderr = "agent-run: first\n" + strings.Repeat("noise noise noise\n", launcherSentenceMax/10) + "agent-run: the last one\n"
+	rig.start()
+	if got := rig.st.FailureHint(); got != "the last one" {
+		t.Fatalf("failure reason = %q, want the last sentence", got)
 	}
 }
 
@@ -256,5 +291,57 @@ func TestLauncherSentence(t *testing.T) {
 		if got := launcherSentence(in); got != want {
 			t.Errorf("launcherSentence(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A restart during an interactive macOS VM run's prep leaves "prep: running" on its row; the sweep that
+// adopts the run ends it with the sentence, through the shared terminal tail (run.reconcile audit, revoke,
+// sandbox teardown). A run whose prep finished, or any other run, is adopted as before.
+func TestSweepRunWatchers_FailsAnInterruptedMacOSPrep(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		kind     types.MachineKind
+		detail   string
+		wantFail bool
+	}{
+		{"interrupted", types.MachineMacOSVM, statusDetailMacPrepRunning, true},
+		{"done", types.MachineMacOSVM, statusDetailMacPrepDone, false},
+		{"linux vm", types.MachineLinuxVM, statusDetailMacPrepRunning, false},
+		{"container", types.MachineContainer, statusDetailMacPrepRunning, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			run := execRun(t, "")
+			run.Interactive, run.MachineKind, run.StatusDetail = true, tc.kind, tc.detail
+			fr := &execExitRunner{fakeRunner: &fakeRunner{}}
+			fake := &bootReconcileStore{run: run}
+			audit := &syncAudit{}
+			cfg := baseTestConfig(h, fake)
+			cfg.Runner, cfg.Broker, cfg.Audit = fr, h.broker, audit
+			srv := testServer(t, cfg)
+
+			if err := srv.sweepRunWatchers(context.Background()); err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			to, transitioned := fake.finalTransition()
+			if tc.wantFail {
+				if !transitioned || to != types.RunFailed {
+					t.Fatalf("transitioned=%v to=%q, want FAILED", transitioned, to)
+				}
+				if got := fake.hintValue(); got != "This run's setup was interrupted when the server restarted. Start a new run." {
+					t.Errorf("failure reason = %q", got)
+				}
+				if !audit.has(run.ID, "run.reconcile", "success") {
+					t.Error("no run.reconcile row")
+				}
+				if !slices.Contains(fr.stopped, run.SandboxRef) {
+					t.Errorf("sandbox not stopped: %v", fr.stopped)
+				}
+				return
+			}
+			if transitioned {
+				t.Fatalf("a run that was not mid-prep was finalized to %q", to)
+			}
+		})
 	}
 }
