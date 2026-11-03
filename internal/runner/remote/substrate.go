@@ -571,6 +571,17 @@ func (s *Substrate) ReclaimMacDisk(ctx context.Context, mount types.DriveMount) 
 	return res.Outcome, nil
 }
 
+// KeptMachine asks this runner's Mac to act on a kept machine's folder (kept_machine). A runner whose
+// caps do not say it keeps machines is never asked.
+func (s *Substrate) KeptMachine(ctx context.Context, args runnerwire.KeptMachineArgs) (runnerwire.KeptMachineResult, error) {
+	var res runnerwire.KeptMachineResult
+	if c, ok := s.Caps(); !ok || c.MacOSVM == nil || !c.MacOSVM.KeptMachines {
+		return res, runnerwire.Refuse("this runner keeps no machines")
+	}
+	err := s.call(ctx, runnerwire.MethodKeptMachine, args, &res)
+	return res, err
+}
+
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the
 // sink is registered before the runner is asked, so the OPEN the runner sends at connect finds it and
 // retries until the reply has set the sink's offset and gap.
