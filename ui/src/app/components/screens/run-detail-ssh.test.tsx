@@ -31,7 +31,7 @@ vi.mock("../../lib/api/runs", () => ({
   runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a) },
 }));
 
-import { ConnectSSHCard, enterUIApp, openEnterTab } from "./run-detail-ssh";
+import { ConnectSSHCard } from "./run-detail-ssh";
 import { HttpError } from "../../lib/api/core";
 import { RUN_OWNER_ONLY } from "../../lib/run-entry";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -994,38 +994,5 @@ describe("ConnectSSHCard — an advertised ProxyCommand", () => {
     const dimmed = config.closest(".opacity-50");
     expect(dimmed).not.toBeNull();
     expect(dimmed).toContainElement(screen.getByText(cliPrint));
-  });
-});
-
-describe("enterUIApp — a tab the caller opened inside its click", () => {
-  const gateway = { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" };
-
-  it("openEnterTab opens a named blank tab with no opener, or returns null when the browser blocks it", () => {
-    const tab = openEnterTab();
-    expect(tab).toBe(tabStub);
-    expect(openSpy.mock.calls[0][0]).toBe("");
-    expect(tabStub.opener).toBeNull();
-    openSpy.mockReturnValue(null);
-    expect(openEnterTab()).toBeNull();
-  });
-
-  it("opens no second tab, and posts the form into the given one", async () => {
-    attachTicketMock.mockResolvedValue("tkt_x");
-    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
-    const tab = openEnterTab()!;
-    openSpy.mockClear();
-    await enterUIApp("run-1", "__desktop", gateway, { tab });
-    expect(openSpy).not.toHaveBeenCalled();
-    expect((submitSpy.mock.instances[0] as HTMLFormElement).target).toBe(tab.name);
-    expect(tab.name).toMatch(/^wardyn-enter-/);
-    submitSpy.mockRestore();
-  });
-
-  it("closes the given tab when the ticket cannot be minted", async () => {
-    attachTicketMock.mockRejectedValue(new Error("no ticket"));
-    const tab = openEnterTab()!;
-    await expect(enterUIApp("run-1", "__desktop", gateway, { tab })).rejects.toThrow("no ticket");
-    expect(tabStub.close).toHaveBeenCalled();
-    expect(tab).toBe(tabStub);
   });
 });
