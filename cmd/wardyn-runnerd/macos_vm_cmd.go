@@ -146,7 +146,7 @@ func newMacOSVMCommand() *cobra.Command {
 		}
 		return m.editBase(cmd.Context(), cmd.OutOrStdout(), runnerID)
 	}}
-	cmd.AddCommand(status, prepare, editBase, remove)
+	cmd.AddCommand(status, prepare, editBase, remove, newMacOSVMMachinesCommand(open))
 	return cmd
 }
 
@@ -233,6 +233,8 @@ type macOSVMStatus struct {
 	Failure       string `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
 	// Bases are the Mac's other bases (macos_vm_bases_dir), with a failed one's reason.
 	Bases []runnerwire.MacVMDerivedBase `json:"bases,omitempty"`
+	// Kept is the kept machines this Mac holds and the disk they may take (`macos-vm machines` lists them).
+	Kept *macOSVMKeptStatus `json:"kept,omitempty"`
 
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
@@ -281,6 +283,9 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		return st, err
 	}
 	st.counted = len(counted)
+	if st.Kept, err = m.keptStatus(); err != nil {
+		return st, err
+	}
 	for _, e := range counted {
 		if e.Kind == admission.KindLeaked {
 			st.Leaked++
@@ -355,6 +360,9 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		for _, l := range st.editRead {
 			fmt.Fprintln(out, l)
 		}
+	}
+	if st.Kept != nil {
+		st.Kept.writeText(out)
 	}
 	for _, b := range st.Bases {
 		fmt.Fprintf(out, "other base %s: %s", b.Name, b.State)
