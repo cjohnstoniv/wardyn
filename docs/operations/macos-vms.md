@@ -71,17 +71,44 @@
 
 ## Quickstart: an interactive developer sandbox
 
-An interactive macOS VM run is a sandbox you work in: a terminal, and a window on the VM on your own Mac. This is the path from off to running.
+An interactive macOS VM run is a sandbox you work in: a terminal, and a window on the VM on your own Mac. This is the path from a prepared Mac to a first run.
 
-1. Turn it on, once per organisation and Mac. Do steps 1 to 6 of [Turn it on](#turn-it-on). A run is placed on the Mac only when `wardyn-runnerd macos-vm status` shows the base is ready.
-2. Register the Mac as your own runner ([Claiming a runner](hybrid-laptops.md#claiming-a-runner)). A window opens only on a Mac whose runner you registered.
-3. Ask an admin to turn on `macos_vm.allow_attended_window` if you want the window. It is off by default ([Opening a window on your Mac](#opening-a-window-on-your-mac)).
-4. Start the run: `wardyn run --experience interactive --machine-kind macos_vm --window`. In the console, choose a virtual machine, then macOS, in New Run. `--macos-base <name>` picks a base other than Standard.
-5. Wait until the run is `RUNNING` and its preparation is done. The window opens as the VM comes up. If it does not, run `wardyn window <run>` once the run has finished preparing.
-6. Work in the window, or open a terminal with `wardyn attach <run>` or `wardyn ssh <run>`. Closing the window leaves the run going.
+| Needed first | Where it is set |
+|---|---|
+| `WARDYN_MACOS_VMS=1` on the organisation | [Turn it on](#turn-it-on), step 1 |
+| The Mac registered as your own runner, offering macOS VMs | [Turn it on](#turn-it-on), steps 2 to 4; a window opens only on a Mac whose runner you registered |
+| A ready base | `wardyn-runnerd macos-vm status` on the Mac ([Preparing the base image](#preparing-the-base-image)) |
+| Someone signed in at the Mac, with its screen unlocked | [Logins, FileVault and restarts](#logins-filevault-and-restarts) |
+| `macos_vm.allow_attended_window` on, for the window | [The site switch](#the-site-switch); off by default |
 
-- **Where the guest agent logs.** It has no log file of its own. Its launchd job, `com.wardyn.guest-agent`, names no output path, and the agent writes its messages with Go's `slog` to standard error. The Mac-side record of a run is `helper.log`, in `~/Library/Application Support/Wardyn/macos-vm.noindex/runs/<run-key>/` on the Mac.
-- **What to check first.** `wardyn-runnerd macos-vm status` on the Mac, then `wardyn window <run> --status`.
+1. Check the Mac: `wardyn-runnerd macos-vm status`. A run is placed on it only when the base is ready.
+2. Start the run: `wardyn run --experience interactive --machine-kind macos_vm --window`. In the console, choose a virtual machine, then macOS, in New Run. `--macos-base <name>` picks a base other than Standard.
+3. Wait until the run is `RUNNING` and its preparation is done. With `--window` the window opens as the VM comes up. If it does not, run `wardyn window <run>` once preparation has finished.
+4. Work in the window. Closing it leaves the run going ([Closing a window](#closing-a-window)).
+5. For a terminal, run `wardyn attach <run>`, or `wardyn ssh <run>` to use SSH tools.
+6. Ask whether a window can open, and why the last one closed: `wardyn window <run> --status`.
+
+### Keeping the machine
+
+A run's VM is deleted when the run ends. To keep it on your own Mac, an admin turns on `macos_vm.allow_kept_machines`, which is off by default. An idle machine is deleted after `macos_vm.kept_machine_idle_days` (30 by default, 1 to 90). `macos_vm.max_kept_machines_per_person` caps how many one person keeps (1 by default, 1 to 4).
+
+| To | Run |
+|---|---|
+| Keep this run's machine when it stops | `wardyn run --experience interactive --machine-kind macos_vm --keep-machine`, with `--machine-name <name>` to name it |
+| Start a run from a machine you kept | `wardyn run --experience interactive --machine-kind macos_vm --resume-machine <id\|name>` |
+| Start from it again, from the Mac's current base | The same, with `--fresh`. This deletes what is on the machine |
+| List your kept machines | `wardyn machines` (`--json` for JSON) |
+| Delete one, with its files, tools and sign-ins | `wardyn machines delete <id\|name>`. It asks first; without a terminal, add `--yes` |
+
+- A resumed machine is kept again when the run stops. A machine a run holds cannot be deleted until that run ends.
+- `--keep-machine` and `--resume-machine` do not go together, `--machine-name` needs `--keep-machine`, and `--fresh` needs `--resume-machine`. None of them works with `--file`.
+- Kept machines are folders in `macos-vm.noindex/kept/` on the Mac.
+
+### Where to look when it fails
+
+- **The guest agent has no log file.** Its launchd job, `com.wardyn.guest-agent`, names no output path, and the agent writes its messages with Go's `slog` to standard error. Wardyn sets up no place for them on the guest's disk. The lines it writes, such as `screen lock left as it was`, are not kept in a file Wardyn names.
+- **The Mac-side record.** `helper.log` is in `~/Library/Application Support/Wardyn/macos-vm.noindex/runs/<run-key>/` on the Mac.
+- **First checks.** `wardyn-runnerd macos-vm status` on the Mac, then `wardyn window <run> --status`.
 
 ## Docker on the Mac
 
