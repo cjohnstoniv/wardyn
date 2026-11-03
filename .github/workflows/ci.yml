@@ -1385,7 +1385,7 @@ jobs:
   # verb with `kubectl auth can-i --as`, not by running the suite under it. The cases reach the other
   # identities by impersonation.
   #
-  # Train pull requests and pushes to main only: one more runner for up to 35 minutes, on the runs
+  # Train pull requests and pushes to main only: one more runner for up to 45 minutes, on the runs
   # that merge a wave. Not a required check and not in `gates` (the backend is experimental), but a
   # red here is the run's red: the train pull request shows it as its own check, and the run's
   # conclusion is failure, which green-by-tree.sh refuses as release evidence for that tree.
