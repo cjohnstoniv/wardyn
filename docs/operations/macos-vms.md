@@ -589,7 +589,7 @@ A task run's agent output is masked into an asciinema cast and saved when the ag
 |---|---|
 | Saved | The cast is stored under the run with a `session.recording.write` row (`session` `agent`). The row is accepted before the run counts as recorded |
 | Nothing printed | An agent that printed nothing leaves nothing to record. The run stays recorded, with no cast |
-| Declined | The run is marked `runner_declined`, a `session.recording.write` **failure** row says why in `reason`, and the run goes on. It is never stopped for it |
+| Declined | The run is marked `runner_declined` and a **failure** row says why in `reason`. A decline after the run starts never stops it. One at dispatch can (below) |
 | Recovery | After a restart, or on another replica, the runner's copy is read again and saved as `agent-recovered`. The two never replace each other. A sweep settles every finished run that still owes a cast |
 | Erasure | Erasing a run's recordings erases its casts. A run erased in the middle of a save or a re-read owes nothing and gets no cast |
 | Required | Under a recording requirement, a task run whose cast cannot open at start fails: "Recording is required, and this macOS VM run's agent output can't be recorded on this deployment, so the run didn't start." |
@@ -604,7 +604,14 @@ A task run's agent output is masked into an asciinema cast and saved when the ag
 | `erased` | The run's recordings were erased |
 | `unrecoverable`, `sandbox_gone`, `runner_offline` | The re-read found nothing: the runner cannot recover it, the VM is gone, or the runner is not connected |
 
-A run declined when it is dispatched is marked `runner_declined` and the run page says so. That decline writes no failure row; the rows above are written when a cast is lost later or cannot be saved.
+A decline has three timings:
+
+- **At dispatch** (`no_tail`: no cast could open on the run's output; `save_failed`: its obligation could not be stored). The run is marked `runner_declined` and a failure row is durably accepted before it starts.
+  - If the audit recorder will not accept the row, the run does not start: "Wardyn could not record why this run's agent output isn't recorded, so the run didn't start. Try again."
+  - Its `run.create` failure row has `reason` `decline_not_recorded`.
+  - Under a recording requirement it fails with the required sentence above instead.
+- **Later** (a lost or unreadable copy, a failed save, a restart). The run keeps running. A rejected row keeps the obligation, and the sweep writes it again.
+- **Partial or total mask drop.** Some output kept and some dropped: the cast is saved, `incomplete` and `mask_gap`. Everything dropped: nothing is saved and the run is declined as `mask_gap`.
 
 A saved cast says how complete it is, on its row and in its header. A row carries these only when they apply:
 
