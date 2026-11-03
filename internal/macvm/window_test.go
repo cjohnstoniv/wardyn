@@ -25,6 +25,7 @@ type fakeScreen struct {
 	readyErr error
 	openErr  error
 	wins     []*fakeWindow
+	live     int // the most windows open at once
 	texts    []macvm.WindowText
 	vms      []unsafe.Pointer
 }
@@ -45,12 +46,23 @@ func (s *fakeScreen) Open(vm unsafe.Pointer, text macvm.WindowText) (macvm.Windo
 	}
 	w := &fakeWindow{closed: make(chan struct{}), locked: make(chan struct{})}
 	s.wins = append(s.wins, w)
+	open := 0
+	for _, o := range s.wins {
+		select {
+		case <-o.closed:
+		default:
+			open++
+		}
+	}
+	s.live = max(s.live, open)
 	s.texts = append(s.texts, text)
 	s.vms = append(s.vms, vm)
 	return w, nil
 }
 
 func (s *fakeScreen) opens() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.wins) }
+
+func (s *fakeScreen) mostOpen() int { s.mu.Lock(); defer s.mu.Unlock(); return s.live }
 
 func (s *fakeScreen) win(i int) *fakeWindow {
 	s.mu.Lock()
@@ -364,18 +376,98 @@ func TestWindowCloseEndsTheConnectionWithItsReason(t *testing.T) {
 
 func TestWindowSecondOpenIsRefused(t *testing.T) {
 	w := startWindowRun(t, true, nil)
+	t.Cleanup(macvm.SetWindowReleaseWait(time.Minute))
 	first := w.client(t)
 	if _, err := first.Window(context.Background(), "grant-1", ""); err != nil {
 		t.Fatal(err)
 	}
+	// The first window's connection is live, so the refusal is at once: no wait for a release.
+	start := time.Now()
 	_, err := w.client(t).Window(context.Background(), "grant-2", "")
 	wantRefusal(t, err, macvm.WindowCodeOpen, macvm.WindowAlreadyOpenSentence)
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the refusal took %v", d)
+	}
 	if w.scr.opens() != 1 {
 		t.Fatalf("%d windows opened", w.scr.opens())
 	}
 	// The first window is untouched by the refusal.
 	if w.scr.win(0).closes() != 0 {
 		t.Fatal("the refused open closed the first window")
+	}
+}
+
+// holdRelease stops the first window to end just after its hold ends, before it is closed and its slot
+// freed: its client has closed, and the helper has not let the window go. let releases it.
+func holdRelease(t *testing.T) (reached <-chan struct{}, let func()) {
+	t.Helper()
+	at, hold := make(chan struct{}), make(chan struct{})
+	var first, done sync.Once
+	t.Cleanup(macvm.SetWindowReleaseHook(func() { first.Do(func() { close(at); <-hold }) }))
+	let = func() { done.Do(func() { close(hold) }) }
+	t.Cleanup(let)
+	return at, let
+}
+
+// A reopen that arrives while the first window's client has closed, but before the helper has freed its slot,
+// waits for that release and then opens: never two windows at once.
+func TestWindowReopenWaitsForAnEndingWindow(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	t.Cleanup(macvm.SetWindowReleaseWait(time.Minute))
+	reached, let := holdRelease(t)
+	first := w.client(t)
+	if _, err := first.Window(context.Background(), "grant-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	recvClosed(t, reached, "the first window's hold to end")
+	second := w.client(t)
+	got := make(chan error, 1)
+	go func() { _, err := second.Window(context.Background(), "grant-2", ""); got <- err }()
+	select {
+	case err := <-got:
+		t.Fatalf("the reopen answered %v while the first window still held its slot", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	let()
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatalf("the reopen after the release = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reopen never answered")
+	}
+	if w.scr.opens() != 2 || w.scr.mostOpen() != 1 {
+		t.Fatalf("%d windows opened, at most %d at once", w.scr.opens(), w.scr.mostOpen())
+	}
+}
+
+// The wait for an ending window is bounded: past it, the reopen is refused as already open.
+func TestWindowReopenWaitIsBounded(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	t.Cleanup(macvm.SetWindowReleaseWait(100 * time.Millisecond))
+	reached, let := holdRelease(t)
+	first := w.client(t)
+	if _, err := first.Window(context.Background(), "grant-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	recvClosed(t, reached, "the first window's hold to end")
+	_, err := w.client(t).Window(context.Background(), "grant-2", "")
+	wantRefusal(t, err, macvm.WindowCodeOpen, macvm.WindowAlreadyOpenSentence)
+	let()
+	if w.scr.opens() != 1 {
+		t.Fatalf("%d windows opened", w.scr.opens())
+	}
+}
+
+func recvClosed(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
 	}
 }
 

@@ -81,8 +81,11 @@ type runner struct {
 	hostNet *os.File
 	netCh   chan *os.File
 
-	// winOpen is true while a window is up (or being made): one window at a time. Guarded by mu.
-	winOpen bool
+	// winOpen is true while a window is up (or being made): one window at a time. Guarded by mu, with
+	// winFreed (closed when the slot is given up) and winGoing (whether its holder's connection is ending).
+	winOpen  bool
+	winFreed chan struct{}
+	winGoing func() bool
 
 	stopReq  chan stopRequest
 	stopOnce sync.Once
@@ -474,23 +477,49 @@ var _ windowHandler = (*runner)(nil)
 // openWindow puts a close-only window on the running VM for the caller, who holds it until it ends. It
 // refuses unless the VM is running, no window is open, the person is at the Mac's screen, the engine can
 // give the VM's pointer and the window opens. The VM's configuration is never touched: no device is added.
-func (r *runner) openWindow(grant, title string) (*windowSession, *WindowRefusal) {
-	r.mu.Lock()
-	m, state, taken := r.machine, r.st.State, r.winOpen
-	if state == StateRunning && m != nil && !taken {
-		r.winOpen = true
-	}
-	r.mu.Unlock()
-	switch {
-	case state != StateRunning || m == nil:
-		return nil, &WindowRefusal{WindowCodeNotRunning, WindowNotRunningSentence}
-	case taken:
-		return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
-	}
-	release := func() {
+// going reports whether the caller's connection is ending; a window whose holder is ending is waited for
+// (at most windowReleaseWait) rather than refused, since its client has already let it go.
+func (r *runner) openWindow(grant, title string, going func() bool) (*windowSession, *WindowRefusal) {
+	var (
+		m       Machine
+		expired <-chan time.Time
+	)
+	for {
 		r.mu.Lock()
-		r.winOpen = false
+		m = r.machine
+		state, taken, freed, holderGoing := r.st.State, r.winOpen, r.winFreed, r.winGoing
+		if state == StateRunning && m != nil && !taken {
+			r.winOpen, r.winFreed, r.winGoing = true, make(chan struct{}), going
+		}
 		r.mu.Unlock()
+		if state == StateRunning && m != nil && taken && holderGoing != nil && holderGoing() {
+			if expired == nil {
+				t := time.NewTimer(time.Duration(windowReleaseWait.Load()))
+				defer t.Stop()
+				expired = t.C
+			}
+			select {
+			case <-freed:
+				continue
+			case <-expired:
+			}
+		}
+		switch {
+		case state != StateRunning || m == nil:
+			return nil, &WindowRefusal{WindowCodeNotRunning, WindowNotRunningSentence}
+		case taken:
+			return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		}
+		break
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			r.mu.Lock()
+			r.winOpen, r.winGoing = false, nil
+			close(r.winFreed)
+			r.mu.Unlock()
+		})
 	}
 	scr := r.o.Window
 	if scr == nil {

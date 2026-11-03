@@ -19,6 +19,20 @@ func SetWindowRecheck(d time.Duration) (restore func()) {
 	return func() { windowRecheck.Store(old) }
 }
 
+// SetWindowReleaseWait makes an open wait at most d for a window whose holder is ending. restore undoes it.
+func SetWindowReleaseWait(d time.Duration) (restore func()) {
+	old := windowReleaseWait.Load()
+	windowReleaseWait.Store(int64(d))
+	return func() { windowReleaseWait.Store(old) }
+}
+
+// SetWindowReleaseHook runs f once a window's hold has ended, before it is closed and its slot freed. restore
+// undoes it.
+func SetWindowReleaseHook(f func()) (restore func()) {
+	old := windowReleaseHook.Swap(&f)
+	return func() { windowReleaseHook.Store(old) }
+}
+
 // ErrConsoleUnreadable is errConsoleUnreadable.
 var ErrConsoleUnreadable = errConsoleUnreadable
 

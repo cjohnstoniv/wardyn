@@ -181,7 +181,7 @@ func (cc *controlConn) op(req ControlRequest) bool {
 // windowHandler is what the run loop adds for OpWindow. A handler without it (the stage-2 VM) answers
 // every window request with WindowUnavailableSentence.
 type windowHandler interface {
-	openWindow(grant, title string) (*windowSession, *WindowRefusal)
+	openWindow(grant, title string, going func() bool) (*windowSession, *WindowRefusal)
 }
 
 // windowSession is one open window, held by the connection that asked for it.
@@ -202,6 +202,16 @@ var windowRecheck = func() *atomic.Int64 {
 	v.Store(int64(2 * time.Second))
 	return &v
 }()
+
+// windowReleaseWait bounds how long an open waits for a window whose holder's connection is ending.
+var windowReleaseWait = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(2 * time.Second))
+	return &v
+}()
+
+// windowReleaseHook runs once a window's hold has ended, before it is closed and its slot freed; tests hold it.
+var windowReleaseHook atomic.Pointer[func()]
 
 var windowGrantRE = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
@@ -240,17 +250,42 @@ func (cc *controlConn) window(req ControlRequest) bool {
 	if !windowGrantRE.MatchString(req.Grant) {
 		return refuse(WindowCodeBadRequest, WindowBadRequestSentence)
 	}
-	s, rf := wh.openWindow(req.Grant, cleanWindowTitle(req.Title))
+	// The window is going once it has ended here, or once its client has closed the connection: the
+	// client closes before it opens again, so a reopen can arrive before this goroutine reads that close.
+	var ended atomic.Bool
+	going := func() bool { return ended.Load() || peerClosed(cc.c) }
+	s, rf := wh.openWindow(req.Grant, cleanWindowTitle(req.Title), going)
 	if rf != nil {
 		return refuse(rf.Code, rf.Sentence)
 	}
 	reason := cc.holdWindow(s)
+	if h := windowReleaseHook.Load(); h != nil {
+		(*h)()
+	}
+	ended.Store(true)
 	s.win.Close()
 	s.end(reason, time.Since(s.at))
 	if reason != "" {
 		cc.reply(ControlReply{OK: true, Event: &Event{Time: time.Now().UTC(), Type: EventWindowClosed, Detail: reason}})
 	}
 	return false
+}
+
+// peerClosed reports whether c's client has closed its end: a read would return end of file now. It peeks
+// without blocking and consumes nothing, so the connection's own reader is undisturbed.
+func peerClosed(c *net.UnixConn) bool {
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return true
+	}
+	closed := false
+	if err := rc.Control(func(fd uintptr) {
+		n, _, rerr := unix.Recvfrom(int(fd), make([]byte, 1), unix.MSG_PEEK|unix.MSG_DONTWAIT)
+		closed = (n == 0 && rerr == nil) || (rerr != nil && rerr != unix.EAGAIN && rerr != unix.EINTR)
+	}); err != nil {
+		return true
+	}
+	return closed
 }
 
 // holdWindow answers the open, then waits for the window to end and returns why. The reason is empty when the
