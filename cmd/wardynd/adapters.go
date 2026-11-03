@@ -326,6 +326,14 @@ func sinkDropsReporter(fan *sinks.Fanout) func() map[string]int64 {
 	return fan.DropsByName
 }
 
+// forgetRunCorrelation adapts a Fanout to api.Config.ForgetRunCorrelation; nil when no sink is configured.
+func forgetRunCorrelation(fan *sinks.Fanout) func([]uuid.UUID) {
+	if fan == nil {
+		return nil
+	}
+	return fan.ForgetRuns
+}
+
 // fanoutRecorder writes every event to the primary store recorder (source of
 // truth, append-only) and ALSO emits it to the sink fanout. The store write is
 // authoritative: a fanout failure is logged but never returned, so audit

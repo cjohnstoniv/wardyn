@@ -19,6 +19,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
@@ -215,7 +217,7 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 	return nil, fmt.Errorf("%w: the store cannot list a person's runs", erasure.ErrNotAvailable)
 }
 
-// eraseRunTasks blanks the task text, title and description of every run the person created. A run of theirs still waiting
+// eraseRunTasks blanks the task text, title, description and correlation id of every run the person created. A run of theirs still waiting
 // in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
 // snapshot included, and it would start under the very person being erased.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {
@@ -227,7 +229,16 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	var runIDs []uuid.UUID
+	if s.cfg.ForgetRunCorrelation != nil {
+		if runIDs, err = pe.RunIDsCreatedBy(ctx, person); err != nil {
+			return nil, err
+		}
+	}
 	n, err := pe.BlankRunTasks(ctx, person)
+	if s.cfg.ForgetRunCorrelation != nil {
+		s.cfg.ForgetRunCorrelation(runIDs) // after the rows are cleared, even on a partial failure: a read begun earlier is discarded
+	}
 	out := map[string]any{"runs": n}
 	if cancelled > 0 {
 		out["queued_cancelled"] = cancelled

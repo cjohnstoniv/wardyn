@@ -125,3 +125,54 @@ func TestPG_RunCorrelationID_SinkEnrichmentLeavesTheStoredRowAndItsChainAlone(t 
 		t.Errorf("the stored row changed: data %s -> %s, hashes %s/%s -> %s/%s", dataBefore, dataAfter, prevBefore, rowBefore, prevAfter, rowAfter)
 	}
 }
+
+// TestPG_PersonErasure_ClearsOnlyThatPersonsCorrelationIDs: the run_tasks erasure blanks the correlation id of
+// the person's runs, counts a run whose only retained field it is, leaves another person's run alone, and
+// leaves the run and the stored audit row (and its chain) as they were.
+func TestPG_PersonErasure_ClearsOnlyThatPersonsCorrelationIDs(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	only := erasureRun(t, st, "alice", "") // no task, title or description: the id alone makes it count
+	withTask := erasureRun(t, st, "alice", "secret one")
+	bob := erasureRun(t, st, "bob", "bob's task")
+	for id, ref := range map[uuid.UUID]string{only: "alice-ref-1", withTask: "alice-ref-2", bob: "bob-ref-3"} {
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET correlation_id = $2 WHERE id = $1`, id, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), RunID: &only, ActorType: types.ActorSystem, Actor: "wardynd",
+		Action: "run.create", Outcome: "success", Data: json.RawMessage(`{"agent":"claude-code"}`)}
+	if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
+		t.Fatal(err)
+	}
+	audit := func() (data, row string) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT data::text, COALESCE(row_hash,'') FROM audit_events WHERE id = $1`, ev.ID).Scan(&data, &row); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	dataBefore, rowBefore := audit()
+
+	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 2 {
+		t.Fatalf("BlankRunTasks = %d, %v, want her two runs (one counted for its correlation id alone)", n, err)
+	}
+	for id, want := range map[uuid.UUID]string{only: "", withTask: "", bob: "bob-ref-3"} {
+		if got, _, err := store.RunCorrelationID(ctx, pool, id); err != nil || got != want {
+			t.Errorf("run %s correlation id %q (%v), want %q", id, got, err, want)
+		}
+	}
+	if got, err := st.GetRun(ctx, bob); err != nil || got.Task != "bob's task" || got.CorrelationID != "bob-ref-3" {
+		t.Errorf("bob's run = %+v (%v), want it unchanged", got, err)
+	}
+	if got, err := st.GetRun(ctx, only); err != nil || got.ID != only {
+		t.Errorf("alice's run is gone: %+v (%v)", got, err)
+	}
+	if dataAfter, rowAfter := audit(); dataAfter != dataBefore || rowAfter != rowBefore {
+		t.Errorf("the stored audit row changed: %s/%s -> %s/%s", dataBefore, rowBefore, dataAfter, rowAfter)
+	}
+	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 0 {
+		t.Errorf("a second BlankRunTasks = %d, %v, want nothing to change", n, err)
+	}
+}

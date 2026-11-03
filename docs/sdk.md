@@ -338,7 +338,7 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 
 ## Scheduled runs
 
-- `correlation_id` on `CreateRunRequest` (`wardyn run --correlation-id`) is your own reference for the run, kept and returned on it. Every event of the run that reaches an audit sink carries it as `data.correlation_id`; the stored trail and its hash chain do not, and neither does the acknowledged-delivery webhook. A template carries none.
+- `correlation_id` on `CreateRunRequest` (`wardyn run --correlation-id`) is your own reference for the run, kept and returned on it. Every event of the run that reaches an audit sink carries it as `data.correlation_id`; the stored trail and its hash chain do not, and neither does the acknowledged-delivery webhook. A template carries none. Erasing a person's `run_tasks` clears it; sinks drop it within 30 seconds, and exported copies follow the sink's retention.
 - `start_at` and `start_time_zone` on `CreateRunRequest` start a run once, later: at most 6 days ahead for a background task (6 days 23 hours interactive), so it keeps its wait before the 7-day cap, when the server sets `WARDYN_SCHEDULED_RUNS` ([Scheduled runs](operations/runner-pools.md#scheduled-runs)).
 - The run is `QUEUED` with `queue.reason` `scheduled`, `queue.start_at` and `queue.time_zone`; cancel it with `KillRun`.
 - `GET /setup/status` carries `features.scheduled_runs`, so a client offers scheduling only when it is on.

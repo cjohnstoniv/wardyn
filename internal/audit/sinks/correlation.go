@@ -31,19 +31,38 @@ type RunValueMasker func(runID uuid.UUID, b []byte) []byte
 
 const (
 	correlationCacheMax     = 4096
+	correlationCacheTTL     = 30 * time.Second
 	correlationLookupBudget = 2 * time.Second
 )
 
 // correlationEnricher stamps a run's correlation ID into the data of its events. A run's ID is written
-// once at create, so a hit never goes stale; a run without one is cached as "" so it costs one read.
-// The cache holds the raw id and mask runs on every emit, so a secret registered after the first hit
-// still covers it.
+// at create and cleared only by a person's erasure, so an entry lives correlationCacheTTL: another
+// replica's erasure reaches this one within that, and this replica's own is applied at once by forget.
+// A run without an ID is cached as "" so it costs one read. The cache holds the raw id and mask runs on
+// every emit, so a secret registered after the first hit still covers it.
 // ponytail: a full cache is emptied whole; an LRU if a deployment's live run count makes refills show.
 type correlationEnricher struct {
 	lookup RunCorrelationLookup
 	mask   RunValueMasker
+	now    func() time.Time
 	mu     sync.Mutex
-	ids    map[uuid.UUID]string
+	ids    map[uuid.UUID]cachedCorrelation
+	gen    uint64 // bumped by forget: a read that began before it must not be cached
+}
+
+type cachedCorrelation struct {
+	id      string
+	expires time.Time
+}
+
+// forget drops runs' entries and invalidates reads in flight, so the next emit of each reads the row again.
+func (c *correlationEnricher) forget(runIDs []uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	for _, id := range runIDs {
+		delete(c.ids, id)
+	}
 }
 
 func (c *correlationEnricher) apply(ctx context.Context, ev types.AuditEvent) types.AuditEvent {
@@ -83,10 +102,11 @@ func (c *correlationEnricher) masked(runID uuid.UUID, id string) string {
 
 func (c *correlationEnricher) idOf(ctx context.Context, runID uuid.UUID) (string, bool) {
 	c.mu.Lock()
-	id, hit := c.ids[runID]
+	hit, ok := c.ids[runID]
+	gen := c.gen
 	c.mu.Unlock()
-	if hit {
-		return id, true
+	if ok && c.now().Before(hit.expires) {
+		return hit.id, true
 	}
 	ctx, cancel := context.WithTimeout(ctx, correlationLookupBudget)
 	defer cancel()
@@ -99,11 +119,14 @@ func (c *correlationEnricher) idOf(ctx context.Context, runID uuid.UUID) (string
 		return "", false
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != gen {
+		return "", false // an erasure ran while this read was in flight: what it read may be the id it cleared
+	}
 	if len(c.ids) >= correlationCacheMax {
 		clear(c.ids)
 	}
-	c.ids[runID] = id
-	c.mu.Unlock()
+	c.ids[runID] = cachedCorrelation{id: id, expires: c.now().Add(correlationCacheTTL)}
 	return id, true
 }
 
@@ -132,5 +155,13 @@ func stampCorrelation(data json.RawMessage, id string) (json.RawMessage, bool) {
 // sink sees data.correlation_id and no emit site changes. mask, when set, is applied to the id on every
 // emit. Call it once at boot, before the first Emit.
 func (f *Fanout) EnrichRuns(lookup RunCorrelationLookup, mask RunValueMasker) {
-	f.enrich = &correlationEnricher{lookup: lookup, mask: mask, ids: map[uuid.UUID]string{}}
+	f.enrich = &correlationEnricher{lookup: lookup, mask: mask, now: time.Now, ids: map[uuid.UUID]cachedCorrelation{}}
+}
+
+// ForgetRuns drops what EnrichRuns cached for runIDs, for a person's erasure of their runs' correlation IDs
+// on this replica: call it after the rows are cleared. Other replicas follow within the cache's 30 seconds.
+func (f *Fanout) ForgetRuns(runIDs []uuid.UUID) {
+	if f.enrich != nil {
+		f.enrich.forget(runIDs)
+	}
 }
