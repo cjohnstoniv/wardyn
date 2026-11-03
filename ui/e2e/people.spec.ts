@@ -56,7 +56,7 @@ test.describe("People (Admin view)", () => {
     const row = page.getByRole("row").filter({ hasText: person.email });
     await expect(row).toBeVisible();
     await expect(row.getByText("Never signed in")).toBeVisible();
-    await expect(row.getByText("1 key")).toBeVisible();
+    await expect(row.getByText("1 SSH key")).toBeVisible();
     await row.getByRole("button", { name: person.email }).click();
 
     const drawer = page.getByRole("dialog");
