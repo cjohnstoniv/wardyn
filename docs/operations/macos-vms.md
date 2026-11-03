@@ -604,7 +604,7 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 - A disk drive is in one run at a time. A second run on the Mac that asks for it while another holds it is refused when that run starts, not at Review.
 - A run's VM holds its disk drive for up to about 80 seconds after the run shows as ended, usually half a minute. A run that asks for the drive meanwhile waits for it on the Mac.
   - The runner tries every 3 seconds for at most 90 seconds in all, and the run goes on as soon as the drive is free.
-  - A drive held by a live run of the same runner is refused at once. Anything else holding it is waited for: a run that just ended, another login's VM, or a `drive open` ([Opening a drive on the Mac](#opening-a-drive-on-the-mac)).
+  - Every holder is waited for, up to 90 seconds: a live run, a run that just ended, another login's VM, or a `drive open` ([Opening a drive on the Mac](#opening-a-drive-on-the-mac)). The failure after the wait states the wait.
   - After 90 seconds the run fails with "Waited 90 seconds for the drive to be released." and the sentence below.
   - The sentence: "`<drive>` is in another macOS VM on this Mac. If it is open there with drive open, close it there, then start the run again. Otherwise a run that just ended may still be releasing it: a disk drive is in one run at a time, so try again in a minute, or when that run ends."
 - The guest finds a disk drive by its size, apart from the boot disk, because a macOS guest does not show the disk's identifier. It refuses two disks of one size.
