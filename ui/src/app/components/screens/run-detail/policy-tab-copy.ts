@@ -106,7 +106,7 @@ export const FIELD_LABEL: Record<string, string> = {
   "resources.disk_mib": "Limits",
 };
 
-export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls">;
+export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls" | "wall_preset">;
 
 // S-34 .. S-47: the Summary view.
 export const SUMMARY = {

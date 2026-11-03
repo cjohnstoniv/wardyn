@@ -39,6 +39,11 @@ import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
 import { localMcpConflicts, useHarnessNames } from "../steps/tools/local-mcp";
 import { WallsApplyLine } from "../steps/tools/totals";
+import { chosenPreset, presetUnavailable } from "../steps/tools/wall-preset-picker";
+import { rememberedPreset, useWallPresets } from "../steps/tools/use-wall-presets";
+import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
+import { audienceOf } from "../../../../lib/wall-preset-words";
+import { WallPresetLine } from "./wall-preset-line";
 import { AddTokenDialog, DISABLED_FILL } from "../steps/tools/setup-needed";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { useWallsSpec } from "./use-walls-spec";
@@ -124,6 +129,15 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const gateway = useUIGateway();
   // One read of the person's walls for the Access group and the policy card, so their host counts always agree.
   const walls = useWallsSpec();
+  // The wall preset chosen on the Tools step; Open says nothing. One no longer available stays chosen, as an error.
+  const presets = useWallPresets();
+  const presetId = draft.intent.wall_preset;
+  const chosen = chosenPreset(presets, presetId);
+  const memory = rememberedPreset(presetId ?? "");
+  const gone = draft.guided.wallPresetGone;
+  const presetGone = presetUnavailable(presets, presetId, gone);
+  const presetName = chosen?.name ?? (gone && gone.id === presetId ? gone.name : memory?.name) ?? "";
+  const presetAudience = chosen && presets ? audienceOf(chosen, presets.publish.group_labels) : (memory?.audience ?? "");
   // Harnesses no declared image carries together: the Harnesses step refuses them, and a draft that got here another way is held too.
   const roster = useLoaded(loadRoster);
   const ids = harnessIds(draft.intent);
@@ -150,6 +164,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     setupItems: missingSetup(pre ?? (checks.preflightRefusal && { setup_items: checks.preflightRefusal.setupItems }), checks.preview.result),
     localMcp: localMcpConflicts(pre?.access ?? checks.preview.result?.access, draft.intent),
     harnessLabel: (id: string) => harnessNames.get(id) ?? id,
+    wallPreset: presetId && presetId !== "open" ? { name: presetName, unavailable: presetGone } : undefined,
   };
   // An answer the server gave for this draft that is now over a minute old, as against no answer yet.
   const expired = checks.preflightRead !== null && checks.preflightRead.generation === checks.generation && !gate(0);
@@ -241,6 +256,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
           onSaved={() => { announce(NR_TOOLS.TOKEN_SAVED); setAddingSecret(null); checkAgain(); }}
         />
       )}
+      {view === "pretty" && presetId && presetId !== "open" && (presetGone || chosen) && <WallPresetLine name={presetName} audience={presetAudience} unavailable={presetGone} go={go} />}
       {view === "pretty" && <WallsApplyLine walls={walls} />}
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
@@ -262,7 +278,11 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               <LimitsGroup {...group} docRows={docRows.limits} />
             </BlockedGroups.Provider>
           </StepSection>
-          <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} walls={walls} />
+          {presetGone ? (
+            <p className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">{WALL_PRESETS.PREVIEW_PENDING}</p>
+          ) : (
+            <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} walls={walls} />
+          )}
         </div>
       ) : (
         <RawView intent={draft.intent} format={view} go={go} />

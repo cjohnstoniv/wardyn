@@ -15,7 +15,9 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
 import { SERVICE_FORM_ERRORS as SE } from "../../../wardyn/copy/run-service";
+import { WALL_PRESET_REASON } from "../../../../lib/api/wall-presets";
 import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
@@ -105,6 +107,8 @@ export interface BlockerInput {
   harnessLabel?: (id: string) => string;
   /** An application server is drafted and this server's web app gateway is off, so its ports could never be opened. */
   gatewayOff?: boolean;
+  /** The wall preset the draft chose, and whether this caller can no longer pick it (a launch or the list said so). */
+  wallPreset?: { name: string; unavailable: boolean };
   /** The result for this draft is missing or older than a minute. */
   stale: boolean;
   /** The stale result is one the server did answer for this draft, now more than a minute old. */
@@ -130,10 +134,20 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     const name = input.harnessLabel?.(c.harness) ?? c.harness;
     out.push({ id: `local_mcp:${c.harness}:${c.server}`, kind: "refusal", text: NR_TOOLS.MCP_REFUSED(name, c.server), to: { screen: "step", step: "tools" } });
   }
+  // A wall preset that is gone is never swapped for Open: the choice stays, and Launch is held until another is picked.
+  // The server's own sentence rides under it when it refused the check.
+  const presetRefused = input.refusal?.reason === WALL_PRESET_REASON.UNKNOWN;
+  if (input.wallPreset?.unavailable || presetRefused) {
+    out.push({
+      id: "wall_preset_unknown", kind: "refusal", text: WALL_PRESETS.UNAVAILABLE(input.wallPreset?.name || WALL_PRESETS.UNAVAILABLE_UNNAMED),
+      to: { screen: "step", step: "tools" }, field: "wall_preset", ...(presetRefused && input.refusal && { hint: input.refusal.text }),
+    });
+  }
   // The server's own refusal of the same conflict says it in other words; the blocker above stands for it. The keep
   // blocker likewise says the member limit.
   if (
     input.refusal &&
+    !presetRefused &&
     !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
     !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
   ) {

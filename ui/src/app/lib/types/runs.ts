@@ -9,7 +9,9 @@
 
 import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
+import type { RunPolicyWallPreset } from "./run-policy-wall-preset";
 import type { PolicyContact } from "./site";
+import type { RunWallPreset } from "./wall-presets";
 import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
@@ -19,13 +21,7 @@ import type { RunnerPoolSelection } from "./runner-pools";
 // Older mock data used "claude_code" / "codex". Keep the union open
 // (string) so label mapping can tolerate both forms; the literals below
 // are kept for editor hints / autocomplete only.
-export type Agent =
-  | "claude-code"
-  | "codex-cli"
-  | "claude_code"
-  | "codex"
-  | "cursor"
-  | (string & {});
+export type Agent = "claude-code" | "codex-cli" | "claude_code" | "codex" | "cursor" | (string & {});
 
 export type ConfinementClass = "CC1" | "CC2" | "CC3";
 
@@ -590,6 +586,8 @@ export interface RunDetail extends AgentRun {
   macos_preparing?: boolean;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
   macos_disk?: RunMacOSDisk;
+  // The wall preset the run was launched with, never its spec (GET /runs/{id} only).
+  wall_preset?: RunWallPreset;
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
@@ -688,7 +686,7 @@ export type RunPolicyCause =
   | "git_broker"
   | "overlay"
   | "unit"
-  | "walls"
+  | "walls" | "wall_preset"
   | "org_disk"
   | "pool_disk"
   | "restart"
@@ -733,6 +731,9 @@ export interface RunPolicyView {
   // host passed through unread. Absent for a run recorded before it existed.
   host_marks?: RunPolicyHostMarks;
   inspection_left_to?: string[]; // each model provider whose gateway checks the run's prompts itself, by name
+  wall_preset?: RunPolicyWallPreset; // run-policy-wall-preset.ts
+  // The broker is off and the capability list leaves out code_write: a git token in the sandbox can still push.
+  pushes_unstoppable?: boolean;
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

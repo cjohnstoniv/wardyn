@@ -59,6 +59,16 @@ type WallPresetOnRun struct {
 	GroupID  string
 	Version  int
 	Spec     PersonalWallsSpec
+	// Changed is what the preset had become when a queued run's start found it changed and ended the
+	// run (queue_policy_changed); nil otherwise.
+	Changed *WallPresetChange
+}
+
+// WallPresetChange is a wall preset as a queued run's start found it: at Version, or Gone (deleted, or
+// no longer open to the run's owner).
+type WallPresetChange struct {
+	Version int  `json:"version,omitempty"`
+	Gone    bool `json:"gone,omitempty"`
 }
 
 // The built-in presets' ids. Each is also its name, lower-cased, and every audience's name is checked

@@ -22,7 +22,8 @@ import { asFirstUseMode } from "../../../lib/types";
 import type { ConfinementClass, RunPolicyHostMarks, RunPolicySpec, ToolRule } from "../../../lib/types";
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
 import { POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
-import { toolRulesTail } from "./policy-facts";
+import { pushesLines, toolRulesTail } from "./policy-facts";
+import { WALL_PRESETS } from "../copy/wall-presets";
 
 export const REDACTED = "<redacted>";
 
@@ -59,6 +60,15 @@ type Value = {
 type Row = { label: string; raw?: boolean; values: Value[] };
 type Meaning = { chip?: ChipSpec; text: string };
 type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; ado?: string[]; meanings?: Meaning[] };
+
+/**
+ * What the run page adds to the summary for a wall preset: a chip on each row whose spec fields the preset decided
+ * (the policy view's provenance, layer wall_preset), and whether pushes cannot be stopped on this install.
+ */
+export interface PolicyPresetNotes {
+  chip?: { label: string; fields: ReadonlySet<string> };
+  pushesUnstoppable?: boolean;
+}
 
 type Bag = Record<string, unknown>;
 const isBag = (v: unknown): v is Bag => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -128,6 +138,7 @@ function summarize(
   facts: PolicyFacts | undefined,
   pending: readonly PolicyPreviewPending[] | undefined,
   hostMarks: RunPolicyHostMarks | undefined,
+  notes: PolicyPresetNotes | undefined,
 ): Group[] {
   const raw = spec as unknown as Bag;
   const known = new Set<string>();
@@ -145,7 +156,13 @@ function summarize(
   };
   const groups: Group[] = [];
   const add = (heading: string, rows: Row[]) => rows.length > 0 && groups.push({ heading, rows });
-  const row = (label: string, values: Value[]): Row => ({ label, values });
+  // A row built from spec fields the wall preset decided carries the preset's chip on its first value.
+  const row = (label: string, values: Value[], ...fields: string[]): Row => {
+    const chip = notes?.chip;
+    if (!chip || values.length === 0 || !fields.some((f) => chip.fields.has(f))) return { label, values };
+    const first: Value = { ...values[0], chips: [...(values[0].chips ?? []), { label: chip.label, tone: "info" }] };
+    return { label, values: [first, ...values.slice(1)] };
+  };
   const entries = (items: string[], field: string): Value[] => [
     ...items.map((h) => mono(h, { mark: marks?.of(field, h) })),
     ...(marks?.removed(field) ?? []).filter((h) => !items.includes(h)).map((h) => mono(h, { mark: "removed" })),
@@ -155,7 +172,7 @@ function summarize(
   if (facts?.usedClass) barrier.push(row(SUMMARY.used, [text(ccLabel(facts.usedClass))]));
   if (facts?.requestedClass) barrier.push(row(D.REQUESTED_CLASS, [text(ccLabel(facts.requestedClass))]));
   const floor = take("min_confinement_class", asString);
-  if (floor) barrier.push(row(SUMMARY.minimum, [text(ccLabel(floor))]));
+  if (floor) barrier.push(row(SUMMARY.minimum, [text(ccLabel(floor))], "min_confinement_class"));
   add(SUMMARY.barrier, barrier);
 
   const network: Row[] = [];
@@ -167,7 +184,7 @@ function summarize(
   const outside = opened(hostMarks?.outside);
   if (allowAll) {
     // Nothing is listed, so the hosts the proxy opens are the ones outside the allowlist.
-    network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL), ...outside]));
+    network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL), ...outside], "allow_all_egress", "allowed_domains"));
     if (outside.length > 0) meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
     if (hostMarks) meanings.push({ text: SUMMARY.tunnelOnlyAllowAll });
   } else if (allowed || outside.length > 0) {
@@ -175,7 +192,7 @@ function summarize(
     const hosts = entries(allowed ?? [], "allowed_domains").map((v) =>
       hostMarks && v.text && v.mark !== "removed" ? { ...v, end: hostChip(inspected.has(v.text)) } : v,
     );
-    network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)]));
+    network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)], "allow_all_egress", "allowed_domains"));
     if (hosts.concat(outside).some((v) => v.end?.label === SUMMARY.inspected)) {
       meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
     }
@@ -184,7 +201,7 @@ function summarize(
     }
   }
   const blocked = entries(take("denied_domains", asStrings) ?? [], "denied_domains");
-  if (blocked.length > 0) network.push(row(SUMMARY.blockedHosts, blocked));
+  if (blocked.length > 0) network.push(row(SUMMARY.blockedHosts, blocked, "denied_domains"));
   // The wire still accepts the legacy boolean here.
   const firstUse = take("first_use_approval", (v) => (typeof v === "string" || typeof v === "boolean" ? v : undefined));
   // The hold is read whether or not the policy names a mode: it shows under the
@@ -196,7 +213,7 @@ function summarize(
       row(SUMMARY.otherHost, [
         ...(firstUse !== undefined ? [text(firstUseText(firstUse, holdSeconds))] : []),
         ...(holdSeconds && !waits ? [text(SUMMARY.held(holdSeconds))] : []),
-      ]),
+      ], "first_use_approval", "first_use_hold_seconds"),
     );
   }
   const holds = take("max_holds", asNumber);
@@ -229,7 +246,7 @@ function summarize(
     held.values.push(...grantValues(grant));
     byKind.set(kind, held);
   }
-  add(SUMMARY.credentials, [...byKind.values()]);
+  add(SUMMARY.credentials, [...byKind.values()].map((r) => ({ ...row(r.label, r.values, "eligible_grants"), raw: r.raw })));
 
   const ado = take("azure_devops_capabilities", asStrings);
   // The real one-line summary; capabilities it does not know are still listed.
@@ -282,13 +299,13 @@ function summarize(
     const { named, defaultEffect, explicitDefault } = splitToolRules(rules as unknown as ToolRule[]);
     const values = named.map((r) => text(D.TOOL_RULE(String(r.tool), EFFECT_PAST[r.effect] ?? String(r.effect))));
     if (explicitDefault) values.push(text(toolRulesTail(defaultEffect)));
-    if (values.length > 0) tools.push(row(SUMMARY.toolRules, values));
+    if (values.length > 0) tools.push(row(SUMMARY.toolRules, values, "tool_rules"));
   }
   const push = take("push_rules", asBag);
   const deny = asStrings(push?.deny_paths) ?? [];
   const hold = asStrings(push?.require_review_paths) ?? [];
-  if (deny.length > 0) tools.push(row(SUMMARY.pushDeny, deny.map((p) => mono(p, { mark: marks?.of("push_rules", p) }))));
-  if (hold.length > 0) tools.push(row(SUMMARY.pushHold, hold.map((p) => mono(p, { mark: marks?.of("push_rules", p) }))));
+  if (deny.length > 0) tools.push(row(SUMMARY.pushDeny, deny.map((p) => mono(p, { mark: marks?.of("push_rules", p) })), "push_rules"));
+  if (hold.length > 0) tools.push(row(SUMMARY.pushHold, hold.map((p) => mono(p, { mark: marks?.of("push_rules", p) })), "push_rules"));
   // A limit the broker enforces, so a reviewer sees why a push was refused or timed out.
   const maxFile = asNumber(push?.max_file_size_mib);
   const holdFor = asNumber(push?.hold_seconds);
@@ -297,7 +314,12 @@ function summarize(
   if (holdFor) tools.push(row(SUMMARY.pushHoldFor, [text(SUMMARY.secondsValue(holdFor))]));
   if (inspect) tools.push(row(SUMMARY.pushInspectPack, [text(SUMMARY.mibValue(inspect))]));
   const anyBranch = take("git_push_any_branch", asBool);
-  if (anyBranch !== undefined) tools.push(row(SUMMARY.pushes, [text(anyBranch ? SUMMARY.anyBranch : SUMMARY.ownBranch)]));
+  // Every push refused, or no write access, outranks where a push could go.
+  // The server says when pushes cannot be stopped on this install (broker off, no code_write): that outranks both.
+  // Every push refused outranks it: deny_all also refuses an unbrokered push to a known forge host, so the line never shows then.
+  const denyAll = spec.push_rules?.deny_all === true;
+  const pushLines = notes?.pushesUnstoppable && !denyAll ? [WALL_PRESETS.PUSHES_UNSTOPPABLE] : pushesLines({ ...spec, git_push_any_branch: anyBranch });
+  if (pushLines.length > 0) tools.push(row(SUMMARY.pushes, pushLines.map((l) => text(l)), "push_rules", "git_push_any_branch", "github_capabilities", "azure_devops_capabilities"));
   add(SUMMARY.tools, tools);
 
   const apps = take("ui_apps", asBags);
@@ -364,6 +386,7 @@ export function PolicySummary({
   facts,
   pending,
   hostMarks,
+  notes,
   headingLevel = 3,
 }: {
   spec: RunPolicySpec;
@@ -372,10 +395,12 @@ export function PolicySummary({
   pending?: readonly PolicyPreviewPending[];
   /** Which allowed hosts the run's proxy opens (run page only); with none given no host is marked. */
   hostMarks?: RunPolicyHostMarks;
+  /** The wall preset's chips and the unstoppable-push line (run page only). */
+  notes?: PolicyPresetNotes;
   /** The level of the section headings, set by where the document sits on its page. */
   headingLevel?: 3 | 4;
 }) {
-  const groups = summarize(spec, marks, facts, pending, hostMarks);
+  const groups = summarize(spec, marks, facts, pending, hostMarks, notes);
   const Heading = headingLevel === 4 ? "h4" : "h3";
   if (groups.length === 0) return <p className="text-sm text-muted-foreground">{SUMMARY.none}</p>;
   return (

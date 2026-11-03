@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,8 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
+	// Every push refused outranks it: deny_all refuses an unbrokered push to a known forge host even with the brokers off.
+	response.PushesUnstoppable = slices.Contains(f.policyWarns, unstoppablePushWarning) && (f.spec.PushRules == nil || !f.spec.PushRules.DenyAll)
 	response.Provenance = f.prov
 	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()

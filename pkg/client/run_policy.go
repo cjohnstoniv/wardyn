@@ -48,6 +48,26 @@ type RunPolicyView struct {
 	// prompts itself; Wardyn still checks them for the run's own secret values
 	// when the policy has that check. Absent when no provider does.
 	InspectionLeftTo []string `json:"inspection_left_to,omitempty"`
+	// WallPreset is the wall preset the run was launched with and what it
+	// narrowed, removed and added. A personal preset read by anyone but the
+	// run's owner carries its scope alone.
+	WallPreset *RunPolicyWallPreset `json:"wall_preset,omitempty"`
+	// PushesUnstoppable is set when the install's git token broker is off and the run's capability list leaves out
+	// code_write: a git token in the sandbox can still push.
+	PushesUnstoppable bool `json:"pushes_unstoppable,omitempty"`
+}
+
+// RunPolicyWallPreset is a run's wall preset in its policy view: Narrowed names
+// the knobs it narrowed, Removed and Added the list entries it took out or added.
+type RunPolicyWallPreset struct {
+	ID       string              `json:"id,omitempty"`
+	Name     string              `json:"name,omitempty"`
+	Scope    string              `json:"scope"`
+	GroupID  string              `json:"group_id,omitempty"`
+	Version  int                 `json:"version,omitempty"`
+	Narrowed []string            `json:"narrowed,omitempty"`
+	Removed  map[string][]string `json:"removed,omitempty"`
+	Added    map[string][]string `json:"added,omitempty"`
 }
 
 // RunPolicyHostMarks lists the allowed_domains entries the proxy terminates TLS

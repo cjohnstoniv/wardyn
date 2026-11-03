@@ -37,6 +37,7 @@ import { PUSH } from "../wardyn/copy/push";
 import { APPROVAL_WALLS } from "../wardyn/copy/personal-walls";
 import { PolicyRemedy, personalOwn } from "../wardyn/policy-remedy";
 import { useOwnerName } from "../../lib/use-owner-name";
+import { wallPresetApprovalSentence } from "./run-detail/wall-preset-run-lines";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
 import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
 import { useAgentName } from "../wardyn/use-agent-name";
@@ -58,9 +59,12 @@ export function ApprovalCard({
   onTakeOver,
   onDecline,
   refused = false,
+  presetBlocked = false,
 }: {
   item: ApprovalRequest;
   run?: RunDetail;
+  /** The server refused this approve because the run's wall preset denies the host (wall_preset_host). */
+  presetBlocked?: boolean;
   // A run that holds Azure DevOps tokens widens one when access is approved.
   tokenWidens?: boolean;
   // The viewer's own capability set, or null when the question doesn't apply
@@ -159,7 +163,12 @@ export function ApprovalCard({
   // Deny stays, and the sentence and Why card say whose walls they are. Drawn once the run read has settled, since
   // the owner is the run's creator and "Your walls" would otherwise flash on an approver who is not the owner.
   const wallsBlocked = !!item.walls_block && !runEnded;
-  const wallsPolicy = { source: "personal", layer: "personal", owner: run?.created_by } as const;
+  // The run's wall preset, when it is what refused: named by the run read, which a non-owner reading a personal preset
+  // gets without a name. The card then speaks of the preset and its Why card says who chose it.
+  const presetName = presetBlocked ? run?.wall_preset?.name : undefined;
+  const wallsPolicy = presetBlocked && run?.wall_preset
+    ? ({ source: "wall_preset", layer: "wall_preset", owner: run.created_by, ...(presetName && { name: presetName }) } as const)
+    : ({ source: "personal", layer: "personal", owner: run?.created_by } as const);
 
   // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
   // raise) gets ITS OWN card, not this generic one: it needs fields
@@ -391,11 +400,17 @@ export function ApprovalCard({
 
       {wallsBlocked && host && run && (
         <div className="mt-2.5 space-y-2" data-testid="approval-walls-block">
-          <p className="text-sm text-foreground">
-            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsOwnerName)}
-            <span className="font-mono">{host}</span>
-            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_AFTER : APPROVAL_WALLS.OTHER_AFTER}
-          </p>
+          {presetName ? (
+            <p className="text-sm text-foreground">
+              {wallPresetApprovalSentence({ name: presetName, host, ownRun: personalOwn(wallsPolicy, principal), owner: wallsOwnerName }).map((part, i) => (i === 1 ? <span key={i} className="font-mono">{part}</span> : part))}
+            </p>
+          ) : (
+            <p className="text-sm text-foreground">
+              {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsOwnerName)}
+              <span className="font-mono">{host}</span>
+              {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_AFTER : APPROVAL_WALLS.OTHER_AFTER}
+            </p>
+          )}
           <PolicyRemedy policy={wallsPolicy} copyable />
         </div>
       )}

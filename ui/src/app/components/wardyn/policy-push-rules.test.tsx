@@ -388,8 +388,11 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(status).toHaveTextContent(PUSH_RULES_CARD.DENY_ALL_STATUS);
     expect(status).toHaveTextContent(PUSH_RULES_CARD.DENY_ALL_WHERE);
     expect(PUSH_RULES_CARD.DENY_ALL_STATUS).toBe("Every push is refused by this policy.");
+    // The 0/0 counts would read as "nothing is refused", so they are hidden under deny_all.
+    expect(screen.queryByText(/denied paths? ·/)).not.toBeInTheDocument();
     rerender(<PushRulesSection spec={{ ...BASE, push_rules: { deny_paths: ["a/**"] } }} onSpecChange={() => {}} />);
     expect(screen.queryByText(PUSH_RULES_CARD.DENY_ALL_STATUS)).not.toBeInTheDocument();
+    expect(screen.getByText("1 denied path · 0 paths held for review")).toBeInTheDocument();
   });
 
   // A row's error is not just visually beside its input — an assistive

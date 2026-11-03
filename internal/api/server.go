@@ -824,12 +824,12 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
-	// localAttachSubs (localAttachSubFor) and localCovered (promotionCovered) replace a local attach's substrate and corpus proof, tests only.
+	// localAttachSubs (localAttachSubFor) and localCovered (promotionCovered) replace a local attach's substrate and corpus proof; queueRace runs at each queueRace* point (queueRaceAt). Tests only.
 	localAttachSubs func(id uuid.UUID) localAttachSub
 	localCovered    func(runID uuid.UUID) bool
+	queueRace       func(point string)
 	macWindowHost   // this replica's open attended windows and the tests' seams for them (run_mac_window.go)
-	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
-	// output pause for THIS server only (tests).
+	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed output pause for THIS server only (tests).
 	pauseLimit time.Duration
 	// attachPrepare overrides attachPrepareTimeout for THIS server only (tests):
 	// the bound on one Runner.Attach.

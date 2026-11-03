@@ -1865,9 +1865,9 @@ enforces, not a re-derivation:
   row:
   - the saved policy (id, and its name and content as they read at launch), an inline policy, the default, or the governance profile the run's creator was bound to.
   - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
-- **What changed at launch** is each difference, given a cause:
+- **What changed at launch**: each difference's cause:
   `workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`,
-  `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
+  `overlay`, `profile`, `walls`, `wall_preset`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
   - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the

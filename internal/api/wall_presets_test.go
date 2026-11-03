@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -352,5 +353,68 @@ func TestWallPresetWriteRefusals(t *testing.T) {
 	post(`{"scope":"person","name":"tight",`+tightSpec+`}`, http.StatusConflict, reasonWallPresetNameTaken)
 	if n := len(e.wp.presets); n != 1 {
 		t.Fatalf("stored %d presets, want 1", n)
+	}
+}
+
+// TestWallPresetPersonalIsInvisibleToEveryoneButItsOwner: someone's personal preset is read by its owner
+// alone, with no administrator exception (the design gives an administrator no read of a person's walls).
+// To anyone else its GET is the 404 a missing id gets, byte for byte, so the id confirms nothing, and no
+// list of theirs holds it, by id, name or spec.
+func TestWallPresetPersonalIsInvisibleToEveryoneButItsOwner(t *testing.T) {
+	e := newWallPresetEnv(t)
+	alice := templateCookie(t, "alice", oidc.RoleUser, false, []string{}, false)
+	mine := e.save(alice, `{"scope":"person","name":"Alice private",`+tightSpec+`}`)
+	path := "/api/v1/wall-presets/" + mine.ID
+	e.expect(alice, http.MethodGet, path, "", http.StatusOK, "")
+
+	readers := map[string]*http.Cookie{
+		"another user":   templateCookie(t, "bob", oidc.RoleUser, false, []string{}, false),
+		"an admin":       templateCookie(t, "root", oidc.RoleAdmin, false, []string{}, false),
+		"security admin": templateCookie(t, "sec", oidc.RoleSecurityAdmin, false, []string{}, false),
+	}
+	for who, c := range readers {
+		missing := e.expect(c, http.MethodGet, "/api/v1/wall-presets/"+uuid.NewString(), "", http.StatusNotFound, reasonWallPresetNotFound)
+		if got := e.expect(c, http.MethodGet, path, "", http.StatusNotFound, reasonWallPresetNotFound); got != missing {
+			t.Errorf("%s: someone's personal preset answers %q, a missing id %q: the id is an existence oracle", who, got, missing)
+		}
+		_, list := e.call(c, http.MethodGet, "/api/v1/wall-presets", "")
+		if strings.Contains(list, mine.ID) || strings.Contains(list, "Alice private") || strings.Contains(list, "pastebin") {
+			t.Errorf("%s: the preset list holds someone else's personal preset: %s", who, list)
+		}
+	}
+}
+
+// TestWallPresetLaunchRefusesSomeoneElsesPersonalPreset: the one place a launch resolves its wall preset
+// (launchWallPreset, behind the policy preview, Review and create) answers a non-owner naming someone's
+// personal preset exactly as it answers an id that does not exist (422 wall_preset_unknown, the id echoed
+// and nothing more), applies nothing, and shows none of the preset's rows; its owner applies it.
+func TestWallPresetLaunchRefusesSomeoneElsesPersonalPreset(t *testing.T) {
+	e := newWallPresetEnv(t)
+	mine := tightPreset(types.WallPresetScopePerson, "Alice private")
+	mine.OwnerID = "alice"
+	e.wp.presets[mine.ID] = mine
+	launch := func(ctx context.Context, id string) (*types.WallPresetOnRun, *runRefusal) {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+		return e.srv.launchWallPreset(ctx, r, id)
+	}
+	owner := withHumanIdentity(context.Background(), "alice", "alice@corp.example", oidc.RoleUser, types.UserTypeStandard, []string{}, false)
+	if p, refusal := launch(owner, mine.ID); refusal != nil || p == nil || p.ID != mine.ID || p.Spec.Empty() {
+		t.Fatalf("the owner: copy %+v refusal %+v, want the preset applied", p, refusal)
+	}
+	for who, role := range map[string]string{"another user": oidc.RoleUser, "an admin": oidc.RoleAdmin, "security admin": oidc.RoleSecurityAdmin} {
+		ctx := withHumanIdentity(context.Background(), "bob", "bob@corp.example", role, types.UserTypeStandard, []string{}, false)
+		p, refusal := launch(ctx, mine.ID)
+		if p != nil || refusal == nil || refusal.status != http.StatusUnprocessableEntity || refusal.body.Reason != reasonWallPresetUnknown {
+			t.Errorf("%s: copy %+v refusal %+v, want 422 %s", who, p, refusal, reasonWallPresetUnknown)
+			continue
+		}
+		gone := uuid.NewString()
+		_, missing := launch(ctx, gone)
+		if missing == nil || strings.ReplaceAll(refusal.body.Error, mine.ID, "ID") != strings.ReplaceAll(missing.body.Error, gone, "ID") {
+			t.Errorf("%s: someone's preset is refused %q, a missing one %+v: the sentence differs", who, refusal.body.Error, missing)
+		}
+		if b, _ := json.Marshal(refusal.body); strings.Contains(string(b), "pastebin") || strings.Contains(string(b), "Alice private") || strings.Contains(string(b), "ssh_key") {
+			t.Errorf("%s: the refusal leaks the preset: %s", who, b)
+		}
 	}
 }

@@ -89,6 +89,25 @@ describe("Review blockers", () => {
     }
   });
 
+  it("holds Launch for a wall preset that is gone, never swapping it for Open, and links it to the Tools step", () => {
+    const [b] = buildBlockers({ ...NOTHING, wallPreset: { name: "Docs triage", unavailable: true } });
+    expect(b).toMatchObject({ id: "wall_preset_unknown", kind: "refusal", text: "Docs triage is no longer available. Choose another wall preset to continue.", to: { screen: "step", step: "tools" }, field: "wall_preset" });
+    expect(b.hint).toBeUndefined();
+  });
+
+  it("turns the server's wall_preset_unknown refusal into the one blocker, with the server's sentence under it", () => {
+    const sentence = 'wall preset "Docs triage" does not exist or is not open to you';
+    const out = buildBlockers({ ...NOTHING, refusal: { text: sentence, reason: "wall_preset_unknown" }, wallPreset: { name: "Docs triage", unavailable: true } });
+    expect(out.map((b) => b.id)).toEqual(["wall_preset_unknown"]);
+    expect(out[0].hint).toBe(sentence);
+    // A refusal alone, before the list says so, still blocks, with no name invented.
+    expect(buildBlockers({ ...NOTHING, refusal: { text: sentence, reason: "wall_preset_unknown" } })[0].text).toContain("The chosen wall preset is no longer available");
+  });
+
+  it("does not block for a wall preset that is available", () => {
+    expect(buildBlockers({ ...NOTHING, wallPreset: { name: "Sealed", unavailable: false } })).toEqual([]);
+  });
+
   it("links a refusal to nowhere when its reason is not known", () => {
     const out = buildBlockers({ ...NOTHING, issues: [{ home: "shape", code: "shape_required", focus: "nr-workload" }], refusal: { text: "Refused.", reason: "something_new" } });
     expect(out[1].to).toBeUndefined();
