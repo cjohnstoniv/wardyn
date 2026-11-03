@@ -106,6 +106,7 @@
 - The run ends as failed, and the replaced-pod sentence below is recorded as the run's failure hint.
 - Teardown finds the run's agent pod by its fixed name, not by a label, so a pod whose labels were edited is still deleted.
 - A mutating webhook that injects a sidecar makes the read-back refuse the run, though the plain path accepts it. That is deliberate.
+- A cluster-wide default PriorityClass (`globalDefault: true`) makes every run refuse at start, naming `spec.priorityClassName`, though the plain path accepts it. Name a class in the placement's `priorityClassName` (`WARDYN_K8S_SANDBOX_PLACEMENT`), so the read-back expects it.
 - A real controller rewrite is tested with fake clients only.
 
 ## What the person sees
