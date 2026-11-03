@@ -269,7 +269,7 @@ func makeMacBase(t *testing.T, l macvm.Layout) {
 // every prepare stamps it (a kept machine's record names that time as its base's).
 func writeMacManifest(t *testing.T, l macvm.Layout, desktop string) {
 	t.Helper()
-	m := `{"format":2,"state":"ready","created_at":"2026-10-01T09:00:00Z","guest_os":"macOS 26.1","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"` + desktop + `","harnesses":["claude-code"]}`
+	m := `{"format":2,"state":"ready","created_at":"` + time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339) + `","guest_os":"macOS 26.1","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"` + desktop + `","harnesses":["claude-code"]}`
 	if err := os.WriteFile(filepath.Join(l.BaseDir(0), macvm.ManifestFile), []byte(m), 0o600); err != nil {
 		t.Fatal(err)
 	}
