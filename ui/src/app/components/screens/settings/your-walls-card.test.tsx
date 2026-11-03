@@ -193,6 +193,18 @@ describe("Your walls card", () => {
     expect(screen.getByText("b.example.com")).toBeInTheDocument();
   });
 
+  it("keeps the host of a typed site without its port, IPv6 brackets included", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const never = screen.getByPlaceholderText(YOUR_WALLS.ADD_SITE);
+    for (const typed of ["https://Example.com:8443/x", "internal.test:80", "[::1]:8080"]) {
+      setField(never, typed);
+      fireEvent.keyDown(never, { key: "Enter" });
+    }
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ denied_domains: ["example.com", "internal.test", "[::1]"] }));
+  });
+
   it("Remove all walls asks first, and Cancel removes nothing", async () => {
     getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"] } });
     render(<YourWallsCard />);
@@ -217,6 +229,19 @@ describe("Your walls card", () => {
     await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("a.example.com")).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: YOUR_WALLS.UPLOAD })).not.toBeChecked();
+  });
+
+  it("Remove all walls stays open and shows the error when the clear fails", async () => {
+    getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"] } });
+    clearMock.mockRejectedValue(new HttpError(500, "could not clear", "walls_unavailable"));
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
+    expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("could not clear");
+    expect(screen.getByText("a.example.com")).toBeInTheDocument();
   });
 
   it("says what the server refused with its code in small print, and offers no Saved", async () => {

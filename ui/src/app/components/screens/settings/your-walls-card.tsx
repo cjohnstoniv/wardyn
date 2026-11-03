@@ -51,13 +51,15 @@ export function YourWallsCard() {
     setSaved(false);
   };
   const fail = (e: unknown) => setRefusal({ message: e instanceof HttpError ? e.message : T.SAVE_FAILED, reason: e instanceof HttpError ? e.reason : "" });
-  const run = async (act: () => Promise<void>) => {
+  const run = async (act: () => Promise<void>): Promise<boolean> => {
     setBusy(true);
     setRefusal(null);
     try {
       await act();
+      return true;
     } catch (e) {
       fail(e);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -120,6 +122,12 @@ export function YourWallsCard() {
             <AlertDialogTitle>{T.REMOVE_ALL_TITLE}</AlertDialogTitle>
             <AlertDialogDescription>{T.REMOVE_ALL_BODY}</AlertDialogDescription>
           </AlertDialogHeader>
+          {refusal && (
+            <p role="alert" className="text-sm text-danger">
+              {refusal.message}
+              {refusal.reason && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{refusal.reason}</span>}
+            </p>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>{T.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
@@ -127,7 +135,7 @@ export function YourWallsCard() {
               disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
-                void removeAll().then(() => setConfirmingRemove(false));
+                void removeAll().then((ok) => ok && setConfirmingRemove(false));
               }}
             >
               {T.REMOVE_ALL}

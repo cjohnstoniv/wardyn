@@ -1199,6 +1199,13 @@ func TestMacWindowCreateRefusesAtStart(t *testing.T) {
 			t.Fatalf("begin rows = %+v, want one denied row naming no run", b)
 		}
 	})
+	t.Run("a failed read is a 500 audited as a failure, not a denial", func(t *testing.T) {
+		rec, ok, r := step(t, func(r *macWindowRig, f *runFold) { r.st.err = errors.New("store down") }, foldCreate)
+		b := r.rows("takeover.begin")
+		if ok || rec.Code != http.StatusInternalServerError || len(b) != 1 || b[0].Outcome != "failure" {
+			t.Fatalf("ok=%v %d %s rows=%+v, want a 500 and one failure row", ok, rec.Code, rec.Body.String(), b)
+		}
+	})
 	t.Run("row 4: a ceiling that denies interactive desktops refuses the create", func(t *testing.T) {
 		rec, ok, _ := step(t, func(r *macWindowRig, f *runFold) {
 			f.ceiling = governanceCeiling{Limits: types.GovernanceLimits{DenyInteractive: true}}
