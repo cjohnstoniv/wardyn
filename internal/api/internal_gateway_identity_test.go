@@ -998,7 +998,7 @@ func TestGatewayDispatchRoute(t *testing.T) {
 	var d providerDispatch
 	off := testGatewayProvider()
 	off.GatewayIdentity = nil
-	if !d.addGatewayRoute(providerKeyLane{provider: off}) || d.gatewayRoutes != nil {
+	if !d.addGatewayRoute(off) || d.gatewayRoutes != nil {
 		t.Fatalf("off: %+v", d.gatewayRoutes)
 	}
 	withRoute, err := json.Marshal(proxy.Config{GatewayIdentity: d.gatewayRoutes})
@@ -1011,7 +1011,7 @@ func TestGatewayDispatchRoute(t *testing.T) {
 	on := testGatewayProvider()
 	on.BaseURL = "https://GW.corp.example.:8443/llm/"
 	for range 2 {
-		if !d.addGatewayRoute(providerKeyLane{provider: on}) {
+		if !d.addGatewayRoute(on) {
 			t.Fatal("on: refused")
 		}
 	}
@@ -1022,19 +1022,19 @@ func TestGatewayDispatchRoute(t *testing.T) {
 	// A second provider on the same gateway path clashes; one on a path apart does not.
 	same := testGatewayProvider()
 	same.ID, same.UID, same.BaseURL = "corp-gw-2", "uid-2", "https://gw.corp.example:8443/llm/v1"
-	if got := d.gatewayRouteClash(providerKeyLane{provider: same}); got != "corp-gw" {
+	if got := d.gatewayRouteClash(same); got != "corp-gw" {
 		t.Errorf("clash = %q, want corp-gw", got)
 	}
 	same.BaseURL = "https://gw.corp.example:8443/other"
-	if got := d.gatewayRouteClash(providerKeyLane{provider: same}); got != "" {
+	if got := d.gatewayRouteClash(same); got != "" {
 		t.Errorf("a path apart clashed with %q", got)
 	}
-	if got := d.gatewayRouteClash(providerKeyLane{provider: on}); got != "" {
+	if got := d.gatewayRouteClash(on); got != "" {
 		t.Errorf("a provider clashed with itself: %q", got)
 	}
 	bad := testGatewayProvider()
 	bad.BaseURL = "https://gw.corp.example/a/../b"
-	if d.addGatewayRoute(providerKeyLane{provider: bad}) {
+	if d.addGatewayRoute(bad) {
 		t.Error("an address no route can hold was dispatched")
 	}
 }
@@ -1045,5 +1045,128 @@ func TestGatewayIdentityIssuerIsTheTokensIss(t *testing.T) {
 	f := newGatewayFixture(t)
 	if got := f.srv.gatewayIdentityIssuer(); got != "spiffe://wardyn.local" {
 		t.Errorf("issuer %q", got)
+	}
+}
+
+func testGatewayBedrockBearer() types.ModelProvider {
+	return types.ModelProvider{
+		ID: "corp-gw", UID: "uid-1", Kind: types.ModelProviderBedrockBearer,
+		Bedrock:         &types.BedrockSettings{Region: "us-east-1", BaseURL: "https://GW.corp.example:8443/bedrock/"},
+		GatewayIdentity: &types.ModelProviderGatewayIdentity{Audience: "gw-aud"},
+		Harnesses:       []types.ProviderHarness{{Harness: "claude-code", Model: "profile"}},
+	}
+}
+
+// A Bedrock key row may send identity once bedrock.base_url names a gateway, and is refused
+// without one, with the field the admin must fill; a Bedrock sign-in row is refused with the
+// way out, whatever it names.
+func TestGatewayIdentityBedrockKinds(t *testing.T) {
+	if err := validateProviderGatewayIdentity(testGatewayBedrockBearer()); err != nil {
+		t.Fatalf("a Bedrock key row with a gateway address refused: %v", err)
+	}
+	noAddress := testGatewayBedrockBearer()
+	noAddress.Bedrock.BaseURL = ""
+	noAddress.BaseURL = "https://gw.corp.example" // the top-level address is never a Bedrock row's
+	err := validateProviderGatewayIdentity(noAddress)
+	if err == nil || !strings.Contains(err.Error(), "gateway_identity needs a bedrock.base_url, or the token would go to AWS") || refusalField(err) != "bedrock.base_url" {
+		t.Errorf("no bedrock.base_url: %v (field %q)", err, refusalField(err))
+	}
+	badAddress := testGatewayBedrockBearer()
+	badAddress.Bedrock.BaseURL = "https://gw.corp.example/a/../b"
+	if err := validateProviderGatewayIdentity(badAddress); err == nil || refusalField(err) != "bedrock.base_url" {
+		t.Errorf("a dot segment: %v (field %q)", err, refusalField(err))
+	}
+	sso := testGatewayBedrockBearer()
+	sso.Kind = types.ModelProviderBedrockSSO
+	err = validateProviderGatewayIdentity(sso)
+	want := `model_providers: "corp-gw": gateway_identity is not available for bedrock_sso providers; use a bedrock_bearer row, or the gateway as a custom endpoint`
+	if err == nil || err.Error() != want {
+		t.Errorf("sign-in row: %v, want %q", err, want)
+	}
+}
+
+// A Bedrock key row's route is its bedrock.base_url normalized, holds for a mint while that address and
+// audience stand, and breaks when either moves. Its audience may not name a second address.
+func TestGatewayBedrockBearerRoute(t *testing.T) {
+	p := testGatewayBedrockBearer()
+	rt, ok := gatewayRouteOf(p)
+	want := proxy.GatewayIdentityRoute{Host: "gw.corp.example", Port: 8443, PathPrefix: "/bedrock", ProviderID: "corp-gw", ProviderUID: "uid-1", Audience: "gw-aud"}
+	if !ok || rt != want {
+		t.Fatalf("route %+v ok=%v, want %+v", rt, ok, want)
+	}
+	if !gatewayBindingHolds(rt, p) {
+		t.Error("the sealed route does not hold for the row it was sealed from")
+	}
+	moved := testGatewayBedrockBearer()
+	moved.Bedrock.BaseURL = "https://other.corp.example/bedrock"
+	if gatewayBindingHolds(rt, moved) {
+		t.Error("a token for one gateway could go to another")
+	}
+	// The region does not decide the route, and the top-level base_url is not read.
+	same := testGatewayBedrockBearer()
+	same.Bedrock.Region, same.BaseURL = "eu-west-1", "https://other.corp.example"
+	if !gatewayBindingHolds(rt, same) {
+		t.Error("an edit that leaves the address alone broke the binding")
+	}
+	// One audience, two addresses: refused across a Bedrock row and an endpoint row.
+	other := testGatewayProvider()
+	other.ID, other.UID = "other-gw", "uid-2"
+	other.GatewayIdentity.Audience = "gw-aud"
+	if err := validateGatewayAudiences(&types.ModelProviders{Providers: []types.ModelProvider{p, other}}, nil); err == nil {
+		t.Error("one audience on a Bedrock gateway and a different endpoint passed")
+	}
+	other.BaseURL = "https://gw.corp.example:8443/bedrock/"
+	if err := validateGatewayAudiences(&types.ModelProviders{Providers: []types.ModelProvider{p, other}}, nil); err != nil {
+		t.Errorf("one destination refused: %v", err)
+	}
+	// A new bedrock.base_url that keeps the audience is refused.
+	stored := &types.ModelProviders{Providers: []types.ModelProvider{testGatewayBedrockBearer()}}
+	err := validateGatewayIdentityEdit(&types.ModelProviders{Providers: []types.ModelProvider{moved}}, stored)
+	if err == nil || !strings.Contains(err.Error(), "moved to a new address") {
+		t.Errorf("a moved Bedrock gateway kept its audience: %v", err)
+	}
+}
+
+// Dispatch records a Bedrock key row's route once, and writes none for a row with identity off or a kind that cannot carry it.
+func TestGatewayDispatchBedrockBearerRoute(t *testing.T) {
+	var d providerDispatch
+	srv := &Server{}
+	off := testGatewayBedrockBearer()
+	off.GatewayIdentity = nil
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, off) || d.gatewayRoutes != nil {
+		t.Fatalf("off: %+v", d.gatewayRoutes)
+	}
+	on := testGatewayBedrockBearer()
+	for range 2 {
+		if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, on) {
+			t.Fatal("on: refused")
+		}
+	}
+	want := proxy.GatewayIdentityRoute{Host: "gw.corp.example", Port: 8443, PathPrefix: "/bedrock", ProviderID: "corp-gw", ProviderUID: "uid-1", Audience: "gw-aud"}
+	if len(d.gatewayRoutes) != 1 || d.gatewayRoutes[0] != want {
+		t.Errorf("routes %+v", d.gatewayRoutes)
+	}
+	// A kind that cannot carry identity writes no route, even with the field stored.
+	sso := testGatewayBedrockBearer()
+	sso.Kind = types.ModelProviderBedrockSSO
+	var none providerDispatch
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &none, sso) || none.gatewayRoutes != nil {
+		t.Errorf("a sign-in row wrote a route: %+v", none.gatewayRoutes)
+	}
+}
+
+// A mint for a Bedrock key row passes from the route its dispatch sealed, and refuses once its gateway moves.
+func TestGatewayMintForABedrockKeyRow(t *testing.T) {
+	f := newGatewayFixture(t)
+	p := testGatewayBedrockBearer()
+	f.st.set(func(s *gatewayStore) { s.site = testGatewaySite(p) })
+	f.seal(t, f.run.ID, p)
+	if w := f.mint(t); w.Code != http.StatusOK {
+		t.Fatalf("mint = %d %s", w.Code, w.Body)
+	}
+	p.Bedrock.BaseURL = "https://other.corp.example/bedrock"
+	f.st.set(func(s *gatewayStore) { s.site = testGatewaySite(p) })
+	if w := f.mint(t); w.Code != http.StatusForbidden || reasonOf(t, w) != reasonGatewayIdentityChanged {
+		t.Fatalf("moved: mint = %d %s", w.Code, w.Body)
 	}
 }

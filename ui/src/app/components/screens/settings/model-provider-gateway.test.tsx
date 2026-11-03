@@ -16,10 +16,11 @@ import { HttpError } from "../../../lib/api/core";
 import type { ModelProvidersList } from "../../../lib/api/model-providers";
 import { MODEL_PROVIDERS as M, PROVIDER_EDITOR as E } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { setField } from "../../../../test/set-field";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { AVAILABILITY } from "../../../lib/availability-copy";
-import { refusedField } from "./model-provider-draft";
+import { draftFrom, providerFrom, refusedField } from "./model-provider-draft";
 import { ModelProviderEditor } from "./model-provider-editor";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -338,6 +339,8 @@ describe("which field a refusal is about", () => {
     ['model_providers: "gateway_identity.audience": base_url: must be https:// (got "http://x")', "base_url"],
     ['model_providers: "base_url": gateway_identity: audience is required', "gateway_audience"],
     ['model_providers: "base_url": gateway_identity is not available for anthropic_subscription providers', null],
+    ['model_providers: "p": gateway_identity needs a bedrock.base_url, or the token would go to AWS', "base_url"],
+    ['model_providers: "base_url": gateway_identity is not available for bedrock_sso providers; use a bedrock_bearer row, or the gateway as a custom endpoint', null],
     ['model_providers: "local.models": local.max_output: must be between 1 and 99', "max_output"],
     ['model_providers: "local.models": gateway_identity is not available for anthropic_subscription providers', null],
     [MOVED("audience"), "gateway_audience"],
@@ -347,5 +350,90 @@ describe("which field a refusal is about", () => {
     ['invalid model providers: model_providers: "q": gateway_identity: audience must be at most 256 bytes, with no control characters', "gateway_audience"],
   ])("%s", (message, field) => {
     expect(refusedField(message)).toBe(field);
+  });
+});
+
+describe("a Bedrock key row", () => {
+  const HOST = "bedrock-runtime.us-east-1.amazonaws.com";
+  const BEDROCK_ON: ModelProvider = {
+    id: "bedrock-keys",
+    uid: "u-3",
+    name: "Bedrock keys",
+    kind: "bedrock_bearer",
+    bedrock: { region: "us-east-1", base_url: "https://gateway.example.com/bedrock" },
+    gateway_identity: { audience: "wardyn-bedrock" },
+    harnesses: [{ harness: "claude-code", model: "us.anthropic.profile" }],
+  };
+  const bearer = () => screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER });
+  const sso = () => screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO });
+
+  it("asks for a gateway address first, naming the regional host, and labels the region for what it is", async () => {
+    const { user } = await addKind(M.KIND.bedrock_bearer);
+    await user.click(bearer());
+    expect(sw()).toBeDisabled();
+    expect(screen.getByText(G.NEEDS_ADDRESS(HOST))).toBeInTheDocument();
+    expect(screen.getByLabelText(E.REGION_BEARER)).toBeInTheDocument();
+    expect(screen.queryByText(E.IDC_GROUP)).not.toBeInTheDocument();
+    setField(screen.getByLabelText(E.REGION_BEARER), "eu-west-1");
+    expect(screen.getByText(G.NEEDS_ADDRESS("bedrock-runtime.eu-west-1.amazonaws.com"))).toBeInTheDocument();
+    setField(screen.getByLabelText(E.ROUTE_THROUGH), "https://gateway.example.com/bedrock");
+    expect(sw()).toBeEnabled();
+    expect(screen.getByText(G.DISCLOSURE)).toBeInTheDocument();
+  });
+
+  it("saves the address under bedrock and the audience beside it, and no base_url of its own", async () => {
+    const { user } = await addKind(M.KIND.bedrock_bearer);
+    await user.click(bearer());
+    setField(screen.getByLabelText(E.REGION_BEARER), "us-east-1");
+    setField(screen.getByLabelText(E.ROUTE_THROUGH), "https://gateway.example.com/bedrock");
+    for (const model of screen.getAllByLabelText(new RegExp(`^${E.MODEL}`))) setField(model, "us.anthropic.profile");
+    await user.click(sw());
+    setField(audience(), "  wardyn-bedrock ");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    const saved = putBody().providers[0];
+    expect(saved).toMatchObject({
+      kind: "bedrock_bearer",
+      bedrock: { region: "us-east-1", base_url: "https://gateway.example.com/bedrock" },
+      gateway_identity: { audience: "wardyn-bedrock" },
+    });
+    expect(saved).not.toHaveProperty("base_url");
+  });
+
+  it("a new address clears the audience, and clearing it while on says it needs one", async () => {
+    renderEditor(BEDROCK_ON);
+    expect(audience()).toHaveValue("wardyn-bedrock");
+    setField(screen.getByLabelText(E.ROUTE_THROUGH), "https://other.example.com/bedrock");
+    expect(audience()).toHaveValue("");
+    expect(screen.getByText(G.ADDRESS_CHANGED)).toBeInTheDocument();
+    setField(screen.getByLabelText(E.ROUTE_THROUGH), "");
+    expect(screen.getByText(G.ADDRESS_CLEARED)).toBeInTheDocument();
+    expect(screen.getByLabelText(E.ROUTE_THROUGH)).toBeInvalid();
+  });
+
+  it("switching to SSO shows the switch off with its reason; switching back restores it", async () => {
+    const { user } = renderEditor(BEDROCK_ON);
+    expect(sw()).toHaveAttribute("aria-checked", "true");
+    await user.click(sso());
+    expect(sw()).toBeDisabled();
+    expect(sw()).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(G.NOT_AVAILABLE.bedrock_sso)).toBeInTheDocument();
+    await user.click(bearer());
+    expect(sw()).toBeEnabled();
+    expect(sw()).toHaveAttribute("aria-checked", "true");
+    expect(audience()).toHaveValue("wardyn-bedrock");
+  });
+
+  it("a draft switched to SSO writes no identity, and keeps the stored gateway address", () => {
+    const draft = { ...draftFrom(BEDROCK_ON, HARNESSES), kind: "bedrock_sso" as const };
+    const out = providerFrom(draft, BEDROCK_ON, []);
+    expect(out.gateway_identity).toBeUndefined();
+    expect(out.bedrock?.base_url).toBe("https://gateway.example.com/bedrock");
+  });
+
+  it("a sign-in row's reason names both ways out", () => {
+    expect(G.NOT_AVAILABLE.bedrock_sso).toBe(
+      "Not available when people sign in with SSO. Use a bearer key row, or add the gateway as your own endpoint.",
+    );
   });
 });

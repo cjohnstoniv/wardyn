@@ -26,7 +26,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { LOCAL_MODEL_EDITOR } from "../../../lib/local-model-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
-import { LOCAL_MODEL_DEFAULTS, type ModelProvider, type ModelProviderKind } from "../../../lib/types/site";
+import { LOCAL_MODEL_DEFAULTS, type ModelProvider } from "../../../lib/types/site";
 import { AGENTS, AGENTS_EXTRA } from "../../../lib/workspace-providers-copy";
 import {
   AlertDialog,
@@ -64,8 +64,11 @@ import { LaptopRunnersSwitch } from "./model-provider-laptop";
 import {
   EDITOR_KINDS,
   addressChanged,
+  directHost,
   draftFrom,
+  draftGatewayAddress,
   editorProvidesLine,
+  gatewayKind,
   incompatibleReason,
   isBedrock,
   isEndpoint,
@@ -76,7 +79,6 @@ import {
   laptopBaseUrlRefused,
   refusedHarness,
   refusedModel,
-  vendorHost,
   type HarnessRow,
   type ProviderDraft,
 } from "./model-provider-draft";
@@ -403,9 +405,10 @@ function ProviderFields({
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
   // A new address needs its audience entered again (the server refuses a kept one), so an edit that
   // leaves the saved address clears it, and one that returns to it restores it.
-  const setBaseUrl = (baseUrl: string) => {
+  const setBaseUrl = (value: string) => {
     const saved = draft.gatewaySaved;
-    set(saved ? { baseUrl, gatewayAudience: sameAddress(baseUrl, saved.baseUrl) ? saved.audience : "" } : { baseUrl });
+    const patch = isBedrock(draft.kind) ? { bedrockBaseUrl: value } : { baseUrl: value };
+    set(saved ? { ...patch, gatewayAudience: sameAddress(value, saved.baseUrl) ? saved.audience : "" } : patch);
   };
   const endpoint = isEndpoint(draft.kind);
   const local = isLocal(draft.kind);
@@ -413,10 +416,10 @@ function ProviderFields({
   const laptopBad = laptopBaseUrlRefused(draft);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
-  const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key";
-  const host = vendorHost(draft.kind);
+  const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key" || draft.kind === "bedrock_bearer";
+  const host = directHost(draft);
   // A key kind's gateway address cleared while identity is still on: the server refuses it, so say so first.
-  const addressCleared = routeThrough && draft.gatewayOn && !draft.baseUrl.trim();
+  const addressCleared = routeThrough && draft.gatewayOn && !draftGatewayAddress(draft).trim();
   const [before, after] = PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host).split(host);
   const rows = Object.keys(draft.harnesses).map((id) => harnesses.find((h) => h.id === id) ?? { id, display: id });
   // E3's "How people sign in" toggle — the ONE field that reaches bedrock_bearer
@@ -465,8 +468,8 @@ function ProviderFields({
 
       {bedrock && (
         <>
-          <p className="text-xs font-medium text-foreground">{PROVIDER_EDITOR.IDC_GROUP}</p>
-          <Field label={PROVIDER_EDITOR.REGION} htmlFor="mp-region" required={bedrock}>
+          {sso && <p className="text-xs font-medium text-foreground">{PROVIDER_EDITOR.IDC_GROUP}</p>}
+          <Field label={sso ? PROVIDER_EDITOR.REGION : PROVIDER_EDITOR.REGION_BEARER} htmlFor="mp-region" required={bedrock}>
             <Input
               id="mp-region"
               required={bedrock}
@@ -632,7 +635,7 @@ function ProviderFields({
               className="font-mono"
               placeholder="https://"
               aria-invalid={badField === "base_url" || addressCleared || undefined}
-              value={draft.baseUrl}
+              value={draftGatewayAddress(draft)}
               onChange={(e) => setBaseUrl(e.target.value)}
             />
           </Field>
@@ -666,8 +669,7 @@ function ProviderFields({
   );
 }
 
-// The kinds that may send run identity to a gateway: each needs a base_url, or the token would go to the vendor.
-const GATEWAY_KINDS: readonly ModelProviderKind[] = ["anthropic_api_key", "openai_api_key", "custom_endpoint"];
+// The kinds that may send run identity to a gateway (gatewayKind) each need an address, or the token would go to the vendor.
 const sameAddress = (a: string, b: string) => a.trim().replace(/\/$/, "") === b.trim().replace(/\/$/, "");
 // The issuer an install gets when it never names its own trust domain.
 const DEFAULT_ISSUER = "spiffe://wardyn.local";
@@ -694,12 +696,12 @@ function GatewayIdentity({
   const root = React.useRef<HTMLDivElement>(null);
   const noteId = React.useId();
   const reasonId = React.useId();
-  const refusedKind = !GATEWAY_KINDS.includes(draft.kind);
-  const needsAddress = !refusedKind && !draft.gatewayOn && !draft.baseUrl.trim() && draft.kind !== "custom_endpoint";
+  const refusedKind = !gatewayKind(draft.kind);
+  const needsAddress = !refusedKind && !draft.gatewayOn && !draftGatewayAddress(draft).trim() && draft.kind !== "custom_endpoint";
   const reason = refusedKind
     ? g.NOT_AVAILABLE[draft.kind as keyof typeof g.NOT_AVAILABLE]
     : needsAddress
-      ? g.NEEDS_ADDRESS(vendorHost(draft.kind))
+      ? g.NEEDS_ADDRESS(directHost(draft))
       : undefined;
   const disabled = !operator || !!reason;
   // Switch takes no aria-describedby, so the sentence is attached to the control here, to be read with it.
@@ -708,13 +710,13 @@ function GatewayIdentity({
     root.current?.querySelector('[role="switch"]')?.setAttribute("aria-describedby", describedBy);
   }, [describedBy]);
   const saved = draft.gatewaySaved;
-  const moved = !!saved && !sameAddress(draft.baseUrl, saved.baseUrl);
+  const moved = !!saved && !sameAddress(draftGatewayAddress(draft), saved.baseUrl);
   const keyAddress = jwksPath ? `${window.location.origin}${jwksPath}` : "";
 
   return (
     <div ref={root} className="space-y-2">
       <div className="flex items-center gap-2.5">
-        <Switch checked={draft.gatewayOn} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
+        <Switch checked={draft.gatewayOn && !refusedKind} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
         <span className="text-body">{g.SWITCH}</span>
       </div>
       {reason ? (

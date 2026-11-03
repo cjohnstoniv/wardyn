@@ -37,6 +37,7 @@ export const PROVIDER_EDITOR = {
   // the same legacy Bedrock setting "Region" in prose, but no Field constant
   // existed to pin against). Owner-approved as canon 2026-09-25 (PR #1038).
   REGION: "Region",
+  REGION_BEARER: "AWS region",
   SSO_SETUP_HINT: "These make each person's sign-in one click.",
   MODEL_HINT_BEDROCK: "An inference profile id.",
   CLAUDE_IMAGE_MISSING:
@@ -102,8 +103,7 @@ export const PROVIDER_EDITOR = {
       "You changed where this provider sends requests. Enter the audience again for the new address. After saving, existing runs cannot refresh their gateway tokens. Create new runs to use the new address.",
     NOT_AVAILABLE: {
       anthropic_subscription: "Not available for Claude subscriptions yet.",
-      bedrock_sso: "Not available for Amazon Bedrock yet.",
-      bedrock_bearer: "Not available for Amazon Bedrock yet.",
+      bedrock_sso: "Not available when people sign in with SSO. Use a bearer key row, or add the gateway as your own endpoint.",
       local_model: "Not available for a local model server, which is not a gateway.",
     },
   },
