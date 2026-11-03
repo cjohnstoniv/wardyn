@@ -79,6 +79,7 @@ type mcpServer struct {
 	url     string
 	host    string
 	port    int
+	path    string // the URL's path, which a gateway identity route's prefix is matched against
 	grantID *uuid.UUID
 
 	mu        sync.Mutex
@@ -99,7 +100,7 @@ func newMCPBroker(servers []MCPServerConfig, bindings []MCPBinding) *mcpBroker {
 			port, _ = strconv.Atoi(u.Port())
 		}
 		host := strings.ToLower(strings.TrimRight(u.Hostname(), "."))
-		b.servers[s.Key] = &mcpServer{key: s.Key, url: s.URL, host: host, port: port, grantID: s.GrantID}
+		b.servers[s.Key] = &mcpServer{key: s.Key, url: s.URL, host: host, port: port, path: u.Path, grantID: s.GrantID}
 	}
 	return b
 }
@@ -497,7 +498,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	copyHeader(out.Header, x.r.Header)
 	removeHopByHop(out.Header)
 	stripSandboxCredentials(out.Header, "")
-	// An MCP server gets the call id on a run with a gateway route, and no identity token.
+	// An MCP server gets the call id on a run with a gateway route, and the identity token only on its own route.
 	p.stripGatewayHeaders(out.Header)
 	if s.grantID != nil {
 		hdr, err := p.mcpCredential(x.r.Context(), s)
@@ -512,6 +513,16 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	if len(p.gatewayRoutes) > 0 {
 		callID = uuid.NewString()
 		out.Header.Set(gatewayCallIDHeader, callID)
+	}
+	route := p.gatewayRouteFor(s.host, s.port, s.path)
+	if route != nil && route.MCPKey != s.key {
+		// A route that is not this server's (a provider's, or another server's on one path) must not send its token here.
+		x.emit(egress.Deny, ruleSourceMCPCredential)
+		p.httpError(w, "the MCP server's gateway identity route is not its own", errors.New("another destination's route covers this server"), http.StatusBadGateway)
+		return
+	}
+	if route != nil && !p.attachGatewayIdentity(w, x.r, out.Header, route, s.host, s.port, ruleSourceMCP, callID) {
+		return
 	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
@@ -532,6 +543,10 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)
 	allow.GatewayCallID = callID
 	p.emitDialledAllow(allow, s.host)
+	if route != nil {
+		p.relayGatewayRoute(w, x.r, s.host, s.port, resp, ruleSourceMCP, out.Header.Get(gatewayIdentityHeader), callID)
+		return
+	}
 	p.relayStreaming(w, resp)
 }
 
