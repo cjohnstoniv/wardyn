@@ -104,6 +104,10 @@ describe("template field registry", () => {
       "RunLocalFolder.path",
       "RunLocalFolder.remote_dir",
       "RunLocalFolder.runner_id",
+      "RunMachine.fresh",
+      "RunMachine.keep",
+      "RunMachine.name",
+      "RunMachine.resume",
     ]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });
