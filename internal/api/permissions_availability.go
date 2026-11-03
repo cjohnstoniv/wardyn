@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -101,8 +102,7 @@ func (s *Server) availabilityOf(r *http.Request, kind, value string) (availabili
 	if err != nil {
 		return v, err
 	}
-	var prefixes, denies []types.CapabilityGrant
-	onlyPrefixAllows := true
+	var prefixes, nonPrefix, denies []types.CapabilityGrant
 	for _, g := range grants {
 		if g.Capability != kind {
 			continue
@@ -118,34 +118,41 @@ func (s *Server) availabilityOf(r *http.Request, kind, value string) (availabili
 			if isImagePrefixGrant(g.Value) {
 				prefixes = append(prefixes, g)
 			} else {
-				onlyPrefixAllows = false
+				nonPrefix = append(nonPrefix, g)
 			}
 		}
 	}
 	if kind == capImage {
-		v.CoveredBy = coveringPrefixes(prefixes, denies, value, v.Restricted, onlyPrefixAllows && imageSiblingIn(restricted[capImage], value))
+		v.CoveredBy = coveringPrefixes(prefixes, nonPrefix, denies, value, v.Restricted, imageSiblingIn(restricted[capImage], value))
 	}
 	return v, nil
 }
 
 // coveringPrefixes keeps the prefix allows a launch would honour for value,
 // mirroring capRead.granted: nothing on a restricted value (only a named allow
-// counts there), nothing when the allows are all prefixes and another tag of
-// the repository is restricted, and nothing for a who that a deny row on the
-// image refuses outright (the same subject, or everyone). A deny on a narrower
-// subject than the cover's, such as one person in a user type, is not read.
-func coveringPrefixes(prefixes, denies []types.CapabilityGrant, value string, restricted, siblingBlocks bool) []availabilityCover {
+// counts there), nothing for a who whose allows are all prefixes while another
+// tag of the repository is restricted (a wildcard allow that applies to that
+// same who keeps its existing reading), and nothing for a who that a deny row
+// on the image refuses outright. A row applies to a who when it names the same
+// subject or everyone; a row on a narrower subject, such as one person in a
+// user type, is not read.
+func coveringPrefixes(prefixes, nonPrefix, denies []types.CapabilityGrant, value string, restricted, siblingRestricted bool) []availabilityCover {
 	covers := []availabilityCover{}
-	if restricted || siblingBlocks {
+	if restricted {
 		return covers
+	}
+	applies := func(row, who types.CapabilityGrant) bool {
+		return row.SubjectType == types.CapabilitySubjectAll || (row.SubjectType == who.SubjectType && row.Subject == who.Subject)
 	}
 next:
 	for _, g := range prefixes {
 		for _, d := range denies {
-			if capDenyOverlaps(capImage, d.Value, value) &&
-				(d.SubjectType == types.CapabilitySubjectAll || (d.SubjectType == g.SubjectType && d.Subject == g.Subject)) {
+			if capDenyOverlaps(capImage, d.Value, value) && applies(d, g) {
 				continue next
 			}
+		}
+		if siblingRestricted && !slices.ContainsFunc(nonPrefix, func(a types.CapabilityGrant) bool { return applies(a, g) }) {
+			continue
 		}
 		covers = append(covers, availabilityCover{
 			Prefix: strings.TrimSpace(g.Value),

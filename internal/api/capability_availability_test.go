@@ -341,7 +341,7 @@ func TestAvailabilityRoutes_CoveredByPrefix(t *testing.T) {
 // TestAvailabilityRoutes_CoveredByMirrorsLaunch: covered_by names only the prefix rows a
 // launch would honour (capRead.granted): not on a restricted value, not while another tag
 // of the repository is restricted and only prefixes allow it, and not for a who a deny on
-// the image refuses. A wildcard allow keeps its existing reading beside a restricted sibling.
+// the image refuses. A wildcard allow that applies to the same who keeps its existing reading beside a restricted sibling.
 func TestAvailabilityRoutes_CoveredByMirrorsLaunch(t *testing.T) {
 	const img = "registry.example.com/team/app:1"
 	const sibling = "registry.example.com/team/app:2"
@@ -365,6 +365,12 @@ func TestAvailabilityRoutes_CoveredByMirrorsLaunch(t *testing.T) {
 		{name: "a wildcard allow keeps its reading beside a restricted sibling",
 			grants:     []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow)},
 			restricted: map[string]bool{sibling: true}, want: 1},
+		{name: "a wildcard allow for the same user type keeps its reading beside a restricted sibling",
+			grants:     []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectUserType, utDev, capImage, capWildcard, types.CapabilityAllow)},
+			restricted: map[string]bool{sibling: true}, want: 1},
+		{name: "a wildcard allow for another user type does not lift the sibling block for this one",
+			grants:     []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectUserType, utPM, capImage, capWildcard, types.CapabilityAllow)},
+			restricted: map[string]bool{sibling: true}},
 		{name: "a deny for the same who removes that cover",
 			grants: []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectUserType, utDev, capImage, img, types.CapabilityDeny)}},
 		{name: "a deny for everyone removes it",
