@@ -186,6 +186,53 @@ var (
 	ErrKeptIncomplete = errors.New("macvm: this kept machine's folder is incomplete")
 )
 
+// KeptRefusalFile is written into the run folder when a kept machine's boot is refused, before the helper
+// has a ctl.sock to report on: the runner reads it (ReadKeptRefusal) instead of matching the error's text.
+const KeptRefusalFile = "kept-refusal.json"
+
+// The kept_refusal values (KeptRefusalCode), one per way a boot is refused.
+const (
+	KeptRefusalLocked     = "locked"
+	KeptRefusalOwner      = "owner"
+	KeptRefusalIncomplete = "incomplete"
+	KeptRefusalExpired    = "expired"
+	KeptRefusalIDMismatch = "id_mismatch"
+)
+
+type keptRefusal struct {
+	Code string `json:"kept_refusal"`
+}
+
+// KeptRefusalCode is the kept_refusal value for err, or "" when err is none of the refusals.
+func KeptRefusalCode(err error) string {
+	switch {
+	case errors.Is(err, ErrKeptLocked):
+		return KeptRefusalLocked
+	case errors.Is(err, ErrKeptOwner):
+		return KeptRefusalOwner
+	case errors.Is(err, ErrKeptIncomplete):
+		return KeptRefusalIncomplete
+	case errors.Is(err, ErrKeptExpired):
+		return KeptRefusalExpired
+	case errors.Is(err, ErrKeptIDMismatch):
+		return KeptRefusalIDMismatch
+	}
+	return ""
+}
+
+// ReadKeptRefusal is the kept_refusal value runDir's helper left, or "" when it left none.
+func ReadKeptRefusal(runDir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(runDir, KeptRefusalFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	var r keptRefusal
+	if err == nil {
+		err = json.Unmarshal(b, &r)
+	}
+	return r.Code, err
+}
+
 // keptFiles are what a kept folder holds besides kept.json and the tools record.
 var keptFiles = []string{DiskFile, AuxFile, MachineIDFile, PairKeyFile, ManifestFile, ToolsRecordFile}
 

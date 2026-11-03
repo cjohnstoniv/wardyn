@@ -351,3 +351,78 @@ func TestKeptWindowStripSaysTheSignInsStay(t *testing.T) {
 		t.Fatalf("the kept window opened as %+v", scr.texts)
 	}
 }
+
+func TestKeptRefusedBootWritesItsCode(t *testing.T) {
+	id := uuid.New()
+	for _, tc := range []struct {
+		name, code string
+		err        error
+		setup      func(l macvm.Layout, base, dir string) func()
+	}{
+		{"locked", macvm.KeptRefusalLocked, macvm.ErrKeptLocked, func(l macvm.Layout, base, dir string) func() {
+			unlock, err := macvm.LockKept(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return unlock
+		}},
+		{"owner", macvm.KeptRefusalOwner, macvm.ErrKeptOwner, func(l macvm.Layout, base, dir string) func() {
+			rec, _ := macvm.ReadKept(dir, id.String())
+			rec.OwnerHash = "someone-else"
+			if err := macvm.WriteKept(dir, rec); err != nil {
+				t.Fatal(err)
+			}
+			return func() {}
+		}},
+		{"incomplete", macvm.KeptRefusalIncomplete, macvm.ErrKeptIncomplete, func(l macvm.Layout, base, dir string) func() {
+			if err := os.Remove(filepath.Join(dir, macvm.DiskFile)); err != nil {
+				t.Fatal(err)
+			}
+			return func() {}
+		}},
+		{"expired", macvm.KeptRefusalExpired, macvm.ErrKeptExpired, func(l macvm.Layout, base, dir string) func() {
+			rec, _ := macvm.ReadKept(dir, id.String())
+			rec.ExpiresAt = time.Now().Add(-time.Hour)
+			if err := macvm.WriteKept(dir, rec); err != nil {
+				t.Fatal(err)
+			}
+			return func() {}
+		}},
+		{"id_mismatch", macvm.KeptRefusalIDMismatch, macvm.ErrKeptIDMismatch, func(l macvm.Layout, base, dir string) func() {
+			rec, _ := macvm.ReadKept(dir, id.String())
+			rec.ID = uuid.NewString()
+			if err := macvm.WriteKept(dir, rec); err != nil {
+				t.Fatal(err)
+			}
+			return func() {}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := startRun(t, &macvmtest.Engine{}, func(c *macvm.RunConfig, _ *macvm.RunOptions) {
+				l := macvm.Layout{Root: filepath.Dir(filepath.Dir(c.BaseDir))}
+				dir := l.KeptMachineDir(id.String())
+				if err := openKept(t, keptCfg(c.BaseDir, macvm.KeptNew, id), dir, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(tc.setup(l, c.BaseDir, dir))
+				*c = keptCfg(c.BaseDir, macvm.KeptResume, id)
+				c.CPUs, c.MemoryMiB, c.SockRoot = 4, 8192, macvmtest.SockRoot(t)
+			})
+			err := <-r.done
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("Run = %v, want %v", err, tc.err)
+			}
+			if got, rerr := macvm.ReadKeptRefusal(r.dir); got != tc.code || rerr != nil || macvm.KeptRefusalCode(err) != tc.code {
+				t.Fatalf("kept_refusal = %q, %v; want %q", got, rerr, tc.code)
+			}
+		})
+	}
+	// A boot that is not refused leaves no code.
+	r := startRun(t, &macvmtest.Engine{}, func(c *macvm.RunConfig, _ *macvm.RunOptions) {
+		*c = keptCfg(c.BaseDir, macvm.KeptNew, uuid.New())
+		c.CPUs, c.MemoryMiB, c.SockRoot = 4, 8192, macvmtest.SockRoot(t)
+	})
+	if got, err := macvm.ReadKeptRefusal(r.dir); got != "" || err != nil {
+		t.Fatalf("a boot that was not refused left kept_refusal %q, %v", got, err)
+	}
+}
