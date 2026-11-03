@@ -692,7 +692,7 @@ k8s:
   # the cluster runner's limits; without either it sets none (deploy/kind/quickstart.sh turns it on for that).
   readNodes: false
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
-  # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name
+  # form, e.g. CC2=gvisor;CC3=kata-qemu; the chart README has a Kata example). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime
   # family names) — CC2/CC3 stay unadvertised until pinned here to an existing
   # RuntimeClass whose .Handler clears the class's floor guard
