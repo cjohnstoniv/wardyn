@@ -181,11 +181,11 @@ func TestCapsStatusAndListNeverTouchTheLock(t *testing.T) {
 	if c := m.build(nil); !c.KeptMachines || c.Kept == nil {
 		t.Fatalf("caps: %+v", c)
 	}
-	// The runner's code that reads on a timer or for a report never names the probe; only the explicit
-	// update (macos_vm_kept_tools.go) does.
+	// Nothing in the runner names the probe: what must know a machine is free waits for its lock instead
+	// (macvm.LockKeptWait).
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") || f == "macos_vm_kept_tools.go" {
+		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
 		if b, _ := os.ReadFile(f); strings.Contains(string(b), "macvm.KeptLocked(") {
@@ -477,8 +477,14 @@ func TestKeptDiskLimitSetting(t *testing.T) {
 // openKeptRig opens the rig's runner with the kept limit setting as its caller resolved it.
 func openKeptRig(t *testing.T, r *macLedgerRig, setting string) *macOSVMs {
 	t.Helper()
+	return openSettingsRig(t, r, macOSVMSettings{keptLimit: setting})
+}
+
+// openSettingsRig opens the rig's runner with the settings as its caller resolved them.
+func openSettingsRig(t *testing.T, r *macLedgerRig, set macOSVMSettings) *macOSVMs {
+	t.Helper()
 	m := openMacOSVMs(macOSVMSetup{ledgerDir: r.dir, root: r.root, runnerID: "runner-a", version: "1.0.0", uid: 501,
-		dockerMemory: 8 * gib, host: r.host, owner: r.owner, fstat: r.fstat, keptLimit: setting})
+		dockerMemory: 8 * gib, host: r.host, owner: r.owner, fstat: r.fstat, settings: set})
 	if m.ledger == nil {
 		t.Fatalf("ledger refused: %s", m.refusal)
 	}
@@ -536,7 +542,7 @@ func TestCapsCarryKeptMachines(t *testing.T) {
 	if c := m.build(nil); !c.KeptMachines || c.Kept == nil || c.Base.State == runnerwire.MacVMBaseReady {
 		t.Fatalf("with no base: kept %v, %+v, base %s", c.KeptMachines, c.Kept, c.Base.State)
 	}
-	f.kept = nil
+	f.kept, m.kept.limit = nil, 0 // the driver reports nothing at a limit of 0
 	if c := m.build(nil); !c.KeptMachines || c.Kept == nil || c.Kept.LimitBytes != 0 || len(c.Kept.Machines) != 0 {
 		t.Fatalf("a Mac that keeps none reports %v, %+v", c.KeptMachines, c.Kept)
 	}
@@ -699,7 +705,7 @@ func TestKeptDiskLimitFollowsTheConfigFileServeReads(t *testing.T) {
 		}
 	}
 	explicit := filepath.Join(t.TempDir(), "runner.json")
-	limitOf := func() int64 {
+	openServe := func() *macOSVMs {
 		t.Helper()
 		cfg, err := serveConfig(newServeCommand(nil), explicit)
 		if err != nil {
@@ -708,8 +714,9 @@ func TestKeptDiskLimitFollowsTheConfigFileServeReads(t *testing.T) {
 		var org, state string
 		var opts serveOptions
 		cfg.applyTo(&org, &state, &opts)
-		return openKeptRig(t, newMacLedgerRig(t), opts.macOSVMKeptLimit).kept.limit
+		return openSettingsRig(t, newMacLedgerRig(t), opts.macOSVMSettings)
 	}
+	limitOf := func() int64 { return openServe().kept.limit }
 	body := func(v string) string { return `{"macos_vm_kept_disk_limit_gb":"` + v + `"}` }
 	write(defPath, body("60"))
 	write(explicit, body("0"))
@@ -724,5 +731,174 @@ func TestKeptDiskLimitFollowsTheConfigFileServeReads(t *testing.T) {
 	write(explicit, `{}`)
 	if n := limitOf(); n != 110<<30 {
 		t.Errorf("explicit file with none over a default file's 0 = %d, want 110 GB", n)
+	}
+}
+
+// The install list (macos_vm_base_file) and the other bases' folder (macos_vm_bases_dir) are the ones in
+// the file serve was told to read, not the default file's.
+func TestBaseSettingsFollowTheConfigFileServeReads(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	t.Setenv("HOME", cfgHome)
+	defPath, err := defaultRunnerConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	explicit := filepath.Join(t.TempDir(), "runner.json")
+	write(defPath, `{"macos_vm_base_file":"/default/items.json","macos_vm_bases_dir":"/default/bases"}`)
+	write(explicit, `{"macos_vm_base_file":"/explicit/items.json","macos_vm_bases_dir":"/explicit/bases"}`)
+	open := func() *macOSVMs {
+		cfg, err := serveConfig(newServeCommand(nil), explicit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var org, state string
+		var opts serveOptions
+		cfg.applyTo(&org, &state, &opts)
+		return openSettingsRig(t, newMacLedgerRig(t), opts.macOSVMSettings)
+	}
+	m := open()
+	if m.items.file != "/explicit/items.json" || m.items.err != nil || m.bases.dir != "/explicit/bases" || m.bases.err != nil {
+		t.Fatalf("items %+v, bases dir %q: want the explicit file's, not the default's", m.items, m.bases.dir)
+	}
+	write(explicit, `{}`)
+	if m := open(); m.items.file != "" || m.bases.dir != "" {
+		t.Fatalf("an explicit file with none still has the default file's: %q, %q", m.items.file, m.bases.dir)
+	}
+}
+
+// keptFolderAt writes a kept machine folder under root's VM layout, as an earlier run of macOS VMs left it.
+func keptFolderAt(t *testing.T, root string) (id uuid.UUID, dir string) {
+	t.Helper()
+	l := macvm.Layout{Root: root}
+	id = uuid.New()
+	dir = l.KeptMachineDir(id.String())
+	if err := macvm.WriteKept(dir, macvm.KeptRecord{ID: id.String(), OwnerHash: "o", RunnerID: "runner-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+".update", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return id, dir
+}
+
+// A revoked runner erases its kept machines with macOS VMs off (no handle) and with a handle that has no
+// driver; a machine a boot holds is reported as not erased, and the rest go.
+func TestEraseKeptWithMacOSVMsOff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root, err := macvm.DefaultRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := keptLockWait
+	keptLockWait = 20 * time.Millisecond
+	defer func() { keptLockWait = was }()
+	var off *macOSVMs
+	_, a := keptFolderAt(t, root)
+	_, b := keptFolderAt(t, root)
+	if err := off.eraseKept(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{a, a + ".lock", a + ".update", b, b + ".lock", b + ".update"} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s survives the erase: %v", p, err)
+		}
+	}
+	// A handle with no driver erases from its own layout.
+	m := keptRig(t)
+	_, c := keptFolderAt(t, m.layout.Root)
+	if err := m.eraseKept(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(c); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a handle with no driver left %s: %v", c, err)
+	}
+	// A held machine is reported, kept with its lock, and does not stop the others going.
+	_, held := keptFolderAt(t, root)
+	_, free := keptFolderAt(t, root)
+	unlock, err := macvm.LockKept(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	err = off.eraseKept(context.Background())
+	if err == nil || !strings.Contains(err.Error(), filepath.Base(held)) {
+		t.Fatalf("erase with a machine held: %v", err)
+	}
+	if _, err := os.Lstat(held); err != nil {
+		t.Errorf("the held machine was removed: %v", err)
+	}
+	if _, err := os.Lstat(free); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a free machine survives: %v", err)
+	}
+}
+
+// A Mac whose limit is 0 keeps no new machines but still reports the ones it holds, so they can be seen,
+// deleted and expired: the caps list them with the limit 0, the status counts them, and a delete works.
+func TestLimitZeroDoesNotHideMachines(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := openKeptRig(t, r, "0")
+	if m.kept.limit != 0 {
+		t.Fatalf("limit %d", m.kept.limit)
+	}
+	m.useDriver(&fakeKept{kept: nil}) // the driver reports nothing at a limit of 0
+	idle, busy := uuid.New(), uuid.New()
+	dir := keptMachine(t, m, idle, "idle", nil)
+	keptMachine(t, m, busy, "busy", nil)
+	run := bootKept(t, r, m, busy)
+	c := m.build(nil)
+	if !c.KeptMachines || c.Kept == nil || c.Kept.LimitBytes != 0 || len(c.Kept.Machines) != 2 {
+		t.Fatalf("caps at limit 0: %v, %+v", c.KeptMachines, c.Kept)
+	}
+	for _, km := range c.Kept.Machines {
+		switch km.ID {
+		case idle.String():
+			if km.InUse || km.RunID != "" {
+				t.Errorf("idle machine: %+v", km)
+			}
+		case busy.String():
+			if !km.InUse || km.RunID != run {
+				t.Errorf("busy machine: %+v, want run %s", km, run)
+			}
+		default:
+			t.Errorf("unknown machine %+v", km)
+		}
+	}
+	if c.Kept.WorstBytes != 2*admission.RunDiskReservation(50<<30) {
+		t.Errorf("worst %d", c.Kept.WorstBytes)
+	}
+	st, err := m.status(context.Background())
+	if err != nil || st.Kept == nil || st.Kept.Machines != 2 || st.Kept.LimitBytes != 0 {
+		t.Fatalf("status at limit 0: %v, %+v", err, st.Kept)
+	}
+	rows, _ := m.keptRows()
+	var gone keptRow
+	for _, r := range rows {
+		if r.name == "idle" {
+			gone = r
+		}
+	}
+	var out bytes.Buffer
+	if err := deleteKept(&out, gone); err != nil {
+		t.Fatalf("delete at limit 0: %v", err)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the deleted machine survives: %v", err)
+	}
+	if c := m.build(nil); c.Kept == nil || len(c.Kept.Machines) != 1 {
+		t.Errorf("caps after the delete: %+v", c.Kept)
 	}
 }

@@ -132,9 +132,8 @@ type macOSVMs struct {
 type macOSVMSetup struct {
 	ledgerDir, root, runnerID, version string
 	limitsFile                         string
-	// keptLimit is macos_vm_kept_disk_limit_gb as the caller resolved it (serve from its --config file, a
-	// command from its own), "" when unset: the Mac's kept machines budget, which this never re-reads.
-	keptLimit                  string
+	// settings are the runner settings as the caller resolved them (macOSVMSettings).
+	settings                   macOSVMSettings
 	uid                        int
 	dockerMemory, perRunMemory uint64
 	host                       admission.Host
@@ -165,8 +164,8 @@ func (m *macOSVMs) useDriver(d macVMDriver) {
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory, limitsFile: s.limitsFile,
-		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: openMacOSVMItems()}
-	m.openKept(s.keptLimit)
+		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: macOSVMItems{file: s.settings.baseFile}, bases: macOSVMBases{dir: s.settings.basesDir}}
+	m.openKept(s.settings.keptLimit)
 	if s.ledgerDir != admission.DefaultDir {
 		m.ledgerDir = s.ledgerDir
 	}

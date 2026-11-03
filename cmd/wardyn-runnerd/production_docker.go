@@ -113,7 +113,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	watch.onChange = opts.offline.relayChanged
 	extras.report = connectReport{log: opts.offline, relay: watch}
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
-	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMKeptLimit)
+	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
 	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
@@ -879,7 +879,7 @@ func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeEx
 // whose helper's probe does not pass, offers none and says why in its caps as a code, and in its log in words. Container runs are untouched
 // either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
 // the offer sizes each guest at the base's minimum until it does.
-func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool, keptLimit string) *macOSVMs {
+func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool, set macOSVMSettings) *macOSVMs {
 	if !on {
 		return nil
 	}
@@ -896,7 +896,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 	if err != nil {
 		slog.WarnContext(ctx, "macOS VM sandboxes: Docker did not report its memory; the ledger subtracts none", "error", err.Error())
 	}
-	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir), keptLimit: keptLimit,
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir), settings: set,
 		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
 	m.helper, err = macVMHelperPath()
 	if err == nil {

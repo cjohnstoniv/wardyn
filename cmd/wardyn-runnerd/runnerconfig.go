@@ -174,6 +174,19 @@ func parseKeptDiskLimit(v string) (int64, error) {
 	return gb << 30, nil
 }
 
+// macOSVMSettings are the runner settings the macOS VM handle takes from the config serve (or a macos-vm
+// command) resolved, so the file that command was given is the one that counts and no default file is read
+// again behind it. "" is unset.
+type macOSVMSettings struct {
+	// keptLimit is macos_vm_kept_disk_limit_gb, baseFile macos_vm_base_file and basesDir macos_vm_bases_dir.
+	keptLimit, baseFile, basesDir string
+}
+
+// macOSVMSettings is c's macOS VM settings.
+func (c runnerConfig) macOSVMSettings() macOSVMSettings {
+	return macOSVMSettings{keptLimit: c.get(macOSVMKeptDiskLimitKey), baseFile: c.get("macos_vm_base_file"), basesDir: c.get("macos_vm_bases_dir")}
+}
+
 // macOSVMOn reads the macos_vm setting.
 func macOSVMOn(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {

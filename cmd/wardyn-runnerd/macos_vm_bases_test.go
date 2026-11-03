@@ -33,7 +33,6 @@ func TestMacOSVMDerivedBases(t *testing.T) {
 		string(slices.Repeat([]byte("a"), 64))+`"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m.bases.once.Do(func() {})
 	m.bases.dir = dir
 	started := make(chan string, 4)
 	m.bases.start = func(v macvm.BaseVariant, _ macvm.Manifest) error { started <- v.Name; return nil }
@@ -134,7 +133,6 @@ func TestMacOSVMUnreadableBasesFileIsFailedWithReason(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rc9.json"), []byte(`{"items":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m.bases.once.Do(func() {})
 	m.bases.dir = dir
 	m.bases.start = func(v macvm.BaseVariant, _ macvm.Manifest) error {
 		t.Errorf("a derivation of %s started", v.Name)

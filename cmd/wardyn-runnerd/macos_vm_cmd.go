@@ -57,7 +57,7 @@ func newMacOSVMCommand() *cobra.Command {
 			return nil, "", err
 		}
 		m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), version: version.String(), uid: os.Getuid(),
-			host: admission.SystemHost(), owner: fileOwner, limitsFile: macOSVMLimitsFile(stateDir), keptLimit: cfg.get(macOSVMKeptDiskLimitKey)})
+			host: admission.SystemHost(), owner: fileOwner, limitsFile: macOSVMLimitsFile(stateDir), settings: cfg.macOSVMSettings()})
 		if m.helper, err = macVMHelperPath(); err != nil {
 			return nil, "", err
 		}

@@ -33,6 +33,9 @@ type keptToolsRig struct {
 
 func newKeptToolsRig(t *testing.T) *keptToolsRig {
 	t.Helper()
+	was := keptLockWait
+	keptLockWait = 20 * time.Millisecond
+	t.Cleanup(func() { keptLockWait = was })
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	m.helper = "/opt/wardyn/wardyn-macvm"
@@ -190,5 +193,20 @@ func TestKeptToolsUpdateWithoutALedger(t *testing.T) {
 	k.m.ledger, k.m.refusal = nil, macOSVMLedgerDamaged
 	if err := k.u.ForceKeptTools(context.Background(), k.dir); err == nil || err.Error() != macOSVMLedgerDamaged || len(k.jobs) != 0 {
 		t.Fatalf("err %v, jobs %d", err, len(k.jobs))
+	}
+}
+
+// A holder that lets go within the short wait (a stop write) does not refuse an update; one that stays does.
+func TestKeptToolsUpdateWaitsBrieflyForAHolder(t *testing.T) {
+	k := newKeptToolsRig(t)
+	k.writeRecord(t, "0.9.9")
+	keptLockWait = 2 * time.Second
+	unlock, err := macvm.LockKept(k.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(100 * time.Millisecond); unlock() }()
+	if err := k.u.UpdateKeptTools(context.Background(), k.dir); err != nil || len(k.jobs) != 1 {
+		t.Fatalf("a brief holder: err %v, jobs %d", err, len(k.jobs))
 	}
 }

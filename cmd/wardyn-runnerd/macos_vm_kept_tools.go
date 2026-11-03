@@ -70,12 +70,12 @@ func (u *keptToolsUpdater) update(ctx context.Context, keptDir string, force boo
 		}
 	}
 	// The helper takes the lock itself; this only avoids a job and a ledger entry for a machine that is
-	// in use.
-	if locked, err := macvm.KeptLocked(dir); err != nil {
+	// in use. It waits a short while for a holder (a stop write is not a boot), and holds nothing after.
+	unlock, err := macvm.LockKeptWait(dir, keptLockWait)
+	if err != nil {
 		return err
-	} else if locked {
-		return macvm.ErrKeptLocked
 	}
+	unlock()
 	extra, err := m.baseFileArgs([]string{"--" + macvm.FlagKept, dir})
 	if err != nil {
 		return err

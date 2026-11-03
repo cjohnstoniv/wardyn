@@ -84,10 +84,29 @@ func (m *macOSVMs) keptCaps(c, last *runnerwire.MacVMCaps) {
 			c.Kept = last.Kept
 		}
 	case k == nil:
-		c.Kept = &runnerwire.MacVMKept{}
+		// The driver reports nothing at a limit of 0; the machines already on the Mac are still reported,
+		// listed from the folder, so they can be seen, deleted and expired.
+		c.Kept = m.keptFromFolder()
 	default:
 		c.Kept = k
 	}
+}
+
+// keptFromFolder is the kept caps read from the kept folder: this Mac's limit, every machine's worst case and
+// what they take now, and each machine with the run that boots it.
+func (m *macOSVMs) keptFromFolder() *runnerwire.MacVMKept {
+	out := &runnerwire.MacVMKept{LimitBytes: m.kept.limit}
+	rows, err := m.keptRows()
+	if err != nil {
+		slog.Warn("macOS VM kept machines: read the kept folder", "error", err.Error())
+	}
+	for _, r := range rows {
+		out.WorstBytes += r.worst
+		out.AllocatedBytes += r.written
+		out.Machines = append(out.Machines, runnerwire.MacVMKeptMachine{ID: r.rec.ID, Bytes: r.written, InUse: r.inUse, RunID: r.run,
+			Scrubbed: r.rec.Scrubbed, ExpiresAt: r.rec.ExpiresAt})
+	}
+	return out
 }
 
 // keptSweepTick runs the kept machines sweep on every keptSweepEvery-th recompute tick.
@@ -120,17 +139,74 @@ func (m *macOSVMs) sweepKept(ctx context.Context) {
 }
 
 // eraseKept deletes every kept machine on this Mac, for a runner the organisation revoked (when it learns
-// of it, and again when it starts revoked). A failure is remembered for the sweep to retry. A nil handle
-// or a driver without kept machines has none to erase.
+// of it, and again when it starts revoked). A failure is remembered for the sweep to retry. A runner
+// without the driver (macOS VMs off, a nil handle) deletes the kept folder directly.
 func (m *macOSVMs) eraseKept(ctx context.Context) error {
 	if m == nil || m.kept.driver == nil {
-		return nil
+		// macOS VMs are off, or the driver keeps none: a machine folder from an earlier run of them is still
+		// on this Mac, and the revoked runner's erase does not need the driver to delete it.
+		return m.eraseKeptFolder()
 	}
 	err := m.kept.driver.EraseKeptMachines(ctx)
 	m.mu.Lock()
 	m.kept.eraseAgain = err != nil
 	m.mu.Unlock()
 	return err
+}
+
+// eraseKeptFolder deletes every kept machine folder under this Mac's VM directory, and their locks, update
+// staging and reservations, without the driver: a machine a boot or an update holds is waited for briefly
+// (keptLockWait) and then reported as not erased, with the rest erased. A nil handle uses the default VM
+// directory; a Mac with none, or a host that is not a Mac, has nothing to erase.
+func (m *macOSVMs) eraseKeptFolder() error {
+	root := ""
+	if m != nil {
+		root = m.layout.Root
+	}
+	if root == "" {
+		var err error
+		if root, err = macvm.DefaultRoot(); err != nil {
+			return nil // no home, so no VM directory in it
+		}
+	}
+	kept := macvm.Layout{Root: root}.KeptDir()
+	des, err := os.ReadDir(kept)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("read the kept machines: %w", err)
+	}
+	var errs []error
+	held := map[string]bool{}
+	for _, de := range des {
+		if !de.IsDir() || !isKeptKey(de.Name()) {
+			continue
+		}
+		dir := filepath.Join(kept, de.Name())
+		unlock, err := macvm.LockKeptWait(dir, keptLockWait)
+		if err == nil {
+			unlock()
+			_, err = macvm.RemoveKept(dir)
+		}
+		if err != nil {
+			held[de.Name()] = true
+			errs = append(errs, fmt.Errorf("kept machine %s was not erased: %w", de.Name(), err))
+		}
+	}
+	// What is left beside the machines: a staging folder, a reservation, a lock of a machine already gone.
+	for _, de := range des {
+		key, _, _ := strings.Cut(de.Name(), ".")
+		if held[de.Name()] || held[key] || isKeptKey(de.Name()) && de.IsDir() {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(kept, de.Name())); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) == 0 {
+		slog.Info("macOS VM kept machines: erased this Mac's kept machines")
+	}
+	return errors.Join(errs...)
 }
 
 // keptRow is one kept machine on this Mac, read from its folder.
@@ -145,6 +221,7 @@ type keptRow struct {
 	// the runner's stop write use, so it can refuse a boot or drop a write.
 	written, worst int64
 	inUse          bool
+	run            string // the run whose VM boots the machine, "" when none
 }
 
 // keptRunsByMachine maps each kept machine a live VM of this runner boots to that VM's run id, from the run
@@ -203,7 +280,7 @@ func (m *macOSVMs) keptRows() ([]keptRow, error) {
 		}
 		man, _ := macvm.ReadManifest(dir)
 		written, _ := macvm.KeptAllocatedBytes(dir)
-		rows = append(rows, keptRow{key: de.Name(), name: rec.Name, dir: dir, rec: rec, written: written, inUse: runs[rec.ID] != "",
+		rows = append(rows, keptRow{key: de.Name(), name: rec.Name, dir: dir, rec: rec, written: written, inUse: runs[rec.ID] != "", run: runs[rec.ID],
 			worst: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes))})
 	}
 	slices.SortFunc(rows, func(a, b keptRow) int {
@@ -377,9 +454,6 @@ func deleteKept(out io.Writer, r keptRow) error {
 // updateKept brings the machine's tools up to this Mac's. Without force it does nothing for a machine that
 // is current; with force it updates anyway and retries every withheld harness.
 func updateKept(ctx context.Context, out io.Writer, u *keptToolsUpdater, r keptRow, force bool) error {
-	if err := waitKeptFree(r); err != nil {
-		return err
-	}
 	if !force {
 		behind, err := u.behind(r.dir)
 		if err != nil {
