@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.13] — 2026-11-04
+
 ### Before you upgrade
 
 - The Mac window fix is in the Mac's helper, `wardyn-macvm`. On each Mac that opens windows, install the new `wardyn-runnerd.pkg` and run `/usr/local/wardyn/bin/wardyn-runnerd setup` again with the same flags. `wardyn runner upgrade` replaces only `wardyn-runnerd`, so it does not bring the fix; a server-only upgrade leaves the refusal in place.
