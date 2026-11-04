@@ -102,8 +102,12 @@ func (c runComponents) dispatch() componentDispatch {
 		switch {
 		case def.RemoteMCP():
 			server, _ := types.MCPURLDestination(def.MCP.URL)
-			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], URL: def.MCP.URL, Host: server.Host,
-				Harnesses: a.snapshot.MCPHarnesses, Credentialed: len(def.Secrets) > 0})
+			m := componentMCP{Ordinal: row, Key: keys[i], URL: def.MCP.URL, Host: server.Host,
+				Harnesses: a.snapshot.MCPHarnesses, Credentialed: len(def.Secrets) > 0}
+			if snap := a.snapshot; def.MCP.GatewayAudience != "" && !snap.SelfDefined && snap.Owner == "" && snap.ComponentID != nil {
+				m.GatewayAudience, m.GatewayUID = def.MCP.GatewayAudience, gatewayMCPUID(*snap.ComponentID, snap.Version)
+			}
+			d.MCP = append(d.MCP, m)
 		case def.LocalMCP():
 			d.MCP = append(d.MCP, componentMCP{Ordinal: row, Key: keys[i], Harnesses: a.snapshot.MCPHarnesses,
 				Launch: def.MCP.Launch, EnvNames: componentEnvNames(def)})

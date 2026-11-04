@@ -59,6 +59,10 @@ const (
 	secretRunConfigKey = "wardyn-run-config-key" // seals each run's stored proxy config (32 bytes, #1176)
 )
 
+// secretGatewayIdentityKey holds the keys that sign an AI gateway's run identity
+// token (internal/gatewayidentity): the current key and the previous one's public half.
+const secretGatewayIdentityKey = "wardyn-gateway-identity-key"
+
 // Host-sensor (eBPF ground-truth) token parameters. The audience MUST match the
 // api package's groundtruthAudience (kept in sync as a literal because that
 // const is unexported). The sentinel run id is fixed: the host sensor is
@@ -112,8 +116,8 @@ func run() error {
 	// govern SERVING, and a rotation run under the deployment's own environment
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
 	// -migrate-secrets / -reconcile (store mode) are early exits for the same
-	// reason; maintenanceMode (migrate_secrets.go) dispatches all three.
-	if ran, err := maintenanceMode(f); ran {
+	// reason; maintenance runs the gateway identity rotation, then maintenanceMode dispatches all three.
+	if ran, err := f.maintenance(); ran {
 		return err
 	}
 
@@ -393,8 +397,11 @@ func run() error {
 		SweepHealth:  ticks,
 		Store:        st,
 		Identity:     idp,
-		Approvals:    approvals,
-		Broker:       brk,
+		// Reads its row on first use, so an install with identity off has no key
+		// and takes no query per anonymous JWKS request past one each 30 seconds.
+		GatewayIdentity: bootKeys.gatewayIdentity(),
+		Approvals:       approvals,
+		Broker:          brk,
 		// The wait ceiling a run's captured wait folds under; the approval
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
@@ -412,36 +419,37 @@ func run() error {
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
-		AuditSpool:          auditSpool,
-		AuditDrainRecorder:  auditDrainRec,
-		AuditSinkDrops:      sinkDropsReporter(fan),
-		AuditDelivery:       auditDeliveryReporter(*f.auditSinks, st),
-		AuditCoalesceWindow: *f.auditCoalesceWindow,
-		Runner:              run,
-		AdminToken:          *f.adminToken,
-		LocalMode:           lm.enabled,
-		MemberMode:          *f.memberMode,
-		SSOOnly:             *f.ssoOnly,
-		GovernAdminRuns:     *f.governAdminRuns,
-		LocalOperator:       lm.operator,
-		TrustDomain:         *f.trustDomain,
-		DefaultPolicy:       knobs.defaultPolicy,
-		TrustedCAPEM:        trustedCAPEM,
-		EgressPortRule:      egressPortRule(*f.egressPortRule),
-		DesktopSignins:      *f.desktopSignins == "on",
-		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
-		CLIArtifactBase:     knobs.cliArtifactBase,
-		OrgCAFingerprints:   knobs.orgCAFingerprints,
-		RunnerTarget:        runnerTarget,
-		RunnerOrgURL:        *f.runnerOrgURL,
-		TrustedProxies:      knobs.trustedProxies,
-		ProxyImage:          *f.proxyImage,
-		ProxyImageByArch:    proxyImageByArch,
-		UIDir:               *f.uiDir,
-		ControlPlaneURL:     *f.controlURL,
-		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
-		RecordingStore:      feats.recStore,
-		OIDC:                feats.authn,
+		AuditSpool:           auditSpool,
+		AuditDrainRecorder:   auditDrainRec,
+		AuditSinkDrops:       sinkDropsReporter(fan),
+		ForgetRunCorrelation: forgetRunCorrelation(fan),
+		AuditDelivery:        auditDeliveryReporter(*f.auditSinks, st),
+		AuditCoalesceWindow:  *f.auditCoalesceWindow,
+		Runner:               run,
+		AdminToken:           *f.adminToken,
+		LocalMode:            lm.enabled,
+		MemberMode:           *f.memberMode,
+		SSOOnly:              *f.ssoOnly,
+		GovernAdminRuns:      *f.governAdminRuns,
+		LocalOperator:        lm.operator,
+		TrustDomain:          *f.trustDomain,
+		DefaultPolicy:        knobs.defaultPolicy,
+		TrustedCAPEM:         trustedCAPEM,
+		EgressPortRule:       egressPortRule(*f.egressPortRule),
+		DesktopSignins:       *f.desktopSignins == "on",
+		DemoVideoBaseURL:     knobs.demoVideoBaseURL,
+		CLIArtifactBase:      knobs.cliArtifactBase,
+		OrgCAFingerprints:    knobs.orgCAFingerprints,
+		RunnerTarget:         runnerTarget,
+		RunnerOrgURL:         *f.runnerOrgURL,
+		TrustedProxies:       knobs.trustedProxies,
+		ProxyImage:           *f.proxyImage,
+		ProxyImageByArch:     proxyImageByArch,
+		UIDir:                *f.uiDir,
+		ControlPlaneURL:      *f.controlURL,
+		ControlPlaneCAPEM:    feats.hop.caCertPEM(),
+		RecordingStore:       feats.recStore,
+		OIDC:                 feats.authn,
 
 		// The runner stream's anonymous in-flight bound per client address.
 		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
@@ -500,6 +508,7 @@ func run() error {
 		ADOEntraByRow:                 adoEntraByRow(st, adoEntraLoginFromFlags(f)),
 		AzureFoundryEntra:             azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
 		AzureCLIEntra:                 azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
+		EndpointOIDC:                  endpointOIDCFromFlags(f), // endpoint_oidc_source.go
 		ADOLoginFacts:                 adoLoginFactsFromFlags(f),
 		Components:                    componentsInfo(f, runnerTarget, feats.recStore),
 		RecordingSelection:            *f.recordingSel,

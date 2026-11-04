@@ -102,3 +102,28 @@ describe("GovernanceScreen — the Assign bar (#3064)", () => {
     expectActionBar(screen.getByRole("button", { name: "Assign profile" }));
   });
 });
+
+describe("GovernanceScreen — a link to one profile", () => {
+  it("opens that profile's editor once the profiles are read, and an unknown id opens nothing", async () => {
+    getGovernanceMock.mockResolvedValue({ profiles: [PLATFORM], assignments: [] });
+    const { unmount } = render(
+      <MemoryRouter initialEntries={["/admin/governance?profile=p2"]}>
+        <OperatorProvider operator securityOperator>
+          <GovernanceScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("governance-profile-editor")).toBeInTheDocument();
+    expect(screen.getByDisplayValue(PLATFORM.name)).toBeInTheDocument();
+    unmount();
+    render(
+      <MemoryRouter initialEntries={["/admin/governance?profile=nope"]}>
+        <OperatorProvider operator securityOperator>
+          <GovernanceScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText(PLATFORM.name);
+    expect(screen.queryByTestId("governance-profile-editor")).not.toBeInTheDocument();
+  });
+});

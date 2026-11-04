@@ -62,7 +62,8 @@
     "ComponentMCP": [
       "url",
       "transport",
-      "launch"
+      "launch",
+      "gateway_audience"
     ],
     "ComponentMCPLaunch": [
       "command",
@@ -152,7 +153,8 @@
       "require_review_paths",
       "hold_seconds",
       "deny_new_executables",
-      "max_file_size_mib"
+      "max_file_size_mib",
+      "deny_all"
     ],
     "RepoSelection": [
       "repo",
@@ -213,7 +215,8 @@
     "ServiceHealth": [
       "path",
       "interval_sec",
-      "failure_threshold"
+      "failure_threshold",
+      "probe"
     ],
     "StartFolder": [
       "kind",
@@ -291,6 +294,26 @@
       "path": "RunLocalFolder.runner_id",
       "excluded": "launch",
       "why": "Part of local_folder, which is named at each launch."
+    },
+    {
+      "path": "RunMachine.fresh",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
+    },
+    {
+      "path": "RunMachine.keep",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
+    },
+    {
+      "path": "RunMachine.name",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
+    },
+    {
+      "path": "RunMachine.resume",
+      "excluded": "launch",
+      "why": "Part of machine, which is chosen at each launch."
     }
   ],
   "policy": [
@@ -522,6 +545,11 @@
       "why": "A run is described when it is launched: the Name this run dialog opens empty in this release, so a template carries no description."
     },
     {
+      "name": "correlation_id",
+      "excluded": "launch",
+      "why": "A correlation ID names one launch to the caller's other systems, so it is given at each launch and a template carries none."
+    },
+    {
       "name": "policy_id",
       "part": "policy_ref",
       "omitted": "baseline",
@@ -733,6 +761,11 @@
       "why": "A preset's version only means something beside its preset."
     },
     {
+      "name": "wall_preset",
+      "excluded": "launch",
+      "why": "A wall preset is chosen at each launch."
+    },
+    {
       "name": "runner_pool_id",
       "part": "runner",
       "omitted": "baseline",
@@ -764,6 +797,11 @@
       "why": "A macOS VM's base is chosen at each launch, with the kind of sandbox."
     },
     {
+      "name": "desktop_window",
+      "excluded": "launch",
+      "why": "A window onto a macOS VM is asked for at each launch by the person at that Mac; a template never opens one for whoever uses it."
+    },
+    {
       "name": "max_wait_sec",
       "excluded": "launch",
       "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."
@@ -782,6 +820,11 @@
       "name": "keep_work_folder",
       "excluded": "launch",
       "why": "Keeping the work folder makes a drive for the person launching, so it is chosen at each launch."
+    },
+    {
+      "name": "machine",
+      "excluded": "launch",
+      "why": "Whether to keep a macOS VM's machine is chosen at each launch; a template never keeps one for whoever uses it."
     },
     {
       "name": "no_end",

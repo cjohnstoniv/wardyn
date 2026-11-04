@@ -211,7 +211,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop and its disk over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the hosted-model list it started with, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop, whether it is still being set up, and its disk and its kept machine over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -221,6 +221,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "model_provider_deleted",
       "created_via_name",
       "model_allowlists",
+      "allowed_models",
       "runner_pool_name",
       "kept_until",
       "policy",
@@ -228,8 +229,23 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "computer_folder",
       "agents",
       "macos",
+      "background_watch",
+      "mac_window",
+      "macos_preparing",
       "macos_disk",
+      "wall_preset",
+      "machine",
     ]);
+  });
+
+  it("AgentRun.has_recording is a pointer omitted when unprojected, optional in TS (#3715)", () => {
+    expect(typesGo).toMatch(/HasRecording\s+\*bool\s+`json:"has_recording,omitempty"`/);
+    expect(typesGo).toMatch(/RecordingBytes\s+int64\s+`json:"recording_bytes,omitempty"`/);
+    expect(typesGo).toMatch(/RecordingDurationSec\s+float64\s+`json:"recording_duration_sec,omitempty"`/);
+    const body = /export\s+interface\s+AgentRun\b[^{]*\{([\s\S]*?)\n\}/.exec(runsTs)?.[1] ?? "";
+    for (const k of ["has_recording", "recording_bytes", "recording_duration_sec"]) {
+      expect(body).toMatch(new RegExp(`\\b${k}\\?:`));
+    }
   });
 
   it("RunMacOSDisk's keys are exactly runMacOSDiskView's json tags (GET /runs/{id} macos_disk, run_macos_disk.go)", () => {
@@ -246,6 +262,28 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   it("RunMacOS's keys are exactly runMacOSView's json tags (GET /runs/{id} macos, run_macos_view.go)", () => {
     const viewGo = readFileSync(join(root, "internal/api/run_macos_view.go"), "utf8");
     expect(tsInterfaceKeys(runsTs, "RunMacOS").sort()).toEqual(goJSONTags(viewGo, "runMacOSView").sort());
+  });
+
+  it("RunBackgroundWatch's keys and states are exactly backgroundWatchView's json tags and the door's states (GET /runs/{id} background_watch, run_background_watch.go)", () => {
+    const watchGo = readFileSync(join(root, "internal/api/run_background_watch.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunBackgroundWatch").sort()).toEqual(goJSONTags(watchGo, "backgroundWatchView").sort());
+    const goStates = [...watchGo.matchAll(/^\s*backgroundWatch\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
+    const tsStates = [...(/state: ([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunBackgroundWatch")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    expect(goStates.length).toBeGreaterThan(0);
+    expect(tsStates).toEqual(goStates);
+  });
+
+  it("RunMacWindow's keys and states are exactly macWindowView's json tags and the door's states, and RunMacWindowClose's keys and reasons macWindowLastClose's (GET /runs/{id} mac_window, run_mac_window.go)", () => {
+    const windowGo = readFileSync(join(root, "internal/api/run_mac_window.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunMacWindow").sort()).toEqual(goJSONTags(windowGo, "macWindowView").sort());
+    const goStates = [...windowGo.matchAll(/^\s*macWindowState\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
+    const tsStates = [...(/state:([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunMacWindow")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    expect(goStates.length).toBeGreaterThan(0);
+    expect(tsStates).toEqual(goStates);
+    expect(tsInterfaceKeys(runsTs, "RunMacWindowClose").sort()).toEqual(goJSONTags(windowGo, "macWindowLastClose").sort());
+    const goEnded = [...windowGo.matchAll(/^\s*macWindowEnded\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
+    const tsEnded = [...(/reason: ([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunMacWindowClose")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    expect(tsEnded).toEqual(goEnded);
   });
 
   it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {

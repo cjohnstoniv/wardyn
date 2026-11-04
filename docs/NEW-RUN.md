@@ -215,7 +215,7 @@ A `kind: Run` document is the draft written as text. Choose **YAML / JSON** on t
 - Unsupported input is reported, never discarded. "N issues must be fixed" blocks **Continue to review**. **Open in Guided setup** validates, then opens step 1.
 - [Run documents](sdk.md#run-documents) lists the fields. A title or description is refused as `template_field_excluded`; you name the run at launch.
 
-From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wait`, `--timeout`, `--max-wait`, `--machine-kind`, `--macos-base`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
+From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wall-preset`, `--wait`, `--timeout`, `--max-wait`, `--start-at`, `--time-zone`, `--machine-kind`, `--macos-base`, `--correlation-id`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
 
 The `wardyn template` commands are listed in [Run templates](sdk.md#run-templates).
 
@@ -236,6 +236,7 @@ The Launched screen opens at `?launched=<run id>`. It refreshes every 4 seconds 
 | The run's state | Any other | The run's state badge |
 
 - A waiting run says why: none of your runners is online (`runner_pool_no_runner_free`), every runner is at its limit (`runner_pool_runners_at_capacity`), or the pool is running its limit.
+- When every runner is at a limit, the waiting card names the limit and a runner, for example "dev-mac is at a limit: Runs at once: 2 running of 2. This run starts when it has room." It falls back to "Every runner in {pool} is at its limit" when the limit cannot be worked out.
 - A run also waits when recording is required and the organisation keeps no session recordings (`runner_pool_recording_store_off`).
 - **Cancel run** asks you to confirm, then calls `POST /api/v1/runs/{id}/kill`. The run leaves the queue and ends as killed. A failure shows under the waiting card.
 - The owner, an admin or, for a service identity's run, its sponsor can cancel. A run that already ended otherwise answers `run_kill_already_terminal`.
@@ -256,4 +257,4 @@ What you configure changes what members see. Each row links to the section that 
 | User and shared drives | The drive lists on step 4 | [User drives](operations/user-drives.md) |
 | Organisation templates, template managers | Who can publish, rename and delete | [Run templates](OPERATIONS.md#run-templates) |
 
-- Template managers are granted with `PUT /api/v1/admin/template-group-admins` or `wardyn template group-admin grant`; no console screen does this in this release.
+- Template managers are granted with `PUT /api/v1/admin/template-group-admins` or `wardyn template group-admin grant`; no console screen does this in this release. A template manager also saves the group's wall presets ([SDK](sdk.md#wall-presets)).

@@ -135,7 +135,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
       ) : status === "forbidden" ? (
         <p className="p-4 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
       ) : status === "error" ? (
-        <ErrorState onRetry={() => load()} />
+        <ErrorState as="h3" onRetry={() => load()} />
       ) : rows.length === 0 ? (
         // The unfiltered title is not "People": it would repeat the section label right above (#2902).
         <EmptyState

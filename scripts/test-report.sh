@@ -257,6 +257,18 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "l0-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestL0_MetadataUnreachable TestL0_ProxyIsSoleEgressPath TestL0_NoDNSExfil'
   fi
+  # The SSH gateway's -L forwarding, the editor path over it, the UI relay and the macOS VM Screen Sharing
+  # refusal (gateway and guest agent). None needs Postgres or Docker, so they run in the plain unit suite,
+  # and none may skip or be renamed away without this job going red. Built by appends because a name is
+  # matched whole: REQUIRE_ALL must stay one space-separated line.
+  if [ "$SUITE" = "unit" ]; then
+    REQUIRE_ALL='TestSSHGateway_DirectTCPIPLoopbackRestriction TestSSHGateway_ForwardAuditSurvivesKill'
+    REQUIRE_ALL="$REQUIRE_ALL TestSSHGateway_VMRunDoors TestSSHGateway_ContainerRunForwardStaysSocat"
+    REQUIRE_ALL="$REQUIRE_ALL TestSSHGateway_RemoteSSHChannelsOnOneConnection"
+    REQUIRE_ALL="$REQUIRE_ALL TestUIGateway_MacOSVMScreenSharingPortRefused"
+    REQUIRE_ALL="$REQUIRE_ALL TestUIRelay_AnotherAppsIdlePoolDoesNotRefuseAnApp TestUIRelay_ActiveConnectionsStillRefuseAnApp"
+    REQUIRE_ALL="$REQUIRE_ALL TestForwardRefusesMacScreenSharingPorts TestForwardDialsLoopbackOnly"
+  fi
 fi
 if [ -n "$REQUIRE_ALL" ] && [ -s "$OUT/test-output.json" ]; then
   REQUIRE_PASS="^(${REQUIRE_ALL// /|})\$"

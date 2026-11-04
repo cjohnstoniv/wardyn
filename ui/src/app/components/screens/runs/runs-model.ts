@@ -17,6 +17,7 @@
 // needing to know about ceilings at all.
 import type { AgentRun, RunState } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
+import { isBackgroundRun } from "../../../lib/run-entry";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { RUN_HEADER } from "../../wardyn/copy/run-header";
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
@@ -60,6 +61,11 @@ export function isLiveRunState(state: RunState): boolean {
  * offers Review either way, and the decision card underneath is where the
  * real ceiling is enforced — same as today).
  */
+/** UXR-24: RUNNING with its agent frozen (paused_at set) and no lost reason. A lease-ended or lost run is not paused. */
+export function isPausedRun(run: Pick<AgentRun, "state" | "paused_at" | "lost_reason">): boolean {
+  return run.state === "RUNNING" && !!run.paused_at && !run.lost_reason;
+}
+
 export function rowPresentation(run: AgentRun, adminView = false): RowPresentation {
   // a lease-ended run (lost_reason "ended") stays RUNNING until
   // the ended-run grace stops it, but it has no network and is already OVER
@@ -97,7 +103,8 @@ export function rowPresentation(run: AgentRun, adminView = false): RowPresentati
         return {
           hue: "amber",
           word: you ? RUNS_ROW_WORD.NEEDS_TAKEOVER : RUNS_ROW_WORD.WAITING_FOR_TAKEOVER,
-          action: you ? "take-over" : null,
+          // A background run has no door to take over: its desktop is watched, never driven.
+          action: you && !isBackgroundRun(run) ? "take-over" : null,
           needsYou: you,
         };
       case "reauth":
@@ -134,6 +141,7 @@ export function rowPresentation(run: AgentRun, adminView = false): RowPresentati
   }
   switch (run.state) {
     case "RUNNING": {
+      if (isPausedRun(run)) return { hue: "grey", word: RUNS_ROW_WORD.PAUSED, action: null, needsYou: false };
       // RL-15 (design.md §2.3): the board's own "Ends in 1 hour" warning —
       // same three thresholds (24h/1h/10m) the run page's banner uses, from
       // runs-model.ts's one shared rule. A run with no attention and no

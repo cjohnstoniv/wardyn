@@ -111,6 +111,12 @@ type DecisionLog struct {
 	// policy:tool-deny row: the tool or "*", prefixed "<harness>:" under
 	// per-harness rules. Empty on every other row.
 	MatchedRule string `json:"matched_rule,omitempty"`
+	// GatewayCallID is the id the proxy sent in X-Wardyn-Call-Id on one attempt to a
+	// model gateway route (or to an MCP server on a run that has such a route), so
+	// the gateway's access log and this row join on it. Made by the proxy for every
+	// attempt, never taken from the sandbox. Empty on every row of a run with no
+	// gateway route, and on every row for a host that is neither.
+	GatewayCallID string `json:"gateway_call_id,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.
@@ -124,7 +130,7 @@ type ScanSummary struct {
 	Action     string        `json:"action"`                // "alert" | "block" | "skip" | "bypass" | "fail"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
-	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "body_oversize" | "uninspected_channel" | "findings_capped"
+	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "body_oversize" | "uninspected_channel" | "findings_capped" | "deferred_to_gateway"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
 	// THE WIRE, since Findings above carries at most the cap's worth of rows
@@ -137,6 +143,11 @@ type ScanSummary struct {
 	FindingsCapped  bool `json:"findings_capped,omitempty"`
 	FindingsPastCap int  `json:"findings_past_cap,omitempty"`
 	FindingsTotal   int  `json:"findings_total,omitempty"`
+
+	// DeferredTo is the model provider whose gateway checks this prompt itself: the proxy
+	// looked only for the run's own secret values, or, with no such check on the policy,
+	// for nothing. Empty on every other request.
+	DeferredTo string `json:"deferred_to,omitempty"`
 }
 
 // ScanFinding is one content-free detection record (detector + location only).

@@ -108,7 +108,7 @@ copy is permanent.
   - A run on a runner that keeps a tail (Docker, on a laptop or on this deployment) reads `source: "stdout"`.
   - A recorded run on a Kubernetes runner under the session recorder, this deployment's or an organisation's, reads
     `source: "recording"`.
-  - A run not recorded (`not_recorded` set; macOS VMs are) reads its tail, unless a runner older than per-run recording
+  - A run not recorded (`not_recorded` set) reads its tail, unless a runner older than per-run recording
     records anyway.
   - When the run's own runner cannot be asked (offline, or connected to another replica), this deployment's runner
     answers: a recorded run keeps the recording path, and a run that is not recorded keeps its tail.
@@ -681,8 +681,8 @@ commands are the ones in "Back them up" and "Restore them", and in
   and the only `/tmp` volume is an `emptyDir`
   ([`deploy/helm/wardyn/templates/deployment.yaml`](../deploy/helm/wardyn/templates/deployment.yaml), which says so
   itself: "durable across a container restart, not a reschedule").
-- A rolling deploy — which is what `helm upgrade` does to a Deployment — or a pod reschedule gives the new Pod a new
-  empty directory.
+- A redeploy — `helm upgrade` recreates the pod, the chart's `Recreate` strategy — or a pod reschedule
+  gives the new Pod a new empty directory.
 - So the counter reads 0 again and the permanently-refused events it accounted for are gone with it.
 - wardynd says so at every boot rather than leaving it to be inferred from a counter that silently reset.
 - It WARNs `the audit
@@ -1256,7 +1256,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text, title and description of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title, description and correlation ID of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
@@ -1294,6 +1294,8 @@ erases one person's retained records by explicit scope, in one audited act
   - Migration `0171_run_launch_intents` adds the table; a split-role install grants the app role `SELECT, INSERT, DELETE` on it.
 
 - An erasure that names more than one of `run_tasks`, `components` and `run_setups` deletes the launch intents in the first of those steps; the others report `launch_intents: 0`.
+
+- `run_tasks` clears a run's correlation ID. The audit sinks on this replica stop adding it at once, the others within 30 seconds, and copies a sink already exported follow that sink's own retention.
 
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
@@ -1863,9 +1865,9 @@ enforces, not a re-derivation:
   row:
   - the saved policy (id, and its name and content as they read at launch), an inline policy, the default, or the governance profile the run's creator was bound to.
   - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
-- **What changed at launch** is each difference, given a cause:
+- **What changed at launch**: each difference's cause:
   `workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`,
-  `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
+  `overlay`, `profile`, `walls`, `wall_preset`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
   - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the
@@ -3348,7 +3350,7 @@ Naming these is the point of the walk, not a caveat on it:
 - Migration `0143_provider_connection_changes` creates an empty history table; pre-upgrade removals have no recorded cause.
 
 - Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`.
-- An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's own brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by its `base_url` alone.
+- An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by `base_url` alone. Its `fast_model` sets the haiku alias.
 
 > [!WARNING]
 > A Claude subscription provider's `base_url` re-points the sign-in token too.
@@ -3674,11 +3676,11 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 
 - Migrations are **forward-only**.
 - `internal/db` records each applied filename in `schema_migrations` and applies anything new on boot, under an advisory lock so concurrent starts do not race.
-- There are no `down` migrations and no downgrade path.
+- There are no `down` migrations or downgrade path.
 - A rollback to an older wardynd against a migrated database is unsupported, and wardynd itself refuses it.
 - A boot that finds a `schema_migrations` row it does not ship stops before writing anything, naming the newest unknown file.
 - That covers `helm rollback` and a pinned older image, not only `install.sh`.
-- Restore the dump.
+- Restore the dump ([rehearsal](../scripts/rollback-drill.sh)).
 - `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass past the refusal; it does not make the older binary understand the newer schema.
 - One name is a known exception, not a downgrade.
 - 0.7.12 databases record `0065_secret_envelope_v1.sql` (this tree ships the byte-identical file as `0069_secret_envelope_v1.sql`, freeing
@@ -3892,7 +3894,7 @@ done
 
 | Install | How |
 |---|---|
-| Compose | Compose does not pass the variable on from `.env`: add the override file below beside `docker-compose.yaml`, and name it with a second `-f` if you pass `-f` yourself |
+| Compose | Set it in `.env`. Compose passes it on. The override file below also works: name it with a second `-f` if you pass `-f` yourself |
 | Helm | `--set env.WARDYN_MIGRATE_TIMEOUT=30m`, or an `extraEnv` entry of that name. The startup probe follows it. Give `helm upgrade --timeout` more than the migration needs |
 
 ```yaml
@@ -4108,6 +4110,14 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0242` (`0242_runner_pool_member_namespace`) adds `runner_pool_members.runs_namespace` (`0152`'s table): the Kubernetes namespace an organization runner serves a pool in, empty (the runner's default) on every existing row; no grant changes.
 - `0245` (`0245_run_shape`) adds `agent_runs.shape` (`0001`'s table): the New Run shape a run was set up from, empty on every existing row; no grant changes.
 - `0247` (`0247_sources_runner_id`) adds `sources.runner_id` (`0031`'s table): the runner a library folder is bound to, part of its identity, NULL on every existing row; no grant changes.
+- `0248` (`0248_wall_presets`) creates `wall_presets` (named walls kept for a person, a group or the organisation) and adds `agent_runs.wall_preset` (`0001`'s table): the frozen copy of the wall preset a run was launched with, NULL on every existing row. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `wall_presets`.
+- `0249` (`0249_run_image_input`) adds `agent_runs.image_input` (`0001`'s table): the image ref a run's create held to the digest rule, which a revive checks again. NULL on every existing row; no grant changes.
+- `0250` (`0250_kept_machines`) creates `kept_machines`: a person's macOS guest disk, kept on their own Mac between runs. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `kept_machines`.
+- `0251` (`0251_agent_runs_agent_cast_owed`) adds `agent_runs.agent_cast_owed_at` (`0001`'s table) and a partial index on it: a macOS VM task run's agent output recording still owed, NULL on every existing row; no grant changes.
+- `0252` (`0252_provider_change_clears_on_oidc`) is a later `CREATE OR REPLACE` of `0143`'s `clear_provider_connection_change` trigger function, so an endpoint sign-in's `-oidc` part clears the owner's provider change history too; no table, row or grant changes.
+- `0253` (`0253_agent_runs_kept_machine_id`) adds `agent_runs.kept_machine_id` and `agent_runs.kept_machine_mode` (`0001`'s table): the kept machine a macOS VM run kept or resumed and how, with no foreign key so the run's page can say the machine was deleted. It also adds `kept_machines.reset_run_id` and `kept_machines.reset_unconfirmed` (`0250`'s table): a fresh start its Mac has not confirmed, and an earlier one a later attempt replaced. NULL or false on every existing row; no grant changes.
+- `0254` (`0254_agent_runs_correlation_id`) adds `agent_runs.correlation_id` (`0001`'s table): the caller's own reference for a run, empty on every existing row; no grant changes.
+- `0255` (`0255_agent_runs_allowed_models`) adds `allowed_models` to `agent_runs` (`0001`'s table): the governed allowed-models list the run was dispatched under and the profile that set it, replayed on revive and never changed by a later profile edit; NULL when no list binds the run.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5587,7 +5597,7 @@ What the switch needs, and refuses to render or boot without:
     The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
     credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.

@@ -338,12 +338,12 @@ func usageExitsTwo(cmd *cobra.Command) {
 		}
 		return nil
 	}
-	cmd.PreRunE = func(c *cobra.Command, _ []string) error {
+	addPreRunE(cmd, func(c *cobra.Command, _ []string) error {
 		if err := c.ValidateRequiredFlags(); err != nil {
 			return usageError(err)
 		}
 		return nil
-	}
+	})
 }
 
 func workloadDeleteCmd(client clientFn) *cobra.Command {

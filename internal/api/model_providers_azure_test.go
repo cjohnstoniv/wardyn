@@ -157,7 +157,12 @@ func TestValidateProviderAzure(t *testing.T) {
 		{name: "azure on another kind", p: with(keyProvider("a", "claude-code"), func(p *types.ModelProvider) { p.Azure = azureProvider().Azure }),
 			want: "azure applies only to the azure_foundry kind"},
 		{name: "fast_model on another kind", p: with(keyProvider("a", "claude-code"), func(p *types.ModelProvider) { p.Harnesses[0].FastModel = "h" }),
-			want: "fast_model applies only to the azure_foundry kind"},
+			want: "fast_model applies only to the azure_foundry and custom_endpoint kinds"},
+		{name: "fast_model on a custom endpoint, claude-code", p: with(endpointProvider(), func(p *types.ModelProvider) { p.Harnesses[0].FastModel = "haiku-gw" })},
+		{name: "fast_model on a custom endpoint, codex", p: with(endpointProvider(), func(p *types.ModelProvider) { p.Harnesses[1].FastModel = "gpt-5-mini" }),
+			want: "fast_model applies only to the claude-code harness"},
+		{name: "fast_model on a custom endpoint, not a model id", p: with(endpointProvider(), func(p *types.ModelProvider) { p.Harnesses[0].FastModel = `h"` }),
+			want: "is not a model id"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := azureEnv()

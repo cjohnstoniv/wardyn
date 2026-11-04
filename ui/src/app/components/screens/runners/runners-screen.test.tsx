@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useNavigate } from "react-router-dom";
+import { PollPauseContext } from "../../../lib/use-poll";
 import type { RemoteRunnerView } from "../../../lib/types/runner-pools";
 import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
 
@@ -159,15 +160,17 @@ function Back() {
   return null;
 }
 
-function renderScreen(opts: { operator?: boolean; at?: string } = {}) {
-  const { operator = true, at = "/admin/runners" } = opts;
+function renderScreen(opts: { operator?: boolean; at?: string; signedOut?: boolean } = {}) {
+  const { operator = true, at = "/admin/runners", signedOut = false } = opts;
   return render(
-    <MemoryRouter initialEntries={[at]}>
-      <OperatorProvider operator={operator} securityOperator operatorResolved principal="admin@corp.example">
-        <RunnersScreen />
-        <Back />
-      </OperatorProvider>
-    </MemoryRouter>,
+    <PollPauseContext.Provider value={signedOut}>
+      <MemoryRouter initialEntries={[at]}>
+        <OperatorProvider operator={operator} securityOperator operatorResolved principal="admin@corp.example">
+          <RunnersScreen />
+          <Back />
+        </OperatorProvider>
+      </MemoryRouter>
+    </PollPauseContext.Provider>,
   );
 }
 
@@ -350,6 +353,20 @@ describe("Admin -> Runners list", () => {
       });
       await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
       expect(screen.queryByText("Couldn't load runners")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-read while the console is signed out", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      renderScreen({ signedOut: true });
+      await screen.findByRole("button", { name: "laptop-7" });
+      await act(async () => {
+        vi.advanceTimersByTime(90_000);
+      });
+      expect(listMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

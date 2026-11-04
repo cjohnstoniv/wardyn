@@ -26,6 +26,13 @@ import (
 )
 
 func main() {
+	// The SSH gateway's `-L` forward and the UI-app relay exec this mode: a VM has no socat.
+	if len(os.Args) > 1 && os.Args[1] == guestagent.ForwardVerb {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		code := guestagent.ForwardMain(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	port := flag.String("port", "/dev/virtio-ports/"+guestagent.PortName, "the virtio-serial port to serve")
 	out := flag.String("out", "/run/wardyn-guest", "directory for detached execs' output (a tmpfs)")
 	flag.Parse()

@@ -15,7 +15,8 @@ deploy/images/README.md=5072 share=35
 # docs/operations/build-images.md 1792 adds 341 over 1451 (0.9.3 M): images for both laptop architectures; the lead re-measures at merge.
 # docs/operations/build-images.md 1820 adds 28 (0.9.3 M-2/DR-0235): the digest-and-platform clause and the staged claude-bin refusal.
 # #1987: docs/operations/build-images.md 1836 adds 16 over 1820, measured: the run_harnesses UPDATE grant once WARDYN_MULTI_AGENT_TASKS is on.
-docs/operations/build-images.md=1836 share=35
+# docs/operations/build-images.md 1932 adds 96 over 1836, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
+docs/operations/build-images.md=1932 share=35
 # docs/ENVBUILD.md 3190 adds 1122 over 2068 (0.9 F-1516 B7): the build record, rebuild and refresh sections.
 # docs/ENVBUILD.md 3220 adds 30 over 3190 (0.9.3 FIN-B), measured: one bullet saying a base that exists only on this host cannot be refreshed.
 # docs/ENVBUILD.md 3249 adds 29: the swap-lost-at-launch bullet (0.9.3 FIN-B2).

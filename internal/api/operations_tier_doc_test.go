@@ -303,6 +303,9 @@ var docTierRows = []struct{ route, token string }{
 	// Member drives (0.9): the admin list and delete of the drives people create are SUPER.
 	{"GET /api/v1/drives/member", "the `/drives/member` routes"},
 	{"DELETE /api/v1/drives/member/{id}", "the `/drives/member` routes"},
+	// Kept machines (0.10): the admin list and delete of the machines people keep are SUPER.
+	{"GET /api/v1/machines/kept", "the `/machines/kept` routes"},
+	{"DELETE /api/v1/machines/kept/{id}", "the `/machines/kept` routes"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each

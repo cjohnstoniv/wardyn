@@ -326,3 +326,23 @@ func TestAuditReadsOpenSealedFieldsAndFailOnAKeyStoreOutage(t *testing.T) {
 		t.Errorf("with no unsealer rows must pass through: %v %v", got, err)
 	}
 }
+
+// The run_tasks scope tells the audit sinks to forget the correlation ids of the person's runs, after the
+// rows are cleared and for that person's runs alone.
+func TestErasePerson_RunTasksMakesTheSinksForgetThePersonsCorrelationIDs(t *testing.T) {
+	_, srv, st, _ := erasureRig(t)
+	var forgotten []uuid.UUID
+	var blankedFirst bool
+	srv.cfg.ForgetRunCorrelation = func(ids []uuid.UUID) {
+		blankedFirst = slices.Equal(st.blanked, []string{"bob"})
+		forgotten = ids
+	}
+	sa := ssoSession(t, "sec-2", "sec2@corp.example", oidc.RoleSecurityAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/people/bob/erasure", sa, erasureBody("run_tasks"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("erasure = %d %s", w.Code, w.Body)
+	}
+	if !slices.Equal(forgotten, st.runs["bob"]) || !blankedFirst {
+		t.Errorf("forgot %v (rows cleared first: %v), want bob's runs %v after the clear", forgotten, blankedFirst, st.runs["bob"])
+	}
+}

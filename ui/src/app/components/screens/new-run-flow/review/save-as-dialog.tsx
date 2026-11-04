@@ -19,6 +19,7 @@ import { RadioGroup, RadioGroupItem } from "../../../ui/radio-group";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
 import { getErrorMessage } from "../../../../lib/format";
 import { TEMPLATE_REASON, TEMPLATE_REFUSAL } from "../../../../lib/template-refusals";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
@@ -61,6 +62,7 @@ export const SAVE_AS_COPY = {
   save: (kind: TemplateKind) => (kind === "template" ? NR_SAVE.CONFIRM_TEMPLATE : NR_SAVE.CONFIRM_POLICY),
   nothingPicked: NR_SAVE.NOTHING_PICKED as string,
   ownDrivesLeftOut: NR_SAVE.OWN_DRIVES_LEFT_OUT as string,
+  wallPresetNotSaved: WALL_PRESETS.SAVE_AS_NOTE as string,
 };
 
 export type SaveAsCopy = typeof SAVE_AS_COPY;
@@ -236,6 +238,7 @@ function SaveAsForm({
         )}
         <p className="text-xs text-muted-foreground">{copy.omittedValues}</p>
         {audienceIntent.leftOut && copy.ownDrivesLeftOut && <p className="text-xs text-muted-foreground">{copy.ownDrivesLeftOut}</p>}
+        {intent.wall_preset && copy.wallPresetNotSaved && <p className="text-xs text-muted-foreground">{copy.wallPresetNotSaved}</p>}
         {(nothingToSave || fields.length === 0) && reason && <p className="text-xs text-muted-foreground">{reason}</p>}
       </fieldset>
 

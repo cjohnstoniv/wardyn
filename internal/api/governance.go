@@ -247,6 +247,9 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 			return fmt.Sprintf("limits.allowed_macos_bases: %q is not a macOS base name — use Standard, or lowercase letters, digits, '.', '_' and '-'", b)
 		}
 	}
+	if err := types.ValidAllowedModels(l.AllowedModels); err != nil {
+		return "limits.allowed_models: " + err.Error()
+	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
 			return "limits.autonomy_rubric." + err.Error()

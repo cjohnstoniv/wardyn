@@ -163,7 +163,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // isMITMHost reports whether host is an upstream the proxy will TLS-MITM.
 //
 // TRUST BOUNDARY (read before widening): TLS-MITM lets the proxy read plaintext and swap the
-// credential header. Permitted for exactly five reasons:
+// credential header. Permitted for exactly six reasons:
 //  1. built-in LLM hosts (Anthropic/OpenAI) — subscription-OAuth / content-inspection. Bedrock is
 //     excluded: its client-side SigV4 auth would be invalidated by terminate-and-reforward.
 //  2. operator-configured corp artifact hosts (p.mitmHosts, compiled at dispatch from site-config
@@ -183,6 +183,8 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 //     on port 443, whose requests the proxy signs again with role credentials the sandbox never
 //     holds. Bedrock's data plane is terminated only here, where the proxy is the signer, so #1's
 //     reason does not apply.
+//  6. a governed model list is set: each model gateway host the run's providers reach is authored at
+//     DISPATCH as "host:port", so the allowed_models gate reads its requests (allowed_models.go).
 //
 // #2/#3's surface is bounded on every axis: admin-authored only (never sandbox/agent/request); exact
 // hostname, never wildcard/suffix; exact port when the entry names one (mitmPorts), so a non-443
@@ -434,9 +436,17 @@ func rearmBodyDeadline(w http.ResponseWriter) {
 // port is the REAL CONNECT port — the dial below must use it, not assume 443, or the operator's
 // credential reaches whatever answers at the wrong port.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
+	p.stripGatewayHeaders(r.Header)
 	// A via_org destination: the inner request's own Host goes to the
 	// organisation, which refuses one that is not the grant's destination.
 	if route, ok := p.viaOrgRouteForHost(host); ok {
+		// The run's allowed_models judges a via_org request to a model host too: the organisation
+		// forwards it on, and nothing after this branch would see it.
+		releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+		defer releaseModels()
+		if modelRefused {
+			return
+		}
 		authority := r.Host
 		if authority == "" {
 			authority = net.JoinHostPort(host, strconv.Itoa(port))
@@ -450,6 +460,16 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	defer release()
+	// The run's allowed_models judges a model host's request before any door, gate or scan sees it.
+	// A method the policy refuses is left to serveAdmittedMITMRequest, which keeps its policy:method row.
+	releaseModels, modelRefused := noopRelease, false
+	if p.evaluator.MethodAllowed(r.Method) {
+		releaseModels, modelRefused = p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+	}
+	defer releaseModels()
+	if modelRefused {
+		return
+	}
 	p.serveAdmittedMITMRequest(w, r, host, port)
 }
 
@@ -525,7 +545,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
 		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardBody(w, r, host, port)
 	} else {
-		bodyReader, scanSummary, releaseBody, blocked = p.inspectLLM(w, r, host, port, rest, channel)
+		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardedLLM(w, r, host, port, rest, channel)
 		// Honest coverage: say what happened instead of a bare scan:mitm allow for a channel we
 		// can't parse — same uninspected_channel skip the brokered route already emits.
 		if scanSummary == nil && channel == contentscan.ChannelGeneric && p.scanner != nil &&

@@ -262,6 +262,8 @@ func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, sessio
 	case runnerwire.EventWorkload:
 		// The session the frame came in on, resumed ones included: session above is a fresh session's only.
 		err = s.WorkloadFromRunner(ctx, runnerID, remote.EventSession(ctx), ev)
+	case runnerwire.EventMacWindowUnexpected:
+		err = s.MacWindowUnexpectedFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps:
 		s.capsFromRunner(ctx, runnerID, session, ev)
 	case runnerwire.EventWaiting:

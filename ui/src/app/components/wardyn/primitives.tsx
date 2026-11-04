@@ -7,19 +7,22 @@ import * as React from "react";
 import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
 import { AUTONOMY_META, AUTONOMY_NO_CAP_LABEL } from "./autonomy-meta";
-import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, WIRE_TO_COPY } from "./copy";
+import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, RUN_COCKPIT, WIRE_TO_COPY } from "./copy";
 import { POSTURE_CHIP_SUFFIX_ACKNOWLEDGED, POSTURE_CHIP_SUFFIX_UNENFORCED } from "./confinement-posture-copy";
 import { useConfinementPosture, type ConfinementPosture } from "./operator-context";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import {
   Archive,
   AlertTriangle,
   Bot,
+  Server,
   User,
   Check,
   Cpu,
   Fence,
   BrickWall,
   Gauge,
+  Maximize2,
   ShieldX,
   Square,
   Vault,
@@ -359,6 +362,7 @@ const actorMeta: Record<ActorType, { tone: Tone; Icon: React.ElementType; label:
   human: { tone: "info", Icon: User, label: "human" },
   agent: { tone: "primary", Icon: Bot, label: "agent" },
   system: { tone: "neutral", Icon: Cpu, label: "system" },
+  service: { tone: "warning", Icon: Server, label: "service" },
 };
 export function ActorTypeChip({ type }: { type: ActorType }) {
   const m = metaFor(actorMeta, type as string, { tone: "neutral", Icon: Cpu, label: String(type) });
@@ -405,8 +409,10 @@ const kindTone: Record<ApprovalKind, Tone> = {
   // The agent is waiting on a person, like the two above.
   human_takeover: "warning",
 };
-export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
+export function ApprovalKindChip({ kind, scope }: { kind: ApprovalKind; scope?: Record<string, unknown> }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);
+  // A held sign-in to an endpoint is not an AWS sign-in: its request names its own lane.
+  if (kind === "credential_reauth" && scope?.lane === "custom_endpoint") return <Chip tone={tone}>{OIDC_SIGN_IN.APPROVAL_CHIP}</Chip>;
   const copyKind = WIRE_TO_COPY[kind];
   return <Chip tone={tone}>{copyKind ? APPROVAL_KIND_LABEL[copyKind] : String(kind)}</Chip>;
 }
@@ -541,6 +547,13 @@ export function SectionCard({
   );
 }
 
+/** Set by the run canvas around a widget it can expand, and by nothing else. A card inside it draws the Expand control
+ *  in its header; a card outside it (the dock, the local models card) draws none. `mode` is where the widget is now:
+ *  in its tile, in its tile while the layout is being edited (the control keeps its place, unseen and unreachable), or
+ *  in the large view (the control keeps its place there too, and the header clears the dialog's own Close). */
+export type WidgetExpandState = { mode: "tile" | "editing" | "expanded"; onExpand: () => void };
+export const WidgetExpandContext = React.createContext<WidgetExpandState | null>(null);
+
 /* Widget card shell (run cockpit). */
 // The run-detail cockpit's widget shell. Deliberately a SIBLING of SectionCard
 // rather than more props on it: SectionCard is a padded, self-sizing document
@@ -567,6 +580,7 @@ export function WidgetCard({
   grow,
   bodyClassName,
   className,
+  "data-testid": testId,
   children,
 }: {
   title: string;
@@ -575,26 +589,70 @@ export function WidgetCard({
   grow?: boolean;
   bodyClassName?: string;
   className?: string;
+  "data-testid"?: string;
   children: React.ReactNode;
 }) {
+  const expand = React.useContext(WidgetExpandContext);
+  const expanded = expand?.mode === "expanded";
   return (
     <section
+      data-testid={testId}
       className={cn(
         "flex flex-col overflow-hidden rounded-lg border border-border bg-card",
         grow ? "min-h-0 flex-1" : "shrink-0",
+        expanded && "rounded-none border-0",
         className,
       )}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-2">
+      {/* Wraps rather than clips: below the width where the title, the chip and the control all fit, the chip and the
+          control drop together to a second line, still at the right edge. */}
+      <div
+        className={cn(
+          "flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border",
+          expanded ? "py-3.5 pl-4 pr-12" : "px-2.5 py-2",
+        )}
+      >
         {Icon && <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
         {/* h2, not a div: the cockpit's widgets are the page's section headings
             once the old SectionCard h2s are gone, and a rail of unlabelled
             regions is unnavigable by heading. label-eyebrow is the board's own
-            class (theme.css). */}
-        <h2 className="label-eyebrow">{title}</h2>
-        {right && <div className="ml-auto flex items-center gap-1.5">{right}</div>}
+            class (theme.css). The title gives way first; the full name is on the tooltip. */}
+        <h2 title={title} className={cn("label-eyebrow min-w-0 flex-1 truncate", right && "min-w-[4rem]")}>
+          {title}
+        </h2>
+        {(right || expand) && (
+          <div className="ml-auto flex min-w-0 max-w-full items-center gap-2">
+            {right && <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">{right}</div>}
+            {expand && (
+              <button
+                type="button"
+                data-widget-expand
+                aria-label={RUN_COCKPIT.expandWidget(title)}
+                title={RUN_COCKPIT.expandWidget(title)}
+                aria-haspopup="dialog"
+                // Never reachable while it is not the thing to press: in edit layout the header keeps its shape, and in
+                // the large view Close is the control. `invisible` also takes it out of the tab order.
+                tabIndex={expand.mode === "tile" ? undefined : -1}
+                onClick={expand.onExpand}
+                className={cn(
+                  "-my-1.5 shrink-0 rounded-md p-[5px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:outline-hidden",
+                  expand.mode !== "tile" && "invisible",
+                )}
+              >
+                <Maximize2 className="size-3.5" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
       </div>
-      <div className={cn("min-h-0", grow && "flex-1", bodyClassName ?? "px-2.5 py-2")}>{children}</div>
+      <div
+        // The large view's focus lands here, so arrow and page keys scroll at once even in a widget with no button.
+        tabIndex={expanded ? 0 : undefined}
+        data-widget-body={expanded ? "" : undefined}
+        className={cn("min-h-0", grow && "flex-1", expanded && "focus-visible:ring-ring focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:outline-hidden", bodyClassName ?? "px-2.5 py-2")}
+      >
+        {children}
+      </div>
     </section>
   );
 }

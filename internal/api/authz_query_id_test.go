@@ -109,6 +109,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"handleListRunnerTokens"},
 		foreign: 403, pinnedBy: "TestRunnerTokensSecurityAdminRevokesButCannotMint",
 	},
+	// The kept-machine list across people is super-admin only (operatorOnly): a member naming any
+	// person's subject in ?owner= gets the router's 403 before the handler reads it.
+	"GET /api/v1/machines/kept?owner": {
+		entity: entityPrincipal, readers: []string{"handleListKeptMachines"},
+		foreign: 403,
+	},
 	// Internal (run token): the named approval is looked up among the CALLING
 	// run's approvals only, so another run's id is a mismatch, never a spend.
 	"GET /api/v1/internal/injection/{grantID}?approval": {
@@ -242,6 +248,7 @@ var queryParamNotAnID = map[string]string{
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
 	"kinds":          "Explain grid (security tier route): capability kind names, a closed set",
+	"runner":         "GET /machines/kept (super admin only, operatorOnly): a runner id narrowing the deployment-wide kept-machine list that tier already reads whole; a runner is shared infrastructure, not a principal's entity, and a member gets the router's 403 before it is read",
 	"v":              "GET /branding/logo (anonymous): the logo's content digest, which only decides whether the answer is cached for good; it names no entity",
 }
 

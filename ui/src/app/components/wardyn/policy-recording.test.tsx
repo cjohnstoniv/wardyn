@@ -56,4 +56,13 @@ describe("RecordingSection (#2968, M7 Knobs-B and States)", () => {
     expect(await screen.findByText("Session recording is disabled on this deployment")).toBeInTheDocument();
     expect(screen.getByText("Disabled")).toBeInTheDocument();
   });
+
+  it("a profile ceiling's section says what a level does to a macOS VM run; the stored-policy editor's does not", () => {
+    const { rerender } = render(<RecordingSection spec={spec("terminal")} onSpecChange={vi.fn()} ceiling />);
+    expect(screen.getByTestId("policy-recording-macos")).toHaveTextContent(
+      "Choosing a recording level doesn't by itself rule out macOS VMs. At Terminal a macOS VM's desktop isn't recorded; at Screen and actions it is, unmasked, while someone watches. A task run's agent output is recorded when output capture is on; if recording is required and that can't be done, the run doesn't start.",
+    );
+    rerender(<RecordingSection spec={spec("terminal")} onSpecChange={vi.fn()} />);
+    expect(screen.queryByTestId("policy-recording-macos")).toBeNull();
+  });
 });

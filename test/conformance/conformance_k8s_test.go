@@ -78,7 +78,7 @@ func TestConformanceK8s(t *testing.T) {
 	// resolved the same way register.go would — empty => k8s.New's own
 	// "default" fallback (Config.withDefaults). ci.yml sets it to the
 	// PSS-restricted namespace it labels.
-	sub, err := k8s.New(k8s.Config{
+	sub, err := k8s.New(k8sSuiteConfig(k8s.Config{
 		Namespaces: []string{os.Getenv("WARDYN_K8S_NAMESPACE")},
 		ProxyImage: proxyImage,
 		Record:     true, // the production default; see the doc comment above
@@ -87,7 +87,7 @@ func TestConformanceK8s(t *testing.T) {
 		// throwaway conformance cluster does not provision (see A1's
 		// Config.ConfinementRuntimes doc — a RuntimeClass name carries no
 		// guessable platform convention).
-	})
+	}))
 	if err != nil {
 		// Construction itself IS the positive canary-direction proof: k8s.New
 		// refuses to boot unless the boot-time egress canary proves this

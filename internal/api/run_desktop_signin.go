@@ -281,10 +281,16 @@ type desktopSigninBeginResponse struct {
 
 // handleBeginDesktopSignin stops the agent, proves it stopped, and starts the
 // person's display. The display never starts unless the stop is proven, and
-// any failure after the stop resumes the agent before it answers.
+// any failure after the stop resumes the agent before it answers. The run's
+// profile is asked first, so a refused begin never stops the agent. signinRun
+// does not ask it: End shares that, and End is how a person gives the agent back
+// from a sign-in a limit arrived during.
 func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request) {
 	run, st, ok := s.signinRun(w, r)
 	if !ok {
+		return
+	}
+	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, r, run) || s.refuseInteractiveAttach(w, r, run)) {
 		return
 	}
 	ctx := r.Context()
@@ -500,10 +506,14 @@ func cookieForSite(domain, site string) bool {
 // handleShareDesktopSignin copies one site's cookies from the person's browser
 // to the agent's. The bytes pass through wardynd's memory once and are never
 // stored or logged; the server re-filters them to the site whatever the
-// person's side returned.
+// person's side returned. The door is begin's, asked of the profile as it stands
+// now: a limit set during a sign-in stops the next share.
 func (s *Server) handleShareDesktopSignin(w http.ResponseWriter, r *http.Request) {
 	run, st, ok := s.signinRun(w, r)
 	if !ok {
+		return
+	}
+	if (!s.isOperator(r.Context()) || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, r, run) || s.refuseInteractiveAttach(w, r, run)) {
 		return
 	}
 	ctx := r.Context()

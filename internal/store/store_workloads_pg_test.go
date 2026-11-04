@@ -723,6 +723,46 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_ViewReadsTheProbe: the view decodes the run's service_status.probe when it is set, says
+// whether the run asked the control plane to probe it, and leaves the probe nil for a run with none.
+func TestPG_Workload_ViewReadsTheProbe(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	probed := mustPutWorkload(t, st, workloadPut("sub-a", "probed", "d"))
+	plain := mustPutWorkload(t, st, workloadPut("sub-a", "plain", "d"))
+	probedRun := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	plainRun := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service = '{"health":{"probe":"control_plane"}}',
+		service_status = jsonb_build_object('health', 'healthy', 'probe',
+			jsonb_build_object('health', 'unhealthy', 'reason', 'timeout', 'failures', 2, 'observed_at', $2::timestamptz))
+		WHERE id = $1`, probedRun.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service_status = '{"health":"healthy"}' WHERE id = $1`, plainRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct {
+		id  uuid.UUID
+		run uuid.UUID
+	}{{probed.ID, probedRun.ID}, {plain.ID, plainRun.ID}} {
+		if _, err := st.SetWorkloadRun(ctx, w.id, mustClaim(t, st, w.id), 1, w.run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := st.GetWorkloadByRun(ctx, probedRun.ID)
+	if err != nil || !v.ServiceProbeOn || v.ServiceProbe == nil {
+		t.Fatalf("probed view = %+v (%v), want the probe read", v, err)
+	}
+	if p := v.ServiceProbe; p.Health != "unhealthy" || p.Reason != "timeout" || p.Failures != 2 || p.ObservedAt.IsZero() {
+		t.Errorf("probe = %+v", *p)
+	}
+	v, err = st.GetWorkloadByRun(ctx, plainRun.ID)
+	if err != nil || v.ServiceProbeOn || v.ServiceProbe != nil {
+		t.Fatalf("plain view = %+v (%v), want no probe", v, err)
+	}
+}
+
 // TestPG_Workload_ARunningReplacementWaitsForTheNext: generation 2 waited in its queue and is running when
 // generation 3 is recorded, before the sweep ended generation 1. Generation 2 serves, so it stays until
 // generation 3 runs; generation 1, which generation 2 took over from, is owed its end at once.

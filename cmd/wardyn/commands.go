@@ -116,7 +116,7 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
-	var title, description, file string
+	var title, description, file, correlationID string
 	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote, runIn string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout, maxWait time.Duration
@@ -125,6 +125,7 @@ func runCmd(client clientFn) *cobra.Command {
 	var ends runEndFlags
 	var sched runScheduleFlags
 	var machine runMachineFlags
+	var wallPreset runWallPreset
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
@@ -186,6 +187,8 @@ func runCmd(client clientFn) *cobra.Command {
 				}
 			}
 			machine.apply(&body)
+			body.CorrelationID = correlationID // after the document: it cannot carry one, as with the machine flags
+			body.WallPreset = wallPreset.id
 			if err := setLocalFolder(&body, localFolder, localFolderRemote, createJSON); err != nil {
 				return err
 			}
@@ -227,8 +230,10 @@ func runCmd(client clientFn) *cobra.Command {
 				}
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
+				printMachineCreatedLine(cmd, client(), body.Machine)
 				fmt.Fprintf(cmd.OutOrStdout(), "  spiffe id: %s\n", run.SPIFFEID)
 				fmt.Fprintln(cmd.OutOrStdout(), endLine(run.AgentRun))
+				wallPreset.printLine(cmd.Context(), client(), cmd.OutOrStdout(), run.ID)
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive || body.Experience == sdk.ExperienceInteractive {
@@ -245,16 +250,18 @@ func runCmd(client clientFn) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; "+
-		"only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --json and --dry-run go with it. "+
+		"only --title, --description, --wall-preset, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --correlation-id, --json and --dry-run go with it. "+
 		"A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
+	cmd.Flags().StringVar(&correlationID, "correlation-id", "", "your own reference for this run, up to 128 characters of letters, digits and . _ : / - (optional; carried on the run's audit rows sent to audit sinks)")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	where.register(cmd)
-	machine.register(cmd)
+	machine.register(cmd) // its flag checks send no request, so they run before the wall preset's lookup
+	wallPreset.register(cmd, client)
 	ends.register(cmd)
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")

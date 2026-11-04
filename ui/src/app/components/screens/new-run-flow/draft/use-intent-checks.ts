@@ -49,6 +49,8 @@ interface Params {
   autoCheck: { local: boolean; backendArm: boolean; modelArm: boolean };
   doorOpen: boolean;
   adoDoorOpen: boolean;
+  /** Ask the server again when a preflight answer ages out, so a screen left open keeps a launchable result. */
+  recheckOnExpiry?: boolean;
 }
 
 interface Check {
@@ -262,9 +264,18 @@ export function useIntentChecks(params: Params) {
       return at === null ? [] : [at + PREFLIGHT_FRESH_MS - Date.now()];
     }).filter((n) => n >= 0);
     if (!times.length) return;
-    const timeout = setTimeout(() => tick((n) => n + 1), Math.min(...times) + 1);
+    const timeout = setTimeout(() => {
+      const flight = flights.current.preflight;
+      const aged = reads.current.preflight;
+      if (latest.current.recheckOnExpiry && aged.generation >= 0 && !flight.controller && !flight.stopped && Date.now() - aged.at >= PREFLIGHT_FRESH_MS) {
+        flight.pending = true;
+        flight.due = 0;
+        schedule(0);
+      }
+      tick((n) => n + 1);
+    }, Math.min(...times) + 1);
     return () => clearTimeout(timeout);
-  }, [checks, ageTick]);
+  }, [checks, ageTick, schedule]);
 
   const preflight = React.useCallback(async () => {
     clearTimer();

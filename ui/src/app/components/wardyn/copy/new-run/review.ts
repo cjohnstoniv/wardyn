@@ -25,9 +25,17 @@ export const NR_REVIEW = {
   NARROWED_TAIL_SERVER: "Not allowed on this server.",
   /** pending W-04: the recommended text until the owner answers. */
   NARROWED_TAIL_RUNNERS: "More than your runners can give.",
+  ADMIN_BYPASS_SIGNED_IN: (unit: string | number, limits: string | number) =>
+    `This admin run bypasses member limits. As a member, ${unit} would limit this run to ${limits}.`,
+  ADMIN_BYPASS_NO_PERSON: "This admin run bypasses member limits. There is no signed-in person to compare with.",
+  ADMIN_BYPASS_NO_PROFILE: "This admin run bypasses member limits. You have no member profile to compare with.",
+  ADMIN_BYPASS_UNAVAILABLE: "This admin run bypasses member limits. Wardyn couldn't work out what a member would get.",
+  ADMIN_BYPASS_NO_LIMITS: "This admin run bypasses member limits.",
   BLOCKERS_ONE: "1 blocker before launch",
   BLOCKERS_MANY: (n: string | number) => `${n} blockers before launch`,
   BLOCKER_STALE: "The setup changed. Check the server's current result again.",
+  BLOCKER_EXPIRED: "The server's check is more than a minute old. Check again before you launch.",
+  CHECKING: "Checking with the server…",
   /** pending W-29: the recommended text until the owner answers. */
   BLOCKER_UNSUPPORTED: (path: string | number) => `This document field isn't supported here: ${path}.`,
   CHECK_AGAIN: "Check again",

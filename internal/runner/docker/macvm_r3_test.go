@@ -139,7 +139,7 @@ func TestMacVMStartRefusalsAreCanon(t *testing.T) {
 		"agent start": {func(s *runner.SandboxSpec) {
 			s.Interactive, s.Env = true, map[string]string{envInteractiveStart: "agent"}
 		},
-			"A macOS VM sandbox's terminal opens a shell, not the agent CLI, in this release. Set the interactive start to shell."},
+			`A macOS VM's terminal opens a shell, not the agent, in this release. Turn off "Start the run in this harness", or send interactive_start: "shell" in the API.`},
 	} {
 		spec := macSpec()
 		tc.mut(&spec)

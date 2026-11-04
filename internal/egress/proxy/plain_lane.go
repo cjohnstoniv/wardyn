@@ -95,6 +95,13 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The run's allowed_models judges a model host's request on this lane as on the others.
+	releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+	defer releaseModels()
+	if modelRefused {
+		return
+	}
+
 	// Content inspection: two lanes converge here based on host. A model host (isLLMHost)
 	// whose channel we can parse takes the LLM per-endpoint classifier — handleConnect
 	// parity, so a prompt isn't forwarded unscanned in mode=block. Every other host gets
@@ -137,6 +144,8 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		outReq.Body = io.NopCloser(bodyOverride)
 	}
 	removeHopByHop(outReq.Header)
+	p.stripGatewayHeaders(outReq.Header)
+	p.stripGatewayHeaders(outReq.Trailer) // r.Clone keeps the sandbox's trailers
 
 	// Credential injection: plain HTTP only, exact-allow host only, and only on a transport
 	// that may carry the credential — see injectableTransport.

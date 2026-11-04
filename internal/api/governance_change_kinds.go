@@ -349,6 +349,7 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 	if posture := s.rubricPostureAdvisory(r.Context(), h.res); posture != "" {
 		p.notes = append(p.notes, posture)
 	}
+	p.notes = append(p.notes, s.governanceADOCeilingWarnings(r.Context(), h.res)...)
 	s.proposeGovernanceChange(w, r, p)
 }
 

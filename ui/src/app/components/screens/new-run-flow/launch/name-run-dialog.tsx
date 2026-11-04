@@ -13,6 +13,7 @@ import * as React from "react";
 import { Check, Loader2 } from "lucide-react";
 import { HttpError } from "../../../../lib/api/core";
 import { isCredentialRefusal, isGitCredentialRefusal } from "../../../../lib/api/runs";
+import { WALL_PRESET_REASON } from "../../../../lib/api/wall-presets";
 import { ADO_PAT } from "../../../../lib/ado-pat-copy";
 import type { SCMAccessPAT } from "../../../../lib/types/ado-pat";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
@@ -31,6 +32,7 @@ import { useOwnTokenRows } from "../../../../lib/hooks/use-own-token-rows";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
+import { rememberedPreset } from "../steps/tools/use-wall-presets";
 import { intentToWire } from "../draft/intent-to-wire";
 import { launchStart } from "../draft/launch-start";
 import type { RunIntent } from "../draft/run-intent";
@@ -130,6 +132,11 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
   // The last refused launch was an Azure DevOps credential one: only then is a missing own token its likely cause.
   const [gitCredentialRefused, setGitCredentialRefused] = React.useState(false);
   const refused = (e: unknown) => {
+    // The wall preset was deleted after Review loaded: it stays chosen, as an error, and Review holds Launch.
+    const preset = draft.intent.wall_preset;
+    if (preset && e instanceof HttpError && e.reason === WALL_PRESET_REASON.UNKNOWN) {
+      dispatch({ type: "guided", patch: { wallPresetGone: { id: preset, name: rememberedPreset(preset)?.name ?? "" } } });
+    }
     setGitCredentialRefused(isGitCredentialRefusal(e));
     adoDoor.notifyLaunchError(e);
     if (!isCredentialRefusal(e)) return;

@@ -382,6 +382,8 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "a lifted interactive denial", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyInteractive = false }},
 		{name: "a lifted exec denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = false }},
 		{name: "a lifted member-drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = false }},
+		{name: "a lifted kept-machine denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = false }},
+		{name: "a lifted background watch denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = false }},
 		{name: "a lifted drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = false }},
 		{name: "a lifted placement denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
 			l.DenyPlacements = []types.Placement{types.PlacementLocal}
@@ -490,7 +492,9 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		}},
 		{"a smaller run cap", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 1 }},
 		{"a new denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }},
+		{"a new background watch denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = true }},
 		{"a new member-drive denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }},
+		{"a new kept-machine denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = true }},
 		{"a new placement denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
 			l.DenyPlacements = []types.Placement{types.PlacementLocal}
 		}},
@@ -585,5 +589,24 @@ func TestGrantWithinFailsClosed(t *testing.T) {
 		if err := composer.GrantWithin(g, ceiling); err == nil {
 			t.Errorf("%s: GrantWithin = nil, want a refusal", name)
 		}
+	}
+}
+
+// TestLeqPushDenyAll: deny_all is a refusal, so a proposal without it is wider than a ceiling with it,
+// and one with it is no wider than a ceiling with or without it.
+func TestLeqPushDenyAll(t *testing.T) {
+	leq := func(a, b *types.PushRulesSpec) bool {
+		return composer.Leq(types.RunPolicySpec{PushRules: a}, types.RunPolicySpec{PushRules: b}, types.GovernanceLimits{}, types.GovernanceLimits{})
+	}
+	on := &types.PushRulesSpec{DenyAll: true}
+	paths := &types.PushRulesSpec{DenyPaths: []string{".github/**"}}
+	if leq(nil, on) || leq(paths, on) {
+		t.Error("a proposal without deny_all reads as within a ceiling that sets it")
+	}
+	if !leq(on, on) || !leq(on, nil) {
+		t.Error("a proposal with deny_all reads as wider than a ceiling with or without it")
+	}
+	if !leq(&types.PushRulesSpec{DenyAll: true, DenyPaths: []string{".github/**"}}, paths) {
+		t.Error("adding deny_all to the ceiling's own rules reads as a widening")
 	}
 }

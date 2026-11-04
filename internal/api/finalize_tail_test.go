@@ -52,6 +52,13 @@ func (a *syncAudit) has(runID uuid.UUID, action, outcome string) bool {
 	return false
 }
 
+// snapshot is a copy of every recorded event, read under the lock.
+func (a *syncAudit) snapshot() []types.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]types.AuditEvent(nil), a.events...)
+}
+
 // eventsFor returns every recorded event for runID/action, in recorded
 // order — used where a test needs to inspect an event's Data, not just
 // whether one landed.
@@ -120,12 +127,11 @@ func TestFinalizeTail_CompletionWatcherAndReconcile_ShareTerminalSequence(t *tes
 
 	srvA.startCompletionWatcher(runA.ID, "ref-a", "exec-a")
 
-	// The watcher is detached: wait for BOTH the terminal state and the revoke
-	// (the cascade fires after the CAS, so a poll that stops at "terminal" can
-	// read revocations=0 microseconds early).
+	// The watcher is detached: wait for the terminal state, the revoke and the teardown
+	// (each fires after the one before it, so a poll that stops early reads the next as 0).
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) &&
-		!(stA.State() == types.RunCompleted && brkA.revocations(runA.ID) > 0) {
+		!(stA.State() == types.RunCompleted && brkA.revocations(runA.ID) > 0 && rnA.stopCount() > 0) {
 		time.Sleep(10 * time.Millisecond)
 	}
 

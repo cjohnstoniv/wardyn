@@ -144,6 +144,46 @@ describe("Your walls card", () => {
     await waitFor(() => expect(putMock).toHaveBeenCalledWith({ allow_all_egress: false, withheld_grants: [scoped] }));
   });
 
+  it("keeps the capability lists, tool and push rules, recording and auto-stop the CLI wrote across a save", async () => {
+    const carried = {
+      azure_devops_capabilities: ["work_items_read"],
+      github_capabilities: ["contents_read"],
+      tool_rules: [{ tool: "Bash", effect: "hold" }],
+      push_rules: { deny_paths: [".github/**"] },
+      recording: "screen_actions",
+      auto_stop_after_sec: 900,
+    };
+    getMock.mockResolvedValue({ spec: carried } as PersonalWalls);
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("checkbox", { name: YOUR_WALLS.COPY_OUT }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ ...carried, desktop: { copy_out: "blocked" } }));
+  });
+
+  it("keeps only the host of a typed site: no scheme, path or capitals", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const never = screen.getByPlaceholderText(YOUR_WALLS.ADD_SITE);
+    setField(never, "HTTPS://GitHub.com/org/repo?x=1");
+    fireEvent.keyDown(never, { key: "Enter" });
+    expect(screen.getByText("github.com")).toBeInTheDocument();
+    expect(screen.getByText(YOUR_WALLS.SITE_HINT)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ denied_domains: ["github.com"] }));
+  });
+
+  it("can clear the barrier and the unlisted-sites choice, and says what VM desktops do with the clipboard", async () => {
+    getMock.mockResolvedValue({ spec: { min_confinement_class: "CC2", first_use_approval: "wait_for_review" } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByText(YOUR_WALLS.CLIPBOARD_HINT)).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: YOUR_WALLS.BARRIER_NONE }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_ORG }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({}));
+  });
+
   it("removes a site chip", async () => {
     getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com", "b.example.com"] } });
     render(<YourWallsCard />);
@@ -153,14 +193,55 @@ describe("Your walls card", () => {
     expect(screen.getByText("b.example.com")).toBeInTheDocument();
   });
 
-  it("Remove all walls clears the document and the form", async () => {
+  it("keeps the host of a typed site without its port, IPv6 brackets included", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const never = screen.getByPlaceholderText(YOUR_WALLS.ADD_SITE);
+    for (const typed of ["https://Example.com:8443/x", "internal.test:80", "[::1]:8080"]) {
+      setField(never, typed);
+      fireEvent.keyDown(never, { key: "Enter" });
+    }
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ denied_domains: ["example.com", "internal.test", "[::1]"] }));
+  });
+
+  it("Remove all walls asks first, and Cancel removes nothing", async () => {
+    getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"] } });
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(YOUR_WALLS.REMOVE_ALL_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText(YOUR_WALLS.REMOVE_ALL_BODY)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: YOUR_WALLS.CANCEL }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(clearMock).not.toHaveBeenCalled();
+    expect(screen.getByText("a.example.com")).toBeInTheDocument();
+  });
+
+  it("Remove all walls clears the document and the form once confirmed", async () => {
     getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"], desktop: { upload: "blocked" } } });
     render(<YourWallsCard />);
     await open();
     await user.click(screen.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
     await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("a.example.com")).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: YOUR_WALLS.UPLOAD })).not.toBeChecked();
+  });
+
+  it("Remove all walls stays open and shows the error when the clear fails", async () => {
+    getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"] } });
+    clearMock.mockRejectedValue(new HttpError(500, "could not clear", "walls_unavailable"));
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
+    expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("could not clear");
+    expect(screen.getByText("a.example.com")).toBeInTheDocument();
   });
 
   it("says what the server refused with its code in small print, and offers no Saved", async () => {
@@ -172,6 +253,40 @@ describe("Your walls card", () => {
     expect(alert).toHaveTextContent("denied_domains[0]");
     expect(within(alert).getByText("walls_invalid")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("Refuse every push is a switch under Pushes: it sends push_rules.deny_all true beside the paths the CLI wrote, and is not sent when off", async () => {
+    getMock.mockResolvedValue({ spec: { push_rules: { deny_paths: [".github/**"] } } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByText(YOUR_WALLS.PUSHES)).toBeInTheDocument();
+    expect(screen.getByText(YOUR_WALLS.REFUSE_PUSH_HELP)).toBeInTheDocument();
+    const sw = screen.getByRole("switch", { name: YOUR_WALLS.REFUSE_PUSH });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    await user.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenLastCalledWith({ push_rules: { deny_paths: [".github/**"], deny_all: true } }));
+    await user.click(sw);
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenLastCalledWith({ push_rules: { deny_paths: [".github/**"] } }));
+  });
+
+  it("shows the switch on when the walls it loaded refuse every push, and saves only deny_all with nothing else", async () => {
+    getMock.mockResolvedValue({ spec: { push_rules: { deny_all: true } } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByRole("switch", { name: YOUR_WALLS.REFUSE_PUSH })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ push_rules: { deny_all: true } }));
+  });
+
+  it("stacks the unlisted-sites choices below 400px and lists no carried-knob row", async () => {
+    getMock.mockResolvedValue({ spec: { github_capabilities: ["code_read"] } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_BLOCK }).parentElement?.className).toContain("max-[399px]:flex-col");
+    expect(screen.queryByTestId("walls-carried")).not.toBeInTheDocument();
   });
 
   it.each(["walls_need_person", "walls_unavailable"])("is absent when the server answers %s", async (reason) => {

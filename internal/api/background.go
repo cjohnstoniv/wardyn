@@ -47,13 +47,15 @@ func (s *Server) GoBackground(fn func()) {
 // (signInCaptureReadTimeout) plus killRunCascade (killCascadeTimeout, claim and
 // teardown under one shared bound), so the strict ceiling is
 // supersedeCASAttempts * (signInCaptureReadTimeout + killCascadeTimeout), 105s.
-// This constant is one pass of that sum. It covers the kill because a pass that
-// loses its swap to the launch moving the run forward tears nothing down: it
-// costs a read and one row update, then re-reads, so the teardown runs once, in
-// the pass that wins. A store where every read and every lost swap ran to its
-// full timeout could pass the budget; the goroutine is then abandoned with the
-// WARN below and the run is ended by ReconcileOnBoot or its idle cap. The budget
-// is not sized to 105s because HTTPShutdownTimeout, this budget and the audit
+// This constant is one pass of that sum. The loop checks BaseCtx before every
+// pass and BaseCtx is cancelled before WaitBackground, so a shutdown lets the
+// pass under way finish and starts no further one: the goroutine outlives
+// shutdown by at most one pass, which this budget covers. A pass that loses its
+// swap to the launch moving the run forward tears nothing down, so the retries
+// the shutdown skips are the cheap ones; the run is then ended by its 30-minute
+// idle cap (harnessLoginIdleCap). A single pass whose store calls all ran to their full
+// timeouts can still pass the budget and is abandoned with the WARN below. The
+// budget is not sized to 105s because HTTPShutdownTimeout, this budget and the audit
 // flush must fit the 70s termination grace (TestShutdownGraceCoversTheBudget).
 //
 // finishCreateRunLaunch has no such inner bound: a devcontainer build may take

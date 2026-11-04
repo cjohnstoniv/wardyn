@@ -106,13 +106,17 @@ func runGetCmd(client clientFn) *cobra.Command {
 }
 
 // serviceLine is a service run's health as one line, "service: healthy · 3 restarts · checked 40s ago", and ""
-// for a run that is not a service. A service wardynd has not yet observed says so.
+// for a run that is not a service. A service wardynd has not yet observed says so. A service that opted in to
+// Wardyn's own check gets that reading on a second line (probeLine).
 func serviceLine(run types.AgentRun, now time.Time) string {
 	if run.Service == nil {
 		return ""
 	}
 	st := run.ServiceStatus
 	if st == nil {
+		if run.Service.ControlPlaneProbe() {
+			return "service: not checked yet\n" + probeLine(nil, now)
+		}
 		return "service: not checked yet"
 	}
 	health := string(st.Health)
@@ -123,7 +127,30 @@ func serviceLine(run types.AgentRun, now time.Time) string {
 	if st.Restarts == 1 {
 		restarts = "1 restart"
 	}
-	return fmt.Sprintf("service: %s \u00b7 %s \u00b7 checked %s ago", health, restarts, agoText(now.Sub(st.ObservedAt)))
+	line := fmt.Sprintf("service: %s \u00b7 %s \u00b7 checked %s ago", health, restarts, agoText(now.Sub(st.ObservedAt)))
+	if run.Service.ControlPlaneProbe() {
+		line += "\n" + probeLine(st.Probe, now)
+	}
+	return line
+}
+
+// probeLine is Wardyn's own check of a service that opted in to it, as the line under serviceLine's:
+// "wardyn's check: healthy (bad_status, HTTP 503) · 1 failed in a row · checked 40s ago".
+func probeLine(p *types.RunServiceProbe, now time.Time) string {
+	if p == nil {
+		return "wardyn's check: not checked yet"
+	}
+	health := string(p.Health)
+	switch {
+	case p.Reason != "" && p.HTTPStatus != 0:
+		health += fmt.Sprintf(" (%s, HTTP %d)", p.Reason, p.HTTPStatus)
+	case p.Reason != "":
+		health += " (" + p.Reason + ")"
+	}
+	if p.Failures > 0 {
+		health += fmt.Sprintf(" \u00b7 %d failed in a row", p.Failures)
+	}
+	return fmt.Sprintf("wardyn's check: %s \u00b7 checked %s ago", health, agoText(now.Sub(p.ObservedAt)))
 }
 
 // agoText is an elapsed time as the terminal says it: seconds, minutes, hours or days, rounded down.

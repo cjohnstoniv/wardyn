@@ -22,6 +22,7 @@ export function BlockerList({
   go,
   onCheckAgain,
   onAdd,
+  checking,
 }: {
   blockers: readonly Blocker[];
   go: (loc: NewRunLocation) => void;
@@ -29,9 +30,21 @@ export function BlockerList({
   onCheckAgain?: () => void;
   /** Opens the paste-once dialog for a missing secret, as Tools' Add does. */
   onAdd?: (item: SetupItem) => void;
+  /** The server's check is running: a stale result alone then says so, with no blocker count. */
+  checking?: boolean;
 }) {
   // A stale result blames no group, so its card is amber; any blocker that names something stays red.
   const stale = blockers.length > 0 && blockers.every((b) => b.kind === "stale");
+  if (stale && checking) {
+    return (
+      <section id={BLOCKERS_ID} role="status" className="rounded-lg border border-warning/25 bg-warning-subtle p-3 text-sm">
+        <p className="flex items-center gap-2 font-medium text-foreground">
+          <CircleAlert aria-hidden="true" className="size-4 shrink-0 text-warning" />
+          {NR_REVIEW.CHECKING}
+        </p>
+      </section>
+    );
+  }
   return (
     <section
       id={BLOCKERS_ID}

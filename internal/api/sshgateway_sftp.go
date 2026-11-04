@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
@@ -20,6 +21,18 @@ import (
 // documented BYOI image contract (docs/SSH.md).
 const sftpServerPath = "/usr/lib/openssh/sftp-server"
 
+// sftpServerPathMacOS is where a macOS VM keeps it: the system's own, so the base needs no install.
+const sftpServerPathMacOS = "/usr/libexec/sftp-server"
+
+// sftpServerPathFor is the sftp-server path of a run's machine kind: the Linux path for a container
+// and a Linux VM (its image installs openssh-sftp-server), the system's for a macOS VM.
+func sftpServerPathFor(kind types.MachineKind) string {
+	if kind.IsMacOSVM() {
+		return sftpServerPathMacOS
+	}
+	return sftpServerPath
+}
+
 // execSFTPServer starts the sandbox's own sftp-server (plus args) and, on a
 // launch failure, returns the message the client sees: an offline runner or a
 // gone sandbox is named as such, ErrExecStreamUnsupported maps to the shared
@@ -27,7 +40,7 @@ const sftpServerPath = "/usr/lib/openssh/sftp-server"
 // read as a BYOI image without the binary and names the image contract (never
 // a hang).
 func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, args ...string) (*runner.ExecSession, string, error) {
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: append([]string{sftpServerPath, "-e"}, args...)})
+	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: append([]string{sftpServerPathFor(run.MachineKind), "-e"}, args...)})
 	if err == nil {
 		return sess, "", nil
 	}
@@ -40,7 +53,7 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, args ..
 	case errors.Is(err, runner.ErrSandboxGone):
 		reason = "sftp unavailable: the sandbox is gone"
 	default:
-		reason = sftpServerMissing + " (" + err.Error() + ")"
+		reason = strings.Replace(sftpServerMissing, sftpServerPath, sftpServerPathFor(run.MachineKind), 1) + " (" + err.Error() + ")"
 	}
 	return nil, reason, err
 }

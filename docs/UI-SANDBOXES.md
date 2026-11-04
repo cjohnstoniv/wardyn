@@ -1,6 +1,6 @@
 # UI sandboxes
 
-`wardynd` can relay **one declared loopback port** inside a running sandbox — a code editor, a dev server — to an operator's browser. It rides the same exec lane the SSH gateway's `-L` forward already uses (`socat` over `Runner.ExecStream`): there is no pod-IP or container-IP dial, no `NetworkPolicy` change, and **no new network path out of the sandbox**. The bytes travel control plane → substrate exec → container, exactly like an attach.
+`wardynd` can relay **one declared loopback port** inside a running sandbox — a code editor, a dev server — to an operator's browser. It rides the same exec lane the SSH gateway's `-L` forward already uses (`socat` over `Runner.ExecStream`): there is no pod-IP or container-IP dial, no `NetworkPolicy` change, and **no new network path out of the sandbox**. The bytes travel control plane → substrate exec → container.
 
 - The gateway is off by default. It exists only when `WARDYN_UI_SANDBOX_LISTEN` is set — see [docs/ENV.md](ENV.md) for all three variables (`WARDYN_UI_SANDBOX_LISTEN`, `WARDYN_UI_SANDBOX_ADVERTISE`, `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`). With it unset there is no listener and no new surface: the relay's cookie key is not even generated.
 - It listens on a **second address**, and boot refuses one equal to `-listen` (or to `-ssh-listen`). That is a security control, not a deployment convenience: everything the relay serves is the sandbox's **own** HTML and JavaScript.
@@ -88,6 +88,10 @@
   Playwright `storageState`).
 - `POST .../desktop-signin/end` closes the display and resumes the agent. A
   sign-in ends by itself after 30 minutes.
+- `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
+  refused begin leaves the agent running. End stays open.
+- A limit set during a sign-in stops new entry. An open display stays until it
+  ends, and the agent comes back at End or within 30 minutes.
 - The person's browser is a different uid in the same sandbox, not a
   sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
   states what that holds and what it does not. After a share the agent holds
@@ -265,9 +269,9 @@
 - An app is a **name, a loopback port and a path — never a command string**, so a
   policy can never choose what runs inside the sandbox.
 - The relay serves **only**
-  a declared port; anything else is refused naming this field, and
+  a declared port; anything else is refused, and
   [`ssh -L`](SSH.md#4--l-port-forwarding) stays the escape hatch for an
-  undeclared one.
+  undeclared one. A macOS VM app can't use 5900-5909.
 - Declaring an app grants nothing on its own: the gateway still
   has to be enabled, and every session still needs a ticket.
 
@@ -309,7 +313,9 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 ## 3. Open an app
 
-- A background task's UI apps cannot be opened (`409 run_background_only`), except an [inbound](#inbound-let-named-callers-reach-a-port) app.
+- A background task's UI apps cannot be opened (`409 run_background_only`), except an [inbound](#inbound-let-named-callers-reach-a-port) app. One more door opens: the built-in desktop of a background macOS VM run opens as a view-only watch for the person who started the run ([Watching a background run's desktop](operations/macos-vms.md#watching-a-background-runs-desktop)). A declared noVNC app, a terminal and the desktop's files stay refused.
+- A script that asks `POST /runs/{id}/attach/ticket?purpose=ui` for a background run gets `409 run_background_only`. For the desktop of a background macOS VM run, call `POST /runs/{id}/desktop/watch-ticket` instead; the steps below are for a run that is not a background task.
+- A screen can show what a background run keeps out of its logs, such as a secret in a GUI app or a document. The site switch `macos_vm.allow_background_watch` and the profile limit `deny_background_desktop_watch` turn watching off.
 - Three calls:
   1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type); `?purpose=ui` skips the terminal session cap at the mint, since a UI session holds no terminal slot,
   2. **bind** it to the browser that will use it,
@@ -628,7 +634,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
 | `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
-| `ui.input.drop` | a view-only desktop's relay dropped the session's first key or first pointer move | app, input (never the input itself) |
+| `ui.input.drop` | a view-only desktop's relay dropped the first key and the first pointer move on a desktop socket (once for each socket a viewer opens) | app, input (never the input itself) |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
   and a relay session must never appear in the run detail page's Recording tab as

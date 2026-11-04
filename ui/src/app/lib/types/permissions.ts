@@ -76,4 +76,6 @@ export interface AvailabilityView {
   value: string;
   restricted: boolean;
   allowed_by: CapabilityGrant[];
+  // Images only, read-only: the registry-prefix allow rows that cover this value.
+  covered_by?: { prefix: string; who: { subject_type: CapabilitySubjectType; subject: string } }[];
 }

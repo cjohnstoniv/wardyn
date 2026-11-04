@@ -379,7 +379,16 @@ func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot) (tr
 		return treeDryRunReport{}, err
 	}
 	for _, run := range runs {
-		if run.UnitID != nil && (wallsChanged[*run.UnitID] || leftBy(left[*run.UnitID], run)) {
+		if run.UnitID == nil {
+			continue
+		}
+		hit := wallsChanged[*run.UnitID]
+		if !hit {
+			if hit, err = s.leftBy(ctx, left[*run.UnitID], run); err != nil {
+				return treeDryRunReport{}, err
+			}
+		}
+		if hit {
 			report.LiveRuns = append(report.LiveRuns, run.ID)
 		}
 	}
@@ -387,9 +396,27 @@ func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot) (tr
 }
 
 // leftBy reports whether run may be its owner's under one of the memberships that leave its unit: a
-// user membership names its owner, and any other kind may match them.
-func leftBy(moved []types.GovernanceMembership, run types.AgentRun) bool {
-	return slices.ContainsFunc(moved, func(m types.GovernanceMembership) bool {
-		return m.SubjectType != types.CapabilitySubjectUser || m.Subject == run.CreatedBy
-	})
+// user membership names its owner by their sub or by an alias the identity directory holds for them (a
+// sign-in email), and any other kind may match them. The run records only the sub, so the aliases are
+// read from the directory, and only when no membership has matched by then.
+func (s *Server) leftBy(ctx context.Context, moved []types.GovernanceMembership, run types.AgentRun) (bool, error) {
+	var aliases []string
+	read := false
+	for _, m := range moved {
+		if m.SubjectType != types.CapabilitySubjectUser || m.Subject == run.CreatedBy ||
+			m.Subject == types.CanonicalUserSubject(run.CreatedBy) {
+			return true, nil
+		}
+		if pe, ok := s.cfg.Store.(store.PersonErasureStore); ok && !read {
+			var err error
+			if aliases, err = pe.PrincipalAliases(ctx, run.CreatedBy); err != nil {
+				return false, err
+			}
+			read = true
+		}
+		if slices.Contains(aliases, types.CanonicalUserSubject(m.Subject)) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

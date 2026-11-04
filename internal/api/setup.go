@@ -167,15 +167,19 @@ type SetupFeatures struct {
 	// MacOSVMs is WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off, so the
 	// status of a deployment that leaves it off reads exactly as before.
 	MacOSVMs bool `json:"macos_vms,omitempty"`
+	// MacWindow is the site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window
+	// on their Mac. Absent when off or when the site config could not be read, which the console reads as off.
+	MacWindow bool `json:"mac_window,omitempty"`
 }
 
-func setupFeatures(multiAgentTasks bool) SetupFeatures {
+func setupFeatures(multiAgentTasks, macWindow bool) SetupFeatures {
 	return SetupFeatures{
 		ScheduledRuns:   envEnabled(envScheduledRuns),
 		KubectlCLI:      kubectlCLIOn(),
 		MultiAgentTasks: multiAgentTasks,
 		MCPLocalServers: envEnabled(envMCPLocalServers),
 		MacOSVMs:        envEnabled(envMacOSVMs),
+		MacWindow:       macWindow,
 	}
 }
 
@@ -475,7 +479,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
-		Features:       setupFeatures(s.cfg.MultiAgentTasks),
+		Features:       setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed()),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's

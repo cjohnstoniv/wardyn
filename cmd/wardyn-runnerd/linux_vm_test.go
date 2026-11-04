@@ -39,7 +39,7 @@ func TestLinuxVMOffByDefault(t *testing.T) {
 func TestVMCapsCarryTheFolderShareProbe(t *testing.T) {
 	for _, found := range []bool{true, false} {
 		c := docker.VMConfig{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: found}
-		if caps := vmCaps(c); caps.Virtiofs != found || caps.MachineType != c.MachineType {
+		if caps := vmCaps(c); caps.Virtiofs != found || caps.Drives != found || caps.MachineType != c.MachineType {
 			t.Fatalf("probe found virtiofsd %v, caps %+v", found, caps)
 		}
 	}

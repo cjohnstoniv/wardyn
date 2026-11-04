@@ -9,23 +9,21 @@
 
 import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
+import type { RunPolicyWallPreset } from "./run-policy-wall-preset";
 import type { PolicyContact } from "./site";
+import type { RunWallPreset } from "./wall-presets";
 import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
+import type { RunService, RunServiceStatus } from "./run-service";
 import type { RunnerPoolSelection } from "./runner-pools";
+import type { RunMachine } from "./kept-machine";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
 // (string) so label mapping can tolerate both forms; the literals below
 // are kept for editor hints / autocomplete only.
-export type Agent =
-  | "claude-code"
-  | "codex-cli"
-  | "claude_code"
-  | "codex"
-  | "cursor"
-  | (string & {});
+export type Agent = "claude-code" | "codex-cli" | "claude_code" | "codex" | "cursor" | (string & {});
 
 export type ConfinementClass = "CC1" | "CC2" | "CC3";
 
@@ -85,34 +83,7 @@ export type RunState =
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
 
-/** Go: types.RunService. A service is a background run of a command that wardynd keeps running. */
-export interface RunService {
-  restart: "on_failure" | "never";
-  /** Listens on 127.0.0.1 inside the sandbox; absent = none declared. */
-  port?: number;
-  /** Needs `port`: an HTTP GET of `path` (2xx/3xx passes), or a TCP connect without one. */
-  health?: ServiceHealth;
-}
-
-/** Go: types.ServiceHealth. */
-export interface ServiceHealth {
-  path?: string;
-  interval_sec: number;
-  failure_threshold: number;
-}
-
-/** Go: types.ServiceHealthState. */
-export type ServiceHealthState = "starting" | "healthy" | "unhealthy" | "unknown";
-
-/** Go: types.RunServiceStatus. `reason` is closed: restarting | probe_failing | supervisor_missing | unreachable | paused. */
-export interface RunServiceStatus {
-  health: ServiceHealthState;
-  reason?: string;
-  restarts: number;
-  last_exit_code?: number;
-  /** wardynd's clock, never the sandbox's. */
-  observed_at: string;
-}
+export type { RunService, RunServiceProbe, RunServiceStatus, ServiceHealth, ServiceHealthState } from "./run-service";
 
 /** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
 export interface RunQueue {
@@ -125,6 +96,8 @@ export interface RunQueue {
   /** A scheduled run's start time and the IANA zone it was given in; absent for any other waiting run. */
   start_at?: string;
   time_zone?: string;
+  /** The whole wait sentence of a run its runners' limits hold back, naming the limit as the runners stand now. Present only on a single-run read by the run's owner or an admin; absent, the sentence is the one the reason gives. */
+  limit_sentence?: string;
 }
 
 export interface AgentRun {
@@ -206,6 +179,7 @@ export interface AgentRun {
   // shape its experience, workload and tools fit. Absent when they fit more than one, for a run
   // from an older client, or one created before the field.
   shape?: RunShape;
+  correlation_id?: string; // The caller's own reference for the run, given at create (Go: types.AgentRun.CorrelationID); absent when none was.
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
@@ -230,7 +204,9 @@ export interface AgentRun {
   // without fetching every run's cast just to answer "does one exist, how
   // big, how long". has_recording is the ONLY "no recording" signal: a zero
   // (or absent) recording_duration_sec is a real, header-only cast that
-  // captured no output, not "unknown" or "none" — never gate on it.
+  // captured no output, not "unknown" or "none" — never gate on it. A list
+  // without include=recording_meta omits all three keys; absent means "not
+  // asked", not "no recording". The single-run read always sets has_recording.
   has_recording?: boolean;
   recording_bytes?: number;
   recording_duration_sec?: number;
@@ -420,6 +396,10 @@ export interface VMMachine {
   base_edited_at?: string;
   // A macOS VM's base: the one the run picked ("Standard" or another of the Mac's), then the one it started on.
   macos_base?: string;
+  // What this boot's helper reported: its desktop filter is forced view only. Absent reads as not forced.
+  desktop_forced_view_only?: boolean;
+  // The dispatch that recorded this boot asked its helper to force that. Absent on a background macOS run: an older boot.
+  desktop_view_only_asked?: boolean;
 }
 
 export interface RunAttention {
@@ -559,6 +539,7 @@ export interface RunDetail extends AgentRun {
   // The model allowlist each local model provider handed the run's proxy at its latest dispatch, {provider id: models}
   // (#3374): what the run is held to, whatever the provider lists now. Absent when the run holds none.
   model_allowlists?: Record<string, string[]>;
+  allowed_models?: import("./run-allowed-models").RunAllowedModels; // see run-allowed-models.ts
   // The name of the pool the run was admitted into, as it reads now; a deleted pool is still named.
   runner_pool_name?: string;
   kept_until?: string;
@@ -573,8 +554,15 @@ export interface RunDetail extends AgentRun {
   agents?: RunDetailAgent[];
   // A macOS VM run's desktop as its Mac offers it (GET /runs/{id} only); see RunMacOS.
   macos?: RunMacOS;
+  // Whether this caller may watch a running background macOS VM run's desktop (GET /runs/{id} only); see RunBackgroundWatch.
+  background_watch?: RunBackgroundWatch;
+  mac_window?: RunMacWindow; // whether this caller may open a window onto the run on their own Mac (GET /runs/{id} only)
+  // True while an interactive macOS VM run's setup (repo clone, harness setup) runs (GET /runs/{id} only); absent otherwise.
+  macos_preparing?: boolean;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
   macos_disk?: RunMacOSDisk;
+  wall_preset?: RunWallPreset; // the preset the run was launched with, never its spec (GET /runs/{id} only)
+  machine?: RunMachine; // the kept machine the run keeps or resumed (GET /runs/{id} only); absent for a run that keeps none
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
@@ -582,6 +570,28 @@ export interface RunDetail extends AgentRun {
 // and while the runner's caps are unknown.
 export interface RunMacOS {
   desktop: "control" | "observe";
+}
+
+// GET /runs/{id}'s background_watch (backgroundWatchView, internal/api/run_background_watch.go): "open" is the only
+// state with a button; every other is the door's refusal, with its sentence, except "not_run_owner", which has none.
+// Absent on every run but a running background macOS VM run.
+export interface RunBackgroundWatch {
+  state: "open" | "site_off" | "governance" | "sign_ins_off" | "old_boot" | "unconfirmed" | "offline" | "control" | "paused" | "not_run_owner";
+  message?: string;
+}
+
+// GET /runs/{id}'s mac_window (macWindowView, internal/api/run_mac_window.go): "open" is the only state with a
+// button; the others are the door's refusals, with their sentence, except "not_run_owner". Absent unless a live macOS VM run.
+export interface RunMacWindow {
+  state: "open" | "window_open" | "site_off" | "governance" | "sign_ins_off" | "not_your_mac" | "unrecorded" | "offline" | "runner_too_old" | "not_here" | "paused" | "preparing" | "unconfirmed" | "not_run_owner";
+  message?: string;
+  last_close?: RunMacWindowClose; // why this person's last window closed (macWindowLastClose); absent when none has
+}
+
+export interface RunMacWindowClose {
+  reason: "person" | "host_locked" | "run_ended" | "failed" | "not_opened";
+  message?: string; // not_opened only: the refusal's sentence when the window a create asked for didn't open at start
+  at: string;
 }
 
 // GET /runs/{id}'s macos_disk (runMacOSDiskView, internal/api/run_macos_disk.go): "removing" while no report
@@ -652,7 +662,7 @@ export type RunPolicyCause =
   | "git_broker"
   | "overlay"
   | "unit"
-  | "walls"
+  | "walls" | "wall_preset"
   | "org_disk"
   | "pool_disk"
   | "restart"
@@ -696,6 +706,9 @@ export interface RunPolicyView {
   // Which allowed hosts the run's proxy opened at launch; every other allowed
   // host passed through unread. Absent for a run recorded before it existed.
   host_marks?: RunPolicyHostMarks;
+  inspection_left_to?: string[]; // each model provider whose gateway checks the run's prompts itself, by name
+  wall_preset?: RunPolicyWallPreset; // run-policy-wall-preset.ts
+  pushes_unstoppable?: boolean; // the broker is off and the capability list leaves out code_write: a git token in the sandbox can still push
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

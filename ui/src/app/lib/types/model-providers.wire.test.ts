@@ -59,6 +59,24 @@ describe("local_model wire", () => {
     expect(ts).toContain('| "local_model"');
   });
 
+  it("ProviderOIDC has full parity with its TS mirror, and the provider carries the block", () => {
+    const ts = read("ui/src/app/lib/types/site.ts");
+    expect([...tsKeys(ts, "ProviderOIDC")].sort()).toEqual([...goJSONTags(goType, "ProviderOIDC")].sort());
+    expect(tsKeys(ts, "ModelProvider")).toContain("oidc");
+    expect(goJSONTags(goType, "ModelProvider")).toContain("oidc");
+  });
+
+  it("the setup status row carries uid, sign_in and identity_binding as the server writes them", () => {
+    const ts = read("ui/src/app/lib/types/setup.ts");
+    const goSetup = read("internal/api/model_providers_api.go");
+    expect([...tsKeys(ts, "SetupModelProvider")].sort()).toEqual([...goJSONTags(goSetup, "SetupModelProvider")].sort());
+  });
+
+  it("the provider access row carries signed_in_at as the server writes it", () => {
+    expect(tsKeys(read("ui/src/app/lib/types/setup.ts"), "SetupProviderAccess")).toContain("signed_in_at");
+    expect(goJSONTags(read("internal/api/provider_access.go"), "SetupProviderAccess")).toContain("signed_in_at");
+  });
+
   it("the defaults and limits are the API's", () => {
     expect(LOCAL_MODEL_DEFAULTS).toEqual({
       max_context: num(goType, "DefaultLocalMaxContext"),
