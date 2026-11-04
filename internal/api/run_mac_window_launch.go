@@ -126,9 +126,10 @@ func (s *Server) macWindowAtStartIfAsked(ctx context.Context, runID uuid.UUID, a
 // up, so its creator is asked for a window as `wardyn window` would, under the grant the create left
 // (macWindowStorePending), never under whatever the launch's own context carries. A refusal is audited and the
 // run goes on: the run page and the CLI offer the window later. The run is read again here, since dispatch has
-// set its recording level and its state since create. The open waits for the run to be up by where it is called
-// (after the sandbox started and the run is RUNNING); a run still preparing then is refused with the preparing
-// sentence, and no later retry is made, so a window never appears on a Mac the person did not just ask for. A
+// set its recording level and its state since create. The open waits for the run to be up by where it is called:
+// after the sandbox started and the run is RUNNING, or, for an interactive macOS VM run, once its prep has
+// recorded done (runs_dispatch.go). It is asked once; a refusal is not retried, so a window never appears on a
+// Mac the person did not just ask for. A
 // refusal under a loaded grant is also kept as the grant principal's last close (not_opened, with its sentence),
 // so the run page says why the window it asked for is not there.
 func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
