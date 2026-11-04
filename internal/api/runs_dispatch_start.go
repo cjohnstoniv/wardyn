@@ -222,6 +222,7 @@ func (s *Server) prepareMacOSInteractive(ctx context.Context, run types.AgentRun
 				"argv": macPrepareArgv, "error": sentence, "exit_code": exit, "reason": "interactive_prepare"})))
 		s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 		s.failAndRevoke(ctx, run.ID, types.RunRunning, sentence)
+		s.macWindowForgetPending(ctx, run) // a window asked for at start is asked only after a prep that succeeded
 		return false
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",

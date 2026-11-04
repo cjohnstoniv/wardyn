@@ -126,14 +126,24 @@ func (s *Server) macWindowAtStartIfAsked(ctx context.Context, runID uuid.UUID, a
 // agent's start, or, for an interactive macOS VM run, whose window is refused until its prep records done, from the
 // returned hook, which startAgentsOrIdle runs once the prep is done. The hook is nil when nothing waits on the prep.
 func (s *Server) macWindowAtStartOrAfterPrep(ctx context.Context, run types.AgentRun, interactive, asked bool) (onPrepared func()) {
-	if !interactive || !run.MachineKind.IsMacOSVM() {
-		s.macWindowAtStartIfAsked(ctx, run.ID, asked)
-		return nil
-	}
-	if !asked {
+	now, afterPrep := macWindowAtStartWhen(run.MachineKind, interactive, asked)
+	s.macWindowAtStartIfAsked(ctx, run.ID, now)
+	if !afterPrep {
 		return nil
 	}
 	return func() { s.macWindowAtStartIfAsked(ctx, run.ID, true) }
+}
+
+// macWindowAtStartWhen says when an at-start window is asked for: now (as the run reaches RUNNING), after its prep
+// (an interactive macOS VM run), or never (not asked). It is never both, so the pending grant is spent once.
+func macWindowAtStartWhen(kind types.MachineKind, interactive, asked bool) (now, afterPrep bool) {
+	if !asked {
+		return false, false
+	}
+	if interactive && kind.IsMacOSVM() {
+		return false, true
+	}
+	return true, false
 }
 
 // macWindowAtStart is the launch trigger: the run was created with desktop_window at_start and has just come

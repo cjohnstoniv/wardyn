@@ -369,3 +369,27 @@ func TestSweepRunWatchers_FailsAnInterruptedMacOSPrep(t *testing.T) {
 		})
 	}
 }
+
+// An at-start window is asked for exactly once when asked: after the prep on an interactive macOS VM run, at
+// RUNNING on any other run, and never when not asked.
+func TestMacWindowAtStartWhen(t *testing.T) {
+	for _, tc := range []struct {
+		kind                   types.MachineKind
+		interactive, asked     bool
+		wantNow, wantAfterPrep bool
+	}{
+		{types.MachineMacOSVM, true, true, false, true},
+		{types.MachineMacOSVM, false, true, true, false},
+		{types.MachineContainer, true, true, true, false},
+		{types.MachineContainer, false, true, true, false},
+		{types.MachineMacOSVM, true, false, false, false},
+		{types.MachineMacOSVM, false, false, false, false},
+		{types.MachineContainer, true, false, false, false},
+	} {
+		now, after := macWindowAtStartWhen(tc.kind, tc.interactive, tc.asked)
+		if now != tc.wantNow || after != tc.wantAfterPrep {
+			t.Errorf("kind %q interactive %v asked %v: now %v after prep %v, want %v %v",
+				tc.kind, tc.interactive, tc.asked, now, after, tc.wantNow, tc.wantAfterPrep)
+		}
+	}
+}
