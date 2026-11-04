@@ -16,16 +16,18 @@
 // are the field names themselves (wire keys, rendered mono) and On/Off.
 import * as React from "react";
 import type { CeilingOverlay, GovernanceLimits, GovernanceUnit } from "../../../lib/api/governance";
-import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
+import { ALLOWED_MODELS, BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
 import type { ConfinementClass } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { CC_META } from "../../wardyn/cc-meta";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
+import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
+import { ALLOWED_MODELS_KEY, ModelHintText, ModelReadsNote, NarrowEmptyError, ProviderModelStrip } from "./allowed-models";
 import { limitChips, limitsBoundNothing } from "./limit-chips";
 
 // ---- the base graph -------------------------------------------------------
@@ -163,8 +165,11 @@ export const LIMIT_FIELDS: Field[] = [
   // as the ceiling rows do. The autonomy rubric has its own section.
   { key: "deny_ui_apps", kind: "true", label: LIMITS_CHIP.UI_APPS, mono: false },
   { key: "deny_background_desktop_watch", kind: "true", label: BACKGROUND_WATCH_DOOR.LABEL, mono: false, hint: BACKGROUND_WATCH_DOOR.HINT },
+  { key: "deny_kept_machines", kind: "true", label: KEEP_POLICY.LABEL, mono: false, hint: KEEP_POLICY.HINT },
   ceilingField("deny_placements", "list"),
   { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
+  // The hint under this row is chosen by what the base lists (modelsHint), so it carries none here.
+  { key: ALLOWED_MODELS_KEY, kind: "list", label: ALLOWED_MODELS.LABEL, mono: false },
   ceilingField("local_self_defined_components", "false"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
@@ -198,6 +203,10 @@ export function seedOverlayLimits(limits: GovernanceLimits): Bag {
   return out;
 }
 
+// The models row's sentence: edit down from a list the base holds, or choose a list where it limits none.
+const modelsHint = (inherited: unknown): string =>
+  Array.isArray(inherited) && inherited.length > 0 ? ALLOWED_MODELS.NARROW_HINT : ALLOWED_MODELS.NARROW_HINT_OPEN;
+
 const onOff = (v: unknown) => (v ? "On" : "Off");
 
 // The inherited value as the row prints it after "Inherited:".
@@ -210,7 +219,8 @@ function shown(kind: Kind, v: unknown): string {
 
 // What a row holds the moment Narrow is switched on: the inherited value for a
 // list, number or barrier (so the admin edits down from it), and the narrowing
-// direction for a boolean. Methods fall back to GET, since an empty list is refused.
+// direction for a boolean. Methods fall back to GET, since an empty list is refused. A models list
+// opens empty where the base lists none; the editor never sends that empty list (see profile-editor.tsx).
 function seed(f: Field, inherited: unknown): unknown {
   switch (f.kind) {
     case "false":
@@ -267,7 +277,16 @@ export function OverlayRows({
                   {GOV.OVERLAY_INHERITED(shown(f.kind, inherited[f.key]))}
                 </p>
                 {on && <OverlayValue field={f} id={id} value={value[f.key]} disabled={disabled} onChange={(v) => set(f.key, v)} />}
-                {f.hint && <p className="mt-1 text-xs text-muted-foreground">{f.hint}</p>}
+                {f.key === ALLOWED_MODELS_KEY ? (
+                  <>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      <ModelHintText first={modelsHint(inherited[f.key])} />
+                    </p>
+                    {on && Array.isArray(value[f.key]) && (value[f.key] as unknown[]).length > 0 && <ModelReadsNote />}
+                  </>
+                ) : (
+                  f.hint && <p className="mt-1 text-xs text-muted-foreground">{f.hint}</p>
+                )}
               </div>
             </div>
           </div>
@@ -317,7 +336,26 @@ function OverlayValue({
       </div>
     );
   }
-  return <ListValue id={id} label={field.label} value={Array.isArray(value) ? (value as string[]) : []} disabled={disabled} onChange={onChange} />;
+  const list = Array.isArray(value) ? (value as string[]) : [];
+  // Narrow on with nothing listed narrows nothing, and the editor cannot save it.
+  const models = field.key === ALLOWED_MODELS_KEY;
+  const emptyId = `${id}-empty`;
+  return (
+    <>
+      <ListValue
+        id={id}
+        label={field.label}
+        value={list}
+        disabled={disabled}
+        onChange={onChange}
+        placeholder={models ? ALLOWED_MODELS.PLACEHOLDER : undefined}
+        invalid={models && list.length === 0}
+        describedBy={models && list.length === 0 ? emptyId : undefined}
+      />
+      {models && list.length === 0 && <NarrowEmptyError id={emptyId} />}
+      {models && <ProviderModelStrip listed={list} disabled={disabled} onAdd={(m) => onChange([...list, m])} />}
+    </>
+  );
 }
 
 // One entry per line. The text is kept locally so a blank line being typed is
@@ -328,30 +366,42 @@ function ListValue({
   value,
   disabled,
   onChange,
+  placeholder,
+  invalid,
+  describedBy,
 }: {
   id: string;
   label: string;
   value: string[];
   disabled: boolean;
   onChange: (v: string[]) => void;
+  placeholder?: string;
+  invalid?: boolean;
+  describedBy?: string;
 }) {
   const [text, setText] = React.useState(value.join("\n"));
+  // A name added from outside the box (the models row's helper strip) arrives as a new value; what was typed
+  // already parses to the value it sent, so only an outside change rewrites the text.
+  const lines = (t: string) =>
+    t
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+  if (lines(text).join("\n") !== value.join("\n")) setText(value.join("\n"));
   return (
     <textarea
       id={`${id}-value`}
       aria-label={label}
       rows={Math.min(6, Math.max(2, text.split("\n").length))}
-      className="mt-2 w-full max-w-[28rem] rounded-md border border-border bg-input-background px-3 py-2 font-mono text-xs"
+      className={`mt-2 w-full max-w-[28rem] rounded-md border bg-input-background px-3 py-2 font-mono text-xs ${invalid ? "border-danger" : "border-border"}`}
+      placeholder={placeholder}
+      aria-invalid={invalid || undefined}
+      aria-describedby={describedBy}
       disabled={disabled}
       value={text}
       onChange={(e) => {
         setText(e.target.value);
-        onChange(
-          e.target.value
-            .split("\n")
-            .map((l) => l.trim())
-            .filter(Boolean),
-        );
+        onChange(lines(e.target.value));
       }}
     />
   );

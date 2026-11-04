@@ -6,6 +6,7 @@
 // Review: the whole run with where each value came from, the true notices, one
 // ordered blocker list, and Launch only on a current, fresh, clean check.
 
+import { useKeptMachines } from "../steps/run/kept-machines-provider";
 import * as React from "react";
 import { Check, CircleAlert, MoreHorizontal } from "lucide-react";
 import { Button } from "../../../ui/button";
@@ -31,6 +32,7 @@ import { isServer } from "../lenses/apps-lens";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
 import { combinationReason, loadRoster } from "../steps/harnesses/roster";
 import { macOSMinimumSentence, useMacOSOffer } from "../steps/run/macos-offer";
+import { useClearRefusedWindow } from "../steps/run/window-choice";
 import { useDriveCatalogue } from "../steps/files/file-sources";
 import { templateSource } from "../steps/shape/shape-sources";
 import { useLoaded } from "../steps/shape/use-loaded";
@@ -39,6 +41,11 @@ import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
 import { localMcpConflicts, useHarnessNames } from "../steps/tools/local-mcp";
 import { WallsApplyLine } from "../steps/tools/totals";
+import { chosenPreset, presetUnavailable } from "../steps/tools/wall-preset-picker";
+import { rememberedPreset, useWallPresets } from "../steps/tools/use-wall-presets";
+import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
+import { audienceOf } from "../../../../lib/wall-preset-words";
+import { WallPresetLine } from "./wall-preset-line";
 import { AddTokenDialog, DISABLED_FILL } from "../steps/tools/setup-needed";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { useWallsSpec } from "./use-walls-spec";
@@ -116,17 +123,30 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     autoCheck: AUTO_CHECK,
     doorOpen: false,
     adoDoorOpen: false,
+    recheckOnExpiry: true,
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
+  // A refused window on the Mac is cleared here too (a level raised on Access refuses it), and the draft is checked again.
+  useClearRefusedWindow({ field: checks.preflightField, text: checks.preflightError });
   const template = useTemplateNeeds(draft.origin, draft.intent);
   const harnessNames = useHarnessNames();
   const gateway = useUIGateway();
   // One read of the person's walls for the Access group and the policy card, so their host counts always agree.
   const walls = useWallsSpec();
+  // The wall preset chosen on the Tools step; Open says nothing. One no longer available stays chosen, as an error.
+  const presets = useWallPresets();
+  const presetId = draft.intent.wall_preset;
+  const chosen = chosenPreset(presets, presetId);
+  const memory = rememberedPreset(presetId ?? "");
+  const gone = draft.guided.wallPresetGone;
+  const presetGone = presetUnavailable(presets, presetId, gone);
+  const presetName = chosen?.name ?? (gone && gone.id === presetId ? gone.name : memory?.name) ?? "";
+  const presetAudience = chosen && presets ? audienceOf(chosen, presets.publish.group_labels) : (memory?.audience ?? "");
   // Harnesses no declared image carries together: the Harnesses step refuses them, and a draft that got here another way is held too.
   const roster = useLoaded(loadRoster);
   const ids = harnessIds(draft.intent);
   const macOSOffer = useMacOSOffer();
+  const keptRead = useKeptMachines();
   const combination = roster.status === "ready" ? combinationReason(roster.value, ids, ids[0]) : undefined;
 
   const gate = (blockers: number) =>
@@ -141,6 +161,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     unsupported: wire.unsupported,
     combination,
     macOSMinimum: macOSMinimumSentence(draft.intent, macOSOffer),
+    keptReadFailed: !!draft.intent.machine && keptRead.status === "failed",
     templateNeeds: template.needs,
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
@@ -149,10 +170,15 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     setupItems: missingSetup(pre ?? (checks.preflightRefusal && { setup_items: checks.preflightRefusal.setupItems }), checks.preview.result),
     localMcp: localMcpConflicts(pre?.access ?? checks.preview.result?.access, draft.intent),
     harnessLabel: (id: string) => harnessNames.get(id) ?? id,
+    wallPreset: presetId && presetId !== "open" ? { name: presetName, unavailable: presetGone } : undefined,
   };
-  const blockers = buildBlockers({ ...inputs, stale: !gate(0) });
+  // An answer the server gave for this draft that is now over a minute old, as against no answer yet.
+  const expired = checks.preflightRead !== null && checks.preflightRead.generation === checks.generation && !gate(0);
+  const blockers = buildBlockers({ ...inputs, stale: !gate(0), expired });
   const hard = blockers.filter((b) => b.kind !== "stale");
   const open = gate(hard.length);
+  // Only age holds Launch: pressing it asks the server again instead of doing nothing.
+  const recheckOnLaunch = !open && !hard.length && !issues.length && expired && !checks.preflighting;
 
   const asked = React.useRef(false);
   const wasOpen = React.useRef(false);
@@ -193,7 +219,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       eyebrow={NR_REVIEW.EYEBROW}
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
-      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false, className: cn(DISABLED_FILL, "max-sm:order-3 max-sm:col-span-2 max-sm:h-11") }}
+      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => (open ? onLaunch?.() : checkAgain()), disabled: !open && !recheckOnLaunch, describedBy: BLOCKERS_ID, arrow: false, className: cn(DISABLED_FILL, "max-sm:order-3 max-sm:col-span-2 max-sm:h-11") }}
       phoneBar
       headingAside={
         <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
@@ -226,8 +252,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
         ),
       }}
     >
-      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} warningContext={pre?.warning_context} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} wallsLeftOut={wallsLeftOut} />
-      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} />
+      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} warningContext={pre?.warning_context} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} wallsLeftOut={wallsLeftOut} ungoverned={checks.preview.result?.ungoverned} />
+      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} checking={checks.preflighting} />
       {addingSecret && (
         <AddTokenDialog
           item={addingSecret}
@@ -236,6 +262,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
           onSaved={() => { announce(NR_TOOLS.TOKEN_SAVED); setAddingSecret(null); checkAgain(); }}
         />
       )}
+      {view === "pretty" && presetId && presetId !== "open" && (presetGone || chosen) && <WallPresetLine name={presetName} audience={presetAudience} unavailable={presetGone} go={go} />}
       {view === "pretty" && <WallsApplyLine walls={walls} />}
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
@@ -257,7 +284,11 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               <LimitsGroup {...group} docRows={docRows.limits} />
             </BlockedGroups.Provider>
           </StepSection>
-          <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} walls={walls} />
+          {presetGone ? (
+            <p className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">{WALL_PRESETS.PREVIEW_PENDING}</p>
+          ) : (
+            <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} walls={walls} />
+          )}
         </div>
       ) : (
         <RawView intent={draft.intent} format={view} go={go} />

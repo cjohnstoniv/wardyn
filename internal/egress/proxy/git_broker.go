@@ -143,6 +143,9 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
 	}
+	if p.refuseWithheldPush(w, r, githubHost, rest, func(src string) { p.emitGitDecision(r, egress.Deny, src) }) {
+		return
+	}
 
 	// Push confinement (ON by default; =false opts out). A receive-pack POST
 	// carries its ref updates in a small pkt-line command section AHEAD of the

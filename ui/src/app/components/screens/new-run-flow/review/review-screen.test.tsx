@@ -200,7 +200,6 @@ describe("Review: a draft that keeps its work folder at the drive limit (#1991)"
 describe("Review Launch gate (U11)", () => {
   it.each([
     ["no answer yet", answered(null)],
-    ["an answer older than a minute", answered(SCENARIO_PREFLIGHT.member, PREFLIGHT_FRESH_MS + 1)],
     ["an answer for another body", { ...answered(SCENARIO_PREFLIGHT.member), generation: GENERATION + 1 }],
     ["a fresh answer beside a missing setup item", answered(SCENARIO_PREFLIGHT.app)],
   ])("%s keeps Launch shut, described by the blocker list, and Ctrl+Enter does nothing", async (_case, state) => {
@@ -498,11 +497,11 @@ describe("Review blockers", () => {
     expect(new Set(Array.from(document.querySelectorAll("[data-review-group]")).map((g) => g.parentElement)).size).toBe(1);
   });
 
-  it("says the setup changed, with Check again, when the only thing wrong is a stale result", async () => {
+  it("says the check is over a minute old, with Check again, when the only thing wrong is a stale result", async () => {
     checks.current = answered(SCENARIO_PREFLIGHT.member, PREFLIGHT_FRESH_MS + 1);
     open(AGENT);
     await ready();
-    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_STALE);
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_EXPIRED);
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_ONE);
     // #3043: nothing specific is to blame, so the chip and the card are amber, every group keeps its tick.
     expect(screen.getByText("Check needed")).toBeInTheDocument();

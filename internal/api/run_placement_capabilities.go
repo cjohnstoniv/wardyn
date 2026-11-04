@@ -280,7 +280,7 @@ const macOSVMOnRemote = "macOS VMs run only on a registered runner that offers t
 
 // linuxVMAgentStart is the refusal of interactive_start: agent on a Linux VM, whose terminal is a
 // plain shell in this release (no shared session to open in the agent CLI or to take over).
-const linuxVMAgentStart = "A Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release: set interactive_start to shell"
+const linuxVMAgentStart = "A Linux VM's terminal opens a shell, not the agent, in this release. Turn off \"Start the run in this harness\", or send interactive_start: \"shell\" in the API."
 
 // runnerCaps is the runner's own last caps event, which remote.Substrate keeps.
 type runnerCaps interface {
@@ -348,7 +348,10 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
 	}
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
-		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "interactive_start"}, linuxVMAgentStart)
+	}
+	if f := macOSVMRunShapeRefusal(req, demands); f != nil {
+		return f
 	}
 	if demands.LinuxVM && ask.KeepsWorkFolder {
 		// A kept work folder is a Docker or cluster volume, which a Linux VM can never open (it takes only a drive bound to its
@@ -365,10 +368,11 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		if baseLimit, err = s.macOSBaseLimitOf(ctx); err != nil {
 			return runServerError("read macOS VM capability", err)
 		}
-		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil {
+		// A resume names no base: its machine's own is checked by stepKeptMachine, never the Mac's current one.
+		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil && !keptResume(req) {
 			return f
 		}
-		baseLimit.Base = req.MacOSBase
+		baseLimit.Base, baseLimit.Kept = req.MacOSBase, keptResume(req)
 	}
 	for _, id := range runners {
 		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
@@ -390,6 +394,21 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 			// The field travels in errorBody.Field, so the sentence is the detail alone.
 			return placementRunRefusal(ref, ref.Detail)
 		}
+	}
+	return nil
+}
+
+// macOSVMRunShapeRefusal is the refusal of a macOS VM run shape the runner cannot honour, whichever Mac
+// it lands on: a terminal that opens the agent CLI (the runner's own sentence) and a profile that pauses
+// idle runs (a macOS VM has no pause; the runner's Freeze answers runner.ErrFreezeUnsupported).
+func macOSVMRunShapeRefusal(req createRunRequest, demands placementDemands) *runRefusal {
+	switch {
+	case !demands.MacOSVM:
+		return nil
+	case requestIsInteractive(req) && req.InteractiveStart == "agent":
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "interactive_start"}, runner.MacVMAgentStart)
+	case demands.IdlePause:
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "pause_idle_after_sec"}, runner.MacVMNoIdlePause)
 	}
 	return nil
 }
@@ -476,6 +495,9 @@ type macOSBaseLimit struct {
 	Now     time.Time
 	// Base is the base the run picked (CreateRunRequest.MacOSBase), whose age is the one read; "" is Standard.
 	Base string
+	// Kept: the run resumes a kept machine, which boots its own disk, so the Mac's current base (its state,
+	// name, age, harnesses and minimum size) is not what it runs; the runner checks the machine's own.
+	Kept bool
 }
 
 // macOSBaseLimitOf is the organisation's maximum base age now, none when the site config sets none.
@@ -556,18 +578,19 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	base, harnesses, known := macOSChosenBase(mc, limit)
 	out.Harnesses = harnesses
 	ageRefusal, days := macOSBaseRefusal(name, base, limit)
+	kept := len(limit) > 0 && limit[0].Kept // a resumed machine boots its own disk, whatever the Mac's base is now
 	switch {
-	case mc.Base.State == runnerwire.MacVMBasePreparing:
+	case !kept && mc.Base.State == runnerwire.MacVMBasePreparing:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", fmt.Sprintf("%s is still preparing macOS (%d%%).", name, mc.Base.Progress)), client.MacOSVMWhyPreparing
-	case mc.Base.State != runnerwire.MacVMBaseReady:
+	case !kept && mc.Base.State != runnerwire.MacVMBaseReady:
 		detail := name + " has no macOS base image ready yet."
 		if mc.Base.Error != "" {
 			detail = fmt.Sprintf("%s has no macOS base image ready yet: %s.", name, mc.Base.Error)
 		}
 		out.Refusal, out.Why = macOSRefusal("machine_kind", detail), client.MacOSVMWhyNoBase
-	case !known:
+	case !kept && !known:
 		out.Refusal, out.Why = macOSBaseNotFound(limit[0].Base), client.MacOSVMWhyNoBase
-	case ageRefusal != nil:
+	case !kept && ageRefusal != nil:
 		out.Refusal, out.Why, out.Have, out.Need = ageRefusal, client.MacOSVMWhyBaseTooOld, days, limit[0].MaxDays
 	case live >= mc.Max && mc.Max >= 2:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", name+" already runs 2 macOS VMs, the most Apple's licence allows."), client.MacOSVMWhyAtLimit
@@ -672,6 +695,10 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 	}
 	fit := *caps.MacOSVM
 	fit.Harnesses = offer.Harnesses // the picked base's
+	// The runner checks a resumed machine's harnesses and size against its own disk.
+	if limit.Kept {
+		ask.Harnesses, ask.CPUMillis, ask.MemoryMiB = nil, 0, 0
+	}
 	return macOSVMFit(&fit, rn, ask, pool), nil
 }
 

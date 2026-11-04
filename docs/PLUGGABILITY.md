@@ -139,9 +139,10 @@
 - **Before you set it up.**
   - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
   - The gateway sees `wardyn-proxy` as its caller. Unless a provider opts in, Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
-  - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. Both are experimental until 0.11. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) are on the setup page.
+  - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. Both are experimental until 0.11. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
+  - A Bedrock key provider opts in with its gateway in `bedrock.base_url`. A Bedrock SSO provider cannot.
   - Without it, a per-person limit can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key. With it, a rule can key on the token's `sub`, `wardyn_run` and `wardyn_runner`.
-  - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern.
+  - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern. Prompt checks can be left to a provider's gateway, except the run's own secret values: see [Who inspects](operations/ai-gateway.md#who-inspects).
 - **When it is worth it.**
   - It pays off when an organisation already sends all model and MCP traffic through one gateway.
   - For a single team, a provider's settings in Wardyn are enough.
@@ -153,8 +154,10 @@
 - It sits at the physical-sandbox layer. It takes its isolation from a RuntimeClass (gVisor, Kata).
   - A sandbox template can carry a NetworkPolicy with coarse egress rules (by default, public Internet only).
   - It has no per-domain egress decisions, and no credential, approval or audit controls.
-- Wardyn's `k8s` substrate creates its own pods, so it does not drive agent-sandbox today.
-  - A backend that does is not built. It would create the controller's objects in place of pods, keep Wardyn's NetworkPolicy, proxy and managed files on them, and pass the same conformance contract.
+- Wardyn's `k8s` substrate creates its own pods by default. An experimental switch (`k8s.agentSandbox.enabled`, off by default) makes the agent pod through a bare `Sandbox` instead.
+  - Wardyn keeps its own NetworkPolicies, proxy pod and managed files, and holds the pod behind a scheduling gate until it has read it back.
+  - Server mode only, no warm pools, templates, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - It trusts the controller with every run's pod. See [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md).
 - A cluster can run both now, each in its own namespace.
 
 ### Inner walls: narrowing an organisation's access per person, machine and run
@@ -208,6 +211,7 @@
 - `k8s` substrate ([`internal/runner/k8s`](../internal/runner/k8s), `-tags k8s`, `WARDYN_RUNNER=k8s`) — pods instead of containers, L1/NetworkPolicy-backed (not L0/structural: the boot-time egress canary refuses to construct unless the cluster's CNI actually enforces `NetworkPolicy`),
   - CC1-only until `WARDYN_CONFINEMENT_MAP`/the Helm chart's `k8s.runtimeClasses` pins CC2/CC3 to a registered RuntimeClass;
 - OCI runtime pins via `WARDYN_CONFINEMENT_MAP` (kata-qemu, kata-clh, gVisor, sysbox);
+- an experimental agent-sandbox switch inside the `k8s` substrate (off by default; [setup and limits](operations/kubernetes-agent-sandbox.md));
 - non-OCI VMM (SmolVM/Firecracker) via a new `Substrate` impl.
 
 ### Sandbox / confinement: conformance
@@ -222,6 +226,7 @@
 - shipped (registry + `init()` self-registration — the `docker` impl registers under `-tags docker`, the `k8s` impl under `-tags k8s`; runtime-pluggable + substrate sub-interface).
 - The `k8s` substrate is registered and conformance-green on kind+Calico, but is NOT the shipped out-of-box default (that stays `docker`) and is not at parity with it —
 - no BYOI/devcontainer builds, no `local_dir` mounts, no ground-truth correlator ([`docs/operations/kubernetes-known-gaps.md`](operations/kubernetes-known-gaps.md)'s "Kubernetes: known gaps").
+- The agent-sandbox switch is experimental and covered by its own CI job; it is not part of the shipped default.
 - Non-OCI VMM impl planned.
 
 ### Secret store: registered alternates

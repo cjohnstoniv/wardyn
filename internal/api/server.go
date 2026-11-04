@@ -105,11 +105,11 @@ type Config struct {
 	// person's audit-seal key through it. Nil makes the audit_personal_fields
 	// scope unavailable.
 	SubjectKeys *subjectkey.Manager
-	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
-	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
-	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
-	// sinks configured has nothing to report.
-	AuditSinkDrops func() map[string]int64
+	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for the
+	// wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit Fanout's
+	// DropsByName). Nil omits the metric: no SIEM sinks configured, nothing to report.
+	AuditSinkDrops       func() map[string]int64
+	ForgetRunCorrelation func(runIDs []uuid.UUID) // cmd/wardynd: the audit Fanout's ForgetRuns; person erasure calls it after clearing the ids. Nil with no sinks.
 	// AuditDelivery, when set, reports each acknowledged-delivery destination's
 	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
 	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
@@ -445,12 +445,12 @@ type Config struct {
 	// still be revoked (ado_run_pat_sweep.go). Nil: the revoke uses ADOEntra.
 	ADOEntraByRow func(ctx context.Context, rowID string) (ADOEntraConfig, bool, error)
 	// AzureFoundryEntra resolves the Entra application an azure_foundry provider row signs people in against,
-	// by the row's uid (azure_foundry_entra.go). It answers found=false for a uid that is not an azure_foundry
-	// row. The application is always the console's own sign-in application, so a deployment without Entra
-	// console login answers an unusable configuration and both legs refuse. Nil: no Azure sign-in is offered.
+	// by the row's uid (azure_foundry_entra.go); found=false for any other uid. It is always the console's own sign-in
+	// application, so a deployment without Entra console login answers an unusable configuration. Nil: none is offered.
 	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
 	// AzureCLIEntra is that same console application, keyed to an Azure CLI component's id (Server.azureCLIEntra).
 	AzureCLIEntra func(componentID string) ADOEntraConfig
+	EndpointOIDC  func() (EndpointOIDCEnv, bool) // the console login issuer and callback URL for an endpoint sign-in; ok=false: none
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// HostResolver is how the model-provider write boundary resolves an azure_foundry endpoint host for its
@@ -824,12 +824,12 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
-	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
+	// localAttachSubs (localAttachSubFor) and localCovered (promotionCovered) replace a local attach's substrate and corpus proof; queueRace runs at each queueRace* point (queueRaceAt). Tests only.
 	localAttachSubs func(id uuid.UUID) localAttachSub
-	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
-	localCovered func(runID uuid.UUID) bool
-	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
-	// output pause for THIS server only (tests).
+	localCovered    func(runID uuid.UUID) bool
+	queueRace       func(point string)
+	macWindowHost   // this replica's open attended windows and the tests' seams for them (run_mac_window.go)
+	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed output pause for THIS server only (tests).
 	pauseLimit time.Duration
 	// attachPrepare overrides attachPrepareTimeout for THIS server only (tests):
 	// the bound on one Runner.Attach.

@@ -301,7 +301,7 @@ describe("erasing someone not listed (design F-5)", () => {
     eraseMock.mockResolvedValue({ count: 1 });
     renderScreen({ securityOperator: false });
     await openMenuItem(INVENTORY.ERASE_MENU_CREDS);
-    const confirmBtn = screen.getByRole("button", { name: ERASE_DATA.CONFIRM });
+    const confirmBtn = screen.getByRole("button", { name: ERASE.CONFIRM });
     expect(confirmBtn).toBeDisabled();
     await userEvent.type(screen.getByLabelText(ERASE.FIELD), "eli@example.com");
     expect(confirmBtn).toBeEnabled();
@@ -319,9 +319,9 @@ describe("erasing someone not listed (design F-5)", () => {
     renderScreen({ securityOperator: false });
     await openMenuItem(INVENTORY.ERASE_MENU_CREDS);
     await userEvent.type(screen.getByLabelText(ERASE.FIELD), "former@example.com");
-    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
     expect(await screen.findByRole("alert")).toHaveTextContent(msg);
-    expect(screen.getByRole("button", { name: ERASE_DATA.CONFIRM })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ERASE.CONFIRM })).toBeInTheDocument();
   });
 });
 
@@ -442,7 +442,7 @@ describe("one erase dialog (#3054)", () => {
     expect(box(dialog, "Credentials")).toBeChecked();
     expect(within(dialog).getByText(ERASE.HINT)).toBeInTheDocument();
     await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "nobody.listed@corp.example");
-    await userEvent.click(within(dialog).getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    await userEvent.click(within(dialog).getByRole("button", { name: ERASE.CONFIRM }));
     expect(eraseMock).toHaveBeenCalledWith("nobody.listed@corp.example");
     expect(erasePersonMock).not.toHaveBeenCalled();
   });

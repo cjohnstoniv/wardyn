@@ -317,7 +317,7 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
     expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
     expect(screen.queryByText("Attach from your terminal")).not.toBeInTheDocument();
     // Kill stays.
-    expect(screen.getByRole("button", { name: /^Kill/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^End run/ })).toBeEnabled();
   });
 
   // #1888: the link leads to a recording, so it is offered unless /healthz says
@@ -527,6 +527,45 @@ describe("RunDetailScreen — the recording tab's session-picker copy", () => {
 
     expect(await screen.findByText("No recording available")).toBeInTheDocument();
     expect(screen.queryByText("No recording for this session")).not.toBeInTheDocument();
+  });
+});
+
+// A macOS VM run stores nothing under its own key: its Recording tab opens on its newest agent output cast, and a
+// declined cast's failure row reads as a failure with its reason in the Audit tab.
+describe("RunDetailScreen — a macOS VM run's recording tab", () => {
+  const row = (id: string, target: string, session: string, mins: number, extra: Record<string, unknown> = {}) => ({
+    id, time: new Date(Date.parse(aheadByHours(-3)) + mins * 60_000).toISOString(), actor_type: "system", actor: "wardynd",
+    action: "session.recording.write", target, outcome: "success", data: { session }, ...extra,
+  });
+  const MAC = { ...RUN, state: "COMPLETED", machine_kind: "macos_vm", recording_level: "terminal" };
+
+  it("opens on the newest agent cast, not on an empty own key, and lists no Agent session entry", async () => {
+    listAuditMock.mockResolvedValue([
+      row("a", "run-1~agent", "agent", 0),
+      row("t", "run-1~console-1", "console-1", 9, { actor: "maya", actor_type: "human" }),
+      row("r", "run-1~agent-recovered", "agent-recovered", 4),
+      row("f", "run-1~agent", "agent", 7, { outcome: "failure", data: { session: "agent", reason: "save_failed" } }),
+    ]);
+    getRecordingMock.mockResolvedValue(null);
+    renderRun(MAC);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await waitFor(() => expect(getRecordingMock).toHaveBeenLastCalledWith("run-1", "run-1~agent-recovered"));
+    const picker = screen.getByRole("combobox", { name: "Recorded session" });
+    expect(picker).toHaveTextContent(/^Agent output, re-read after a restart · ended /);
+    await user.click(picker);
+    expect(screen.queryByRole("option", { name: "Agent session" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+  });
+
+  it("a Linux VM run still opens on its own key", async () => {
+    listAuditMock.mockResolvedValue([row("a", "run-1~console-1", "console-1", 0, { actor: "maya" })]);
+    getRecordingMock.mockResolvedValue(null);
+    renderRun({ ...MAC, machine_kind: "linux_vm" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await waitFor(() => expect(getRecordingMock).toHaveBeenCalledWith("run-1", "run-1"));
+    expect(getRecordingMock).not.toHaveBeenCalledWith("run-1", "run-1~console-1");
   });
 });
 

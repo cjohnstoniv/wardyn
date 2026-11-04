@@ -277,6 +277,24 @@ func TestMeetPushRules(t *testing.T) {
 			t.Errorf("push_rules = %+v", p)
 		}
 	})
+	t.Run("deny_all is OR'd and never a widening", func(t *testing.T) {
+		on, off := Authority{Ceiling: types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyAll: true}}}, Authority{}
+		for name, c := range map[string]struct {
+			base Authority
+			o    *bool
+			want bool
+		}{
+			"an overlay adds it":         {off, ptr(true), true},
+			"false keeps the base's":     {on, ptr(false), true},
+			"unset keeps the base's":     {on, nil, true},
+			"false under none adds none": {off, ptr(false), false},
+		} {
+			got := mustApply(t, c.base, overlayOf(types.CeilingOverlay{PushRules: &types.PushRulesOverlay{DenyAll: c.o}}))
+			if p := got.Ceiling.PushRules; (p != nil && p.DenyAll) != c.want {
+				t.Errorf("%s: push_rules = %+v, want deny_all %v", name, p, c.want)
+			}
+		}
+	})
 	t.Run("a looser file cap is not taken", func(t *testing.T) {
 		base := Authority{Ceiling: types.RunPolicySpec{PushRules: &types.PushRulesSpec{MaxFileSizeMiB: 10}}}
 		got := mustApply(t, base, overlayOf(types.CeilingOverlay{PushRules: &types.PushRulesOverlay{MaxFileSizeMiB: ptr(0)}}))

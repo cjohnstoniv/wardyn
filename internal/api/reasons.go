@@ -146,6 +146,7 @@ const (
 	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included), or two repositories clone into one directory
 	reasonWorkspacePinConflict    = "workspace_pin_conflict"     // the attached workspaces pin two different model providers
 	reasonImageConflict           = "image_conflict"             // the attached workspaces use two different base images: a refusal about the run's image, not a workspace field
+	reasonImageDigestRequired     = "image_digest_required"      // images.require_digest is on and a member's image is not pinned by digest (image@sha256:<digest>)
 	reasonAllowedImageInvalid     = "allowed_image_invalid"      // allowed_image is malformed, or is combined with image or devcontainer_repo
 	reasonWorkspaceADOOrgConflict = "workspace_ado_org_conflict" // the attached workspaces use two Azure DevOps organisations
 	reasonResourcesInvalid        = "resources_invalid"          // resources carries a negative or absurd CPU or memory value
@@ -247,6 +248,25 @@ const (
 	reasonRunBackgroundWatchControl       = "run_background_watch_control"        // the run's Mac offers desktop control, which a watch does not open
 	reasonRunBackgroundWatchPaused        = "run_background_watch_paused"         // the run is paused, and a watch never wakes it
 
+	// An attended window onto a macOS VM run (run_mac_window.go). A profile's deny_ui_apps or deny_interactive
+	// answers as governance_unit, and an agent whose desktop sign-ins are Not allowed as desktop_sign_ins_off.
+	reasonMacWindowSiteOff        = "mac_window_site_off"        // macos_vm.allow_attended_window is not true: no window on this install
+	reasonMacWindowNotMacOSVM     = "mac_window_not_macos_vm"    // the run is not a macOS VM run
+	reasonMacWindowNotYourMac     = "mac_window_not_your_mac"    // the run is not on a Mac whose runner the caller registered
+	reasonMacWindowUnrecorded     = "mac_window_unrecorded"      // the run's recording level is Screen and actions, and a window on the Mac isn't recorded
+	reasonMacWindowOffline        = "mac_window_offline"         // the run's runner is not connected
+	reasonMacWindowRunnerTooOld   = "mac_window_runner_too_old"  // the runner's caps say it can't open a window
+	reasonMacWindowDesktopControl = "mac_window_desktop_control" // a browser desktop that had control of the run did not close in time: one keyboard at a time
+	reasonMacWindowPaused         = "mac_window_paused"          // the run is paused
+	reasonMacWindowPreparing      = "mac_window_preparing"       // the run is still being prepared
+	reasonMacWindowNotHere        = "mac_window_not_here"        // the runner is connected through another server, and nothing routes the call there
+	reasonMacWindowOpen           = "mac_window_open"            // the run already has a window open
+	reasonMacWindowNotAtMac       = "mac_window_not_at_mac"      // the person isn't signed in at the Mac's screen, or it is locked
+	reasonMacWindowLockUnknown    = "mac_window_lock_unknown"    // the Mac can't tell whether its screen is locked, so the window fails closed
+	reasonMacWindowRevoked        = "mac_window_revoked"         // the caller's session was cut off
+	reasonMacWindowFailed         = "mac_window_failed"          // the runner could not open the window
+	reasonDesktopWindowInvalid    = "desktop_window_invalid"     // desktop_window is not "at_start", or is on a run that is not a macOS VM
+
 	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
 	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
 	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
@@ -343,6 +363,18 @@ const (
 	reasonWallsNeedPerson   = "walls_need_person"   // the caller is no signed-in person (the admin token, local mode, a service identity)
 	reasonWallsUnavailable  = "walls_unavailable"   // the store keeps no personal settings (not the Postgres store)
 	reasonPersonalWallsHost = "personal_walls_host" // an egress approval would admit a host the run owner's walls deny
+
+	// /wall-presets (wall_presets.go), a run's wall_preset at launch, and the preset's refusals at an approval.
+	reasonWallPresetInvalid         = "wall_preset_invalid"          // 422: a preset that names a wider value or no limit, or a launch whose frozen copy no longer validates
+	reasonWallPresetScopeForbidden  = "wall_preset_scope_forbidden"  // 403: a write to the organisation or a group the caller may not save to
+	reasonWallPresetBuiltin         = "wall_preset_builtin"          // 403: an edit or delete of Open, Read-only or Sealed
+	reasonWallPresetHost            = "wall_preset_host"             // 403: an egress approval would admit a host the run's wall preset denies
+	reasonWallPresetNotFound        = "wall_preset_not_found"        // 404: no such preset, or the caller may not see it
+	reasonWallPresetNameTaken       = "wall_preset_name_taken"       // 409: another preset of the same audience, or a built-in, uses the name (case-insensitive)
+	reasonWallPresetVersionConflict = "wall_preset_version_conflict" // 409: the preset changed since the version the caller read
+	reasonWallPresetLimitReached    = "wall_preset_limit_reached"    // 409: the audience already holds the most presets it may
+	reasonWallPresetUnknown         = "wall_preset_unknown"          // 422: a launch names a preset that does not exist or the caller may not see
+	reasonWallPresetsUnavailable    = "wall_presets_unavailable"     // 501: the store keeps no wall presets (not the Postgres store)
 
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
@@ -612,6 +644,8 @@ const (
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
 	reasonGitPATBrokerOffResident        = "git_pat_broker_off_resident"        // the PAT broker is off, and a member's run (or any, under WARDYN_GIT_PAT_BROKER_OFF_REFUSED) may not hold the PAT
+	reasonPushDenyAllResidentPAT         = "push_deny_all_resident_pat"         // the run refuses every push, and the broker-off lane would put a git PAT in the sandbox
+	reasonPushDenyAllSSHKey              = "push_deny_all_ssh_key"              // the run refuses every push, and an ssh_key would let it push over SSH, which no broker sees
 )
 
 // Run templates (template_document.go, template_refusals.go): the refusals of
@@ -675,6 +709,11 @@ const reasonSignInRequired = "sign_in_required"
 // (writeHostCapacityRefusal): a wait, not a fault, so it is a 503 with a Retry-After.
 const reasonHostCapacityRefused = "host_capacity_refused"
 
+// A run held to the allowed-models list whose chosen model provider's calls the run's proxy could not
+// check (stepAllowedModelsChecked, run_allowed_models.go), refused at every door before it starts, and
+// the run failed at dispatch for the same lane.
+const reasonAllowedModelsUnchecked = "allowed_models_unchecked"
+
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
 const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"
@@ -709,6 +748,11 @@ const reasonAttachLocalUnavailable = "attach_local_unavailable"
 // PATCH /runs/{id}/title (run_title.go).
 const (
 	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
+)
+
+// POST /runs correlation_id (run_correlation_id.go).
+const (
+	reasonCorrelationIDInvalid = "correlation_id_invalid" // correlation_id is over 128 characters or holds anything but ASCII letters, digits and . _ : / -
 )
 
 // GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,

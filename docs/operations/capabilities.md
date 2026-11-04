@@ -18,7 +18,7 @@ the ADMIN pre-authorized.
 | `egress_host` | host (`:port` dropped) or `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, [`internal/api/approvals.go`](../../internal/api/approvals.go)), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, [`internal/api/inline_policy_bounds.go`](../../internal/api/inline_policy_bounds.go)) |
 | `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, [`internal/api/secrets.go`](../../internal/api/secrets.go)) |
 | `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../../internal/api/runs_create_validate.go)) |
-| `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
+| `image` | exact image ref, or a registry prefix `host/path/*` | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) below |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) below |
@@ -58,7 +58,24 @@ the ADMIN pre-authorized.
 - **The widening kind reads the same rows the other way.**
 - For `image` (`capGranted`) an unenforced kind is *refused*, not permitted, because 0.5 refused it too.
 - Both directions obey "an upgrade with no configuration changes nothing".
-- So `image` needs *both* the switch on and an exact-ref grant; the other nine need only the absence of a deny until you enforce them (a value an admin restricted, as a new organisation component is, also needs an allow row naming it).
+- So `image` needs *both* the switch on and an exact-ref grant or a registry-prefix grant (or `*`); the other nine need only the absence of a deny until you enforce them (a value an admin restricted, as a new organisation component is, also needs an allow row naming it).
+- **An `image` grant may be a registry prefix**, such as `registry.example.com/team/*`: a prefix of the reference as typed.
+- It matches `registry.example.com/team/app:1`, `…/app@sha256:…` and `…/sub/app:1`, but not `registry.example.com/team`, `…/teamx/app` or `…/Team/app`. Whole path segments, case-sensitive, nothing normalised: `docker.io/library/*` does not cover `nginx:1`.
+- It must start with a registry host and end in one `/*`, with no tag, digest, uppercase letter, `..` segment or other `*`; anything else is refused `400`. A stored row that breaks these rules matches nothing.
+- A deny prefix overlaps every ref it matches and every prefix above or below it.
+- A deny covers other spellings of the same registry and image (capitals in the host, `:443`, Docker Hub short names such as `nginx`); an allow covers only the spelling written.
+- "Available to" stays exact: a prefix never opens a restricted image, or another tag or digest of its repository, only an allow naming it does.
+- A prefix over mutable tags is weaker than an exact digest ref.
+- **Digest rule (`images.require_digest`, off by default).** With it on, a member's image must be pinned by digest, `image@sha256:<digest>` (a tag beside the digest is fine).
+  - It sits on top of the grants, not instead of them: a prefix grant or an exact grant on a tag ref still needs the run to name the digest form, and `*` does not lift it.
+  - It applies to the image a member names (`image`) and to the base image of a workspace the run attaches or its policy carries, whoever owns the workspace. A run that names no image keeps the agent's convention image, which an operator sets.
+  - A refused run answers `403` with reason `image_digest_required` and a sentence that names the setting and shows the form.
+  - **Operators are not bound by it**, as for other governance. While it is on, an operator's run.create audit row carries `image_digest_exempt: true` when its image is not pinned. An SSO admin is bound when `WARDYN_GOVERN_ADMIN_RUNS` is on.
+  - It is checked when a run is created, previewed (Review), or starts after waiting in a queue, and for a service identity's run, which is a member's.
+  - Reviving or restarting a run checks it again, on the image the run's create checked and under the rule as it is then. A run whose image was not pinned, made while the rule was off or before this release, is refused until a new run starts. The run owner's authority decides: an operator's run stays exempt, marked `image_digest_exempt` on the run.revive row, and an admin reviving a member's run is bound as the member. Extending a run does not check it.
+  - Set it with `PUT /api/v1/site-config` (`"images": {"require_digest": true}`); a body that omits `images` keeps the stored value, and the change is on the `site_config.write` audit row as `images_require_digest`. There is no console control yet.
+  - It reads only the reference as typed: it does not look the image up in a registry, and it cannot verify a signature. For cluster-side enforcement, see [image admission](image-admission.md).
+  - Not run in CI against a real cluster or registry: the tests cover the control plane's decision.
 - That rule is also why `agent` narrows rather than widens:
   - launching an agent is something every member could already do,
   - so a widening kind would refuse every member run on every deployment that has not enforced it — i.e. all of them on upgrade day.

@@ -198,7 +198,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		return out, err
 	}
 	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: fits,
-		requireRecording: requireRecording}
+		requireRecording: runnerRecordingDemand(requireRecording, types.MachineKind(req.MachineKind))}
 	out.needs = map[string]types.RunnerAmounts{}
 	out.pool, out.fits = row.Pool.Name, fits
 	online := false

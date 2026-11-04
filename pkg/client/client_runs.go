@@ -40,6 +40,16 @@ func (c *Client) GetRunSyncRules(ctx context.Context, id uuid.UUID) (RunSyncRule
 	return out.Sync, err
 }
 
+// GetRunAllowedModels reads GET /runs/{id}'s allowed_models: the list the run's proxy holds it to
+// and the profile that set it, as written at dispatch; nil when no limit binds the run.
+func (c *Client) GetRunAllowedModels(ctx context.Context, id uuid.UUID) (*RunAllowedModels, error) {
+	var out struct {
+		AllowedModels *RunAllowedModels `json:"allowed_models"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+id.String(), nil, &out)
+	return out.AllowedModels, err
+}
+
 // ListRunsPage is ListRuns plus the server's X-Wardyn-Truncated signal:
 // truncated=true means a further page exists and this one is not the whole
 // list. See the package doc's "# Pagination" for why every list family answers

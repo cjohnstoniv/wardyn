@@ -533,7 +533,26 @@ func (s *Substrate) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte
 	if err := s.own(ref); err != nil {
 		return err
 	}
+	if err := s.checkRevivedModelList(cfgJSON); err != nil {
+		return err
+	}
 	return s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, nil)
+}
+
+// checkRevivedModelList refuses, before anything is sent, a revived config that limits the run's
+// models on a runner that did not advertise the list: an older runner would start the replacement
+// proxy without it, admitting every model.
+func (s *Substrate) checkRevivedModelList(cfgJSON []byte) error {
+	var head struct {
+		AllowedModels *[]string `json:"allowed_models"`
+	}
+	if err := json.Unmarshal(cfgJSON, &head); err != nil {
+		return fmt.Errorf("remote: read the revived proxy config: %w", err)
+	}
+	if c, _ := s.Caps(); head.AllowedModels != nil && !slices.Contains(c.ProxySettings, runnerwire.ProxySettingAllowedModels) {
+		return &ProxySettingError{Setting: runnerwire.ProxySettingAllowedModels}
+	}
+	return nil
 }
 
 func (s *Substrate) EnsureProxyImage(ctx context.Context) error {
@@ -569,6 +588,17 @@ func (s *Substrate) ReclaimMacDisk(ctx context.Context, mount types.DriveMount) 
 		return "", runner.ErrDriveInUse
 	}
 	return res.Outcome, nil
+}
+
+// KeptMachine asks this runner's Mac to act on a kept machine's folder (kept_machine). A runner whose
+// caps do not say it keeps machines is never asked.
+func (s *Substrate) KeptMachine(ctx context.Context, args runnerwire.KeptMachineArgs) (runnerwire.KeptMachineResult, error) {
+	var res runnerwire.KeptMachineResult
+	if c, ok := s.Caps(); !ok || c.MacOSVM == nil || !c.MacOSVM.KeptMachines {
+		return res, runnerwire.Refuse("this runner keeps no machines")
+	}
+	err := s.call(ctx, runnerwire.MethodKeptMachine, args, &res)
+	return res, err
 }
 
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the

@@ -7,13 +7,15 @@
 // server's `access` block. A host is Requested until the server has answered
 // this exact body; only then does its verdict show.
 
-import { Grid3x3 } from "lucide-react";
+import { Grid3x3, Shield } from "lucide-react";
 import { AdoLaunchNote, AdoOwnTokenNote, AdoRunTokenLine, adoLaunchNoteKind, ownTokenNoteOrgs } from "../../../../wardyn/ado-run-token-line";
 import { Switch } from "../../../../wardyn/form-primitives";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { CC_META } from "../../../../wardyn/cc-meta";
 import { NR_WALLS, YOUR_WALLS } from "../../../../wardyn/copy/personal-walls";
+import { WALL_PRESETS } from "../../../../wardyn/copy/wall-presets";
+import { FORGE_NAME, forgeLimits, readsOnly } from "../../../../../lib/wall-preset-words";
 import type { PersonalWallsSpec } from "../../../../../lib/api/walls";
 import { appURL } from "../../../../../lib/base-path";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
@@ -69,6 +71,35 @@ export function WallsApplyLine({ walls }: { walls: PersonalWallsSpec | undefined
         {/* A new tab: the draft lives in the New Run route's state, so leaving this page for Settings would drop it. */}
         <a href={appURL("/account")} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">{NR_WALLS.CHANGE_WALLS}</a>
       </span>
+    </p>
+  );
+}
+
+/**
+ * The clauses of the chosen wall preset, in the walls line's words: the sites it keeps and refuses, what an unlisted
+ * site meets, the barrier, the desktop transfers and credentials it takes out, read capabilities only, every push
+ * refused. None for a preset that names nothing (Open).
+ */
+export function wallPresetClauses(spec: PersonalWallsSpec): string[] {
+  const sites = wallsApplyClauses({ allowed_domains: spec.allowed_domains, denied_domains: spec.denied_domains });
+  const rest = wallsApplyClauses({ min_confinement_class: spec.min_confinement_class, desktop: spec.desktop, withheld_grants: spec.withheld_grants });
+  return [
+    ...sites,
+    ...(spec.first_use_approval === "always_deny" ? [WALL_PRESETS.CLAUSE_UNLISTED_REFUSED] : []),
+    ...rest,
+    ...(readsOnly(spec) ? [WALL_PRESETS.CLAUSE_READ_ONLY] : forgeLimits(spec).filter((f) => f.reads).map((f) => WALL_PRESETS.CLAUSE_FORGE_READ(FORGE_NAME[f.forge]))),
+    ...(spec.push_rules?.deny_all === true ? [WALL_PRESETS.CLAUSE_EVERY_PUSH] : []),
+  ];
+}
+
+/** One neutral line saying what the chosen wall preset narrows, above the person's own walls line (Tools step). Nothing for Open. */
+export function WallPresetApplyLine({ name, spec }: { name: string; spec: PersonalWallsSpec }) {
+  const clauses = wallPresetClauses(spec);
+  if (clauses.length === 0) return null;
+  return (
+    <p data-testid="wall-preset-apply" className="flex items-start gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
+      <Shield aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 [overflow-wrap:anywhere]">{WALL_PRESETS.PRESET_LINE(name, clauses.join(NR_WALLS.APPLY_JOIN))}</span>
     </p>
   );
 }

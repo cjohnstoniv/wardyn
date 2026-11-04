@@ -223,3 +223,62 @@ describe("useRunLayout: the default rail by kind of run", () => {
     expect(y(renderHook(() => useRunLayout("live", false, true)).result.current.layout, "effective-policy")).toBe(29);
   });
 });
+
+// The write path: the server's upsert is unconditional, so the client keeps one request per preset in flight, and a
+// failed write is remembered with its preset and exact body so Retry repeats THAT, whatever is showing by then.
+describe("useRunLayout: write ordering and retry", () => {
+  const deferred = () => {
+    let resolve!: (v: unknown) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+  const A: RunLayoutWidget[] = [{ widget: "terminal", x: 0, y: 0, w: 12, h: 12 }];
+
+  it("never has two writes for one preset in flight, and the last action is the last body stored", async () => {
+    const { result } = await loaded(SAVED, false);
+    const first = deferred();
+    putLayout.mockReturnValueOnce(first.promise);
+
+    act(() => result.current.apply(A));
+    let flushed!: Promise<unknown>;
+    act(() => void (flushed = result.current.save())); // the drag's PUT, slow
+    act(() => result.current.reset()); // the person resets while it is in flight
+    act(() => result.current.apply(SAVED)); // ...and rearranges again
+    act(() => void result.current.reset()); // ...and resets: the LAST action
+    expect(putLayout).toHaveBeenCalledTimes(1); // nothing overlaps
+
+    await act(async () => {
+      first.resolve({ preset: "live", layout: A });
+      await flushed;
+    });
+    await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
+    // Only the newest waiting body goes out after the slow one, so the stored row ends as the last action left it.
+    expect(putLayout.mock.calls.map((c) => c[1])).toEqual([A, []]);
+  });
+
+  it("Retry repeats the failed write for its own preset after the preset has switched", async () => {
+    getLayout.mockResolvedValue({ preset: "live", layout: SAVED });
+    const hook = renderHook(({ p }: { p: "live" | "finished" }) => useRunLayout(p), { initialProps: { p: "live" } });
+    await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+    const slow = deferred();
+    putLayout.mockReturnValueOnce(slow.promise);
+
+    act(() => hook.result.current.reset()); // Live reset, in flight
+    hook.rerender({ p: "finished" }); // the run finished / Finished was chosen
+    await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+    await act(async () => slow.reject(new Error("network")));
+
+    expect(hook.result.current.status).toBe("failed");
+    expect(hook.result.current.failedPreset).toBe("live");
+
+    putLayout.mockResolvedValue({ preset: "live", layout: [] });
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
+    expect(putLayout.mock.calls[1]).toEqual(["live", []]);
+    await waitFor(() => expect(hook.result.current.status).not.toBe("failed"));
+  });
+});

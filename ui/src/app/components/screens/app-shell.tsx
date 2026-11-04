@@ -264,6 +264,9 @@ const SubstrateHealthBanner = React.lazy(() =>
 const AdoSignInBanner = React.lazy(() =>
   import("../wardyn/ado-signin-banner").then((m) => ({ default: m.AdoSignInBanner })),
 );
+const OidcSignInResult = React.lazy(() =>
+  import("../wardyn/oidc-signin-result").then((m) => ({ default: m.OidcSignInResult })),
+);
 
 // #483 — the "Sign in to continue" dialog and the signed-out bar. Lazy for the
 // same entry-budget reason; the shell warms the chunk on mount, because by the
@@ -556,12 +559,15 @@ export function AppShell({
           <div className="flex h-screen flex-col bg-background text-foreground">
             {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
-            <a
-              href="#main-content"
-              className="sr-only rounded-md focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            >
-              Skip to main content
-            </a>
+            {/* Hidden in focus mode: its target is inert then, and the focus overlay is what is on screen. */}
+            {!focus && (
+              <a
+                href="#main-content"
+                className="sr-only rounded-md focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Skip to main content
+              </a>
+            )}
             {/* Measured for focus mode, so it starts above the reauth layer: that layer's z-50 bar
           must grow this box, or the overlay's offset goes stale when the bar comes and goes. */}
             <div ref={bannerStackRef} className="shrink-0">
@@ -679,6 +685,9 @@ export function AppShell({
               <React.Suspense fallback={null}>
                 <AdoSignInBanner />
               </React.Suspense>
+              <React.Suspense fallback={null}>
+                <OidcSignInResult />
+              </React.Suspense>
               {/* §4.2 (M-3): each band is passed the session's resolved view
               (useShellView, not the raw URL) so a clamped admin who types an
               /admin/* path while still in the User view — the interstitial
@@ -724,6 +733,10 @@ export function AppShell({
               <main
                 id="main-content"
                 tabIndex={-1}
+                // Focus mode paints its overlay in a portal over this region; the run header and tabs stay mounted
+                // beneath it, so they must leave the tab order and the accessibility tree while it is on. The
+                // overlay, the terminal and the banners all live outside this element and stay reachable.
+                inert={focus}
                 className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none"
               >
                 {/* Keyed by pathname so navigating away from a screen that threw

@@ -61,13 +61,14 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 	pc := runner.ProxyConfig{
 		RunToken: c.RunToken, ControlPlaneURL: c.ControlPlaneURL, ControlPlaneCAPEM: c.ControlPlaneCAPEM,
 		Policy: c.Policy, MITMCACertPEM: c.MITMCACertPEM, MITMCAKeyPEM: c.MITMCAKeyPEM,
-		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, PATGrants: c.PATGrants,
+		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, GitPushWithheld: c.GitPushWithheld, PATGrants: c.PATGrants,
 		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4, KubeAPI: c.KubeAPI,
 		UpstreamProxyURL: c.UpstreamProxyURL, TrustedCAPEM: c.TrustedCAPEM, InternalHosts: c.InternalHosts,
 		UpstreamProxyNoProxy: c.UpstreamProxyNoProxy, LLMUpstreams: c.LLMUpstreams,
 		LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels, GatewayIdentity: c.GatewayIdentity,
-		Unattended: c.Unattended, ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
-		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
+		ModelLimit: runner.ModelLimitOf(c.AllowedModels, c.BedrockRoutes), Unattended: c.Unattended,
+		ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
+		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, ForgeHosts: c.ForgeHosts, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
 		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings,
 		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "",
 	}

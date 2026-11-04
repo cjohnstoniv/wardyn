@@ -88,6 +88,18 @@ func (p *Proxy) viaOrgRouteForHost(host string) (ViaOrgRoute, bool) {
 // written here: the organisation owns both.
 func (p *Proxy) serveViaOrg(w http.ResponseWriter, r *http.Request, route ViaOrgRoute, authority string) {
 	if r.Method != http.MethodConnect {
+		// The run's allowed_models judges a plain via_org request to a model host as serveMITMRequest
+		// judges a terminated one: the organisation forwards it on, and nothing after this would see it.
+		defaultPort := 443
+		if r.URL != nil && r.URL.Scheme == "http" {
+			defaultPort = 80
+		}
+		host, port := splitHostPort(authority, defaultPort)
+		releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+		defer releaseModels()
+		if modelRefused {
+			return
+		}
 		p.forwardViaOrg(w, r, route, authority)
 		return
 	}

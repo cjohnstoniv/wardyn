@@ -102,7 +102,7 @@ func providerTakesNoCredential(p types.ModelProvider) bool {
 // model_credential. A human owner's sentence is untouched.
 func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
 	blob, d, err := s.providerLivenessByKind(ctx, p, agent, owner, refresh)
-	if d.credential && isServicePrincipal(owner) && !providerTypedKinds[p.Kind] {
+	if d.credential && isServicePrincipal(owner) && (!providerTypedKinds[p.Kind] || p.OIDC != nil) {
 		d.msg = fmt.Sprintf(mpRunRefusal, p.ID, d.state, mpRunRemedyService)
 	}
 	return blob, d, err
@@ -167,6 +167,7 @@ type providerKeyLane struct {
 	format     string
 	upstream   string // BaseURL(+Path) when requests do not go to vendorHost
 	model      string
+	fast       string // custom_endpoint only: the claude-code small-model alias; "" leaves the haiku alias unset
 	owner      string // whose namespace the key is read from: the run owner's, always
 }
 
@@ -190,6 +191,9 @@ func providerKeyLaneFor(p types.ModelProvider, agent string) (providerKeyLane, b
 	base := p.BaseURL
 	if p.Kind == types.ModelProviderCustomEndpoint || p.Kind == types.ModelProviderLocalModel {
 		base += h.Path // always "" on a local model (validateProviderHarness)
+		if p.Kind == types.ModelProviderCustomEndpoint {
+			l.fast = h.FastModel
+		}
 		var auth types.ProviderAuth
 		if p.Auth != nil {
 			auth = *p.Auth
@@ -221,6 +225,9 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 	}
 	if !s.credentialPerson(owner) {
 		return providerDenial{msg: mpcNoPerson}, nil
+	}
+	if p.OIDC != nil {
+		return s.providerEndpointOIDCRefusal(ctx, owner, p)
 	}
 	_, found, err := s.ownSecret(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), owner, providerSecretName(p.UID, providerKeyPart))
 	if err != nil || found {
@@ -379,6 +386,9 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			return nil, nil, injections, providerDispatch{}, false
 		}
 		llms, lanePairs = append(llms, llm), append(lanePairs, pairs[i])
+		if lane.chosen != nil && !s.takeProviderGatewayRoute(ctx, lr, &prov, lane.chosen.provider) {
+			return nil, nil, injections, providerDispatch{}, false
+		}
 		if lane.chosen == nil || !providerKeyKind(lane.chosen.provider.Kind) {
 			continue
 		}
@@ -394,14 +404,6 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			unionAllowedDomains(policy, []string{lane.key.host})
 		}
 		prov.addLocalModel(lane.key)
-		if other := prov.gatewayRouteClash(lane.key); other != "" {
-			s.refuseProviderDispatch(ctx, lr, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayClash, lane.chosen.provider.ID, other)}, nil)
-			return nil, nil, injections, providerDispatch{}, false
-		}
-		if !prov.addGatewayRoute(lane.key) {
-			s.refuseProviderDispatch(ctx, lr, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayAddress, lane.chosen.provider.ID)}, nil)
-			return nil, nil, injections, providerDispatch{}, false
-		}
 		if lane.key.upstream != "" {
 			if prov.upstreams == nil {
 				prov.upstreams = map[string]string{}
@@ -680,6 +682,9 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 				}
 			}
 		}
+		if lane.key.fast != "" {
+			sandboxEnv[envDefaultHaikuModel] = lane.key.fast
+		}
 	case "codex-cli":
 		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
 		// from config.toml and its key from CODEX_API_KEY (task mode) or
@@ -713,15 +718,11 @@ func codexBaseURL(proxyURL, gateway string) string {
 
 // authorProviderKeyInjection writes the key arm's one model-credential grant:
 // an api_key grant for the lane's host naming the owner's own
-// wardyn-provider-<uid>-key, with the record the sink requires
-// (providerGrantSnapshot). ok=false means the write failed and the run is
-// already FAILED.
+// wardyn-provider-<uid>-key (-oidc for an endpoint that signs people in), with
+// the record the sink requires (providerGrantSnapshot). ok=false means the
+// write failed and the run is already FAILED.
 func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.AgentRun, lane providerKeyLane) (runner.InjectionGrant, bool) {
-	scope, _ := json.Marshal(map[string]any{
-		"host": lane.host, "header": lane.header, "format": lane.format,
-		"secret_name": providerSecretName(lane.provider.UID, providerKeyPart),
-		"snapshot":    providerGrantSnapshot{OwnerSubject: lane.owner, ProviderUID: lane.provider.UID, Harness: run.Agent},
-	})
+	scope, _ := json.Marshal(providerKeyGrantScope(run, lane))
 	grantID := uuid.New()
 	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),

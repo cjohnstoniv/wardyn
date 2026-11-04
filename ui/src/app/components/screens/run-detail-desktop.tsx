@@ -20,14 +20,19 @@ import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { entryErrorMessage, isBackgroundRun, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { RUN_MODE_REFUSAL } from "../../lib/run-mode-refusals";
 import { Mono } from "../wardyn/code-block";
-import { UI_APPS_LANE } from "../wardyn/copy";
+import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
+import { MAC_WINDOW } from "../wardyn/copy/mac-window";
+import { RECORDING_DESKTOP, desktopRecordedAt } from "../wardyn/copy/recording-level";
+import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { Chip, WidgetCard } from "../wardyn/primitives";
+import { KEEP_LIST } from "../wardyn/copy/keep-machine";
 import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
-import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
-import { DESKTOP_APP, enterUIApp } from "./run-detail-ssh";
+import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsError, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
+import { MacWindowButton, macWindowHasButton, MacWindowRefusal } from "./run-detail/mac-window-section";
+import { DESKTOP_APP, enterUIApp, openEnterTab } from "./run-detail-ssh";
 
 // Exported for the tests: standalone-testable without mounting the whole screen's fetch graph.
 export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: MacOSRunFacts }) {
@@ -52,6 +57,9 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
     bind_url?: string;
   } | null>(null);
   const [healthAnswered, setHealthAnswered] = React.useState(false);
+  // health() resolves {} on any failure; "checked, and it did not say ok" is a failed check, not a gateway that is off.
+  const [healthFailed, setHealthFailed] = React.useState(false);
+  const [healthAttempt, setHealthAttempt] = React.useState(0);
   const [openingApp, setOpeningApp] = React.useState(false);
   const [appError, setAppError] = React.useState<string | null>(null);
   // #2972: a VM desktop's sign-ins, once the gateway can open it. A background run has none: nobody types in it.
@@ -67,11 +75,12 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
       if (!alive) return;
       setUISandbox(h.ui_sandbox ?? null);
       setHealthAnswered(h.status === "ok");
+      setHealthFailed(h.status !== "ok");
     });
     return () => {
       alive = false;
     };
-  }, [mayAttach, running]);
+  }, [mayAttach, running, healthAttempt]);
 
   // A finished macOS VM run keeps this tile while the Mac reports its disk.
   if (!isVMKind(run.machine_kind) || !mayAttach || (!running && !macOS?.disk)) return null;
@@ -87,16 +96,27 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const viewOnly = (macOS?.desktop === "observe" && running) || watchable;
   const desktopOn = !!uiSandbox?.enabled && !macOff;
   const uiApps = run.ui_apps ?? [];
+  // The window on the Mac (mac_window, live macOS VM runs only): its button comes first and the desktop's turns outline.
+  const windowState = running ? run.mac_window?.state : undefined;
+  const windowButton = running && macWindowHasButton(run.mac_window);
+  const windowWay = windowButton || windowState === "window_open";
 
   // Mints a single-use ticket and opens the built-in desktop in a new tab. A background watch has its own ticket
   // route; every other desktop uses the UI-app ticket the Attach lanes use. The ticket mint is the entry check.
   async function openDesktop() {
     setAppError(null);
+    // The tab opens here, before the ticket request, so the browser still counts it as the click's own.
+    const tab = openEnterTab();
+    if (!tab) {
+      setAppError(RUN_SSH.POPUP_BLOCKED);
+      return;
+    }
     setOpeningApp(true);
     try {
       const ticket = watchable ? await runsApi.watchTicket(run.id) : undefined;
-      await enterUIApp(run.id, DESKTOP_APP.name, uiSandbox, { ticket });
+      await enterUIApp(run.id, DESKTOP_APP.name, uiSandbox, { ticket, tab });
     } catch (err) {
+      tab.close();
       setAppError(entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e)), run));
     } finally {
       setOpeningApp(false);
@@ -108,7 +128,9 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const bgMac = background && mac && running;
   const noWatchChip = bgMac && (!watch || watch.state === "control" || watch.state === "not_run_owner");
   const chip =
-    (!healthAnswered && !macOff) || noDoor || noWatchChip ? null : (desktopOn && viewOnly) || bgMac ? (
+    windowState === "window_open" ? (
+      <Chip tone="info">{MAC_WINDOW.openChip}</Chip>
+    ) : (!healthAnswered && !macOff) || noDoor || noWatchChip ? null : desktopOn && (viewOnly || bgMac) ? (
       <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
     ) : desktopOn && signIns.view?.paused ? (
       <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
@@ -121,16 +143,32 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
     // loses its bottom on a short one.
     <WidgetCard title={DESKTOP.title} Icon={Monitor} right={chip} grow bodyClassName="scroll-thin overflow-y-auto p-4">
       <section aria-label={DESKTOP.title}>
+        <p className="mb-2 text-meta text-muted-foreground">{mac ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
+        {running && <MacWindowButton run={run} />}
         {desktopOn && !noDoor && (!background || watchable) && (
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={openingApp} onClick={() => void openDesktop()}>
+          <div className={`flex flex-wrap gap-2 ${windowWay ? "mt-4" : ""}`}>
+            <Button size="sm" variant={windowButton ? "outline" : undefined} disabled={openingApp} onClick={() => void openDesktop()}>
               {openingApp ? UI_APPS_LANE.ctaBusy : viewOnly ? DESKTOP.watch : UI_APPS_LANE.cta("desktop")}
             </Button>
             {!background && <DesktopSignInButton s={signIns} />}
           </div>
         )}
+        {/* What the screen recording keeps, once, where the desktop opens. No frames are kept while the agent is paused for a sign-in. */}
+        {desktopOn && !noDoor && (!background || watchable) && desktopRecordedAt(run) && (
+          <p className="mt-2 text-meta text-muted-foreground" data-testid="desktop-recorded-line">
+            {!background && signIns.view?.paused ? RECORDING_DESKTOP.PAUSED : RECORDING_DESKTOP.WATCHED}
+          </p>
+        )}
+        {desktopOn && !background && <DesktopSignInsError s={signIns} />}
+        {healthFailed && !macOff && !noDoor && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-meta leading-relaxed text-muted-foreground">{RUN_VM_PAGE.gatewayUnknown}</p>
+            <Button size="sm" variant="outline" onClick={() => { setHealthFailed(false); setHealthAttempt((n) => n + 1); }}>
+              {RUN_VM_PAGE.tryAgain}
+            </Button>
+          </div>
+        )}
         {appError && <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError}</p>}
-        <p className="mt-2 text-meta text-muted-foreground">{mac ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
         {noDoor && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{RUN_MODE_REFUSAL.BACKGROUND_ONLY("desktop")}</p>}
         {watchRefusal && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{watchRefusal}</p>}
         {/* What a person can do on this desktop is only said while the gateway can open it; with it off, the Off sentence is the one claim. */}
@@ -141,7 +179,11 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.loginWindowNote}</p>
           </>
         )}
-        {!background && viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.observeOnlyMacOS}</p>}
+        {!background && viewOnly && (
+          <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{windowWay ? MAC_WINDOW.watchLine : DESKTOP.observeOnlyMacOS}</p>
+        )}
+        {/* A window refusal sits under the line above: the browser can still watch, and this says why no window opens. */}
+        {running && <MacWindowRefusal run={run} />}
         {healthAnswered && !uiSandbox?.enabled && !macOff && !noDoor && (
           <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{offCopy(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
         )}
@@ -154,10 +196,10 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
         )}
         {desktopOn && (!background || watchable) && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>}
         {/* Files moves with the desktop, under the buttons: the same gate it had in the Attach tile
-            (the run's person, not a sponsor, while it runs, with a declared UI app), plus never on a background run,
-            which has no files door. */}
-        {desktopOn && !background && uiApps.length > 0 && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} />}
-        {desktopOn && !background && <DesktopSignInsNote s={signIns} />}
+            (the run's person, not a sponsor, while it runs, with a declared UI app or a Linux VM's built-in desktop),
+            plus never on a background run, which has no files door. The panel shows the run's own desktop rules. */}
+        {desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} vm />}
+        {desktopOn && !background && <DesktopSignInsNote s={signIns} keptOn={run.machine && !run.machine.deleted && run.machine.keep_at_end ? run.machine.runner_name || KEEP_LIST.THIS_MAC : undefined} />}
       </section>
     </WidgetCard>
   );

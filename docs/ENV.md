@@ -179,6 +179,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_NAMESPACE` | string | the pod's own namespace (read from `/var/run/secrets/kubernetes.io/serviceaccount/namespace`), else `default` | Kubernetes namespace the `k8s` substrate (`-tags k8s`) creates every sandbox's Secret/NetworkPolicies/pods in |
 | `WARDYN_K8S_IMAGE_PULL_SECRET` | string | (unset) | optional pre-existing Secret name threaded onto `imagePullSecrets` for every pod the `k8s` substrate creates (agent, proxy, and the boot-time egress canary) (`-tags k8s`) |
 | `WARDYN_K8S_READ_NODES` | bool | off | list the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`); boot measures the cluster from them. Needs `list` on `nodes`. [Details](#wardyn_k8s_read_nodes) |
+| `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -187,7 +188,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_DIR` | string | (unset) | built web UI directory (flag `-ui-dir`) |
 | `WARDYN_BASE_PATH` | string | (unset = the host root) | sub-path the console, API, sign-in, `/healthz` and `/readyz` are served under behind a reverse proxy, e.g. `/wardyn` (flag `-base-path`). The proxy forwards the path **unchanged** (no stripping). [Details](#wardyn_base_path) |
 | `WARDYN_HOST_PROXY_B64` | string (base64 JSON) | (unset) | host-side proxy detection, captured by [`scripts/up.sh`](../scripts/up.sh) on the host and consumed by the Getting-started "Host proxy" step. **Diagnostics only.** [Details](#wardyn_host_proxy_b64) |
-| `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
+| `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog/otlp (flag `-audit-sinks`). A webhook or otlp `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_APPROVAL_NOTIFY` 🔒 | string (JSON) | (unset) | approval notification config (flag `-approval-notify`): channels that are told when an approval is waiting. Unset or empty means off. Any bad value refuses boot, naming the channel `id` and the rule. [Details](#wardyn_approval_notify) |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`); a sibling `<path>.quarantine` appears if the store permanently refuses a spooled line |
 | `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, a person in `actor` or `target` is a subject, shown while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
@@ -776,6 +777,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - Leave the flag off for such a cluster, or its runs fail at the start timeout instead of waiting for the new node.
 - The runs namespace's ResourceQuota read needs no flag and no env.
 - Boot measures the cluster from that quota, else from the nodes this reads, and proposes the cluster runner's limits; with neither it sets none.
+
+### `WARDYN_K8S_AGENT_SANDBOX`
+
+- Experimental, off by default (`-tags k8s`). The agent pod is made by a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller from a `Sandbox`; the proxy pod, Secret and NetworkPolicies stay Wardyn's.
+- Boot refuses when the cluster does not serve `agents.x-k8s.io/v1beta1`, when wardynd lacks a needed verb, under `wardyn-runnerd`, or beside `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`.
+- Tested with agent-sandbox v1.0.9 only. Setup, what it widens and what is not supported: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md). Chart: `k8s.agentSandbox.*`.
 
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 
@@ -2145,17 +2152,42 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 {
   "syslog":  {"network": "udp", "addr": "localhost:514"},
   "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
-  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3}
+  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3},
+  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100}
 }
 ```
 
 - Defaults for the fields not shown: `file` rotates at `max_bytes` 100 MiB keeping `keep` 5.
 - `webhook` also takes `flush_interval` (`5s`), `buffer_size` (`4096`), `max_retries` (`3`), `retry_base_delay` (`200ms`) and `timeout` (`15s`, per HTTP request, must be positive and at most `15s`, the flush the shutdown grace is sized on).
+- A `webhook` `url` may carry credentials (`https://user:pass@host/...`). Credentials in the URL are sent in clear over http; use https.
 - See [`internal/audit/sinks/webhook.go`](../internal/audit/sinks/webhook.go).
 - The compose stack ships the `file` sink pointed at `/data/audit/audit.log`.
 - Every event is one JSON object (NDJSON on the webhook sink — one line per event per POST batch).
 - `Data` is the per-action payload documented in [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - `WARDYN_AUDIT_SOURCE` above adds a `"source"` field to every one of them, for a multi-instance SIEM index.
+
+#### OpenTelemetry logs (`otlp`)
+
+- Each audit row becomes one OTLP/HTTP JSON log record, POSTed in batches to `<endpoint>/v1/logs` (the path is added unless `endpoint` already ends in it). Stdlib only, no SDK.
+- Best-effort, like the webhook sink: a full queue or a batch that fails every retry is shed and counted in `wardyn_audit_sink_drops_total{sink="otlp"}`. It is not lossless; use the acknowledged webhook for that.
+- Spans are not exported yet.
+
+| Field | Default | Notes |
+|---|---|---|
+| `endpoint` | (required) | collector base URL, `http://` or `https://`. Credentials in the URL are sent in clear over http; use https |
+| `bearer_token` | (unset) | sent as `Authorization: Bearer`; requires an `https://` endpoint, boot fails otherwise |
+| `headers` | (unset) | extra request headers, for example a tenant id; sent as written, so a secret in one travels in cleartext over `http://`. `Authorization`, `Content-Type`, `Content-Length` and `Host` are refused |
+| `batch_size` | `100` | records per POST |
+| `flush_interval`, `buffer_size`, `max_retries`, `retry_base_delay`, `timeout` | as `webhook` | same meaning and limits, including the `15s` timeout cap |
+
+| Record part | Value |
+|---|---|
+| Resource | `service.name=wardynd`; `service.instance.id` is `WARDYN_AUDIT_SOURCE` when set |
+| Body | the audit `action` |
+| Severity | `success` is INFO, `denied` is WARN, `failure` is ERROR |
+| Attributes | `wardyn.run_id` (run-scoped rows), `wardyn.actor`, `wardyn.target` (when set), `wardyn.outcome`, `wardyn.correlation_id` (when the row's `data` carries one, at most 128 characters) |
+
+- Nothing else from the row is sent: not `data`, `source_ip`, the hashes or the row id. The webhook sink's payload is the ceiling.
 
 #### Acknowledged delivery (`delivery: acknowledged`)
 

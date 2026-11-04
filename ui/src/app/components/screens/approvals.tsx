@@ -36,7 +36,8 @@ import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useRefusedApprovals } from "../../lib/hooks/use-refused-approvals";
-import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
+import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
+import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
 import { useOperator, useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
@@ -115,7 +116,9 @@ export function capabilityLabel(kind: ApprovalKind, scope: Scope): string | unde
   return undefined;
 }
 
-export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
+/** `signIn` is the provider's name for an endpoint sign-in's hold, when the caller has mapped the scope's provider
+ *  uid to it; without it the title reads as the unnamed provider. */
+export function deriveTitle(kind: ApprovalKind, scope: Scope, signIn?: string): string {
   switch (kind) {
     case "egress_domain": {
       const host = str(scope, "host", "domain");
@@ -141,7 +144,8 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
     // mapping it to "credential" titled it "Mint a scoped credential" and
     // painted a blast-radius banner over a row that grants nothing.
     case "credential_reauth":
-      return REAUTH_TITLE;
+      // An endpoint's sign-in is not AWS's: its hold names its own lane.
+      return scope.lane === OIDC_HOLD_LANE ? OIDC_SIGN_IN.APPROVAL_LABEL(signIn || OIDC_SIGN_IN.APPROVAL_UNNAMED) : REAUTH_TITLE;
     // Only reached by DecidedRow — ApprovalCard's own push_content branch
     // returns before this function is ever called (it renders PUSH.CARD_TITLE
     // directly, which is PENDING-tense and would read wrong on a decided row).
@@ -160,7 +164,7 @@ interface Banner {
 }
 
 // The fail-closed audience: no viewer in hand is "this is not yours to clear".
-const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false };
+const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false, oidc: false, holdUID: "" };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
 // ApprovalCard calls it before any scope has been chosen (the picker lives
@@ -188,7 +192,10 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
       // sign-in clears it, and the sentence naming who CAN clear it for
       // everybody else (W6-U BLOCKER-1/BLOCKER-2). `reauth` is undefined only
       // for a caller with no viewer in hand, which grades as "not yours".
-      return { what: REAUTH_ROW.label + ".", blast: reauthRowHint(reauth ?? NO_REAUTH_AUDIENCE) };
+      return {
+        what: (reauth?.oidc ? OIDC_SIGN_IN.APPROVAL_LABEL(reauth.signIn ?? OIDC_SIGN_IN.APPROVAL_UNNAMED) : REAUTH_ROW.label) + ".",
+        blast: reauthRowHint(reauth ?? NO_REAUTH_AUDIENCE),
+      };
     case "egress_domain": {
       const host = str(scope, "host", "domain");
       // egressBlastRadius (copy.ts) is scope-aware — honesty rule: "we only
@@ -325,7 +332,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     },
     [setSearchParams],
   );
-  const { refused, wallsRefused, noteRefusal } = useRefusedApprovals();
+  const { refused, wallsRefused, presetRefused, noteRefusal } = useRefusedApprovals();
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
   // EXPIRED approvals must be fetched too, or a request that timed out
@@ -564,7 +571,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             {pendingItems.map((a) => (
               <ApprovalCard
                 key={a.id}
-                item={wallsRefused.has(a.id) ? { ...a, walls_block: true } : a}
+                item={wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a}
+                presetBlocked={presetRefused.has(a.id)}
                 caps={caps}
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
                 onAdoDecide={decideAdoDirect}

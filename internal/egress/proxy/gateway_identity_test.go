@@ -164,9 +164,10 @@ func newGwidRig(t *testing.T, routes []GatewayIdentityRoute, h2 bool) *gwidRig {
 		n := g.mint.hits.Add(1)
 		var body struct {
 			ProviderID string `json:"provider_id"`
+			MCPServer  string `json:"mcp_server"`
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/internal/gateway-identity" ||
-			r.Header.Get("Authorization") != "Bearer RUNTOK" || json.NewDecoder(r.Body).Decode(&body) != nil || body.ProviderID == "" {
+			r.Header.Get("Authorization") != "Bearer RUNTOK" || json.NewDecoder(r.Body).Decode(&body) != nil || (body.ProviderID == "") == (body.MCPServer == "") {
 			t.Errorf("bad mint request %s %s", r.Method, r.URL.Path)
 		}
 		g.mint.mu.Lock()
@@ -418,6 +419,81 @@ func TestGatewayIdentity_RefreshAndOutageTolerance(t *testing.T) {
 	g.advance(1 * time.Second) // exactly exp: no grace
 	if rec := send(); rec.Code < 400 || g.gw.count() != hits {
 		t.Fatalf("past exp: status %d, gateway hits %d -> %d", rec.Code, hits, g.gw.count())
+	}
+}
+
+// A short-lived token: a failed refresh is asked again within half of what is left of its life,
+// not after the full retry interval, so a mint that recovers lands before exp.
+func TestGatewayIdentity_ShortLifeRetriesBeforeExp(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	short := func() {
+		g.mint.mu.Lock()
+		defer g.mint.mu.Unlock()
+		g.mint.answer = func(w http.ResponseWriter, _ *http.Request, n int64) {
+			tok := gwidToken(gwidAudience, g.now().Add(time.Minute), n)
+			g.mint.mu.Lock()
+			g.mint.minted = append(g.mint.minted, tok)
+			g.mint.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": tok, "expires_at": g.now().Add(time.Minute)})
+		}
+	}
+	short()
+	send := gwidLanes(g, t)["brokered"]
+	send()
+	first := g.lastMinted(t)
+	g.answerStatus(http.StatusServiceUnavailable)
+	g.advance(30 * time.Second) // half-life, and the control plane is down
+	send()
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != 2 {
+		t.Fatalf("mints at half-life = %d, want 2", n)
+	}
+	short()                     // the control plane is back
+	g.advance(15 * time.Second) // half of the 30 s left, well inside lastGoodRetry
+	if rec := send(); rec.Code != http.StatusOK {
+		t.Fatalf("status %d before exp", rec.Code)
+	}
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != 3 {
+		t.Fatalf("mints 15 s after the failed refresh = %d, want 3", n)
+	}
+	g.advance(20 * time.Second) // past the first token's exp
+	if rec := send(); rec.Code != http.StatusOK || g.gw.last(t).Header.Get(gatewayIdentityHeader) == first {
+		t.Fatalf("past the first exp: status %d, still the first token=%v", rec.Code, g.gw.last(t).Header.Get(gatewayIdentityHeader) == first)
+	}
+}
+
+// Past a short-lived token's exp with the control plane still down, mints fall back to the usual
+// interval instead of one a second.
+func TestGatewayIdentity_ShortLifeOutagePastExpKeepsTheInterval(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.mint.mu.Lock()
+	g.mint.answer = func(w http.ResponseWriter, _ *http.Request, n int64) {
+		tok := gwidToken(gwidAudience, g.now().Add(time.Minute), n)
+		g.mint.mu.Lock()
+		g.mint.minted = append(g.mint.minted, tok)
+		g.mint.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": tok, "expires_at": g.now().Add(time.Minute)})
+	}
+	g.mint.mu.Unlock()
+	send := gwidLanes(g, t)["brokered"]
+	send()
+	g.answerStatus(http.StatusServiceUnavailable)
+	g.advance(61 * time.Second) // past exp, never refreshed
+	send()
+	gwidWaitNoFlight(t, g)
+	after := g.mint.hits.Load()
+	g.advance(2 * time.Second)
+	send()
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != after {
+		t.Fatalf("mints 2 s after a failure past exp = %d, want %d", n, after)
+	}
+	g.advance(lastGoodRetry)
+	send()
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != after+1 {
+		t.Fatalf("mints after the interval = %d, want %d", n, after+1)
 	}
 }
 
@@ -1423,7 +1499,7 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	for f := range rt.Fields() {
 		keys = append(keys, f.Tag.Get("json"))
 	}
-	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience", "provider_uid,omitempty"}; !slices.Equal(keys, want) {
+	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id,omitempty", "mcp_key,omitempty", "audience", "provider_uid,omitempty", "inspection_deferred,omitempty"}; !slices.Equal(keys, want) {
 		t.Fatalf("route keys %v: a route holds no token and no key, want %v", keys, want)
 	}
 	good := map[string]any{"host": gwidHost, "port": 443, "path_prefix": "/v1", "provider_id": "p", "audience": "a"}
@@ -1436,6 +1512,7 @@ func TestGatewayIdentityConfig(t *testing.T) {
 		"url host":    {"host": "https://x/", "port": 443, "provider_id": "p", "audience": "a"},
 		"no port":     {"host": gwidHost, "provider_id": "p", "audience": "a"},
 		"no provider": {"host": gwidHost, "port": 443, "audience": "a"},
+		"both":        {"host": gwidHost, "port": 443, "provider_id": "p", "mcp_key": "m", "audience": "a"},
 		"no audience": {"host": gwidHost, "port": 443, "provider_id": "p"},
 		"bad prefix":  {"host": gwidHost, "port": 443, "provider_id": "p", "audience": "a", "path_prefix": "v1"},
 		"unknown key": {"host": gwidHost, "port": 443, "provider_id": "p", "audience": "a", "token": "x"},
@@ -1445,10 +1522,11 @@ func TestGatewayIdentityConfig(t *testing.T) {
 		}
 	}
 	for name, second := range map[string]map[string]any{
-		"two audiences for a provider": {"host": gwidOther, "port": 443, "provider_id": "p", "audience": "b"},
-		"two providers on a host":      {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b"},
-		"two providers on one path":    {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/"},
-		"a path under the other's":     {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/messages"},
+		"two audiences for a provider":       {"host": gwidOther, "port": 443, "provider_id": "p", "audience": "b"},
+		"two providers on a host":            {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b"},
+		"two providers on one path":          {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/"},
+		"a path under the other's":           {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/messages"},
+		"an MCP server on a provider's path": {"host": gwidHost, "port": 443, "mcp_key": "m", "audience": "b", "path_prefix": "/v1/mcp"},
 	} {
 		if _, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{good, second}})); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -1466,6 +1544,20 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	}
 	if rt := p.gatewayRouteFor(gwidHost, 443, "/v1/messages"); rt == nil || rt.ProviderID != "p" {
 		t.Errorf("/v1/messages matched %+v, want p", rt)
+	}
+	// An MCP server's route is a destination of its own: apart from the provider's it loads, and holds one audience.
+	mcp := map[string]any{"host": gwidOther, "port": 443, "mcp_key": "m", "audience": "b"}
+	cfg, err = LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{good, mcp}}))
+	if err != nil {
+		t.Fatalf("a provider and an MCP server on hosts apart: %v", err)
+	}
+	p = &Proxy{gatewayRoutes: cfg.GatewayIdentity}
+	if rt := p.gatewayRouteFor(gwidOther, 443, "/x"); rt == nil || rt.MCPKey != "m" {
+		t.Errorf("the MCP host matched %+v, want the MCP route", rt)
+	}
+	mcpTwice := map[string]any{"host": gwidHost, "port": 8443, "mcp_key": "m", "audience": "c"}
+	if _, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{mcp, mcpTwice}})); err == nil {
+		t.Error("one MCP server with two audiences: accepted")
 	}
 	unset, err := LoadConfigBytes(baseConfigJSON(t, nil))
 	if err != nil {

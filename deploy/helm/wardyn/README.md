@@ -408,6 +408,18 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - With no ResourceQuota in the runs namespace, it is also how wardynd measures the cluster at boot to propose the cluster runner's limits. With neither, the runner gets none and takes no run until an admin sets them. The kind quickstart turns it on for that.
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),
     - and one that would fill a quota to 90% or more is warned; a quota wardynd may not read is reported as unreadable, never as empty.
+- `k8s.agentSandbox.enabled` (`WARDYN_K8S_AGENT_SANDBOX`, default `false`, **experimental**): creates each run's agent pod through a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox` instead of directly.
+  - Off renders exactly what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
+  - Tested against agent-sandbox v1.0.9 only (beta `agents.x-k8s.io/v1beta1`). Install its controller and CRD first: this chart installs neither.
+  - Needs `k8s.enabled=true` and an enforced NetworkPolicy; the chart refuses `k8s.allowUnenforcedNetPol` and `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`, including one set through `extraEnv` `valueFrom`, which it cannot read.
+  - Adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes.agents.x-k8s.io` to the runner Role, nothing to the ClusterRole.
+  - Also renders two `ValidatingAdmissionPolicy` objects with bindings (`<release>-wardyn-sandbox-pod-gate` and `-ungate`) for the runs namespace.
+    - The first selects pod creates by the controller's identity (`k8s.agentSandbox.controller`, default the upstream ServiceAccount). It refuses one without the `wardyn.dev/verify` scheduling gate or a `Sandbox` owner, or one that names a node.
+    - The second selects an update of a pod that held the gate. Only wardynd's own ServiceAccount may remove the gate, and the same write may not change labels, annotations, owners, images, tolerations, node selector, affinity, the deadline or the node, or add an ephemeral container.
+    - They need Kubernetes 1.30+ and fail closed. Other identities, Wardyn's own pods included, are not selected.
+    - The guarantee covers create and gate-removal hooks, and only while those two identities are configured right. A kind run has not yet proven it.
+    - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
+  - Refused with `k8s.ackAmbientDefaultDeny` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` too, as a literal or a `valueFrom`.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
   - Ships at 1000m/2048Mi so a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size.
   - `runner.sandbox.proxyResources` sizes each run's `wardyn-proxy` sidecar (500m/256Mi).
@@ -418,6 +430,20 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g. `--set k8s.runtimeClasses.CC2=gvisor`.
   - Unlike Docker's well-known runtime family names, a RuntimeClass object name is operator-chosen and carries no platform convention Wardyn can guess;
     - CC2/CC3 stay unadvertised (CC1-only) until pinned here to a RuntimeClass whose `.Handler` actually delivers that class's isolation.
+  - Running CC3 on a managed cluster with Kata, for a pool whose RuntimeClass is named `kata-vm-isolation` with handler `kata`:
+    ```
+    helm upgrade --install wardyn ... --set k8s.runtimeClasses.CC3=kata-vm-isolation
+    ```
+    - The value is the RuntimeClass NAME, which may be anything. CC3 is advertised only when that class exists in the cluster and its HANDLER is non-empty and does not start with `runc`, `crun`, `sysbox` or `runsc` (the list is in [`internal/runner/sandbox.go`](../../../internal/runner/sandbox.go); `kata`, `kata-qemu` and `krun` pass).
+    - A missing class, an empty pin or a refused handler makes a CC3 run fail to start; it never falls back to the node's default runtime.
+    - The RuntimeClass is set on the agent pod only. The `wardyn-proxy` pod runs on the node's default runtime, outside the guest.
+    - Agent limits (`runner.sandbox.defaultResources`, or the policy's resources) become the pod's CPU and memory limits, and its requests equal them unless `runner.sandbox.requestRatio` is set.
+    - CC2 stays unadvertised on a cluster with no gVisor (`runsc*`) handler: leave `k8s.runtimeClasses.CC2` empty.
+    - A Linux VM sandbox (`k8s.linuxVM=true`) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
+    - Not proven: CI does not run Kata, because the conformance test skips where none is installed.
+    - The unit tests use a fake clientset with class `kata` and handler `kata-qemu`, plus a `kata-vm-isolation` / `kata` row, so this pairing has never run on a real cluster.
+    - Unknown: PVC drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
+    - Nothing here states what your cloud's node pools support (sizes, hardening modes, scanners); check your provider's documentation.
 - `k8s.apiServer.ports`: port(s) the control-plane NetworkPolicy opens so wardynd can reach the API server.
   - Defaults to `[443, 6443]` — `kubernetes.default.svc`'s Service port (443, what client-go's in-cluster config always targets) PLUS the typical kubeadm/kind apiserver backend port (6443):
     - on iptables-mode kube-proxy + Calico, the DNAT to that backend port happens BEFORE Calico evaluates egress, so `[443]` alone fails this rule closed on that (common) combination.
@@ -497,7 +523,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 - Accepted but not enforced, with a logged warning naming the run: **no per-pod PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide backstop).
 - That one is not a missing feature and will not close: the Pod API has no per-container maximum-pids resource to request, so there is nothing for the chart to set — see `resourceRequirements` in [`internal/runner/k8s/naming.go`](../../../internal/runner/k8s/naming.go).
 - The kubelet setting is the only lever, and it is node-wide by design.
-- Also **no in-sandbox DNS** (a fast-failing loopback-only resolver — only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress), **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no k8s-substrate equivalent),
+- Also **no in-sandbox DNS** (a fast-failing loopback-only resolver — only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress), **no k8s ground-truth correlator** ([join your own sensor by run](../../../docs/operations/kubernetes-ground-truth.md)),
   - and **`replicas` stays 1 unless `ha.enabled` is set** (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "High availability").
 
 - **Narrowed in 0.7.5, further in 0.8 (#164): `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's writes to `/tmp`, its workdir `/home/agent/work`, and its toolchain cache root `/home/agent/.cache`.**

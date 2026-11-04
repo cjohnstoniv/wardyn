@@ -64,6 +64,7 @@ import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatu
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useUserTypeName, useUserTypes } from "../../lib/use-user-types";
+import { PICKABLE_KINDS, useGrantItems, type GrantItem } from "../../lib/use-grant-items";
 
 // The audit actor a bare admin-bearer caller is recorded as (actorFromRequest,
 // internal/api/runs_policy.go) — a machine lane, never a member.
@@ -214,6 +215,8 @@ export function PermissionsScreen() {
   // with its member-powers prose as fact. There is no seed; there is no snapshot
   // until one arrives.
   const [snap, setSnap] = React.useState<PermissionsSnapshot | null>(null);
+  // Names for the ids the grants table holds, for the kinds that have a list.
+  const grantItems = useGrantItems((snap?.grants ?? []).map((g) => g.capability as CapabilityKind));
   // X3-F5: FORBIDDEN is its own arm. /permissions is a securityOps route hidden
   // from a member's nav, so a member only arrives by typing the URL — and the
   // 403 that answers them is the daemon's verdict on their tier, not an outage
@@ -429,7 +432,7 @@ export function PermissionsScreen() {
                     </TableCell>
                     <TableCell>{kindLabel(g.capability, g.value)}</TableCell>
                     <TableCell>
-                      <Mono>{g.value}</Mono>
+                      <GrantValue g={g} items={grantItems[g.capability as CapabilityKind]} />
                     </TableCell>
                     <TableCell>
                       {/* F4-F5/F6-F5: a row markInertGrants flagged can never
@@ -723,8 +726,17 @@ export function AddGrantForm({
   }, [presetValue, fixed]);
 
   const copy = KIND[kind];
+  // A picker only where the kind's list loaded; otherwise the free text stays.
+  const pickItems = useGrantItems([kind])[kind] ?? null;
+  // "Enter an ID" turns the picker into the free-text field: a list holds only its first page. Typing in the
+  // field sets it too, so a list that finishes loading later does not swap the field away from typed text.
+  const [enterId, setEnterId] = React.useState(false);
+  React.useEffect(() => setEnterId(false), [kind]);
+  const picking = PICKABLE_KINDS.includes(kind) && pickItems !== null && !enterId;
+  const valueHint = picking && kind !== "component" ? PERM_EXTRA.PICKER_HINT : copy.valueHint;
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
-  const ready = !!value.trim() && (subjectType === "all" || !!subject.trim());
+  const valueChosen = picking ? value === "*" || !!pickItems?.some((i) => i.value === value) : !!value.trim();
+  const ready = valueChosen && (subjectType === "all" || !!subject.trim());
 
   const submit = async () => {
     setSaving(true);
@@ -818,17 +830,52 @@ export function AddGrantForm({
           )}
         </Field>
 
-        <Field label={copy.valueLabel} htmlFor="grant-value" hint={copy.valueHint} required>
-          <Input
-            id="grant-value"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            disabled={disabled}
-            className="font-mono"
-            autoComplete="off"
-            spellCheck={false}
-            required
-          />
+        <Field label={copy.valueLabel} htmlFor="grant-value" hint={valueHint} required>
+          {picking ? (
+            <Select
+              value={valueChosen ? value : ""}
+              onValueChange={(v) => {
+                if (v === ENTER_ID) {
+                  setValue("");
+                  setEnterId(true);
+                } else setValue(v);
+              }}
+              disabled={disabled}
+            >
+              <SelectTrigger id="grant-value">
+                <SelectValue placeholder={PERM_EXTRA.PICKER_PLACEHOLDER} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="*">{PERM_EXTRA.PICKER_EVERY}</SelectItem>
+                {pickItems?.map((i) => (
+                  <SelectItem key={i.value} value={i.value}>
+                    {i.label}
+                  </SelectItem>
+                ))}
+                <SelectItem value={ENTER_ID}>{PERM_EXTRA.PICKER_ENTER_ID}</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <Input
+              id="grant-value"
+              value={value}
+              onChange={(e) => {
+                setValue(e.target.value);
+                // Typed text stays a typed id even if the list arrives afterwards.
+                setEnterId(true);
+              }}
+              disabled={disabled}
+              className="font-mono"
+              autoComplete="off"
+              spellCheck={false}
+              required
+            />
+          )}
+          {enterId && pickItems !== null && (
+            <Button type="button" variant="ghost" size="sm" onClick={() => { setValue(""); setEnterId(false); }}>
+              {PERM_EXTRA.PICKER_BACK_TO_LIST}
+            </Button>
+          )}
         </Field>
 
         <Field label={PERM.FIELD_EFFECT}>
@@ -892,6 +939,19 @@ export function AddGrantForm({
       <h2 className="text-sm font-medium text-foreground">{PERM.ADD_TITLE}</h2>
       {body}
     </section>
+  );
+}
+
+// The picker's last choice; no id, name or "*" can equal it.
+const ENTER_ID = "__enter_id__";
+
+// A grant's Value cell: the item's name with its id on hover when the kind's list knows it,
+// else the raw value (a wildcard, an id since deleted, a kind with no list).
+function GrantValue({ g, items }: { g: CapabilityGrant; items?: GrantItem[] | null }) {
+  const item = items?.find((i) => i.value === g.value);
+  if (!item) return <Mono>{g.value}</Mono>;
+  return (
+    <span title={g.value}>{item.label}</span>
   );
 }
 

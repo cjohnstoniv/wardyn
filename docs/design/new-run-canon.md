@@ -817,9 +817,16 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NARROWED_TAIL_CEILING` | mock | Not allowed by your ceiling. |
 | `NARROWED_TAIL_SERVER` | pending (W-04) | Not allowed on this server. |
 | `NARROWED_TAIL_RUNNERS` | pending (W-04) | More than your runners can give. |
+| `ADMIN_BYPASS_SIGNED_IN(unit, limits)` | deviation (lead wording reviewed by Codex 2026-11-03, ungoverned admin run notice) | This admin run bypasses member limits. As a member, {unit} would limit this run to {limits}. |
+| `ADMIN_BYPASS_NO_PERSON` | deviation (lead wording reviewed by Codex 2026-11-03, ungoverned admin run notice) | This admin run bypasses member limits. There is no signed-in person to compare with. |
+| `ADMIN_BYPASS_NO_PROFILE` | deviation (lead wording reviewed by Codex 2026-11-03, ungoverned admin run notice) | This admin run bypasses member limits. You have no member profile to compare with. |
+| `ADMIN_BYPASS_UNAVAILABLE` | deviation (lead wording reviewed by Codex 2026-11-03, ungoverned admin run notice) | This admin run bypasses member limits. Wardyn couldn't work out what a member would get. |
+| `ADMIN_BYPASS_NO_LIMITS` | deviation (lead wording reviewed by Codex 2026-11-03, ungoverned admin run notice) | This admin run bypasses member limits. |
 | `BLOCKERS_ONE` | mock | 1 blocker before launch |
 | `BLOCKERS_MANY(n)` | mock | {n} blockers before launch |
 | `BLOCKER_STALE` | mock | The setup changed. Check the server's current result again. |
+| `BLOCKER_EXPIRED` | deviation (lead wording 2026-11-03) | The server's check is more than a minute old. Check again before you launch. |
+| `CHECKING` | deviation (lead wording 2026-11-03) | Checking with the server… |
 | `BLOCKER_UNSUPPORTED(path)` | pending (W-29) | This document field isn't supported here: {path}. |
 | `CHECK_AGAIN` | mock | Check again |
 | `CHECKED_ANNOUNCE` | mock | Server result checked. Launch is ready. |

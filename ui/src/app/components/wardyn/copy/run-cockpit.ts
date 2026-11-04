@@ -70,10 +70,12 @@ export const RUN_COCKPIT = {
   recordingDisabled: "Session recording is disabled on this deployment",
   recordingMissing:
     "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.",
-  // A macOS VM run: the agent's own process makes no cast there (SandboxSpec.Record is false), only a console
-  // or SSH terminal session does, and its cast is saved when the session ends, only if it showed output.
-  recordingMissingMacOS:
-    "This run has no captured terminal session. A recording appears here after a console or SSH terminal on this run closes, if it showed any output.",
+  // A macOS VM run: a recording appears when a console or SSH terminal on it closes, or when a task's
+  // agent finishes (its output is saved as one). An interactive run has no agent, so no agent clause.
+  recordingMissingMacOS: "This run has no recording yet. One appears when a console or SSH terminal on this run closes, or when a task's agent finishes.",
+  recordingMissingMacOSInteractive: "This run has no recording yet. One appears when a console or SSH terminal on this run closes.",
+  // A finished run with nothing listed: not "yet", and not a claim about why.
+  recordingNoneForRun: "No recording is available for this run.",
   // The THIRD fact: a fetch that FAILED establishes nothing about the run, so
   // it must not be reported as "this run has no recording". Same sentence the
   // Recording tab already shows
@@ -161,15 +163,17 @@ export const RUN_COCKPIT = {
   editLayout: "Edit layout",
   editing: "Editing layout",
   resetLayout: "Reset to default",
-  saveLayoutDefault: "Save as my default",
   doneEditing: "Done",
-  layoutSaved: "Saved as your default layout",
+  // Layout changes save themselves; these say where that stands. A failed write stays on screen, with a retry.
+  layoutSaving: "Saving layout…",
+  layoutSaved: "Layout saved",
+  layoutRetry: "Retry",
   // Honest, not an error: the deployment's store cannot persist layouts (the
   // endpoint 501s), so the arrangement is real but session-scoped. Said ONCE,
   // inline in the toolbar — never a toast per drag.
   // THIS attempt failed and the next may not — distinct from layoutNotPersisted,
   // which is a permanent fact about the deployment.
-  layoutSaveFailed: "Couldn't save that layout — try again.",
+  layoutSaveFailed: (preset: string) => `${preset} layout wasn't saved.`,
   layoutNotPersisted:
     "This deployment can't store layouts — your arrangement lasts for this session.",
   removeWidget: (label: string) => `Remove ${label}`,
@@ -211,10 +215,9 @@ export const RUN_COCKPIT = {
   countsFloor: "at least",
   countsFloorTitle: "This run's audit trail is longer than one page, so the counts cover its oldest and newest events only.",
   // Only the shortcuts this file actually binds. ⌘K (no command palette
-  // exists), ⌘1..4 (the tabs belong to run-detail-command-bar.tsx) and ⇧⌘F
-  // (AttachTerminal ships a fullscreen BUTTON, not a key binding) are on the
-  // board's strip and deliberately absent here: a hint that lies is worse than
-  // no hint.
+  // exists) and ⌘1..4 (the tabs belong to run-detail-command-bar.tsx) are on
+  // the board's strip and deliberately absent here: a hint that lies is worse
+  // than no hint. Esc is the terminal's, so the strip shows the terminal's own leave chord.
   //
   // M3: the same two hints, as two labelled key chips rather than one run of
   // text — the key itself is drawn by Kbd (kbd.tsx), which spells the modifier
@@ -235,6 +238,22 @@ export const RUN_COCKPIT = {
   tileNotAvailable: "Not available",
   tileFilesCount: (n: number) => `${n}`,
   tileCredentialsValue: (eligible: number, minted: number) => `${eligible} eligible · ${minted} minted`,
+} as const;
+
+// The run page's VM desktop tile and identity card (run-surfaces review).
+export const RUN_VM_PAGE = {
+  gatewayUnknown: "Couldn't check whether the desktop gateway is on.",
+  tryAgain: "Try again",
+  // The strip above a macOS VM run's terminal while its setup runs (macos_preparing).
+  settingUp:
+    "Setting up this run: cloning the repository and installing the agent's tools. You can use the terminal now. The work folder fills in when setup finishes.",
+  diskKeptNextStep: "It still takes room on this Mac. Tell the Mac's owner so they can remove it.",
+  machineLabel: "Machine",
+  machineMacOS: "macOS VM",
+  machineLinux: "Linux VM",
+  machineWithBase: (kind: string, base: string) => `${kind} · ${base}`,
+  startedLabel: "Started",
+  startedByLabel: "Started by",
 } as const;
 
 // #125 — the run page's own launch-advisory block. A launch that answers 2xx

@@ -6,6 +6,8 @@
 // Open desktop: the words are byte for byte from the approved mocks.
 // The button itself is UI_APPS_LANE.cta("desktop"), so the "Open …" pattern holds.
 
+import { TERMINAL } from "./terminal";
+
 export const DESKTOP = {
   title: "Desktop",
   ready: "Ready",
@@ -59,7 +61,7 @@ export const DESKTOP = {
   viewOnlyChip: "View only", // MAC-V01
   watch: "Watch desktop", // MAC-V02
   viewOnlyTitle: "View only", // MAC-V05
-  viewOnlyBody: "macOS 26 doesn't keep control here. Typing and clicking don't reach this desktop.", // MAC-V06
+  viewOnlyBody: "The browser can only watch this desktop on macOS 26. Typing and clicking don't reach it.", // MAC-V06
   backgroundWatchTile: "You can watch this desktop. Typing, clicking, pasting and clipboard copy are disabled.",
   backgroundWatchExposure: "A screen can show what the run keeps out of its logs, such as an app's secrets, open documents or anything else it puts on screen.",
   backgroundWatchBody: "This is a background run. Typing, clicking, pasting and clipboard copy are disabled.",
@@ -76,4 +78,16 @@ export const DESKTOP = {
   endedLowDisk: (gb: string) => `This Mac ran low on disk (${gb} GB free), so the macOS VM was stopped.`, // MV-D13
   endedRunnerUpgraded: "This Mac's runner was upgraded while the macOS VM ran, so the run was ended.", // MV-D14
   startingMacOS: "The macOS desktop is still starting.", // MV-D15
+  // Viewer states and hints not on the boards (run-surfaces review).
+  windowOpenTitle: "A window is open on the Mac",
+  windowOpenBody: "One keyboard at a time: while that window is open, this desktop only watches. Open the desktop again from the run page to watch it.",
+  reconnecting: "Reconnecting to the desktop",
+  reconnectingBody: "The connection dropped. This tab reconnects on its own.",
+  stillTrying: (reason: string) => `Still trying. The gateway said: ${reason}`,
+  noClipboard: "Copy and paste don't reach this desktop yet. Use Files or the terminal to move text.",
+  // A macOS VM desktop: the viewer cannot tell whether the run declared a UI app, so no Files there.
+  noClipboardMac: "Copy and paste don't reach this desktop yet. Use the terminal to move text.",
+  escapeHint: `${TERMINAL.ESCAPE_CHORD} leaves the desktop`,
+  canvasLabel: "Remote desktop",
+  backToRun: (title: string) => `Back to ${title}`,
 } as const;

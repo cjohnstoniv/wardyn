@@ -216,6 +216,15 @@ describe("TerminalPane — Watch desktop", () => {
     expect(await screen.findByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
   });
 
+  it("says when the gateway check failed, and Try again asks again", async () => {
+    vi.mocked(health.health).mockResolvedValueOnce({} as never);
+    paneFor({});
+    expect(await screen.findByText("Couldn't check whether the desktop gateway is on.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't check whether the desktop gateway is on.")).toBeNull();
+  });
+
   it("stays away while the gateway is off", async () => {
     vi.mocked(health.health).mockResolvedValue({ status: "ok", ui_sandbox: { enabled: false } } as never);
     paneFor({});
@@ -383,5 +392,37 @@ describe("TerminalPane — a run with no recording shows its kept output", () =>
   it("a macOS VM run still starting shows its startup steps, not output", async () => {
     await mount(mac({ state: "STARTING" }), false, "idle");
     expect(getOutput).not.toHaveBeenCalled();
+  });
+});
+
+// A macOS VM run is RUNNING while its setup runs: the strip above the terminal says so, on its own field, and
+// goes once setup is done.
+describe("TerminalPane — a macOS VM run's setup", () => {
+  const live = (over: Partial<RunDetail> = {}) =>
+    render(
+      <OperatorProvider operator principal="me">
+        <TerminalPane
+          run={{ ...makeMacOSVMRun({ id: "run-1", state: "RUNNING", created_by: "me", interactive: true }), ...over }}
+          terminal={false}
+          recording={null}
+          recState="idle"
+          recordingDisabled={false}
+          onGoRecording={vi.fn()}
+          onGoOutput={vi.fn()}
+          execMode={false}
+        />
+      </OperatorProvider>,
+    );
+
+  it("shows the strip, word for word, while setup runs, whatever mac_window says", () => {
+    live({ macos_preparing: true, mac_window: { state: "site_off", message: "off" } });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Setting up this run: cloning the repository and installing the agent's tools. You can use the terminal now. The work folder fills in when setup finishes.",
+    );
+  });
+
+  it("has no strip once setup is done", () => {
+    live();
+    expect(screen.queryByTestId("macos-setting-up")).toBeNull();
   });
 });

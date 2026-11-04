@@ -68,7 +68,7 @@ describe("a scheduled run's page", () => {
     show(scheduled("scheduled"));
     await userEvent.click(screen.getByRole("button", { name: SCHEDULED_RUN.CANCEL_RUN }));
     expect(runs.killRun).not.toHaveBeenCalled();
-    await userEvent.click(await screen.findByRole("button", { name: "Kill run" }));
+    await userEvent.click(await screen.findByRole("button", { name: "End run" }));
     await waitFor(() => expect(runs.killRun).toHaveBeenCalledWith("run-1"));
   });
 });

@@ -7,6 +7,7 @@
 // local issues, unsupported document fields, the template's unmet setup, the
 // server's refusal, missing setup items, then a stale or unchecked result.
 
+import { KEEP_NEW_RUN } from "../../../wardyn/copy/keep-machine";
 import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
@@ -15,12 +16,14 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
 import { SERVICE_FORM_ERRORS as SE } from "../../../wardyn/copy/run-service";
+import { WALL_PRESET_REASON } from "../../../../lib/api/wall-presets";
 import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
-  FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfRefusal, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
+  DESKTOP_WINDOW_FIELD, FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfRefusal, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
@@ -105,8 +108,14 @@ export interface BlockerInput {
   harnessLabel?: (id: string) => string;
   /** An application server is drafted and this server's web app gateway is off, so its ports could never be opened. */
   gatewayOff?: boolean;
+  /** The wall preset the draft chose, and whether this caller can no longer pick it (a launch or the list said so). */
+  wallPreset?: { name: string; unavailable: boolean };
+  /** The draft keeps or resumes a machine and the read of the kept machines failed: Launch waits for the Run step's retry. */
+  keptReadFailed?: boolean;
   /** The result for this draft is missing or older than a minute. */
   stale: boolean;
+  /** The stale result is one the server did answer for this draft, now more than a minute old. */
+  expired?: boolean;
 }
 
 export function buildBlockers(input: BlockerInput): Blocker[] {
@@ -117,6 +126,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
   if (input.macOSMinimum) out.push({ id: "local:macos_minimum", kind: "local", text: input.macOSMinimum, field: "resources" });
   if (input.keepLimit) out.push({ id: "keep:limit", kind: "local", ...input.keepLimit, to: locationOfHome("files"), field: "keep_work_folder" });
+  if (input.keptReadFailed) out.push({ id: "kept:read", kind: "local", text: KEEP_NEW_RUN.READ_FAILED, to: locationOfHome("run"), field: "machine" });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
   }
@@ -128,10 +138,22 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     const name = input.harnessLabel?.(c.harness) ?? c.harness;
     out.push({ id: `local_mcp:${c.harness}:${c.server}`, kind: "refusal", text: NR_TOOLS.MCP_REFUSED(name, c.server), to: { screen: "step", step: "tools" } });
   }
+  // A wall preset that is gone is never swapped for Open: the choice stays, and Launch is held until another is picked.
+  // The server's own sentence rides under it when it refused the check.
+  const presetRefused = input.refusal?.reason === WALL_PRESET_REASON.UNKNOWN;
+  if (input.wallPreset?.unavailable || presetRefused) {
+    out.push({
+      id: "wall_preset_unknown", kind: "refusal", text: WALL_PRESETS.UNAVAILABLE(input.wallPreset?.name || WALL_PRESETS.UNAVAILABLE_UNNAMED),
+      to: { screen: "step", step: "tools" }, field: "wall_preset", ...(presetRefused && input.refusal && { hint: input.refusal.text }),
+    });
+  }
   // The server's own refusal of the same conflict says it in other words; the blocker above stands for it. The keep
-  // blocker likewise says the member limit.
+  // blocker likewise says the member limit. A refusal of the window on the Mac is never a blocker: the choice is cleared
+  // with its sentence and the draft checked again without it (window-choice.ts).
   if (
     input.refusal &&
+    !presetRefused &&
+    input.refusal.field !== DESKTOP_WINDOW_FIELD &&
     !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
     !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
   ) {
@@ -147,7 +169,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: "gateway_off", kind: "gateway_off", text: NR_REVIEW.BLOCKER_GATEWAY_OFF, to: { screen: "step", step: "run" }, field: "inline_policy.ui_apps" });
   }
   // A stale result only matters when nothing else already holds Launch.
-  if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE });
+  if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: input.expired ? NR_REVIEW.BLOCKER_EXPIRED : NR_REVIEW.BLOCKER_STALE });
   return out;
 }
 

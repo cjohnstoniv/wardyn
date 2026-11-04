@@ -66,6 +66,7 @@ type PushRulesOverlay struct {
 	HoldSeconds        *int      `json:"hold_seconds,omitempty"`
 	DenyNewExecutables *bool     `json:"deny_new_executables,omitempty"`
 	MaxFileSizeMiB     *int      `json:"max_file_size_mib,omitempty"`
+	DenyAll            *bool     `json:"deny_all,omitempty"`
 }
 
 // LimitsOverlay is CeilingOverlay's counterpart for GovernanceLimits. The
@@ -80,8 +81,10 @@ type LimitsOverlay struct {
 	MaxConcurrentRuns          *int            `json:"max_concurrent_runs,omitempty"`
 	DenyUserDrive              *bool           `json:"deny_user_drive,omitempty"`
 	DenyMemberDrives           *bool           `json:"deny_member_drives,omitempty"`
+	DenyKeptMachines           *bool           `json:"deny_kept_machines,omitempty"`
 	DenyPlacements             *[]Placement    `json:"deny_placements,omitempty"`
 	AllowedMacOSBases          *[]string       `json:"allowed_macos_bases,omitempty"`
+	AllowedModels              *[]string       `json:"allowed_models,omitempty"`
 	MaxCPUMillis               *int            `json:"max_cpu_millis,omitempty"`
 	MaxMemoryMiB               *int            `json:"max_memory_mib,omitempty"`
 	MaxEphemeralDiskMiB        *int            `json:"max_ephemeral_disk_mib,omitempty"`

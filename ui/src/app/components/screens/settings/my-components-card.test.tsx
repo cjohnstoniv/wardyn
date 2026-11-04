@@ -130,7 +130,9 @@ describe("MyComponentsCard", () => {
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "content-type": "application/json" } }));
     mount();
     await user.click(screen.getByRole("button", { name: /Your components/ }));
-    expect(await screen.findByText("Couldn't load your components.")).toBeInTheDocument();
+    // UXA-74: the shared compact failure block, not red text beside a button.
+    expect(await screen.findByRole("heading", { name: "Couldn't load your components.", level: 4 })).toBeInTheDocument();
+    expect(document.querySelector('[data-size="compact"]')).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("2 saved");
     expect(within(screen.getByTestId("my-components-card")).getByText("Acme")).toBeInTheDocument();

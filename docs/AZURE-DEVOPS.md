@@ -605,6 +605,41 @@ That has two consequences:
 - **A push that removes a file at a review path is not held.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file. That is true on every forge: Azure DevOps' own branch policy is what protects that file.
 - **A review-path match on an unattended run stays refused and cannot be approved later.** Git prints what to do: remove those paths, or run the task interactively.
 
+## A template for contributing to a repository
+
+A `coverage: partial` run template saves the parts of an Azure DevOps contribution that do not change and leaves the repository to the person who launches it. It is kept in the repository as [`examples/templates/ado-contribute-partial.yaml`](../examples/templates/ado-contribute-partial.yaml); a test imports that file through the template door, and checks that this copy matches it.
+
+```yaml
+api_version: wardyn/v1
+kind: RunTemplate
+name: contribute-to-azure-devops-repo
+description: Push a branch to an Azure DevOps repository and open a pull request. The repository is chosen at launch.
+coverage: partial
+intent:
+  interactive: false
+  task_mode: harness
+  agent: claude-code
+  inline_policy:
+    allowed_domains:
+      - dev.azure.com
+    azure_devops_capabilities:
+      - code_read
+      - code_write
+      - pr
+needs_setup:
+  - field: workspaces
+    reason: Pick the Azure DevOps repository to contribute to (for example the contoso organisation's example-service repository).
+  - field: task
+    reason: Write what the agent should change, for example the work item or bug to fix.
+```
+
+- The organisation, project and repository names are placeholders. The template carries none; the person picks the repository at launch.
+- It is `partial` because a full template must attach a repository or drive, or say there are none (`template_coverage_invalid` otherwise). A partial template lists what is left under `needs_setup`, each entry a `field` and a `reason`, and a field listed there is not also in the intent.
+- An autonomous agent task that must push and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr`: nobody is there to approve either later. See [Capabilities](#capabilities).
+- The capabilities are a request. The row's ceiling still applies, and a run is never handed one the ceiling does not list.
+- To check it without storing anything, run `wardyn template import --kind RunTemplate ado-contribute-partial.yaml`. To keep it, save it with `wardyn template save ado-contribute-partial.yaml --scope person`. A shared template holds references, never credentials.
+- At launch the person picks the repository (`workspaces`) and writes the task, then reviews the run as for any other. See [New Run](NEW-RUN.md).
+
 ## Request flow
 
 ```mermaid

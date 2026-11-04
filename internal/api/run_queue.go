@@ -138,9 +138,12 @@ func queueWaitSec(req createRunRequest, interactive bool) (sec int, warning stri
 
 // queuePolicyRef is run_queue.policy_ref: what the run's policy was when it was reviewed, so a start can
 // tell it changed (Q7-A). A stored policy is its id and the SHA-256 of its spec; a launch preset is its
-// name, version and the SHA-256 of its request. An inline or default policy is the request's own, so
-// nothing can change under it. A policy or preset that has gone is recorded as gone.
-func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest) (json.RawMessage, error) {
+// name, version and the SHA-256 of its request; a wall preset is its id and version. An inline or
+// default policy is the request's own, so nothing can change under it. A policy or preset that has gone
+// is recorded as gone. frozen is the wall preset a fold froze for req, nil for none: its id and version
+// are recorded, never a second read that an edit in between could answer differently. With no fold, the
+// preset is read as it is now, and one that r's caller can no longer read is gone (r nil: not asked).
+func (s *Server) queuePolicyRef(ctx context.Context, r *http.Request, req createRunRequest, frozen *types.WallPresetOnRun) (json.RawMessage, error) {
 	ref := map[string]any{}
 	if req.PolicyID != nil {
 		ref["policy_id"] = req.PolicyID.String()
@@ -166,7 +169,65 @@ func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest) (json
 			ref["request_sha256"] = queueSHA256(p.Request)
 		}
 	}
+	if req.WallPreset != "" {
+		id, version := "", 0
+		if frozen != nil {
+			id, version = frozen.ID, frozen.Version
+		} else {
+			var err error
+			if id, version, err = s.wallPresetNow(ctx, r, req.WallPreset); err != nil {
+				return nil, fmt.Errorf("read the wall preset: %w", err)
+			}
+		}
+		if id == "" {
+			ref["wall_preset"], ref["wall_preset_gone"] = req.WallPreset, true
+		} else {
+			ref["wall_preset"], ref["wall_preset_version"] = id, version
+		}
+	}
 	return json.Marshal(ref)
+}
+
+// wallPresetNow is the id and version of the wall preset name names as it is now: a built-in's, or a
+// stored preset's. id is empty when it no longer exists or, with r, when r's caller may no longer read
+// it, judged as the fold judges it (launchWallPreset).
+func (s *Server) wallPresetNow(ctx context.Context, r *http.Request, name string) (id string, version int, err error) {
+	if p, ok := types.BuiltinWallPreset(name); ok {
+		return p.ID, p.Version, nil
+	}
+	ps, ok := s.cfg.Store.(store.WallPresetStore)
+	uid, perr := uuid.Parse(name)
+	if !ok || perr != nil {
+		return "", 0, nil
+	}
+	p, err := ps.GetWallPreset(ctx, uid)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return "", 0, nil
+	case err != nil || r == nil:
+		return p.ID, p.Version, err
+	}
+	c, err := s.wallPresetCaller(ctx, r, ps)
+	if err != nil {
+		return "", 0, err
+	}
+	if types.TemplateAuthorize(c.actor, p.Owner(), types.TemplateRead) != types.TemplateAllowed {
+		return "", 0, nil
+	}
+	return p.ID, p.Version, nil
+}
+
+// The points a test edits a wall preset at (Server.queueRace): between the create's fold and the
+// queue row's reference, and between the start's check of the reference and its fold.
+const (
+	queueRaceEnqueueAfterFold   = "enqueue_after_fold"
+	queueRaceStartAfterPrecheck = "start_after_precheck"
+)
+
+func (s *Server) queueRaceAt(point string) {
+	if s.queueRace != nil {
+		s.queueRace(point)
+	}
 }
 
 func queueSHA256JSON(v any) string {
@@ -415,7 +476,8 @@ func (s *Server) projectQueueLimit(r *http.Request, run *types.AgentRun) {
 
 // entry is the run_queue row a launch is stored with.
 func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.RunQueueEntry, error) {
-	ref, err := s.queuePolicyRef(ctx, q.req)
+	s.queueRaceAt(queueRaceEnqueueAfterFold)
+	ref, err := s.queuePolicyRef(ctx, nil, q.req, q.f.source.wallPreset)
 	if err != nil {
 		return store.RunQueueEntry{}, err
 	}
@@ -427,9 +489,10 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), DriveRunner: drivesBoundRunner(q.f.drives, q.f.keep),
-		NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
+		Barrier: q.f.enforced, NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
 	}
+	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
+	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID
@@ -476,7 +539,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	createData["queue"] = queue
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markGovernanceExempt(ctx, createData)
+	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
 		created.ID.String(), "success", mustJSON(withRunUserType(ctx, created.UserType, createData))))

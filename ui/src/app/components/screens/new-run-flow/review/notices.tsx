@@ -9,6 +9,7 @@ import { Notice } from "../../../wardyn/notice";
 import { PolicyRemedy, safeRequestHref } from "../../../wardyn/policy-remedy";
 import type { PolicyRef } from "../../../../lib/api/health";
 import type { WarningContext } from "../../../../lib/types/preflight";
+import type { UngovernedNotice } from "../../../../lib/types/policy-preview";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import type { AppliedAmount, AppliedResources } from "../../../../lib/types/new-run-contract";
@@ -49,6 +50,25 @@ function narrowing(amount: AppliedAmount, poolName: string | undefined): Narrowi
   }
 }
 
+/** The headline limits in plain English, at most three; "and more" only when the server says there are further ones. */
+function joinLimits(limits: readonly string[], more: boolean): string {
+  const shown = limits.slice(0, 3);
+  if (more) return [...shown, "and more"].join(", ");
+  if (shown.length < 3) return shown.join(" and ");
+  return `${shown.slice(0, -1).join(", ")}, and ${shown[shown.length - 1]}`;
+}
+
+/** The one line for a caller whose run stands outside governance; each state the server can report has its own sentence. */
+export function ungovernedText(u: UngovernedNotice | undefined): string | undefined {
+  if (!u) return undefined;
+  if (u.no_person) return NR_REVIEW.ADMIN_BYPASS_NO_PERSON;
+  if (u.no_unit) return NR_REVIEW.ADMIN_BYPASS_NO_PROFILE;
+  if (u.unavailable) return NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE;
+  if (!u.unit) return NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE;
+  if (!u.limits?.length) return NR_REVIEW.ADMIN_BYPASS_NO_LIMITS;
+  return NR_REVIEW.ADMIN_BYPASS_SIGNED_IN(u.unit, joinLimits(u.limits, !!u.more));
+}
+
 export interface NoticesProps {
   poolName?: string;
   slots?: PoolSlotsFact;
@@ -63,6 +83,8 @@ export interface NoticesProps {
   diskCut?: boolean;
   /** The walls' host lists the Access group draws a "Your walls leave out {host}." line for; that line says the list's warning by host. */
   wallsLeftOut?: readonly string[];
+  /** The policy preview's `ungoverned` block: present only for a caller whose own runs are not governed. */
+  ungoverned?: UngovernedNotice;
 }
 
 /** The policy a drop warning names, only when it publishes a way to ask; otherwise the warning reads as it always did. */
@@ -71,7 +93,8 @@ function askablePolicy(ctx: WarningContext | undefined): PolicyRef | undefined {
   return p && (safeRequestHref(p.request_url) || p.email || p.request_text) ? p : undefined;
 }
 
-export function Notices({ poolName, slots, applied, askedByYou, warnings, warningContext, diskCut, wallsLeftOut }: NoticesProps) {
+export function Notices({ poolName, slots, applied, askedByYou, warnings, warningContext, diskCut, wallsLeftOut, ungoverned }: NoticesProps) {
+  const bypass = ungovernedText(ungoverned);
   const full = slots?.verdict === "waits" && slots.max !== undefined && !!poolName;
   const found = applied
     ? [narrowing(applied.cpu_millis, poolName), narrowing(applied.memory_mib, poolName)].filter((n): n is Narrowing => n !== undefined)
@@ -82,9 +105,10 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings, warnin
     .map((w, index) => ({ w, policy: askablePolicy(warningContext?.find((c) => c.warning_index === index)) }))
     .filter(({ w }) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut || !!applied?.pids_limit?.capped))
     .filter(({ w }) => { const knob = wallsHostKnob(w); return !(knob && wallsLeftOut?.includes(knob)); });
-  if (!full && distinct.length === 0 && server.length === 0) return null;
+  if (!full && distinct.length === 0 && server.length === 0 && !bypass) return null;
   return (
     <div className="flex flex-col gap-3">
+      {bypass && <Notice tone="info">{bypass}</Notice>}
       {full && slots && poolName && (
         <Notice tone="info" live>
           {RUN_WAIT.AT_CAPACITY(poolName, slots.max ?? 0)}

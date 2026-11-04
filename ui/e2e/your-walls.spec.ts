@@ -97,6 +97,10 @@ test.describe("Your walls", () => {
     await navToRoute(page, "/account");
     await page.getByRole("button", { name: new RegExp(`^${YOUR_WALLS.TITLE}( |$)`) }).click();
     await press(page, YOUR_WALLS.REMOVE_ALL);
+    // Remove all asks first; only its confirm removes the walls.
+    const confirm = page.getByRole("alertdialog", { name: YOUR_WALLS.REMOVE_ALL_TITLE });
+    await confirm.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL, exact: true }).click();
+    await expect(confirm).toHaveCount(0);
     await page.reload();
     await page.getByRole("button", { name: new RegExp(`^${YOUR_WALLS.TITLE}( |$)`) }).click();
     await expect(page.getByRole("radio", { name: YOUR_WALLS.SITES_ANY })).toBeChecked();

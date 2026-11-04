@@ -81,6 +81,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("Launched: while the run loads (UXR-48)", () => {
+  it("draws a placeholder for the badge and the title, then the run", async () => {
+    let settle!: (r: unknown) => void;
+    getRun.mockReturnValue(new Promise((r) => (settle = r)));
+    open();
+    const loading = await screen.findByTestId("launched-loading");
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    await act(async () => settle(run()));
+    expect(await screen.findByRole("heading", { level: 1, name: "nightly build" })).toBeInTheDocument();
+    expect(screen.queryByTestId("launched-loading")).toBeNull();
+  });
+});
+
 describe("Launched: Waiting (U13)", () => {
   it.each([
     [0, "1st in line"],
@@ -113,9 +127,9 @@ describe("Launched: Waiting (U13)", () => {
     getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue() }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
-    const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
     expect(killRun).not.toHaveBeenCalled();
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
   });
 });
@@ -215,8 +229,8 @@ describe("Launched: reload and identity", () => {
     getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockResolvedValue(run({ state: "KILLED" }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
-    const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "nightly build" })).toHaveFocus());
   });

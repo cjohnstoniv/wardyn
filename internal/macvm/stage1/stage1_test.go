@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -66,6 +67,7 @@ var wantArgv = [][]string{
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.RemoteManagement", "VNCLegacyConnectionsEnabled", "-bool", "true"),
 	root("/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"),
 	root("/usr/bin/sudo", "-H", "-u", "agent", "--", "/usr/bin/defaults", "-currentHost", "write", "com.apple.screensaver", "idleTime", "-int", "0"),
+	root("/usr/bin/sudo", "-H", "-u", "agent", "--", "/usr/sbin/sysadminctl", "-screenLock", "off", "-password", "-"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"),
@@ -271,7 +273,7 @@ func TestNoSecretInArgvEventsOrErrors(t *testing.T) {
 					f.srv.Fail = func(argv []string) bool { return slices.Equal(argv, commands[i].Argv) }
 				}
 				_, err := f.b.Bootstrap(context.Background(), f.input(withCode))
-				if (err != nil) != (i >= 0) {
+				if (err != nil) != (i >= 0 && !commands[i].Optional) {
 					t.Fatalf("err = %v", err)
 				}
 				var text strings.Builder
@@ -303,6 +305,9 @@ func TestNoSecretInArgvEventsOrErrors(t *testing.T) {
 func TestAFailureAtEachStepStopsStage1(t *testing.T) {
 	for i, c := range commands {
 		t.Run(c.ID, func(t *testing.T) {
+			if c.Optional {
+				t.Skip("optional: TestAnOptionalStepFailingDoesNotStopStage1")
+			}
 			f := newFixture(t, code)
 			f.srv.Fail = func(argv []string) bool { return slices.Equal(argv, c.Argv) }
 			_, err := f.b.Bootstrap(context.Background(), f.input(true))
@@ -696,5 +701,43 @@ func TestStage1RefusesAnInputWithoutAPairKey(t *testing.T) {
 		if len(f.srv.Execs()) != 0 {
 			t.Fatal("stage 1 ran a command before it had a pairing key")
 		}
+	}
+}
+
+// Only the screen lock row is optional: a Mac that refuses it must still publish a base.
+func TestAnOptionalStepFailingDoesNotStopStage1(t *testing.T) {
+	var optional []string
+	for _, c := range commands {
+		if c.Optional {
+			optional = append(optional, c.ID)
+		}
+	}
+	if !slices.Equal(optional, []string{"screenlock-off"}) {
+		t.Fatalf("optional rows = %q", optional)
+	}
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+	f := newFixture(t, provPass)
+	f.srv.Fail = func(argv []string) bool { return slices.Contains(argv, "-screenLock") }
+	if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+		t.Fatalf("stage 1 stopped on an optional row: %v", err)
+	}
+	execs := f.srv.Execs()
+	if len(execs) != len(wantArgv) || !slices.Equal(execs[len(execs)-1].Argv, wantArgv[len(wantArgv)-1]) {
+		t.Fatalf("%d commands ran; want all %d, ending with Remote Login off", len(execs), len(wantArgv))
+	}
+	var agentPw string
+	for _, e := range execs {
+		if slices.Contains(e.Argv, "-addUser") {
+			agentPw = strings.Split(string(e.Stdin), "\n")[1]
+		}
+	}
+	if !strings.Contains(logs.String(), "screenlock-off") {
+		t.Fatalf("no log line naming the row: %s", logs.String())
+	}
+	if agentPw == "" || strings.Contains(logs.String(), agentPw) || strings.Contains(logs.String(), provPass) {
+		t.Fatalf("a secret is in the log (or none was found): %s", logs.String())
 	}
 }

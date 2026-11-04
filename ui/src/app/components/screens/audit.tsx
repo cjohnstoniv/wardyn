@@ -382,7 +382,7 @@ export function AuditScreen() {
     <PageContainer width="list">
       <PageHeader
         title="Audit"
-        description="Append-only. Every egress decision, credential broker, approval, and enforcement action — across every run."
+        description="Append-only. Every egress decision, brokered credential, approval and enforcement action, across every run."
       />
 
       {securityOperator && (
@@ -402,6 +402,7 @@ export function AuditScreen() {
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            aria-label="Search events"
             placeholder="Search events, domains, run IDs…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -432,6 +433,7 @@ export function AuditScreen() {
             <SelectItem value="human">Human</SelectItem>
             <SelectItem value="agent">Agent</SelectItem>
             <SelectItem value="system">System</SelectItem>
+            <SelectItem value="service">Service</SelectItem>
           </SelectContent>
         </Select>
 
@@ -440,6 +442,11 @@ export function AuditScreen() {
           {status === "ready" && !pollStale && (
             <Chip tone="success" dot pulse title="Polling for new events">
               Live · appending
+            </Chip>
+          )}
+          {status === "ready" && pollStale && (
+            <Chip tone="warning" dot>
+              Not updating — retrying
             </Chip>
           )}
           <span className="whitespace-nowrap text-sm text-muted-foreground">
@@ -473,7 +480,7 @@ export function AuditScreen() {
         <TruncatedNote count={events.length} cap={LIST_LIMIT}>
           {runFilter
             ? `Showing the newest ${LIST_LIMIT} events for this run (truncated) — its earliest events are not shown here.`
-            : `Showing the first ${LIST_LIMIT} events (truncated) — older events may have rolled off this window. Filter by a run to see that run's own trail.`}
+            : `Showing the newest ${LIST_LIMIT} events. Older events aren't shown here. Filter by a run to see that run's own trail.`}
         </TruncatedNote>
       )}
 
@@ -507,7 +514,7 @@ export function AuditScreen() {
             <EmptyState
               icon={ScrollText}
               title="The trail starts with your first run."
-              description="Every egress decision, credential broker, approval, and enforcement action gets recorded here the moment you launch a run."
+              description="Every egress decision, brokered credential, approval, and enforcement action gets recorded here the moment you launch a run."
               action={
                 // An audit screen doesn't need to own a run-launcher — /runs
                 // is already the canonical "Launch your first run" CTA (its
@@ -728,7 +735,7 @@ function EventRow({
         <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
           {detail || callId ? (
             <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:min-w-[10rem]">
-              <span className="truncate text-sm text-foreground" title={describeEvent(event)}>
+              <span className="truncate text-sm text-foreground" title={`${describeEvent(event)}\n${event.action}`}>
                 {describeEvent(event)}
               </span>
               {detail ? (
@@ -751,7 +758,7 @@ function EventRow({
               )}
             </span>
           ) : (
-            <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>
+            <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={`${describeEvent(event)}\n${event.action}`}>
               {describeEvent(event)}
             </span>
           )}

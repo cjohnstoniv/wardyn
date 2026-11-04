@@ -186,6 +186,7 @@ if v.State == client.RunPolicyViewRecorded {
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 | `provenance` | per top-level `spec` key, the layer that set it (`client.PolicyProvenance`, [denials.md](operations/denials.md)) |
 | `host_marks` | `inspected` the allowed hosts Wardyn opens and `terminated` every host it terminates once admitted, as `host` or `host:port`, and `outside` those opened on a port no entry names (all, under allow-all), from the run's proxy config (`client.RunPolicyHostMarks`); other allowed hosts are tunnels. Absent for a run recorded before marks or restarted |
+| `wall_preset` | the run's wall preset (`id`, `name`, `scope`, `group_id`, `version`) and what it `narrowed`, `removed` and `added`; only `scope` for a personal preset read by anyone but its owner |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
 
@@ -201,7 +202,7 @@ The spec always strict-decodes as a policy. Whether it passes policy validation 
 
 #### `changes`
 
-Never `null`. Each item is a `cause` (`workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `walls`, `wall_preset`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
 Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle
@@ -338,6 +339,7 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 
 ## Scheduled runs
 
+- `correlation_id` on `CreateRunRequest` (`wardyn run --correlation-id`) is your own reference for the run, kept and returned on it. Every event of the run that reaches an audit sink carries it as `data.correlation_id` while the run's masking is held complete (a row labelled `mask_scope: globals_only` carries none); the stored trail and its hash chain do not, and neither does the acknowledged-delivery webhook. A template carries none. Erasing a person's `run_tasks` clears it; sinks drop it within 30 seconds, and exported copies follow the sink's retention.
 - `start_at` and `start_time_zone` on `CreateRunRequest` start a run once, later: at most 6 days ahead for a background task (6 days 23 hours interactive), so it keeps its wait before the 7-day cap, when the server sets `WARDYN_SCHEDULED_RUNS` ([Scheduled runs](operations/runner-pools.md#scheduled-runs)).
 - The run is `QUEUED` with `queue.reason` `scheduled`, `queue.start_at` and `queue.time_zone`; cancel it with `KillRun`.
 - `GET /setup/status` carries `features.scheduled_runs`, so a client offers scheduling only when it is on.
@@ -488,6 +490,24 @@ overrides:
     add_allowed: [api.example.com, pypi.org]
 ```
 
+## Wall presets
+
+A wall preset is a named set of walls that only narrows, picked for one run at launch. Open, Read-only and Sealed are built in; a person keeps their own, a group's template managers keep the group's, and an organisation administrator keeps the organisation's.
+
+| Method | Route | Who |
+|---|---|---|
+| `ListWallPresets` | `GET /api/v1/wall-presets` | anyone signed in, the admin token and a service identity: the built-ins, then each preset they may read, and `publish` |
+| `GetWallPreset` | `GET /api/v1/wall-presets/{id}` | a reader of that preset; `{id}` is a uuid or a built-in's name (`open`, `read-only`, `sealed`) |
+| `SaveWallPreset` | `POST /api/v1/wall-presets`, `PUT /api/v1/wall-presets/{id}` | the owner (personal), an organisation administrator in the Admin view (organisation), the group's template managers (group) |
+| `DeleteWallPreset` | `DELETE /api/v1/wall-presets/{id}` | as `SaveWallPreset` |
+
+- The rules are the [run templates'](#run-templates): the same scopes, the same `publish`, and the same template managers. A preset you cannot read, and one that does not exist, answer the same `404` `wall_preset_not_found`.
+- `WallPresetSaveRequest` on `POST` names `scope` (`person`, `group` or `org`), `group_id` for a group, `name`, `description` and `spec`. On `PUT` it names `name`, `description`, `spec` and `expected_version`, the version you read; the scope never changes.
+- `spec` is the [Your walls](#your-walls) document and is checked the same way, as `422` `wall_preset_invalid`. A spec that names no limit is refused too: Open is the built-in for no preset.
+- A built-in is never written (`403` `wall_preset_builtin`), and no preset may take a built-in's name in any case (`409` `wall_preset_name_taken`).
+- Writes need a signed-in person (`400` `walls_need_person`). Who saved a shared preset last is answered as `updated_by`; for a personal preset it never is.
+- A write is audited as `wall_preset.create`, `wall_preset.update` or `wall_preset.delete`. A shared preset's row records its whole spec; a personal one's records only the knobs and list sizes, as `person.walls.set` does.
+
 ## Run templates
 
 A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: a published template grants nothing.
@@ -499,7 +519,7 @@ A template is a saved run setup, whole or partial, kept for yourself, published 
 | `SaveTemplate` | `POST /api/v1/templates`, `PUT /api/v1/templates/{id}` | the owner (personal), an organisation administrator (organisation), the group's template managers (group) |
 | `DeleteTemplate` | `DELETE /api/v1/templates/{id}` | as `SaveTemplate` |
 | `CopyTemplate` | `POST /api/v1/templates/{id}/copy` | a reader of the source who may write the target |
-| `ListTemplateGroupAdmins`, `GrantTemplateGroupAdmin`, `RevokeTemplateGroupAdmin` | `GET`/`PUT`/`DELETE /api/v1/admin/template-group-admins` | admin |
+| `ListTemplateGroupAdmins`, `GrantTemplateGroupAdmin`, `RevokeTemplateGroupAdmin` | `GET`/`PUT`/`DELETE /api/v1/admin/template-group-admins` | admin; a grant makes one person a template manager of one group, for its templates and its [wall presets](#wall-presets) |
 
 - A template you cannot read, and one that does not exist, answer the same `404` `template_not_found`.
 - `ListTemplates` answers `publish`: where you may save one.
@@ -526,7 +546,8 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 - `POST /api/v1/templates/import` (`Client.ImportTemplate`) takes `{format, source, kind?}`, where `format` is `json` or `yaml` and `kind` is `Run`, `RunTemplate` or empty for either. It answers `200` with the normalised `document` when nothing is wrong, and otherwise with `diagnostics`, each `{path, reason, message}`. It stores nothing, grants nothing and needs only a signed-in person.
 - A document over 1 MiB is a diagnostic in a `200`; a request over 2 MiB plus 4 KiB is `413` `request_body_too_large`. A client that JSON-escapes `<`, `>` and `&` (Go does, as six bytes each) can push a document under its own cap past the request cap when it is mostly those characters.
 - The door holds a document to the same shape and availability checks as create, preflight and the policy preview, so a request they refuse is refused at the door with the same reason, except that a field this server cannot honour yet is `template_field_unavailable` at the door where a run request gets `request_field_unavailable`.
-- `wardyn run --file <doc>` (`-` reads stdin) has the door check a `Run` document, then creates the run from its `intent`. A document's `inline_policy` is sent as `policy_overlay`, so it lays onto your default policy and never replaces it. Only `--title`, `--description`, `--wait`, `--timeout`, `--max-wait`, `--machine-kind`, `--macos-base`, `--json` and `--dry-run` go with it. `wardyn template import --kind Run|RunTemplate` sets the kind the import expects.
+- A worked `coverage: partial` example for an Azure DevOps repository is in [AZURE-DEVOPS.md](AZURE-DEVOPS.md#a-template-for-contributing-to-a-repository).
+- `wardyn run --file <doc>` (`-` reads stdin) has the door check a `Run` document, then creates the run from its `intent`. A document's `inline_policy` is sent as `policy_overlay`, so it lays onto your default policy and never replaces it. Only `--title`, `--description`, `--wall-preset`, `--wait`, `--timeout`, `--max-wait`, `--start-at`, `--time-zone`, `--machine-kind`, `--macos-base`, `--correlation-id`, `--json` and `--dry-run` go with it. `wardyn template import --kind Run|RunTemplate` sets the kind the import expects.
 
 `policy_overlay` carries a document's `intent.inline_policy`: the keys it names replace your default policy's (your governance ceiling, or the deployment default); the rest keep the default's values. Only the named keys are bounded by your ceiling: the default's operator mounts and grant pairings stay. Beside `policy_id` or `inline_policy` it is `400` `policy_overlay_conflict`; beside `preset`, `preset_field_not_per_launch`. A null or empty overlay, an unknown key, a wrongly typed value, an excluded field or a redaction placeholder is `400` `policy_overlay_invalid`, naming the first path. Edits beside a saved policy travel as `overrides`.
 
@@ -576,6 +597,67 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 - `GET /runs/{id}/output` adds `agents`: each agent's `state`, `running` or `exited` with its `exit_code`, as the last status line in the kept output reads. It is absent when no status line is in that output. `?agent=<id>` returns that agent's lines alone. Every line an agent prints is prefixed with its id in the combined output. The prefix and `?agent=` are for display only: an agent can print lines that look like another's.
 - A held tool call's approval names the agent that asked in `requested_scope.harness`; an egress approval names none, since the agents share one proxy route: the agent whose tool-approval credential the call carried, never one the request body names. The agents share one user in the sandbox, so one agent could present another's credential; every agent holds the same met rules, so that changes the name on the card and never the decision.
 - Needs a harnesses image from 0.10.0 or later: an older image's launcher has no `--tasks`.
+
+## Kept machines
+
+A kept machine is a person's macOS VM, kept on their own Mac between runs ([macOS VMs](operations/macos-vms.md#keeping-the-machine)). The refusal codes are in the [reason table](#reason-branch-on-this-never-on-errors-prose) as `kept_machine_*`.
+
+| Method | Route | Who |
+|---|---|---|
+| `CreateRun` with `Machine` | `POST /api/v1/runs` | a signed-in person, for an interactive macOS VM run on their own Mac |
+| `ListMyMachines` | `GET /api/v1/me/machines` | a signed-in person: their own machines |
+| `DeleteMyMachine` | `DELETE /api/v1/me/machines/{id}` | the machine's owner |
+| `ListKeptMachines` | `GET /api/v1/machines/kept` | the super admin: every person's machines, narrowed by `?owner=` and `?runner=`; answers `machines` and `total` |
+| `DeleteKeptMachine` | `DELETE /api/v1/machines/kept/{id}` | the super admin |
+
+The run's `machine` request field is `RunMachine`:
+
+| Field | Meaning |
+|---|---|
+| `keep` | `true` keeps this run's machine when the run stops |
+| `name` | The new machine's name, yours alone and unique among yours. Empty lets the server pick one. Only with `keep` |
+| `resume` | The kept machine this run starts from, by id or name |
+| `fresh` | With `resume`: delete what is on the machine and start it again from the Mac's current base. Only with `resume` |
+
+- `keep` and `resume` are exclusive. Both together, `fresh` without `resume`, or a bad name is `400` `kept_machine_invalid`.
+
+`GET /api/v1/me/machines` answers `MyMachines`:
+
+| Field | Meaning |
+|---|---|
+| `machines` | The caller's machines, deleting ones included. Each has `id`, `name`, `owner_subject`, `runner_id`, `runner_name`, `base`, `base_prepared_at`, `state` (`creating`, `in_use`, `kept` or `deleting`), `run_id`, the run that holds it now or held it last (a normal stop does not clear it, so use `state`, `creating` or `in_use`, to tell whether it is held), `scrubbed`, `disk_bytes`, `created_at`, `last_used_at`, `expires_at`, and `delete_started_at` with `delete_reason` while a delete is finishing |
+| `count` | How many machines the caller keeps |
+| `limit` | The most the caller may keep: `macos_vm.max_kept_machines_per_person` |
+| `idle_days` | The site's current idle limit in days: `macos_vm.kept_machine_idle_days`. It does not move a machine's own `expires_at`, which was set at its last stop |
+| `allowed` | Whether the caller may keep another machine |
+| `reason` | When `allowed` is false, the refusal code: `kept_machine_site_off`, `governance_unit`, `kept_machine_not_your_mac` or `kept_machine_person_limit` (a resume still works) |
+| `worst_bytes` | The most disk one new kept machine can take |
+
+`GET /api/v1/runs/{id}` adds `machine` for a run that kept or resumed one. The Go client's `GetRunMachine` reads it as `RunMachineView`:
+
+| Field | Meaning |
+|---|---|
+| `id` | The machine's id |
+| `name` | Its name |
+| `mode` | `new`, `resumed` or `fresh`: what this run did with it |
+| `keep_at_end` | `true` while the machine still exists and is kept when the run stops |
+| `state` | The machine's state now: `creating`, `in_use`, `kept` or `deleting` |
+| `scrubbed` | Whether its last stop scrubbed it |
+| `runner_name` | The Mac it is kept on |
+| `holder_run_id` | The run that holds it now, or held it last. A stop does not clear it |
+| `base` | The base it was made from |
+| `disk_bytes` | What its last stop wrote |
+| `expires_at` | When it expires if unused |
+| `deleted` | `true` when the machine no longer exists. The row is then `id`, `mode`, `scrubbed` (false) and `deleted` |
+
+- The row is the machine as it is now, shared by every run that used it. It leaves out `last_used_at`, which a resume overwrites.
+
+`DELETE /api/v1/me/machines/{id}` answers `204` once the Mac has deleted the machine, or the Mac is no longer registered. It answers `202` with the machine while the Mac is offline, and the delete finishes when the Mac is back. `DELETE /api/v1/machines/kept/{id}` answers `200`, or `202` while the Mac is offline, with `id`, `name`, `owner`, `runner_id` and `outcome` (`deleted`, `already_absent`, `deferred` or `record_only`). For both:
+
+- A machine a run holds is `409` `kept_machine_in_use`. A delete already started is `409` `kept_machine_deleting`.
+- An id that is not yours, or is no machine, is `404` `kept_machine_not_found`. The admin route answers `404` only for no machine.
+- `503` `kept_machine_delete_failed` means the Mac refused and the machine is kept. `503` `kept_machine_delete_unconfirmed` means the Mac's answer is unknown and the delete is retried.
+- A delete is audited as `machine.delete`, and an admin's as `by: admin`.
 
 ## Model providers
 
@@ -679,7 +761,7 @@ start.
 | `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `run_containment_pending` | `403` on token renewal (`identity.renew`): the run's Kubernetes runner deleted it but cannot yet prove it stopped, so its token is never renewed again. The runner's relay fence is what bounds its egress; this is the second layer. |
 | `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. Launch the run again. |
-| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. |
+| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run with `allowed_models` on such a runner is refused `409` with it. |
 | `gateway_identity_changed` | A run asked for a gateway token, or a revive was asked for, and its model provider was changed or turned off after the run started: `403` on the token, `409` on the revive. Create a new run, or edit the provider back. |
 | `gateway_identity_unavailable` | `503`: Wardyn couldn't read what a gateway token depends on, or the save that turns gateway identity on couldn't make the signing key, so nothing was issued or saved. |
 | `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. |
@@ -693,6 +775,27 @@ start.
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
+| `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
+| `kept_machine_not_your_mac` | `403`: the caller is not a person, or has no Mac of their own outside other people's pools. |
+| `kept_machine_person_limit` | The caller already keeps `macos_vm.max_kept_machines_per_person` machines. |
+| `kept_machine_not_found` | `404`: no kept machine of the caller's has that id. |
+| `kept_machine_in_use` | `409`: a run holds the machine, so it can't be deleted. |
+| `kept_machine_deleting` | `409`: a delete of the machine has already started. |
+| `kept_machine_delete_failed` | `503`: the Mac refused the delete before removing anything; the machine is kept. |
+| `kept_machine_delete_unconfirmed` | `503`: the Mac's answer was lost or was not a refusal, so the machine may already be gone; the delete stays pending and is retried until the Mac confirms it, and the machine can't be resumed meanwhile. |
+| `kept_machine_invalid` | `400`: the run's `machine` is malformed: both `keep` and `resume`, `fresh` without `resume`, or a name that is not a valid machine name. |
+| `kept_machine_interactive_only` | `422`: a machine is kept or resumed only by an interactive macOS VM run. |
+| `kept_machine_resident_secrets` | `422`: the run would put a lasting credential (an environment or file secret) inside the kept machine. |
+| `kept_machine_with_work_folder` | `422`: `keep_work_folder` was asked beside a kept machine. |
+| `kept_machine_expired` | `410`: the machine passed its idle limit; it is deleted, or its delete has started. |
+| `kept_machine_base_too_old` | `409`: the machine's base is older than `macos_vm.max_base_age_days`; start it fresh. |
+| `kept_machine_offline` | `409`: the Mac is offline, or is not the Mac the machine is kept on. |
+| `kept_machine_runner_too_old` | `409`: the Mac's runner does not keep machines; update `wardyn-runnerd`. |
+| `kept_machine_mac_limit` | `422`: another machine would pass the Mac's kept-disk limit, or the Mac keeps no machines. |
+| `kept_machine_name_taken` | `409`: the caller already keeps a machine of that name. |
+| `kept_machine_unavailable` | The run was not launched: its dispatch could not make or claim the machine. |
+| `kept_machine_fresh_base` | `422`: a fresh start names a base other than its machine's own; start a new kept machine to use a different base. |
+| `kept_machine_reset_unconfirmed` | `409`: a fresh start of the machine was asked of its Mac and never confirmed, so only another fresh start may use it. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `runner_not_found` | No such runner to revoke: absent, already revoked, an unclaimed one past its wait, or (on `/me`) another person's. |
@@ -740,6 +843,7 @@ start.
 | `workspace_seed_store_unavailable` / `workspace_seed_unreadable` / `workspace_seed_source_target_invalid` / `workspace_seed_no_base_image` / `workspace_seed_policy_conflict` | `POST /runs`' `workspace_id` resolution (`seedRequestWorkspace`): no store configured, the workspace could not be read, a stored source's target fails the authored-target deny-list, an exec run named a workspace with no base image and no `--agent`/`--image`, or the seeded sources conflict with the policy's own mounts/repos. |
 | `placement_invalid` / `resources_invalid` / `workspace_target_invalid` / `override_invalid` / `allowed_image_invalid` / `runner_pool_invalid` | `400`: a malformed `placement`, `resources`, workspace `target`, `overrides` entry, `allowed_image` or `runner_pool_id`; `422` for a target on a workspace with several repositories or folders. |
 | `workspace_target_overlap` / `workspace_pin_conflict` / `image_conflict` / `workspace_ado_org_conflict` | `422`: the attached workspaces cannot share one run: equal or nested paths (two repositories in one directory included), two model-provider pins, base images or Azure DevOps organisations. |
+| `image_digest_required` | `403`: the organisation's `images.require_digest` setting is on and a member's image (or any workspace's base image) is not pinned `image@sha256:<digest>`. Operators are not bound. |
 | `workspace_selection_invalid` / `run_ref_invalid` | `400`: a malformed `workspaces[]` list (an id twice or malformed, over 32, or `workspace_id` not first) or `repos` entry (a repo twice, or a ref git could read as an option). |
 | `workspace_repo_unknown` | `422`: a `repos` entry the workspace does not carry, or the `repo` of `GET /workspaces/{id}/branches` is not one of its repository sources. |
 | `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run with no user pool of yours, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. A credential is judged at the trust class of each eligible runner, highest first, and the detail names the class it was refused at. A `machine_kind: "linux_vm"` run with `interactive_start: "agent"` is a `placement_capability` too: a Linux VM's terminal opens a shell, not the agent CLI, in this release. So is a `linux_vm` run that carries a folder, on a runner that cannot share one into the guest (older than VM folder shares, or no working `virtiofsd`). |
@@ -750,7 +854,7 @@ start.
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. `503` on the UI gateway's relay: the runner holding the run is offline; retry once it reconnects. |
 | `runner_at_capacity` | `422`: a revive onto a runner at one of its limits (Runs at once, or a total); or a launch that lost the runner's last room to another launch between placement and the insert (launch it again). A launch whose runners are all at their limits waits in the pool's queue instead. |
 | `runner_limits_unset` | `422`: no runner of the pool that could take the run has declared its limits. |
-| `runner_recording_off` | `422`: the organisation or the pool requires recording (`recording: required`), and no runner of the pool that could take the run records: one started with `--recording-store off`, or one older than per-run recording. |
+| `runner_recording_off` | `422`: the organisation or the pool requires recording (`recording: required`), and no runner of the pool that could take the run records: one started with `--recording-store off`, or one older than per-run recording. A macOS VM pool needs no recording runner: the organisation records it. |
 | `recording_store_off` | `422`: the organisation or the pool requires recording, and the organisation keeps no session recordings. Saving `recording: required` (a pool, or the organisation's defaults) while it keeps none is refused with it too. |
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
 | `request_field_unavailable` / `main_drive_unenforceable` | `422`: a field this server cannot honour yet, refused and never dropped; or a disk size the run's policy sets that the pool's runners cannot cap. |
@@ -766,11 +870,16 @@ start.
 | `multi_agent_tasks_off` | `422`: the request gives an agent its own `tools[].task` while `WARDYN_MULTI_AGENT_TASKS` is off. Launch one agent per run, or turn the switch on. |
 | `policy_overlay_invalid` / `policy_overlay_conflict` | `400`: an unusable `policy_overlay`, or one beside `policy_id` or `inline_policy` (see [Run documents](#run-documents)). |
 | `run_shape_conflict` | `422`: `shape` does not fit the run: it needs `experience`, and `application`, `environment` and `agent_task` each require the workload or tool shown under [Run documents](#run-documents). |
+| `correlation_id_invalid` | `422`: `correlation_id` is over 128 characters or holds anything but ASCII letters, digits and `. _ : / -`. |
 | `run_service_shape` | `422`: `service` rides a run that is not a background run of a command: it needs `experience` `background` and `workload` kind `command`. A VM `machine_kind` is `request_field_unavailable`. |
 | `run_application_ui_apps_denied` | `422`: `POST /runs`, `POST /runs/preflight` and `POST /runs/policy-preview`: `shape` `application` declares `ui_apps` that the governance profile's `deny_ui_apps` strips or its allowed apps lack, or an inbound app that `deny_interactive` strips, and the sentence says which. Other shapes keep the strip and the warning. |
 | `run_background_watch_site_off` | `403`: watching a background macOS run's desktop while the site config's `macos_vm.allow_background_watch` is `false`. A profile's `deny_background_desktop_watch` answers as `governance_unit` instead. |
 | `run_background_watch_not_background` / `run_background_watch_old_boot` / `run_background_watch_unconfirmed` / `run_background_watch_offline` / `run_background_watch_control` / `run_background_watch_paused` | `409`: `POST /runs/{id}/desktop/watch-ticket`, the view-only ticket to a background macOS run's desktop, or that ticket at the gateway: a run that is not a background task; a boot from before its helper was asked to force the view; no report that this boot's view is forced, or caps that do not say `observe`; a runner that is offline; a Mac that offers desktop control; a paused run. `403` on the same reasons when a re-check refuses an open view. |
-| `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. The one exception is the built-in desktop of a background macOS VM run, which its owner can watch view only through `POST /runs/{id}/desktop/watch-ticket` (the `run_background_watch_*` rows above). A declared noVNC app, the desktop's files and a desktop sign-in still answer this. |
+| `mac_window_site_off` / `mac_window_not_macos_vm` / `mac_window_not_your_mac` / `mac_window_unrecorded` | `403`, `409`, `403`, `403`: `POST /runs/{id}/desktop/window`, or `desktop_window: "at_start"` at create, which opens a window onto a macOS VM run on the Mac of the caller's own runner. `macos_vm.allow_attended_window` is not `true`; the run is not a macOS VM run; the Mac's runner is not the caller's; the recording level is Screen and actions, where a window on the Mac isn't recorded (its sentence: "This run's recording level is Screen and actions, and a window on your Mac isn't recorded, so Wardyn won't open one. Watch its desktop from the run page instead."). A profile's denial answers as `governance_unit`. A 30 second re-check asks again and ends the window on any refusal, or any check it cannot make. |
+| `mac_window_offline` / `mac_window_runner_too_old` / `mac_window_not_here` / `mac_window_desktop_control` / `mac_window_paused` / `mac_window_preparing` / `mac_window_open` / `mac_window_not_at_mac` / `mac_window_lock_unknown` / `mac_window_failed` | `409` (`502` for `mac_window_failed`): the runner is offline, cannot open a window, or is connected through another server (use a single replica or sticky runner routing); a browser desktop with control did not close in time; the run is paused, still being prepared, or already has a window; the person is not signed in at the unlocked Mac; the Mac can't tell whether its screen is locked, so the window stays closed; the runner could not open it. `GET /runs/{id}` has `macos_preparing: true` while setup runs. |
+| `mac_window_revoked` | `403`: the caller's session was cut off; at a re-check it closes the window as `revoked`. |
+| `desktop_window_invalid` | `400`: `desktop_window` is not `at_start`, or the run is not a macOS VM run. |
+| `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. The one exception is the built-in desktop of a background macOS VM run, which its owner can watch view only through `POST /runs/{id}/desktop/watch-ticket` (the `run_background_watch_*` rows above). `POST /runs/{id}/attach/ticket`, with `?purpose=ui` too, answers `run_background_only` for a background run: use the watch-ticket call. A declared noVNC app, the desktop's files and a desktop sign-in still answer this. |
 | `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
 | `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |
@@ -802,7 +911,7 @@ start.
 | `computer_folders_off` | `403` on `GET /me/runners/{id}/folders`, and on `POST /runs` with `local_folder.runner_id`: `WARDYN_COMPUTER_FOLDERS` is off. |
 | `computer_runner_offline` / `computer_runner_no_folders` | `409` on the same routes: the runner holding the folder is not connected, or does not share folders (older than 0.10, or not `--substrate folders`). |
 | `computer_folder_refused` | `422` on `GET /me/runners/{id}/folders`: the runner refused the path (outside its roots, a symlink, or a credential folder). |
-| `desktop_transfer_blocked` / `desktop_transfer_too_large` / `desktop_transfer_bad_request` / `desktop_transfer_unavailable` / `desktop_transfer_not_found` / `desktop_transfer_failed` | The run's Files panel (`/runs/{id}/desktop/files`): `403` the run's `desktop` rules block that direction; `413` an upload over the limit; `400` a name that is not plain or an upload with no `Content-Length`; `409` a run with no UI app; `404` no such file in `~/Transfers`; `502` the in-sandbox half failed. |
+| `desktop_transfer_blocked` / `desktop_transfer_too_large` / `desktop_transfer_bad_request` / `desktop_transfer_unavailable` / `desktop_transfer_not_found` / `desktop_transfer_failed` | The run's Files panel (`/runs/{id}/desktop/files`): `403` the run's `desktop` rules block that direction; `413` an upload over the limit; `400` a name that is not plain or an upload with no `Content-Length`; `409` a run with no UI app that is not a Linux VM; `404` no such file in `~/Transfers`; `502` the in-sandbox half failed. |
 | `desktop_rules_unreadable` | `503`: the run's desktop rules could not be read, so the desktop's socket and its Files panel (`/runs/{id}/desktop/files`) refuse rather than fall back to the defaults. Try again. |
 | `computer_folder_none` / `computer_folder_copy_in_only` / `computer_folder_not_synced` / `computer_folder_not_running` / `computer_folder_paused` / `computer_folder_agent_unstoppable` | `409` on `POST /runs/{id}/computer-folder/bring-back` (the run's own person only; anyone else gets `404`): no folder from your computer, Copy in only, first sync never landed, the run is not `RUNNING`, it is paused, or its sandbox cannot stop the agent first. |
 | `harness_inner_walls_looser` / `harness_inner_walls_unmet` / `harness_sandbox_unavailable` | `422` from `POST /runs` and Review: the policy's `harness_inner_walls` is looser than the run's harness walls, or its harness and lane cannot meet it. `harness_sandbox_unavailable`: Codex's sandbox cannot start at the run's class. |
@@ -858,6 +967,9 @@ start.
 | `restriction_invalid` / `restriction_not_found` / `restriction_host` / `workspace_owning_unit_default` | The restriction routes, an egress approval, and `PUT /workspaces/{id}/owning-unit`. |
 | `walls_invalid` / `walls_need_person` / `walls_unavailable` | `/me/walls` ([Your walls](#your-walls)): `400` walls that name a wider value, a bad site or a list over its cap; `400` a caller who is no signed-in person (the admin token, local mode, a service identity); `501` a store that keeps no personal settings. |
 | `personal_walls_host` | `POST /approvals/{id}/approve` (403): the run owner's walls deny the egress host (`GET /approvals` marks the row `walls_block: true`). A host outside their list follows their choice for an unlisted site. |
+| `wall_preset_invalid` / `wall_preset_scope_forbidden` / `wall_preset_builtin` / `wall_preset_not_found` | `/wall-presets` ([Wall presets](#wall-presets)): `422` a preset that names a wider value or no limit, or a launch whose preset no longer passes the walls check; `403` a save to the organisation or a group you may not save to; `403` an edit or delete of a built-in; `404` no such preset, or one you cannot see. |
+| `wall_preset_name_taken` / `wall_preset_version_conflict` / `wall_preset_limit_reached` | `409`: another preset of the same audience, or a built-in, has the name; the preset changed since the version you read; the audience holds the most presets it may. |
+| `wall_preset_unknown` / `wall_preset_host` / `wall_presets_unavailable` | `422` a launch names a preset that does not exist or is not open to you; `403` `POST /approvals/{id}/approve` of a host the run's wall preset denies; `501` this server's store keeps no wall presets. |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary or the run owner's walls now withhold the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile, the Wardyn boundary or the run owner's walls could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |
@@ -938,11 +1050,14 @@ sending `error` alone — completing the sweep this issue tracks:
 | `git_pat_narrowing_unsupported_host` | `POST /runs/preflight` and `POST /runs/policy-preview`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access`, `api` or `forge` for a host another lane serves and that lane does not read those fields: an Azure DevOps host or one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for (its PAT is withheld). |
 | `git_pat_api_forge_disabled` | `POST /runs/preflight` and `POST /runs/policy-preview`, and the failure of a launched run: a `git_pat` grant sets `api` for `bitbucket_server` while `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off on this deployment. Policy and governance writes refuse the same grant with `400`. |
 | `git_pat_broker_off_resident` | `POST /runs/preflight` and `POST /runs/policy-preview` (a run no pool places), the failure of a launched run, and `409` from `POST /runs/{id}/revive` and the admin restart: 0.10.0, the PAT broker is off (`WARDYN_GIT_PAT_BROKER`), so a `git_pat` grant's PAT would be minted into the sandbox, and the run is a member's (on revive, one not launched with the admin token or in local mode, unless its owner revives it while their role is an operator's), or `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is set. A `runner_resident` grant, an Azure DevOps host and a GitHub-brokered forge are not refused. An admin whose runs `WARDYN_GOVERN_ADMIN_RUNS` governs is still refused on revive (`409`). |
+| `push_deny_all_resident_pat` | `POST /runs/preflight` and `POST /runs/policy-preview`, the failure of a launched run (at create or the queue's start), and `409` from `POST /runs/{id}/revive` and the admin restart: the run's `push_rules` set `deny_all` while the PAT broker is off (`WARDYN_GIT_PAT_BROKER`), so a `git_pat` would sit in the sandbox, where its pushes can't be stopped. Refused on an operator's run too. |
+| `push_deny_all_ssh_key` | The same doors: the run's `push_rules` set `deny_all` and it holds an `ssh_key`, whose pushes over SSH no broker sees. |
 | `policy_request_invalid` / `policy_secret_refs_invalid` / `policy_name_conflict` | `PUT/POST/DELETE /api/v1/policies`: the create/update body fails `decodePolicyRequest`, a secret reference in the spec fails shape validation, or a policy by that name already exists. |
 | `model_provider_id_invalid` / `model_provider_not_applicable` / `model_provider_no_block_configured` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` model-provider authorization (`run_provider_authorization.go`), the three field-validation arms outside `writeProviderRefusal` (which always carries its own reason, either the credential-refusal's audit reason or the generic `model_provider_unavailable`): `model_provider` is not a plain provider id, was set on a run that calls no model, or was named but this deployment has no model providers. `integration_id` is refused earlier, unconditionally (`integration_id_retired`), before this door is reached. |
 | `component_ref_invalid` / `component_store_unavailable` / `component_definition_invalid` / `component_secret_not_owned` / `component_secret_missing` / `component_host_denied` / `component_host_serves_model` / `component_host_collision` / `component_resident_delivery_denied` / `component_builtin_lane_off` / `component_builtin_access_above_ceiling` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` component gate (`components_run.go`), over the request's `components[]`: the list is malformed (400); this store cannot record components (501); or one component breaks a rule (422) — its definition, a secret that is not the caller's own, a secret the organisation provides and has not stored (the preview alone does not refuse this one), a host that is blocked, that serves a model or that already carries a credential on the run, or env/file delivery the organisation turned off; or a built-in GitHub component whose provider has its GitHub App lane off, or whose `access` is above the ceiling. A built-in GitHub component is also refused `400` `component_ref_invalid` when its grant fails the broker's scope-shape rule, or when it would give the run a brokered GitHub grant beside an `ssh_key` or `git_pat` grant for the same forge (a brokered forge is single-lane). Who may attach a component is the authorization reasons `capability_component` and `capability_feature`. |
 | `cli_no_github_repo` | `POST /runs` and `/runs/preflight` (`stepGitHubCLIRepo`, `runs_cli_github.go`): a GitHub CLI row is attached and the run has no GitHub repository on the App lane for it to act on (422). The policy preview reports it as the row's `reason` instead. |
 | `component_cli_aws_inject_off` / `component_cli_sign_in_required` / `component_cli_aws_bedrock_sign_in` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview`, for an AWS CLI component (422): `WARDYN_AWS_SSO_PROXY_INJECT` is off, which would put the person's AWS sign-in in the sandbox, so every door refuses the row; the caller has not signed in for the row (`POST /components/{id}/sign-in`); or the run's model, or an included harness's, comes through an Amazon Bedrock sign-in, and a sandbox holds one AWS profile. The preview does not refuse the second one: it lists a `sign_in` setup item instead. An Azure CLI component answers `component_cli_sign_in_required` the same way when the caller has not signed in to Azure for it (`GET /components-entra/signin?component=<id>`). |
+| `allowed_models_unchecked` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` (403): your governance profile limits the models runs may use, and the run's chosen model provider makes calls the run's proxy cannot read to check (an Amazon Bedrock sign-in the sandbox signs itself, with `WARDYN_AWS_SIGV4_AT_PROXY` off). Dispatch refuses the same lane, and the run fails with the same sentence. |
 | `component_cli_azure_no_entra` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview`, for an Azure CLI component (422): this deployment's console does not sign people in with Microsoft Entra, and only that application's sign-in can be bound to a person. The row is refused at every door, since the other way to serve it is a token in the sandbox. |
 | `cli_sign_in_not_aws` / `cli_sign_in_preview_blocked` / `cli_sign_in_capture_changed` | `POST /components/{id}/sign-in` (`cli_aws_signin.go`): the component is not an AWS CLI row (422), or an admin previewing a person's view would capture into their own identity (409). The third is the AWS sign-in sandbox's upload (409): the row was removed, or its portal, region, account or role changed, while the sign-in was open. A component the caller may not attach answers as the run doors do, `capability_component`. |
 | `cli_sign_in_not_azure` | `GET /components-entra/signin?component=<id>` (`cli_azure_signin.go`), the Azure CLI component's Entra sign-in: the component is not an Azure CLI row (422). The door shares the Azure sign-in doors' other answers: `azure_sign_in_no_session` (403), `azure_sign_in_unconfigured` (404), `cli_sign_in_preview_blocked` (409), and through the shared callback `azure_callback_cookies_invalid`, `azure_callback_missing_code` and a redirect to `/?azure_cli_signin_error=<code>&component=<id>` with the Azure sign-in callback's codes. |
@@ -969,7 +1084,8 @@ sending `error` alone — completing the sweep this issue tracks:
 | `user_type_request_invalid` / `user_type_conflict` / `user_type_not_found` / `user_type_id_immutable` / `user_type_built_in_no_priority` / `user_type_built_in_immutable` / `user_type_in_use` / `user_type_delete_conflict` | `/api/v1/admin/user-types` (`user_types.go`). |
 | `key_domain_request_invalid` / `key_domain_assignment_not_found` / `key_domains_store_unavailable` | `/api/v1/key-domains` (`key_domains.go`): a bad subject type, subject or body; a delete of an assignment that is not there; no Postgres-backed service. |
 | `preset_request_invalid` | `/api/v1/presets` (`presets.go`): `validatePresetRequest`'s whole check is one cause bucket, the same grain as `site_config_invalid` — deliberately not split per arm (two arms echo `POST /runs`' own `user_type_*`/`confinement_class_unknown` reasons): an operator-only authoring route, the field is already named in the 400's own message, and `workspace_request_invalid` (slice 1) is the same policy for the same kind of route. |
-| `model_provider_credential_no_store` / `model_provider_credential_no_person` / `model_provider_credential_is_sign_in` / `model_provider_credential_body_invalid` / `model_provider_credential_too_short` / `model_provider_credential_store_unavailable` | `/api/v1/model-providers/{id}/credential` (`model_provider_credentials.go`): the console's own key/token storage door, distinct from the sign-in door and run-create's model-provider choice. |
+| `model_provider_credential_no_store` / `model_provider_credential_no_person` / `model_provider_credential_is_sign_in` / `model_provider_credential_body_invalid` / `model_provider_credential_too_short` / `model_provider_credential_store_unavailable` / `model_provider_credential_signs_in` | `/api/v1/model-providers/{id}/credential` (`model_provider_credentials.go`): the console's own key/token storage door, distinct from the sign-in door and run-create's model-provider choice. `model_provider_credential_signs_in` is the 409 for a provider that signs people in: its credential is made at that provider's sign-in door, not pasted. |
+| `endpoint_oidc_unconfigured` / `endpoint_oidc_unknown_row` / `endpoint_oidc_no_session` / `endpoint_oidc_authority_unavailable` / `endpoint_oidc_callback_invalid` / `endpoint_oidc_callback_missing_code` | The sign-in door and callback of a custom endpoint that signs people in (`endpoint_oidc.go`). `endpoint_oidc_callback_invalid` buckets every state, one-time cookie, signature, session and stamped-row cause as one (start the sign-in again). |
 | `lock_unavailable` | Any write door that serializes on a lock, a cross-replica one or a runner's row lock (a site-configuration or capability-enforcement write, a credential erase, a sign-in capture, an edit of a run's end (`PATCH /runs/{id}`), a revive of one run or, for a run on a runner, another revive on a runner of the same owner, a runner revoke (`DELETE /runners/{id}` and `/me/runners/{id}`), the audit chain verification), `503` with `Retry-After`: the lock is held elsewhere past its wait, the process's lock connections are all in use, or the database could not be asked. Nothing was done and the request is safe to retry; a lock is never skipped. |
 | `audit_invalid_run_id` / `audit_export_store_unavailable` / `audit_export_read_failed` / `audit_scope_unavailable` / `audit_chain_verify_store_unavailable` / `audit_chain_verify_busy` / `audit_chain_sweep_failed` / `audit_invalid_timestamp_param` / `audit_invalid_actor_type` / `audit_invalid_origin` / `audit_invalid_export_form` / `audit_partition_not_found` / `audit_partition_open` / `audit_retention_store_unavailable` / `audit_retention_read_failed` / `audit_retention_body_invalid` / `audit_retention_drop_failed` | `/api/v1/admin/audit` (`audit.go`, `audit_partition_export.go`, `audit_retention.go`): the security tier's audit-log query, export, chain-verification and retention doors. `audit_invalid_export_form`, `audit_partition_not_found` and `audit_partition_open` are `GET /audit/export?partition=`'s: a `form` neither `readable` nor `raw`, a name no audit partition has, and a partition that can still receive rows (no digest yet). `audit_retention_store_unavailable` (`501`), `audit_retention_read_failed` (`500`, the status could not be read), `audit_retention_body_invalid` (`400`, `POST /audit/retention/drop` needs `{"partition", "digest"}`) and `audit_retention_drop_failed` (`500`, nothing was dropped; `503` under `WARDYN_AUDIT_SEAL=full` while the caller's audit subject cannot be had) are `GET /audit/retention`'s and `POST /audit/retention/drop`'s; an unknown partition on the drop is `404` `audit_partition_not_found`. |
 | `recording_chain_key_required` / `recording_chain_busy` | `GET /runs/{id}/recording-chain`: `400`, no `key`; `503` with `Retry-After` while another check walks the log on that replica. |
@@ -983,6 +1099,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `github_own_pat_no_session` / `github_own_pat_preview_blocked` / `github_own_pat_unknown_row` / `github_own_pat_token_invalid` / `github_own_pat_expiry_invalid` / `github_own_pat_expiry_too_long` / `github_own_pat_rejected` / `github_own_pat_check_unavailable` / `github_own_pat_account_mismatch` | `PUT`/`DELETE /me/scm/github/token` (`gh_own_pat.go`): a person adding or removing their own GitHub token on a GitHub row with `credential_source: per_user`. The caller has no browser sign-in (`403`) or is in the user view (`409`, both doors); no such row the caller may use has that address (a row they may not use answers the same; DELETE answers it only when they hold nothing on any GitHub row there); the value is not one fine-grained token (`github_pat_…`), is too long or has spaces; `expires_on` is not a date after today, or is more than 30 days out; GitHub did not accept the token (`422`); GitHub could not be asked or said nothing about the token (`503`); or the token belongs to another GitHub account than the row's and `relink` was not set (`409`, the account never named). |
 | `github_own_token_required` / `github_own_token_expired` / `github_own_token_undeliverable` / `github_own_token_resident` | A run whose `git_pat` grant for github.com is decided by an own-token GitHub row (`gh_own_pat_run.go`), refused at launch (`422`): the person has added no token of their own, or it has reached the expiry they entered; or it could not be kept out of the sandbox (the PAT broker is off, the run is on the person's own runner) or two such rows claim the run's github.com repositories. `github_own_token_resident` is the mint door (`403`) refusing that grant while the PAT broker is off. |
 | `ado_callback_cookies_invalid` / `ado_callback_missing_code` / `identity_binding` / `unusable_grant` | The callback half of the same door (`consumeADOCookies`, `handleADOCallback`): browser-reachable, since the identity provider's own redirect lands here directly. `ado_callback_cookies_invalid` buckets all three single-use state/nonce/pkce cookie causes — the remedy is identical for all three (start the sign-in again). `identity_binding` and `unusable_grant` are the SAME strings this callback's own audit row already carried for those two causes. |
+| `identity_issuer_mismatch` | `GET /api/v1/auth/provider-oidc/callback`, as its `provider_oidc_error` value: under the `console` binding the identity token came from an authority other than the console's own. The admin fixes `oidc.issuer`; `identity_binding` is someone else's account. |
 | `user_view_no_human` / `user_view_invalid_field` / `user_view_type_invalid` / `user_view_no_session` | `POST /api/v1/me/view` (`user_view.go`): the admin/security-admin user-view toggle. |
 | `source_write_invalid` / `source_delete_conflict` / `source_in_use` | `/api/v1/sources` (`sources.go`): the shared source library. `source_write_invalid` is `validateSourceWrite`'s own bucket. |
 | `branding_not_branded` / `branding_store_unavailable` / `branding_body_unreadable` | `/api/v1/admin/branding` (`branding.go`). |

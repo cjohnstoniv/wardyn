@@ -17,10 +17,11 @@
 import { Fingerprint } from "lucide-react";
 import type { AuditEvent, RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
-import { isMacOSVM } from "../../../../lib/types/machine-kind";
+import { isMacOSVM, isVMKind } from "../../../../lib/types/machine-kind";
 import { CopyButton } from "../../../wardyn/copy-button";
 import { RunRef } from "../../../wardyn/run-ref";
 import { RUN_PLACEMENT, RUN_RECORDING, runnerLabel } from "../../../wardyn/copy/runners";
+import { RUN_VM_PAGE } from "../../../wardyn/copy/run-cockpit";
 import { usePrincipal } from "../../../wardyn/operator-context";
 import { WidgetCard } from "../../../wardyn/primitives";
 import { innerWallsText } from "../../new-run-flow/review/format";
@@ -49,8 +50,10 @@ export function IdentityWidget({
   // before 0.9, or on a deployment that places nothing) has no such row. The runner and pool rows name where
   // it went, by id when no name is known.
   const local = run.placement === "local";
-  // A macOS VM run is marked runner_declined whenever it has a store, yet its terminal sessions are recorded.
+  // A macOS VM run marked runner_declined had its agent's output left unrecorded; its terminal sessions are recorded at its level.
   const macOSTerminalRecorded = isMacOSVM(run) && run.not_recorded === "runner_declined" && run.recording_level !== "off";
+  const vmKind = isMacOSVM(run) ? RUN_VM_PAGE.machineMacOS : RUN_VM_PAGE.machineLinux;
+  const machine = isMacOSVM(run) && run.vm_machine?.macos_base ? RUN_VM_PAGE.machineWithBase(vmKind, run.vm_machine.macos_base) : vmKind;
   const runsOn = local
     ? principal && run.created_by === principal
       ? RUN_PLACEMENT.MINE(runnerLabel(run))
@@ -178,10 +181,20 @@ export function IdentityWidget({
           </>
         )}
 
-        <dt className="text-muted-foreground">Started</dt>
-        <dd className="min-w-0 truncate text-right text-foreground">
-          {absoluteTime(run.created_at)} · {run.created_by}
-        </dd>
+        {isVMKind(run.machine_kind) && (
+          <>
+            <dt className="text-muted-foreground">{RUN_VM_PAGE.machineLabel}</dt>
+            <dd className="min-w-0 truncate text-right text-foreground" title={machine}>
+              {machine}
+            </dd>
+          </>
+        )}
+
+        <dt className="text-muted-foreground">{RUN_VM_PAGE.startedLabel}</dt>
+        <dd className="min-w-0 truncate text-right text-foreground">{absoluteTime(run.created_at)}</dd>
+
+        <dt className="text-muted-foreground">{RUN_VM_PAGE.startedByLabel}</dt>
+        <dd className="min-w-0 truncate text-right text-foreground">{run.created_by}</dd>
 
         {ranAs && (
           <>

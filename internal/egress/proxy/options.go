@@ -41,6 +41,8 @@ type Options struct {
 	// GitGrants is the git-broker per-repo allowlist ("<org>/<repo>" -> grant id)
 	// backing the /wardyn/gh/ route. See Proxy.gitGrants.
 	GitGrants map[string]uuid.UUID
+	// GitPushWithheld is Config.GitPushWithheld.
+	GitPushWithheld map[string]string
 	// PATGrants is the git_pat broker's per-HOST allowlist backing /wardyn/git/.
 	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
 	// per-repo.

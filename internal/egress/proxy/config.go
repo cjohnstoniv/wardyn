@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -106,6 +107,12 @@ type Config struct {
 	// stays proxy-side. Compiled at dispatch from the run's github grants. Empty =>
 	// the git-broker route always 403s (no repo brokered).
 	GitGrants map[string]uuid.UUID `json:"git_grants,omitempty"`
+	// GitPushWithheld names the broker hosts whose pushes this run's effective
+	// capabilities withhold (no code_write), each with the forge's name for the
+	// refusal: "github.com" -> "GitHub" on the /wardyn/gh/ route, an Azure DevOps
+	// git_pat host -> "Azure DevOps" on /wardyn/git/. The broker refuses a push
+	// there before anything mints. Empty => no push withheld.
+	GitPushWithheld map[string]string `json:"git_push_withheld,omitempty"`
 	// PATGrants is the git_pat broker's per-HOST allowlist: canonical lower-case
 	// host -> the git_pat grant id to mint from, backing the /wardyn/git/ route.
 	//
@@ -260,6 +267,22 @@ type Config struct {
 	// because an older proxy refuses a key it does not know. Empty (the
 	// default) => no local model route, byte-identical to today.
 	LocalModels map[string]types.LocalModelSettings `json:"local_models,omitempty"`
+	// AllowedModels is the run's allowed_models list: when set, a request to a hosted model
+	// provider (a brokered or terminated Anthropic, OpenAI or Bedrock route) names one of these
+	// models exactly or is refused (allowed_models.go). It applies to the whole run, not a
+	// route: the limit is one governance value for the run, and a per-route map would let a
+	// provider the map missed through. Control-plane-authored; omitempty because an older proxy
+	// refuses a key it does not know, and a pointer so `[]` survives the wire. Unset (the default) =>
+	// off, byte-identical to today; `[]` => set and empty, every model refused.
+	AllowedModels *[]string `json:"allowed_models,omitempty"`
+	// BedrockRoutes maps each Bedrock gateway a run's provider names by its own address
+	// (bedrock.base_url) to the base path its Bedrock API is served under ("" at the root). AWS's
+	// endpoint names (isBedrockHost) do not identify such a host, so this is what makes it a model host
+	// of Bedrock shape for the allowed_models gate: a request under the base path is read as
+	// /model/{id}/{op}, and any other request that is not a read is refused. Sent only with
+	// AllowedModels. Control-plane-authored; omitempty because an older proxy refuses a key it does
+	// not know.
+	BedrockRoutes map[string]string `json:"bedrock_routes,omitempty"`
 	// GatewayIdentity lists the routes that carry the run's signed identity
 	// (gateway_identity.go). Control-plane-authored, same trust boundary as
 	// LLMUpstreams; it holds no token and no key. Empty (the default) => off,
@@ -326,6 +349,14 @@ type Config struct {
 	// the entries the run brought). A set only ever adds to it. Carried beside
 	// PushRuleSets and never beside Policy.PushRules.
 	PushRuleBase *types.PushRulesSpec `json:"push_rule_base,omitempty"`
+	// ForgeHosts are the code hosts Wardyn knows for this run: the public ones
+	// (types.PublicForgeHosts), site config (SCM hosts and Git provider rows)
+	// and the run's git_pat and ssh_key grants. While deny_all is in force the
+	// proxy refuses a connection to one of them unless a door serves it
+	// (push_deny_all_forge.go). Set, never empty, exactly when the run's push
+	// rules set deny_all: an older proxy refuses the key, and a runner that does
+	// not name forge_hosts is refused the run.
+	ForgeHosts []string `json:"forge_hosts,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
 	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
 	// route evaluates the set of the harness that raised the call
@@ -627,7 +658,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateLocalModels(); err != nil {
 		return err
 	}
-	return c.validateChannelHosts()
+	return cmp.Or(c.validateAllowedModels(), c.validateBedrockRoutes(), c.validateChannelHosts())
 }
 
 // validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside

@@ -3,8 +3,8 @@
 
 package proxy
 
-// Run identity for a model gateway: on a provider's route, and only there, the
-// proxy sends a short-lived token the control plane signed, naming the person,
+// Run identity for a model gateway: on a provider's route or an organisation MCP
+// server's, and only there, the proxy sends a short-lived token the control plane signed, naming the person,
 // the run and the runner. The sandbox never holds it, and nothing the sandbox
 // sends under these header names reaches a gateway on a run with a route. No
 // route means none of this runs. The token lives in this process's memory: the
@@ -25,15 +25,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
 	// gatewayIdentityHeader carries the token. Never Authorization, which holds
 	// the person's own model credential on these routes.
 	gatewayIdentityHeader = "X-Wardyn-Identity"
-	// gatewayCallIDHeader carries the id both logs share. An MCP server gets this and no token.
+	// gatewayCallIDHeader carries the id both logs share. An MCP server gets this, and a token only on an organisation server with an audience.
 	gatewayCallIDHeader = "X-Wardyn-Call-Id"
 )
 
@@ -44,47 +46,65 @@ type GatewayIdentityRoute struct {
 	Port int    `json:"port"`
 	// PathPrefix is the provider's base URL path, "" for the whole host and port.
 	PathPrefix string `json:"path_prefix,omitempty"`
-	ProviderID string `json:"provider_id"`
+	// ProviderID names the model provider the route serves, or MCPKey the MCP server:
+	// exactly one is set.
+	ProviderID string `json:"provider_id,omitempty"`
+	MCPKey     string `json:"mcp_key,omitempty"`
 	// Audience is what this route expects in a token's aud. A token for any
 	// other audience is refused here, whatever the control plane minted.
 	Audience string `json:"audience"`
-	// ProviderUID is the provider's UID at dispatch. The proxy never reads it: it is
-	// here because this config is what is sealed, and a mint compares it to the live
-	// provider's, so one deleted and recreated under the same id fails closed.
+	// ProviderUID is the provider's UID at dispatch, or an MCP route's component id and
+	// version. The proxy never reads it: it is here because this config is what is
+	// sealed, and a mint compares it to the live row's, so a provider deleted and
+	// recreated under the same id, or a component edited, fails closed.
 	ProviderUID string `json:"provider_uid,omitempty"`
+	// InspectionDeferred leaves the provider's prompts on this route to the gateway: the proxy
+	// checks them for the run's own secret values only (deferredScan). A provider route only.
+	InspectionDeferred bool `json:"inspection_deferred,omitempty"`
 }
 
-// validate checks a route against the ones before it. A provider has one
-// audience, and two providers on one host and port need paths apart (Clashes).
+// holderKey is what names the route's token holder and its mint: the provider's id,
+// or the MCP server's key under a prefix no provider id can have.
+func (rt GatewayIdentityRoute) holderKey() string {
+	if rt.MCPKey != "" {
+		return "mcp\x00" + rt.MCPKey
+	}
+	return rt.ProviderID
+}
+
+// validate checks a route against the ones before it. A provider or an MCP server
+// has one audience, and two destinations on one host and port need paths apart (Clashes).
 func (rt GatewayIdentityRoute) validate(earlier []GatewayIdentityRoute) error {
 	switch {
 	case rt.Host == "" || strings.ContainsAny(rt.Host, "/ "):
 		return fmt.Errorf("host %q is not a host name", rt.Host)
 	case rt.Port < 1 || rt.Port > 65535:
 		return fmt.Errorf("port %d is out of range", rt.Port)
-	case rt.ProviderID == "":
-		return errors.New("provider_id is required")
+	case (rt.ProviderID == "") == (rt.MCPKey == ""):
+		return errors.New("exactly one of provider_id and mcp_key is required")
 	case rt.Audience == "":
 		return errors.New("audience is required")
 	case rt.PathPrefix != "" && (!strings.HasPrefix(rt.PathPrefix, "/") || strings.ContainsAny(rt.PathPrefix, "?#\\")):
 		return fmt.Errorf("path_prefix %q is not a path", rt.PathPrefix)
+	case rt.InspectionDeferred && rt.ProviderID == "":
+		return errors.New("inspection_deferred is for a model provider's route only")
 	}
 	for _, o := range earlier {
-		if o.ProviderID == rt.ProviderID && o.Audience != rt.Audience {
-			return fmt.Errorf("provider %q has two audiences", rt.ProviderID)
+		if o.holderKey() == rt.holderKey() && o.Audience != rt.Audience {
+			return fmt.Errorf("provider or MCP server %q has two audiences", cmp.Or(rt.ProviderID, rt.MCPKey))
 		}
 		if rt.Clashes(o) {
-			return fmt.Errorf("%s:%d serves two providers under one path", rt.Host, rt.Port)
+			return fmt.Errorf("%s:%d serves two destinations under one path", rt.Host, rt.Port)
 		}
 	}
 	return nil
 }
 
-// Clashes reports whether rt and o are two providers a request could match both
-// of: one host and port, and a path under both prefixes. The proxy could not tell
-// which provider's token to send, so a run with both is refused.
+// Clashes reports whether rt and o are two destinations (providers or MCP servers) a
+// request could match both of: one host and port, and a path under both prefixes. The
+// proxy could not tell which token to send, so a run with both is refused.
 func (rt GatewayIdentityRoute) Clashes(o GatewayIdentityRoute) bool {
-	if hostKey(o.Host) != hostKey(rt.Host) || o.Port != rt.Port || o.ProviderID == rt.ProviderID {
+	if hostKey(o.Host) != hostKey(rt.Host) || o.Port != rt.Port || o.holderKey() == rt.holderKey() {
 		return false
 	}
 	a, b := strings.TrimSuffix(rt.PathPrefix, "/"), strings.TrimSuffix(o.PathPrefix, "/")
@@ -116,6 +136,41 @@ func (p *Proxy) gatewayRouteFor(host string, port int, path string) *GatewayIden
 	return nil
 }
 
+// deferredScan is what a route that leaves prompt inspection to its gateway still
+// runs: eng checks the run's own secret values, exact match, and nothing else. A
+// nil eng is a policy with no such check, so nothing runs there.
+type deferredScan struct{ eng *contentscan.Engine }
+
+// deferredScanFor builds the cut engine when a route leaves inspection to its
+// gateway and the run inspects at all (full is the run's engine); nil otherwise,
+// and nil defers nothing.
+func deferredScanFor(full *contentscan.Engine, spec types.LLMInspectionSpec, corpus [][]byte, routes []GatewayIdentityRoute) (*deferredScan, error) {
+	if full == nil || !slices.ContainsFunc(routes, func(rt GatewayIdentityRoute) bool { return rt.InspectionDeferred }) {
+		return nil, nil
+	}
+	eng, err := contentscan.NewSecretsOnlyEngine(spec, corpus)
+	if err != nil {
+		return nil, err
+	}
+	return &deferredScan{eng: eng}, nil
+}
+
+// inspectionDeferredTo is the route a request to host, port and path carries the
+// token on, when that route leaves prompt inspection to its gateway; nil means the
+// run's whole policy applies. It reads the same match the token is attached by
+// (gatewayRouteFor), so only a call that goes to that gateway is left to it. A proxy
+// that never built the cut engine defers nothing: an unknown state is inspected.
+func (p *Proxy) inspectionDeferredTo(host string, port int, path string) *GatewayIdentityRoute {
+	if p.deferredScan == nil {
+		return nil
+	}
+	rt := p.gatewayRouteFor(host, port, path)
+	if rt == nil || !rt.InspectionDeferred || rt.ProviderID == "" {
+		return nil
+	}
+	return rt
+}
+
 // stripGatewayHeaders deletes what the sandbox sent under the gateway's header
 // names, on every lane of a run with a route. An opaque tunnel is out of reach;
 // a forged token fails the gateway's signature check there. No route: nothing
@@ -138,7 +193,7 @@ func (p *Proxy) stripGatewayHeaders(h http.Header) {
 func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h http.Header, rt *GatewayIdentityRoute, host string, port int, ruleSource, callID string) bool {
 	h.Del("Range")
 	h.Del("If-Range")
-	token, err := p.gatewayHolders[rt.ProviderID].current(r.Context(), p)
+	token, err := p.gatewayHolders[rt.holderKey()].current(r.Context(), p)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return false // the caller hung up during the mint and was never refused
@@ -176,7 +231,7 @@ func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host s
 			log.GatewayCallID = callID
 			p.sink.emit(log)
 		}
-		p.httpErrorShaped(w, p.shapeOf(r, host), host, "the model gateway's answer was not relayed", errors.New(cause), http.StatusBadGateway,
+		p.httpErrorShaped(w, p.shapeOf(r, host), host, "the gateway's answer was not relayed", errors.New(cause), http.StatusBadGateway,
 			brokeredFault{port: port, ruleSource: ruleSource, reason: reasonUpstreamError})
 	}
 	if enc := strings.Join(resp.Header.Values("Content-Encoding"), ","); enc != "" && !strings.EqualFold(enc, "identity") {
@@ -242,14 +297,14 @@ func (s *scrubbedWriter) maskValueCut(v string) string {
 	return out.String()
 }
 
-// gatewayTokenHolder is one provider's current token. Requests share one mint
+// gatewayTokenHolder is one provider's or MCP server's current token. Requests share one mint
 // at a time. From half-life on, a mint runs behind requests that keep using the
 // held token; a failed mint keeps it to exp, with no grace past that. The mask
 // set holds the two most recent tokens, each with its signature head: a new one
 // is registered before it is used, then the one before last is dropped, so the
 // set does not grow for the run's life.
 type gatewayTokenHolder struct {
-	providerID, audience string
+	providerID, mcpKey, audience string
 	// timeout bounds one mint. A request with no usable token waits at most this long.
 	timeout time.Duration
 
@@ -324,11 +379,18 @@ func (h *gatewayTokenHolder) startMintLocked(p *Proxy) <-chan struct{} {
 func (h *gatewayTokenHolder) settleLocked(p *Proxy, token string, exp time.Time, drop bool, err error) {
 	now := p.now()
 	if err != nil {
-		slog.Warn("proxy: gateway identity mint failed", "provider", h.providerID, "err", err)
-		h.lastErr, h.nextAsk = err, now.Add(lastGoodRetry)
+		slog.Warn("proxy: gateway identity mint failed", "provider", h.providerID, "mcp_server", h.mcpKey, "err", err)
 		if drop {
 			h.token = ""
 		}
+		// A held token is asked again within half of what is left of its life, so a short-lived
+		// token's next mint still lands before its exp; with none held, or one past its exp, the
+		// usual interval, so an outage longer than a token's life is not asked once a second.
+		wait := lastGoodRetry
+		if left := h.expires.Sub(now); h.token != "" && left > 0 && left/2 < wait {
+			wait = max(left/2, time.Second)
+		}
+		h.lastErr, h.nextAsk = err, now.Add(wait)
 		return
 	}
 	for _, v := range gatewayMaskValues(token) {
@@ -346,7 +408,11 @@ func (h *gatewayTokenHolder) settleLocked(p *Proxy, token string, exp time.Time,
 // mint asks the control plane for a token. drop says the answer was definite,
 // so a held token must go too.
 func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, exp time.Time, drop bool, err error) {
-	body, err := json.Marshal(map[string]string{"provider_id": h.providerID})
+	ask := map[string]string{"provider_id": h.providerID}
+	if h.mcpKey != "" {
+		ask = map[string]string{"mcp_server": h.mcpKey}
+	}
+	body, err := json.Marshal(ask)
 	if err != nil {
 		return "", time.Time{}, false, err
 	}
@@ -384,8 +450,9 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 // is judged against the control plane's expires_at, or its exp if that is earlier.
 // A clock ahead of the control plane's drops the token early; one behind holds it
 // no longer than ten minutes, and the gateway refuses what its own clock has passed:
-// wrong either way, it fails closed. Ten minutes is how long a kill may go unseen by
-// a gateway; half of it, the refresh point, is how long an outage is tolerated.
+// wrong either way, it fails closed. Ten minutes is the cap on a token's life (the
+// provider may set a shorter one); half the life, the refresh point, is how long an
+// outage is tolerated.
 func (h *gatewayTokenHolder) check(token string, expiresAt, now time.Time) (time.Time, error) {
 	const lifetime = 10 * time.Minute
 	unusable := errors.New("the control plane's gateway identity token is malformed")

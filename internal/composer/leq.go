@@ -274,6 +274,7 @@ func leqPush(a, b *types.PushRulesSpec) bool {
 	return contains(pa.DenyPaths, pb.DenyPaths) &&
 		contains(pa.RequireReviewPaths, pb.RequireReviewPaths) &&
 		(pa.DenyNewExecutables || !pb.DenyNewExecutables) &&
+		(pa.DenyAll || !pb.DenyAll) &&
 		notLooser(pa.MaxFileSizeMiB, pb.MaxFileSizeMiB) &&
 		normPushHold(pa.HoldSeconds) <= normPushHold(pb.HoldSeconds) &&
 		notLooser(packCap(&pa), packCap(&pb))
@@ -286,7 +287,8 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	for _, p := range [][2]bool{
 		{a.DenyTaskModeExec, b.DenyTaskModeExec}, {a.DenyInteractive, b.DenyInteractive},
 		{a.DenyUIApps, b.DenyUIApps}, {a.DenyUserDrive, b.DenyUserDrive},
-		{a.DenyMemberDrives, b.DenyMemberDrives}, {a.DenyBackgroundDesktopWatch, b.DenyBackgroundDesktopWatch},
+		{a.DenyMemberDrives, b.DenyMemberDrives}, {a.DenyKeptMachines, b.DenyKeptMachines},
+		{a.DenyBackgroundDesktopWatch, b.DenyBackgroundDesktopWatch},
 	} {
 		if p[1] && !p[0] { // a denial the base keeps must stay
 			return false
@@ -298,6 +300,10 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	if len(b.AllowedMacOSBases) > 0 && (len(a.AllowedMacOSBases) == 0 ||
 		slices.ContainsFunc(a.AllowedMacOSBases, func(n string) bool { return !slices.Contains(b.AllowedMacOSBases, n) })) {
 		return false // a macOS base the base does not allow must stay refused
+	}
+	if len(b.AllowedModels) > 0 && (len(a.AllowedModels) == 0 ||
+		slices.ContainsFunc(a.AllowedModels, func(n string) bool { return !slices.Contains(b.AllowedModels, n) })) {
+		return false // a model the base does not allow must stay refused
 	}
 	for _, p := range [][2]int{
 		{a.MaxConcurrentRuns, b.MaxConcurrentRuns}, {a.MaxCPUMillis, b.MaxCPUMillis},

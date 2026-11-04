@@ -281,6 +281,26 @@ func NewEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
 	}, nil
 }
 
+// NewSecretsOnlyEngine is NewEngine cut to one check: an exact match of the run's own
+// secret values (DetectSecrets). It is what a route whose gateway inspects prompts
+// still runs, since those values exist only in Wardyn's memory and no gateway can
+// look for them. The spec is rebuilt from the fields this check uses rather than
+// copied with the others cleared, so a detector added later stays off here.
+// (nil, nil) when spec has no DetectSecrets, or the corpus gives it nothing to match.
+func NewSecretsOnlyEngine(spec types.LLMInspectionSpec, corpus [][]byte) (*Engine, error) {
+	if !spec.DetectSecrets {
+		return nil, nil
+	}
+	return NewEngine(types.LLMInspectionSpec{
+		Mode:                 spec.Mode,
+		DetectSecrets:        true,
+		MaxScanBytes:         spec.MaxScanBytes,
+		OnScannerError:       spec.OnScannerError,
+		BlockMinSeverity:     spec.BlockMinSeverity,
+		InspectForwardEgress: spec.InspectForwardEgress,
+	}, corpus)
+}
+
 // InspectForwardEgress reports whether the proxy should also scan the generic
 // plaintext-HTTP forward path (not just the LLM routes). Nil engine => false.
 func (e *Engine) InspectForwardEgress() bool {

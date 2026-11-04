@@ -372,6 +372,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `stop-early-dco` | – | pending | pending | 10 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
+| `conformance-k8s-agent-sandbox` (not required; train and main only) | – | pending | pending | 45 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
 | `macos` (not required) | – | pending | pending | 30 |
 | `macos-xcode-27` (not required) | – | pending | pending | 10 |
@@ -719,7 +720,7 @@ wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
 
 A pipeline can keep a [workload](operations/workloads.md) declared with `wardyn apply`. Use a service identity's token as `WARDYN_TOKEN`, as above, with `WARDYN_URL`.
 
-- A service identity's token may `apply`, `workload list|get|delete|restart` and read runs. It gets `403` `service_scope` (exit `2`) from `wardyn diff` and `wardyn apply --dry-run`, so a pipeline cannot preview a change. Review the file in the pull request instead.
+- A service identity's token may `apply`, `diff`, `apply --dry-run`, `workload list|get|delete|restart` and read runs.
 - `apply` exits `0` when the workload is applied, `1` when the organisation refuses the new run (the spec is stored and the old run keeps running). [Exit codes](operations/workloads.md#apply)
 - Put the step behind your platform's approval gate: a GitHub environment with required reviewers, or an Azure DevOps environment with approvals.
 - The workload runs under the service identity's walls and grants, like any run it launches.

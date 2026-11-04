@@ -46,7 +46,7 @@ func TestPlacementCapability_LinuxVMNeedsARunnerThatOffersIt(t *testing.T) {
 	// refused up front, before it reaches the runner; a shell start, or a batch run, is not.
 	agentStart := createRunRequest{Placement: types.PlacementLocal, RunnerID: offers.String(), MachineKind: "linux_vm", Interactive: true, InteractiveStart: "agent"}
 	if ref := s.placementCapabilityRefusal(capsCtx, agentStart, runPlacement{}, governanceCeiling{}, 0); ref == nil ||
-		ref.body.Reason != string(placement.ReasonPlacementCapability) || !strings.Contains(ref.body.Error, "interactive_start") {
+		ref.body.Reason != string(placement.ReasonPlacementCapability) || ref.body.Field != "interactive_start" || !strings.Contains(ref.body.Error, "interactive_start") {
 		t.Errorf("interactive_start agent on a VM: refusal = %+v, want 422 placement_capability naming interactive_start", ref)
 	}
 	shellStart := agentStart

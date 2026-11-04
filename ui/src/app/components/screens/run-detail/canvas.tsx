@@ -28,7 +28,6 @@ import { createPortal } from "react-dom";
 import GridLayout, { noCompactor, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import { Check, Expand, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } from "lucide-react";
-import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
 import { isVMKind } from "../../../lib/types/machine-kind";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
@@ -37,7 +36,7 @@ import { cn } from "../../ui/utils";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { useFocusMode } from "../app-shell";
 import { FocusMode } from "./focus-mode";
-import { useRunLayout } from "./use-run-layout";
+import { useRunLayout, type SaveStatus } from "./use-run-layout";
 import { fitRows, measureTile, settleItems } from "./fit-layout";
 import { WidgetSlot } from "./widget-slot";
 import { ErrorBoundary } from "../../wardyn/error-boundary";
@@ -206,7 +205,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
   const vm = isVMKind(ctx.run.machine_kind);
-  const { layout, persistable, apply, save, reset } = useRunLayout(preset, !!ctx.run.service, vm);
+  const { layout, persistable, status, failedPreset, retry, apply, reset } = useRunLayout(preset, !!ctx.run.service, vm, !!ctx.run.machine);
   const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through
@@ -214,7 +213,19 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // console: a canvas mounted with no <AppShell> above it gets the default
   // no-op setter and simply never enters focus.
   const { focus, setFocus } = useFocusMode();
-  const exitFocus = React.useCallback(() => setFocus(false), [setFocus]);
+  // An ordinary exit (Exit focus, Escape, the leave chord) hands focus back to the button that opened it. That button
+  // is a new element by then, so the effect below finds it after the cockpit has rendered. Unmounting skips this.
+  const focusTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const restoreFocusRef = React.useRef(false);
+  const exitFocus = React.useCallback(() => {
+    restoreFocusRef.current = true;
+    setFocus(false);
+  }, [setFocus]);
+  React.useEffect(() => {
+    if (focus || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    (focusTriggerRef.current ?? document.getElementById("main-content") ?? document.body).focus();
+  }, [focus]);
   // Never leave the console headless: whatever unmounts this canvas — a route
   // change, an ErrorBoundary catch — puts the shell's chrome back.
   React.useEffect(() => () => setFocus(false), [setFocus]);
@@ -342,10 +353,10 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // #3038: a finished run nobody has rearranged reads at its content's size: each tile is as tall as what it holds, so
   // Identity is never cut off and an emptier tile is shorter. The terminal keeps its rows, and an arrangement the
   // person made, or one being edited, is shown exactly as stored.
-  const fitOn = ctx.finished && !editing && sameLayout(layout, presetLayout("finished", false, vm));
+  const fitOn = ctx.finished && !editing && sameLayout(layout, presetLayout("finished", false, vm, !!ctx.run.machine));
   // The default rail, unarranged, closes the rows of a tile this viewer can't see (Desktop and Attach on a run they did
   // not start). An arrangement the person made, or one being edited, is shown exactly as stored.
-  const settleOn = !fitOn && !editing && sameLayout(layout, presetLayout(preset, !!ctx.run.service, vm));
+  const settleOn = !fitOn && !editing && sameLayout(layout, presetLayout(preset, !!ctx.run.service, vm, !!ctx.run.machine));
   const [fitted, setFitted] = React.useState<Record<string, number>>({});
   const visibleKey = visible.map((w) => w.widget).join();
   React.useLayoutEffect(() => {
@@ -383,18 +394,6 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
 
   const toggleWidget = (id: WidgetId) => {
     apply(layout.some((w) => w.widget === id) ? removeWidget(layout, id) : addWidget(layout, id));
-  };
-
-  const saveDefault = () => {
-    // Three outcomes, three sentences. "unsupported" is a permanent property of
-    // the deployment and matches the toolbar's inline note; "failed" is THIS
-    // attempt and is worth retrying. Collapsing the last two told the operator
-    // their server cannot store layouts because one save hit a 500.
-    void save().then((result) => {
-      if (result === "ok") toast.success(RUN_COCKPIT.layoutSaved);
-      else if (result === "unsupported") toast.message(RUN_COCKPIT.layoutNotPersisted);
-      else toast.error(RUN_COCKPIT.layoutSaveFailed);
-    });
   };
 
   // The large view never shrinks while it is open, so a poll that shortens the widget cannot move Close or the content
@@ -537,7 +536,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
               <ToolbarButton onClick={reset} Icon={RotateCcw}>
                 {RUN_COCKPIT.resetLayout}
               </ToolbarButton>
-              <ToolbarButton onClick={saveDefault}>{RUN_COCKPIT.saveLayoutDefault}</ToolbarButton>
+              <LayoutStatus status={status} failedPreset={failedPreset} onRetry={retry} />
               <button
                 type="button"
                 onClick={() => setEditing(false)}
@@ -557,7 +556,10 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
             // run-detail-command-bar.tsx, which this file does not own — so the
             // canvas carries its own entry points.
             <div className="flex items-center gap-1.5">
+              {/* A write that failed outlives Done: leaving the editor must not read as "saved". */}
+              {status === "failed" && <LayoutStatus status={status} failedPreset={failedPreset} onRetry={retry} />}
               <button
+                ref={focusTriggerRef}
                 type="button"
                 onClick={() => setFocus(true)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
@@ -684,6 +686,26 @@ function ToolbarButton({
       {Icon && <Icon className="size-3.5" />}
       {children}
     </button>
+  );
+}
+
+// Where the automatic save stands. Silent before the first gesture; a failure names itself and offers the retry.
+function LayoutStatus({ status, failedPreset, onRetry }: { status: SaveStatus; failedPreset: RunLayoutPreset | null; onRetry: () => void }) {
+  if (status === "idle") return null;
+  if (status === "failed") {
+    return (
+      <span role="status" className="inline-flex items-center gap-1 px-1.5 text-xs text-danger">
+        {RUN_COCKPIT.layoutSaveFailed(failedPreset === "finished" ? "Finished" : "Live")}
+        <button type="button" onClick={onRetry} className="rounded px-1 font-medium underline underline-offset-2">
+          {RUN_COCKPIT.layoutRetry}
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span role="status" className="px-1.5 text-xs text-muted-foreground">
+      {status === "saving" ? RUN_COCKPIT.layoutSaving : RUN_COCKPIT.layoutSaved}
+    </span>
   );
 }
 

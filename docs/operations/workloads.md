@@ -16,7 +16,7 @@
 | Intent | What to run: exactly the `intent` of a `kind: Run` document ([Run documents](../sdk.md#run-documents)) |
 | Generation | Counts spec changes. `current_generation` is the one the current run was launched from |
 | Digest | The hex SHA-256 over the intent, `run_in` and `restart_key`. An apply with the same digest changes nothing. The security tier reading another owner's workload does not get it |
-| Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block |
+| Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block, the worse of two with [Wardyn's own check](../SERVICES.md#wardyns-own-check) |
 
 - An owner holds at most 100 workloads (`422` `workload_cap_reached`).
 - The store must be Postgres. Any other backend answers `501` `workloads_unavailable`.
@@ -59,7 +59,7 @@ intent:
 | Command | What it does |
 |---|---|
 | `wardyn apply -f FILE` | Stores each workload the file names, and starts a run when it is new or changed |
-| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing. A service identity's token gets `403` `service_scope` (exit `2`) |
+| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing. A service identity's token may run it |
 | `wardyn delete -f FILE` | Ends each workload's run and deletes the workload |
 | `wardyn workload list` | Lists `NAME`, `OWNER`, `SOURCE`, `STATE`, `GENERATION` (current/latest), `RUN` and `REFUSED` (the last refusal's reason) |
 | `wardyn workload get NAME` | Prints the workload, its document and status, as JSON |
@@ -69,13 +69,13 @@ intent:
 
 - `-f -` reads standard input. `FILE` is required.
 - `workload list|get|restart|delete` take `--owner` for an administrator, or a service identity's sponsor, who acts on another owner's workloads. A `security_admin` may list, get and delete them but not restart one (below). `list` takes `--limit`, `--offset` and `--json`.
-- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads. It can `apply`, but not `diff` or `apply --dry-run`; see [Apply from a pipeline](../CI.md#apply-from-a-pipeline).
+- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads. It can `apply`, `diff` and `apply --dry-run`; see [Apply from a pipeline](../CI.md#apply-from-a-pipeline).
 
 ### apply
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait`. A service identity's token gets the same `403` as `diff` |
+| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait`. A service identity's token may run it |
 | `--wait` | Follows each launched run: until it is running for a service, until it ends for any other workload |
 | `--timeout` | Gives up waiting after this long, `30m` by default. The run keeps going |
 | `--json` | Prints the results as a JSON array, with progress on stderr |
@@ -191,7 +191,7 @@ The runner writes `status` and nothing else, only to the resource named by the a
 | `Pending` | The current spec has no run yet, or its run is starting |
 | `Queued` | The run is waiting in the queue |
 | `Running` | The run is live and its service, if any, is not unhealthy. A paused run or a stale check reads "service health unknown" in `message`, with the last check |
-| `Unhealthy` | The run's service health is unhealthy |
+| `Unhealthy` | The run's service health, or Wardyn's own check, is unhealthy |
 | `Completed` | The run completed |
 | `Ended` | The run ended another way: failed, killed or stopped |
 | `Refused` | The launch of this spec was refused. The previous run keeps running |

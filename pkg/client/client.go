@@ -16,7 +16,8 @@
 //
 //   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
-//     RunSignIn, GetRunPolicy, GetRunSyncRules, RunContainment, RecordRunNode
+//     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
+//     OpenMacWindow, GetMacWindow, GetRunMachine
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
@@ -37,7 +38,11 @@
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
 //     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
 //     CreateMyDrive, DeleteMyDrive (/api/v1/me/drives)
+//   - machines (/api/v1/me/machines):    ListMyMachines, DeleteMyMachine — the caller's own kept macOS machines;
+//     ListKeptMachines, DeleteKeptMachine (/api/v1/machines/kept, super admin) — everyone's
 //   - walls (/api/v1/me/walls):          GetMyWalls, PutMyWalls, ClearMyWalls — the caller's own narrow-only walls
+//   - wall presets (/api/v1/wall-presets): ListWallPresets, GetWallPreset, SaveWallPreset, DeleteWallPreset — named
+//     narrow-only walls, built in or kept for a person, a group or the organisation
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,

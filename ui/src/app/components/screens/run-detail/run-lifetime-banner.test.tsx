@@ -8,7 +8,7 @@
 // state's own copy and actions, and that only one ever renders (the
 // tightened note is the one exception, F19).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
@@ -281,6 +281,37 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(screen.queryByRole("button", { name: "Extend and revive" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+});
+
+describe("RunLifetimeBanner — End run asks first (UXR-15)", () => {
+  const ended = () => detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true, title: "nightly build" });
+
+  it("opens the shared confirm and kills nothing until it is confirmed", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    renderBanner(ended(), [], onChanged);
+    await user.click(screen.getByRole("button", { name: "End run" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveAccessibleName("End nightly build?");
+    expect(dialog).toHaveTextContent("This cannot be undone.");
+    expect(killRunMock).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(killRunMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "End run" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "End run" }));
+    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("a failed kill names the run by its title, not its id", async () => {
+    const user = userEvent.setup();
+    killRunMock.mockRejectedValue(new Error("boom"));
+    renderBanner(ended());
+    await user.click(screen.getByRole("button", { name: "End run" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "End run" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Couldn't end nightly build", expect.anything()));
   });
 });
 

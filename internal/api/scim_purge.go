@@ -456,6 +456,33 @@ func (s *Server) personMemberDriveIDs(ctx context.Context, subjects []string) ([
 	return ids, nil
 }
 
+// personKeptMachineIDs is the ids of the kept machines any of subjects keeps, sorted. The runner
+// revocation erases them on the Mac, and the organisation closes their rows (machine.delete, by
+// revoked_runner); the ones still recorded when the purge finishes are listed beside the drives.
+func (s *Server) personKeptMachineIDs(ctx context.Context, subjects []string) ([]string, error) {
+	ks, ok := s.cfg.Store.(store.KeptMachineStore)
+	if !ok {
+		return nil, nil
+	}
+	ids := []string{}
+	for _, sub := range subjects {
+		if sub = types.CanonicalUserSubject(sub); sub == "" {
+			continue
+		}
+		ms, err := ks.ListKeptMachinesOf(ctx, sub)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range ms {
+			if id := m.ID.String(); !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
 // memberDrivesOf is the member drives in drives whose owner is any of subjects, tombstoned ones included.
 func memberDrivesOf(drives []types.UserDriveListItem, subjects []string) []types.UserDriveListItem {
 	return slices.DeleteFunc(slices.Clone(drives), func(d types.UserDriveListItem) bool {
@@ -491,6 +518,10 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	if err != nil {
 		return err
 	}
+	keptIDs, err := s.personKeptMachineIDs(ctx, forms.targets)
+	if err != nil {
+		return err
+	}
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
@@ -502,6 +533,9 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	}
 	if len(memberIDs) > 0 {
 		data["member_drive_ids"] = memberIDs
+	}
+	if len(keptIDs) > 0 {
+		data["kept_machine_ids"] = keptIDs
 	}
 	if ne, ok := notErasedDetail(forms.notErased); ok {
 		data["not_erased"] = ne

@@ -41,10 +41,14 @@ func (s *Server) runMacOSView(run types.AgentRun) *runMacOSView {
 }
 
 // macOSDesktopViewOnly says a run's desktop stream keeps the viewer's input from the guest: every macOS VM
-// run unless its runner's live caps say the Mac's Screen Sharing can be controlled.
+// run unless its runner's live caps say the Mac's Screen Sharing can be controlled, and always while an
+// attended window is open on the run (run_mac_window.go).
 func (s *Server) macOSDesktopViewOnly(run types.AgentRun) bool {
 	if !run.MachineKind.IsMacOSVM() {
 		return false
+	}
+	if s.macWindows.open(run.ID) != nil {
+		return true // one keyboard at a time: while a window is open, the browser desktop only watches
 	}
 	v := s.runMacOSView(run)
 	return v == nil || v.Desktop != runnerwire.MacVMDesktopControl

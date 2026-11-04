@@ -17,6 +17,9 @@ import { FORM_ACTIONS } from "./copy/form-actions";
  * far left, never next to the primary.
  */
 export const INLINE_ACTIONS = "flex flex-wrap items-center justify-end gap-2";
+/** A dialog footer that stays at the bottom of the dialog's scroll while its content scrolls (the dialog's own padding
+ *  is p-6, which the negative margins cover). */
+export const STICKY_FOOTER = "sticky bottom-0 z-10 -mx-6 -mb-6 mt-2 border-t border-border bg-background px-6 py-3";
 /** A destructive action's weight: outline with danger text. It always opens a confirm. */
 export const DANGER_OUTLINE = "border-danger text-danger hover:bg-danger/10 hover:text-danger";
 

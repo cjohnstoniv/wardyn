@@ -145,7 +145,7 @@ export function SetupLayout({
           <h1 className="text-page">Getting started</h1>
           <p className="mt-1 text-muted-foreground">Governed sandboxes for anything you run — on your own infrastructure, free.</p>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setShowIntro((s) => !s)}>
+        <Button variant="ghost" size="sm" aria-expanded={showIntro} onClick={() => setShowIntro((s) => !s)}>
           <Eye className="size-4" aria-hidden />
           {showIntro ? "Hide intro" : "Show intro"}
         </Button>

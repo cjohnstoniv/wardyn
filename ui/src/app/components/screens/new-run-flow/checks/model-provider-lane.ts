@@ -51,30 +51,30 @@ export function providerConnected(state: string): boolean {
   return state === "live" || state === "expiring";
 }
 
-function isSignInKind(kind: string): boolean {
-  return kind === "bedrock_sso" || kind === "anthropic_subscription";
+function isSignInKind(kind: string, oidc = false): boolean {
+  return oidc || kind === "bedrock_sso" || kind === "anthropic_subscription";
 }
 
 /** The word RAIL_PROVIDER.OPTION fills "your {what}" with, per kind. */
-export function providerWhatWord(kind: string): string {
+export function providerWhatWord(kind: string, oidc = false): string {
   if (kind === "bedrock_sso") return "AWS sign-in";
-  if (kind === "anthropic_subscription") return "sign-in";
+  if (kind === "anthropic_subscription" || oidc) return "sign-in";
   if (isTokenKind(kind)) return "token";
   return "key";
 }
 
 /** The trailing state word ("added"/"not available"/"signed in"/"not signed
  *  in"), keyed on the SAME kind-vocabulary as providerWhatWord. */
-export function providerStateWord(kind: string, state: string): string {
+export function providerStateWord(kind: string, state: string, oidc = false): string {
   const connected = providerConnected(state);
-  if (isSignInKind(kind)) return connected ? "signed in" : "not signed in";
+  if (isSignInKind(kind, oidc)) return connected ? "signed in" : "not signed in";
   return connected ? "added" : "not available";
 }
 
 /** RAIL_PROVIDER.OPTION for one candidate, given this person's access rows. */
 export function providerOptionLabel(p: SetupModelProvider, access: SetupProviderAccess[] | undefined): string {
   const state = accessStateFor(access, p.id);
-  return RAIL_PROVIDER.OPTION(p.name ?? p.id, providerWhatWord(p.kind), providerStateWord(p.kind, state));
+  return RAIL_PROVIDER.OPTION(p.name ?? p.id, providerWhatWord(p.kind, p.sign_in === "oidc"), providerStateWord(p.kind, state, p.sign_in === "oidc"));
 }
 
 /** The admin's roster default for `agent`, among candidates this person may

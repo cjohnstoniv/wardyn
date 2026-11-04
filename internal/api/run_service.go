@@ -4,6 +4,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -29,7 +30,11 @@ func serviceRefusal(req createRunRequest) *runRefusal {
 		return runError(http.StatusUnprocessableEntity, reasonRunServiceShape, runServiceShapeMsg)
 	}
 	if _, err := frozenRunService(req.Service); err != nil {
-		return runModeInvalid("%s", err.Error())
+		ref := runModeInvalid("%s", err.Error())
+		if fe := (*types.ServiceFieldError)(nil); errors.As(err, &fe) {
+			ref.body.Field = fe.Field
+		}
+		return ref
 	}
 	return nil
 }

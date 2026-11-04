@@ -107,7 +107,7 @@ func TestSignExactClaimKeys(t *testing.T) {
 			s := testSigner(t, testRotate(t, nil, false), now)
 			c := testClaims()
 			c.Sponsor = tt.sponsor
-			token, signed, err := s.Sign(c)
+			token, signed, err := s.Sign(c, 0)
 			if err != nil {
 				t.Fatalf("Sign: %v", err)
 			}
@@ -160,8 +160,63 @@ func TestSignRefusesAMissingIdentityField(t *testing.T) {
 	} {
 		c := testClaims()
 		clear(&c)
-		if token, _, err := s.Sign(c); err == nil {
+		if token, _, err := s.Sign(c, 0); err == nil {
 			t.Errorf("%s empty: signed %q", name, token)
+		}
+	}
+}
+
+// An MCP server's token names the server and no provider; a token naming both, or neither, is refused.
+func TestSignMCPToken(t *testing.T) {
+	s := testSigner(t, testRotate(t, nil, false), testRotatedAt)
+	c := testClaims()
+	c.Provider, c.MCP = "", "corp-tools"
+	token, _, err := s.Sign(c, 0)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	body, err := base64.RawURLEncoding.DecodeString(strings.Split(token, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := m["wardyn_provider"]; has || m["wardyn_mcp"] != "corp-tools" {
+		t.Errorf("claims = %v, want wardyn_mcp and no wardyn_provider", m)
+	}
+	for name, mutate := range map[string]func(*Claims){
+		"both":    func(c *Claims) { c.Provider = "corp-gateway" },
+		"neither": func(c *Claims) { c.MCP = "" },
+	} {
+		bad := c
+		mutate(&bad)
+		if token, _, err := s.Sign(bad, 0); err == nil {
+			t.Errorf("%s: signed %q", name, token)
+		}
+	}
+}
+
+// The caller's lifetime sets exp; a lifetime that is zero, negative or past the
+// cap gives the cap.
+func TestSignLifetime(t *testing.T) {
+	now := testRotatedAt
+	s := testSigner(t, testRotate(t, nil, false), now)
+	for name, tt := range map[string]struct{ ask, want time.Duration }{
+		"a minute":     {time.Minute, time.Minute},
+		"five minutes": {5 * time.Minute, 5 * time.Minute},
+		"the cap":      {tokenLifetime, tokenLifetime},
+		"unset":        {0, tokenLifetime},
+		"negative":     {-time.Minute, tokenLifetime},
+		"past the cap": {time.Hour, tokenLifetime},
+	} {
+		_, signed, err := s.Sign(testClaims(), tt.ask)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := time.Duration(signed.ExpiresAt-signed.IssuedAt) * time.Second; got != tt.want {
+			t.Errorf("%s: life = %s, want %s", name, got, tt.want)
 		}
 	}
 }
@@ -169,7 +224,7 @@ func TestSignRefusesAMissingIdentityField(t *testing.T) {
 // ES256, the kid in the header, and a real verify against the published set.
 func TestSignVerifiesAgainstThePublishedKeySet(t *testing.T) {
 	s := testSigner(t, testRotate(t, nil, false), time.Now())
-	token, _, err := s.Sign(testClaims())
+	token, _, err := s.Sign(testClaims(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +260,7 @@ func TestSignVerifiesAgainstThePublishedKeySet(t *testing.T) {
 func TestAGatewayVerifierEnforcesExpiryAndAudience(t *testing.T) {
 	issued := time.Now().UTC().Truncate(time.Second)
 	s := testSigner(t, testRotate(t, nil, false), issued)
-	token, signed, err := s.Sign(testClaims())
+	token, signed, err := s.Sign(testClaims(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +332,7 @@ func TestRunTokenVerifierRefusesAGatewayToken(t *testing.T) {
 	for _, aud := range []string{"gw-audience", "wardyn-internal"} {
 		c := testClaims()
 		c.Audience = aud
-		token, _, err := s.Sign(c)
+		token, _, err := s.Sign(c, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -292,7 +347,7 @@ func TestRunTokenVerifierRefusesAGatewayToken(t *testing.T) {
 func TestRotateServesBothThenRetiresThePrevious(t *testing.T) {
 	first := testRotate(t, nil, false)
 	old := testSigner(t, first, testRotatedAt)
-	oldToken, _, err := old.Sign(testClaims())
+	oldToken, _, err := old.Sign(testClaims(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +371,7 @@ func TestRotateServesBothThenRetiresThePrevious(t *testing.T) {
 	if got := testKids(testKeySet(t, s)); !slices.Equal(got, []string{s.KeyID(), old.KeyID()}) {
 		t.Errorf("JWKS kids = %v, want new then old", got)
 	}
-	newToken, _, err := s.Sign(testClaims())
+	newToken, _, err := s.Sign(testClaims(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +425,7 @@ func TestRotateRetirePreviousRemovesEveryOldKeyAtOnce(t *testing.T) {
 	first := testRotate(t, nil, false)
 	second := testRotate(t, first, false) // a previous is live, inside its overlap
 	oldest, stolen := testSigner(t, first, testRotatedAt), testSigner(t, second, testRotatedAt)
-	forged, _, err := stolen.Sign(testClaims())
+	forged, _, err := stolen.Sign(testClaims(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +449,7 @@ func TestRotateRetirePreviousRemovesEveryOldKeyAtOnce(t *testing.T) {
 	if s.KeyID() == stolen.KeyID() {
 		t.Fatal("the retire kept the stolen key as current")
 	}
-	token, _, err := s.Sign(testClaims())
+	token, _, err := s.Sign(testClaims(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

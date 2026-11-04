@@ -12,7 +12,7 @@
 // The ids are NOT ours to choose: internal/api/ui_layout.go's
 // runLayoutWidgetIDs is a CLOSED set the server validates every PUT against
 // ("terminal, egress, files, sandbox, credentials, identity, effective-policy,
-// desktop, ssh, service"). An id outside it is a 400, so this table's keys must match that slice
+// desktop, ssh, service, machine"). An id outside it is a 400, so this table's keys must match that slice
 // exactly — the two halves of the contract are kept in sync by hand (C-UI adds
 // `effective-policy` to BOTH, in the same commit — a client-only add would
 // 400 every layout PUT that ever placed it). That file's own doc explains what
@@ -23,7 +23,7 @@
 // use React.createElement rather than turning the registry into a component
 // module.
 import * as React from "react";
-import { Box, FileDiff, Fingerprint, Globe, HeartPulse, KeyRound, Monitor, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
+import { Box, FileDiff, Fingerprint, Globe, HardDrive, HeartPulse, KeyRound, Monitor, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
 import type {
   AuditEvent,
   CredentialGrant,
@@ -37,6 +37,7 @@ import { isBackgroundRun, mayEnterRunOrUnknown } from "../../../lib/run-entry";
 import { isMacOSVM, isVMKind } from "../../../lib/types/machine-kind";
 import { DesktopCard } from "../run-detail-desktop";
 import { ConnectSSHCard } from "../run-detail-ssh";
+import { MachineWidget } from "./widgets/machine-card";
 import { ServicePanel } from "./service-panel";
 import {
   CredentialsWidget,
@@ -65,7 +66,8 @@ export type WidgetId =
   | "effective-policy"
   | "desktop"
   | "ssh"
-  | "service";
+  | "service"
+  | "machine";
 
 // Everything a widget can need, assembled once by the screen. Widgets keep
 // their own props — this is only the bag the registry destructures from, so a
@@ -303,6 +305,16 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     presets: {},
     available: (ctx) => !!ctx.run.service && ctx.run.state === "RUNNING",
   },
+  // Board KM-3: the kept machine of a run that keeps or resumed one, in the right column. A run with none has no tile, so
+  // the default layouts leave it out and presetLayout / withMachine add it, below everything, for a run that has one.
+  machine: {
+    label: "Machine",
+    Icon: HardDrive,
+    component: (ctx) => React.createElement(MachineWidget, { run: ctx.run }),
+    defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
+    presets: {},
+    available: (ctx) => !!ctx.run.machine,
+  },
 };
 
 export const WIDGET_IDS = Object.keys(RUN_WIDGETS) as WidgetId[];
@@ -362,6 +374,30 @@ export function withDesktop(layout: RunLayoutWidget[]): RunLayoutWidget[] {
   return [...layout.map((o) => (o.y >= at.y ? { ...o, y: o.y + at.h } : o)), { widget: "desktop", ...at }];
 }
 
+/**
+ * What a saved layout holds in place of the Machine tile once the person has removed it, as DESKTOP_REMOVED does for the
+ * Desktop tile (the tile's smallest size is 3×2, so 1×1 cannot be the tile). A saved layout with no Machine entry at all
+ * predates the tile and, on a run with a kept machine, gets it (withMachine); one with this entry was saved after, with
+ * the tile taken out, and does not.
+ */
+export const MACHINE_REMOVED: RunLayoutWidget = { widget: "machine", x: 0, y: 0, w: 1, h: 1 };
+
+export const isMachineRemoved = (w: RunLayoutWidget): boolean => w.widget === "machine" && w.w === 1 && w.h === 1;
+
+/** The layout with a Machine tile when it has none: at the foot of the right column, where it costs the rest nothing. A layout that has the tile is left as it is. */
+export function withMachine(layout: RunLayoutWidget[]): RunLayoutWidget[] {
+  if (layout.some((w) => w.widget === "machine")) return layout;
+  const { w, h } = RUN_WIDGETS.machine.defaultLayout;
+  const x = Math.min(rightColumnX(layout), GRID_COLS - w);
+  const y = layout.filter((o) => o.x < x + w && o.x + o.w > x).reduce((bottom, o) => Math.max(bottom, o.y + o.h), 0);
+  return [...layout, { widget: "machine", x, y, w, h }];
+}
+
+/** A layout for a run that has a kept machine: the tile is there unless the person took it out. */
+export function forMachineRun(layout: RunLayoutWidget[], machine: boolean): RunLayoutWidget[] {
+  return machine ? withMachine(layout) : layout;
+}
+
 /** A layout for one run: a service run's live layout has the Service panel, one saved before the panel existed included. */
 export function forRun(layout: RunLayoutWidget[], preset: RunLayoutPreset, service: boolean): RunLayoutWidget[] {
   return service && preset === "live" ? withService(layout) : layout;
@@ -374,16 +410,17 @@ export function forVMRun(layout: RunLayoutWidget[], vm: boolean): RunLayoutWidge
 
 /**
  * The situational default for a preset, in wire shape. `service`: the run is a service, which adds its panel. `vm`: the
- * run is a VM run, which has the Desktop tile; any other run's rail closes the tile's rows, so no gap is left in it.
+ * run is a VM run, which has the Desktop tile; any other run's rail closes the tile's rows, so no gap is left in it. `machine`: the
+ * run keeps or resumed a kept machine, which has the Machine tile at the foot of the right column.
  */
-export function presetLayout(preset: RunLayoutPreset, service = false, vm = false): RunLayoutWidget[] {
+export function presetLayout(preset: RunLayoutPreset, service = false, vm = false, machine = false): RunLayoutWidget[] {
   const slot = RUN_WIDGETS.desktop.presets[preset];
   const base = WIDGET_IDS.flatMap((id) => {
     if (id === "desktop" && !vm) return [];
     const at = RUN_WIDGETS[id].presets[preset];
     return at ? [{ widget: id, ...at }] : [];
   }).map((w) => (!vm && slot && w.y >= slot.y + slot.h && w.x < slot.x + slot.w && w.x + w.w > slot.x ? { ...w, y: w.y - slot.h } : w));
-  return forRun(base, preset, service);
+  return forMachineRun(forRun(base, preset, service), machine);
 }
 
 // The ONE guard every layout passes through — load, add, remove, preset
@@ -399,7 +436,7 @@ export function normalizeLayout(
   const seen = new Set<string>();
   const out: RunLayoutWidget[] = [];
   for (const w of layout) {
-    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w) || isDesktopRemoved(w)) continue;
+    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w) || isDesktopRemoved(w) || isMachineRemoved(w)) continue;
     seen.add(w.widget);
     out.push({ widget: w.widget, x: w.x, y: w.y, w: w.w, h: w.h });
   }

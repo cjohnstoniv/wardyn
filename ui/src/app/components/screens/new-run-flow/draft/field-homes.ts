@@ -7,6 +7,7 @@
 // Keys are the template field registry's request names and every policy name
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
+import { KEPT_MACHINE_REASON, type KeptMachineReason } from "../../../../lib/kept-machine-refusals";
 import type { NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
@@ -41,7 +42,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine_kind macos_base run_in"),
+  ...homes("excluded", "title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base desktop_window run_in wall_preset"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -58,21 +59,21 @@ export const FIELD_HOME_OVERRIDES: Record<string, FieldHome> = {
 };
 
 export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
-  ...groups("run", policy("ui_apps") + " shape experience workload service interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder"),
-  ...groups("where", "machine_kind macos_base run_in runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
+  ...groups("run", policy("ui_apps") + " shape experience workload service interactive task_mode interactive_start agent task preset preset_version title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder"),
+  ...groups("where", "machine machine_kind macos_base desktop_window run_in runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives keep_work_folder repo workspace_id " + policy("workspace_mounts workspace_repos")),
-  ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals " + policy("desktop")),
+  ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals wall_preset " + policy("desktop")),
   ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection recording`)),
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
-  placement_invalid: "document", image_conflict: "document", allowed_image_invalid: "document",
+  placement_invalid: "document", image_conflict: "document", image_digest_required: "document", allowed_image_invalid: "document",
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
   workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",
@@ -109,11 +110,15 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   template_name_taken: "review", template_limit_reached: "review", template_policy_field_refused: "review",
   harness_not_installed: "harnesses", harness_set_no_image: "harnesses", harness_set_custom_image: "harnesses",
   harness_providers_conflict: "harnesses", multi_agent_tasks_off: "harnesses",
+  // A refusal of the run's kept machine: the choice is on the Run step, under Where should it run.
+  ...(Object.fromEntries(Object.values(KEPT_MACHINE_REASON).map((r) => [r, "run"])) as Record<KeptMachineReason, FieldHome>),
 };
 
 /** The one field a refusal names, where it names one: the run's runner, chosen through its pool. */
 export const FIELD_OF_REASON: Partial<Record<KnownLaunchReason, string>> = {
   placement_credential: "runner_pool_id",
+  // A refusal of the run's kept machine marks the Where row, where Review shows the machine.
+  ...(Object.fromEntries(Object.values(KEPT_MACHINE_REASON).map((r) => [r, "machine"])) as Record<KeptMachineReason, string>),
 };
 
 /** A document path's Review group: its top-level field's (or `inline_policy.<name>`). */
@@ -126,9 +131,15 @@ export function groupOfPath(path: string): ReviewGroupId | undefined {
 export const homeOfReason = (reason: string): FieldHome =>
   (HOME_OF_REASON as Record<string, FieldHome>)[reason] ?? "review";
 
+/** The request field every refusal of a window on the Mac names: the console clears that choice, never blocks on it. */
+export const DESKTOP_WINDOW_FIELD = "desktop_window";
+
 /** The step that changes the request field a refusal names (the envelope's `field`), where it differs by field
- *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size. */
-export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = { machine_kind: "run", macos_base: "run", harness: "harnesses", resources: "review" };
+ *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size, and every
+ *  refusal of a window on the Mac names desktop_window, which the Run step sets. */
+export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = {
+  machine_kind: "run", macos_base: "run", desktop_window: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review",
+};
 
 /** A refusal's step: its field's, when the console knows that field, else its reason's. */
 export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? homeOfReason(reason);

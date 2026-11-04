@@ -49,6 +49,16 @@ var proxySettingOfField = map[string]string{
 	// to the gateway: an older remote executor must refuse the run, not run it
 	// unsigned. A person's runner never gets this far (internal/placement enforce.go).
 	"GatewayIdentity": ProxySettingGatewayIdentity,
+	// Dropped, the broker forwards a push the run's capabilities withhold: a GitHub
+	// push meets only its read-only token's forge 403, and an Azure DevOps git_pat
+	// push nothing at all.
+	"GitPushWithheld": ProxySettingGitPushWithheld,
+	// Dropped, the proxy refuses only the public code hosts under deny_all, and a
+	// self-hosted one the run reaches plainly is an open tunnel again.
+	"ForgeHosts": ProxySettingForgeHosts,
+	// Dropped, the run's proxy holds no model list and admits every model the
+	// governance profile limits.
+	"ModelLimit": ProxySettingAllowedModels,
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner

@@ -5,7 +5,8 @@
 
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
-import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
+import { aheadByHours } from "../../../lib/test-clock";
+import { rowPresentation, isPausedRun, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
@@ -175,6 +176,30 @@ describe("rowPresentation — plain state words with no attention", () => {
   });
 });
 
+describe("rowPresentation — a paused run (UXR-24)", () => {
+  it("reads Paused, in a neutral hue, for RUNNING with paused_at set", () => {
+    const p = rowPresentation(run({ state: "RUNNING", paused_at: aheadByHours(-1), paused_reason: "idle" }));
+    expect(p.hue).toBe("grey");
+    expect(p.word).toBe("Paused");
+    expect(p.action).toBeNull();
+    expect(p.needsYou).toBe(false);
+  });
+
+  it("a lost run (reboot, outage or gone) is never Paused, even with paused_at set", () => {
+    for (const lost_reason of ["reboot", "outage", "gone"] as const) {
+      const r = run({ state: "RUNNING", paused_at: aheadByHours(-1), lost_reason });
+      expect(isPausedRun(r)).toBe(false);
+      expect(rowPresentation(r).word).not.toBe("Paused");
+    }
+    expect(isPausedRun(run({ state: "RUNNING", paused_at: aheadByHours(-1) }))).toBe(true);
+  });
+
+  it("an unpaused RUNNING run still reads Running, and a lease-ended one still reads its end", () => {
+    expect(rowPresentation(run({ state: "RUNNING" })).word).toBe("Running");
+    expect(rowPresentation(run({ state: "RUNNING", paused_at: aheadByHours(-1), lost_reason: "ended" })).word).toBe("Ended at its end time");
+  });
+});
+
 describe("rowPresentation — RL-15: the board's own ends-soon warning (design.md §2.3)", () => {
   it("10 minutes left: amber 'Ends in 10 minutes', no attention needed", () => {
     const r = run({ state: "RUNNING", ends_at: new Date(NOW + 9 * 60_000).toISOString() });
@@ -244,6 +269,13 @@ describe("glyphKindFor — the shape half of the colour/glyph rule", () => {
     // stays RUNNING (see runs-model.ts's own note) — the RUNNING check must
     // not win the shape decision for this word.
     expect(glyphKindFor("grey", "Ended at its end time", "RUNNING")).toBe("square-outline");
+  });
+
+  it("a paused row (state still RUNNING, its agent frozen) gets the static ring, not the pulsing dot", () => {
+    expect(glyphKindFor("grey", "Paused", "RUNNING")).toBe("ring");
+    const paused = rowPresentation(run({ state: "RUNNING", paused_at: aheadByHours(-1) }));
+    expect(paused.word).toBe("Paused");
+    expect(glyphKindFor(paused.hue, paused.word, "RUNNING")).toBe("ring");
   });
 });
 

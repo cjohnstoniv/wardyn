@@ -55,7 +55,8 @@ func (s *Server) mountUI(r chi.Router) {
 		// SPA router can handle client-side paths (history API mode). The path is
 		// cleaned rooted, as http.FileServer cleans it: no ".." survives, so the
 		// file checked is inside dir and is the one fs would serve.
-		if clean := filepath.Clean("/" + req.URL.Path); clean != "/" {
+		clean := filepath.Clean("/" + req.URL.Path)
+		if clean != "/" {
 			if info, err := os.Stat(filepath.Join(dir, clean)); err == nil && !info.IsDir() {
 				// Hashed build artifacts under /assets/ are content-addressed and
 				// safe to cache forever; everything else (favicon, manifest) revalidates.
@@ -67,6 +68,15 @@ func (s *Server) mountUI(r chi.Router) {
 				fs.ServeHTTP(w, req)
 				return
 			}
+		}
+		// No client-side route lives under /.well-known/, and a client that asks
+		// there wants a document, so HTML is a wrong answer. A file a deployment
+		// put there was served above. Every unserved path here is a plain 404,
+		// the gateway key set's address included while identity is off, so off
+		// stays indistinguishable from a path nothing holds.
+		if clean == wellKnownPrefix || strings.HasPrefix(clean, wellKnownPrefix+"/") {
+			http.NotFound(w, req)
+			return
 		}
 		// index.html must always revalidate so a redeploy's new hashed bundle is
 		// picked up instead of a stale cached shell.

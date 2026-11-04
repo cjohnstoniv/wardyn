@@ -137,8 +137,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	// The grant's own narrowing, past the hand-off (an Azure DevOps host may have
 	// no grant here) and before anything can spend the credential: the push rules
-	// below may read the forge or hold for review, and patToken mints.
-	if !p.patScopeAllows(w, r, host, rest, verb, grant) {
+	// below may read the forge or hold for review, and patToken mints. A push the
+	// run's capabilities withhold is refused first, in its own words.
+	if p.refuseWithheldPush(w, r, host, verb, func(src string) { p.emitPATDecision(r, host, egress.Deny, src) }) ||
+		!p.patScopeAllows(w, r, host, rest, verb, grant) {
 		return
 	}
 

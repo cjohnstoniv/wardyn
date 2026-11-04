@@ -29,8 +29,15 @@
 2. Give wardynd the certificate authority. Set the Helm value `trustedCA`, or `WARDYN_TRUSTED_CA_FILE` outside Helm. The run's proxy and the sandbox's own TLS clients then trust it.
 3. Add a `custom_endpoint` provider whose `base_url` is the model hostname and port, for example `https://llm-gw.wardyn.svc.cluster.local:8443`. A person's credential is stored as for any provider.
    - Two providers with identity on can share one gateway only on paths apart, such as `/anthropic` and `/openai`. A run that uses both on one path is refused.
+   - A Bedrock provider with a bearer key can send identity too. Put the gateway in its `bedrock.base_url`, and each person's key goes to the gateway.
+   - A Bedrock provider with SSO sign-in cannot, because AWS signs the `Host` header. Use a bearer key row, or the gateway as a custom endpoint.
 4. Add the model hostname to the policy's `allowed_domains`. The model route needs no `internal_hosts` entry, and adding one lifts the private-address guard for that host on every path ([Internal model gateway](../OPERATIONS.md#internal-model-gateway)).
 5. Allow the MCP hostname in the run's policy, and add it to `internal_hosts` when it names a private address. Wardyn then governs whether a run reaches the gateway, and the gateway decides which tools a caller gets.
+6. To have the gateway know which run and person made an MCP call, set `mcp.gateway_audience` on the organisation's MCP component (its `url` is the gateway's MCP address). Run identity is turned on per model provider and makes the signing key, so turn it on for a provider first.
+   - Only an organisation's remote server may set it: a host a person names could otherwise be sent a token good at a real gateway.
+   - One audience belongs to one address, across model providers and MCP servers.
+   - An MCP component edited after a run started is refused a new token for that run, as a changed provider is.
+   - An MCP server whose address falls under another destination's identity route is refused (`502`) rather than sent that destination's token.
 
 ## The gateway's config
 
@@ -42,6 +49,7 @@
 | `"*": passthrough` | Every other path is forwarded to the provider's host untouched |
 | `ai.hostOverride` | Where the provider's calls go: the fake here, a vendor's host in a real setup |
 | `mcp.targets` | The servers behind the one MCP endpoint a client sees |
+| `policies.jwtAuth` on the MCP route: `mode: strict`, `location.header.name: x-wardyn-identity`, `providers[].issuer`, `audiences` (the component's `mcp.gateway_audience`), `jwks.url` | Verifies the same token on MCP calls. `wardyn_mcp` names the server |
 | `policies.jwtAuth` on the model route: `mode: strict`, `location.header.name: x-wardyn-identity`, `providers[].issuer`, `audiences`, `jwks.url` | Verifies the run's identity token (below). `preserveToken` is left unset, so the gateway consumes the header and the upstream never receives it |
 | `frontendPolicies.accessLog.add`: `jwt.sub`, `jwt.wardyn_run`, `request.headers["x-wardyn-call-id"]` | Puts the subject, the run id and Wardyn's call id on each access-log line |
 
@@ -100,32 +108,75 @@ The setup was checked against the pinned image in a one-container trial. These a
 ## The claims a gateway receives
 
 - Experimental until 0.11. The token format (`wardyn_format` is `experimental-1`) and the key set's address may change before then.
-- With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It never uses `Authorization`, which carries a person's own credential.
-- The token is ES256 with the key's `kid` in its header, and lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
+- With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It does the same on an organisation MCP server's address when the component sets `mcp.gateway_audience`. It never uses `Authorization`, which carries a person's own credential.
+- The token is ES256 with the key's `kid` in its header, and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). An MCP server's token always lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
 
 | Claim | Value | Notes |
 |---|---|---|
 | `iss` | The trust domain, as `spiffe://<trust domain>` | `GET /api/v1/model-providers` reports it as `gateway_identity_issuer`. Two Wardynds on the default `wardyn.local` domain behind one gateway present one issuer, so set `WARDYN_TRUST_DOMAIN` on each |
-| `aud` | The provider's `gateway_identity.audience` | Set by an admin. A gateway accepts only the audiences it lists |
+| `aud` | The provider's `gateway_identity.audience`, or an MCP component's `mcp.gateway_audience` | Set by an admin. A gateway accepts only the audiences it lists. One audience is never on two addresses, so a model route's token is no good on an MCP route |
 | `sub` | The run's subject: a person, or a service identity on a service run | A local install gives a fixed seat. A run started with the admin token gives `admin-token` |
 | `wardyn_run` | The run id | Flat, so a gateway rule needs no SPIFFE parsing |
 | `wardyn_runner` | The runner's id, else the runner target | An operator-chosen slug, possibly a hostname, or `docker` |
-| `wardyn_provider` | The model provider's id | |
+| `wardyn_provider` | The model provider's id | Absent on an MCP server's token |
+| `wardyn_mcp` | The MCP server's key, the `<server>` of `mcp__<server>__<tool>` | Present on an MCP server's token alone |
 | `sponsor` | The accountable person of a service identity | Present only on a service run |
 | `jti` | A fresh UUID per token | |
 | `iat` | When the token was issued | Unix seconds |
-| `exp` | `iat` plus 10 minutes | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
+| `exp` | `iat` plus the provider's token lifetime, 10 minutes unless set | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
 | `wardyn_format` | `experimental-1` | |
 | `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape |
 
 - There is no `nbf`. A Wardyn clock ahead of the gateway's drops a token early and one behind gets a `401`: both fail closed.
 - A test holds this table equal to the signer's claim struct.
 
+## How long a token lives
+
+- A provider's `gateway_identity.token_lifetime_seconds` sets it, from 60 to 600 seconds. Unset means 600, so an install that sets nothing changes nothing. Any other value is refused when saved.
+- A shorter life limits how long a leaked token is good for, and so how long a killed run's token can still be spent.
+- The setting applies to tokens issued after a save. A running run keeps working, because the life is not part of the route the run started with.
+- `wardyn-proxy` asks for a new token at half the remaining life. If the mint fails, it keeps the held token until `exp`, so a run survives a wardynd outage of about half the lifetime.
+
+| Lifetime | Outage a run survives | A mint, per run and provider, every |
+|---|---|---|
+| 600 seconds | 5 minutes | 5 minutes |
+| 300 seconds | 2 minutes 30 seconds | 2 minutes 30 seconds |
+| 120 seconds | 1 minute | 1 minute |
+| 60 seconds | 30 seconds | 30 seconds |
+
+- Each mint is about five store reads. At 60 seconds, 500 concurrent runs come to about 83 reads a second.
+- A rolling wardynd upgrade longer than the outage a run survives fails that run's model calls, so a short life is the admin's trade.
+
 ## The key set's address
 
 - The key set is the anonymous `GET /.well-known/wardyn-experimental/gateway-jwks.json` on wardynd, under `WARDYN_BASE_PATH` when that is set.
 - The console shows the address built from the browser's own origin. A gateway that reaches wardynd by another address, such as a cluster Service name, uses that address with the same path.
 - The gateway reads the key set when it loads its config and does not start if the read fails. Start wardynd first, and save a provider with run identity on, which creates the key.
+- With run identity off, every `GET` under `/.well-known/` that names no file in the console's directory answers a plain `404`, this address included. A gateway whose `jwks.url` points here cannot load a key set from it. A file an operator places under `/.well-known/` in the console's directory is still served.
+
+## The TLS chain
+
+A model call crosses three TLS hops. Only the first two are Wardyn's.
+
+| Hop | Who terminates TLS | Who trusts what | What each side sees |
+|---|---|---|---|
+| 1. Sandbox to `wardyn-proxy` | `wardyn-proxy`, with a leaf from the run's own certificate authority. It terminates only a host it is set to intercept; any other `CONNECT` is an opaque tunnel | The sandbox trusts the run's authority plus the `WARDYN_TRUSTED_CA_FILE` roots | The proxy reads the whole request, the person's bearer included. The sandbox never holds the identity token, and the proxy deletes any `X-Wardyn-Identity` the sandbox sends on a run with a route |
+| 2. `wardyn-proxy` to the gateway | The gateway | The proxy trusts the system roots plus the `WARDYN_TRUSTED_CA_FILE` bundle. It presents no client certificate | The gateway sees `wardyn-proxy` as its caller, with `X-Wardyn-Identity`, `X-Wardyn-Call-Id` and the person's bearer |
+| 3. The gateway to the model vendor | The vendor | Whatever the gateway's own config says | Nothing on this hop is Wardyn's |
+
+- Identity is a header, not a client certificate. The gateway checks the token's signature against the key set, and nothing at the TLS layer names the caller.
+- With an upstream proxy set, hop 2 is a `CONNECT` through it, unless the gateway host is on `upstream_proxy_no_proxy`.
+
+> [!WARNING]
+> A TLS-inspecting corporate proxy on hop 2 terminates TLS with its own authority, so it reads `X-Wardyn-Identity` and the person's bearer in clear. To stop that, keep it out of the path with the recipe below. Trusting the inspector's root in `WARDYN_TRUSTED_CA_FILE` makes it a party to every credential on that hop.
+
+To exempt the gateway host from the upstream proxy:
+
+1. Check that the `wardyn-proxy` sidecar can resolve the gateway's name and reach it directly. A bypassed host is dialled by the sidecar itself, not by the corporate proxy. The model route needs no `internal_hosts` entry, as step 4 of the setup says.
+2. Add the gateway's host to `upstream_proxy_no_proxy` in site config. A name or a domain suffix matches a hostname; a CIDR matches only an address written as an IP literal.
+3. Start a run and confirm the gateway's access log shows the call.
+
+- The list and its matching rules are under "[Upstream proxy: the bypass list](../OPERATIONS.md#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)".
 
 ## Joining a run's audit rows to the gateway's log
 
@@ -138,7 +189,26 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 - Only a gateway log line that passed the token check is trustworthy. A sandbox that reaches the gateway through an opaque tunnel can send any `X-Wardyn-Call-Id`, so run the gateway's `jwtAuth` in `strict` mode.
 - An attempt refused or failed after the proxy made its id has a row with the id, and no gateway line when nothing was sent. A call refused before that has no id.
 - The id is Wardyn's own. It is not a request id the gateway made.
-- MCP has a call id and no identity token.
+- An MCP server has a call id. It also gets an identity token when it is an organisation's remote server with `mcp.gateway_audience`, and no token otherwise.
+
+## Who inspects
+
+With content inspection on (`llm_inspection` in the run's policy), Wardyn checks each prompt before it leaves. A gateway that checks prompts too runs the same checks twice. A provider with run identity on can leave them to its gateway: `gateway_identity.inspection: gateway`, the console's "Let this gateway check prompts".
+
+| Check | `inspection` unset | `inspection: gateway` |
+|---|---|---|
+| The run's own secret values, exact match (`detect_secrets`) | Wardyn | Wardyn |
+| Secret formats, entropy, personal data, classified markers, the detector sidecar, attachments | Wardyn | The gateway |
+
+- Only a call on the provider's route is left to the gateway: its host, port and path prefix, the match that carries the token. Another host, a path outside the prefix, a path with a dot segment and the plain HTTP lane keep the whole policy.
+- The run's own secret values exist only in Wardyn's memory, so no gateway can look for them. That check stays on whenever the policy has it, and in block mode it still refuses the call.
+- With no `detect_secrets` on the policy, Wardyn checks nothing on that route.
+- Each prompt left to the gateway has an `llm.scan.skip` row with `data.skip_reason: deferred_to_gateway` and `data.deferred_to` set to the provider id. A secret found there is an alert or block row with the same `deferred_to`. The console's audit reads "Left prompt checks to" the provider, and the run's Policy tab reads "On, except prompts to" its name.
+- In block mode the gateway's rules then decide what the other checks would have refused. A policy author who relies on Wardyn's blocks loses them on that route.
+- A prompt-bearing path the proxy cannot parse is still refused when the policy blocks on scanner errors.
+- A Bedrock provider cannot take the setting, and saving it is refused. Its calls are scanned only by `inspect_forward_egress`, which no gateway takes over.
+- The setting is part of the route a run starts with. Changing it refuses the run's next token, so its gateway calls stop within 10 minutes. Create a new run to pick it up.
+- Any value other than `gateway` is refused when saved.
 
 ## Defaults on a route that carries the token
 
@@ -147,4 +217,4 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 | The response scrub is forced on | `WARDYN_PROXY_RESPONSE_SCRUB=off` does not turn it off here, so a gateway that echoes the token back cannot hand it to the sandbox |
 | `Accept-Encoding` is deleted from the request | The answer arrives in bytes the scrub can read |
 | A compressed answer gets a `502` | The proxy refuses bytes it cannot scrub rather than relay them |
-| A running run keeps the routes it started with | A run keeps its routes. Once a provider's gateway changes, the mint refuses that run, so its gateway calls fail once its token expires, within 10 minutes. Create a new run to pick the change up |
+| A running run keeps the routes it started with | A run keeps its routes. Once a provider's gateway changes, the mint refuses that run, so its gateway calls fail once its token expires, within 10 minutes at most. Create a new run to pick the change up. |

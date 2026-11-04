@@ -80,7 +80,7 @@ test("renders the seeded, day-grouped audit trail with append-only framing", asy
 test("the truncated indicator is ABSENT below the 500-event cap", async ({ page }) => {
   await expect(eventCount(page)).toBeVisible();
   // Far under the cap, so the truncation warning must not appear.
-  await expect(page.getByText(/Showing the first 500 events/i)).toHaveCount(0);
+  await expect(page.getByText(/Showing the newest 500 events/i)).toHaveCount(0);
   await expect(page.getByText(/\(truncated\)/i)).toHaveCount(0);
 });
 

@@ -33,9 +33,10 @@ const (
 	// tokenFormat is the wardyn_format claim: a gateway rule can tell which
 	// shape it is reading while the format is experimental.
 	tokenFormat = "experimental-1"
-	// tokenLifetime is how long a token lives. A gateway cannot learn that a run
-	// was killed, so this is also how long a killed run's token can still be
-	// spent.
+	// tokenLifetime is the longest a token lives, and how long one lives when the
+	// provider sets none. A gateway cannot learn that a run was killed, so this is
+	// also the longest a killed run's token can still be spent. Key retirement
+	// reads it too, so a shorter token never outlives its key's publication.
 	tokenLifetime = 10 * time.Minute
 	// retireOverlap is what a replaced key stays published past the last token
 	// it signed: enough for a gateway on the 60-second refetch the JWKS route
@@ -47,12 +48,13 @@ const (
 // caller fills the identity fields from the run and the provider, never from a
 // request; Sign fills the rest.
 type Claims struct {
-	Issuer   string `json:"iss"`             // the trust domain, spelled as the run token spells it
-	Audience string `json:"aud"`             // the provider's gateway audience
-	Subject  string `json:"sub"`             // the person, or the service principal of a service run
-	Run      string `json:"wardyn_run"`      // the run id
-	Runner   string `json:"wardyn_runner"`   // the executor, else the runner target
-	Provider string `json:"wardyn_provider"` // the model provider id
+	Issuer   string `json:"iss"`                       // the trust domain, spelled as the run token spells it
+	Audience string `json:"aud"`                       // the provider's gateway audience
+	Subject  string `json:"sub"`                       // the person, or the service principal of a service run
+	Run      string `json:"wardyn_run"`                // the run id
+	Runner   string `json:"wardyn_runner"`             // the executor, else the runner target
+	Provider string `json:"wardyn_provider,omitempty"` // the model provider id; empty on an MCP server's token
+	MCP      string `json:"wardyn_mcp,omitempty"`      // the MCP server's key, on its token alone
 	Sponsor  string `json:"sponsor,omitempty"`
 
 	ID        string   `json:"jti"`
@@ -158,15 +160,19 @@ func Rotate(raw []byte, retirePrevious bool, now time.Time) ([]byte, error) {
 // Sign signs c with the current key and returns the token and c as signed, whose
 // ID and ExpiresAt the caller's audit row needs. A token missing an identity
 // field is refused, so a caller's empty value never reaches a gateway as a
-// signed one.
-func (s *Signer) Sign(c Claims) (string, Claims, error) {
-	if c.Issuer == "" || c.Audience == "" || c.Subject == "" || c.Run == "" || c.Provider == "" {
-		return "", Claims{}, errors.New("gateway identity: issuer, audience, subject, run and provider are required")
+// signed one. The token lives for lifetime, or for the longest a token may when
+// lifetime is zero, negative or longer than that.
+func (s *Signer) Sign(c Claims, lifetime time.Duration) (string, Claims, error) {
+	if c.Issuer == "" || c.Audience == "" || c.Subject == "" || c.Run == "" || (c.Provider == "") == (c.MCP == "") {
+		return "", Claims{}, errors.New("gateway identity: issuer, audience, subject, run and exactly one of provider and MCP server are required")
+	}
+	if lifetime <= 0 || lifetime > tokenLifetime {
+		lifetime = tokenLifetime
 	}
 	now := s.now()
 	c.ID = uuid.NewString()
 	c.IssuedAt = now.Unix()
-	c.ExpiresAt = now.Add(tokenLifetime).Unix()
+	c.ExpiresAt = now.Add(lifetime).Unix()
 	c.Format = tokenFormat
 	c.Actor = actClaim{Sub: c.Issuer + "/agent-run/" + c.Run}
 	token, err := jwt.Signed(s.signer).Claims(c).Serialize()

@@ -126,6 +126,10 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonMacOSBaseInvalid, msg)
 		return req, noCeiling, "", "", false
 	}
+	if msg := desktopWindowRequestRefusal(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+		return req, noCeiling, "", "", false
+	}
 
 	// The request-level fields a member does not get to choose freely (see
 	// denyUserRequest) — checked before the XOR/builder validation below so a

@@ -52,6 +52,7 @@ describe("IdentityWidget recording row", () => {
 
   it("says a macOS VM run's terminal sessions are recorded, not that the run is unrecorded", () => {
     render(<IdentityWidget run={{ ...run, machine_kind: "macos_vm", recording_level: "terminal", not_recorded: "runner_declined" }} onGoPolicy={() => {}} />);
+    expect(screen.getByText("Terminal sessions are recorded at this run's recording level. The agent's output isn't recorded.")).toBeInTheDocument();
     expect(screen.getByText(RUN_RECORDING.macos_terminal)).toBeInTheDocument();
     expect(screen.queryByText(RUN_RECORDING.runner_declined)).not.toBeInTheDocument();
   });

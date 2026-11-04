@@ -30,6 +30,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +80,13 @@ const (
 	desktopCloseUnreachable   websocket.StatusCode = 4004
 	// desktopCloseWatchEnded: a re-check ended a background run's watch. It says so, never the hour's words.
 	desktopCloseWatchEnded websocket.StatusCode = 4005
+	// desktopCloseWindowOpen: a window is open on the Mac, so a stream with control ends (one keyboard at a
+	// time). The viewer says so and sends the person to the run page, never retrying.
+	desktopCloseWindowOpen websocket.StatusCode = 4006
 )
+
+// desktopWindowOpenMsg is desktopCloseWindowOpen's reason.
+const desktopWindowOpenMsg = "A window is open on the Mac, so this desktop only watches. Open the desktop again from the run page to watch it."
 
 // uiDesktopSessions is the process-local state of desktop sessions, keyed by uiReassertKey: a cache
 // of those known closed (until the cookie would have expired anyway) and the streams still open.
@@ -265,10 +272,17 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		}
 		// The run's machine kind, so the viewer names a macOS desktop while it starts. A run that
 		// cannot be read is served without it: the viewer then says what it says of any desktop.
-		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil && run.MachineKind != "" {
-			boot["machine_kind"] = string(run.MachineKind)
-			if s.macOSDesktopViewOnly(run) {
-				boot["view_only"] = true
+		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil {
+			if run.MachineKind != "" {
+				boot["machine_kind"] = string(run.MachineKind)
+				if s.macOSDesktopViewOnly(run) {
+					boot["view_only"] = true
+				}
+			}
+			// The run's name and page, for the viewer's way back to it: both or neither. Only on an open
+			// session's page, never on a refusal, which anyone holding the link is shown.
+			if href := s.desktopRunHref(runID); run.Title != "" && href != "" {
+				boot["run_title"], boot["run_href"] = run.Title, href
 			}
 		}
 		s.serveDesktopViewer(w, r, runID, boot, http.StatusOK)
@@ -286,6 +300,17 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 	default:
 		writeErrorReason(w, http.StatusNotFound, reasonUIGatewayNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 	}
+}
+
+// desktopRunHref is the run's page on the console, absolute because the viewer is served from the gateway's
+// origin: the console's origin as WARDYN_OIDC_REDIRECT_URL names it (uiOriginIsConsole) and its base path. ""
+// when no http(s) console URL is configured.
+func (s *Server) desktopRunHref(runID uuid.UUID) string {
+	u, err := url.Parse(strings.TrimSpace(s.cfg.OIDCRedirectURL))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + s.cfg.BasePath + "/runs/" + runID.String()
 }
 
 // serveDesktopAsset serves one file of the console bundle's assets/ directory, the viewer's script
@@ -374,7 +399,10 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	c := desktopSocket{ws}
 	// ctx ends the stream at the bound and at Close; the socket itself lives on the request, so the
 	// stream can tell the viewer why before it goes.
-	ctx, cancel := context.WithDeadline(r.Context(), time.Unix(sess.Expires, 0))
+	// A window that opens on the Mac ends a stream with control with errMacWindowTookControl as its cause.
+	yielding, yield := context.WithCancelCause(r.Context())
+	defer yield(nil)
+	ctx, cancel := context.WithDeadline(yielding, time.Unix(sess.Expires, 0))
 	defer cancel()
 	go signIn.watch(ctx) // from here on, so a pause during the dial is held before the first frame
 	untrack := s.trackDesktop(sess, cancel)
@@ -421,6 +449,19 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}
 	opened := s.cfg.Now()
 	viewOnly := sess.ViewOnly || s.macOSDesktopViewOnly(run)
+	yielded := func() {} // forgets this stream's control; a window waits for it, never for the close frame
+	if !viewOnly && run.MachineKind.IsMacOSVM() {
+		// A stream with control is known to a window that opens (macWindowYieldControl). Registered before the
+		// window is looked for once more, so a window that opened since viewOnly was read ends this stream
+		// instead of running beside it.
+		yielded = s.desktopControl.track(sess.Run, func() { yield(errMacWindowTookControl) })
+		defer yielded()
+		if s.macWindows.open(sess.Run) != nil {
+			yielded()
+			_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
+			return
+		}
+	}
 	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", withBackgroundWatch(watch, withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName})))
 	defer func() {
 		s.auditUISession(sess, "ui.close", uiDesktopAppName, "success",
@@ -430,6 +471,12 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
 	filtered := s.desktopClipboardFilter(ctx, sess, rules, viewOnly, s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}}))
 	defer func() { _ = filtered.Close() }()
+	// A window waits for this stream's control to end (yielded), so its input stops before the close frame goes.
+	windowOpened := func() {
+		_ = filtered.Close()
+		yielded()
+		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
+	}
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
@@ -440,11 +487,18 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	for {
 		select {
 		case <-done:
+			if windowTookControl(ctx) {
+				windowOpened()
+				return
+			}
 			_ = c.Close(desktopCloseUnreachable, "the desktop closed the connection")
 			return
 		case <-ctx.Done():
-			// The bound, Close, or the browser leaving: only the first two are told.
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) || s.uiDesktopClosedHere(sess, s.cfg.Now()) {
+			// A window that opened, the bound, Close, or the browser leaving: only the first three are told.
+			switch {
+			case windowTookControl(ctx):
+				windowOpened()
+			case errors.Is(ctx.Err(), context.DeadlineExceeded) || s.uiDesktopClosedHere(sess, s.cfg.Now()):
 				_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
 			}
 			return
@@ -477,6 +531,11 @@ func withBackgroundWatch(watch bool, data map[string]any) map[string]any {
 		data["view_only"], data["background"] = true, true
 	}
 	return data
+}
+
+// windowTookControl reports that ctx's stream ended because a window opened on the Mac (macWindowYieldControl).
+func windowTookControl(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errMacWindowTookControl)
 }
 
 // desktopSocket closes with words cut to what a close frame carries (123 bytes).

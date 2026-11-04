@@ -37,6 +37,8 @@ import (
 //     a deny list, so absent means permitted.
 //   - AllowedMacOSBases: the macOS bases they may pick; an allow list, so
 //     absent means any base a Mac offers.
+//   - AllowedModels: the hosted models their runs may ask for; an allow list,
+//     so absent means no limit. The run's proxy holds every model request to it.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
 //     not 403.
 //   - MaxCPUMillis/MaxMemoryMiB/MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
@@ -84,6 +86,10 @@ type GovernanceLimits struct {
 	// also blocks creation (a person who may mount no drive may not make one); this door
 	// narrows only the creating. Operators are exempt from both doors.
 	DenyMemberDrives bool `json:"deny_member_drives,omitempty"`
+	// DenyKeptMachines refuses keeping a machine under this profile, on top of the site switch
+	// for kept machines. A DOOR with no zero-value opinion: false inherits the switch, so an
+	// unset profile changes nothing. Deny wins in composition.
+	DenyKeptMachines bool `json:"deny_kept_machines,omitempty"`
 	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
 	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
 	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
@@ -94,6 +100,12 @@ type GovernanceLimits struct {
 	// allows any base a Mac offers; a run naming another is refused 403 placement_denied. Operators are
 	// exempt, as from DenyPlacements.
 	AllowedMacOSBases []string `json:"allowed_macos_bases,omitempty"`
+	// AllowedModels are the models a run under this profile may ask a hosted model provider for,
+	// written exactly as the provider names them (ValidAllowedModels). An ALLOW LIST whose empty value
+	// is no limit: there is no deny-all value. A set list is handed to the run's proxy at dispatch,
+	// which refuses a request for any other model; local models keep their own lists. Operators are
+	// exempt, as from every limit.
+	AllowedModels []string `json:"allowed_models,omitempty"`
 	// MaxCPUMillis and MaxMemoryMiB cap the sandbox's CPU (millicores) and memory a run under this
 	// profile may be given, whatever its ceiling's own resources or a member's request say. 0 is
 	// unlimited. A CLAMP, NOT A DOOR, like MaxEphemeralDiskMiB. Folded into composer.Clamp at

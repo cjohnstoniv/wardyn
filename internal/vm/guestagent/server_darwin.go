@@ -55,6 +55,17 @@ type Server struct {
 	Mount func(context.Context, Mount) error
 	// Disk attaches one disk drive (MacDisks.Attach); nil refuses an Init that names one.
 	Disk func(context.Context, Disk) error
+	// ScreenLockOff turns the agent account's screen lock off (ScreenLock.Off), once at Init; nil does
+	// nothing (tests only). It never fails the Init.
+	ScreenLockOff func(context.Context) bool
+	// Scrub removes what a run wrote (MacScrub.Scrub), at POST /v1/scrub; nil answers that request
+	// 501 (tests only).
+	Scrub func(ctx context.Context, when string) ScrubReport
+	// RecordMCPTables records Init's Codex MCP table names for a later scrub
+	// (MacScrub.RecordMCPTables); nil records none (tests only). It never fails the Init.
+	RecordMCPTables func(env ...map[string]string) error
+	// BootScrub is this boot's scrub, which ran before the agent served; Init answers it once.
+	BootScrub *ScrubReport
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
@@ -66,6 +77,9 @@ type Server struct {
 	execs   map[string]*detached
 	latest  string
 	counter int
+
+	// stopping is set by the stop scrub: the run's settings are gone, so no Init or exec starts.
+	stopping bool
 }
 
 type detached struct {
@@ -113,6 +127,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ready", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, Ready{Version: s.Version}) })
 	mux.HandleFunc("POST /v1/init", s.handleInit)
+	mux.HandleFunc("POST /v1/scrub", s.handleScrub)
 	mux.HandleFunc("POST /v1/exec", s.handleExec)
 	mux.HandleFunc("GET /v1/exec/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if d := s.lookup(r.PathValue("id")); d != nil {
@@ -159,6 +174,10 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopping {
+		http.Error(w, errStopping.Error(), http.StatusConflict)
+		return
+	}
 	if s.inited {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
@@ -190,13 +209,13 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	if in.SignInsOff && s.Desktop != nil {
 		s.Desktop.Disable()
 	}
-	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, "wardyn-guest-init"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, initMarkerFile), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
 	_ = marker.Close()
-	res := InitResult{SignIns: SignInsRunDisk}
+	res := InitResult{SignIns: SignInsRunDisk, Scrub: s.BootScrub}
 	if s.Desktop != nil {
 		res.DesktopPasswordSet = new(bool)
 	}
@@ -214,6 +233,11 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.env = initEnv(in.Env, in.SecretEnv, ca)
+	if s.RecordMCPTables != nil {
+		if err := s.RecordMCPTables(in.Env, in.SecretEnv); err != nil {
+			slog.Warn("guest agent: the run's MCP tables are not recorded for the scrub", "err", err)
+		}
+	}
 	// Before Init answers, so before the host starts any agent process. A CA that is not trusted
 	// does not fail the Init: the answer says so, and the run goes on its CA bundle.
 	if in.RunCA != "" && s.TrustRunCA != nil {
@@ -222,8 +246,27 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	if s.Desktop != nil {
 		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
 	}
+	if s.ScreenLockOff != nil {
+		s.ScreenLockOff(r.Context())
+	}
 	s.inited = true
 	writeJSON(w, res)
+}
+
+// errStopping refuses an Init or an exec after the stop scrub.
+var errStopping = errors.New("the sandbox is stopping: its run's settings are removed")
+
+// handleScrub runs the stop scrub. It first closes the agent to Init and execs, so nothing starts on
+// a guest whose walls and CA are gone; it does not hold the lock while the scrub runs.
+func (s *Server) handleScrub(w http.ResponseWriter, r *http.Request) {
+	if s.Scrub == nil {
+		http.Error(w, "this agent cannot scrub", http.StatusNotImplemented)
+		return
+	}
+	s.mu.Lock()
+	s.stopping = true
+	s.mu.Unlock()
+	writeJSON(w, s.Scrub(r.Context(), ScrubAtStop))
 }
 
 // buildCA writes MacCAFullPath from the system roots and the CA Init has just written.
@@ -309,7 +352,7 @@ func (s *Server) signalLatest(gen int64, sig unix.Signal) (int, string) {
 }
 
 // fenceFile, in the marker directory, keeps the PauseFence across a restart of the agent's service.
-const fenceFile = "wardyn-pause-fence"
+const fenceFile = pauseFenceFile
 
 // readFence reads the fence the marker directory keeps; none is the zero fence of a fresh boot.
 func readFence(dir string) (PauseFence, error) {
@@ -393,6 +436,10 @@ func (s *Server) command(er ExecRequest) (*exec.Cmd, error) {
 		return nil, errors.New("an exec needs argv")
 	}
 	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		return nil, errStopping
+	}
 	env := append([]string{"HOME=" + s.Home, "USER=" + s.User, "LOGNAME=" + s.User, "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=en_US.UTF-8"}, s.env...)
 	s.mu.Unlock()
 	if er.TTY {
@@ -421,6 +468,10 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmd, err := s.command(er)
+	if errors.Is(err, errStopping) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

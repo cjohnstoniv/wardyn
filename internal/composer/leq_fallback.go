@@ -45,8 +45,8 @@ func withoutCeilingRules(s types.RunPolicySpec) types.RunPolicySpec {
 func withoutLimitRules(l types.GovernanceLimits) types.GovernanceLimits {
 	l.LocalSelfDefinedComponents = false
 	l.DenyTaskModeExec, l.DenyInteractive, l.DenyUIApps, l.DenyUserDrive, l.DenyMemberDrives = false, false, false, false, false
-	l.DenyBackgroundDesktopWatch = false
-	l.DenyPlacements, l.AllowedMacOSBases = nil, nil
+	l.DenyBackgroundDesktopWatch, l.DenyKeptMachines = false, false
+	l.DenyPlacements, l.AllowedMacOSBases, l.AllowedModels = nil, nil, nil
 	l.MaxConcurrentRuns, l.MaxCPUMillis, l.MaxMemoryMiB = 0, 0, 0
 	l.MaxEphemeralDiskMiB, l.MaxDriveSizeMiB, l.AutonomyRubric = 0, 0, nil
 	l.MaxEndAheadSec, l.DefaultEndSec, l.AllowNoEnd = 0, 0, false

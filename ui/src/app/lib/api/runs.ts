@@ -300,6 +300,14 @@ export const runs = {
     return body.ticket;
   },
 
+  // POST /api/v1/runs/{id}/desktop/window — opens a window onto a macOS VM run on the caller's own Mac. It answers once
+  // the window is up (the server waits up to 30 seconds for the Mac); a refusal carries its sentence. The run read's
+  // mac_window says the window is open after it.
+  async openMacWindow(runId: string): Promise<void> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/desktop/window`, { method: "POST", body: JSON.stringify({ trigger: "run_page" }) });
+    await asJson<unknown>(res);
+  },
+
   // POST /api/v1/runs/{id}/apps/{app}/ticket — a single-use ticket that opens one inbound app in a browser, for
   // the run's owner or a person its callers name. Any other person, a run that is gone and an app that is not
   // inbound all answer the same 404.

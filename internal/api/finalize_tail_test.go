@@ -52,6 +52,13 @@ func (a *syncAudit) has(runID uuid.UUID, action, outcome string) bool {
 	return false
 }
 
+// snapshot is a copy of every recorded event, read under the lock.
+func (a *syncAudit) snapshot() []types.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]types.AuditEvent(nil), a.events...)
+}
+
 // eventsFor returns every recorded event for runID/action, in recorded
 // order — used where a test needs to inspect an event's Data, not just
 // whether one landed.

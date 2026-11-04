@@ -138,14 +138,14 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
 // record says it cannot confirm — it does not invent who, when or how.
 const KILL_AUDIT_ROW = "The audit row names who killed it and the reason they gave.";
 const KILL_START_NEW = "Start a new run if the work still needs doing — a killed run cannot resume.";
-const KILL_AGAIN = "Kill it again to run teardown once more; the cascade is safe to repeat.";
+const KILL_AGAIN = "End it again to run teardown once more; the cascade is safe to repeat.";
 const KILL_SCRATCH_GONE = "Files written to a mounted workspace are still on the host; scratch is gone.";
 // run.kill carries outcome "failure" (plus a run.revoke/failure row) when
 // KillSandbox, the identity revoke or the broker revoke failed —
 // internal/api/runs_lifecycle.go's HONEST OUTCOME: the run IS marked KILLED,
 // but the sandbox may still be live and a minted token may still be valid.
 const KILL_PARTIAL_AUDIT_ROW = "The audit row names the step that failed — read it before treating this run as contained.";
-const KILL_PARTIAL_RETRY = "Killing it again re-runs the same teardown; the cascade is safe to repeat.";
+const KILL_PARTIAL_RETRY = "Ending it again re-runs the same teardown; the cascade is safe to repeat.";
 const KILL_PARTIAL_SCRATCH =
   "Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host.";
 

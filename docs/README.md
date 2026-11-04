@@ -30,6 +30,8 @@
 | Register a self-hosted runner on a laptop, and what it does while offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
 | Offer Linux VM sandboxes (QEMU/KVM) from a Linux runner host: requirements, the `/dev/kvm` step, the guest image contract | [operations/linux-vm-sandboxes.md](operations/linux-vm-sandboxes.md) |
 | Offer macOS VM sandboxes from a company-managed Mac: requirements, the base image, memory and disk limits, the shared ledger | [operations/macos-vms.md](operations/macos-vms.md) |
+| Sign people in to a custom model endpoint's own identity service (OIDC, identity binding, renewal) | [operations/endpoint-sign-in.md](operations/endpoint-sign-in.md) |
+| Make a cluster refuse unsigned Wardyn images (Sigstore policy-controller or Kyverno; not run in CI) | [operations/image-admission.md](operations/image-admission.md) |
 | Run the organisation's own runner in a Kubernetes cluster (Helm chart, enrolment, claim, trust class, failure modes) | [operations/k8s-runners.md](operations/k8s-runners.md) + [design/0.9/k8s-runnerd.md](design/0.9/k8s-runnerd.md) + the `wardyn-k8s-runner-setup` Claude Code skill |
 | Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
@@ -46,6 +48,8 @@
 | Keep a run declared from a file or a WardynWorkload resource, and bind a namespace | [operations/workloads.md](operations/workloads.md) |
 | Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |
 | Offboard a person: sessions, tokens, keys, runs, credentials, workspaces, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
+| Let an agent-sandbox controller make the agent pods (experimental), and what that trusts | [operations/kubernetes-agent-sandbox.md](operations/kubernetes-agent-sandbox.md) |
+| See which run and person a Kubernetes kernel-sensor alert belongs to | [operations/kubernetes-ground-truth.md](operations/kubernetes-ground-truth.md) |
 | Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
 | Look up why a member was refused (`authz.denied` reasons and their targets) | [operations/denials.md](operations/denials.md) |
 | Configure an org component, and what a launch leaves behind | [operations/custom-components.md](operations/custom-components.md) |
