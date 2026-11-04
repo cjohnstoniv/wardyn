@@ -33,7 +33,7 @@
 # leave it empty and download as before.
 FROM scratch AS gomodcache
 
-FROM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
+FROM golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b AS builder
 WORKDIR /build
 
 # Corporate build support (no-ops on an OSS build): GOTOOLCHAIN=local skips the

@@ -33,7 +33,7 @@ ARG UI_STAGE=ui-build
 # stage runs NATIVELY on the builder even for a linux/arm64 target — no QEMU,
 # no emulated pnpm. Same reason applies to every other stage in this file that
 # carries the flag.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS ui-build
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS ui-build
 WORKDIR /ui
 
 # Corporate build support (no-ops on an OSS build): stage the optional corp CA so
@@ -84,7 +84,7 @@ RUN pnpm build
 # ui/dist is un-ignored in .dockerignore ONLY so this COPY can see it; the build
 # fails loudly (empty COPY) if you selected this stage without building the UI
 # first, rather than shipping a stale bundle silently.
-FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS ui-prebuilt
+FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS ui-prebuilt
 WORKDIR /ui
 COPY ui/dist ./dist
 RUN ! grep -rq __wardynTerm ./dist || { echo "UI_STAGE=ui-prebuilt but ui/dist carries the e2e-only __wardynTerm seam — rebuild it with 'make ui' (production mode)"; exit 1; }
@@ -102,7 +102,7 @@ FROM ${UI_STAGE} AS ui
 # An ordinary and a release build leave it empty and download as before.
 FROM scratch AS gomodcache
 
-FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
 
 WORKDIR /build
 
