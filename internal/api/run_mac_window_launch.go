@@ -122,6 +122,20 @@ func (s *Server) macWindowAtStartIfAsked(ctx context.Context, runID uuid.UUID, a
 	}
 }
 
+// macWindowAtStartOrAfterPrep asks for the window a create asked for, as run reaches RUNNING: now, beside the
+// agent's start, or, for an interactive macOS VM run, whose window is refused until its prep records done, from the
+// returned hook, which startAgentsOrIdle runs once the prep is done. The hook is nil when nothing waits on the prep.
+func (s *Server) macWindowAtStartOrAfterPrep(ctx context.Context, run types.AgentRun, interactive, asked bool) (onPrepared func()) {
+	if !interactive || !run.MachineKind.IsMacOSVM() {
+		s.macWindowAtStartIfAsked(ctx, run.ID, asked)
+		return nil
+	}
+	if !asked {
+		return nil
+	}
+	return func() { s.macWindowAtStartIfAsked(ctx, run.ID, true) }
+}
+
 // macWindowAtStart is the launch trigger: the run was created with desktop_window at_start and has just come
 // up, so its creator is asked for a window as `wardyn window` would, under the grant the create left
 // (macWindowStorePending), never under whatever the launch's own context carries. A refusal is audited and the
