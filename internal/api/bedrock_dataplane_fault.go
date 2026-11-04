@@ -61,8 +61,8 @@ func bedrockRefusalHint(fault string) (string, bool) {
 	if m[2] != "" {
 		what += " " + m[2]
 	}
-	return bedrockRefusalHintLead + what + "). Wardyn did not record AWS's message; the agent's own output, in the " +
-		"run's recording, says what it refused.", true
+	return bedrockRefusalHintLead + what + "). Wardyn did not record AWS's message; the agent's own output may hold AWS's " +
+		"explanation, and so may the run's recording if the run has one.", true
 }
 
 // noteBedrockDataPlaneFault records fault (a class, or "recovered") on the

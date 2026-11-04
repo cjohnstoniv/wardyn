@@ -68,7 +68,7 @@ describe("a scheduled run's page", () => {
     show(scheduled("scheduled"));
     await userEvent.click(screen.getByRole("button", { name: SCHEDULED_RUN.CANCEL_RUN }));
     expect(runs.killRun).not.toHaveBeenCalled();
-    await userEvent.click(await screen.findByRole("button", { name: "Kill run" }));
+    await userEvent.click(await screen.findByRole("button", { name: "End run" }));
     await waitFor(() => expect(runs.killRun).toHaveBeenCalledWith("run-1"));
   });
 });
@@ -104,5 +104,14 @@ describe("any other queued run", () => {
     show(scheduled("runner_pool_at_capacity", {}, { start_at: undefined, time_zone: undefined }));
     expect(screen.getByTestId("run-queued-wait")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: SCHEDULED_RUN.WORD })).not.toBeInTheDocument();
+  });
+});
+
+describe("a run its runners hold back", () => {
+  const named = "Every runner in Laptops is at a limit. For example, mac-1: Runs at once: 1 running of 1. This run starts when one has room.";
+
+  it("says the limit the server named, the same sentence the Launched screen shows", () => {
+    show(scheduled("runner_pool_runners_at_capacity", {}, { start_at: undefined, time_zone: undefined, limit_sentence: named }));
+    expect(screen.getByTestId("run-queued-wait")).toHaveTextContent(named);
   });
 });

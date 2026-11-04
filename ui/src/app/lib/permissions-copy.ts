@@ -87,7 +87,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "Base images",
     blurb: "Which base images a member may name on a run of their own.",
     valueLabel: "Image ref",
-    valueHint: "The exact image ref, registry and tag included. Use * for every image.",
+    valueHint: "An exact image ref (registry and tag included), a prefix ending in /*, or * for every image.",
     unenforced: "Members can't name their own base image at all. Runs use what the workspace carries.",
     enforced: "A member can name an image granted to them. Every other ref is still refused.",
     direction: "widens",
@@ -126,7 +126,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "Model providers",
     blurb: "Which model provider a member's run may use.",
     valueLabel: "Model provider",
-    valueHint: "The exact provider id, as it is written on the Model providers page. Use * for every provider.",
+    valueHint: "The provider's id. Open the provider on Settings → Model providers to set who it is available to instead.",
     unenforced: "Members can run on any model provider that serves their agent.",
     enforced:
       "A member can only run on providers granted to them — the one they choose, the one a workspace pins, or their agent's default. A run on another one is refused, naming it.",
@@ -312,6 +312,15 @@ export const PERM = {
 // than landing inside PERM, which the doc's own §7 table transcribes
 // verbatim.
 export const PERM_EXTRA = {
+  // The Add grant Value picker for kinds Wardyn already lists (workspace, model
+  // provider, policy, component, agent, git provider): items by name, this
+  // choice first. Its value is "*", the grant that names every one.
+  PICKER_EVERY: "Every one (*)",
+  PICKER_PLACEHOLDER: "Choose one",
+  // Last choice of the picker: a list holds only its first page, so an id outside it is typed.
+  PICKER_ENTER_ID: "Enter an ID",
+  PICKER_BACK_TO_LIST: "Choose from the list instead",
+  PICKER_HINT: "Choose one by name, or Every one (*).",
   // A stored grant whose value predates the per-kind canonicalization rule
   // (grantView.Inert, permissions.go's markInertGrants) can never match
   // anything the resolver compares — a red Deny chip for a rule that has

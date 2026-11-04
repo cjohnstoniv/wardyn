@@ -13,6 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 import { SCENARIO_POOLS } from "../../../../../lib/new-run-fixtures/scenarios/pools";
 import type { SetupStatus } from "../../../../../lib/types/setup";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
+import { NR_WINDOW } from "../../../../wardyn/copy/new-run/window";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
@@ -73,12 +74,19 @@ const chooseVM = async () => {
 const changes = () => screen.getByRole("region", { name: NR_MACHINE.CHANGES_TITLE });
 
 describe("OS row: macOS offered (frames 1 and 3)", () => {
-  it("is today's row while the organisation switch is off or absent: Linux only, with the macOS and Windows line", async () => {
-    for (const status of [null, { features: { macos_vms: false } } as SetupStatus]) {
+  it("is Linux only while the organisation switch is off or the status is absent; only a loaded status says macOS is off", async () => {
+    for (const status of [null, { unreachable: true } as SetupStatus, { features: { macos_vms: false } } as SetupStatus, { features: {} } as SetupStatus]) {
       show(AGENT, status);
       await chooseVM();
       expect(within(osGroup()).queryByRole("button", { name: NR_MACHINE.OS_MACOS })).toBeNull();
-      expect(screen.getByText(NR_MACHINE.OS_LATER)).toBeInTheDocument();
+      expect(screen.getByText(NR_MACHINE.OS_LINUX_HELP)).toBeInTheDocument();
+      if (status && !status.unreachable) {
+        expect(screen.getByText(NR_WINDOW.OS_LATER)).toBeInTheDocument();
+      } else {
+        // Still loading, or the first read failed (unreachable): not told macOS is off, only that Windows is not available.
+        expect(screen.queryByText(NR_WINDOW.OS_LATER)).toBeNull();
+        expect(screen.getByText(NR_WINDOW.OS_WINDOWS_LATER)).toBeInTheDocument();
+      }
       cleanup();
     }
   });
@@ -88,12 +96,21 @@ describe("OS row: macOS offered (frames 1 and 3)", () => {
     await chooseVM();
     expect(within(osGroup()).getByRole("button", { name: NR_MACHINE.OS_LINUX })).toHaveAttribute("aria-pressed", "true");
     expect(macosButton()).toBeEnabled();
-    expect(screen.getByText(NR_MACHINE.OS_WINDOWS_LATER)).toBeInTheDocument();
-    expect(screen.queryByText(NR_MACHINE.OS_LATER)).toBeNull();
+    expect(screen.getByText(NR_WINDOW.OS_WINDOWS_LATER)).toBeInTheDocument();
+    expect(screen.getByText(NR_MACHINE.OS_LINUX_HELP)).toBeInTheDocument();
+    expect(screen.queryByText(NR_WINDOW.OS_LATER)).toBeNull();
   });
 });
 
 describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
+  it("offers the window in the view-only line only while the site's window switch is on", async () => {
+    show(AGENT, { features: { macos_vms: true, mac_window: true } } as unknown as SetupStatus, READY);
+    await chooseVM();
+    await userEvent.click(macosButton());
+    expect(screen.getByText(NR_WINDOW.VIEW_ONLY_WINDOW_ON)).toBeInTheDocument();
+    expect(screen.queryByText(NR_WINDOW.VIEW_ONLY_WINDOW_OFF)).toBeNull();
+  });
+
   it("writes macos_vm, drops the container barrier, says what is set up and starts the ask at the minimum", async () => {
     show({ ...AGENT, confinement_class: "CC3" }, ON, READY);
     await chooseVM();
@@ -102,8 +119,13 @@ describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
     expect(intentNow().confinement_class).toBeUndefined();
     expect(macosButton()).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(NR_MACHINE.MACOS_ABOUT("macOS 27.0.1 (26A434)"))).toBeInTheDocument();
+    expect(screen.getByText(NR_MACHINE.MACOS_GIVES)).toBeInTheDocument();
+    expect(screen.queryByText(NR_MACHINE.OS_LINUX_HELP)).toBeNull();
+    // The desktop is view only on macOS 26, so the choice says where to type and click; no window offer while the switch is off.
+    expect(screen.getByText(NR_WINDOW.VIEW_ONLY_WINDOW_OFF)).toBeInTheDocument();
+    expect(screen.queryByText(NR_WINDOW.VIEW_ONLY_WINDOW_ON)).toBeNull();
     expect(screen.getByText(NR_MACHINE.MACOS_SIZE("4", "8192"))).toBeInTheDocument();
-    expect(screen.queryByText(NR_MACHINE.OS_WINDOWS_LATER)).toBeNull();
+    expect(screen.queryByText(NR_WINDOW.OS_WINDOWS_LATER)).toBeNull();
     const panel = within(changes());
     expect(panel.getByText(NR_MACHINE.CHANGES_NETWORK_BODY)).toBeInTheDocument();
     expect(panel.getByText(NR_MACHINE.CHANGES_CLIPBOARD_MACOS_NONE)).toBeInTheDocument();
@@ -246,7 +268,7 @@ describe("OS row: macOS disabled with its reason (frames 4 to 8b)", () => {
     await chooseVM();
     expect(macosButton()).toBeDisabled();
     expect(line(text)).toBeInTheDocument();
-    expect(line(NR_MACHINE.OS_WINDOWS_LATER)).toBeInTheDocument();
+    expect(line(NR_WINDOW.OS_WINDOWS_LATER)).toBeInTheDocument();
     await userEvent.click(macosButton());
     expect(intentNow().machine_kind).toBe("linux_vm");
   });

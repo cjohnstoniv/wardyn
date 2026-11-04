@@ -1,0 +1,240 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Command gatewayfake stands behind an AI gateway in the nightly gateway job
+// (scripts/kind-gateway-run.sh): a canned Anthropic Messages endpoint, a
+// one-tool MCP server, and a /_seen listing of what reached it. It holds no
+// provider key and calls nothing; the only credential it ever sees is the
+// throwaway value the job makes up.
+//
+// A TEST BINARY, never built by `make agent-images` and never published.
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
+	"sync"
+)
+
+const (
+	// replyText is the model's canned answer, and echoPrefix the tool's.
+	replyText  = "hello from the gateway fake"
+	echoPrefix = "echo: "
+	// maxBody bounds a request the fake reads; maxSeen bounds the list /_seen keeps.
+	maxBody = 1 << 20
+	maxSeen = 200
+)
+
+// seenRequest is one request that reached the fake: which of its two routes it
+// took, and every header the gateway forwarded.
+type seenRequest struct {
+	Route   string              `json:"route"` // "model", "mcp" or "other"
+	Method  string              `json:"method"`
+	Path    string              `json:"path"`
+	RPC     string              `json:"rpc,omitempty"` // the MCP method, for an mcp request
+	Headers map[string][]string `json:"headers"`
+}
+
+// seenReport is /_seen: counts to assert on, and the requests behind them.
+type seenReport struct {
+	ModelCalls int           `json:"model_calls"`
+	ToolCalls  int           `json:"tool_calls"` // tools/call on the one tool, not initialize or tools/list
+	Requests   []seenRequest `json:"requests"`
+}
+
+type fake struct {
+	mu   sync.Mutex
+	seen seenReport
+}
+
+func (f *fake) record(r *http.Request, route, rpc string) {
+	h := make(map[string][]string, len(r.Header))
+	for k, v := range r.Header {
+		h[strings.ToLower(k)] = append([]string(nil), v...)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.seen.Requests) < maxSeen {
+		f.seen.Requests = append(f.seen.Requests, seenRequest{Route: route, Method: r.Method, Path: r.URL.Path, RPC: rpc, Headers: h})
+	}
+}
+
+func (f *fake) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok\n") })
+	mux.HandleFunc("/_seen", f.serveSeen)
+	mux.HandleFunc("/v1/messages", f.serveMessages)
+	mux.HandleFunc("/v1/messages/count_tokens", f.serveCountTokens)
+	mux.HandleFunc("/mcp", f.serveMCP)
+	// Any other path the gateway forwards is recorded and refused, so /_seen
+	// names every path a harness reached beyond the two routes above.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		f.record(r, "other", "")
+		http.NotFound(w, r)
+	})
+	return mux
+}
+
+func (f *fake) serveSeen(w http.ResponseWriter, _ *http.Request) {
+	f.mu.Lock()
+	out := f.seen
+	out.Requests = append([]seenRequest(nil), f.seen.Requests...)
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+func readJSON(r *http.Request, v any) error {
+	return json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(v)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+// serveMessages answers POST /v1/messages. A "stream": true request gets the
+// server-sent events the Messages API sends, a plain one the single message.
+func (f *fake) serveMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	_ = readJSON(r, &req)
+	f.record(r, "model", "")
+	f.mu.Lock()
+	f.seen.ModelCalls++
+	f.mu.Unlock()
+	model := req.Model
+	if model == "" {
+		model = "fake-model"
+	}
+	message := map[string]any{
+		"id": "msg_gatewayfake", "type": "message", "role": "assistant", "model": model,
+		"content":     []map[string]string{{"type": "text", "text": replyText}},
+		"stop_reason": "end_turn", "stop_sequence": nil,
+		"usage": map[string]int{"input_tokens": 3, "output_tokens": 5},
+	}
+	if !req.Stream {
+		writeJSON(w, http.StatusOK, message)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	start := map[string]any{
+		"id": "msg_gatewayfake", "type": "message", "role": "assistant", "model": model,
+		"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
+		"usage": map[string]int{"input_tokens": 3, "output_tokens": 1},
+	}
+	events := []struct {
+		name string
+		data map[string]any
+	}{
+		{"message_start", map[string]any{"type": "message_start", "message": start}},
+		{"content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]string{"type": "text", "text": ""}}},
+		{"content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": replyText}}},
+		{"content_block_stop", map[string]any{"type": "content_block_stop", "index": 0}},
+		{"message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 5}}},
+		{"message_stop", map[string]any{"type": "message_stop"}},
+	}
+	for _, e := range events {
+		b, _ := json.Marshal(e.data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, b)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
+}
+
+// serveCountTokens answers the harness's token count so a run does not stall on it.
+func (f *fake) serveCountTokens(w http.ResponseWriter, r *http.Request) {
+	f.record(r, "model", "")
+	writeJSON(w, http.StatusOK, map[string]int{"input_tokens": 3})
+}
+
+// rpcRequest is the slice of a JSON-RPC 2.0 request the fake reads. A request
+// with no id is a notification and gets no body back.
+type rpcRequest struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Params struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		Name            string `json:"name"`
+		Arguments       struct {
+			Text string `json:"text"`
+		} `json:"arguments"`
+	} `json:"params"`
+}
+
+func rpcResult(id json.RawMessage, result any) map[string]any {
+	return map[string]any{"jsonrpc": "2.0", "id": id, "result": result}
+}
+
+// serveMCP is a stateless MCP server over streamable HTTP with one tool, echo.
+func (f *fake) serveMCP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		// No server-initiated stream: the transport lets a server say so with 405.
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req rpcRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{"code": -32700, "message": "parse error"}})
+		return
+	}
+	f.record(r, "mcp", req.Method)
+	if len(req.ID) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	switch req.Method {
+	case "initialize":
+		version := req.Params.ProtocolVersion
+		if version == "" {
+			version = "2025-06-18"
+		}
+		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{
+			"protocolVersion": version,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]string{"name": "gatewayfake", "version": "0"},
+		}))
+	case "ping":
+		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{}))
+	case "tools/list":
+		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{"tools": []map[string]any{{
+			"name":        "echo",
+			"description": "Returns the text it is given.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]string{"type": "string"}}},
+		}}}))
+	case "tools/call":
+		if req.Params.Name != "echo" {
+			writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32602, "message": "unknown tool"}})
+			return
+		}
+		f.mu.Lock()
+		f.seen.ToolCalls++
+		f.mu.Unlock()
+		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{
+			"content": []map[string]string{{"type": "text", "text": echoPrefix + req.Params.Arguments.Text}},
+		}))
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})
+	}
+}
+
+func main() {
+	addr := flag.String("addr", ":8080", "listen address")
+	flag.Parse()
+	log.Printf("gatewayfake listening on %s", *addr)
+	log.Fatal(http.ListenAndServe(*addr, (&fake{}).handler()))
+}

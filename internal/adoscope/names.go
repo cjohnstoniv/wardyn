@@ -17,6 +17,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/cjohnstoniv/wardyn/internal/pctdecode"
 )
 
 // UnescapeName decodes one URL path segment into the name Azure DevOps routes
@@ -34,7 +36,7 @@ func UnescapeName(raw string) (string, error) {
 		if i+2 >= len(raw) {
 			return "", fmt.Errorf("adoscope: path segment %q is not decodable", raw)
 		}
-		hi, lo := unhex(raw[i+1]), unhex(raw[i+2])
+		hi, lo := pctdecode.Unhex(raw[i+1]), pctdecode.Unhex(raw[i+2])
 		if hi < 0 || lo < 0 {
 			return "", fmt.Errorf("adoscope: path segment %q is not decodable", raw)
 		}
@@ -231,7 +233,7 @@ const maxDecodeDepth = 4
 // meet, and leniency costs no legitimate name anything.
 func hidesStructure(seg string) bool {
 	for range maxDecodeDepth {
-		next := percentDecodeLenient(seg)
+		next := pctdecode.Lenient(seg)
 		if next == seg {
 			return false
 		}
@@ -241,34 +243,4 @@ func hidesStructure(seg string) bool {
 		seg = next
 	}
 	return true
-}
-
-// percentDecodeLenient decodes every valid %XY in s once and keeps every
-// malformed one as literal text. See hidesStructure for why lenient.
-func percentDecodeLenient(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '%' && i+2 < len(s) {
-			if hi, lo := unhex(s[i+1]), unhex(s[i+2]); hi >= 0 && lo >= 0 {
-				b.WriteByte(byte(hi<<4 | lo))
-				i += 2
-				continue
-			}
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
-// unhex is one hex digit's value, or -1.
-func unhex(c byte) int {
-	switch {
-	case c >= '0' && c <= '9':
-		return int(c - '0')
-	case c >= 'a' && c <= 'f':
-		return int(c-'a') + 10
-	case c >= 'A' && c <= 'F':
-		return int(c-'A') + 10
-	}
-	return -1
 }

@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ALLOWED_MODELS,
   AUTONOMY_BOUND,
   AUTONOMY_RAIL,
   autonomyBoundSentence,
@@ -592,6 +593,27 @@ function resolve0(rel: string): string {
 describe("MEMBER_DRIVE_DOOR", () => {
   it("is the design's label", () => {
     expect(MEMBER_DRIVE_DOOR.LABEL).toBe("Can't create drives");
+  });
+});
+
+// The allowed-models strings sit outside the doc tables, so the sentences that carry a rule are pinned here.
+describe("ALLOWED_MODELS", () => {
+  it("says a blank list is no limit, and that Narrow needs a model", () => {
+    expect(ALLOWED_MODELS.HINT).toBe(
+      "The models a run under this profile may ask your model providers for, one per line, written exactly as the provider names them. Local models keep their own lists. Leave blank for no limit.",
+    );
+    expect(ALLOWED_MODELS.NARROW_EMPTY).toBe("Add at least one model, or turn Narrow off. An empty list here narrows nothing.");
+    expect(ALLOWED_MODELS.NARROW_HINT).toBe("Only models in the inherited list can stay. Remove the ones this profile should not use.");
+    expect(ALLOWED_MODELS.NARROW_HINT_OPEN).toBe("Choose which models this profile allows. Leave Narrow off for no limit.");
+  });
+
+  it("names up to three models on the chip and counts beyond", () => {
+    expect(ALLOWED_MODELS.CHIP(["model-a", "model-b", "model-c"])).toBe("Allowed models: model-a, model-b, model-c");
+    expect(ALLOWED_MODELS.CHIP(["model-a", "model-b", "model-c", "model-d"])).toBe("Allowed models: 4");
+  });
+
+  it("words the audit chips", () => {
+    expect(ALLOWED_MODELS.AUDIT_REFUSED).toBe("Refused: model limit");
   });
 });
 

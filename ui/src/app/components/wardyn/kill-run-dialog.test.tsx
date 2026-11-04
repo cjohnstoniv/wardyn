@@ -14,26 +14,27 @@ describe("KillRunDialog", () => {
   it("names the run by its title, keeps the short id beside it, and kills the id", async () => {
     const onConfirm = vi.fn();
     render(<KillRunDialog runId={ID} title="e2e fixture 2" onOpenChange={() => {}} onConfirm={onConfirm} />);
-    const dialog = screen.getByRole("alertdialog", { name: 'Kill "e2e fixture 2"?' });
+    const dialog = screen.getByRole("alertdialog", { name: "End e2e fixture 2?" });
     expect(dialog).toHaveTextContent("1697570d");
     expect(dialog).not.toHaveTextContent(ID);
     // #3036: the short id is the run reference's, so it copies the whole id.
     expect(within(dialog).getByRole("button", { name: "1697570d" })).toHaveAttribute("title", `${ID}\nClick to copy`);
-    expect(dialog).toHaveTextContent("The kill is recorded in the audit trail.");
-    await userEvent.click(screen.getByRole("button", { name: "Kill run" }));
+    expect(dialog).toHaveTextContent("Ending the run is recorded in the audit trail.");
+    await userEvent.click(screen.getByRole("button", { name: "End run" }));
     expect(onConfirm).toHaveBeenCalledWith(ID);
   });
 
-  it("falls back to the short id, never the long one, when the run has no title", () => {
+  it("says End this run, never an id, when the run has no title", () => {
     render(<KillRunDialog runId={ID} onOpenChange={() => {}} onConfirm={() => {}} />);
-    const dialog = screen.getByRole("alertdialog", { name: "Kill run 1697570d?" });
+    const dialog = screen.getByRole("alertdialog", { name: "End this run?" });
     expect(dialog).not.toHaveTextContent(ID);
+    expect(dialog).not.toHaveTextContent("1697570d?");
   });
 
   it("names a run by the first line of a long task, bounded", () => {
     const task = `${"a".repeat(120)}\nsecond line`;
     render(<KillRunDialog runId={ID} title={task} onOpenChange={() => {}} onConfirm={() => {}} />);
-    const dialog = screen.getByRole("alertdialog", { name: `Kill "${"a".repeat(79)}…"?` });
+    const dialog = screen.getByRole("alertdialog", { name: `End ${"a".repeat(79)}…?` });
     expect(dialog).not.toHaveTextContent("second line");
   });
 });

@@ -60,6 +60,7 @@
  * and start deleting workspaces.
  */
 
+import { END_RUN } from "../../src/app/components/wardyn/copy/run-lifetime";
 import { mkdirSync, rmSync } from "node:fs";
 
 import { test, expect, type Page } from "@playwright/test";
@@ -795,11 +796,11 @@ test("V00 act 3 — secrets stay secret", async () => {
   // End the run on camera. The dialog's own body says what the kill costs
   // ("tears down the sandbox, and revokes any brokered credentials"), so the
   // softer verb in C46 is not a euphemism the viewer cannot check.
-  await act(page, page.getByRole("button", { name: "Kill", exact: true }), "End the run. The sandbox goes with it."); // C46
+  await act(page, page.getByRole("button", { name: END_RUN, exact: true }), "End the run. The sandbox goes with it."); // C46
   const kill = page.getByRole("alertdialog");
   await expect(kill).toBeVisible({ timeout: 15_000 });
   await expect(kill).toContainText("tears down the sandbox");
-  await act(page, kill.getByRole("button", { name: "Kill run" }));
+  await act(page, kill.getByRole("button", { name: "End run" }));
   await expect(page.getByText(RUN_OVER).first()).toBeVisible({ timeout: 60_000 });
 });
 

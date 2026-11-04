@@ -10,7 +10,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"slices"
 	"strconv"
@@ -143,9 +142,7 @@ func (p *Proxy) harnessOf(r *http.Request) string {
 // decided, without an approval row. The response carries a terminal `state`
 // and no `id`, which wardyn-toolgate reads as short-circuiting its poll loop.
 func writeToolDecision(w http.ResponseWriter, state string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	writeJSONStatus(w, http.StatusOK, "application/json", map[string]string{
 		"state":      state,
 		"decided_by": "policy",
 	})

@@ -129,6 +129,9 @@ func (s *Server) componentSaveRefusal(ctx context.Context, c types.Component) (r
 			return reasonComponentSecretMissing, fmt.Sprintf("definition.secrets[%d]: the organisation has no secret named %q; add it under Secrets first", i, sec.SecretName)
 		}
 	}
+	if m := c.Definition.MCP; c.Owner == "" && m != nil && m.GatewayAudience != "" {
+		return s.gatewayMCPAudienceRefusal(ctx, c)
+	}
 	return "", ""
 }
 
@@ -376,6 +379,11 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 		saveRefusal(w, reason, msg)
 		return
 	}
+	var unlockAudience func()
+	if r, unlockAudience, ok = s.lockGatewayAudienceComponent(w, r, c); !ok {
+		return
+	}
+	defer unlockAudience()
 	if c.Definition.MCP != nil {
 		// The key check and the save run under one organisation-wide lock, so two saves of servers whose
 		// names give the same key cannot both pass the check.

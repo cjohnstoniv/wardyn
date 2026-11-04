@@ -72,5 +72,6 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 			deleted++
 		}
 	}
-	return map[string]any{"drives": deleted}, errors.Join(errs...)
+	machines, err := s.eraseKeptMachinesOf(ctx, person) // the same scope reaches a kept machine (kept_machine_delete.go)
+	return map[string]any{"drives": deleted, "kept_machines": machines}, errors.Join(append(errs, err)...)
 }

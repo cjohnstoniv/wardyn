@@ -153,6 +153,10 @@ type providerGrantSnapshot struct {
 	// Harness is the harness the grant serves; "" on a grant authored before
 	// the harness set, which served the run's own agent.
 	Harness string `json:"harness,omitempty"`
+	// AddressDigest is providerAddressDigest of a row that signs people in, as it stood at dispatch: the
+	// resolve refuses when the live row's digest differs, so an edit of the endpoint or its authority
+	// never carries a run's sign-in to the new address. Empty on every other grant.
+	AddressDigest string `json:"address_digest,omitempty"`
 }
 
 // authorProviderSubscriptionInjection authors the per-person subscription

@@ -39,6 +39,26 @@ const ACTION_VERB: Record<string, string> = {
   "run.requirement.inject": "applied a workspace's required integration to the run",
   "run.record.synthesize": "synthesized a least-privilege profile from the recording",
   "credential.mint": "minted a credential",
+  // What an admin does to people, tokens, templates and the audit log. The raw key stays in the row's title.
+  "person.create": "added a person",
+  "person.erasure": "erased a person's data",
+  "credential.erase": "erased a person's stored credentials",
+  "session.revoke": "signed a person out everywhere",
+  "token.create": "created an API token",
+  "token.revoke": "revoked an API token",
+  "invitation.create": "invited a person to create an API token",
+  "invitation.claim": "claimed an invitation",
+  "service_identity.create": "created a service identity",
+  "service_identity.retire": "retired a service identity",
+  "service_identity.token.create": "created a service identity token",
+  "access.role_mapping.write": "mapped a role",
+  "access.role_mapping.delete": "removed a role mapping",
+  "scim.user.deactivate": "deactivated by your identity provider",
+  "person.deprovision": "deprovisioned a person",
+  "template.create": "created a template",
+  "template.update": "changed a template",
+  "template.delete": "deleted a template",
+  "audit.retention.partition_dropped": "dropped an audit partition",
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
   "run.bedrock.configure": "configured Bedrock model access for the run",
@@ -92,10 +112,70 @@ const ACTION_VERB: Record<string, string> = {
   "auth.fail": "failed to sign in to",
 };
 
+// An admin verb that destroys something is worded by its outcome, so a failed or refused row never reads as done
+// above its own badge. `partial` is for a success row that carries data.not_erased (some of it was kept).
+interface OutcomeWords {
+  done: string;
+  failed: string;
+  refused: string;
+  partial?: string;
+}
+const DESTRUCTIVE: Record<string, OutcomeWords> = {
+  "person.erasure": {
+    done: "Erased a person's data",
+    failed: "Person data erasure failed",
+    refused: "Person data erasure refused",
+    partial: "Erased part of a person's data",
+  },
+  "credential.erase": {
+    done: "Erased a person's stored credentials",
+    failed: "Credential erasure failed",
+    refused: "Credential erasure refused",
+  },
+  "session.revoke": {
+    done: "Signed a person out everywhere",
+    failed: "Signing a person out failed",
+    refused: "Signing a person out refused",
+  },
+  "token.revoke": { done: "Revoked an API token", failed: "Revoking an API token failed", refused: "Revoking an API token refused" },
+  "person.deprovision": {
+    done: "Deprovisioned a person",
+    failed: "Person deprovisioning failed",
+    refused: "Person deprovisioning refused",
+    partial: "Deprovisioned a person; some data was kept",
+  },
+  "service_identity.retire": {
+    done: "Retired a service identity",
+    failed: "Retiring a service identity failed",
+    refused: "Retiring a service identity refused",
+  },
+  "access.role_mapping.delete": {
+    done: "Removed a role mapping",
+    failed: "Removing a role mapping failed",
+    refused: "Removing a role mapping refused",
+  },
+  "template.delete": { done: "Deleted a template", failed: "Deleting a template failed", refused: "Deleting a template refused" },
+  "audit.retention.partition_dropped": {
+    done: "Dropped an audit partition",
+    failed: "Dropping an audit partition failed",
+    refused: "Dropping an audit partition refused",
+  },
+  "scim.user.deactivate": {
+    done: "Deactivated by your identity provider",
+    failed: "Deactivation by your identity provider failed",
+    refused: "Deactivation by your identity provider refused",
+  },
+};
+
 // A run.build failure row the run carried on past (a dropped base image, an unbuilt SSH devcontainer): its reason is
 // the row's detail line (inboundDetail), and the failure badge stays.
 const SKIPPED_BUILD = "Skipped part of the sandbox image build";
 const isSkippedBuild = (e: AuditEvent): boolean => e.action === "run.build" && e.data?.skipped === true;
+
+// A session.recording.write failure row: a recording that was owed and not stored (an agent output cast that was
+// declined or could not be saved). Its reason is the row's detail line (inboundDetail), and the failure badge shows.
+const AUDIT_RECORDING_NOT_SAVED = "could not save the terminal recording";
+export const isFailedRecordingWrite = (e: AuditEvent): boolean => e.action === "session.recording.write" && e.outcome === "failure";
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
@@ -129,12 +209,18 @@ function describeParts(e: AuditEvent): AuditParts {
           : "Deferred egress to";
     return { lead: verb, sep: " ", object: e.target || "an unknown host" };
   }
+  if (e.action === "llm.scan.skip" && typeof e.data?.deferred_to === "string" && e.data.deferred_to) {
+    return { lead: AUDIT.SCAN_LEFT_TO, sep: " ", object: e.data.deferred_to };
+  }
   if (e.action.startsWith("llm.scan.")) {
     return { lead: `LLM content scan (${e.action.slice("llm.scan.".length)}) for`, sep: " ", object: e.target || "an unknown host" };
   }
   if (e.action === "inbound.allow" || e.action === "inbound.deny") {
     const verb = e.action === "inbound.allow" ? AUDIT.INBOUND_ALLOW : AUDIT.INBOUND_DENY;
     return { lead: `${verb} to`, sep: " ", object: e.target || AUDIT.INBOUND_NO_APP };
+  }
+  if (e.action === "gateway_identity.mint" && (e.outcome === "success" || e.outcome === "denied")) {
+    return { lead: `${e.outcome === "success" ? AUDIT.MINT_SIGNED : AUDIT.MINT_REFUSED} for`, sep: " ", object: e.target || AUDIT.MINT_NO_PROVIDER };
   }
   if (e.action === "credential.revoke") return whole(AUDIT.REVOKE_RUN_CREDENTIALS);
   if (e.action === "run.end.set" && e.data?.reason === "service_renewed") {
@@ -153,10 +239,17 @@ function describeParts(e: AuditEvent): AuditParts {
     }
     if (reason === "expired") return whole(ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED);
   }
+  const destructive = DESTRUCTIVE[e.action];
+  if (destructive) {
+    const kept = e.outcome === "success" && !!e.data?.not_erased;
+    const lead = e.outcome === "success" ? (kept && destructive.partial ? destructive.partial : destructive.done) : e.outcome === "denied" ? destructive.refused : destructive.failed;
+    return { lead, sep: " — ", object: e.target ?? "" };
+  }
   if (isSkippedBuild(e)) return { lead: SKIPPED_BUILD, sep: " — ", object: e.target ?? "" };
   if (e.action === "run.build" && e.data?.cache_hit === true) {
     return { lead: AUDIT.REUSED_IMAGE, sep: " — ", object: e.target ?? "" };
   }
+  if (isFailedRecordingWrite(e)) return { lead: capitalize(AUDIT_RECORDING_NOT_SAVED), sep: " — ", object: e.target ?? "" };
   const verb = ACTION_VERB[e.action];
   return { lead: verb ? capitalize(verb) : e.action, sep: " — ", object: e.target ?? "" };
 }
@@ -190,10 +283,12 @@ export function serviceSource(e: AuditEvent): string | null {
 // inboundDetail is the second line of an inbound.allow / inbound.deny row, from what the row recorded: the request
 // (method and path, never the query), how the caller came (a token or a session) and who they matched, or why they
 // were refused. `withRun` ends the line with the run's short id, for the Audit page, which lists several runs; a run's
-// own Audit tab leaves it off. A skipped run.build row's line is its recorded reason. Null for any other row; a field
+// own Audit tab leaves it off. A skipped run.build row's line is its recorded reason, and so is a failed
+// session.recording.write row's ("reason: mask_gap"). Null for any other row; a field
 // the row lacks is left out, never guessed.
 export function inboundDetail(e: AuditEvent, withRun = false): string | null {
   if (isSkippedBuild(e)) return typeof e.data?.reason === "string" && e.data.reason ? e.data.reason : null;
+  if (isFailedRecordingWrite(e)) return typeof e.data?.reason === "string" && e.data.reason ? `reason: ${e.data.reason}` : null;
   if (!isInbound(e)) return null;
   const d = e.data ?? {};
   const text = (k: string) => (typeof d[k] === "string" && d[k] ? (d[k] as string) : "");

@@ -455,6 +455,7 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, shape errShape, err erro
 		dl.Cause = cause
 		dl.Via = p.viaHop(host)
 		dl.Scan = seen.Scan
+		dl.GatewayCallID = seen.GatewayCallID
 		p.sink.emit(dl)
 	}
 	port := 443
@@ -474,7 +475,9 @@ func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.Deci
 		return
 	}
 	if seen != nil && p.sink != nil {
-		p.sink.emit(p.denyDialFailed("builtin:dial-failed", seen.Request, host, err, seen.Scan))
+		dl := p.denyDialFailed("builtin:dial-failed", seen.Request, host, err, seen.Scan)
+		dl.GatewayCallID = seen.GatewayCallID
+		p.sink.emit(dl)
 	}
 	p.httpError(w, msg, err, http.StatusBadGateway)
 }

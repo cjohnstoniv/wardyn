@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"slices"
@@ -136,6 +137,11 @@ func (b *Bootstrapper) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (
 			continue
 		}
 		if err := s.run(ctx, c); err != nil {
+			if c.Optional && ctx.Err() == nil {
+				// The id only: the error holds the command's stderr and the row's stdin is a secret.
+				slog.Warn("stage 1: an optional step failed and was skipped", "step", c.ID)
+				continue
+			}
 			return macvm.BootstrapResult{}, &StepError{Step: c.Step, Command: c.ID, Err: err}
 		}
 		if c.OnlyWithCode {

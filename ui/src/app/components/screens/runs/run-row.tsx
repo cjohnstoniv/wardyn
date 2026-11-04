@@ -23,7 +23,7 @@ import { Button } from "../../ui/button";
 import { Chip, RunStateBadge } from "../../wardyn/primitives";
 import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
-import { rowPresentation, waitingSignInPresentation } from "./runs-model";
+import { isPausedRun, rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { serviceBadge } from "../../wardyn/copy/run-service";
@@ -41,6 +41,9 @@ const CancelRunDialog = React.lazy(() => import("../run-detail/cancel-run-dialog
 
 function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   const parts: string[] = [repoLabel(run).text];
+  // UXR-31: a VM run says which kind; a container run says nothing, as before.
+  if (run.machine_kind === "macos_vm") parts.push(RUNS_ROW_WORD.MACOS_VM);
+  else if (run.machine_kind === "linux_vm") parts.push(RUNS_ROW_WORD.LINUX_VM);
   // 0.9 (M-RN-3 RS8): a local run names its computer, and says so while it is offline, in neutral words in
   // the meta line; the row's hue, word and action are rowPresentation's and unchanged.
   if (run.placement === "local") {
@@ -157,6 +160,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             <Chip tone="neutral">{p.word}</Chip>
           ) : health ? (
             <RunStateBadge state={run.state} word={health.word} tone={health.tone} pulse={health.pulse} />
+          ) : isPausedRun(run) && p.word === RUNS_ROW_WORD.PAUSED ? (
+            <RunStateBadge state={run.state} word={p.word} tone="neutral" pulse={false} />
           ) : (
             <RunStateBadge state={run.state} word={p.word} />
           )}

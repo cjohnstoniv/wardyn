@@ -37,9 +37,12 @@ function useOrgRecording(): SiteRecording | undefined {
 export function RecordingSection({
   spec,
   onSpecChange,
+  ceiling,
 }: {
   spec: RunPolicySpec;
   onSpecChange: (next: RunPolicySpec) => void;
+  /** The section edits a profile's ceiling, so it says what a level does to a macOS VM run. */
+  ceiling?: boolean;
 }) {
   const storeOff = useRecordingDisabled() === true;
   const org = useOrgRecording();
@@ -87,6 +90,11 @@ export function RecordingSection({
       {floor && lower.length > 0 && (
         <p className="text-meta text-muted-foreground" data-testid="policy-recording-floor">
           {C.MINIMUM_ABOVE(C.ORG, C.LEVELS.find((o) => o.value === floor)!.label, lower.map((o) => o.label))}
+        </p>
+      )}
+      {ceiling && (
+        <p className="text-meta text-muted-foreground" data-testid="policy-recording-macos">
+          {C.MACOS_VM_CEILING}
         </p>
       )}
       <div className="flex items-baseline gap-2 text-body" data-testid="policy-recording-keystrokes">

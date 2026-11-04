@@ -432,6 +432,9 @@ func (s *Server) startResidentErase(runnerID uuid.UUID) {
 		if err := s.finishMacDiskDeletes(s.cfg.BaseCtx); err != nil {
 			slog.WarnContext(s.cfg.BaseCtx, "wardynd: finish disk drive deletes", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
 		}
+		if err := s.sweepKeptMachines(s.cfg.BaseCtx); err != nil {
+			slog.WarnContext(s.cfg.BaseCtx, "wardynd: kept machine sweep", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+		}
 	})
 }
 
@@ -454,7 +457,7 @@ func (s *Server) sweepResidentErase(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(abandonErr, err)
 	}
-	errs := []error{abandonErr, s.finishMacDiskDeletes(ctx)}
+	errs := []error{abandonErr, s.finishMacDiskDeletes(ctx), s.sweepKeptMachines(ctx)}
 	for _, id := range runners {
 		if s.runnerOnline(id) {
 			errs = append(errs, s.eraseResidentOn(ctx, st, id))

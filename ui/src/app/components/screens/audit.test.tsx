@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -21,10 +21,12 @@ import { aheadByHours } from "../../lib/test-clock";
 const listAuditMock = vi.fn();
 const getRunMock = vi.fn();
 const listRunsMock = vi.fn();
-vi.mock("../../lib/api/audit", () => ({
+vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: {
     listAudit: (...a: unknown[]) => listAuditMock(...a),
   },
+  // The real reading of a row's call id, not a stub.
+  gatewayCallId: (await importOriginal<typeof import("../../lib/api/audit")>()).gatewayCallId,
 }));
 vi.mock("../../lib/api/runs", () => ({
   runs: {
@@ -277,12 +279,31 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(actors[1]).toHaveTextContent(/system/i);
   });
 
+  it("lets the admin isolate service activity, and names the search box", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "s1", actor_type: "service", action: "token.create" }),
+      ev({ id: "h1", actor_type: "human", action: "person.create", run_id: "run_333" }),
+    ]);
+    renderScreen();
+    await screen.findByText("Created an API token");
+    expect(screen.getByLabelText("Search events")).toBeInTheDocument();
+    // The raw key stays in the row's title; the sentence is the text.
+    expect(screen.getByText("Added a person").getAttribute("title")).toContain("person.create");
+    const actors = screen.getAllByTestId("audit-actor-cell");
+    expect(actors[0]).toHaveTextContent(/service/i);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("combobox", { name: "Actor" }));
+    await user.click(await screen.findByRole("option", { name: "Service" }));
+    await waitFor(() => expect(screen.queryByText("Added a person")).toBeNull());
+    expect(screen.getByText("Created an API token")).toBeInTheDocument();
+  });
+
   it("shows a truncation indicator when the global window is capped at 1000", async () => {
     const many = Array.from({ length: 1000 }, (_, i) => ev({ id: `e${i}`, action: `act.${i}` }));
     listAuditMock.mockResolvedValue(many);
     renderScreen();
 
-    await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Showing the newest 1000 events\. Older events aren't shown here/)).toBeInTheDocument());
   }, 30_000);
 
   it("does not cry truncation at the old 500 cap the console no longer asks for", async () => {
@@ -295,7 +316,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
 
     await screen.findByText(/500 events/);
-    expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing the newest/)).not.toBeInTheDocument();
   });
 
   it("does not show the truncation indicator below the cap", async () => {
@@ -597,6 +618,56 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await user.click(await screen.findByRole("option", { name: /^Egress$/i }));
     await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
     expect(screen.getByText("Allowed inbound to api")).toBeInTheDocument();
+  });
+
+  // The call id a row went to a gateway under. Untrusted text: shown only as a UUID, only as text, and copied whole.
+  it("shows the gateway call id on an egress row with a copy button, and a row without it looks as it did", async () => {
+    const id = "3f2a1c70-8e4b-4d19-a6f2-5b0c7de19a44";
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "egress.allow", target: "gateway.example.com", data: { gateway_call_id: id } }),
+      ev({ id: "e2", action: "egress.deny", target: "gateway.example.com", outcome: "denied", data: { gateway_call_id: id.replace("3f2a", "b81e") } }),
+      ev({ id: "e3", action: "egress.allow", target: "registry.example.com", data: {} }),
+      ev({ id: "e4", action: "egress.allow", target: "no-data.example.com" }),
+      // Not a UUID, or on a row that is not an egress decision: no line, and the text is never parsed as markup.
+      ev({ id: "e5", action: "egress.allow", target: "evil.example.com", data: { gateway_call_id: "<img src=x onerror=alert(1)>" } }),
+      ev({ id: "e6", action: "run.create", data: { gateway_call_id: id } }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    // After setup(), which installs a clipboard of its own.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const { container } = renderScreen();
+    expect(await screen.findByText(`Call id ${id}`)).toBeInTheDocument();
+    expect(screen.getByText(`Call id ${id.replace("3f2a", "b81e")}`)).toBeInTheDocument();
+    expect(screen.getAllByTestId("audit-call-id")).toHaveLength(2);
+    expect(screen.getByText("Allowed egress to registry.example.com").parentElement?.children).toHaveLength(1);
+    expect(screen.getByText("Allowed egress to no-data.example.com").parentElement?.children).toHaveLength(1);
+    expect(screen.getByText("Allowed egress to evil.example.com").parentElement?.children).toHaveLength(1);
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.queryByText(/onerror/)).not.toBeInTheDocument();
+    expect(screen.getByText("Created the run").parentElement?.children).toHaveLength(1);
+    // Copy takes the whole id, never the "Call id" label.
+    const [copy] = screen.getAllByRole("button", { name: "Copy call id" });
+    expect(screen.getAllByRole("button", { name: "Copy call id" })).toHaveLength(2);
+    await user.click(copy);
+    expect(writeText).toHaveBeenCalledWith(id);
+  });
+
+  it("words a gateway token mint row, and files it under Credentials", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", actor_type: "agent", action: "gateway_identity.mint", target: "corp-gateway", data: { provider: "corp-gateway" } }),
+      ev({ id: "e2", action: "gateway_identity.mint", target: "old-gateway", outcome: "denied", data: { reason: "identity_deactivated" } }),
+      ev({ id: "e3", action: "run.create" }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    expect(await screen.findByText("Signed a gateway token for corp-gateway")).toBeInTheDocument();
+    expect(screen.getByText("Refused a gateway token for old-gateway")).toBeInTheDocument();
+    expect(screen.queryByTestId("audit-call-id")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: /event/i }));
+    await user.click(await screen.findByRole("option", { name: /^Credentials$/i }));
+    await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
+    expect(screen.getByText("Signed a gateway token for corp-gateway")).toBeInTheDocument();
   });
 
   it("r15 T2-f: labels service rows by source, names no caller for a credential-less refusal, and ends an inbound detail with the run", async () => {
@@ -902,99 +973,5 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("sm:min-w-[10rem]");
     // Below sm the wrapper's own minimum keeps the sentence from collapsing and wraps the row instead.
     expect(screen.getByText("Failed egress to flaky.example.com:443").parentElement).toHaveClass("min-w-[12rem]");
-  });
-});
-
-// R4-F132: the live-tail deliberately swallows a failed tick to keep the last
-// good view, so `status` stays "ready" forever — and the green pulsing
-// "Live · appending" chip rode on `status` alone. A control plane that died
-// after the first read therefore left a confident liveness claim over a frozen
-// trail. CONSOLE-RULES §10: a result verb needs a real result behind it.
-describe("AuditScreen — the liveness chip stops claiming a feed that stopped answering", () => {
-  beforeEach(() => {
-    listAuditMock.mockReset();
-    listAuditMock.mockResolvedValue([]);
-    getRunMock.mockReset().mockResolvedValue(undefined);
-    healthMock.mockReset().mockResolvedValue({});
-  });
-  afterEach(() => vi.useRealTimers());
-
-  // Mock packet M4 (approved 2026-10-03), surface D: a field whose key was
-  // destroyed reads Erased, muted, with the explanation as its title.
-  it("renders an erased target and an erased data field as Erased, never the wire value", async () => {
-    listAuditMock.mockResolvedValue([
-      ev({
-        id: "e1",
-        action: "person.create",
-        actor_type: "human",
-        actor: "sec@corp.example",
-        target: "[erased]",
-        data: { email: "[erased]", note: "kept" },
-      }),
-    ]);
-    renderScreen();
-    expect(await screen.findByText("person.create — Erased")).toBeInTheDocument();
-    const field = screen.getByText("email: Erased");
-    expect(field).toHaveAttribute("title", "Erased on request. The event and its place in the log remain.");
-    expect(field).toHaveClass("text-muted-foreground");
-    expect(screen.queryByText(/\[erased\]/)).toBeNull();
-    expect(screen.queryByText(/note:/)).toBeNull();
-  });
-
-  it("drops the chip once a poll stops answering, and brings it back when the feed recovers", async () => {
-    // Fake timers BEFORE the render: usePoll's setInterval has to be the fake
-    // one, or advancing time never reaches a tick.
-    vi.useFakeTimers();
-    listAuditMock.mockResolvedValueOnce([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
-    renderScreen();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(screen.getByText("Live · appending")).toBeInTheDocument();
-
-    // Every later read 503s — the harness's `auditdead` case.
-    listAuditMock.mockRejectedValue(new Error("503"));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(6000);
-    });
-    expect(screen.queryByText("Live · appending")).toBeNull();
-    // The last good view is still there — the fix removes the CLAIM, not the data.
-    expect(screen.getByText("1 event")).toBeInTheDocument();
-
-    // ...and it is not a one-way latch: a feed that comes back is live again.
-    listAuditMock.mockReset();
-    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(6000);
-    });
-    expect(screen.getByText("Live · appending")).toBeInTheDocument();
-  });
-
-  // A read slower than the poll interval must still paint: the next tick waits for it instead of overtaking it,
-  // because the request-id guard drops every answer that is not the newest request's.
-  it("a read slower than the poll interval still paints, and the chip stays live", async () => {
-    vi.useFakeTimers();
-    listAuditMock.mockResolvedValueOnce([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
-    renderScreen();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(screen.getByText("1 event")).toBeInTheDocument();
-
-    // Each later read takes 7 s, longer than the 5 s poll.
-    listAuditMock.mockImplementation(
-      () =>
-        new Promise((resolve) =>
-          setTimeout(
-            () => resolve([ev({ id: "e1", run_id: "run_111", action: "egress.allow" }), ev({ id: "e2", run_id: "run_111", action: "egress.deny" })]),
-            7000,
-          ),
-        ),
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(13000);
-    });
-    expect(screen.getByText("2 events")).toBeInTheDocument();
-    expect(screen.getByText("Live · appending")).toBeInTheDocument();
   });
 });

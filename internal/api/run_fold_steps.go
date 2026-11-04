@@ -160,7 +160,27 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	var refusal *runRefusal
 	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, carriers, f.seed,
 		driveTargets(f.drives))
+	if refusal == nil && f.req.Image == "" {
+		// After the seed, no image means neither the request nor an attached workspace set one, and dispatch
+		// takes it from a workspace the policy carries (resolveCreateRunImage), attached or not: the digest
+		// rule binds that base image as it binds an attached one's (seededImageRefusal).
+		if i := slices.IndexFunc(f.wsRefs, func(ws types.Workspace) bool { return workspaceBaseImage(ws) != "" }); i >= 0 {
+			f.carriedImage = workspaceBaseImage(f.wsRefs[i])
+		}
+		refusal = s.imageDigestRefusal(f.r.Context(), f.carriedImage, true)
+	}
 	return !refusal.write(s, f.w, f.r)
+}
+
+// createDigestInput is the image create held to the digest rule: the request's (named, or set by an attached
+// workspace's base image), else a policy-carried workspace's (carried, the fold's carriedImage), "" for the
+// convention image. The run row records it (AgentRun.ImageInput) and the run.create row's exempt mark reads it.
+// It takes the carried image, not the fold: only runFoldSteps steps take the fold.
+func createDigestInput(req createRunRequest, carried string) string {
+	if req.Image != "" {
+		return req.Image
+	}
+	return carried
 }
 
 // stepHarnessSet holds every harness a run-mode request includes to the agent
@@ -362,18 +382,25 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
 		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}
+	// The kept work folder is its own ask: counting it as a drive worded its refusal for drives, and a runner
+	// that shares drives passed it at Review only for the start to refuse it.
+	ask.MountsDrives, ask.KeepsWorkFolder = len(f.drives) > 0, f.keep != nil
 	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
 		return false
 	}
 	if !types.MachineKind(f.req.MachineKind).IsMacOSVM() {
 		return true
 	}
-	// A macOS VM is not recorded in this release: refused where recording is asked for, else said.
-	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f.place, f.ceiling)
+	// A macOS VM is recorded by the organisation, not its runner: nothing about recording refuses it, and Review
+	// says what its level records (its desktop only at Screen and actions, and then unmasked).
+	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
+		return true
+	}
+	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
-	if notice != "" {
+	if notice := macOSVMRecordingNotice(choice.Resolve(), f.req.Interactive || s.cfg.ExecOutputTailOff); notice != "" {
 		f.policyWarns = append(f.policyWarns, notice)
 	}
 	return true
@@ -821,10 +848,18 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		}
 		f.schedule = sch
 	}
+	// A resume goes to the Mac its machine is kept on, as a disk drive's run goes to its Mac; a fresh start
+	// keeps its machine's base, which placement and its checks then read.
+	resumed := s.keptResumeOf(f.r, *f.req)
+	if rf := s.keptFreshBase(f.req, resumed); rf != nil {
+		s.auditKeptMachineDenied(f.r, *f.req, rf, f.mode == foldCreate)
+		return !rf.write(s, f.w, f.r)
+	}
+	f.keptPin = keptPinOf(resumed)
+	drives, driveRunner := keptPlacementPin(mountsDrives(f.drives, f.keep), drivesBoundRunner(f.drives, f.keep), f.keptPin)
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: mountsDrives(f.drives, f.keep), driveRunner: drivesBoundRunner(f.drives, f.keep),
-		noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: drives, driveRunner: driveRunner, noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}

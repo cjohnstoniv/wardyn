@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, asRealMember, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN_WAIT } from "../src/app/components/wardyn/copy/run-wait";
 import { NO_BARRIER } from "../src/app/components/wardyn/copy";
+import { COULDNT_END, END_RUN, ENDING } from "../src/app/components/wardyn/copy/run-lifetime";
 import type { Page } from "@playwright/test";
 
 // ============================================================================
@@ -161,7 +162,7 @@ test.describe("Killing an active run", () => {
   // especially, so pinning one fixture is racy. On the `none` runner the run
   // has no live process, so the backend 409s the kill yet reconciles the row
   // to a terminal state. The UI's error-handling fix turns that rejection into
-  // a "Failed to kill" toast (instead of an unhandled rejection that blanks
+  // a "Couldn't end" toast (instead of an unhandled rejection that blanks
   // the console) and always re-syncs the run — we assert EITHER toast variant:
   // the point is the failure is surfaced, not swallowed.
   const ACTIVE_BADGE: Record<string, string> = {
@@ -192,21 +193,22 @@ test.describe("Killing an active run", () => {
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(badge, { exact: true })).toBeVisible();
 
-    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+    const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
     await expect(killBtn).toBeEnabled();
     await killBtn.click();
 
     const confirm = page.getByRole("alertdialog");
     await expect(confirm).toBeVisible();
-    await expect(confirm.getByText(/Kill .+\?/)).toBeVisible();
+    await expect(confirm.getByText(/End .+\?/)).toBeVisible();
     // #3036: the question names the run by its title, and the short id beside it is the copyable reference.
-    await expect(confirm.getByText(`Kill "${victim!.task}"?`)).toBeVisible();
+    await expect(confirm.getByText(`End ${victim!.task}?`)).toBeVisible();
     await expect(confirm.getByTestId("run-ref").getByRole("button")).toHaveText(/^[0-9a-f]{8}$/);
-    await confirm.getByRole("button", { name: "Kill run" }).click();
+    await confirm.getByRole("button", { name: "End run" }).click();
 
-    // Success on a graceful kill, or "Failed to kill" on a 409 from the `none`
+    // Success on a graceful kill ("Ending <title>"), or "Couldn't end <title>" on a 409 from the `none`
     // runner. Either proves the rejection was handled, not swallowed.
-    await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({
+    const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await expect(page.getByText(new RegExp(`${escapeRe(ENDING(""))}|${escapeRe(COULDNT_END(""))}`)).first()).toBeVisible({
       timeout: 10000,
     });
 

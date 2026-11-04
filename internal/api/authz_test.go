@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
@@ -216,9 +217,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// mounted on the TOP-LEVEL router, outside every auth group and after the
 	// whole /api/v1 tree, so it can shadow nothing; mountUI's rooted clean of
 	// the path is what keeps it from serving outside the directory.
-	"GET /*":             {class: classAnonymous},
-	"GET /healthz":       {class: classAnonymous},
-	"GET /readyz":        {class: classAnonymous},
+	"GET /*":       {class: classAnonymous},
+	"GET /healthz": {class: classAnonymous},
+	"GET /readyz":  {class: classAnonymous},
+	// Public keys only, fetched by an AI gateway that holds no Wardyn credential;
+	// with no key it answers as a path no route holds (handleGatewayJWKS). Walked on
+	// the console's router; a headless one serves it from mountUI's NotFound.
+	"GET /.well-known/wardyn-experimental/gateway-jwks.json": {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
 	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the
@@ -650,6 +655,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// delete, SUPER like reclaim because the delete destroys a person's bytes.
 	"GET /api/v1/drives/member":         {class: classAdmin},
 	"DELETE /api/v1/drives/member/{id}": {class: classAdmin},
+	// People's kept machines (kept_machines.go): the super admin's list and delete, SUPER like the
+	// member drives' because the delete destroys a person's files on their Mac.
+	"GET /api/v1/machines/kept":         {class: classAdmin},
+	"DELETE /api/v1/machines/kept/{id}": {class: classAdmin},
 	// Directory autocomplete (§I) — classSecurity, and the contrast with the
 	// four classAdmin /access routes above is the whole tier argument in one
 	// pair: those decide who DERIVES admin, this one only READS the directory
@@ -679,6 +688,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// owner predicate answers another person's id with the uniform 404.
 	"POST /api/v1/me/drives":        {class: classMember},
 	"DELETE /api/v1/me/drives/{id}": {class: classMember},
+	// A person lists and deletes their own kept machines (kept_machines.go). The handler refuses every
+	// caller that is not a person, and the owner predicate answers another person's id with the uniform 404.
+	"GET /api/v1/me/machines":         {class: classMember},
+	"DELETE /api/v1/me/machines/{id}": {class: classMember},
 	// The Support link the header shows every signed-in person (#1125).
 	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
@@ -711,6 +724,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The Azure Foundry capture's start door (azure_foundry_entra.go): the same
 	// self-service shape. Its callback is the Azure DevOps callback above.
 	"GET /api/v1/model-providers-entra/signin": {class: classMember},
+	// A custom endpoint's own sign-in (endpoint_oidc.go): the same self-service shape. The door names a deployment
+	// row, the callback is bound to the caller's session subject, and the capture lands in their own namespace only.
+	"GET /api/v1/model-providers/{id}/oidc/sign-in": {class: classMember},
+	"GET /api/v1/auth/provider-oidc/callback":       {class: classMember},
 	// The Azure CLI component's capture (cli_azure_signin.go): the same
 	// self-service shape and the same shared callback. A component the caller
 	// may not attach answers as the run doors answer it.
@@ -779,6 +796,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/presets":                             {class: classMember},
 	"GET /api/v1/presets/{name}":                      {class: classMember},
 	"GET /api/v1/runs":                                {class: classMember},
+	// Wall presets (wall_presets.go): member at the router, like /templates; the handler checks the
+	// preset's scope with types.TemplateAuthorize, and one the caller cannot read is the missing 404.
+	"GET /api/v1/wall-presets":         {class: classMember},
+	"POST /api/v1/wall-presets":        {class: classMember},
+	"GET /api/v1/wall-presets/{id}":    {class: classMember},
+	"PUT /api/v1/wall-presets/{id}":    {class: classMember},
+	"DELETE /api/v1/wall-presets/{id}": {class: classMember},
 	// PUT/DELETE moved here from classAdmin in 0.7 (migration `0050`,
 	// per-principal secrets): self-service, scoped to the caller's OWN row at
 	// the STORE (secretOwnerFromRequest) — same shape as /me/ssh-keys and
@@ -885,6 +909,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/desktop/sign-ins":         {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"POST /api/v1/runs/{id}/desktop/sign-ins/pause":  {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/desktop/sign-ins/resume": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	// The ticket to watch a background macOS run's desktop, view only (run_background_watch.go).
+	"POST /api/v1/runs/{id}/desktop/watch-ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop/window":       {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -979,6 +1006,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/approvals/{id}/expire":          {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":               {class: classInternal},
 	"POST /api/v1/internal/desktop-signin/check":           {class: classInternal},
+	"POST /api/v1/internal/gateway-identity":               {class: classInternal},
 	"POST /api/v1/internal/decisions":                      {class: classInternal},
 	"POST /api/v1/internal/activity":                       {class: classInternal},
 	"POST /api/v1/internal/groundtruth":                    {class: classInternal},
@@ -1123,12 +1151,56 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // too. Shared rather than duplicated: a second copy of this config is exactly
 // where a conditional route silently goes unmounted and therefore unprobed.
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
-// row for claude-code.
+// row for claude-code. The attended macOS window's site switch is on, so the
+// owner of a run reaches POST /runs/{id}/desktop/window's handler; the switch
+// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer.
 func authzMatrixSiteConfig() types.SiteConfig {
+	on := true
 	return types.SiteConfig{
 		Runners: &types.RunnerSettings{Enabled: true}, AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
 			ID: "claude-code",
-		}}}}
+		}}},
+		MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
+	}
+}
+
+// TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
+// /runs/{id}/desktop/window on the matrix server: with the site switch at its default (off) a 403
+// mac_window_site_off, and with it on, the handler's own answer (the matrix's switch-on rows). Entry
+// authorization answers before the switch, so with it off a super admin still gets run_owner_only and a
+// non-owning member the run-not-found 404: the switch never tells a non-owner whether the run exists.
+func TestAuthzMatrixMacWindowSiteSwitch(t *testing.T) {
+	srv, ast, _, _ := newAuthzMatrixServer(t)
+	const owner = "sub-member"
+	memberSess := ssoSession(t, owner, "member@corp.example", oidc.RoleUser)
+	adminSess := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	otherSess := ssoSession(t, "sub-other-member", "other@corp.example", oidc.RoleUser)
+	id := uuid.New()
+	on := true
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunRunning, Agent: "claude-code"}
+	ast.siteCfg.MacOSVM = nil
+	ast.mu.Unlock()
+	const route = "POST /api/v1/runs/{id}/desktop/window"
+	path, body := buildPath("/api/v1/runs/{id}/desktop/window", id.String()), bodyFor(http.MethodPost, routeMatrix[route])
+	if w := doSSO(t, srv, http.MethodPost, path, memberSess, body); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), `"reason":"`+reasonMacWindowSiteOff+`"`) {
+		t.Errorf("switch off: owning member: status = %d, want 403 %s; body=%s", w.Code, reasonMacWindowSiteOff, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodPost, path, adminSess, body); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), `"reason":"run_owner_only"`) {
+		t.Errorf("switch off: super admin: status = %d, want 403 run_owner_only; body=%s", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodPost, path, otherSess, body); w.Code != http.StatusNotFound ||
+		strings.Contains(w.Body.String(), reasonMacWindowSiteOff) {
+		t.Errorf("switch off: non-owning member: status = %d, want the run-not-found 404; body=%s", w.Code, w.Body.String())
+	}
+	ast.mu.Lock()
+	ast.siteCfg.MacOSVM = &types.SiteMacOSVM{AllowAttendedWindow: &on}
+	ast.mu.Unlock()
+	if w := doSSO(t, srv, http.MethodPost, path, memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+		t.Errorf("switch on: owning member: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
+	}
 }
 
 // shape, when given, adjusts the config before New — the deployment-shape knobs
@@ -1356,6 +1428,10 @@ func TestAuthzMatrix(t *testing.T) {
 				}
 
 			case classInternal:
+				if pattern == gatewayMintPath {
+					// Off, this door answers as a path no route holds, before any credential is read.
+					testGatewayIdentityOn(srv)
+				}
 				p := buildPath(pattern, "x1") // CF: OLD probe
 				if w := do(t, srv, method, p, "", body); w.Code != http.StatusUnauthorized {
 					t.Errorf("no token: status = %d, want 401; body=%s", w.Code, w.Body.String())
@@ -1784,9 +1860,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// (tierEntry); 45 since 0.10 added POST
 		// /runs/{id}/computer-folder/bring-back; 46 since 0.10 (#2968) added GET
 		// /runs/{id}/recording-chain; 49 since 0.10 (#2972) added GET
-		// /runs/{id}/desktop/sign-ins and POST .../pause and .../resume.
-		if probed != 49 {
-			t.Errorf("probed %d classOwner routes, want 49 — a route that left classOwner takes its tier "+
+		// /runs/{id}/desktop/sign-ins and POST .../pause and .../resume; 50 since
+		// 0.10 added POST /runs/{id}/desktop/watch-ticket (tierEntry); 51 since
+		// 0.10 added POST /runs/{id}/desktop/window (tierEntry).
+		if probed != 51 {
+			t.Errorf("probed %d classOwner routes, want 51 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1950,8 +2028,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// prewrapped rows only, and adds POST /base-images/{id}/check beside them (= 96 SEC, 69 SUPER).
 	// 0.10 workloads add the 3 /workload-bindings routes (create, list, delete) on the security tier: a binding is
 	// standing authority over a service identity, made by a signed-in person with the security role (= 99 SEC).
-	if sec != 99 || super != 69 {
-		t.Errorf("tier split = %d security / %d admin, want 99 / 69 (PLUS the 3 /workload-bindings routes, PLUS final §3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// 0.10 kept machines add the admin list and delete of the machines people keep, GET /machines/kept and
+	// DELETE /machines/kept/{id}, on the SUPER tier, as member drives' list and delete are (= 71 SUPER).
+	if sec != 99 || super != 71 {
+		t.Errorf("tier split = %d security / %d admin, want 99 / 71 (PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final §3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 
@@ -3009,5 +3089,204 @@ func TestPathProvenanceIsSecurityTierOnly(t *testing.T) {
 	}
 	if want := []string{"governance_check.go", "governance_unit_write.go"}; !slices.Equal(carriers, want) {
 		t.Errorf("path_provenance is declared in %v, want only %v (checkEffective, governanceUnitView)", carriers, want)
+	}
+}
+
+// ── CLI sign-in and identity-provider logout routes ──
+//
+// routeMatrix is walked from a server with no CLI sign-in and no logout flags, so chi.Walk never
+// sees these ten routes: the CLI sign-in set needs a store that can hold it (mountCLISignInRoutes,
+// cli_sign_in.go) and the logout pair needs WARDYN_OIDC_BACKCHANNEL_LOGOUT / _FRONTCHANNEL_LOGOUT
+// (routes.go, signin_denied.go). They are classified here instead, in a table of their own, and
+// TestAuthzCLIRoutes walks a server that mounts them and fails on any route that is in neither
+// table, so a new CLI or logout route cannot join the router unlisted.
+
+// authzCLIHuman is the class of the /me CLI routes: humanOrAdminAuth admits the caller, and the
+// handler then refuses anything that is not a signed-in person (oidcHumanFromContext is empty for
+// the admin bearer), so the admin token gets 403 api_token_no_human where classMember admits it.
+const authzCLIHuman routeClass = "signed_in_human"
+
+// authzCLIRoute is one row: the class, the body to send, and the handler's own answer to a caller the
+// gate admits (status, and the reason or error code in the body; empty when the answer carries none).
+type authzCLIRoute struct {
+	class  routeClass
+	body   string
+	status int
+	answer string
+}
+
+// authzCLIRoutes is keyed as routeMatrix is. Every expected answer is the handler's, read with the
+// store shim below answering "not found" to every read:
+//
+//   - POST /cli/sign-ins: an empty request is refused by cliSignInRequestRefusal,
+//     400 cli_sign_in_invalid_request (handleCreateCLISignIn).
+//   - POST /cli/sign-ins/{id}/token: an id the store does not know is cliSignInInvalid, 401
+//     cli_sign_in_invalid. That 401 is the handler's, not a gate.
+//   - POST /cli/sessions/{id}/refresh: an unknown session is cliSessionInvalid, 401
+//     cli_session_invalid. Also the handler's.
+//   - /me/cli-sign-ins/{id} (get, approve, deny): pendingCLISignIn answers 404 cli_sign_in_not_found
+//     (pendingCLISignIn). Approve first runs mintGuards, which admits a
+//     member the way POST /me/tokens does (routeMatrix: classMember).
+//   - GET /me/cli-sessions: 200 with the caller's (here no) sessions (handleListCLISessions).
+//   - DELETE /me/cli-sessions/{id}: EndCLISession's not-found is 404 cli_session_not_found
+//     (handleEndCLISession).
+//   - The two logout routes carry no credential of the caller's: the back-channel one reads a signed
+//     logout token (a missing one is 400 invalid_request, auth/oidc/backchannel.go) and
+//     the front-channel one an iss and sid query (400 invalid_request without them,
+//     auth/oidc/frontchannel.go).
+var authzCLIRoutes = map[string]authzCLIRoute{
+	"POST /api/v1/cli/sign-ins":                 {classAnonymous, "{}", http.StatusBadRequest, reasonCLISignInInvalidRequest},
+	"POST /api/v1/cli/sign-ins/{id}/token":      {classAnonymous, "{}", http.StatusUnauthorized, reasonCLISignInInvalid},
+	"POST /api/v1/cli/sessions/{id}/refresh":    {classAnonymous, "{}", http.StatusUnauthorized, reasonCLISessionInvalid},
+	"POST /auth/backchannel-logout":             {classAnonymous, "", http.StatusBadRequest, "invalid_request"},
+	"GET /auth/frontchannel-logout":             {classAnonymous, "", http.StatusBadRequest, "invalid_request"},
+	"GET /api/v1/me/cli-sign-ins/{id}":          {authzCLIHuman, "", http.StatusNotFound, reasonCLISignInNotFound},
+	"POST /api/v1/me/cli-sign-ins/{id}/approve": {authzCLIHuman, "{}", http.StatusNotFound, reasonCLISignInNotFound},
+	"POST /api/v1/me/cli-sign-ins/{id}/deny":    {authzCLIHuman, "{}", http.StatusNotFound, reasonCLISignInNotFound},
+	"GET /api/v1/me/cli-sessions":               {authzCLIHuman, "", http.StatusOK, ""},
+	"DELETE /api/v1/me/cli-sessions/{id}":       {authzCLIHuman, "", http.StatusNotFound, reasonCLISessionNotFound},
+}
+
+// authzCLIStore is the matrix store with the CLI sign-in half added: every read finds nothing and no
+// write is kept, which is all the gate probes need. The other store methods are authzStore's.
+type authzCLIStore struct{ *authzStore }
+
+var _ store.CLISignInStore = authzCLIStore{}
+
+func (authzCLIStore) CreateCLISignIn(context.Context, store.CLISignIn, int, time.Time) (bool, error) {
+	return true, nil
+}
+func (authzCLIStore) GetCLISignIn(context.Context, uuid.UUID) (store.CLISignIn, error) {
+	return store.CLISignIn{}, store.ErrNotFound
+}
+func (authzCLIStore) DecideCLISignIn(context.Context, uuid.UUID, store.CLISignInDecision) (store.CLISignIn, error) {
+	return store.CLISignIn{}, store.ErrNotFound
+}
+func (authzCLIStore) RedeemCLISignIn(context.Context, uuid.UUID, string, time.Time) (store.CLISignIn, error) {
+	return store.CLISignIn{}, store.ErrNotFound
+}
+func (authzCLIStore) CreateCLISession(context.Context, store.CLISessionRow, string, types.APIToken, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (authzCLIStore) GetCLISession(context.Context, uuid.UUID) (store.CLISessionRow, error) {
+	return store.CLISessionRow{}, store.ErrNotFound
+}
+func (authzCLIStore) RotateCLISession(context.Context, uuid.UUID, int64, string, time.Time, types.APIToken, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (authzCLIStore) CreateCLIAdminToken(context.Context, uuid.UUID, types.APIToken, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (authzCLIStore) EndCLISession(context.Context, uuid.UUID, string, string, time.Time) (store.CLISessionRow, error) {
+	return store.CLISessionRow{}, store.ErrNotFound
+}
+func (authzCLIStore) ListCLISessions(context.Context, string, time.Time) ([]store.CLISessionRow, error) {
+	return nil, nil
+}
+func (authzCLIStore) CountLiveCLISessions(context.Context, string) (int, error) { return 0, nil }
+
+// authzCLIAuthenticator is a real authenticator with both logout routes on, over a throwaway
+// discovery server. Its sessions are signed with accessTestHMACKey (accessSession), not the empty key
+// ssoSession uses for the zero-value authenticator the matrix server carries.
+func authzCLIAuthenticator(t *testing.T) *oidc.Authenticator {
+	t.Helper()
+	idp := &gooidctest.Server{}
+	httpSrv := httptest.NewServer(idp)
+	idp.SetIssuer(httpSrv.URL)
+	t.Cleanup(httpSrv.Close)
+	auth, err := oidc.New(context.Background(), oidc.Config{
+		IssuerURL: httpSrv.URL, ClientID: "wardyn-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
+		Revocations: fakeAuthzSessionRevocations{}, BackchannelLogout: true, FrontchannelLogout: true,
+		SessionSIDs: &memSessionSIDs{rows: map[string]string{}},
+	}, accessTestHMACKey)
+	if err != nil {
+		t.Fatalf("oidc.New: %v", err)
+	}
+	return auth
+}
+
+// authzCLIAnswer is the reason in a response body, or its error code when it has no reason (the
+// logout routes answer in the OAuth shape).
+func authzCLIAnswer(w *httptest.ResponseRecorder) string {
+	var b errorBody
+	_ = json.Unmarshal(w.Body.Bytes(), &b)
+	if b.Reason != "" {
+		return b.Reason
+	}
+	return b.Error
+}
+
+// TestAuthzCLIRoutes holds the CLI sign-in and identity-provider logout routes to the gates the
+// handlers' code states: anonymous routes answer the same to every caller, the /me routes admit a
+// signed-in person only. Per-person scoping of the session list and of ending a session is the store's
+// (principal is passed down) and is pinned against Postgres in cli_sign_in_pg_test.go.
+func TestAuthzCLIRoutes(t *testing.T) {
+	srv, _, _, _ := newAuthzMatrixServer(t, func(c *Config) {
+		c.OIDC = authzCLIAuthenticator(t)
+		c.Store = authzCLIStore{c.Store.(*authzStore)}
+		c.CLISignIn = CLISignInConfig{Enabled: true}
+	})
+	// The probes send far more requests from one address than the limiters allow a real caller.
+	srv.cliPeerLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.cliRefreshPeerLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.cliRefreshSessionLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.backchannelLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.frontchannelLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+
+	walked := map[string]bool{}
+	if err := chi.Walk(srv.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		walked[method+" "+route] = true
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	for key := range walked {
+		_, inMatrix := routeMatrix[key]
+		_, inCLI := authzCLIRoutes[key]
+		if !inMatrix && !inCLI {
+			t.Errorf("UNCLASSIFIED route %q — add it to authzCLIRoutes (or routeMatrix, if the matrix server now mounts it)", key)
+		}
+	}
+	for key := range authzCLIRoutes {
+		if !walked[key] {
+			t.Errorf("STALE authzCLIRoutes entry %q — the router no longer registers this route; remove it", key)
+		}
+		if _, ok := routeMatrix[key]; ok {
+			t.Errorf("authzCLIRoutes entry %q is also in routeMatrix — keep it in one table", key)
+		}
+	}
+
+	adminSess := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, nil)
+	memberSess := accessSession(t, "sub-member", "member@corp.example", oidc.RoleUser, nil)
+	for key, rc := range authzCLIRoutes {
+		method, pattern, _ := strings.Cut(key, " ")
+		t.Run(key, func(t *testing.T) {
+			p := buildPath(pattern, uuid.NewString())
+			// want is the handler's own answer: status and reason both, so a 401 that is the
+			// handler's (cli_sign_in_invalid) cannot be mistaken for the gate's.
+			want := func(who string, w *httptest.ResponseRecorder, status int, answer string) {
+				t.Helper()
+				if w.Code != status || authzCLIAnswer(w) != answer {
+					t.Errorf("%s: %d %q, want %d %q; body=%s", who, w.Code, authzCLIAnswer(w), status, answer, w.Body.String())
+				}
+			}
+			switch rc.class {
+			case classAnonymous:
+				// No credential is read, so none changes the answer.
+				want("no credential", doSSO(t, srv, method, p, nil, rc.body), rc.status, rc.answer)
+				want("admin token", do(t, srv, method, p, adminToken, rc.body), rc.status, rc.answer)
+				want("admin session", doSSO(t, srv, method, p, adminSess, rc.body), rc.status, rc.answer)
+				want("member session", doSSO(t, srv, method, p, memberSess, rc.body), rc.status, rc.answer)
+			case authzCLIHuman:
+				if w := doSSO(t, srv, method, p, nil, rc.body); w.Code != http.StatusUnauthorized {
+					t.Errorf("no credential: %d, want 401; body=%s", w.Code, w.Body.String())
+				}
+				want("admin token", do(t, srv, method, p, adminToken, rc.body), http.StatusForbidden, reasonAPITokenNoHuman)
+				want("admin session", doSSO(t, srv, method, p, adminSess, rc.body), rc.status, rc.answer)
+				want("member session", doSSO(t, srv, method, p, memberSess, rc.body), rc.status, rc.answer)
+			default:
+				t.Fatalf("route %q has no recognized class %q", key, rc.class)
+			}
+		})
 	}
 }

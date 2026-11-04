@@ -299,3 +299,103 @@ func TestAvailabilityRoutes(t *testing.T) {
 		}
 	})
 }
+
+// TestAvailabilityRoutes_CoveredByPrefix: GET lists, read-only, the registry-prefix
+// allow rows that cover the image, matched by the launch check's own matcher; a prefix
+// that does not cover it, a deny, a wildcard and an exact row are not in it.
+func TestAvailabilityRoutes_CoveredByPrefix(t *testing.T) {
+	const img = "registry.example.com/team/app:1"
+	path := "/api/v1/permissions/availability/image/" + img
+	srv, st := permServer(t)
+	cover := grant(types.CapabilitySubjectUserType, utDev, capImage, "registry.example.com/team/*", types.CapabilityAllow)
+	st.grants = []types.CapabilityGrant{
+		cover,
+		grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/other/*", types.CapabilityAllow),
+		grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/tea/*", types.CapabilityAllow),
+		grant(types.CapabilitySubjectUser, capSub, capImage, "registry.example.com/team/*", types.CapabilityDeny),
+		grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow),
+		grant(types.CapabilitySubjectUser, "x", capImage, img, types.CapabilityAllow),
+	}
+	w := doSSO(t, srv, http.MethodGet, path, permAdmin(t), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET status = %d %s", w.Code, w.Body.String())
+	}
+	var v availabilityView
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	if len(v.CoveredBy) != 1 || v.CoveredBy[0].Prefix != "registry.example.com/team/*" ||
+		v.CoveredBy[0].Who.SubjectType != types.CapabilitySubjectUserType || v.CoveredBy[0].Who.Subject != utDev {
+		t.Fatalf("covered_by = %+v, want only the team/* row for the Developers type", v.CoveredBy)
+	}
+	if len(v.AllowedBy) != 1 || v.AllowedBy[0].Value != img {
+		t.Fatalf("allowed_by = %+v, want only the exact row", v.AllowedBy)
+	}
+	// An image no prefix covers still answers with an empty list, never null.
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/permissions/availability/image/ghcr.io/acme/agent:1", permAdmin(t), "")
+	if !strings.Contains(w.Body.String(), `"covered_by":[]`) {
+		t.Fatalf("body = %s, want an empty covered_by list", w.Body.String())
+	}
+}
+
+// TestAvailabilityRoutes_CoveredByMirrorsLaunch: covered_by names only the prefix rows a
+// launch would honour (capRead.granted): not on a restricted value, not while another tag
+// of the repository is restricted and only prefixes allow it, and not for a who a deny on
+// the image refuses. A wildcard allow that applies to the same who keeps its existing reading beside a restricted sibling.
+func TestAvailabilityRoutes_CoveredByMirrorsLaunch(t *testing.T) {
+	const img = "registry.example.com/team/app:1"
+	const sibling = "registry.example.com/team/app:2"
+	path := "/api/v1/permissions/availability/image/" + img
+	prefix := func() types.CapabilityGrant {
+		return grant(types.CapabilitySubjectUserType, utDev, capImage, "registry.example.com/team/*", types.CapabilityAllow)
+	}
+	cases := []struct {
+		name       string
+		grants     []types.CapabilityGrant
+		restricted map[string]bool
+		want       int
+	}{
+		{name: "an unrestricted image is covered", grants: []types.CapabilityGrant{prefix()}, want: 1},
+		{name: "a restricted value is not covered: only a named allow counts there",
+			grants: []types.CapabilityGrant{prefix()}, restricted: map[string]bool{img: true}},
+		{name: "a restricted sibling tag in the same repository blocks a prefix-only cover",
+			grants: []types.CapabilityGrant{prefix()}, restricted: map[string]bool{sibling: true}},
+		{name: "a restricted image in another repository does not",
+			grants: []types.CapabilityGrant{prefix()}, restricted: map[string]bool{"registry.example.com/team/other:1": true}, want: 1},
+		{name: "a wildcard allow keeps its reading beside a restricted sibling",
+			grants:     []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow)},
+			restricted: map[string]bool{sibling: true}, want: 1},
+		{name: "a wildcard allow for the same user type keeps its reading beside a restricted sibling",
+			grants:     []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectUserType, utDev, capImage, capWildcard, types.CapabilityAllow)},
+			restricted: map[string]bool{sibling: true}, want: 1},
+		{name: "a wildcard allow for another user type does not lift the sibling block for this one",
+			grants:     []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectUserType, utPM, capImage, capWildcard, types.CapabilityAllow)},
+			restricted: map[string]bool{sibling: true}},
+		{name: "a deny for the same who removes that cover",
+			grants: []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectUserType, utDev, capImage, img, types.CapabilityDeny)}},
+		{name: "a deny for everyone removes it",
+			grants: []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/team/*", types.CapabilityDeny)}},
+		{name: "a deny for a different type leaves it",
+			grants: []types.CapabilityGrant{prefix(), grant(types.CapabilitySubjectUserType, utPM, capImage, img, types.CapabilityDeny)}, want: 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, st := permServer(t)
+			st.grants = c.grants
+			if c.restricted != nil {
+				st.restricted = map[string]map[string]bool{capImage: c.restricted}
+			}
+			w := doSSO(t, srv, http.MethodGet, path, permAdmin(t), "")
+			var v availabilityView
+			if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || w.Code != http.StatusOK {
+				t.Fatalf("GET = %d %s (%v)", w.Code, w.Body.String(), err)
+			}
+			if len(v.CoveredBy) != c.want {
+				t.Fatalf("covered_by = %+v, want %d rows", v.CoveredBy, c.want)
+			}
+			if v.CoveredBy == nil {
+				t.Fatalf("covered_by is null, want a list")
+			}
+		})
+	}
+}

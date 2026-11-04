@@ -188,14 +188,14 @@ func requireSerializes(t *testing.T, a, b Locker) {
 
 // The order is pinned to the one documented in docs/design/0.8/0.8.6-ha.md §3
 // and OPERATIONS.md: run operation, Azure DevOps run-token mint/revoke, AWS SSO (person, then credential),
-// Azure DevOps sign-in, the organisation MCP server key, document locks (site config before capability
+// Azure DevOps sign-in, the gateway audience, the organisation MCP server key, document locks (site config before capability
 // enforcement), the audit sweep last. Reordering the table inverts every
 // nesting it names, and the nestings the daemon really makes (the credential
 // erase takes AWS SSO then the sign-in; a capture takes a credential lock then
 // the site-config lock) run in the api suites under this order's enforcement.
 func TestLockOrderIsTheDocumentedOne(t *testing.T) {
 	want := []int32{RunOpLockClass, ADORunTokenLockClass, AWSSSOLockClass, AWSSSOCredentialLockClass, ADOSignInLockClass,
-		ComponentKeyLockClass, SiteConfigLockClass, CapEnforcementLockClass, AuditSweepLockClass}
+		GatewayAudienceLockClass, ComponentKeyLockClass, SiteConfigLockClass, CapEnforcementLockClass, AuditSweepLockClass}
 	if len(LockOrder) != len(want) {
 		t.Fatalf("LockOrder has %d classes, want %d", len(LockOrder), len(want))
 	}

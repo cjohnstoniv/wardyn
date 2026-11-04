@@ -82,6 +82,25 @@ no admin route opens whatever the type.
   - A run launched in the view takes the picked type's grants, governance profile, drives and run limits, and records that type.
   - Turn the switch on when an admin's own stamped type must bound the runs they launch.
 
+### Testing what members get
+
+Test in the **User view**, looking through the member type. Do not judge it from
+an admin's run outside the view.
+
+- With the switch off, a run from the admin token, local mode or an admin-role
+  personal token is ungoverned. It gets the deployment default, not a member's
+  profile.
+- A browser sign-in cannot launch in the Admin view (`409` `admin_view`). In the
+  User view the effective role is lowered, so the run takes the picked type's
+  profile and grants.
+- A security admin is never ungoverned. Its runs resolve against its stamped type.
+- A run that is ungoverned gets the deployment default only, not a member's profile or ceiling. The switch stays off by default, so an upgrade changes nothing.
+- Where admins sign in with SSO, we recommend turning on `WARDYN_GOVERN_ADMIN_RUNS`, with the steps under
+  [Constrained-admin mode](#constrained-admin-mode).
+  - It refuses Record Mode unless `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT=recording`.
+  - It also governs admin-role personal tokens, so check CI first.
+  - The admin token and local mode stay ungoverned either way.
+
 ## The no-credential preview — "Preview as a new user"
 
 The Permissions page header offers **Preview as a new user**. It's the
@@ -218,7 +237,8 @@ personal token. Their own runs are bounded by the governance profile and the
 capability grants that apply to them. That holds at every run seam: quotas, the
 drive and workspace-provider doors, owner revalidation and preset launch.
 `deny_interactive` and `deny_ui_apps` also bind the terminal, SSH and UI gateway
-on their own run.
+on their own run, and a watch of a background macOS run's desktop. Only the person
+who started that run can watch it.
 **Record Mode is refused** (`403` `recording_governed`), because that lane builds
 its own allow-all, credentialed sandbox and skips the member clamp on purpose.
 Setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording` restores it for that lane

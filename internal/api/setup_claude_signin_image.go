@@ -29,12 +29,36 @@ import (
 // login run itself, naming the image, which is cheaper than a false warning on
 // every k8s install.
 
+// claudeSignInBaseImageFix is the row's next step for the installer's agent-base pin:
+// a one-line install has no clone, so no make target.
+const claudeSignInBaseImageFix = "Build or supply an image with the Claude Code CLI (docs/operations/build-images.md, Claude sign-in image), " +
+	"set the claude-code entry of WARDYN_AGENT_IMAGES to it in the install's .env (~/.wardyn/.env by default), then run `docker compose up -d`."
+
 // claudeSignInImageState is resolveClaudeSignInImage's result.
 type claudeSignInImageState struct {
 	ref      string // the pinned ref, "" when unpinned
 	resolved bool   // ref is set AND (unverifiable-so-trusted OR confirmed present)
 	verified bool   // true when `resolved` came from an actual ImagePresent check
 	checkErr error  // the ImagePresent error when the check was inconclusive
+	noCLI    bool   // ref is Wardyn's agent-base image, which ships no vendor CLI: it can never sign in
+}
+
+// wardynBaseImageRepos are the repositories install.sh and compose name for agent-base.
+var wardynBaseImageRepos = map[string]bool{
+	"ghcr.io/cjohnstoniv/agent-base": true,
+	"wardyn/agent-base":              true,
+	"agent-base":                     true,
+}
+
+// imageRepository is ref without its digest or tag.
+func imageRepository(ref string) string {
+	if i := strings.IndexByte(ref, '@'); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') {
+		ref = ref[:i]
+	}
+	return ref
 }
 
 // resolveClaudeSignInImage is the one place that decides whether the Claude
@@ -44,6 +68,13 @@ func resolveClaudeSignInImage(ctx context.Context, images map[string]string, rnr
 	ref := strings.TrimSpace(images["claude-code"])
 	if ref == "" {
 		return claudeSignInImageState{}
+	}
+	// install.sh pins claude-code to the published agent-base image, which
+	// ships no coding agent, so the login sandbox built from it cannot run
+	// `claude`. Present or not, it is not a sign-in image. Only Wardyn's own
+	// names count: someone else's repository called agent-base may carry the CLI.
+	if wardynBaseImageRepos[imageRepository(ref)] {
+		return claudeSignInImageState{ref: ref, noCLI: true}
 	}
 	ic, ok := rnr.(runner.ImageChecker)
 	if !ok {
@@ -104,6 +135,15 @@ func claudeSignInImageCheck(ctx context.Context, images map[string]string, rnr r
 			Detail: "WARDYN_AGENT_IMAGES[\"claude-code\"] is not set, so the sign-in sandbox has no image " +
 				"carrying the vendor CLI — anthropic_subscription model providers are refused until it resolves.",
 			Fix: fix,
+		}
+	}
+	if st.noCLI {
+		return SetupCheck{
+			ID: id, Label: label, Status: "warn",
+			Detail: "WARDYN_AGENT_IMAGES[\"claude-code\"] is pinned to " + st.ref + ", Wardyn's agent base image, which " +
+				"ships no Claude Code CLI, so it cannot sign in — anthropic_subscription model providers are refused until " +
+				"it points at an image that carries the vendor CLI.",
+			Fix: claudeSignInBaseImageFix,
 		}
 	}
 	if st.resolved {

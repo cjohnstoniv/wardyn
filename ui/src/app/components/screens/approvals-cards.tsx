@@ -27,15 +27,18 @@ import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
-import { REAUTH_ROW, reauthAudience } from "../wardyn/model-access-copy";
+import { OIDC_HOLD_LANE, REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
+import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { resolveDoor } from "../../lib/model-access";
+import { isBackgroundRun } from "../../lib/run-entry";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { PUSH } from "../wardyn/copy/push";
 import { APPROVAL_WALLS } from "../wardyn/copy/personal-walls";
 import { PolicyRemedy, personalOwn } from "../wardyn/policy-remedy";
 import { useOwnerName } from "../../lib/use-owner-name";
+import { wallPresetApprovalSentence } from "./run-detail/wall-preset-run-lines";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
 import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
 import { useAgentName } from "../wardyn/use-agent-name";
@@ -57,9 +60,12 @@ export function ApprovalCard({
   onTakeOver,
   onDecline,
   refused = false,
+  presetBlocked = false,
 }: {
   item: ApprovalRequest;
   run?: RunDetail;
+  /** The server refused this approve because the run's wall preset denies the host (wall_preset_host). */
+  presetBlocked?: boolean;
   // A run that holds Azure DevOps tokens widens one when access is approved.
   tokenWidens?: boolean;
   // The viewer's own capability set, or null when the question doesn't apply
@@ -93,6 +99,14 @@ export function ApprovalCard({
   const view = useConsoleMode();
   const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal, view });
   const { status } = useShellSetupStatus();
+  // The run this approval gates, from the context row below's own fetch (B4 below says why it is read).
+  const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
+  const run = runProp ?? fetchedRun;
+  const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
+  // An endpoint sign-in's hold names its provider row by uid, which setup status maps to the provider: no match
+  // (not loaded, removed, or not this person's) reads as the generic wording with no door.
+  const oidcHold = oidcHoldProvider(reauth, status);
+  const holdAudience = oidcHold ? { ...reauth, signIn: oidcHold.name || oidcHold.id } : reauth;
   // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
   // personal reauth door either, even on the admin's own row — same rule as
   // the cockpit's ReauthRow, with a switch link back to it there instead. The
@@ -102,8 +116,16 @@ export function ApprovalCard({
   // A hold whose provider this person has no door for any more (removed, or no
   // agent of theirs uses it) gets its hint alone, never a button that opens
   // nothing — the failure block's rule (ProviderDoor).
-  const reauthDoor = reauthCanAct && (!reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
-  const banner = deriveBanner(item.kind, scope, reauthCanAct === reauth.canAct ? reauth : { ...reauth, canAct: reauthCanAct });
+  const reauthDoor =
+    reauthCanAct &&
+    (reauth.oidc
+      ? !!oidcHold && !!resolveDoor(status, { provider: oidcHold.id }, "user")
+      : !reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
+  const banner = deriveBanner(
+    item.kind,
+    scope,
+    reauthCanAct === reauth.canAct ? holdAudience : { ...holdAudience, canAct: reauthCanAct },
+  );
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
   // regardless of ownership — see canDecideApproval's doc for why. This list
@@ -136,13 +158,12 @@ export function ApprovalCard({
   // both leave the controls exactly as they were: the screen withdraws them on
   // a KNOWN terminal state, never on a guess, which is the same direction the
   // rest of this card errs in.
-  const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
-  const run = runProp ?? fetchedRun;
-  const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
   // The hold's provider is the run's own, so its name rides the run read (#996,
   // model_provider_name) for a viewer whose setup status does not list it. It is
   // not on the hold: that scope is the dedup key, identity only.
-  const reauthProvider = reauth.provider
+  const reauthProvider = reauth.oidc
+    ? (oidcHold?.name ?? oidcHold?.id ?? "")
+    : reauth.provider
     ? status?.model_providers?.find((p) => p.id === reauth.provider)?.name ||
       (run?.model_provider_id === reauth.provider ? run.model_provider_name : "") ||
       reauth.provider
@@ -158,7 +179,12 @@ export function ApprovalCard({
   // Deny stays, and the sentence and Why card say whose walls they are. Drawn once the run read has settled, since
   // the owner is the run's creator and "Your walls" would otherwise flash on an approver who is not the owner.
   const wallsBlocked = !!item.walls_block && !runEnded;
-  const wallsPolicy = { source: "personal", layer: "personal", owner: run?.created_by } as const;
+  // The run's wall preset, when it is what refused: named by the run read, which a non-owner reading a personal preset
+  // gets without a name. The card then speaks of the preset and its Why card says who chose it.
+  const presetName = presetBlocked ? run?.wall_preset?.name : undefined;
+  const wallsPolicy = presetBlocked && run?.wall_preset
+    ? ({ source: "wall_preset", layer: "wall_preset", owner: run.created_by, ...(presetName && { name: presetName }) } as const)
+    : ({ source: "personal", layer: "personal", owner: run?.created_by } as const);
 
   // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
   // raise) gets ITS OWN card, not this generic one: it needs fields
@@ -227,6 +253,7 @@ export function ApprovalCard({
         <TakeoverCard
           item={item}
           busy={takeoverBusy}
+          canTakeOver={!(run && isBackgroundRun(run))}
           onTakeOver={() => (onTakeOver ? onTakeOver() : void navigate(runPath(view, item.run_id)))}
           onDecline={async () => {
             setTakeoverBusy(true);
@@ -265,10 +292,10 @@ export function ApprovalCard({
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <ApprovalKindChip kind={item.kind} />
+        <ApprovalKindChip kind={item.kind} scope={scope} />
         <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-foreground">
           <KindIcon className="size-3.5 text-muted-foreground" />
-          {deriveTitle(item.kind, scope)}
+          {reauth.oidc && holdAudience.signIn ? OIDC_SIGN_IN.APPROVAL_LABEL(holdAudience.signIn) : deriveTitle(item.kind, scope)}
         </span>
         {cap && <Chip tone="warning">{cap}</Chip>}
         {/* notify-e4 (packet M6 S2): where this request sits on its notification
@@ -359,7 +386,7 @@ export function ApprovalCard({
              no tier can — the server answers 409 to either verb. The one
              control opens the same dialog every other sign-in surface opens. */
           reauthDoor ? (
-            <ReauthAction provider={reauth.provider} />
+            <ReauthAction provider={oidcHold?.id ?? reauth.provider} name={oidcHold ? oidcHold.name || oidcHold.id : undefined} />
           ) : reauthOwnRow ? (
             <OpenInUserView />
           ) : null
@@ -389,11 +416,17 @@ export function ApprovalCard({
 
       {wallsBlocked && host && run && (
         <div className="mt-2.5 space-y-2" data-testid="approval-walls-block">
-          <p className="text-sm text-foreground">
-            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsOwnerName)}
-            <span className="font-mono">{host}</span>
-            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_AFTER : APPROVAL_WALLS.OTHER_AFTER}
-          </p>
+          {presetName ? (
+            <p className="text-sm text-foreground">
+              {wallPresetApprovalSentence({ name: presetName, host, ownRun: personalOwn(wallsPolicy, principal), owner: wallsOwnerName }).map((part, i) => (i === 1 ? <span key={i} className="font-mono">{part}</span> : part))}
+            </p>
+          ) : (
+            <p className="text-sm text-foreground">
+              {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsOwnerName)}
+              <span className="font-mono">{host}</span>
+              {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_AFTER : APPROVAL_WALLS.OTHER_AFTER}
+            </p>
+          )}
           <PolicyRemedy policy={wallsPolicy} copyable />
         </div>
       )}
@@ -432,11 +465,16 @@ export function DecidedRow({
   // an expiry is a sweep nobody decided) and for every other kind.
   const scopeBadge = approvalScopeBadge(item);
   const view = useConsoleMode();
+  // A decided endpoint sign-in names its provider like the pending one does: the scope's uid, through setup status.
+  const { status } = useShellSetupStatus();
+  const hold = oidcHoldProvider({ oidc: scope.lane === OIDC_HOLD_LANE, holdUID: String(scope.provider_id ?? "") }, status);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
-      <ApprovalKindChip kind={item.kind} />
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
+      <ApprovalKindChip kind={item.kind} scope={scope} />
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+        {deriveTitle(item.kind, scope, hold ? hold.name || hold.id : undefined)}
+      </span>
       {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
@@ -475,15 +513,15 @@ export function DecidedRow({
  * everyone else reads the card's hint, which names whose sign-in is awaited,
  * and gets no control at all.
  */
-function ReauthAction({ provider }: { provider: string }) {
+function ReauthAction({ provider, name }: { provider: string; name?: string }) {
   const door = useModelAccessDoor();
   useClaimModelAccessDoor(true);
   // The hold's OWN provider's door (#543): the claude-code default may be
   // another AWS provider, whose sign-in cannot clear it.
   const open = () => door.openDoor(provider ? { for: { provider } } : undefined);
   return (
-    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={open}>
-      {REAUTH_ROW.action}
+    <Button size="sm" variant="info" aria-label={name ? OIDC_SIGN_IN.BUTTON(name) : REAUTH_ROW.ariaLabel} onClick={open}>
+      {name ? OIDC_SIGN_IN.BUTTON(name) : REAUTH_ROW.action}
     </Button>
   );
 }

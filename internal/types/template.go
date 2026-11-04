@@ -79,9 +79,10 @@ func (o TemplateOwner) Valid() bool {
 }
 
 // TemplateGroupAdmin is a bounded template-management grant: Person may
-// publish and edit templates for Group, and nothing else. An organisation
-// administrator writes and revokes it through an audited route. It is not a
-// general administrator role, and it is not implied by group membership.
+// publish and edit templates and wall presets for Group, and nothing else. An
+// organisation administrator writes and revokes it through an audited route.
+// It is not a general administrator role, and it is not implied by group
+// membership.
 type TemplateGroupAdmin struct {
 	Group     string `json:"group_id"`
 	Person    string `json:"person"`

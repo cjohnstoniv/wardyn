@@ -126,10 +126,11 @@ func newTestRelay(t *testing.T, f *fakeProxy) (*Relay, *vmnettest.Guest) {
 	return rl, vmnettest.Attach(t, rl.Serve)
 }
 
-// waitFor polls cond briefly: the relay reports and logs off the guest's path.
+// waitFor polls cond for up to 10 s: the relay reports and logs off the guest's path, and a loaded runner can
+// hold a report past its next flush.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if cond() {
 			return
 		}

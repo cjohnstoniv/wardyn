@@ -40,6 +40,9 @@ export interface GovernanceLimits extends RunLimits {
   // types.GovernanceLimits.DenyUIApps (#1391). The editor has no row for it
   // yet; it rides the limits object it saves back unchanged.
   deny_ui_apps?: boolean;
+  // types.GovernanceLimits.DenyBackgroundDesktopWatch: refuses watching a background macOS run's
+  // desktop. Absent means allowed (the watch is on by default); the profile editor's row writes it.
+  deny_background_desktop_watch?: boolean;
   // types.GovernanceLimits.DenyUserDrive (0.7 user drives) — the door the
   // profile editor's third LimitRow writes. A run under this profile mounts no
   // user drive even when one is allocated to the person; denyUserDrive's 403
@@ -51,6 +54,9 @@ export interface GovernanceLimits extends RunLimits {
   // yet and saves the stored value back unchanged; composing a profile moves it
   // into the overlay through LIMIT_FIELDS (profile-overlay.tsx).
   deny_member_drives?: boolean;
+  // types.GovernanceLimits.DenyKeptMachines — refuses keeping or resuming a macOS VM machine under this profile, on top of
+  // the site switch macos_vm.allow_kept_machines. False/absent inherits the switch.
+  deny_kept_machines?: boolean;
   // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
   // under this profile may not take. A deny list: absent means every placement
   // is permitted. The server refuses a profile denying both.
@@ -59,6 +65,11 @@ export interface GovernanceLimits extends RunLimits {
   // run under this profile may pick. An allow list: absent or empty allows any
   // base a Mac offers.
   allowed_macos_bases?: string[];
+  // types.GovernanceLimits.AllowedModels — the hosted models a run under this
+  // profile may ask for, written as the provider names them. An allow list:
+  // absent or empty is no limit. There is no deny-all value, so the console
+  // omits the key when the box is blank and never sends [].
+  allowed_models?: string[];
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
   // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and

@@ -10,6 +10,8 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -282,6 +284,7 @@ func (m *macOSVMs) setThermal(t string) {
 // the probe's thermal state. A probe that fails changes nothing.
 func (m *macOSVMs) tick(ctx context.Context) {
 	m.ticks++
+	m.keptSweepTick(ctx)
 	if m.ticks%macOSVMReprobeEvery != 0 || m.helper == "" {
 		return
 	}
@@ -356,4 +359,38 @@ func (m *macOSVMs) reasonDiskShort(c *runnerwire.MacVMCaps) {
 	if free, err := m.host.FreeDiskBytes(m.layout.Root); err == nil && free < need {
 		c.Reason, c.FreeGB = runnerwire.MacVMReasonDiskShort, int(free>>30)
 	}
+}
+
+// guestMemory is what one guest of this base takes: the per-run memory, or the base's minimum when that
+// is more (a run below it is refused at start).
+func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return max(m.perRunMemory, man.MinMemoryMiB<<20)
+}
+
+// The caps' refusal for a per-run limit below the base's minimum: the owner's MV-R47 (memory) and MV-R48
+// (CPU), with the runner's per-run amount, the base's minimum and the runner's id.
+const (
+	macOSVMMemoryBelowMinimum = "Per-run memory on this runner is %[1]s GB; a macOS VM needs at least %[2]d GB. Its owner raises it to %[2]d GB or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-memory %[2]d`."
+	macOSVMCPUBelowMinimum    = "Per-run CPU on this runner is %[1]d CPUs; a macOS VM needs at least %[2]d. Its owner raises it to %[2]d or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-cpu %[2]d`."
+)
+
+// belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
+// to raise, for this Mac's log, and the caps' refusal (design 6, "Guest size below minimum"), else "".
+func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal, reason string) {
+	m.mu.Lock()
+	mem, cpus := m.perRunMemory, m.perRunCPUs
+	m.mu.Unlock()
+	switch {
+	case mem != 0 && mem < man.MinMemoryMiB<<20:
+		gb := strconv.FormatFloat(math.Floor(float64(mem>>20)/1024*10)/10, 'f', -1, 64)
+		need := (man.MinMemoryMiB + 1023) >> 10
+		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB),
+			fmt.Sprintf(macOSVMMemoryBelowMinimum, gb, need, m.runnerID), runnerwire.MacVMReasonMemoryBelowMinimum
+	case cpus != 0 && cpus < man.MinCPUs:
+		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs),
+			fmt.Sprintf(macOSVMCPUBelowMinimum, cpus, man.MinCPUs, m.runnerID), runnerwire.MacVMReasonCPUBelowMinimum
+	}
+	return "", "", ""
 }

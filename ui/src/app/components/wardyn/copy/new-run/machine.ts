@@ -11,10 +11,13 @@ export const NR_MACHINE = {
   CONTAINER: "Container",
   VM: "Virtual machine",
   CONTAINER_HELP: "A sandbox container with a terminal. This is the default.",
-  VM_HELP: "A full desktop in its own virtual machine, with a browser. You open it from the run page.",
+  VM_HELP: "A virtual machine of its own, with its own kernel and a terminal. Choose its operating system below.",
+  OS_LINUX_HELP: "Runs the image you choose. To get a desktop you can open, use your own image with a desktop in it.",
+  MACOS_GIVES: "A terminal with your repository and agent set up, SSH access for your editor, and the desktop in the browser: view-only, or with control where the Mac allows it. A window on the Mac is available when your organisation enables it and this run is eligible.",
+  // UXR-1: a VM's terminal opens a shell, so the Harnesses step shows the start switch off and says why.
+  VM_STARTS_SHELL: "A virtual machine's terminal opens a shell in this release. Start the agent from that shell.",
   OS_LABEL: "Operating system",
   OS_LINUX: "Linux",
-  OS_LATER: "macOS and Windows virtual machines arrive when your organisation adds a pool that can run them.",
   BARRIER_LABEL: "Barrier",
   BARRIER_VM: "The virtual machine",
   BARRIER_VM_WHY: "Its own machine with its own kernel, so there is nothing to pick. Fence, Wall and Vault are container barriers.",
@@ -28,7 +31,6 @@ export const NR_MACHINE = {
     "Copy and paste aren't available on VM desktops yet. When they are, the run's paste in and copy out rules apply. The filter is not a boundary against a run built to get data out: the run controls what its screen shows.",
   // macOS virtual machines (MV-N*, MV-C*, MV-E*): the strings are the approved canon, ids in the comments.
   OS_MACOS: "macOS", // MV-N01
-  OS_WINDOWS_LATER: "Windows virtual machines arrive when your organisation adds a pool that can run them.", // MV-N02
   MACOS_ABOUT: (guestOS: string) => `${guestOS}, set up on the Mac itself from Apple's download. Each Mac runs at most 2.`, // MV-N03
   MACOS_SIZE: (cpu: string, mem: string) => `CPU and memory start at the macOS minimum, ${cpu} CPU and ${mem} MiB. You can raise them on Review.`, // MV-N04
   MACOS_POOL_NOT_OFFERED: "Every runner in this pool must offer macOS VMs, and at least one doesn't. Choose a pool of Macs that offer them, or ask an admin to make one.", // MV-N05

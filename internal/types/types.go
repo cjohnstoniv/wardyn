@@ -92,6 +92,9 @@ var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 // how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
 // (runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity, runner_pool_recording_store_off,
 // scheduled or owner_sign_in). A scheduled run also carries its start time and the time zone it was given in.
+// LimitSentence is the wait sentence of a run held back by its runners' limits, naming the limit as the
+// runners stand now; set only on a single-run read by the run's owner or an admin, and absent when it
+// cannot be worked out, which leaves the sentence the reason alone gives.
 type RunQueue struct {
 	PoolID     uuid.UUID  `json:"pool_id"`
 	QueuedAt   time.Time  `json:"queued_at"`
@@ -100,6 +103,8 @@ type RunQueue struct {
 	Reason     string     `json:"reason"`
 	StartAt    *time.Time `json:"start_at,omitempty"`
 	TimeZone   string     `json:"time_zone,omitempty"`
+
+	LimitSentence string `json:"limit_sentence,omitempty"`
 }
 
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
@@ -198,6 +203,10 @@ type AgentRun struct {
 	LocalFolder *RunLocalFolder `json:"-"`
 	SandboxRef  string          `json:"sandbox_ref,omitempty"`
 	Image       string          `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	// ImageInput is the image ref create held to the digest rule (images.require_digest): the ref the member
+	// named or an attached workspace's base image set, "" when the run named none (the convention image),
+	// nil for a run created before 0249. A revive re-runs create's decision on it (site_config_images.go).
+	ImageInput *string `json:"-"`
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -206,6 +215,9 @@ type AgentRun struct {
 	// Shape is the New Run shape the run was set up from, frozen at create: the request's own, else the one shape
 	// its experience, workload and tools fit. Empty when they fit more than one, for an older client, or before 0245.
 	Shape RunShape `json:"shape,omitempty"`
+	// CorrelationID is the caller's own reference for the run (POST /runs correlation_id), stored once at create. It rides in the
+	// data of the run's audit rows as they reach the audit sinks, never in the stored row, and is never a metric label.
+	CorrelationID string `json:"correlation_id,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
@@ -224,6 +236,8 @@ type AgentRun struct {
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
 	// InnerWalls freezes the harness's own walls the run launched with (#2822); nil for a run with no catalog harness, or one created before this field.
 	InnerWalls *HarnessInnerWalls `json:"inner_walls,omitempty"`
+	// WallPreset is the frozen copy of the wall preset the run was launched with, taken at create and at a queued start; nil for none. Its spec never reaches the wire: the run read sends client.RunWallPreset.
+	WallPreset *WallPresetOnRun `json:"-"`
 	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
 	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
@@ -262,8 +276,10 @@ type AgentRun struct {
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
-	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal.
-	HasRecording         bool          `json:"has_recording"`
+	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
+	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
+	// projected run always carries it, true or false.
+	HasRecording         *bool         `json:"has_recording,omitempty"`
 	RecordingBytes       int64         `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64       `json:"recording_duration_sec,omitempty"`
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved

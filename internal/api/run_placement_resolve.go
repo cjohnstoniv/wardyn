@@ -159,12 +159,7 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if demand.requireRecording, refusal = s.poolRecordingDemand(org, row.Pool); refusal != nil {
 		return runPlacement{}, refusal
 	}
-	// A macOS VM is not recorded in this release, so a requirement refuses it here, in its own words
-	// (macOSVMRecordingRefusal), rather than as a pool whose runners do not record.
-	if demand.requireRecording && types.MachineKind(f.req.MachineKind).IsMacOSVM() {
-		return runPlacement{}, placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"},
-			macOSVMRecordingRefusal(types.RecordingChoice{Required: true}))
-	}
+	demand.requireRecording = runnerRecordingDemand(demand.requireRecording, types.MachineKind(f.req.MachineKind))
 	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
 		return runPlacement{}, refusal
@@ -260,6 +255,14 @@ func (s *Server) poolRecordingDemand(org types.RunnerPoolDefaults, pool types.Ru
 		return true, runError(reason.Status(), string(reason), msg)
 	}
 	return required, nil
+}
+
+// runnerRecordingDemand is whether a run under a recording requirement (required) asks its runner to
+// record: a macOS VM's runner never does (the organisation records the run itself: its terminal
+// sessions, its agent's output and its watched desktop), so it asks none. A deployment with no recording
+// store is refused before this (poolRecordingDemand) for every kind.
+func runnerRecordingDemand(required bool, kind types.MachineKind) bool {
+	return required && !kind.IsMacOSVM()
 }
 
 // anyAtCapacity reports whether one of the kinds was refused only because its runners have no room now.

@@ -8,7 +8,7 @@
 // may not USE carries only its id, name, scope and owner), and the organization default.
 //
 // The per-pool reads are bounded, because the list grows with people: the first load and a Retry read every
-// pool, four at a time; the silent re-read (every 30 s while the tab is visible, after a write, and when a
+// pool, four at a time; the silent re-read (every 30 s while the tab is visible and the console is signed in, after a write, and when a
 // pool's details open) asks only for the list, the default, any pool it has not read yet and the pool whose
 // details are open. So a poll is two or three requests however many pools there are, the details open on
 // the pool as it is now, and another administrator's change to a pool that is not open shows when its
@@ -20,6 +20,7 @@ import * as React from "react";
 import { HttpError } from "../../../../lib/api/core";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import type { RunnerPool, RunnerPoolCatalogueEntry } from "../../../../lib/types/runner-pools";
+import { useLoad } from "../use-load";
 
 export const POLL_MS = 30_000;
 
@@ -79,58 +80,39 @@ async function readAll(known: Map<string, RunnerPool> | undefined, open: string 
 
 export function usePoolsData(openPoolId: string | null): PoolsData & { reload: () => void; retry: () => void } {
   const [data, setData] = React.useState<PoolsData>(EMPTY);
-  const seq = React.useRef(0);
   // What the last read knew, and the open pool, as the next silent read sees them.
   const known = React.useRef(new Map<string, RunnerPool>());
   const open = React.useRef(openPoolId);
   open.current = openPoolId;
 
-  // A read that was in flight when the tab went away must not set state.
-  const abandon = React.useCallback(() => {
-    seq.current++;
-  }, []);
-
-  const read = React.useCallback((silent: boolean) => {
-    const mine = ++seq.current;
-    if (!silent) setData((d) => ({ ...d, status: "loading" }));
-    readAll(silent ? known.current : undefined, open.current)
-      .then((r) => {
-        if (mine !== seq.current) return;
+  const read = useLoad(
+    {
+      fetch: (silent) => readAll(silent ? known.current : undefined, open.current),
+      start: () => setData((d) => ({ ...d, status: "loading" })),
+      ok: (r) => {
         known.current = new Map(r.entries.map((e) => [e.pool.id, e.pool]));
         setData({ status: "ready", message: "", ...r });
-      })
-      .catch((e: unknown) => {
-        if (mine !== seq.current) return;
-        // A silent read that failed says nothing on a tab that is showing pools, but one that overtook a
-        // full load is the only answer that load will get: leaving "loading" up would never offer Retry.
+      },
+      // A silent read that failed says nothing on a tab that is showing pools, but one that overtook a
+      // full load is the only answer that load will get: leaving "loading" up would never offer Retry.
+      fail: (e, silent) =>
         setData((d) => {
           if (silent && d.status !== "loading") return d;
           return e instanceof HttpError && e.status === 501 ? { ...EMPTY, status: "unavailable", message: e.message } : { ...d, status: "error" };
-        });
-      });
-  }, []);
-
-  React.useEffect(() => {
-    read(false);
-    const tick = () => document.visibilityState === "visible" && read(true);
-    const id = setInterval(tick, POLL_MS);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", tick);
-      abandon();
-    };
-  }, [read, abandon]);
+        }),
+    },
+    POLL_MS,
+  );
 
   // Opening a pool's details reads that pool then, not at the next tick: its state and revision are what the
   // sheet shows and what Switch off sends back. The first load has just read every pool.
   const mounted = React.useRef(false);
   React.useEffect(() => {
-    if (mounted.current && openPoolId) read(true);
+    if (mounted.current && openPoolId) void read(true);
     mounted.current = true;
   }, [openPoolId, read]);
 
-  const reload = React.useCallback(() => read(true), [read]);
-  const retry = React.useCallback(() => read(false), [read]);
+  const reload = React.useCallback(() => void read(true), [read]);
+  const retry = React.useCallback(() => void read(false), [read]);
   return { ...data, reload, retry };
 }

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { KEPT_MACHINE_REASON } from "../../../../lib/kept-machine-refusals";
 import { SCHEDULE_REASONS } from "../../../../lib/schedule-refusals";
 import { describe, expect, it } from "vitest";
 import { NEW_RUN_REASON, PLACEMENT_REASONS, WORKSPACE_DOOR_REASONS } from "../../../../lib/new-run-refusals";
@@ -27,7 +28,11 @@ describe("field homes (U7)", () => {
     expect(homeOfRefusal("placement_capability", "machine_kind")).toBe("run");
     expect(homeOfRefusal("placement_capability", "harness")).toBe("harnesses");
     expect(homeOfRefusal("placement_capability", "resources")).toBe("review");
+    expect(homeOfRefusal("placement_capability", "interactive_start")).toBe("harnesses");
     expect(homeOfRefusal("runner_posture_unmet", "machine_kind")).toBe("run");
+    // Every window refusal names desktop_window, whatever its reason; the Run step sets it.
+    expect(homeOfRefusal("governance_unit", "desktop_window")).toBe("run");
+    expect(homeOfRefusal("mac_window_site_off", "desktop_window")).toBe("run");
     expect(homeOfRefusal("placement_capability")).toBe(homeOfReason("placement_capability"));
     expect(homeOfRefusal("placement_capability", "pause_idle_after_sec")).toBe(homeOfReason("placement_capability"));
   });
@@ -45,6 +50,9 @@ describe("field homes (U7)", () => {
 
   it("keep the launch-only and origin fields out of every step", () => {
     for (const name of ["title", "description", "mode_contract"]) expect(FIELD_HOME[name], name).toBe("excluded");
+    // A window on the Mac is chosen at each launch, so Save as never keeps it; Review shows it under Where it runs.
+    expect(FIELD_HOME.desktop_window).toBe("excluded");
+    expect(REVIEW_GROUP_OF_FIELD.desktop_window).toBe("where");
   });
 
   it("name subpath homes only under registry fields", () => {
@@ -53,7 +61,7 @@ describe("field homes (U7)", () => {
 
   it("give every reason the console names a step, and send an unknown one to Review", () => {
     const known = [
-      ...Object.values(NEW_RUN_REASON), ...PLACEMENT_REASONS, ...Object.values(RUN_MODE_REASON),
+      ...Object.values(KEPT_MACHINE_REASON), ...Object.values(NEW_RUN_REASON), ...PLACEMENT_REASONS, ...Object.values(RUN_MODE_REASON),
       ...RUNNER_POOL_REASONS, ...SCHEDULE_REASONS, ...Object.values(TEMPLATE_REASON), ...WORKSPACE_DOOR_REASONS,
     ];
     expect(sortedKeys(HOME_OF_REASON)).toEqual([...new Set(known)].sort());
@@ -61,6 +69,8 @@ describe("field homes (U7)", () => {
     expect(homeOfReason("placement_credential")).toBe("run"); // fixed by choosing another runner or pool, not a tool
     expect(homeOfReason("run_shape_conflict")).toBe("shape");
     expect(homeOfReason("something_new")).toBe("review");
+    // A refusal of the run's kept machine is fixed on the Run step, where the machine is chosen.
+    for (const reason of Object.values(KEPT_MACHINE_REASON)) expect(homeOfReason(reason), reason).toBe("run");
   });
 
   it("sends the workspace-door refusals to Files, not Review", () => {

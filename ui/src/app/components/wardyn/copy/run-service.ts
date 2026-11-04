@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { AgentRun, RunService } from "../../../lib/types";
+import type { AgentRun, RunService, ServiceHealthState } from "../../../lib/types";
 
 // The words of a service, a background command Wardyn keeps running: New Run's "Keep it running", the health chip
 // on the run list and run page, the Service panel and the Review row. Byte for byte from the approved mocks (r15 T1-a,
@@ -23,6 +23,9 @@ export const SERVICE_FORM = {
   SECONDS: "seconds",
   FAILURES_LABEL: "Unhealthy after",
   FAILED_CHECKS: "failed checks in a row",
+  PROBE_LABEL: "Also check it from Wardyn",
+  PROBE_HELP: "Every minute Wardyn asks the port itself instead of only trusting the sandbox's report. It reaches the port through the sandbox, so it is not a check from the network outside. The lease is renewed only while both say the service is healthy or starting.",
+  PROBE_NEEDS_PORT: "Name a port above to turn this on.",
 } as const;
 
 /** The field errors under the form's inputs: the server's limits (internal/types/service.go) said before launch. Not in the mocks. */
@@ -63,7 +66,74 @@ export const SERVICE_PANEL = {
   REASON_OLD_IMAGE: "This image's runner tools are older than services, so the command is not restarted or checked. Wrap the image again with this release.",
   REASON_UNREACHABLE: "Wardyn could not read the service's health. Its runner may be offline.",
   FOOTNOTE: "Health is reported from inside the sandbox.",
+  // Wardyn's own check (service.health.probe: control_plane): its row, its findings, the notes and the lease.
+  SANDBOX_SAYS: "Sandbox says",
+  PROBE: "Wardyn's check",
+  PROBE_HTTP: (path: string, status: number) => `GET ${path} answered ${status}.`,
+  PROBE_TCP: (port: number) => `Port ${port} accepted a connection.`,
+  PROBE_REFUSED: (port: number) => `Port ${port} refused the connection.`,
+  PROBE_TIMEOUT: "No answer within 5 s.",
+  PROBE_BAD_ANSWER: "The answer was not an HTTP status line Wardyn could read.",
+  PROBE_FIRST_FAIL: (why: string, n: number) => `The last check failed: ${why} Unhealthy after ${n} in a row.`,
+  PAUSED: "Not checked while the run is paused.",
+  PROBE_NONE_YET: "No result of Wardyn's check has been received yet.",
+  DISAGREE_PROBE_FAILS: (port: number) => `The sandbox says the service is healthy, but Wardyn's check of port ${port} failed. The lease is not renewed while the two disagree.`,
+  DISAGREE_SANDBOX_FAILS: (port: number) => `The sandbox says the service is unhealthy, but port ${port} answers Wardyn's check. The lease is not renewed while the two disagree.`,
+  LEASE_BOTH: (ends: string) => `Renewed while both checks say healthy or starting · ends ${ends} if renewal stops`,
+  LEASE_NOT_NOW: (ends: string) => `Not renewed now · ends ${ends}`,
+  FOOTNOTE_PROBE: "Wardyn's check reaches the port through the sandbox, not from the network outside it. A service that answers its health check passes, whatever else is wrong with it. The sandbox's health is its own report.",
 } as const;
+
+/** Whether the frozen spec opted in to Wardyn's own check of the port. */
+export const probeOn = (s: RunService | undefined): boolean => s?.health?.probe === "control_plane";
+
+/** Worst first, as Go's types.WorseServiceHealth: a word it does not know ranks as unknown. */
+const HEALTH_RANK: Record<ServiceHealthState, number> = { unhealthy: 0, unknown: 1, starting: 2, healthy: 3 };
+const rankOf = (h: string): number => HEALTH_RANK[h as ServiceHealthState] ?? HEALTH_RANK.unknown;
+
+/** The worse of two readings: unhealthy, then unknown, starting, healthy. */
+export function worseHealth(a: string, b: string | undefined): ServiceHealthState {
+  const w = b !== undefined && rankOf(b) < rankOf(a) ? b : a;
+  return w in HEALTH_RANK ? (w as ServiceHealthState) : "unknown";
+}
+
+// Go's serviceSupervisorGrace and serviceStatusStale (internal/api/run_service_health.go, run_service_lease.go).
+export const SERVICE_SUPERVISOR_GRACE_MS = 10 * 60_000;
+export const SERVICE_STATUS_STALE_MS = 15 * 60_000;
+
+type ServiceRunTimes = Partial<Pick<AgentRun, "created_at" | "admitted_at">>;
+
+/** A reading not yet made: starting inside the supervisor's grace from the run's start, unknown after it (Go's rule). */
+function missingHealth(run: ServiceRunTimes, now: number): ServiceHealthState {
+  const since = Date.parse(run.admitted_at ?? run.created_at ?? "");
+  return now - since < SERVICE_SUPERVISOR_GRACE_MS ? "starting" : "unknown";
+}
+
+/**
+ * Wardyn's check as it is shown, for a spec that opted in: its reading, or with none yet the grace rule renewal reads
+ * (Go's probeRenewalHealth). Undefined when the spec did not opt in.
+ */
+export function shownProbeHealth(run: ServiceRunTimes & Pick<AgentRun, "service" | "service_status">, now: number): ServiceHealthState | undefined {
+  if (!probeOn(run.service)) return undefined;
+  const p = run.service_status?.probe;
+  return p ? worseHealth(p.health, undefined) : missingHealth(run, now);
+}
+
+/**
+ * Whether the service's health lets its lease renew now: Go's renewableServiceHealth over the readings the API serves
+ * (a paused or stale one already reads unknown). Each reading must be starting or healthy; a missing one counts as
+ * starting inside the supervisor's grace from the run's start and unknown after it; Wardyn's check counts only when
+ * the spec opted in. The lease line's "Not renewed now" is this function's false, nothing else.
+ */
+export function serviceHealthRenews(run: ServiceRunTimes & Pick<AgentRun, "service" | "service_status">, now: number): boolean {
+  const read = (r: { health: string; observed_at: string } | undefined): string => {
+    if (!r) return missingHealth(run, now);
+    return now - Date.parse(r.observed_at) > SERVICE_STATUS_STALE_MS ? "unknown" : r.health;
+  };
+  const renews = (h: string) => h === "starting" || h === "healthy";
+  const st = run.service_status;
+  return renews(read(st)) && (!probeOn(run.service) || renews(read(st?.probe)));
+}
 
 /** "40 s ago", "6 min ago", "2 h ago": the panel's own clock, finer than the board's "just now". */
 export function agoText(iso: string, now: number): string {
@@ -80,6 +150,7 @@ export function serviceReviewLine(s: RunService): string {
   if (s.port && s.health) {
     const h = s.health;
     parts.push(`checks port ${s.port}${h?.path ? ` ${h.path}` : ""} every ${h?.interval_sec || DEFAULT_HEALTH_INTERVAL_SEC} s`);
+    if (probeOn(s)) parts.push("Wardyn also checks it every minute");
   }
   return parts.join(" · ");
 }
@@ -103,12 +174,14 @@ export const SERVICE_HEALTH: Record<"starting" | "healthy" | "unhealthy" | "unkn
 /**
  * What a live service's chip says in place of "Running", on the run list and the run page: its health, then
  * "· 1 restart" or "· N restarts". A service with no observation yet reads as starting, the way wardynd counts it.
- * Absent for any other run, and for a run that is not RUNNING.
+ * With Wardyn's own check opted in, the word is the worse of the two, a missing check reading counted as the panel
+ * shows it (shownProbeHealth). Absent for any other run, and for a run that is not RUNNING.
  */
-export function serviceBadge(run: Pick<AgentRun, "state" | "service" | "service_status">): ServiceBadge | undefined {
+export function serviceBadge(run: ServiceRunTimes & Pick<AgentRun, "state" | "service" | "service_status">, now = Date.now()): ServiceBadge | undefined {
   if (run.state !== "RUNNING" || !run.service) return undefined;
   const st = run.service_status;
-  const base = SERVICE_HEALTH[st?.health ?? "starting"] ?? SERVICE_HEALTH.unknown;
+  const sandbox = st ? st.health : "starting";
+  const base = SERVICE_HEALTH[worseHealth(sandbox, probeOn(run.service) ? shownProbeHealth(run, now) : st?.probe?.health)];
   const n = st?.restarts ?? 0;
   return n > 0 ? { ...base, word: `${base.word} · ${n} ${n === 1 ? "restart" : "restarts"}` } : base;
 }

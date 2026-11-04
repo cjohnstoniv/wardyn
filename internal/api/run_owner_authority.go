@@ -337,6 +337,9 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 	if err != nil {
 		return false, err
 	}
+	// A prefix allow does not open another tag or digest of a restricted
+	// repository (capRead.granted).
+	prefixBlocked := kind == capImage && batch.imageSiblingRestricted(value)
 	sub = types.CanonicalUserSubject(sub)
 	allow := false
 	for _, g := range grants {
@@ -344,13 +347,14 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 			continue
 		}
 		if g.Effect == types.CapabilityDeny {
-			if capValueOverlaps(kind, g.Value, value) {
+			if capDenyOverlaps(kind, g.Value, value) {
 				return false, nil
 			}
 			continue
 		}
 		if capValueMatches(kind, g.Value, value) &&
 			(!restricted || strings.TrimSpace(g.Value) == strings.TrimSpace(value)) &&
+			(!prefixBlocked || !isImagePrefixGrant(g.Value)) &&
 			(g.SubjectType == types.CapabilitySubjectAll || (g.SubjectType == types.CapabilitySubjectUser && g.Subject == sub) ||
 				(g.SubjectType == types.CapabilitySubjectUserType && g.Subject == userType)) {
 			allow = true
@@ -628,7 +632,11 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 			return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check local placement authority", err))
 		}
 	}
-	ref, err := s.ownerCapabilityRefusal(ctx, run, actor == run.CreatedBy, runRepos(run, cfg))
+	// First, so a provider edited after the run started reads as that, with the new-run step.
+	ref, err := s.gatewayIdentityRefusal(ctx, cfg)
+	if err == nil && ref == nil {
+		ref, err = s.ownerCapabilityRefusal(ctx, run, actor == run.CreatedBy, runRepos(run, cfg))
+	}
 	if err == nil && ref == nil {
 		ref, err = s.modelProviderRefusal(ctx, run)
 	}

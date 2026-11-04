@@ -637,7 +637,9 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 
 // auditDriveMount records run.drive.mount, one row per drive dispatch attached
 // to this sandbox, in the run's order. Silent when no drive was attached — an audit action
-// that fires on every run is noise an operator learns to skip past.
+// that fires on every run is noise an operator learns to skip past. A macOS VM
+// run's `target` is the guest's path (runner.MacGuestPath); the mount keeps the
+// container path.
 //
 // Called AFTER CreateSandbox has returned, never beside the spec assembly: the
 // driver re-runs the drive's ceiling and deny matrix at bind time and can still
@@ -688,9 +690,13 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, drives []types.DriveMount) {
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount) {
 	for i := range drives {
 		drive := &drives[i]
+		target := drive.Target
+		if machine.IsMacOSVM() {
+			target = runner.MacGuestPath(target)
+		}
 		data := map[string]any{
 			"backend":     drive.Backend,
 			"drive":       drive.HomeName,
@@ -698,7 +704,7 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy
 			"enforcement": drive.Enforcement,
 			"mode":        driveAuditMode(drive.ReadOnly),
 			"object":      driveAuditTarget(drive),
-			"target":      drive.Target,
+			"target":      target,
 		}
 		if drive.Team {
 			data["team"], data["mounted_by"] = true, mountedBy
@@ -818,7 +824,12 @@ func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb run
 	if !ok {
 		return errors.New("this store cannot record a VM's machine")
 	}
-	return st.SetRunVMMachine(ctx, run.ID, *sb.Machine)
+	// One write with the machine, so a later boot's report replaces an earlier one's and a lost write
+	// ends the boot. The report is taken from the Sandbox field, never what the runner put in Machine.
+	m := *sb.Machine
+	m.DesktopViewOnlyAsked = run.MachineKind.IsMacOSVM() && run.BackgroundOnly()
+	m.DesktopForcedViewOnly = m.DesktopViewOnlyAsked && sb.DesktopForcedViewOnly
+	return st.SetRunVMMachine(ctx, run.ID, m)
 }
 
 // abortUnrecordedSandbox ends a dispatch whose sandbox ref could not be recorded, while this dispatch

@@ -25,6 +25,31 @@ describe("audit sentences", () => {
     expect(inboundDetail(failed)).toBeNull();
   });
 
+  it("says a failed session.recording.write row could not save the recording, with its reason as the detail; a success row is unchanged", () => {
+    const failed = ev("session.recording.write", "run-1~agent", { outcome: "failure", data: { session: "agent", reason: "mask_gap" } });
+    expect(describeTabEvent(failed)).toBe("Could not save the terminal recording — run-1~agent");
+    expect(describeTabAction(failed)).toBe("Could not save the terminal recording");
+    expect(inboundDetail(failed)).toBe("reason: mask_gap");
+    expect(inboundDetail(ev("session.recording.write", "run-1~agent", { outcome: "failure" }))).toBeNull();
+    const saved = ev("session.recording.write", "run-1~agent", { data: { session: "agent", reason: "ignored" } });
+    expect(describeTabEvent(saved)).toBe("Recorded the terminal session — run-1~agent");
+    expect(inboundDetail(saved)).toBeNull();
+  });
+
+  it("words a gateway token mint row on both tables, and leaves an outcome it does not know as the raw action", () => {
+    const signed = ev("gateway_identity.mint", "corp-gateway");
+    const refused = ev("gateway_identity.mint", "old-gateway", { outcome: "denied" });
+    expect(describeEvent(signed)).toBe("Signed a gateway token for corp-gateway");
+    expect(describeEvent(refused)).toBe("Refused a gateway token for old-gateway");
+    expect(describeAction(signed)).toBe("Signed a gateway token");
+    expect(describeTabEvent(signed)).toBe("Signed a gateway token for corp-gateway");
+    expect(describeTabEvent(refused)).toBe("Refused a gateway token for old-gateway");
+    expect(describeTabAction(refused)).toBe("Refused a gateway token for");
+    expect(describeTabEvent(ev("gateway_identity.mint", ""))).toBe("Signed a gateway token for an unknown provider");
+    expect(describeEvent(ev("gateway_identity.mint", "p", { outcome: "failure" }))).toBe("gateway_identity.mint — p");
+    expect(describeTabEvent(ev("gateway_identity.mint", "p", { outcome: "failure" }))).toBe("gateway_identity.mint — p");
+  });
+
   it("joins the target to the sentence for the whole line, and leaves it off the action", () => {
     expect(describeEvent(ev("run.create", "r1"))).toBe("Created the run — r1");
     expect(describeAction(ev("run.create", "r1"))).toBe("Created the run");
@@ -138,5 +163,47 @@ describe("service audit rows", () => {
     expect(inboundDetail(ev("inbound.allow", "api", { data: { method: "GET", path: "/" } }))).toBe("GET /");
     expect(inboundDetail(ev("inbound.allow", "api"))).toBeNull();
     expect(inboundDetail(ev("egress.allow", "a.example", { data: { method: "GET", path: "/" } }))).toBeNull();
+  });
+
+  // A destructive admin verb reads by its outcome, so a failed or refused row never says it was done above its badge.
+  it.each([
+    ["person.erasure", "Erased a person's data", "Person data erasure failed", "Person data erasure refused"],
+    ["credential.erase", "Erased a person's stored credentials", "Credential erasure failed", "Credential erasure refused"],
+    ["person.deprovision", "Deprovisioned a person", "Person deprovisioning failed", "Person deprovisioning refused"],
+    ["service_identity.retire", "Retired a service identity", "Retiring a service identity failed", "Retiring a service identity refused"],
+    ["token.revoke", "Revoked an API token", "Revoking an API token failed", "Revoking an API token refused"],
+    ["session.revoke", "Signed a person out everywhere", "Signing a person out failed", "Signing a person out refused"],
+    ["access.role_mapping.delete", "Removed a role mapping", "Removing a role mapping failed", "Removing a role mapping refused"],
+    ["template.delete", "Deleted a template", "Deleting a template failed", "Deleting a template refused"],
+    ["audit.retention.partition_dropped", "Dropped an audit partition", "Dropping an audit partition failed", "Dropping an audit partition refused"],
+    ["scim.user.deactivate", "Deactivated by your identity provider", "Deactivation by your identity provider failed", "Deactivation by your identity provider refused"],
+  ])("%s reads by its outcome", (action, done, failed, refused) => {
+    expect(describeTabEvent(ev(action, "t1"))).toBe(`${done} — t1`);
+    expect(describeTabEvent(ev(action, "t1", { outcome: "failure" }))).toBe(`${failed} — t1`);
+    expect(describeTabEvent(ev(action, "t1", { outcome: "denied" }))).toBe(`${refused} — t1`);
+    expect(describeTabAction(ev(action, "t1", { outcome: "failure" }))).toBe(failed);
+  });
+
+  it("a person.erasure that failed on an unknown scope is not worded as an erasure", () => {
+    const row = ev("person.erasure", "priya@acme.io", { outcome: "failure", data: { reason: "erasure_scope_unknown" } });
+    expect(describeTabEvent(row)).toBe("Person data erasure failed — priya@acme.io");
+  });
+
+  it("a success row that kept some data reads as partial, not as completed", () => {
+    expect(describeTabEvent(ev("person.erasure", "p", { data: { not_erased: { drives: 1 } } }))).toBe("Erased part of a person's data — p");
+    expect(describeTabEvent(ev("person.deprovision", "p", { data: { not_erased: { drives: 1 } } }))).toBe("Deprovisioned a person; some data was kept — p");
+    expect(describeTabEvent(ev("person.erasure", "p", { data: { scopes: ["credentials"] } }))).toBe("Erased a person's data — p");
+  });
+});
+
+describe("a prompt left to a model gateway", () => {
+  const left = (action: string, deferred?: string) => ev(action, "gateway.example.com", deferred ? { data: { deferred_to: deferred } } : {});
+
+  it("reads as left to the provider on both surfaces, only for the skip row that names one", () => {
+    expect(AUDIT.SCAN_LEFT_TO).toBe("Left prompt checks to");
+    expect(describeEvent(left("llm.scan.skip", "corp-gateway"))).toBe("Left prompt checks to corp-gateway");
+    expect(describeTabEvent(left("llm.scan.skip", "corp-gateway"))).toBe("Left prompt checks to corp-gateway");
+    expect(describeEvent(left("llm.scan.skip"))).toBe("LLM content scan (skip) for gateway.example.com");
+    expect(describeEvent(left("llm.scan.block", "corp-gateway"))).toBe("LLM content scan (block) for gateway.example.com");
   });
 });

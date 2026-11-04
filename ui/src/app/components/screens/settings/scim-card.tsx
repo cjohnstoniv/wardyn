@@ -196,7 +196,7 @@ export function ScimCard() {
       <p className="text-body leading-snug text-muted-foreground">{SCIM.LEAD}</p>
       <div className="mt-3">
         {state === "loading" && <TableSkeleton rows={2} cols={3} />}
-        {state === "error" && <ErrorState onRetry={load} />}
+        {state === "error" && <ErrorState as="h4" onRetry={load} />}
         {state === "ready" && status && !status.configured && (
           <>
             <p className="text-body text-foreground">{SCIM.OFF_BODY}</p>

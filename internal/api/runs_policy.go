@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // Pagination defaults for the public list endpoints. defaultListLimit is what an
@@ -233,9 +234,11 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// a single run's own detail read must agree with what the list showed.
 	// The recording fields are always filled here: a default read that said
 	// has_recording false for a stored recording read as a lost one (#3705).
+	stored := run // the window's prep check reads the stored status_detail, which the projection blanks
 	runs := []types.AgentRun{run}
 	s.fillRecordingMeta(r.Context(), runs)
 	s.projectStatusDetailFor(r, runs)
+	s.projectQueueLimit(r, &runs[0]) // this route alone: a list, even of one row, never pays for it
 	s.projectRunnerFacts(r, runs)
 	redactRunRepos(runs)
 	run = runs[0]
@@ -287,11 +290,29 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
 		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
 		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
+		// AllowedModels is the governed allowed-models list the run's proxy was handed at dispatch and the
+		// profile that set it (run_allowed_models.go); absent when no limit binds the run.
+		AllowedModels *client.RunAllowedModels `json:"allowed_models,omitempty"`
 		// MacOS is a macOS VM run's desktop as its Mac offers it (run_macos_view.go); absent on every other run.
 		MacOS *runMacOSView `json:"macos,omitempty"`
+		// BackgroundWatch is whether this caller may watch a running background macOS VM run's desktop, and
+		// if not why (run_background_watch.go); absent on every other run. Beside macos, which an offline
+		// runner leaves absent.
+		BackgroundWatch *backgroundWatchView `json:"background_watch,omitempty"`
+		// MacWindow is whether this caller may open a window onto a live macOS VM run on its own Mac, and if not
+		// why (run_mac_window.go); absent on every other run.
+		MacWindow *macWindowView `json:"mac_window,omitempty"`
+		// MacOSPreparing is true while an interactive macOS VM run's setup (repo clone, harness setup) runs
+		// (macOSPrepRunning); absent on every other run, and once it is done.
+		MacOSPreparing bool `json:"macos_preparing,omitempty"`
 		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
 		// absent on every other run.
 		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
+		// WallPreset is the wall preset the run was launched with, never its spec (runWallPresetView).
+		WallPreset *client.RunWallPreset `json:"wall_preset,omitempty"`
+		// Machine is the kept machine the run kept or resumed, read now (run_kept_machine.go); absent on
+		// every other run.
+		Machine *runMachineView `json:"machine,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -303,8 +324,14 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
 		Agents:          s.runDetailAgents(r.Context(), run),
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
+		AllowedModels:   s.runAllowedModels(r.Context(), run.ID),
 		MacOS:           s.runMacOSView(run),
+		BackgroundWatch: s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
+		MacWindow:       s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
+		MacOSPreparing:  macOSPrepRunning(stored),
 		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
+		WallPreset:      s.runWallPresetViewLabelled(r, run),
+		Machine:         s.runMachineOf(r.Context(), run),
 	})
 }
 

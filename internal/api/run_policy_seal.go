@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -36,6 +37,9 @@ type sealLayer struct {
 	desktop *types.DesktopControls
 	// withheldGrants is the credentials the layer keeps from a run (a restriction's withheld_grants).
 	withheldGrants []types.GrantSpec
+	// denyAllPushes is the layer's refusal of every push (push_rules.deny_all): a person's walls or a
+	// wall preset that set it. The seal never reads it; a revive re-asserts it (reassertDenyAllPushes).
+	denyAllPushes bool
 }
 
 // sealDecision is one knob a layer narrowed.
@@ -46,7 +50,8 @@ type sealDecision struct {
 
 // outerLayers is the ordered outer layers a run is sealed against, outermost
 // first: the Wardyn boundary, then the restrictions the run captured (restrictionSealLayers),
-// then the run owner's own walls (personalWallsSealLayer).
+// then the run owner's own walls (personalWallsSealLayer), then the run's wall preset
+// (wallPresetSealLayer).
 // Unit walls are inner layers, applied at resolve, never here. In no_limits there
 // is no layer, so the seal is the identity. A boundary that cannot be read seals
 // the run to no egress, no credential and no desktop direction at all: an unread
@@ -66,7 +71,39 @@ func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLaye
 		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop})
 	}
 	layers = append(layers, s.restrictionSealLayers(ctx, run)...)
-	return append(layers, s.personalWallsSealLayer(ctx, run)...)
+	layers = append(layers, s.personalWallsSealLayer(ctx, run)...)
+	return append(layers, wallPresetSealLayer(run)...)
+}
+
+// reassertDenyAllPushes sets push_rules.deny_all on a revived run's proxy config when an outer layer
+// refuses every push, so a revive or a restart applies the owner's walls and the run's wall preset
+// again, deny_all included, whatever config it replays. The rules go where the config carries them:
+// every per-entry set and the base beside them, or the policy's own block (proxy.Config refuses both).
+// It only ever adds the refusal.
+func reassertDenyAllPushes(cfg *proxy.Config, layers []sealLayer) {
+	if !slices.ContainsFunc(layers, func(l sealLayer) bool { return l.denyAllPushes }) {
+		return
+	}
+	if len(cfg.PushRuleSets) == 0 {
+		rules := types.PushRulesSpec{}
+		if cfg.Policy.PushRules != nil {
+			rules = *cfg.Policy.PushRules
+		}
+		rules.DenyAll = true
+		cfg.Policy.PushRules = &rules
+		return
+	}
+	sets := slices.Clone(cfg.PushRuleSets)
+	for i := range sets {
+		sets[i].Rules.DenyAll = true
+	}
+	cfg.PushRuleSets = sets
+	base := types.PushRulesSpec{}
+	if cfg.PushRuleBase != nil {
+		base = *cfg.PushRuleBase
+	}
+	base.DenyAll = true
+	cfg.PushRuleBase = &base
 }
 
 // boundarySealEgress is the boundary's egress as a seal layer: its allowlist when it names one and

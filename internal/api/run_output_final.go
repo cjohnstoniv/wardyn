@@ -85,13 +85,22 @@ func (c *outputCapture) dropSealed() (late func(), sealed bool) {
 // tailWriter is what the runner receives as SandboxSpec.ExecOutput: the masking
 // writer's pipe, plus runner.OutputDrainer so the drivers report the start and
 // end of each copy into it and the finisher can wait for the last bytes.
+//
+// cast, when set (attachAgentCast), is a macOS VM task run's agent output recording: every byte the tail
+// takes, the gap marker included, is masked into it too, and it is saved when the copy ends. It is set
+// before the writer is handed to a runner, and never changed after.
 type tailWriter struct {
-	t *execOutputTail
+	t    *execOutputTail
+	cast *agentCast
 }
 
 func (w *tailWriter) Write(p []byte) (int, error) {
 	w.t.arrived.Store(w.t.ring.now().UnixNano())
-	return w.t.in.Write(p)
+	n, err := w.t.in.Write(p)
+	if w.cast != nil {
+		w.cast.write(p)
+	}
+	return n, err
 }
 
 func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
@@ -99,6 +108,9 @@ func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
 // OutputGap (runner.OutputGapMarker): a recovered copy starts after skipped bytes the runner had
 // already discarded. The row says so where they would have been and is marked incomplete.
 func (w *tailWriter) OutputGap(skipped int64) {
+	if w.cast != nil {
+		w.cast.gapBytes.Store(skipped)
+	}
 	w.t.mw.mu.Lock()
 	w.t.mw.capture.dropped = true
 	w.t.mw.mu.Unlock()
@@ -112,11 +124,26 @@ func outputGapMarker(skipped int64) string {
 
 // EndDrain must not block (runner.OutputDrainer), and the drain may end only
 // once the copy's bytes are through the masker, or the finisher would seal ahead
-// of them: the end waits for that on its own goroutine.
+// of them: the end waits for that on its own goroutine. The agent output cast is
+// sealed before the drain ends and settled after, so its store wait never holds
+// the finisher; its obligation, stored at dispatch, outlives a process that dies
+// in between (sweepAgentCasts). A copy that ends in an error ends the cast's
+// read the same way (agentCast.endRead): nothing copied keeps the obligation for
+// the sweep, and a partial copy is saved cut, as the output row is incomplete.
 func (w *tailWriter) EndDrain(err error) {
+	if err != nil && w.cast != nil {
+		w.cast.endRead("", err)
+	}
 	go func() {
 		w.t.in.flush()
+		var end func() error
+		if w.cast != nil {
+			end = w.cast.seal()
+		}
 		w.t.endDrain(err)
+		if end != nil {
+			_ = end() // logged where it failed; the obligation stays for the sweep
+		}
 	}()
 }
 
@@ -621,6 +648,9 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/run-output-sweeper", "run.output.retention.sweep",
 				"run_outputs", "success", mustJSON(map[string]any{"deleted": n, "retention_days": int(retention.Hours() / 24)})))
 		}
+	}
+	if err := s.sweepAgentCasts(ctx); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if s.cfg.RunOutputPersistOff {
 		return firstErr

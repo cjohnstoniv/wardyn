@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -48,6 +49,11 @@ type RunOptions struct {
 	// extraPorts are vsock ports this boot registers beyond a run's (tests
 	// of the listener check).
 	extraPorts []uint32
+	// Window draws OpWindow's window; nil is the Mac's own (nativeWindowScreen), and a build without one
+	// refuses every window.
+	Window WindowScreen
+	// drive is DriveOpen's; nil on every run.
+	drive *driveBoot
 }
 
 // DefaultStopTimeout is the graceful stop allowance when none is given.
@@ -65,12 +71,21 @@ type runner struct {
 	id      Identity
 	events  eventHub
 	sockDir string
+	// machineDir holds the VM's disk, aux storage, machine-id and pair key: the run folder, or a kept
+	// machine's folder.
+	machineDir string
 
 	mu      sync.Mutex
 	st      Status
 	machine Machine
 	hostNet *os.File
 	netCh   chan *os.File
+
+	// winOpen is true while a window is up (or being made): one window at a time. Guarded by mu, with
+	// winFreed (closed when the slot is given up) and winGoing (whether its holder's connection is ending).
+	winOpen  bool
+	winFreed chan struct{}
+	winGoing func() bool
 
 	stopReq  chan stopRequest
 	stopOnce sync.Once
@@ -105,6 +120,7 @@ func Run(ctx context.Context, o RunOptions) error {
 		return err
 	}
 	defer os.RemoveAll(sockDir)
+	shim, _ := o.Desktop.(interface{ DesktopForcedViewOnly() bool })
 	r := &runner{
 		o: o, cfg: cfg, sockDir: sockDir,
 		netCh:   make(chan *os.File, 1),
@@ -113,10 +129,18 @@ func Run(ctx context.Context, o RunOptions) error {
 		st: Status{
 			Proto: ControlProto, RunID: cfg.RunID, State: StateStopped, HelperPID: os.Getpid(),
 			Identity: cfg.Identity, CPUs: cfg.CPUs, MemoryMiB: cfg.MemoryMiB, Network: NetWaiting,
-			Display: Display{Width: DisplayWidth, Height: DisplayHeight, PPI: DisplayPPI},
+			Display:               Display{Width: DisplayWidth, Height: DisplayHeight, PPI: DisplayPPI},
+			DesktopForcedViewOnly: shim != nil && shim.DesktopForcedViewOnly(),
 		},
 	}
 	defer r.events.close()
+	if o.drive != nil {
+		peer, err := r.noReachNet()
+		if err != nil {
+			return err
+		}
+		defer peer.Close()
+	}
 	return r.run(ctx)
 }
 
@@ -136,7 +160,7 @@ func (r *runner) lockDisks() (unlock func(), err error) {
 			return nil, fmt.Errorf("macvm: disk %s: %w", d.ID, err)
 		}
 		held = append(held, u)
-		if !d.ReadOnly {
+		if !d.ReadOnly && r.o.drive == nil {
 			if err := MakeDiskImage(d.Path, d.SizeBytes); err != nil {
 				unlock()
 				return nil, err
@@ -151,10 +175,12 @@ func (r *runner) run(ctx context.Context) error {
 	if err := thermalGate(r.o.Engine); err != nil {
 		return err
 	}
-	man, id, err := cloneReadyBase(r.o.Engine, r.cfg.BaseDir, r.o.RunDir, r.cfg.Identity)
+	man, id, machineDir, release, err := r.openMachine()
 	if err != nil {
 		return err
 	}
+	defer release()
+	r.machineDir = machineDir
 	r.id = id
 	r.mu.Lock()
 	r.st.MachineID, r.st.MachineIDSHA256 = r.id.Encoded(), IDHash(r.id.MachineIdentifier)
@@ -187,7 +213,7 @@ func (r *runner) run(ctx context.Context) error {
 		CPUs: r.cfg.CPUs, MemoryBytes: r.cfg.MemoryMiB * mib,
 		MinCPUs: man.MinCPUs, MinMemoryBytes: man.MinMemoryMiB * mib,
 		HardwareModel: man.HardwareModel, MachineIdentifier: r.id.MachineIdentifier,
-		DiskPath: filepath.Join(r.o.RunDir, DiskFile), AuxPath: filepath.Join(r.o.RunDir, AuxFile),
+		DiskPath: filepath.Join(r.machineDir, DiskFile), AuxPath: filepath.Join(r.machineDir, AuxFile),
 		BaseDir: r.cfg.BaseDir, Net: guestNet, Shares: r.cfg.Shares, Disks: r.cfg.Disks,
 	})
 	if err != nil {
@@ -278,6 +304,7 @@ func (r *runner) run(ctx context.Context) error {
 	if r.o.HoldIdleSleep != nil {
 		defer r.o.HoldIdleSleep(os.Getpid())()
 	}
+	defer r.initDriveGuest(ctx)()
 
 	select {
 	case <-m.Done():
@@ -324,8 +351,8 @@ func (r *runner) serveGuest(m Machine) (func(), error) {
 	for _, port := range r.o.extraPorts {
 		ports = append(ports, guestPort{port: port, sock: "tools.sock", serve: splice})
 	}
-	// The run's clone holds its copy of the base's key, which its guest disk holds too.
-	key, err := readPairKey(r.o.RunDir)
+	// The machine's clone holds its copy of the base's key, which its guest disk holds too.
+	key, err := readPairKey(r.machineDir)
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +470,144 @@ func (r *runner) desktopPassword() (string, error) {
 		return "", ErrNoDesktopPassword
 	}
 	return r.o.DesktopPassword.Credential(context.Background())
+}
+
+var _ windowHandler = (*runner)(nil)
+
+// takeWindowSlot takes the run's one window slot for an opener whose connection is going(), or refuses. A
+// slot whose holder is going is waited for, at most windowReleaseWait. release gives the slot back, once.
+func (r *runner) takeWindowSlot(going func() bool) (m Machine, release func(), rf *WindowRefusal) {
+	var expired <-chan time.Time
+	for {
+		r.mu.Lock()
+		m = r.machine
+		state, taken, freed, holderGoing := r.st.State, r.winOpen, r.winFreed, r.winGoing
+		if state == StateRunning && m != nil && !taken {
+			r.winOpen, r.winFreed, r.winGoing = true, make(chan struct{}), going
+		}
+		r.mu.Unlock()
+		if state != StateRunning || m == nil {
+			return nil, nil, &WindowRefusal{WindowCodeNotRunning, WindowNotRunningSentence}
+		}
+		if !taken {
+			break
+		}
+		if holderGoing == nil || !holderGoing() {
+			return nil, nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		}
+		if expired == nil {
+			t := time.NewTimer(time.Duration(windowReleaseWait.Load()))
+			defer t.Stop()
+			expired = t.C
+		}
+		if h := windowWaitHook.Load(); h != nil {
+			(*h)()
+		}
+		select {
+		case <-freed:
+		case <-expired:
+			return nil, nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		}
+	}
+	var releaseOnce sync.Once
+	release = func() {
+		releaseOnce.Do(func() {
+			r.mu.Lock()
+			r.winOpen, r.winGoing = false, nil
+			close(r.winFreed)
+			r.mu.Unlock()
+		})
+	}
+	if expired != nil {
+		// An opener that left while it waited gives the slot back and opens nothing. Nobody reads the reply.
+		left := going != nil && going()
+		if left {
+			release()
+		}
+		if h := windowWaitedHook.Load(); h != nil {
+			(*h)()
+		}
+		if left {
+			return nil, nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		}
+	}
+	return m, release, nil
+}
+
+// openWindow puts a close-only window on the running VM for the caller, who holds it until it ends. It
+// refuses unless the VM is running, no window is open, the person is at the Mac's screen, the engine can
+// give the VM's pointer and the window opens. The VM's configuration is never touched: no device is added.
+// going reports whether the caller's connection is ending; a window whose holder is ending is waited for
+// (at most windowReleaseWait) rather than refused, since its client has already let it go.
+func (r *runner) openWindow(grant, title string, going func() bool) (*windowSession, *WindowRefusal) {
+	m, release, rf := r.takeWindowSlot(going)
+	if rf != nil {
+		return nil, rf
+	}
+	scr := r.o.Window
+	if scr == nil {
+		scr = nativeWindowScreen
+	}
+	vm, ok := m.(ViewMachine)
+	if scr == nil || !ok {
+		release()
+		return nil, &WindowRefusal{WindowCodeUnavailable, WindowUnavailableSentence}
+	}
+	if err := scr.Ready(); err != nil {
+		release()
+		if errors.Is(err, ErrNotAtMac) {
+			return nil, &WindowRefusal{WindowCodeNotAtMac, WindowNotAtMacSentence}
+		}
+		if errors.Is(err, ErrLockUnknown) {
+			r.o.Log.Warn("macvm: window: screen lock unknown", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
+			return nil, &WindowRefusal{WindowCodeLockUnknown, WindowLockUnknownSentence}
+		}
+		r.o.Log.Warn("macvm: window: console check unreadable", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
+		return nil, &WindowRefusal{WindowCodeNotAtMac, WindowUnreadableSentence}
+	}
+	ptr, err := vm.ViewHandle()
+	if err != nil || ptr == nil {
+		release()
+		r.o.Log.Error("macvm: window: the VM's pointer is unreadable", "run_id", r.cfg.RunID, "grant", grant, "err", fmt.Sprint(err))
+		return nil, &WindowRefusal{WindowCodeUnavailable, WindowUnavailableSentence}
+	}
+	if title == "" {
+		title = "Wardyn: macOS VM run"
+	}
+	strip := WindowStrip
+	if r.cfg.Kept != nil {
+		strip = KeptWindowStrip
+	}
+	w, err := scr.Open(ptr, WindowText{Title: title, Strip: strip})
+	runtime.KeepAlive(m)
+	if err != nil {
+		release()
+		if errors.Is(err, ErrNotAtMac) {
+			return nil, &WindowRefusal{WindowCodeNotAtMac, WindowNotAtMacSentence}
+		}
+		if errors.Is(err, ErrLockUnknown) {
+			return nil, &WindowRefusal{WindowCodeLockUnknown, WindowLockUnknownSentence}
+		}
+		if errors.Is(err, errConsoleUnreadable) {
+			r.o.Log.Warn("macvm: window: console check unreadable", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
+			return nil, &WindowRefusal{WindowCodeNotAtMac, WindowUnreadableSentence}
+		}
+		r.o.Log.Error("macvm: window: could not open", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
+		return nil, &WindowRefusal{WindowCodeFailed, WindowFailedSentence + err.Error()}
+	}
+	r.o.Log.Info("macvm: window open", "run_id", r.cfg.RunID, "grant", grant)
+	r.events.publish(Event{Type: EventWindow, Detail: EventWindowOpen, Grant: grant})
+	return &windowSession{
+		win: w, ready: scr.Ready, vmDone: m.Done(), at: time.Now(),
+		end: func(reason string, held time.Duration) {
+			if reason == "" {
+				reason = WindowClosedConnection
+			}
+			release()
+			r.events.publish(Event{Type: EventWindow, Detail: EventWindowClosedDetail, Grant: grant, Reason: reason})
+			r.o.Log.Info("macvm: window closed", "run_id", r.cfg.RunID, "grant", grant, "reason", reason, "held_ms", held.Milliseconds())
+		},
+	}, nil
 }
 
 func (r *runner) netFD(f *os.File) error {

@@ -45,6 +45,9 @@ func (m *meeter) meetPush(o *types.PushRulesOverlay) {
 	if o.DenyNewExecutables != nil {
 		res.DenyNewExecutables = res.DenyNewExecutables || *o.DenyNewExecutables
 	}
+	if o.DenyAll != nil {
+		res.DenyAll = res.DenyAll || *o.DenyAll // only ever adds a refusal, so never a widening
+	}
 	if o.MaxFileSizeMiB != nil {
 		if looser(*o.MaxFileSizeMiB, res.MaxFileSizeMiB) {
 			m.widen("push_rules.max_file_size_mib", "%d is larger than the base's %d", *o.MaxFileSizeMiB, res.MaxFileSizeMiB)

@@ -14,22 +14,27 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../..
 import type { RunIntent } from "../../draft/run-intent";
 import { harnessIds } from "../../lenses/lens-keys";
 import { stepIssues } from "../../lenses/local-issues";
-import { keepRunning, mayKeepRunning, setHealth, setPort, setRestart } from "../../lenses/service-lens";
+import { keepRunning, mayKeepRunning, setHealth, setPort, setProbe, setRestart } from "../../lenses/service-lens";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
 import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
+import { deleteMachine, keepMachine, nameKeptMachine, resumeMachine, startFresh } from "../../lenses/machine-lens";
 import { chooseBarrier, chooseMacOSBase, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { BarrierSection } from "./barrier-section";
 import { CommandSection } from "./command-section";
 import { MachineKindSection } from "./machine-kind-section";
+import { KEEP_NEW_RUN } from "../../../../wardyn/copy/keep-machine";
+import { keptChoiceOf, keptReadRetry, useDropProvenMachine } from "./kept-machine-choice";
+import { useKeptMachines } from "./kept-machines-provider";
 import { useMacOSOffer } from "./macos-offer";
 import { ModeSection } from "./mode-section";
 import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
 import { ServiceSection } from "./service-section";
 import { useRunPreview } from "./use-run-preview";
+import { chooseWindowIn, useClearRefusedWindow } from "./window-choice";
 import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
@@ -54,7 +59,8 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
   const runType = runTypeOf(intent);
-  const { pauses, inboundRefused } = useRunPreview(intent);
+  const { pauses, inboundRefused, windowChecking, refusal, serviceRefusal } = useRunPreview(intent);
+  useClearRefusedWindow(refusal);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
@@ -65,10 +71,21 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const offer = useMacOSOffer();
   const minimum = offer?.ok ? { cpuMillis: offer.minCPUs * 1000, memoryMib: offer.minMemoryMiB } : undefined;
   const fill = draft.guided.macosFill;
+  const keptRead = useKeptMachines();
+  const keptChoice = keptChoiceOf(keptRead, offer, intent);
+  useDropProvenMachine(keptRead, offer, keptChoice, intent);
+  // A choice of the person's own ends the notice of one the server's answer cleared.
+  const choose = (apply: (i: RunIntent) => RunIntent) => {
+    if (draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
+    edit(apply);
+  };
   const chooseKind = (kind: MachineKind) => {
     const onMac = intent.machine_kind === "macos_vm";
     if (kind === "macos_vm" && !onMac && minimum) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, minimum) } });
     else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
+    // The window goes with macOS (chooseMachineKind), and its cleared notice with it.
+    if (kind !== "macos_vm" && draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
+    if (kind !== "macos_vm" && draft.guided.windowCleared) dispatch({ type: "guided", patch: { windowCleared: undefined } });
     edit((i) => {
       const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" ? dropMinimum(i, fill) : i;
       const next = chooseMachineKind(leaving, kind);
@@ -86,7 +103,11 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
       primary={{ label: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES), onActivate: () => go({ screen: "step", step: "harnesses" }) }}
       issues={stepIssues("run", intent, { poolDefault: list ? !!list.default?.pool_id : undefined })}
     >
-      {agent && <ModeSection mode={modeOf(intent) ?? fallback} onChange={(mode) => edit((i) => chooseMode(i, mode))} />}
+      {agent && <ModeSection mode={modeOf(intent) ?? fallback} onChange={(mode) => {
+          // The machine goes with an interactive run: leaving it says so.
+          if (intent.machine && mode !== "interactive") dispatch({ type: "guided", patch: { machineCleared: KEEP_NEW_RUN.INTERACTIVE_ONLY } });
+          edit((i) => chooseMode(i, mode));
+        }} />}
       {agent && modeOf(intent) === "autonomous" && <TimingSection schedule={draft.schedule} onSchedule={(schedule) => dispatch({ type: "schedule", schedule })} />}
       {intent.shape === "application" && (
         <CommandSection
@@ -106,13 +127,33 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
               onRestart={(restart) => edit((i) => setRestart(i, restart))}
               onPort={(port) => edit((i) => setPort(i, port))}
               onHealth={(patch) => edit((i) => setHealth(i, patch))}
+              onProbe={(on) => edit((i) => setProbe(i, on))}
+              refusal={serviceRefusal}
               pauses={pauses}
             />
           )}
         </CommandSection>
       )}
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
-        <MachineKindSection kind={intent.machine_kind ?? "container"} agents={harnessIds(intent)} macosBase={intent.macos_base} onChoose={chooseKind} onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))} />
+        <MachineKindSection
+          kind={intent.machine_kind ?? "container"}
+          agents={harnessIds(intent)}
+          macosBase={intent.macos_base}
+          windowChoice={{ chosen: !!intent.desktop_window, checking: windowChecking, cleared: draft.guided.windowCleared, onChoose: (on) => chooseWindowIn(dispatch, on) }}
+          kept={{
+            choice: keptChoice,
+            retry: keptReadRetry(keptRead, offer, intent),
+            cleared: draft.guided.machineCleared,
+            machine: intent.machine,
+            onDelete: () => choose(deleteMachine),
+            onKeep: () => choose(keepMachine),
+            onName: (name) => edit((i) => nameKeptMachine(i, name)),
+            onResume: (id) => choose((i) => resumeMachine(i, id)),
+            onFresh: (fresh) => edit((i) => startFresh(i, fresh)),
+          }}
+          onChoose={chooseKind}
+          onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))}
+        />
         <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
         {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>

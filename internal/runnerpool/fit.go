@@ -3,7 +3,13 @@
 
 package runnerpool
 
-import "github.com/cjohnstoniv/wardyn/internal/types"
+import (
+	"fmt"
+	"math"
+	"strconv"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // Fit is a runner's answer for one run of a given size: the one rule placement, the store's locked
 // admission, the promotion, the queue's verdict and every usage read share, so none of them can
@@ -35,6 +41,35 @@ func Fits(l *types.RunnerLimits, inUse types.RunnerTally, need types.RunnerAmoun
 		return FitNoRoom
 	}
 	return FitOK
+}
+
+// NoRoomReason names the limit that holds a run back, with its numbers, asking in Fits' own order, and
+// is "" whenever Fits answers anything but FitNoRoom. Its words follow "<runner> is at a limit: …".
+func NoRoomReason(l *types.RunnerLimits, inUse types.RunnerTally, need types.RunnerAmounts) string {
+	if Fits(l, inUse, need) != FitNoRoom {
+		return ""
+	}
+	// Tenths at most, so a size no one typed in whole GB still reads as a size.
+	tenths := func(v float64) string { return strconv.FormatFloat(math.Round(v*10)/10, 'f', -1, 64) }
+	cpus := func(millis int64) string {
+		if n := tenths(float64(millis) / 1000); n != "1" {
+			return n + " CPUs"
+		}
+		return "1 CPU"
+	}
+	gb := func(mib int64) string { return tenths(float64(mib)/1024) + " GB" }
+	total := func(name, held, of, needs string) string {
+		return fmt.Sprintf("%s total: %s held of %s, this run needs %s", name, held, of, needs)
+	}
+	switch {
+	case inUse.Runs >= l.RunsAtOnce:
+		return fmt.Sprintf("Runs at once: %d running of %d", inUse.Runs, l.RunsAtOnce)
+	case inUse.CPUMillis+need.CPUMillis > l.Total.CPUMillis:
+		return total("CPU", cpus(inUse.CPUMillis), cpus(l.Total.CPUMillis), cpus(need.CPUMillis))
+	case inUse.MemoryMiB+need.MemoryMiB > l.Total.MemoryMiB:
+		return total("memory", gb(inUse.MemoryMiB), gb(l.Total.MemoryMiB), gb(need.MemoryMiB))
+	}
+	return total("disk", gb(inUse.DiskMiB), gb(l.Total.DiskMiB), gb(need.DiskMiB))
 }
 
 // Available is a runner's total less what its runs hold, never below zero, and nothing at all while it

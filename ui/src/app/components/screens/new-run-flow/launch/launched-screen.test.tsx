@@ -38,6 +38,11 @@ function Where() {
   return <p data-testid="where">{l.pathname + l.search}</p>;
 }
 
+function RunPage() {
+  const carried = (useLocation().state as { launchWarnings?: string[] } | null)?.launchWarnings ?? [];
+  return <><p>run page</p><p data-testid="carried">{JSON.stringify(carried)}</p></>;
+}
+
 function Typed() {
   const dispatch = useNewRunDispatch();
   const { launch } = useNewRunDraft();
@@ -53,7 +58,7 @@ function open(state?: LaunchedState) {
           <Typed />
           <Routes>
             <Route path="/runs/new" element={<LaunchedScreen location={{ screen: "launched", runId: ID }} go={go} startFromScratch={() => {}} />} />
-            <Route path="/runs/:id" element={<p>run page</p>} />
+            <Route path="/runs/:id" element={<RunPage />} />
           </Routes>
           <Where />
         </NewRunDraftProvider>
@@ -74,6 +79,20 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("Launched: while the run loads (UXR-48)", () => {
+  it("draws a placeholder for the badge and the title, then the run", async () => {
+    let settle!: (r: unknown) => void;
+    getRun.mockReturnValue(new Promise((r) => (settle = r)));
+    open();
+    const loading = await screen.findByTestId("launched-loading");
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    await act(async () => settle(run()));
+    expect(await screen.findByRole("heading", { level: 1, name: "nightly build" })).toBeInTheDocument();
+    expect(screen.queryByTestId("launched-loading")).toBeNull();
+  });
 });
 
 describe("Launched: Waiting (U13)", () => {
@@ -108,9 +127,9 @@ describe("Launched: Waiting (U13)", () => {
     getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue() }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
-    const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
     expect(killRun).not.toHaveBeenCalled();
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
   });
 });
@@ -154,6 +173,30 @@ describe("Launched: Starting", () => {
   });
 });
 
+describe("Launched: a run its runners hold back", () => {
+  const named = "Every runner in CI jobs is at a limit. For example, mac-1: Runs at once: 1 running of 1. This run starts when one has room.";
+  const held = (over: Partial<RunQueue> = {}) => queue({ reason: "runner_pool_runners_at_capacity", ...over });
+
+  it("says the limit the server named, and the run page carries no second copy of it", async () => {
+    const created = run({ state: "QUEUED", queue: held({ limit_sentence: named }), warnings: ["another run uses this folder", named] }) as LaunchedState["created"];
+    getRun.mockResolvedValue(created);
+    open({ created, owner: "alice" });
+    expect(await screen.findByText(named)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: NR_LAUNCH.VIEW_RUN }));
+    expect(screen.getByTestId("carried")).toHaveTextContent(JSON.stringify(["another run uses this folder"]));
+  });
+
+  it("follows the wait when it has changed since the create: the read's words win and the stale copy is not carried", async () => {
+    const created = run({ state: "QUEUED", queue: held({ limit_sentence: named }), warnings: [named] }) as LaunchedState["created"];
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "runner_pool_no_runner_free" }) }));
+    open({ created, owner: "alice" });
+    expect(await screen.findByText("None of your runners in CI jobs is online. This run starts when one is.")).toBeInTheDocument();
+    expect(screen.queryByText(named)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: NR_LAUNCH.VIEW_RUN }));
+    expect(screen.getByTestId("carried")).toHaveTextContent("[]");
+  });
+});
+
 describe("Launched: reload and identity", () => {
   it("reads the run by its id when there is no router state, and creates nothing", async () => {
     const create = vi.spyOn(runs, "createRunWire");
@@ -186,8 +229,8 @@ describe("Launched: reload and identity", () => {
     getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockResolvedValue(run({ state: "KILLED" }));
     open();
     await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
-    const confirm = await screen.findByRole("alertdialog", { name: 'Kill "nightly build"?' });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Kill run" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "End run" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "nightly build" })).toHaveFocus());
   });

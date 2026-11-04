@@ -248,3 +248,10 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 **7. What stays single-human.**
 
 - Workspace approved and denied egress lists, record-egress promotion, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and delete, and the SCIM purge's deletion of a person's own assignments and grants.
+
+**8. Credential delivery rows a release cannot build.**
+
+- A stored `PUT /governance/credential-delivery` row that names a mode the server cannot build for its class stays stored, and a run that needs it is refused.
+- `GET /governance/credential-delivery` lists these rows as `unbuildable`.
+- Setup status shows a `credential_delivery` warning, for operators only. It changes nothing and never blocks.
+- The Runner credentials page does not list the rows. Read `unbuildable` from the `GET`, then set each row to a buildable mode or to refuse.
