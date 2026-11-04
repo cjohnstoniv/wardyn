@@ -71,7 +71,15 @@ test("opening or closing it, and a row count that grows, move nothing in the til
   paths = 2;
   await openRun(page);
   const control = page.getByRole("button", { name: RUN_COCKPIT.expandWidget("Files changed") });
-  const boxes = async () => [await filesTile(page).boundingBox(), await filesTile(page).locator("section > :first-child").boundingBox(), await control.boundingBox()];
+  // Measured from the tile's own corner: the claim is about the tile's header, and the page above the tile can still
+  // move it as a whole while other tiles load (a 4px shift of the whole tile failed this once).
+  const boxes = async () => {
+    const tile = await filesTile(page).boundingBox();
+    const at = async (b: { x: number; y: number; width: number; height: number } | null) =>
+      b && tile && { x: b.x - tile.x, y: b.y - tile.y, width: b.width, height: b.height };
+    return [tile && { width: tile.width, height: tile.height }, await at(await filesTile(page).locator("section > :first-child").boundingBox()), await at(await control.boundingBox())];
+  };
+  await layoutSettled(filesTile(page));
   const before = await boxes();
   paths = 60;
   await page.waitForTimeout(4500); // one poll
