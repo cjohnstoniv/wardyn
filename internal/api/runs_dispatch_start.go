@@ -39,12 +39,14 @@ const mainProcessExecID = runner.MainProcessExecID
 // exec-less runner that is the moment its container — and the managed files
 // delivered into it — first exists.
 func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
-	s.startAgentsOrIdle(ctx, run, nil, ref, image, interactive, execution, onAgentStarted)
+	s.startAgentsOrIdle(ctx, run, nil, ref, image, interactive, execution, onAgentStarted, nil)
 }
 
 // startAgentsOrIdle is startAgentOrIdle for a run whose harnesses may run tasks of their
 // own (several agents in one run): the task exec then starts every agent (agentTaskArgv).
-func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harnesses []types.RunHarness, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
+// onPrepared, when non-nil, runs once an interactive macOS VM run's prep has recorded done, and never when the
+// prep failed: the run's attended window can open from then on.
+func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harnesses []types.RunHarness, ref, image string, interactive bool, execution runnerExecution, onAgentStarted, onPrepared func()) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
@@ -60,6 +62,9 @@ func (s *Server) startAgentsOrIdle(ctx context.Context, run types.AgentRun, harn
 				return
 			}
 			data["prepared"] = true
+			if onPrepared != nil {
+				onPrepared()
+			}
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive.start",
 			run.ID.String(), "success", mustJSON(data)))
@@ -217,6 +222,7 @@ func (s *Server) prepareMacOSInteractive(ctx context.Context, run types.AgentRun
 				"argv": macPrepareArgv, "error": sentence, "exit_code": exit, "reason": "interactive_prepare"})))
 		s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 		s.failAndRevoke(ctx, run.ID, types.RunRunning, sentence)
+		s.macWindowForgetPending(ctx, run) // a window asked for at start is asked only after a prep that succeeded
 		return false
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",

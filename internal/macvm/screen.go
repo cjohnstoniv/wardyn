@@ -74,9 +74,10 @@ type consoleReading struct {
 	LockNoticed       bool
 }
 
-// lockState is what the Mac says of its screen lock. Only a lock key that reads false is known-unlocked; a lock
-// notification, or a lock key that reads true, is locked; anything else (no dictionary, no key, a key that is not
-// a boolean) is unknown.
+// lockState is what the Mac says of its screen lock. A lock notification, or a lock key that reads true, is locked.
+// A session dictionary whose lock key reads false, or has no lock key, is unlocked: macOS adds the key only while
+// the screen is locked, so an unlocked Mac usually has none. Anything else (no dictionary, a key that is not a
+// boolean) is unknown.
 type lockState int
 
 const (
@@ -89,7 +90,7 @@ func (r consoleReading) lock() lockState {
 	switch {
 	case r.LockNoticed, r.Dict && r.Locked == keyTrue:
 		return lockLocked
-	case r.Dict && r.Locked == keyFalse:
+	case r.Dict && (r.Locked == keyFalse || r.Locked == keyAbsent):
 		return lockUnlocked
 	}
 	return lockUnknown
@@ -97,7 +98,8 @@ func (r consoleReading) lock() lockState {
 
 // consoleCheck is WindowScreen.Ready's answer for r: nil only when the screen is known unlocked and this
 // process's session is the Mac's console. A locked screen, or a session not on the console, wraps ErrNotAtMac;
-// an unknown lock wraps ErrLockUnknown, so it refuses and never falls back to the on-console key.
+// an unknown lock (no dictionary, or a lock key that is not a boolean) wraps ErrLockUnknown, so it refuses and
+// never falls back to the on-console key.
 func consoleCheck(r consoleReading) error {
 	if r.lock() == lockLocked {
 		return fmt.Errorf("the screen is locked: %w", ErrNotAtMac)
@@ -113,10 +115,8 @@ func consoleCheck(r consoleReading) error {
 		return errConsoleUnreadable
 	}
 	switch r.Locked {
-	case keyFalse:
+	case keyFalse, keyAbsent: // macOS adds the key only while the screen is locked
 		return nil
-	case keyAbsent:
-		return fmt.Errorf("the session has no CGSSessionScreenIsLocked key: %w", ErrLockUnknown)
 	}
 	return fmt.Errorf("the session's CGSSessionScreenIsLocked key is not a boolean: %w", ErrLockUnknown)
 }

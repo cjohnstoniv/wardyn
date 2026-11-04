@@ -115,7 +115,31 @@ func newMacPrepRig(t *testing.T, kind types.MachineKind) *macPrepRig {
 }
 
 func (r *macPrepRig) start() {
-	r.srv.startAgentsOrIdle(context.Background(), r.run, nil, "fake-"+r.run.ID.String(), "", true, runnerExecution{}, nil)
+	r.startThen(nil)
+}
+
+// startThen starts the run with onPrepared as startAgentsOrIdle's hook.
+func (r *macPrepRig) startThen(onPrepared func()) {
+	r.srv.startAgentsOrIdle(context.Background(), r.run, nil, "fake-"+r.run.ID.String(), "", true, runnerExecution{}, nil, onPrepared)
+}
+
+// A window asked for at start on an interactive macOS VM run is asked for once its prep has recorded done, and
+// never when the prep failed: before then every open is refused as preparing.
+func TestStartAgentsOrIdle_MacOSInteractiveOnPreparedAfterPrepDone(t *testing.T) {
+	rig := newMacPrepRig(t, types.MachineMacOSVM)
+	var at []string
+	rig.startThen(func() { at = append(at, rig.st.Detail()) })
+	if !slices.Equal(at, []string{statusDetailMacPrepDone}) {
+		t.Fatalf("onPrepared ran at status_detail %q, want once at %q", at, statusDetailMacPrepDone)
+	}
+
+	failed := newMacPrepRig(t, types.MachineMacOSVM)
+	failed.rn.exit, failed.rn.stderr = 1, "clone failed"
+	called := false
+	failed.startThen(func() { called = true })
+	if called {
+		t.Fatal("onPrepared ran after a failed prep")
+	}
 }
 
 var wantPrepArgv = []string{"/usr/local/bin/agent-run", "--prepare"}
@@ -343,5 +367,29 @@ func TestSweepRunWatchers_FailsAnInterruptedMacOSPrep(t *testing.T) {
 				t.Fatalf("a run that was not mid-prep was finalized to %q", to)
 			}
 		})
+	}
+}
+
+// An at-start window is asked for exactly once when asked: after the prep on an interactive macOS VM run, at
+// RUNNING on any other run, and never when not asked.
+func TestMacWindowAtStartWhen(t *testing.T) {
+	for _, tc := range []struct {
+		kind                   types.MachineKind
+		interactive, asked     bool
+		wantNow, wantAfterPrep bool
+	}{
+		{types.MachineMacOSVM, true, true, false, true},
+		{types.MachineMacOSVM, false, true, true, false},
+		{types.MachineContainer, true, true, true, false},
+		{types.MachineContainer, false, true, true, false},
+		{types.MachineMacOSVM, true, false, false, false},
+		{types.MachineMacOSVM, false, false, false, false},
+		{types.MachineContainer, true, false, false, false},
+	} {
+		now, after := macWindowAtStartWhen(tc.kind, tc.interactive, tc.asked)
+		if now != tc.wantNow || after != tc.wantAfterPrep {
+			t.Errorf("kind %q interactive %v asked %v: now %v after prep %v, want %v %v",
+				tc.kind, tc.interactive, tc.asked, now, after, tc.wantNow, tc.wantAfterPrep)
+		}
 	}
 }
