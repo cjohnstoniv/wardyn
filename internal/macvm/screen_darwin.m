@@ -55,8 +55,9 @@ static int wardynScreenBoolKey(CFDictionaryRef d, CFStringRef key) {
 
 // wardynScreenConsoleKeys reads the run window's console check: the session's on-console key and its lock key
 // (CGSSessionScreenIsLocked, undocumented), each as wardynScreenBoolKey gives it. It returns 0, setting neither,
-// when the session dictionary cannot be had. It decides nothing: consoleCheck (screen.go) does, and a missing or
-// malformed lock key, or no dictionary, is an unknown lock that refuses.
+// when the session dictionary cannot be had. It decides nothing: consoleCheck (screen.go) does. A missing lock key
+// is unlocked, since macOS adds it only while the screen is locked; a malformed one, or no dictionary, is an
+// unknown lock that refuses.
 int wardynScreenConsoleKeys(int *onConsole, int *locked) {
 	CFDictionaryRef d = CGSessionCopyCurrentDictionary();
 	if (d == NULL) {

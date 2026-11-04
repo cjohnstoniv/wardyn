@@ -310,7 +310,8 @@ describe("ConnectSSHCard — UI apps lane", () => {
     // The env var renders in <Mono> (mock visual rule §6), so the frozen
     // string spans several nodes — the paragraph's text content still has to
     // byte-match the canonical table.
-    const off = screen.getByText(/Off on this deployment\. It relays/);
+    // The off-state renders after the health answer, not when the mock is called.
+    const off = await screen.findByText(/Off on this deployment\. It relays/);
     expect(off.textContent).toBe(UI_APPS_LANE.off);
     expect(screen.getByText("WARDYN_UI_SANDBOX_LISTEN")).toBeInTheDocument();
     // No CTA when the gateway is off.

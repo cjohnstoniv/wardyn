@@ -122,13 +122,38 @@ func (s *Server) macWindowAtStartIfAsked(ctx context.Context, runID uuid.UUID, a
 	}
 }
 
+// macWindowAtStartOrAfterPrep asks for the window a create asked for, as run reaches RUNNING: now, beside the
+// agent's start, or, for an interactive macOS VM run, whose window is refused until its prep records done, from the
+// returned hook, which startAgentsOrIdle runs once the prep is done. The hook is nil when nothing waits on the prep.
+func (s *Server) macWindowAtStartOrAfterPrep(ctx context.Context, run types.AgentRun, interactive, asked bool) (onPrepared func()) {
+	now, afterPrep := macWindowAtStartWhen(run.MachineKind, interactive, asked)
+	s.macWindowAtStartIfAsked(ctx, run.ID, now)
+	if !afterPrep {
+		return nil
+	}
+	return func() { s.macWindowAtStartIfAsked(ctx, run.ID, true) }
+}
+
+// macWindowAtStartWhen says when an at-start window is asked for: now (as the run reaches RUNNING), after its prep
+// (an interactive macOS VM run), or never (not asked). It is never both, so the pending grant is spent once.
+func macWindowAtStartWhen(kind types.MachineKind, interactive, asked bool) (now, afterPrep bool) {
+	if !asked {
+		return false, false
+	}
+	if interactive && kind.IsMacOSVM() {
+		return false, true
+	}
+	return true, false
+}
+
 // macWindowAtStart is the launch trigger: the run was created with desktop_window at_start and has just come
 // up, so its creator is asked for a window as `wardyn window` would, under the grant the create left
 // (macWindowStorePending), never under whatever the launch's own context carries. A refusal is audited and the
 // run goes on: the run page and the CLI offer the window later. The run is read again here, since dispatch has
-// set its recording level and its state since create. The open waits for the run to be up by where it is called
-// (after the sandbox started and the run is RUNNING); a run still preparing then is refused with the preparing
-// sentence, and no later retry is made, so a window never appears on a Mac the person did not just ask for. A
+// set its recording level and its state since create. The open waits for the run to be up by where it is called:
+// after the sandbox started and the run is RUNNING, or, for an interactive macOS VM run, once its prep has
+// recorded done (runs_dispatch.go). It is asked once; a refusal is not retried, so a window never appears on a
+// Mac the person did not just ask for. A
 // refusal under a loaded grant is also kept as the grant principal's last close (not_opened, with its sentence),
 // so the run page says why the window it asked for is not there.
 func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
