@@ -83,7 +83,7 @@ An interactive macOS VM run is a sandbox you work in: a terminal, and a window o
 
 1. Check the Mac: `wardyn-runnerd macos-vm status`. A run is placed on it only when the base is ready.
 2. Start the run: `wardyn run --experience interactive --machine-kind macos_vm --window`. In the console, choose a virtual machine, then macOS, in New Run. `--macos-base <name>` picks a base other than Standard.
-3. Wait until the run is `RUNNING` and its preparation is done. With `--window` the window opens as the VM comes up. If it does not, run `wardyn window <run>` once preparation has finished.
+3. Wait until the run is `RUNNING` and its preparation is done. With `--window` the window opens once preparation finishes. If it does not, run `wardyn window <run>`.
 4. Work in the window. Closing it leaves the run going ([Closing a window](#closing-a-window)).
 5. For a terminal, run `wardyn attach <run>`, or `wardyn ssh <run>` to use SSH tools.
 6. Ask whether a window can open, and why the last one closed: `wardyn window <run> --status`.
@@ -725,7 +725,7 @@ A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your 
 | `wardyn window <run>` | Asks the server to open a window on the Mac the run is on. It prints "The window is opening on `<computer>`." or the refusal's sentence, and exits non-zero on a refusal |
 | `wardyn window <run> --status` | Prints `window:` and a state, the state's sentence, and `last window closed:` with the reason and time. It opens nothing |
 | `wardyn run ... --window` | Asks at create for a window as the VM comes up. A create the window would be refused for is refused with that sentence, and the run is not launched |
-| The run page | `GET /runs/{id}` carries `mac_window` on a running macOS VM run. Its `state` is `open` when you can open a window. The console button for it is not in this build |
+| The run page | The run's Mac window section has an Open Mac window button while you can open one. `GET /runs/{id}` carries `mac_window` on a running macOS VM run; its `state` is `open` when you can open a window |
 
 - The CLI route is `POST /runs/{id}/desktop/window`. Its body may carry `trigger`, either `cli` or `run_page`.
 - The run's owner also gets the refusal's sentence in `mac_window`. Anyone else who can read the run gets `not_run_owner` and no sentence.
