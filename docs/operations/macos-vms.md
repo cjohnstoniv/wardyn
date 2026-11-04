@@ -724,7 +724,7 @@ A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your 
 |---|---|
 | `wardyn window <run>` | Asks the server to open a window on the Mac the run is on. It prints "The window is opening on `<computer>`." or the refusal's sentence, and exits non-zero on a refusal |
 | `wardyn window <run> --status` | Prints `window:` and a state, the state's sentence, and `last window closed:` with the reason and time. It opens nothing |
-| `wardyn run ... --window` | Asks at create for a window as the VM comes up. A create the window would be refused for is refused with that sentence, and the run is not launched |
+| `wardyn run ... --window` | Asks at create for a window once the VM is up; an interactive run's window waits for its preparation to finish. A create the window would be refused for is refused with that sentence, and the run is not launched |
 | The run page | The run's Mac window section has an Open Mac window button while you can open one. `GET /runs/{id}` carries `mac_window` on a running macOS VM run; its `state` is `open` when you can open a window |
 
 - The CLI route is `POST /runs/{id}/desktop/window`. Its body may carry `trigger`, either `cli` or `run_page`.

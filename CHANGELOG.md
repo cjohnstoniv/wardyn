@@ -14,7 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A window onto a macOS VM run opens on an unlocked Mac again. rc.12 refused every open with `mac_window_lock_unknown`, because macOS leaves out the session's screen-lock key while the screen is unlocked. A missing key now reads as unlocked; a lock key that reads true, or a lock notification, still refuses and closes an open window.
-- `wardyn run --machine-kind macos_vm --window` (`desktop_window: "at_start"`) opens the window once the interactive run's preparation finishes. Before, it was asked for while preparation was still running, refused as preparing, and never asked again.
+- On an interactive macOS VM run (`wardyn run --machine-kind macos_vm --experience interactive --window`, or `desktop_window: "at_start"`), the window now opens once the run's preparation finishes. Before, it was asked for while preparation was still running, refused as preparing, and never asked again.
 - The macOS VM page no longer says the console has no Open Mac window button; the run page has one.
 
 ## [0.10.0-rc.12] — 2026-11-03

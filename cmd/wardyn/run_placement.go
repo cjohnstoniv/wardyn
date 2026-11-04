@@ -53,7 +53,7 @@ type runMachineFlags struct {
 func (f *runMachineFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.kind, "machine-kind", "", "the kind of sandbox: container (the default), linux_vm or macos_vm; a macos_vm run needs a registered Mac that offers it — see 'wardyn runner'")
 	cmd.Flags().StringVar(&f.macOSBase, "macos-base", "", "the macOS base a --machine-kind macos_vm run starts from: Standard (the default) or the name of another base the Mac holds")
-	cmd.Flags().BoolVar(&f.window, "window", false, "open a window on the run's Mac as the VM comes up (a --machine-kind macos_vm run on a Mac you registered); like 'wardyn window'. Ask again with 'wardyn window' if it does not")
+	cmd.Flags().BoolVar(&f.window, "window", false, "open a window on the run's Mac once the VM is up and prepared (a --machine-kind macos_vm run on a Mac you registered); like 'wardyn window'. Ask again with 'wardyn window' if it does not")
 	cmd.Flags().BoolVar(&f.keep, "keep-machine", false, "keep this run's macOS VM on your own Mac when the run stops (with --experience interactive --machine-kind macos_vm); see 'wardyn machines'")
 	cmd.Flags().StringVar(&f.name, "machine-name", "", "the name of the machine --keep-machine keeps; empty lets the server pick one")
 	cmd.Flags().StringVar(&f.resume, "resume-machine", "", "start this run from a machine you kept earlier, by id or name (with --experience interactive --machine-kind macos_vm)")
