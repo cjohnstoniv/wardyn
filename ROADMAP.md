@@ -65,6 +65,7 @@
 | **v0.10.0-rc.10** | rc.10: Watch desktop on a view-only macOS VM run, and macOS VM, Azure DevOps push, workload and console fixes (macOS parts not yet run on a real Mac). | **Shipped (pre-alpha)** — `v0.10.0-rc.10`, 2026-11-01 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.11** | rc.11: a macOS VM run's desktop is no longer recorded; experimental gateway run identity; desktop watch, drive open, Expand, and rc.10 test fixes (macOS parts not yet run on a real Mac). | **Shipped (pre-alpha)** — `v0.10.0-rc.11`, 2026-11-02 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.12** | rc.12 (last candidate): Mac window, kept macOS VMs, wall presets, allowed models, endpoint sign-in, MCP run identity, image prefix grants; macOS parts not yet run on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.12`, 2026-11-03 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.13** | rc.13: the Mac window opens on an unlocked Mac, and --window waits for an interactive run's preparation; not run again on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.13`, 2026-11-04 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
