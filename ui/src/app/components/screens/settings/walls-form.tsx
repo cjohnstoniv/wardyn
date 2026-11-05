@@ -274,6 +274,8 @@ function CapabilityList({ id, title, forge, pushName, groups, only, picked, onCh
   serverError?: string;
   problem?: string;
 }) {
+  // Two forms can be on the page at once (Your walls and a preset dialog): the ids are this list's own.
+  const uid = React.useId();
   const all = groups.flatMap((g) => g.caps.map((c) => c.cap));
   const toggle = (cap: string, on: boolean) => onChange(true, on ? [...picked, cap] : picked.filter((c) => c !== cap));
   return (
@@ -310,8 +312,8 @@ function CapabilityList({ id, title, forge, pushName, groups, only, picked, onCh
               <ul>
                 {g.caps.map((c) => (
                   <li key={c.cap} className="flex items-start gap-2.5 border-t border-border px-3 py-2">
-                    <Checkbox id={`${id}-${c.cap}`} className="mt-0.5" aria-label={c.name} checked={picked.includes(c.cap)} onCheckedChange={(on) => toggle(c.cap, on === true)} />
-                    <label htmlFor={`${id}-${c.cap}`} className="min-w-0 text-sm leading-snug">
+                    <Checkbox id={`${uid}-${c.cap}`} className="mt-0.5" aria-label={c.name} checked={picked.includes(c.cap)} onCheckedChange={(on) => toggle(c.cap, on === true)} />
+                    <label htmlFor={`${uid}-${c.cap}`} className="min-w-0 text-sm leading-snug">
                       <span className={picked.includes(c.cap) ? "text-foreground" : "text-muted-foreground"}>{c.name}</span>
                       {c.wire && <span className="block font-mono text-xs text-muted-foreground">{c.wire}</span>}
                     </label>

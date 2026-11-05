@@ -58,8 +58,7 @@ export function YourWallsCard() {
     if (!(e instanceof HttpError)) return setRefusal({ message: T.SAVE_FAILED, reason: "" });
     const { section, text } = sectionOfRefusal(e.message);
     if (e.reason === "walls_invalid" && section && section !== "name" && section !== "description") return setSectionErrors({ [section]: text });
-    const unmapped = text.charAt(0).toUpperCase() + text.slice(1);
-    setRefusal({ message: e.reason === "walls_invalid" ? unmapped : e.message, reason: e.reason });
+    setRefusal({ message: e.reason === "walls_invalid" ? text : e.message, reason: e.reason });
   };
   const run = async (act: () => Promise<void>): Promise<boolean> => {
     setBusy(true);

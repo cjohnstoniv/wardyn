@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Settings: Your walls and wall presets now have a control for every limit they carry: GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
+
+### Fixed
+
+- The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
+
 ## [0.10.0-rc.13] — 2026-11-04
 
 ### Before you upgrade

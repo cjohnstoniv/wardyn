@@ -227,9 +227,9 @@ describe("Wall presets card", () => {
     expect(alert).toHaveTextContent('denied_domains[1]: "https://pastebin.com" must be a DNS name');
     // Under "Never these sites", not above the buttons.
     expect(alert.parentElement).toHaveTextContent("Never these sites");
-    createMock.mockRejectedValueOnce(new HttpError(422, "invalid wall preset: the preset is too large", "wall_preset_invalid"));
+    createMock.mockRejectedValueOnce(new HttpError(422, "invalid wall preset: the preset names no limit; Open is the built-in for no preset", "wall_preset_invalid"));
     await user.click(dialog.getByRole("button", { name: W.SAVE }));
-    const above = await dialog.findByText("The preset is too large");
+    const above = await dialog.findByText("the preset names no limit; Open is the built-in for no preset");
     expect(above.parentElement?.tagName).toBe("FORM");
   });
 
@@ -295,3 +295,66 @@ describe("Wall presets card", () => {
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("Wall presets card: every limit has a control", () => {
+  it("a new preset with no limit keeps Save off and says a preset needs one", async () => {
+    render(<WallPresetsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: W.NEW_PRESET }));
+    const dialog = within(await screen.findByRole("dialog"));
+    setField(dialog.getByLabelText(/^Name/), "Tight");
+    expect(dialog.getByText(W.NEEDS_A_LIMIT)).toBeInTheDocument();
+    expect(dialog.getByRole("button", { name: W.SAVE })).toBeDisabled();
+    expect(dialog.queryByTestId("walls-carried")).not.toBeInTheDocument();
+  });
+
+  it("Copy to mine from Read-only carries six GitHub and eleven Azure DevOps reads into the checklists", async () => {
+    render(<WallPresetsCard />);
+    await open();
+    await user.click(row("read-only").getByRole("button", { name: W.COPY_TO_MINE }));
+    const dialog = within(await screen.findByRole("dialog"));
+    const on = (id: string) => within(dialog.getByTestId(id)).getAllByRole("checkbox").filter((c) => c.getAttribute("aria-checked") === "true");
+    expect(on("walls-github")).toHaveLength(6);
+    expect(on("walls-ado")).toHaveLength(11);
+    expect(dialog.getByRole("switch", { name: "Refuse every push" })).toHaveAttribute("aria-checked", "true");
+    await user.click(dialog.getByRole("button", { name: W.SAVE }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    const spec = (createMock.mock.lastCall![0] as { spec: Record<string, unknown> }).spec;
+    expect(spec.github_capabilities).toEqual(GH);
+    expect(spec.azure_devops_capabilities).toEqual(ADO);
+    expect(spec.push_rules).toEqual({ deny_all: true });
+  });
+
+  it("a row's disclosure names its tool rules, paths never pushed, recording floor and idle stop, the idle one exactly", async () => {
+    const full: WallPreset = {
+      id: "full-1", scope: "builtin", name: "Docs fixes", version: 2,
+      spec: { tool_rules: [{ tool: "WebFetch", effect: "hold" }, { tool: "mcp__slack__post_message", effect: "deny" }], push_rules: { deny_paths: [".github/workflows/"] }, recording: "terminal", auto_stop_after_sec: 90 },
+    };
+    listMock.mockResolvedValue(listOf([full]));
+    render(<WallPresetsCard />);
+    await open();
+    await user.click(row("full-1").getByRole("button", { name: W.SHOW }));
+    const detail = within(screen.getByTestId("wall-preset-detail"));
+    expect(detail.getByText(W.DETAIL_TOOL_RULE("WebFetch", "hold"))).toBeInTheDocument();
+    expect(detail.getByText(W.DETAIL_TOOL_RULE("mcp__slack__post_message", "deny"))).toBeInTheDocument();
+    expect(detail.getByText(".github/workflows/")).toBeInTheDocument();
+    expect(detail.getByText("Terminal")).toBeInTheDocument();
+    expect(detail.getByText(W.DETAIL_IDLE_AFTER(90, "seconds"))).toBeInTheDocument();
+  });
+
+  it("puts a path refusal under Pushes in the dialog", async () => {
+    createMock.mockRejectedValueOnce(new HttpError(422, 'invalid wall preset: push_rules.deny_paths[0]: "a/../b" has an empty, "." or ".." path segment, which no git path contains', "wall_preset_invalid"));
+    render(<WallPresetsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: W.NEW_PRESET }));
+    const dialog = within(await screen.findByRole("dialog"));
+    setField(dialog.getByLabelText(/^Name/), "Paths");
+    await user.click(dialog.getByRole("button", { name: "Add path" }));
+    setField(dialog.getByRole("textbox", { name: "Path 1" }), "a/../b");
+    await user.click(dialog.getByRole("button", { name: W.SAVE }));
+    const alert = await dialog.findByRole("alert");
+    expect(alert).toHaveTextContent("push_rules.deny_paths[0]");
+    expect(alert.parentElement).toHaveTextContent("Pushes");
+  });
+});
+

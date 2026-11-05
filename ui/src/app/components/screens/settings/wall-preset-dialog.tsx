@@ -100,7 +100,7 @@ export function WallPresetDialog({
       if (section === "name") return setNameError(text);
       if (section === "description") return setDescriptionError(text);
       if (section) return setSectionErrors({ [section]: text });
-      return setFailure(text.charAt(0).toUpperCase() + text.slice(1));
+      return setFailure(text);
     }
     setFailure(e.message || W.SAVE_FAILED);
   };

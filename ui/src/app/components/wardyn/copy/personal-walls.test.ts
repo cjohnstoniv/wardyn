@@ -4,10 +4,12 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB } from "../../screens/run-detail/policy-tab-copy";
 import { WHY_CARD } from "../../../lib/why-card-copy";
 import { NR_TOOLS } from "./new-run/tools";
-import { APPROVAL_WALLS, NR_WALLS, YOUR_WALLS } from "./personal-walls";
+import { APPROVAL_WALLS, GITHUB_CAPABILITY_GROUPS, NR_WALLS, YOUR_WALLS } from "./personal-walls";
 
 // T4-a and T4-b, character for character as the owner approved them on board R15, and T4-c on board R16 (PLAN §6.12,
 // §6.13). Editing one is a
@@ -96,5 +98,34 @@ describe("the owner's approval refusal", () => {
   // internal/api/personal_walls.go words the same refusal for the owner; the two must read alike.
   it("reads as the sentence the server sends for a denied host", () => {
     expect(APPROVAL_WALLS.OWN_BEFORE + "a.evil.example" + APPROVAL_WALLS.OWN_AFTER).toBe("Your walls block a.evil.example. Change them in Settings.");
+  });
+});
+
+function repoRoot(): string {
+  let dir = resolve(process.cwd());
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, "go.mod"))) return dir;
+    dir = dirname(dir);
+  }
+  throw new Error("go.mod not found walking up from " + process.cwd());
+}
+
+describe("the GitHub capability checklist", () => {
+  const src = readFileSync(join(repoRoot(), "internal/ghscope/capability.go"), "utf8");
+  const consts = new Map<string, string>();
+  for (const m of src.matchAll(/^\s*(Cap\w+)\s+Capability = "([^"]+)"/gm)) consts.set(m[1], m[2]);
+
+  it("is exactly the grantable set in internal/ghscope/capability.go", () => {
+    const block = /var grantableCapabilities = map\[Capability\]bool\{([\s\S]*?)\n\}/.exec(src);
+    expect(block).not.toBeNull();
+    const grantable = [...block![1].matchAll(/(Cap\w+):\s*true/g)].map((m) => consts.get(m[1]));
+    expect(GITHUB_CAPABILITY_GROUPS.flatMap((g) => g.caps.map((c) => c.cap)).sort()).toEqual([...grantable].sort());
+  });
+
+  it("words each capability as the server does", () => {
+    const labels = new Map<string, string>();
+    const block = /var labels = map\[Capability\]string\{([\s\S]*?)\n\}/.exec(src)![1];
+    for (const m of block.matchAll(/(Cap\w+):\s*"([^"]+)"/g)) labels.set(consts.get(m[1])!, m[2]);
+    for (const c of GITHUB_CAPABILITY_GROUPS.flatMap((g) => g.caps)) expect(c.label).toBe(labels.get(c.cap));
   });
 });

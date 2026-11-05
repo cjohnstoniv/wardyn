@@ -59,7 +59,7 @@ export const YOUR_WALLS = {
   TOOLS: "Tool rules",
   TOOLS_HELP: "Each rule holds a tool for review or refuses it. Rules apply on runs whose tool calls wait for review, and never loosen a rule the run already has.",
   TOOLS_NONE: "No tool rules. Your runs keep their policy's.",
-  TOOLS_STAR_HINT: "Type * as the tool to cover every tool no other rule names.",
+  TOOLS_STAR_HINT: "Type * as the tool to cover every tool no other rule here names.",
   TOOLS_TOOL: "Tool",
   TOOLS_EFFECT: "Effect",
   TOOLS_PLACEHOLDER: "Bash",

@@ -5,13 +5,16 @@
 
 // T4-a: the Your walls card. The api module is mocked at its three routes; what is pinned is what the
 // card sends (only narrowing values), what it shows back, and the strings of the owner-approved board.
+import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../test/set-field";
 import { HttpError } from "../../../lib/api/core";
 import type { PersonalWalls } from "../../../lib/api/walls";
-import { YOUR_WALLS } from "../../wardyn/copy/personal-walls";
+import { GITHUB_CAPABILITIES, GITHUB_PUSH_NAME, YOUR_WALLS } from "../../wardyn/copy/personal-walls";
+import { toForm, WallsForm, type Form } from "./walls-form";
+import { ADO_CAPABILITIES } from "../../../lib/ado-capabilities";
 
 const getMock = vi.fn<() => Promise<PersonalWalls>>();
 const putMock = vi.fn<(spec: unknown) => Promise<PersonalWalls>>();
@@ -257,13 +260,13 @@ describe("Your walls card", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("puts a sentence that names no section above the buttons, capitalised, with its reason code", async () => {
+  it("puts a sentence that names no section above the buttons, as the server worded it, with its reason code", async () => {
     putMock.mockRejectedValue(new HttpError(400, "invalid walls: the document is too large", "walls_invalid"));
     render(<YourWallsCard />);
     await open();
     await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("The document is too large");
+    expect(alert).toHaveTextContent("the document is too large");
     expect(within(alert).getByText("walls_invalid")).toBeInTheDocument();
     expect(alert.nextElementSibling).toContainElement(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
   });
@@ -314,5 +317,233 @@ describe("Your walls card", () => {
     await user.click(await screen.findByRole("button", { name: /^Your walls/ }));
     await user.click(await screen.findByRole("button", { name: YOUR_WALLS.RETRY }));
     await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+  });
+});
+
+// Every limit a walls document carries has a control: capability lists, tool rules, paths never pushed, a recording
+// minimum and an idle stop. What is pinned is what each control shows and what Save sends.
+describe("Your walls: every limit has a control", () => {
+  const save = () => screen.getByRole("button", { name: YOUR_WALLS.SAVE });
+  const sent = () => waitFor(() => expect(putMock).toHaveBeenCalled()).then(() => putMock.mock.lastCall![0]);
+  const group = (name: string) => within(screen.getByRole("radiogroup", { name }));
+  const checked = (testId: string) => within(screen.getByTestId(testId)).getAllByRole("checkbox").filter((c) => c.getAttribute("aria-checked") === "true");
+
+  it.each([
+    ["walls-github", YOUR_WALLS.GITHUB_CAPS, GITHUB_CAPABILITIES.length, "github_capabilities", "Clone, fetch and browse"],
+    ["walls-ado", YOUR_WALLS.ADO_CAPS, ADO_CAPABILITIES.length, "azure_devops_capabilities", "Read code"],
+  ])("%s: No limit, then Only these starting with nothing checked and Save off until one is", async (testId, title, total, key, first) => {
+    render(<YourWallsCard />);
+    await open();
+    const list = within(screen.getByTestId(testId));
+    expect(group(title).getByRole("radio", { name: YOUR_WALLS.LIMIT_NONE })).toBeChecked();
+    expect(list.queryAllByRole("checkbox")).toHaveLength(0);
+    await user.click(group(title).getByRole("radio", { name: YOUR_WALLS.CAPS_ONLY }));
+    expect(list.getAllByRole("checkbox")).toHaveLength(total);
+    expect(checked(testId)).toHaveLength(0);
+    expect(list.getByText(YOUR_WALLS.CAPS_COUNT(0, total))).toBeInTheDocument();
+    expect(list.getByText(YOUR_WALLS.CAPS_EMPTY)).toBeInTheDocument();
+    expect(save()).toBeDisabled();
+    await user.click(list.getByRole("checkbox", { name: new RegExp(`^${first}`) }));
+    expect(list.getByText(YOUR_WALLS.CAPS_COUNT(1, total))).toBeInTheDocument();
+    expect(list.queryByText(YOUR_WALLS.CAPS_EMPTY)).not.toBeInTheDocument();
+    await user.click(save());
+    expect(Object.keys((await sent()) as object)).toEqual([key]);
+    expect(putMock.mock.lastCall![0]).toEqual({ [key]: [expect.any(String)] });
+  });
+
+  it("Reads only checks the six GitHub and eleven Azure DevOps reads and clears the rest", async () => {
+    getMock.mockResolvedValue({ spec: { github_capabilities: ["code_write", "org_admin"], azure_devops_capabilities: ["work_write"] } });
+    render(<YourWallsCard />);
+    await open();
+    await user.click(within(screen.getByTestId("walls-github")).getByRole("button", { name: YOUR_WALLS.CAPS_READS_ONLY }));
+    await user.click(within(screen.getByTestId("walls-ado")).getByRole("button", { name: YOUR_WALLS.CAPS_READS_ONLY }));
+    expect(checked("walls-github")).toHaveLength(6);
+    expect(checked("walls-ado")).toHaveLength(11);
+    await user.click(save());
+    const spec = (await sent()) as { github_capabilities: string[]; azure_devops_capabilities: string[] };
+    expect(spec.github_capabilities).toEqual(["code_read", "issues_read", "actions_read", "packages_read", "org_read", "identity"]);
+    expect(spec.azure_devops_capabilities).toHaveLength(11);
+  });
+
+  it("says what leaving out the push capability does, for the broker, and drops the line when it is checked", async () => {
+    getMock.mockResolvedValue({ spec: { github_capabilities: ["code_read"] } });
+    render(<YourWallsCard />);
+    await open();
+    const list = within(screen.getByTestId("walls-github"));
+    expect(list.getByText(YOUR_WALLS.CAPS_NO_PUSH(GITHUB_PUSH_NAME, "GitHub"))).toBeInTheDocument();
+    expect(list.getByText(YOUR_WALLS.CAPS_NO_PUSH_BROKER_OFF)).toBeInTheDocument();
+    await user.click(list.getByRole("checkbox", { name: /^Push commits with git/ }));
+    expect(list.queryByText(YOUR_WALLS.CAPS_NO_PUSH_BROKER_OFF)).not.toBeInTheDocument();
+  });
+
+  it("tool rules: no default row, a new rule starts at hold, hold and deny only, * is a rule like any other", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect(rules.getByText(YOUR_WALLS.TOOLS_NONE)).toBeInTheDocument();
+    expect(rules.getByText(YOUR_WALLS.TOOLS_STAR_HINT)).toBeInTheDocument();
+    await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
+    const effect = rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement;
+    expect(effect.value).toBe("hold");
+    expect([...effect.options].map((o) => o.value)).toEqual(["hold", "deny"]);
+    expect(rules.queryByText("*")).not.toBeInTheDocument();
+    setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) }), "*");
+    await user.selectOptions(effect, "deny");
+    await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
+    setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "WebFetch");
+    await user.click(save());
+    expect(await sent()).toEqual({ tool_rules: [{ tool: "*", effect: "deny" }, { tool: "WebFetch", effect: "hold" }] });
+  });
+
+  it("tool rules: two rules for one tool are marked, say so, and keep Save off", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "WebFetch", effect: "hold" }, { tool: "WebFetch", effect: "deny" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) })).toHaveAttribute("aria-invalid", "true");
+    expect(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) })).toHaveAttribute("aria-invalid", "true");
+    expect(rules.getByRole("alert")).toHaveTextContent("WebFetch");
+    expect(save()).toBeDisabled();
+    await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_REMOVE_N(2) }));
+    expect(save()).toBeEnabled();
+  });
+
+  it("a rule or path added and left blank is dropped on Save, and Save stays on", async () => {
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.PATHS_ADD }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.PATHS_ADD }));
+    expect(save()).toBeEnabled();
+    await user.click(save());
+    expect(await sent()).toEqual({});
+  });
+
+  it("an existing tool rule or path whose text was cleared blocks Save until it is typed again or removed", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "WebFetch", effect: "hold" }, { tool: "Bash", effect: "deny" }], push_rules: { deny_paths: [".github/workflows/", "infra/prod/**"] } } });
+    render(<YourWallsCard />);
+    await open();
+    setField(screen.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "");
+    setField(screen.getByRole("textbox", { name: YOUR_WALLS.PATHS_PATH_N(2) }), "");
+    expect(screen.getByText(YOUR_WALLS.TOOLS_BLANK)).toBeInTheDocument();
+    expect(screen.getByText(YOUR_WALLS.PATHS_BLANK)).toBeInTheDocument();
+    expect(save()).toBeDisabled();
+    setField(screen.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "Bash");
+    expect(save()).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.PATHS_REMOVE_N(2) }));
+    expect(save()).toBeEnabled();
+    await user.click(save());
+    expect(await sent()).toEqual({ tool_rules: [{ tool: "WebFetch", effect: "hold" }, { tool: "Bash", effect: "deny" }], push_rules: { deny_paths: [".github/workflows/"] } });
+  });
+
+  it("a row that was typed in and then cleared is not dropped either", async () => {
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
+    setField(screen.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) }), "Bash");
+    setField(screen.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) }), "");
+    expect(save()).toBeDisabled();
+  });
+
+  it("paths never pushed stay editable beside Refuse every push, say why they change nothing, and keep their notes readable", async () => {
+    getMock.mockResolvedValue({ spec: { push_rules: { deny_paths: [".github/workflows/"] } } });
+    render(<YourWallsCard />);
+    await open();
+    const paths = within(screen.getByTestId("walls-deny-paths"));
+    expect(paths.getByText(YOUR_WALLS.PATHS_ADO_NOTE)).toBeInTheDocument();
+    expect(paths.getByText(YOUR_WALLS.PATHS_BROKER_NOTE)).toBeInTheDocument();
+    expect(paths.queryByText(YOUR_WALLS.PATHS_OFF_NOTE)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: YOUR_WALLS.REFUSE_PUSH }));
+    expect(paths.getByText(YOUR_WALLS.PATHS_OFF_NOTE)).toBeInTheDocument();
+    const dimmed = screen.getByTestId("walls-deny-paths").querySelector("[data-dimmed]")!;
+    expect(dimmed).toContainElement(paths.getByRole("textbox", { name: YOUR_WALLS.PATHS_PATH_N(1) }));
+    for (const note of [YOUR_WALLS.PATHS_ADO_NOTE, YOUR_WALLS.PATHS_BROKER_NOTE, YOUR_WALLS.PATHS_OFF_NOTE]) expect(dimmed).not.toContainElement(paths.getByText(note));
+    expect(paths.getByRole("textbox", { name: YOUR_WALLS.PATHS_PATH_N(1) })).toBeEnabled();
+    await user.click(save());
+    expect(await sent()).toEqual({ push_rules: { deny_paths: [".github/workflows/"], deny_all: true } });
+  });
+
+  it("Record at least: No minimum, Terminal or Screen and actions, never Off", async () => {
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByText(YOUR_WALLS.RECORDING_UNSET)).toBeInTheDocument();
+    expect(group(YOUR_WALLS.RECORDING).getAllByRole("radio").map((r) => r.parentElement?.textContent)).toEqual([YOUR_WALLS.RECORDING_NONE, "Terminal", "Screen and actions"]);
+    await user.click(group(YOUR_WALLS.RECORDING).getByRole("radio", { name: "Screen and actions" }));
+    expect(screen.getByText(/Records the screen and an action log/)).toBeInTheDocument();
+    await user.click(save());
+    expect(await sent()).toEqual({ recording: "screen_actions" });
+  });
+
+  it.each([
+    [15, "15", "seconds"],
+    [90, "90", "seconds"],
+    [900, "15", "minutes"],
+    [3600, "60", "minutes"],
+  ])("Stop when idle shows a stored %i seconds exactly (%s %s) and an unrelated save sends it unchanged", async (sec, n, unit) => {
+    getMock.mockResolvedValue({ spec: { auto_stop_after_sec: sec } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByRole("textbox", { name: YOUR_WALLS.IDLE_NUMBER })).toHaveValue(n);
+    expect(screen.getByRole("combobox", { name: YOUR_WALLS.IDLE_UNIT_LABEL })).toHaveValue(unit);
+    await user.click(screen.getByRole("checkbox", { name: YOUR_WALLS.COPY_OUT }));
+    await user.click(save());
+    expect(await sent()).toEqual({ auto_stop_after_sec: sec, desktop: { copy_out: "blocked" } });
+  });
+
+  it("Stop when idle: Stop after N seconds or minutes; 0, a fraction and nothing keep Save off", async () => {
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByRole("textbox", { name: YOUR_WALLS.IDLE_NUMBER })).toBeDisabled();
+    await user.click(group(YOUR_WALLS.IDLE).getByRole("radio", { name: YOUR_WALLS.IDLE_AFTER }));
+    const number = screen.getByRole("textbox", { name: YOUR_WALLS.IDLE_NUMBER });
+    for (const bad of ["0", "1.5", "", "-3", "ten"]) {
+      setField(number, bad);
+      expect(screen.getByText(YOUR_WALLS.IDLE_PROBLEM)).toBeInTheDocument();
+      expect(save()).toBeDisabled();
+    }
+    setField(number, "45");
+    await user.selectOptions(screen.getByRole("combobox", { name: YOUR_WALLS.IDLE_UNIT_LABEL }), "seconds");
+    expect(screen.queryByText(YOUR_WALLS.IDLE_PROBLEM)).not.toBeInTheDocument();
+    await user.click(save());
+    expect(await sent()).toEqual({ auto_stop_after_sec: 45 });
+    await user.selectOptions(screen.getByRole("combobox", { name: YOUR_WALLS.IDLE_UNIT_LABEL }), "minutes");
+    await user.click(save());
+    await waitFor(() => expect(putMock).toHaveBeenLastCalledWith({ auto_stop_after_sec: 2700 }));
+  });
+
+  it("puts a server sentence for each new limit under its section", async () => {
+    getMock.mockResolvedValue({ spec: { recording: "terminal" } });
+    putMock.mockRejectedValue(new HttpError(400, "invalid walls: tool_rules[1]: duplicate rule for tool \"WebFetch\" — two rules for one tool means one of them does nothing", "walls_invalid"));
+    render(<YourWallsCard />);
+    await open();
+    await user.click(save());
+    const alert = await screen.findByRole("alert");
+    expect(alert.parentElement).toBe(screen.getByTestId("walls-tool-rules"));
+    expect(alert).toHaveTextContent("tool_rules[1]: duplicate rule");
+  });
+
+  it("says which limits a restarted run takes on", async () => {
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByText(YOUR_WALLS.RESTART_NOTE)).toBeInTheDocument();
+  });
+
+  it("two forms on the page keep their own capability checkboxes: a label click changes only its own form", async () => {
+    const drafts: Form[] = [];
+    function Draft({ at }: { at: number }) {
+      const [form, setForm] = React.useState(() => toForm({ github_capabilities: ["code_read"] }));
+      drafts[at] = form;
+      return <div data-testid={`form-${at}`}><WallsForm form={form} onEdit={(p) => setForm((f) => ({ ...f, ...p }))} /></div>;
+    }
+    render(<><Draft at={0} /><Draft at={1} /></>);
+    const label = "Open, update and review pull requests";
+    const box = (at: number) => within(screen.getByTestId(`form-${at}`)).getByRole("checkbox", { name: label });
+    const ids = [...document.querySelectorAll("[id]")].map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    await user.click(within(screen.getByTestId("form-1")).getByText(label));
+    expect(box(1)).toBeChecked();
+    expect(box(0)).not.toBeChecked();
+    expect(drafts[1].github).toContain("pr");
+    expect(drafts[0].github).toEqual(["code_read"]);
   });
 });
