@@ -809,9 +809,9 @@ func TestMacWindowOpensOnceInteractivePrepIsDone(t *testing.T) {
 	}
 }
 
-// An open window keeps the run in use: the open and each re-check that lets it stay stamp the run's presence and
-// touch the run, so the idle reaper does not stop it. A re-check that ends the window touches nothing, and over
-// N re-checks the touches never pass one per re-check plus the open.
+// TouchRun is called when a window opens and on each re-check that lets it stay, and on no re-check that ends
+// it; over N re-checks the calls never pass one per re-check plus the open. This pins the calls only; it does
+// not exercise the idle reaper.
 func TestMacWindowKeepsTheRunActive(t *testing.T) {
 	t.Run("the open and each re-check that lets it stay touch the run", func(t *testing.T) {
 		r := newMacWindowRig(t)
