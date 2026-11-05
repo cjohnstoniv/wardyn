@@ -36,6 +36,10 @@ type macWindowPending struct {
 	RevSeq       int64           `json:"rev_seq,omitempty"`
 	Token        bool            `json:"token,omitempty"`
 	Via          bool            `json:"via,omitempty"`
+	// TokenID and CLISessionID are the credential the window is bound to (macWindowAuthority). Absent in a grant
+	// kept before the binding existed, which then reads as no binding and is refused.
+	TokenID      uuid.UUID `json:"token_id"`
+	CLISessionID uuid.UUID `json:"cli_session_id"`
 }
 
 // errNoPersonRecords is the refusal of a window at start on a store that keeps no per-person records: the grant
@@ -50,7 +54,8 @@ func (s *Server) macWindowStorePending(ctx context.Context, runID uuid.UUID, a m
 		return errNoPersonRecords
 	}
 	raw, err := json.Marshal(macWindowPending{ActorType: a.ActorType, Principal: a.Principal, Email: a.Email,
-		AuthorizedAt: a.Issue.At, RevSeq: a.Issue.Seq, Token: a.Token, Via: a.Via})
+		AuthorizedAt: a.Issue.At, RevSeq: a.Issue.Seq, Token: a.Token, Via: a.Via,
+		TokenID: a.TokenID, CLISessionID: a.CLISessionID})
 	if err != nil {
 		return err
 	}
@@ -76,7 +81,8 @@ func (s *Server) macWindowLoadPending(ctx context.Context, run types.AgentRun) (
 		return a, false, nil
 	}
 	return macWindowAuthority{ActorType: p.ActorType, Principal: p.Principal, Email: p.Email,
-		Issue: oidc.Issue{At: p.AuthorizedAt, Seq: p.RevSeq}, Token: p.Token, Via: p.Via}, true, nil
+		Issue: oidc.Issue{At: p.AuthorizedAt, Seq: p.RevSeq}, Token: p.Token, Via: p.Via,
+		TokenID: p.TokenID, CLISessionID: p.CLISessionID}, true, nil
 }
 
 // macWindowForgetPending drops the pending grant of run once its launch has asked: a window that stays open

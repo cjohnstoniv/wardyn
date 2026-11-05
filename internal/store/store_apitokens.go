@@ -110,6 +110,20 @@ func GetLiveAPITokenQ(ctx context.Context, q Querier, id uuid.UUID) (types.APITo
 	return scanAPIToken(q.QueryRow(ctx, `SELECT `+apiTokenCols+` FROM api_tokens WHERE id = $1 AND `+apiTokenLive, id))
 }
 
+// LiveAPITokenReader is the non-transaction read of GetLiveAPITokenQ, for a re-check that holds no transaction.
+// A capability interface like APITokensByIdentityLister.
+type LiveAPITokenReader interface {
+	GetLiveAPIToken(ctx context.Context, id uuid.UUID) (types.APIToken, error)
+}
+
+var _ LiveAPITokenReader = PG{}
+
+// GetLiveAPIToken is GetLiveAPITokenQ on the pool: ErrNotFound once the token is revoked, expired, unknown, or
+// belongs to a CLI session that has ended.
+func (s PG) GetLiveAPIToken(ctx context.Context, id uuid.UUID) (types.APIToken, error) {
+	return GetLiveAPITokenQ(ctx, s.Pool, id)
+}
+
 // TouchAPIToken records that id was just used. BEST EFFORT: the auth branch
 // ignores the error, since failing to record a touch must never fail an
 // otherwise-valid request.
