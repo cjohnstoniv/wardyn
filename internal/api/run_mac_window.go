@@ -172,18 +172,71 @@ type macWindowAuthority struct {
 	Token bool
 	// Via: a portal's delegated token admitted the request. A window is never opened through one.
 	Via bool
+	// TokenID is the personal API token that admitted the request, and CLISessionID the CLI session whose access
+	// token did: the credential the window is bound to, ended with it. Only ids, never the secret. A CLI sign-in
+	// binds to its session alone, because a refresh replaces its access token and the session lives on. Both are
+	// nil on a console session.
+	TokenID      uuid.UUID
+	CLISessionID uuid.UUID
 }
 
 // macWindowAuthorityFrom is the authority of the request ctx carries, admitted at.
 func macWindowAuthorityFrom(ctx context.Context, actor types.ActorType, principal string, at time.Time) macWindowAuthority {
 	_, via := audit.DelegationFrom(ctx)
+	tokenID, sessionID := apiTokenIDFromContext(ctx), cliSessionIDFromContext(ctx)
+	if sessionID != uuid.Nil {
+		tokenID = uuid.Nil
+	}
 	return macWindowAuthority{ActorType: actor, Principal: principal, Email: oidcEmailFromContext(ctx),
-		Issue: admittedIssue(ctx, principal, at), Token: admittedByToken(ctx), Via: via}
+		Issue: admittedIssue(ctx, principal, at), Token: admittedByToken(ctx), Via: via,
+		TokenID: tokenID, CLISessionID: sessionID}
+}
+
+// errMacWindowNoBinding is a token authority that names neither a token nor a CLI session, a grant kept before
+// the window was bound to its credential: nothing says which credential to ask after, so it cannot be judged.
+var errMacWindowNoBinding = errors.New("the window's grant names no token or CLI session")
+
+// macWindowCredentialGone is whether the token or CLI session a's window is bound to has ended: a token revoked or
+// expired, a CLI session ended or past its lifetime. A store that cannot say is an error.
+func (s *Server) macWindowCredentialGone(ctx context.Context, a macWindowAuthority) (bool, error) {
+	switch {
+	case a.CLISessionID != uuid.Nil:
+		cs, ok := s.cfg.Store.(interface {
+			GetCLISession(ctx context.Context, id uuid.UUID) (store.CLISessionRow, error)
+		})
+		if !ok {
+			return false, errors.New("the store keeps no CLI sessions")
+		}
+		sess, err := cs.GetCLISession(ctx, a.CLISessionID)
+		if errors.Is(err, store.ErrNotFound) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return sess.EndedAt != nil || !s.cfg.Now().Before(sess.ExpiresAt), nil
+	case a.TokenID != uuid.Nil:
+		tr, ok := s.cfg.Store.(store.LiveAPITokenReader)
+		if !ok {
+			return false, errors.New("the store cannot re-read an API token")
+		}
+		_, err := tr.GetLiveAPIToken(ctx, a.TokenID)
+		if errors.Is(err, store.ErrNotFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, errMacWindowNoBinding
 }
 
 // macWindowRevoked is whether a's credential has been cut since it was issued. A store that cannot answer is an
 // error, and the caller refuses: continuing would serve the credential an admin may have just cancelled.
 func (s *Server) macWindowRevoked(ctx context.Context, a macWindowAuthority) (bool, error) {
+	if a.Token {
+		if gone, err := s.macWindowCredentialGone(ctx, a); gone || err != nil {
+			return gone, err
+		}
+	}
 	rev := s.cfg.SessionRevocations
 	if rev == nil {
 		return false, nil
@@ -560,6 +613,7 @@ func (s *Server) openMacWindow(ctx context.Context, run types.AgentRun, a macWin
 	data := macWindowData(w.background, trigger, &w.runnerID)
 	data["grant_id"] = w.grantID.String()
 	s.auditMacWindowBegin(ctx, &run.ID, a, w.grantID.String(), "success", data)
+	_ = s.cfg.Store.TouchRun(ctx, run.ID) // an error only leaves the run to the reaper, as in attachKeepalive
 	s.goBackground(func() { s.watchMacWindow(wctx, w) })
 	return w, nil
 }
@@ -753,8 +807,8 @@ func (s *Server) watchMacWindow(ctx context.Context, w *macWindow) {
 // macWindowRecheck asks again what the open asked: the run as it stands now, the person's credential and the
 // rows of macWindowRefusal, with the same own-runner rule (no delegate, no service identity, no operator-owned
 // run). It returns the close reason, "" while the window may stay, and the check that refused. Anything it
-// cannot read ends the window (fail closed). A window that stays stamps the run's presence, so an open window
-// keeps the run from idling out from under the person.
+// cannot read ends the window (fail closed). A window that stays stamps the run's presence and touches the run,
+// so an open window keeps the run from idling out from under the person. A window that ends touches nothing.
 func (s *Server) macWindowRecheck(ctx context.Context, w *macWindow) (reason, by string) {
 	run, err := s.cfg.Store.GetRun(ctx, w.runID)
 	if err != nil {
@@ -779,6 +833,7 @@ func (s *Server) macWindowRecheck(ctx context.Context, w *macWindow) (reason, by
 	switch {
 	case rf == nil:
 		_, _ = s.stampPresence(ctx, w.runID, types.ActorHuman, w.auth.Principal, macWindowSurface)
+		_ = s.cfg.Store.TouchRun(ctx, w.runID) // as attachKeepalive: an error only leaves the run to the reaper
 		return "", ""
 	case rf.err == nil && rf.decision == nil && (rf.body.Reason == reasonMacWindowOffline || rf.body.Reason == reasonMacWindowNotHere):
 		return macWindowRunnerOffline, rf.body.Reason

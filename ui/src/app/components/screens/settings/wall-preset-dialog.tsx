@@ -20,7 +20,7 @@ import { Label } from "../../ui/label";
 import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_SHARED } from "../../wardyn/copy/new-run/shared";
 import { WALL_PRESETS as W } from "../../wardyn/copy/wall-presets";
-import { toForm, toSpec, WallsForm, type Form } from "./walls-form";
+import { formBlocked, toForm, toSpec, WallsForm, type Form } from "./walls-form";
 
 export type PresetDialogMode = { kind: "new" } | { kind: "edit"; preset: WallPreset } | { kind: "copy"; preset: WallPreset };
 
@@ -72,6 +72,7 @@ export function WallPresetDialog({
   const audience = audiences.find((a) => a.value === audienceValue) ?? audiences[0];
   const spec = toSpec(form);
   const empty = Object.keys(spec).length === 0;
+  const blocked = formBlocked(form);
   const copyOfOpen = mode.kind === "copy" && Object.keys(mode.preset.spec).length === 0;
   const title = mode.kind === "new" ? W.DIALOG_NEW : mode.kind === "edit" ? W.DIALOG_EDIT : W.DIALOG_COPY;
   const helper = publish.groups_unverified ? TEMPLATE_REFUSAL.GROUP_UNVERIFIED() : publish.org ? W.HELP_ORG : audiences.length > 1 ? W.HELP_GROUPS : W.HELP_ONLY_ME;
@@ -127,7 +128,7 @@ export function WallPresetDialog({
           aria-busy={busy}
           onSubmit={(e) => {
             e.preventDefault();
-            if (!empty && name.trim() && !busy) void submit();
+            if (!empty && !blocked && name.trim() && !busy) void submit();
           }}
         >
           <DialogTitle>{title}</DialogTitle>
@@ -176,7 +177,7 @@ export function WallPresetDialog({
           </div>
           <hr className="border-border" />
           {copyOfOpen && empty && <p className="text-sm text-muted-foreground">{W.COPY_OPEN}</p>}
-          <WallsForm form={form} onEdit={edit} listCarried errors={sectionErrors} />
+          <WallsForm form={form} onEdit={edit} errors={sectionErrors} />
           {mode.kind === "edit" && <p className="text-xs text-muted-foreground">{W.EDITING_VERSION(mode.preset.version)}</p>}
           {failure && (
             <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
@@ -189,10 +190,11 @@ export function WallPresetDialog({
             </p>
           )}
           <DialogFooter>
+            {empty && !blocked && <p className="text-xs text-muted-foreground sm:mr-auto sm:self-center">{W.NEEDS_A_LIMIT}</p>}
             <Button type="button" variant="outline" onClick={onClose}>
               {W.CANCEL}
             </Button>
-            <Button type="submit" disabled={empty || !name.trim() || busy}>
+            <Button type="submit" disabled={empty || blocked || !name.trim() || busy}>
               {W.SAVE}
             </Button>
           </DialogFooter>

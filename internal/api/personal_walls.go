@@ -730,8 +730,9 @@ func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.Agent
 
 // wallsBeyondMeet applies to met what the meet alone would place wrongly; before is the policy the meet
 // started from.
-//   - tool_rules: each rule is ADDED by narrowToolRule, as a run override's is (a hold or deny only, and
-//     only where it is stricter than the tool's effect today). The meet would spell out the "*" default
+//   - tool_rules: the document's rules are ADDED together by narrowToolRules, against the rules the run
+//     had before it, so their order in the document does not matter (a hold or deny only, and only
+//     where it is stricter than the tool's effect today). The meet would spell out the "*" default
 //     as hold, which tightens every tool the person did not name on a run whose lane lets them run.
 //   - recording: a policy that names no level reads as the organisation's, so a floor met into it would
 //     replace that default with the lower floor. It is left naming none, and the floor is applied at
@@ -739,11 +740,7 @@ func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.Agent
 //     level keeps the meet's: the higher of the two.
 func (s *Server) wallsBeyondMeet(met *types.RunPolicySpec, before types.RunPolicySpec, walls types.PersonalWallsSpec) {
 	if walls.ToolRules != nil {
-		for _, nr := range *walls.ToolRules {
-			if next, _, applied := narrowToolRule(met.ToolRules, nr); applied {
-				met.ToolRules = next
-			}
-		}
+		met.ToolRules = narrowToolRules(met.ToolRules, *walls.ToolRules)
 	}
 	if walls.Recording != nil && before.Recording == "" {
 		met.Recording = ""

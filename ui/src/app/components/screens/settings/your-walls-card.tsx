@@ -25,14 +25,17 @@ import { Button, buttonVariants } from "../../ui/button";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { YOUR_WALLS as T } from "../../wardyn/copy/personal-walls";
 import { TableSkeleton } from "../../wardyn/states";
-import { toForm, toSpec, WallsForm, type Form } from "./walls-form";
+import { sectionOfRefusal, type FormSection } from "../../../lib/wall-preset-words";
+import { formBlocked, toForm, toSpec, WallsForm, type Form } from "./walls-form";
 
 export function YourWallsCard() {
   const [state, setState] = React.useState<"loading" | "absent" | "error" | "ready">("loading");
   const [form, setForm] = React.useState<Form>(() => toForm({}));
   const [busy, setBusy] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
+  // A refusal the server words: under the section it names, else above the buttons with its reason code.
   const [refusal, setRefusal] = React.useState<{ message: string; reason: string } | null>(null);
+  const [sectionErrors, setSectionErrors] = React.useState<Partial<Record<FormSection, string>>>({});
 
   const load = React.useCallback(() => {
     setState("loading");
@@ -49,11 +52,18 @@ export function YourWallsCard() {
   const edit = (patch: Partial<Form>) => {
     setForm((f) => ({ ...f, ...patch }));
     setSaved(false);
+    setSectionErrors({});
   };
-  const fail = (e: unknown) => setRefusal({ message: e instanceof HttpError ? e.message : T.SAVE_FAILED, reason: e instanceof HttpError ? e.reason : "" });
+  const fail = (e: unknown) => {
+    if (!(e instanceof HttpError)) return setRefusal({ message: T.SAVE_FAILED, reason: "" });
+    const { section, text } = sectionOfRefusal(e.message);
+    if (e.reason === "walls_invalid" && section && section !== "name" && section !== "description") return setSectionErrors({ [section]: text });
+    setRefusal({ message: e.reason === "walls_invalid" ? text : e.message, reason: e.reason });
+  };
   const run = async (act: () => Promise<void>): Promise<boolean> => {
     setBusy(true);
     setRefusal(null);
+    setSectionErrors({});
     try {
       await act();
       return true;
@@ -92,9 +102,15 @@ export function YourWallsCard() {
       )}
       {state === "ready" && (
         <div className="flex flex-col gap-[18px]">
-          <WallsForm form={form} onEdit={edit} />
+          <WallsForm form={form} onEdit={edit} errors={sectionErrors} />
+          {refusal && (
+            <p role="alert" className="text-sm text-danger">
+              {refusal.message}
+              {refusal.reason && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{refusal.reason}</span>}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" disabled={busy} onClick={() => void save()}>
+            <Button size="sm" disabled={busy || formBlocked(form)} onClick={() => void save()}>
               {T.SAVE}
             </Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmingRemove(true)}>
@@ -105,12 +121,6 @@ export function YourWallsCard() {
             <p role="status" className="flex items-center gap-2 rounded-md border border-success/25 bg-success-subtle px-3 py-2 text-xs text-success">
               <Check className="size-3.5" aria-hidden="true" />
               {T.SAVED}
-            </p>
-          )}
-          {refusal && (
-            <p role="alert" className="text-sm text-danger">
-              {refusal.message}
-              {refusal.reason && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{refusal.reason}</span>}
             </p>
           )}
           <p className="text-xs text-muted-foreground">{T.RESTART_NOTE}</p>
