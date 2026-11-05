@@ -555,7 +555,7 @@ What the check does and does not settle:
 | `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
 | `azure_devops_capabilities` | | The run keeps only capabilities in both your list and its policy's list, or the provider's default profile where the policy names none. Nothing in common refuses the run (`403` `governance_overlay_unsatisfiable`) |
 | `github_capabilities` | | The same for GitHub: the GitHub CLI keeps only your listed capabilities. Without `code_write` (yours or the policy's), git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only; `azure_devops_capabilities` does the same for Azure DevOps `git_pat` pushes. |
-| `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool your walls don't name, including tools the run's policy names. A rule never loosens one the run already has, and `allow` is refused |
+| `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool your walls don't name, the policy's included. A rule never loosens one the run already has, and `allow` is refused |
 | `push_rules.deny_paths` | | Paths added to the run's push deny list. Only more is refused; a path the run already denies stays denied |
 | `push_rules.deny_all` | | `true` only. Refuses every push the run makes |
 | `recording` | | A floor: the run is recorded at least at `terminal` or `screen_actions`. It never lowers the run's level or your organisation's default; `off` is no floor and is refused |
