@@ -125,7 +125,7 @@ func TestWallPresetsNeverWiden(t *testing.T) {
 }
 
 // TestWallPresetToolRulesComposeInAnyOrder: a preset's tool rules read the same in either order, and the
-// person's walls and the preset together are never wider than either for any tool.
+// preset step's result is never wider than the preset or the policy it starts from for any tool.
 func TestWallPresetToolRulesComposeInAnyOrder(t *testing.T) {
 	srv, _, _ := uvServer(t)
 	star, bashHold := types.ToolRule{Tool: "*", Effect: types.ToolDeny}, types.ToolRule{Tool: "Bash", Effect: types.ToolHold}

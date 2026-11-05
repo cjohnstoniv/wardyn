@@ -43,7 +43,7 @@ type PersonalWallsSpec struct {
 	// ToolRules are rules ADDED to the run's: each holds or denies a tool, never allows one, and never
 	// loosens a rule the run already has. It never reaches Overlay(): the meet spells out the "*"
 	// default too, which would tighten every tool the person did not name, so the run step adds the
-	// rules one by one.
+	// whole document at once against the rules the run had before it (order does not matter).
 	ToolRules *[]ToolRule `json:"tool_rules,omitempty"`
 	// PushRules adds paths to the run's push deny list (a union, so only more is refused).
 	PushRules *PersonalWallsPushRules `json:"push_rules,omitempty"`
