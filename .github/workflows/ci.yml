@@ -1001,6 +1001,10 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1257,6 +1261,10 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1405,6 +1413,10 @@ jobs:
         --set serviceAccount.automount=true --set k8s.enabled=true --set k8s.proxyImage=wardyn/wardyn-proxy:kind-test
         --set k8s.runsNamespace=wardyn-conformance --set k8s.agentSandbox.enabled=true
     steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1800,6 +1812,10 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
