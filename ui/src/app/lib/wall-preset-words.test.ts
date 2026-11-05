@@ -59,10 +59,21 @@ describe("sectionOfRefusal", () => {
     ["invalid wall preset: push_rules.deny_all: walls only narrow", "pushes"],
     ["invalid wall preset: name is required", "name"],
     ["invalid wall preset: description must be printable text", "description"],
-    ["invalid wall preset: github_capabilities[0]: nope", null],
-    ["invalid wall preset: push_rules.deny_paths: 99 entries", null],
+    ["invalid wall preset: github_capabilities[0]: nope", "github"],
+    ["invalid wall preset: azure_devops_capabilities: name between 1 and 64 capabilities, or leave it out", "ado"],
+    ["invalid wall preset: tool_rules[1]: duplicate rule for tool \"WebFetch\"", "tools"],
+    ["invalid wall preset: push_rules.deny_paths: 99 entries", "pushes"],
+    ["invalid wall preset: push_rules.deny_paths[2]: empty entry", "pushes"],
+    ["invalid wall preset: recording: off is no floor", "recording"],
+    ["invalid wall preset: auto_stop_after_sec: 0 is not a cap", "idle"],
+    ["invalid walls: tool_rules[0]: tool is required", "tools"],
     ["invalid wall preset: the preset names no limit; Open is the built-in for no preset", null],
   ])("%s", (message, section) => expect(sectionOfRefusal(message).section).toBe(section));
+
+  it("takes off either prefix and leaves the sentence as the server worded it", () => {
+    expect(sectionOfRefusal("invalid walls: tool_rules[0]: tool is required").text).toBe("tool_rules[0]: tool is required");
+    expect(sectionOfRefusal("invalid wall preset: recording: off is no floor").text).toBe("recording: off is no floor");
+  });
 });
 
 describe("presetRefusingEveryPush", () => {

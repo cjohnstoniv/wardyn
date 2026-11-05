@@ -11,7 +11,8 @@ import { WALL_PRESETS as W } from "../components/wardyn/copy/wall-presets";
 import type { PersonalWallsSpec } from "./api/walls";
 import type { WallPreset } from "./types/wall-presets";
 
-const isRead = (c: string) => c.endsWith("_read") || c === "identity";
+/** A read capability: the console's own test, the one the built-in Read-only keeps. */
+export const isRead = (c: string) => c.endsWith("_read") || c === "identity";
 
 /** Both forge capability lists are named and name reads only: the one case "Read capabilities only" is true. */
 export const readsOnly = (s: PersonalWallsSpec): boolean =>
@@ -72,7 +73,19 @@ export function audienceOf(p: Pick<WallPreset, "scope" | "group_id">, groupLabel
 }
 
 /** The form sections a server sentence can name, by the wire path it starts with. */
-export type FormSection = "sites" | "never" | "unlisted" | "barrier" | "clipboard" | "credentials" | "pushes";
+export type FormSection =
+  | "sites"
+  | "never"
+  | "unlisted"
+  | "barrier"
+  | "clipboard"
+  | "credentials"
+  | "github"
+  | "ado"
+  | "tools"
+  | "pushes"
+  | "recording"
+  | "idle";
 
 const SECTION_OF_PATH: Record<string, FormSection | "name" | "description"> = {
   allowed_domains: "sites",
@@ -82,22 +95,32 @@ const SECTION_OF_PATH: Record<string, FormSection | "name" | "description"> = {
   min_confinement_class: "barrier",
   desktop: "clipboard",
   withheld_grants: "credentials",
+  github_capabilities: "github",
+  azure_devops_capabilities: "ado",
+  tool_rules: "tools",
   "push_rules.deny_all": "pushes",
+  "push_rules.deny_paths": "pushes",
+  recording: "recording",
+  auto_stop_after_sec: "idle",
   name: "name",
   description: "description",
 };
 
 /**
- * The part a wall preset refusal names: the section of the form its wire path belongs to, and the server's own
- * sentence under it. A path the form has no section for (a capability list, tool rules, recording) maps to none,
- * and the sentence shows above the buttons. The server prefixes a write's sentence with "invalid wall preset: ".
+ * The part a walls or wall preset refusal names: the section of the form its wire path belongs to, and the server's own
+ * sentence under it. A sentence that names no path of the form maps to none, and shows above the buttons. The server
+ * prefixes a write's sentence with "invalid wall preset: " (a preset) or "invalid walls: " (Your walls).
  */
 export function sectionOfRefusal(message: string): { section: FormSection | "name" | "description" | null; text: string } {
-  const text = message.replace(/^invalid wall preset: /, "");
+  const text = message.replace(/^invalid (?:wall preset|walls): /, "");
   // A path, then a colon ("denied_domains[1]: ...") or a space ("name is required"); indexes are dropped.
   const path = /^[a-z_]+(?:\[\d+\])?(?:\.[a-z_]+)?(?:\[\d+\])?(?=[: ])/.exec(text)?.[0].replace(/\[\d+\]/g, "") ?? "";
   return { section: SECTION_OF_PATH[path] ?? SECTION_OF_PATH[path.split(".")[0]] ?? null, text };
 }
+
+/** A stored idle stop as the form shows it: whole minutes in minutes, anything else in seconds, so it is always exact. */
+export const idleDisplay = (sec: number): { n: number; unit: "seconds" | "minutes" } =>
+  sec % 60 === 0 ? { n: sec / 60, unit: "minutes" } : { n: sec, unit: "seconds" };
 
 /** The audit rule_source of a push refused because the policy refuses every push. */
 export const PUSH_DENY_ALL_SOURCE = "brokered:git:push-deny-all";
