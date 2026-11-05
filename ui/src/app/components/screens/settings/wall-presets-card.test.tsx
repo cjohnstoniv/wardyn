@@ -357,4 +357,3 @@ describe("Wall presets card: every limit has a control", () => {
     expect(alert.parentElement).toHaveTextContent("Pushes");
   });
 });
-
