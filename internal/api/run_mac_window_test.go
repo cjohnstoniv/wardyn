@@ -52,14 +52,16 @@ func (r *macWindowRevocations) set(revoked bool, err error) {
 // presence clock, and a run read a test can fail.
 type macWindowStore struct {
 	*desktopSiteStore
-	mu         sync.Mutex
-	runners    map[uuid.UUID]types.Runner
-	runnerErr  error
-	prefs      map[string]json.RawMessage
-	getRunErr  error
-	stamps     atomic.Int32
-	touched    atomic.Int32
-	prefsWrite atomic.Int32
+	mu          sync.Mutex
+	runners     map[uuid.UUID]types.Runner
+	runnerErr   error
+	prefs       map[string]json.RawMessage
+	getRunErr   error
+	tokens      map[uuid.UUID]bool
+	cliSessions map[uuid.UUID]store.CLISessionRow
+	stamps      atomic.Int32
+	touched     atomic.Int32
+	prefsWrite  atomic.Int32
 }
 
 func (s *macWindowStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
@@ -89,6 +91,69 @@ func (s *macWindowStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentR
 		return types.AgentRun{}, err
 	}
 	return s.desktopSiteStore.GetRun(ctx, id)
+}
+
+// liveToken registers a personal API token that can still authenticate.
+func (s *macWindowStore) liveToken(id uuid.UUID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens == nil {
+		s.tokens = map[uuid.UUID]bool{}
+	}
+	s.tokens[id] = true
+}
+
+func (s *macWindowStore) GetLiveAPIToken(_ context.Context, id uuid.UUID) (types.APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.tokens[id] {
+		return types.APIToken{}, store.ErrNotFound
+	}
+	return types.APIToken{ID: id}, nil
+}
+
+// RevokeAPIToken is what DELETE /tokens/{id} reaches: the token stops reading as live.
+func (s *macWindowStore) RevokeAPIToken(_ context.Context, id uuid.UUID, _ string, _ time.Time) (types.APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.tokens[id] {
+		return types.APIToken{}, store.ErrNotFound
+	}
+	delete(s.tokens, id)
+	return types.APIToken{ID: id}, nil
+}
+
+// cliSession registers a CLI session for f to change, and returns its id.
+func (s *macWindowStore) cliSession(f func(row *store.CLISessionRow)) uuid.UUID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cliSessions == nil {
+		s.cliSessions = map[uuid.UUID]store.CLISessionRow{}
+	}
+	row := store.CLISessionRow{ID: uuid.New(), ExpiresAt: time.Now().Add(24 * time.Hour)}
+	if f != nil {
+		f(&row)
+	}
+	s.cliSessions[row.ID] = row
+	return row.ID
+}
+
+func (s *macWindowStore) GetCLISession(_ context.Context, id uuid.UUID) (store.CLISessionRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.cliSessions[id]
+	if !ok {
+		return store.CLISessionRow{}, store.ErrNotFound
+	}
+	return row, nil
+}
+
+func (s *macWindowStore) endCLISession(id uuid.UUID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, now := s.cliSessions[id], time.Now()
+	row.EndedAt = &now
+	s.cliSessions[id] = row
 }
 
 func (s *macWindowStore) failRunRead(err error) {
@@ -955,12 +1020,13 @@ func TestMacWindowAtStartPendingGrant(t *testing.T) {
 	t.Run("the record round-trips", func(t *testing.T) {
 		r := newMacWindowRig(t)
 		a := r.auth()
-		a.Issue.Seq, a.Token = 41, true
+		a.Issue.Seq, a.Token, a.TokenID, a.CLISessionID = 41, true, uuid.New(), uuid.New()
 		if err := r.h.srv.macWindowStorePending(context.Background(), r.h.run.ID, a); err != nil {
 			t.Fatal(err)
 		}
 		got, ok, err := r.h.srv.macWindowLoadPending(context.Background(), r.h.run)
-		if err != nil || !ok || got.Principal != a.Principal || got.Email != a.Email || got.Issue.Seq != 41 || !got.Token || !got.Issue.At.Equal(a.Issue.At) {
+		if err != nil || !ok || got.Principal != a.Principal || got.Email != a.Email || got.Issue.Seq != 41 || !got.Token || !got.Issue.At.Equal(a.Issue.At) ||
+			got.TokenID != a.TokenID || got.CLISessionID != a.CLISessionID {
 			t.Fatalf("loaded %+v ok=%v err=%v, want %+v", got, ok, err, a)
 		}
 	})
@@ -1407,4 +1473,145 @@ func TestMacWindowSentences(t *testing.T) {
 	if !bytes.Contains([]byte(macWindowDesktopControlMsg), []byte("Close it")) {
 		t.Error("the control sentence must say what to do")
 	}
+}
+
+// tokenAuth is the run's person as an API token admitted them, bound to token id.
+func (r *macWindowRig) tokenAuth(id uuid.UUID) macWindowAuthority {
+	a := r.auth()
+	a.Token, a.TokenID = true, id
+	return a
+}
+
+// cliAuth is the run's person as a CLI sign-in admitted them, bound to session id (never to its access token).
+func (r *macWindowRig) cliAuth(id uuid.UUID) macWindowAuthority {
+	a := r.auth()
+	a.Token, a.CLISessionID = true, id
+	return a
+}
+
+// openAs opens a window under a.
+func (r *macWindowRig) openAs(a macWindowAuthority) *macWindow {
+	r.t.Helper()
+	w, rf := r.h.srv.openMacWindow(context.Background(), r.h.run, a, macWindowTriggerCLI)
+	if rf != nil {
+		r.t.Fatalf("open refused: %+v", rf)
+	}
+	return w
+}
+
+// stays ticks once and fails if the window ended.
+func (r *macWindowRig) stays(w *macWindow) {
+	r.t.Helper()
+	r.tick()
+	time.Sleep(20 * time.Millisecond)
+	if len(r.rows("takeover.close")) != 0 || r.h.srv.macWindows.open(r.h.run.ID) != w {
+		r.t.Fatal("the window ended while its credential was live")
+	}
+}
+
+// closesRevoked ticks once and expects the window to have closed as revoked.
+func (r *macWindowRig) closesRevoked() {
+	r.t.Helper()
+	r.tick()
+	if c := r.closeRow(); c["reason"] != macWindowRevoked {
+		r.t.Fatalf("close = %v, want %s", c, macWindowRevoked)
+	}
+	macWindowEventually(r.t, "the registry to empty", func() bool { return r.h.srv.macWindows.open(r.h.run.ID) == nil })
+}
+
+// A window ends with the API token or CLI session that opened it, and an at-start grant opened by one that is
+// gone does not open.
+func TestMacWindowEndsWithItsCredential(t *testing.T) {
+	t.Run("a token-opened window closes after DELETE /tokens/{id}", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		id := uuid.New()
+		r.st.liveToken(id)
+		w := r.openAs(r.tokenAuth(id))
+		r.stays(w)
+		router := chi.NewRouter()
+		router.Delete("/tokens/{id}", r.h.srv.handleAdminRevokeAPIToken)
+		req := httptest.NewRequest(http.MethodDelete, "/tokens/"+id.String(), nil)
+		req = req.WithContext(withHumanIdentity(req.Context(), "root", "root@example.com", oidc.RoleAdmin, types.UserTypeStandard, nil, false))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("the revoke answered %d, want %d", rec.Code, http.StatusNoContent)
+		}
+		r.closesRevoked()
+	})
+	t.Run("a CLI-opened window survives a rotation and closes when the session ends", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		sess := r.st.cliSession(nil)
+		oldAccess := uuid.New()
+		r.st.liveToken(oldAccess) // the access token the window was asked with
+		w := r.openAs(r.cliAuth(sess))
+		// A refresh revokes the old access token and mints another; the session lives on.
+		if _, err := r.st.RevokeAPIToken(context.Background(), oldAccess, "", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		r.stays(w)
+		r.st.endCLISession(sess)
+		r.closesRevoked()
+	})
+	t.Run("a CLI-opened window closes when its session expires", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		sess := r.st.cliSession(nil)
+		r.openAs(r.cliAuth(sess))
+		r.st.mu.Lock()
+		row := r.st.cliSessions[sess]
+		row.ExpiresAt = time.Now().Add(-time.Minute)
+		r.st.cliSessions[sess] = row
+		r.st.mu.Unlock()
+		r.closesRevoked()
+	})
+	t.Run("a pending at-start grant from a revoked token does not open", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		id := uuid.New()
+		r.st.liveToken(id)
+		if err := r.h.srv.macWindowStorePending(context.Background(), r.h.run.ID, r.tokenAuth(id)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.st.RevokeAPIToken(context.Background(), id, "", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		r.h.srv.macWindowAtStart(context.Background(), r.h.run.ID)
+		b := r.rows("takeover.begin")
+		if r.sub.openCount() != 0 || len(b) != 1 || b[0].Outcome != "denied" || rowData(t, b[0])["reason"] != reasonMacWindowRevoked {
+			t.Fatalf("opens %d, begin rows %+v, want none and one denied (%s)", r.sub.openCount(), b, reasonMacWindowRevoked)
+		}
+	})
+	t.Run("a pending grant with no binding is refused", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		a := r.auth()
+		raw, _ := json.Marshal(map[string]any{"actor_type": a.ActorType, "principal": a.Principal, "email": a.Email,
+			"authorized_at": a.Issue.At, "token": true})
+		r.st.prefs[a.Principal+"\x00"+macWindowPendingKey+r.h.run.ID.String()] = raw
+		if gone, err := r.h.srv.macWindowRevoked(context.Background(), macWindowAuthority{Token: true}); gone || !errors.Is(err, errMacWindowNoBinding) {
+			t.Fatalf("revoked = %v, err = %v, want the unbound refusal", gone, err)
+		}
+		r.h.srv.macWindowAtStart(context.Background(), r.h.run.ID)
+		b := r.rows("takeover.begin")
+		if r.sub.openCount() != 0 || len(b) != 1 || b[0].Outcome != "denied" {
+			t.Fatalf("opens %d, begin rows %+v, want none and one denied", r.sub.openCount(), b)
+		}
+	})
+	t.Run("the person-level revoke still closes a token-bound window", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		id := uuid.New()
+		r.st.liveToken(id)
+		w := r.openAs(r.tokenAuth(id))
+		r.stays(w)
+		r.rev.set(true, nil)
+		r.closesRevoked()
+	})
+	t.Run("the request's CLI session wins over its access token", func(t *testing.T) {
+		tok, sess := uuid.New(), uuid.New()
+		ctx := withCLISessionID(withAPITokenID(context.Background(), tok), sess)
+		if a := macWindowAuthorityFrom(ctx, types.ActorHuman, "alice", time.Now()); !a.Token || a.CLISessionID != sess || a.TokenID != uuid.Nil {
+			t.Fatalf("authority = %+v, want bound to session %s alone", a, sess)
+		}
+		if a := macWindowAuthorityFrom(withAPITokenID(context.Background(), tok), types.ActorHuman, "alice", time.Now()); !a.Token || a.TokenID != tok || a.CLISessionID != uuid.Nil {
+			t.Fatalf("authority = %+v, want bound to token %s", a, tok)
+		}
+	})
 }
