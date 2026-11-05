@@ -36,7 +36,11 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["T4-a21", YOUR_WALLS.SAVE, "Save walls"],
   ["T4-a22", YOUR_WALLS.REMOVE_ALL, "Remove all walls"],
   ["T4-a23", YOUR_WALLS.SAVED, "Saved. Runs you start from now on use these walls."],
-  ["T4-a24", YOUR_WALLS.RESTART_NOTE, "Your walls, including Refuse every push, apply again when a run restarts."],
+  [
+    "restart note",
+    YOUR_WALLS.RESTART_NOTE,
+    "A restarted run takes on what you add to Never these sites, Credentials kept out and Refuse every push. Any other change, including Clipboard and files, tool rules, paths never pushed and Stop when idle, needs a new run. A restart never removes a limit the run started with.",
+  ],
   ["UXR-14a", YOUR_WALLS.REMOVE_ALL_TITLE, "Remove all your walls?"],
   ["UXR-14b", YOUR_WALLS.REMOVE_ALL_BODY, "Your runs go back to what your organisation allows. This also removes the walls you set from the CLI."],
   ["UXR-14c", YOUR_WALLS.CANCEL, "Cancel"],

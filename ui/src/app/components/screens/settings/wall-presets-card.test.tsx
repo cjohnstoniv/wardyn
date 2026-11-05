@@ -127,8 +127,8 @@ describe("Wall presets card", () => {
     expect(dialog.getByLabelText(W.DESCRIPTION)).toHaveValue("Docs only.");
     expect(dialog.getByLabelText(W.AUDIENCE)).toHaveValue("person");
     expect(dialog.getByRole("radio", { name: "Only these sites" })).toBeChecked();
-    // The capability list has no control; it is named, and a save keeps it.
-    expect(dialog.getByTestId("walls-carried")).toHaveTextContent(W.CARRIED("GitHub keeps only 1 read capability"));
+    // The capability list is a control: Only these capabilities, one box checked.
+    expect(within(dialog.getByTestId("walls-github")).getByRole("checkbox", { name: /Clone, fetch and browse/ })).toBeChecked();
     await user.click(dialog.getByRole("button", { name: W.SAVE }));
     await waitFor(() =>
       expect(createMock).toHaveBeenCalledWith({
@@ -227,9 +227,9 @@ describe("Wall presets card", () => {
     expect(alert).toHaveTextContent('denied_domains[1]: "https://pastebin.com" must be a DNS name');
     // Under "Never these sites", not above the buttons.
     expect(alert.parentElement).toHaveTextContent("Never these sites");
-    createMock.mockRejectedValueOnce(new HttpError(422, "invalid wall preset: github_capabilities[0]: nope", "wall_preset_invalid"));
+    createMock.mockRejectedValueOnce(new HttpError(422, "invalid wall preset: the preset is too large", "wall_preset_invalid"));
     await user.click(dialog.getByRole("button", { name: W.SAVE }));
-    const above = await dialog.findByText(/github_capabilities\[0\]: nope/);
+    const above = await dialog.findByText("The preset is too large");
     expect(above.parentElement?.tagName).toBe("FORM");
   });
 

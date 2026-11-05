@@ -6,8 +6,6 @@
 // Wall presets: the Settings card, the New Run choice and the run page's words. The strings are the jointly
 // approved boards' (WP-1, WP-2, WP-3). The word "preset" also names a launch preset on the run page, so every
 // string about a wall preset says "wall preset" in full where it could be read as the other.
-import type { PersonalWallsSpec } from "../../../lib/api/walls";
-
 export const WALL_PRESETS = {
   TITLE: "Wall presets",
   SUMMARY: "Named sets of walls you pick when you start a run. They only narrow what your organisation allows, and only for that run.",
@@ -48,6 +46,13 @@ export const WALL_PRESETS = {
   DETAIL_GITHUB: "GitHub keeps only",
   DETAIL_ADO: "Azure DevOps keeps only",
   DETAIL_NOT_NARROWED: "Not narrowed",
+  DETAIL_TOOL_RULES: "Tool rules",
+  DETAIL_TOOL_RULE: (tool: string, effect: string) => `${tool}: ${effect}`,
+  DETAIL_PATHS: "Paths never pushed",
+  DETAIL_RECORDING: "Record at least",
+  DETAIL_IDLE: "Stop when idle",
+  DETAIL_IDLE_AFTER: (n: number, unit: string) => `After ${n} ${unit} idle`,
+  NEEDS_A_LIMIT: "A preset needs at least one limit. Set one to save it.",
   // The form dialog.
   DIALOG_NEW: "New wall preset",
   DIALOG_EDIT: "Edit wall preset",
@@ -61,13 +66,6 @@ export const WALL_PRESETS = {
   HELP_AUDIENCE_FIXED: "The audience never changes on an edit; copy it to move it.",
   EDITING_VERSION: (v: string | number) => `Editing version ${v}.`,
   COPY_SUFFIX: (name: string) => `${name} (copy)`,
-  CARRIED: (knobs: string) => `Also kept, set from the CLI: ${knobs}. Change them with wardyn walls presets set.`,
-  CARRIED_GITHUB: (n: string | number, reads: boolean) => `GitHub keeps only ${n} ${reads ? "read " : ""}${n === 1 ? "capability" : "capabilities"}`,
-  CARRIED_ADO: (n: string | number, reads: boolean) => `Azure DevOps keeps only ${n} ${reads ? "read " : ""}${n === 1 ? "capability" : "capabilities"}`,
-  CARRIED_TOOL_RULES: (n: string | number) => `${n} tool ${n === 1 ? "rule" : "rules"}`,
-  CARRIED_PUSH_PATHS: "push path rules",
-  CARRIED_RECORDING: "a recording floor",
-  CARRIED_AUTO_STOP: "an idle stop",
   SAVE: "Save preset",
   CANCEL: "Cancel",
   SAVED: "Saved. Pick it when you start a run. Runs already started keep what they had.",
@@ -133,20 +131,3 @@ export const WALL_PRESETS = {
   APPROVAL_OTHER: (owner: string, name: string) => `${owner}'s run uses the ${name} wall preset, which blocks `,
   APPROVAL_OTHER_AFTER: ".",
 } as const;
-
-const isRead = (c: string) => c.endsWith("_read") || c === "identity";
-
-/** The knobs a form has no control for, as the Also kept row names them; none for a spec that carries none. */
-export function carriedKnobWords(carried: PersonalWallsSpec): string[] {
-  const W = WALL_PRESETS;
-  const out: string[] = [];
-  const gh = carried.github_capabilities;
-  if (gh) out.push(W.CARRIED_GITHUB(gh.length, gh.every(isRead)));
-  const ado = carried.azure_devops_capabilities;
-  if (ado) out.push(W.CARRIED_ADO(ado.length, ado.every(isRead)));
-  if (carried.tool_rules?.length) out.push(W.CARRIED_TOOL_RULES(carried.tool_rules.length));
-  if (carried.push_rules && Object.keys(carried.push_rules).length > 0) out.push(W.CARRIED_PUSH_PATHS);
-  if (carried.recording) out.push(W.CARRIED_RECORDING);
-  if (carried.auto_stop_after_sec) out.push(W.CARRIED_AUTO_STOP);
-  return out;
-}

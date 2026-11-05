@@ -144,10 +144,10 @@ describe("Your walls card", () => {
     await waitFor(() => expect(putMock).toHaveBeenCalledWith({ allow_all_egress: false, withheld_grants: [scoped] }));
   });
 
-  it("keeps the capability lists, tool and push rules, recording and auto-stop the CLI wrote across a save", async () => {
+  it("keeps the capability lists, tool and push rules, recording and idle stop the CLI wrote across a save", async () => {
     const carried = {
-      azure_devops_capabilities: ["work_items_read"],
-      github_capabilities: ["contents_read"],
+      azure_devops_capabilities: ["work_read"],
+      github_capabilities: ["code_read"],
       tool_rules: [{ tool: "Bash", effect: "hold" }],
       push_rules: { deny_paths: [".github/**"] },
       recording: "screen_actions",
@@ -178,7 +178,7 @@ describe("Your walls card", () => {
     render(<YourWallsCard />);
     await open();
     expect(screen.getByText(YOUR_WALLS.CLIPBOARD_HINT)).toBeInTheDocument();
-    await user.click(screen.getByRole("radio", { name: YOUR_WALLS.BARRIER_NONE }));
+    await user.click(within(screen.getByRole("radiogroup", { name: YOUR_WALLS.BARRIER })).getByRole("radio", { name: YOUR_WALLS.BARRIER_NONE }));
     await user.click(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_ORG }));
     await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
     await waitFor(() => expect(putMock).toHaveBeenCalledWith({}));
@@ -244,15 +244,28 @@ describe("Your walls card", () => {
     expect(screen.getByText("a.example.com")).toBeInTheDocument();
   });
 
-  it("says what the server refused with its code in small print, and offers no Saved", async () => {
+  it("puts a refusal under the section it names, without the prefix or the reason code, and offers no Saved", async () => {
     putMock.mockRejectedValue(new HttpError(400, "invalid walls: denied_domains[0]: \"x y\" must be a DNS name", "walls_invalid"));
     render(<YourWallsCard />);
     await open();
     await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("denied_domains[0]");
-    expect(within(alert).getByText("walls_invalid")).toBeInTheDocument();
+    expect(alert).toHaveTextContent('denied_domains[0]: "x y" must be a DNS name');
+    expect(alert).not.toHaveTextContent("invalid walls");
+    expect(screen.queryByText("walls_invalid")).not.toBeInTheDocument();
+    expect(alert.parentElement).toHaveTextContent(YOUR_WALLS.NEVER);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("puts a sentence that names no section above the buttons, capitalised, with its reason code", async () => {
+    putMock.mockRejectedValue(new HttpError(400, "invalid walls: the document is too large", "walls_invalid"));
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The document is too large");
+    expect(within(alert).getByText("walls_invalid")).toBeInTheDocument();
+    expect(alert.nextElementSibling).toContainElement(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
   });
 
   it("Refuse every push is a switch under Pushes: it sends push_rules.deny_all true beside the paths the CLI wrote, and is not sent when off", async () => {
@@ -281,12 +294,11 @@ describe("Your walls card", () => {
     await waitFor(() => expect(putMock).toHaveBeenCalledWith({ push_rules: { deny_all: true } }));
   });
 
-  it("stacks the unlisted-sites choices below 400px and lists no carried-knob row", async () => {
+  it("stacks the unlisted-sites choices below 400px", async () => {
     getMock.mockResolvedValue({ spec: { github_capabilities: ["code_read"] } });
     render(<YourWallsCard />);
     await open();
     expect(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_BLOCK }).parentElement?.className).toContain("max-[399px]:flex-col");
-    expect(screen.queryByTestId("walls-carried")).not.toBeInTheDocument();
   });
 
   it.each(["walls_need_person", "walls_unavailable"])("is absent when the server answers %s", async (reason) => {

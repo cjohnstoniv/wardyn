@@ -7,16 +7,19 @@
 // the form model (toForm and toSpec, a lossless round trip of a PersonalWallsSpec) and the controlled form itself;
 // the callers own loading, saving and their own buttons.
 import * as React from "react";
-import { X } from "lucide-react";
-import { type PersonalWallsPushRules, type PersonalWallsSpec, type WithheldGrant } from "../../../lib/api/walls";
-import { CC_ORDER, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
+import { Plus, Trash2, X } from "lucide-react";
+import { type PersonalWallsSpec, type WithheldGrant } from "../../../lib/api/walls";
+import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../../lib/ado-capabilities";
+import { adoCapName, adoGroupName } from "../../../lib/ado-access-copy";
+import { CC_ORDER, toolRulesProblem, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
+import { idleDisplay, isRead, type FormSection } from "../../../lib/wall-preset-words";
+import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { cn } from "../../ui/utils";
-import { YOUR_WALLS as T } from "../../wardyn/copy/personal-walls";
-import type { FormSection } from "../../../lib/wall-preset-words";
-import { WALL_PRESETS as WP, carriedKnobWords } from "../../wardyn/copy/wall-presets";
+import { GITHUB_CAPABILITIES, GITHUB_CAPABILITY_GROUPS, GITHUB_PUSH_NAME, YOUR_WALLS as T } from "../../wardyn/copy/personal-walls";
+import { RECORDING_LEVEL } from "../../wardyn/copy/recording-level";
 import { Switch } from "../../wardyn/form-primitives";
 import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { Segmented } from "../../wardyn/segmented";
@@ -35,6 +38,29 @@ const UNLISTED: { value: FirstUseMode | ""; label: string }[] = [
   { value: "wait_for_review", label: T.UNLISTED_HOLD },
 ];
 
+export type IdleUnit = "seconds" | "minutes";
+export type WallToolEffect = "hold" | "deny";
+
+/**
+ * A tool rule or a path as a row. `fresh` is a row added in this edit and not yet typed into: Save drops it when it is
+ * still blank. A row that held text, from the server or typed here, and was then cleared is never dropped: it blocks Save.
+ */
+export interface ToolRow {
+  id: number;
+  tool: string;
+  effect: WallToolEffect;
+  fresh: boolean;
+}
+export interface PathRow {
+  id: number;
+  path: string;
+  fresh: boolean;
+}
+
+let nextRowId = 0;
+const newToolRow = (tool: string, effect: WallToolEffect, fresh: boolean): ToolRow => ({ id: ++nextRowId, tool, effect, fresh });
+const newPathRow = (path: string, fresh: boolean): PathRow => ({ id: ++nextRowId, path, fresh });
+
 // The form, one field per knob the card shows. `allowAllOff` keeps a walls document's own
 // allow_all_egress: false (written with the CLI) across a save, as the card has no control for it.
 export interface Form {
@@ -50,22 +76,25 @@ export interface Form {
   allowAllOff: boolean;
   /** push_rules.deny_all: refuse every push. */
   denyAll: boolean;
-  // The knobs the card has no control for (capability lists, tool and push rules, recording, auto-stop):
-  // kept as fetched, since a save replaces the whole document.
-  carried: PersonalWallsSpec;
+  /** github_capabilities: a present list (Only these capabilities) and what is checked. */
+  githubOnly: boolean;
+  github: string[];
+  /** azure_devops_capabilities, the same. */
+  adoOnly: boolean;
+  ado: string[];
+  tools: ToolRow[];
+  /** push_rules.deny_paths. */
+  paths: PathRow[];
+  recording: "terminal" | "screen_actions" | undefined;
+  /** auto_stop_after_sec as a whole number (text, so a bad entry can be said so) and its unit. */
+  idleOn: boolean;
+  idleText: string;
+  idleUnit: IdleUnit;
 }
-
-export const carriedKnobs = (s: PersonalWallsSpec): PersonalWallsSpec => {
-  const { azure_devops_capabilities, github_capabilities, tool_rules, recording, auto_stop_after_sec } = s;
-  // deny_all has its own switch; the push paths beside it ride along as fetched.
-  const paths = Object.fromEntries(Object.entries(s.push_rules ?? {}).filter(([k]) => k !== "deny_all")) as PersonalWallsPushRules;
-  const push_rules = Object.keys(paths).length > 0 ? paths : undefined;
-  const carried = { azure_devops_capabilities, github_capabilities, tool_rules, push_rules, recording, auto_stop_after_sec };
-  return Object.fromEntries(Object.entries(carried).filter(([, v]) => v !== undefined));
-};
 
 export function toForm(s: PersonalWallsSpec): Form {
   const d = s.desktop;
+  const idle = s.auto_stop_after_sec === undefined ? { n: 30, unit: "minutes" as IdleUnit } : idleDisplay(s.auto_stop_after_sec);
   return {
     only: s.allowed_domains !== undefined,
     allowed: s.allowed_domains ?? [],
@@ -78,8 +107,57 @@ export function toForm(s: PersonalWallsSpec): Form {
     withheld: s.withheld_grants ?? [],
     allowAllOff: s.allow_all_egress === false,
     denyAll: s.push_rules?.deny_all === true,
-    carried: carriedKnobs(s),
+    githubOnly: s.github_capabilities !== undefined,
+    github: s.github_capabilities ?? [],
+    adoOnly: s.azure_devops_capabilities !== undefined,
+    ado: s.azure_devops_capabilities ?? [],
+    tools: (s.tool_rules ?? []).map((r) => newToolRow(r.tool, r.effect === "deny" ? "deny" : "hold", false)),
+    paths: (s.push_rules?.deny_paths ?? []).map((p) => newPathRow(p, false)),
+    recording: s.recording === "terminal" || s.recording === "screen_actions" ? s.recording : undefined,
+    idleOn: s.auto_stop_after_sec !== undefined,
+    idleText: String(idle.n),
+    idleUnit: idle.unit,
   };
+}
+
+/** The idle stop in seconds, or null when the text is not a whole number of 1 or more. */
+export function idleSeconds(f: Pick<Form, "idleText" | "idleUnit">): number | null {
+  const text = f.idleText.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  const sec = n * (f.idleUnit === "minutes" ? 60 : 1);
+  return n >= 1 && Number.isSafeInteger(sec) ? sec : null;
+}
+
+const blankRow = (text: string, fresh: boolean) => text.trim() === "" && !fresh;
+const filled = (rows: ToolRow[]) => rows.filter((r) => r.tool.trim() !== "");
+
+/** What keeps Save off, by section: the form checks what it can before the server is asked. */
+export function formProblems(f: Form): { github?: string; ado?: string; tools?: string; idle?: string; blankTools: Set<number>; blankPaths: Set<number>; duplicateTools: Set<number> } {
+  const blankTools = new Set(f.tools.filter((r) => blankRow(r.tool, r.fresh)).map((r) => r.id));
+  const blankPaths = new Set(f.paths.filter((r) => blankRow(r.path, r.fresh)).map((r) => r.id));
+  const seen = new Map<string, number>();
+  const duplicateTools = new Set<number>();
+  for (const r of filled(f.tools)) {
+    const first = seen.get(r.tool);
+    if (first === undefined) seen.set(r.tool, r.id);
+    else duplicateTools.add(first).add(r.id);
+  }
+  return {
+    github: f.githubOnly && f.github.length === 0 ? T.CAPS_EMPTY : undefined,
+    ado: f.adoOnly && f.ado.length === 0 ? T.CAPS_EMPTY : undefined,
+    tools: toolRulesProblem(filled(f.tools).map((r) => ({ tool: r.tool, effect: r.effect }))) ?? undefined,
+    idle: f.idleOn && idleSeconds(f) === null ? T.IDLE_PROBLEM : undefined,
+    blankTools,
+    blankPaths,
+    duplicateTools,
+  };
+}
+
+/** True while a check above fails: the caller keeps Save off. */
+export function formBlocked(f: Form): boolean {
+  const p = formProblems(f);
+  return !!(p.github || p.ado || p.tools || p.idle) || p.blankTools.size > 0 || p.blankPaths.size > 0;
 }
 
 // A typed site is a bare host: lower-case, with any scheme, everything from the first "/", "?" or "#", and a port dropped.
@@ -96,8 +174,10 @@ export const withText = (list: string[], text: string): string[] => {
   return site && !list.includes(site) ? [...list, site] : list;
 };
 
+const inCatalogue = (order: readonly string[], picked: string[]) => order.filter((c) => picked.includes(c));
+
 export function toSpec(f: Form): PersonalWallsSpec {
-  const spec: PersonalWallsSpec = { ...f.carried };
+  const spec: PersonalWallsSpec = {};
   if (f.only) spec.allowed_domains = withText(f.allowed, f.allowedText);
   const denied = withText(f.denied, f.deniedText);
   if (denied.length > 0) spec.denied_domains = denied;
@@ -107,7 +187,16 @@ export function toSpec(f: Form): PersonalWallsSpec {
   const blocked = DIRECTIONS.filter((d) => f.blocked[d.id]);
   if (blocked.length > 0) spec.desktop = Object.fromEntries(blocked.map((d) => [d.id, "blocked" as const]));
   if (f.withheld.length > 0) spec.withheld_grants = f.withheld;
-  if (f.denyAll) spec.push_rules = { ...spec.push_rules, deny_all: true };
+  if (f.githubOnly) spec.github_capabilities = inCatalogue(GITHUB_CAPABILITIES, f.github);
+  if (f.adoOnly) spec.azure_devops_capabilities = inCatalogue(ADO_CAPABILITIES.map((c) => c.cap), f.ado);
+  // A row added in this edit and left blank is dropped; one that held text and was cleared blocks Save (formBlocked).
+  const tools = f.tools.filter((r) => !(r.fresh && r.tool.trim() === ""));
+  if (tools.length > 0) spec.tool_rules = tools.map((r) => ({ tool: r.tool, effect: r.effect }));
+  const paths = f.paths.filter((r) => !(r.fresh && r.path.trim() === "")).map((r) => r.path);
+  if (paths.length > 0 || f.denyAll) spec.push_rules = { ...(paths.length > 0 && { deny_paths: paths }), ...(f.denyAll && { deny_all: true }) };
+  if (f.recording) spec.recording = f.recording;
+  const idle = f.idleOn ? idleSeconds(f) : null;
+  if (idle !== null) spec.auto_stop_after_sec = idle;
   return spec;
 }
 
@@ -155,12 +244,291 @@ const SectionError = ({ text }: { text: string }) => (
   </p>
 );
 
+interface CapGroup {
+  name: string;
+  caps: { cap: string; name: string; wire?: string }[];
+}
+
+const GITHUB_GROUPS: CapGroup[] = GITHUB_CAPABILITY_GROUPS.map((g) => ({ name: g.name, caps: g.caps.map((c) => ({ cap: c.cap, name: c.label, wire: c.cap })) }));
+const ADO_GROUPS: CapGroup[] = ADO_CAPABILITY_GROUPS.map((g) => ({
+  name: adoGroupName(g.id),
+  caps: ADO_CAPABILITIES.filter((c) => c.group === g.id).map((c) => ({ cap: c.cap, name: adoCapName(c.cap) })),
+}));
+
+const GROUP_HEAD = "bg-muted px-3 py-1.5 text-xs font-semibold text-foreground";
+
 /**
- * The controlled form. `onEdit` merges a patch into the caller's Form. `listCarried` adds a read-only row naming the
- * knobs the form has no control for, which a save keeps as they were fetched. `errors` puts a server sentence under the
- * section it names.
+ * One forge's capability list: No limit, or Only these capabilities with a grouped checklist. A wall never grants, so the
+ * list only names what the run may keep; nothing is checked until the person checks it.
  */
-export function WallsForm({ form, onEdit: edit, listCarried, errors }: { form: Form; onEdit: (patch: Partial<Form>) => void; listCarried?: boolean; errors?: Partial<Record<FormSection, string>> }) {
+function CapabilityList({ id, title, forge, pushName, groups, only, picked, onChange, serverError, problem }: {
+  id: string;
+  title: string;
+  forge: string;
+  /** The push capability's short name, for the line under a list that leaves it out. */
+  pushName: string;
+  groups: CapGroup[];
+  only: boolean;
+  picked: string[];
+  onChange: (only: boolean, picked: string[]) => void;
+  serverError?: string;
+  problem?: string;
+}) {
+  const all = groups.flatMap((g) => g.caps.map((c) => c.cap));
+  const toggle = (cap: string, on: boolean) => onChange(true, on ? [...picked, cap] : picked.filter((c) => c !== cap));
+  return (
+    <div className="flex flex-col gap-2" data-testid={id}>
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <span className={LABEL}>{title}</span>
+        {only && <span className="text-xs text-muted-foreground">{T.CAPS_COUNT(all.filter((c) => picked.includes(c)).length, all.length)}</span>}
+      </div>
+      {serverError && <SectionError text={serverError} />}
+      <RadioGroup className="gap-2" aria-label={title} value={only ? "only" : "none"} onValueChange={(v) => onChange(v === "only", picked)}>
+        <label className="flex items-center gap-2 text-sm">
+          <RadioGroupItem value="none" />
+          {T.LIMIT_NONE}
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <RadioGroupItem value="only" />
+          {T.CAPS_ONLY}
+        </label>
+      </RadioGroup>
+      {only && (
+        <div className="flex flex-col gap-2 pl-6">
+          <p className="text-xs text-muted-foreground">{T.CAPS_HELP}</p>
+          <div>
+            <Button type="button" variant="ghost" size="sm" className="px-1" onClick={() => onChange(true, all.filter(isRead))}>
+              {T.CAPS_READS_ONLY}
+            </Button>
+          </div>
+          {groups.map((g) => (
+            <fieldset key={g.name} className="min-w-0 overflow-hidden rounded-md border border-border">
+              <legend className="sr-only">{g.name}</legend>
+              <div aria-hidden="true" className={GROUP_HEAD}>
+                {g.name}
+              </div>
+              <ul>
+                {g.caps.map((c) => (
+                  <li key={c.cap} className="flex items-start gap-2.5 border-t border-border px-3 py-2">
+                    <Checkbox id={`${id}-${c.cap}`} className="mt-0.5" aria-label={c.name} checked={picked.includes(c.cap)} onCheckedChange={(on) => toggle(c.cap, on === true)} />
+                    <label htmlFor={`${id}-${c.cap}`} className="min-w-0 text-sm leading-snug">
+                      <span className={picked.includes(c.cap) ? "text-foreground" : "text-muted-foreground"}>{c.name}</span>
+                      {c.wire && <span className="block font-mono text-xs text-muted-foreground">{c.wire}</span>}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </fieldset>
+          ))}
+          {problem && <SectionError text={problem} />}
+          {!picked.includes("code_write") && (
+            <>
+              <p className="text-xs text-warning">{T.CAPS_NO_PUSH(pushName, forge)}</p>
+              <p className="text-xs text-muted-foreground">{T.CAPS_NO_PUSH_BROKER_OFF}</p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+const RULE_ROW = "grid grid-cols-[minmax(0,1fr)_9rem_2rem] items-center gap-2 max-[399px]:grid-cols-[minmax(0,1fr)_2rem]";
+const EFFECT_TONE: Record<WallToolEffect, string> = { hold: "text-warning", deny: "text-danger" };
+
+/** Tool rules: a tool and what to do with it, hold or deny. No default row: `*` is a rule like any other. */
+function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem: ReturnType<typeof formProblems> }) {
+  const patch = (id: number, p: Partial<ToolRow>) => edit({ tools: form.tools.map((r) => (r.id === id ? { ...r, ...p } : r)) });
+  return (
+    <div className="flex flex-col gap-2" data-testid="walls-tool-rules">
+      <span className={LABEL}>{T.TOOLS}</span>
+      {serverError && <SectionError text={serverError} />}
+      <p className="text-xs text-muted-foreground">{T.TOOLS_HELP}</p>
+      {form.tools.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground">{T.TOOLS_NONE}</p>
+      ) : (
+        <div className="flex flex-col">
+          <div className={cn(RULE_ROW, "border-b border-border pb-1.5 text-xs font-semibold uppercase text-muted-foreground max-[399px]:hidden")}>
+            <span>{T.TOOLS_TOOL}</span>
+            <span>{T.TOOLS_EFFECT}</span>
+            <span />
+          </div>
+          {form.tools.map((r, i) => {
+            const blank = problem.blankTools.has(r.id);
+            const invalid = blank || problem.duplicateTools.has(r.id);
+            return (
+              <div key={r.id} className="border-b border-border py-2 last:border-b-0">
+                <div className={RULE_ROW}>
+                  <Input
+                    aria-label={T.TOOLS_TOOL_N(i + 1)}
+                    aria-invalid={invalid || undefined}
+                    value={r.tool}
+                    spellCheck={false}
+                    placeholder={T.TOOLS_PLACEHOLDER}
+                    className="h-8 font-mono text-sm max-[399px]:col-span-2"
+                    onChange={(e) => patch(r.id, { tool: e.target.value, fresh: false })}
+                  />
+                  <select
+                    aria-label={T.TOOLS_EFFECT_N(i + 1)}
+                    value={r.effect}
+                    onChange={(e) => patch(r.id, { effect: e.target.value as WallToolEffect })}
+                    className={cn("h-8 w-full rounded-md border border-input bg-input-background px-2 font-mono text-sm font-medium", EFFECT_TONE[r.effect])}
+                  >
+                    {(["hold", "deny"] as const).map((e) => (
+                      <option key={e} value={e} className="text-foreground">
+                        {e}
+                      </option>
+                    ))}
+                  </select>
+                  <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={T.TOOLS_REMOVE_N(i + 1)} onClick={() => edit({ tools: form.tools.filter((x) => x.id !== r.id) })}>
+                    <Trash2 className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
+                {blank && <SectionError text={T.TOOLS_BLANK} />}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">{T.TOOLS_STAR_HINT}</p>
+      {problem.tools && <SectionError text={problem.tools} />}
+      <div>
+        <Button type="button" variant="ghost" size="sm" className="px-1" onClick={() => edit({ tools: [...form.tools, newToolRow("", "hold", true)] })}>
+          <Plus className="size-4" aria-hidden="true" /> {T.TOOLS_ADD}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Pushes: Refuse every push, and the paths never pushed under it. The paths stay editable, dimmed, while the switch is on. */
+function PushRules({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem: ReturnType<typeof formProblems> }) {
+  const patch = (id: number, path: string) => edit({ paths: form.paths.map((r) => (r.id === id ? { ...r, path, fresh: false } : r)) });
+  const listed = form.paths.some((r) => r.path.trim() !== "");
+  return (
+    <div className="flex flex-col gap-2">
+      <span className={LABEL}>{T.PUSHES}</span>
+      {serverError && <SectionError text={serverError} />}
+      <label className="flex items-start gap-2 text-sm">
+        <Switch checked={form.denyAll} onChange={(denyAll) => edit({ denyAll })} label={T.REFUSE_PUSH} className="mt-0.5" />
+        <span className="flex flex-col gap-0.5">
+          <span className="font-medium text-foreground">{T.REFUSE_PUSH}</span>
+          <span className="text-xs text-muted-foreground">{T.REFUSE_PUSH_HELP}</span>
+        </span>
+      </label>
+      <div className="flex flex-col gap-1.5" data-testid="walls-deny-paths">
+        {/* Dimmed while every push is refused; the notes below sit outside it so they stay readable. */}
+        <div className={cn("flex flex-col gap-1.5", form.denyAll && "opacity-60")} data-dimmed={form.denyAll || undefined}>
+          <span className="text-sm font-medium text-foreground">{T.PATHS}</span>
+          <p className="text-xs text-muted-foreground">{T.PATHS_HELP}</p>
+          {form.paths.length === 0 && <p className="text-xs italic text-muted-foreground">{T.PATHS_NONE}</p>}
+          {form.paths.map((r, i) => (
+            <div key={r.id}>
+              <div className="flex items-start gap-2">
+                <Input
+                  aria-label={T.PATHS_PATH_N(i + 1)}
+                  aria-invalid={problem.blankPaths.has(r.id) || undefined}
+                  value={r.path}
+                  spellCheck={false}
+                  className="h-8 flex-1 font-mono text-sm"
+                  onChange={(e) => patch(r.id, e.target.value)}
+                />
+                <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={T.PATHS_REMOVE_N(i + 1)} onClick={() => edit({ paths: form.paths.filter((x) => x.id !== r.id) })}>
+                  <Trash2 className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
+              {problem.blankPaths.has(r.id) && <SectionError text={T.PATHS_BLANK} />}
+            </div>
+          ))}
+          <div>
+            <Button type="button" variant="ghost" size="sm" className="px-1" onClick={() => edit({ paths: [...form.paths, newPathRow("", true)] })}>
+              <Plus className="size-4" aria-hidden="true" /> {T.PATHS_ADD}
+            </Button>
+          </div>
+        </div>
+        {listed && <p className="text-xs text-muted-foreground">{T.PATHS_ADO_NOTE}</p>}
+        {listed && <p className="text-xs text-muted-foreground">{T.PATHS_BROKER_NOTE}</p>}
+        {listed && form.denyAll && <p className="text-xs text-muted-foreground">{T.PATHS_OFF_NOTE}</p>}
+      </div>
+    </div>
+  );
+}
+
+const RECORDING_CHOICES = RECORDING_LEVEL.LEVELS.filter((l) => l.value !== "off");
+
+/** Record at least: a floor, never a way to record less. */
+function RecordingFloor({ form, edit, serverError }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string }) {
+  const chosen = RECORDING_CHOICES.find((l) => l.value === form.recording);
+  return (
+    <div className="flex flex-col gap-2">
+      <span className={LABEL}>{T.RECORDING}</span>
+      {serverError && <SectionError text={serverError} />}
+      <RadioGroup className="flex flex-wrap gap-x-4 gap-y-2" aria-label={T.RECORDING} value={form.recording ?? "none"} onValueChange={(v) => edit({ recording: v === "none" ? undefined : (v as Form["recording"]) })}>
+        <label className="flex items-center gap-2 text-sm">
+          <RadioGroupItem value="none" />
+          {T.RECORDING_NONE}
+        </label>
+        {RECORDING_CHOICES.map((l) => (
+          <label key={l.value} className="flex items-center gap-2 text-sm">
+            <RadioGroupItem value={l.value} />
+            {l.label}
+          </label>
+        ))}
+      </RadioGroup>
+      <p className="text-xs text-muted-foreground">{chosen ? chosen.description : T.RECORDING_UNSET}</p>
+    </div>
+  );
+}
+
+/** Stop when idle: No limit, or a whole number of seconds or minutes. A stored value shows exactly as it is stored. */
+function IdleStop({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem?: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className={LABEL}>{T.IDLE}</span>
+      {serverError && <SectionError text={serverError} />}
+      <RadioGroup className="gap-2" aria-label={T.IDLE} value={form.idleOn ? "after" : "none"} onValueChange={(v) => edit({ idleOn: v === "after" })}>
+        <label className="flex items-center gap-2 text-sm">
+          <RadioGroupItem value="none" />
+          {T.LIMIT_NONE}
+        </label>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm">
+          <label className="flex items-center gap-2">
+            <RadioGroupItem value="after" />
+            {T.IDLE_AFTER}
+          </label>
+          <Input
+            aria-label={T.IDLE_NUMBER}
+            aria-invalid={(form.idleOn && !!problem) || undefined}
+            inputMode="numeric"
+            value={form.idleText}
+            disabled={!form.idleOn}
+            className="h-8 w-20 text-right"
+            onChange={(e) => edit({ idleText: e.target.value })}
+          />
+          <select
+            aria-label={T.IDLE_UNIT_LABEL}
+            value={form.idleUnit}
+            disabled={!form.idleOn}
+            onChange={(e) => edit({ idleUnit: e.target.value as IdleUnit })}
+            className="h-8 rounded-md border border-input bg-input-background px-2 text-sm disabled:opacity-50"
+          >
+            <option value="seconds">seconds</option>
+            <option value="minutes">minutes</option>
+          </select>
+          <span>{T.IDLE_SUFFIX}</span>
+        </div>
+      </RadioGroup>
+      {form.idleOn && problem && <SectionError text={problem} />}
+      <p className="text-xs text-muted-foreground">{T.IDLE_HELP}</p>
+    </div>
+  );
+}
+
+/**
+ * The controlled form. `onEdit` merges a patch into the caller's Form. `errors` puts a server sentence under the
+ * section it names; the checks the form can make itself (formProblems) show under theirs and keep Save off.
+ */
+export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: (patch: Partial<Form>) => void; errors?: Partial<Record<FormSection, string>> }) {
+  const problem = formProblems(form);
   // The unlisted-sites choice was filled in by picking "Only these sites", not chosen by the person.
   const [autoFirstUse, setAutoFirstUse] = React.useState(false);
   const unnamed = KIND_OPTIONS.filter((k) => !form.withheld.some((g) => g.kind === k));
@@ -276,22 +644,34 @@ export function WallsForm({ form, onEdit: edit, listCarried, errors }: { form: F
           )}
         </div>
       </div>
-      <div className="flex flex-col gap-2">
-        <span className={LABEL}>{T.PUSHES}</span>
-        {errors?.pushes && <SectionError text={errors.pushes} />}
-        <label className="flex items-start gap-2 text-sm">
-          <Switch checked={form.denyAll} onChange={(denyAll) => edit({ denyAll })} label={T.REFUSE_PUSH} className="mt-0.5" />
-          <span className="flex flex-col gap-0.5">
-            <span className="font-medium text-foreground">{T.REFUSE_PUSH}</span>
-            <span className="text-xs text-muted-foreground">{T.REFUSE_PUSH_HELP}</span>
-          </span>
-        </label>
-      </div>
-      {listCarried && carriedKnobWords(form.carried).length > 0 && (
-        <p data-testid="walls-carried" className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-          {WP.CARRIED(carriedKnobWords(form.carried).join(", "))}
-        </p>
-      )}
+      <CapabilityList
+        id="walls-github"
+        title={T.GITHUB_CAPS}
+        forge="GitHub"
+        pushName={GITHUB_PUSH_NAME}
+        groups={GITHUB_GROUPS}
+        only={form.githubOnly}
+        picked={form.github}
+        onChange={(githubOnly, github) => edit({ githubOnly, github })}
+        serverError={errors?.github}
+        problem={problem.github}
+      />
+      <CapabilityList
+        id="walls-ado"
+        title={T.ADO_CAPS}
+        forge="Azure DevOps"
+        pushName={adoCapName("code_write")}
+        groups={ADO_GROUPS}
+        only={form.adoOnly}
+        picked={form.ado}
+        onChange={(adoOnly, ado) => edit({ adoOnly, ado })}
+        serverError={errors?.ado}
+        problem={problem.ado}
+      />
+      <ToolRules form={form} edit={edit} serverError={errors?.tools} problem={problem} />
+      <PushRules form={form} edit={edit} serverError={errors?.pushes} problem={problem} />
+      <RecordingFloor form={form} edit={edit} serverError={errors?.recording} />
+      <IdleStop form={form} edit={edit} serverError={errors?.idle} problem={problem.idle} />
     </div>
   );
 }
