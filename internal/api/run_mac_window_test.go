@@ -21,6 +21,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -57,6 +58,7 @@ type macWindowStore struct {
 	prefs      map[string]json.RawMessage
 	getRunErr  error
 	stamps     atomic.Int32
+	touched    atomic.Int32
 	prefsWrite atomic.Int32
 }
 
@@ -119,6 +121,10 @@ func (s *macWindowStore) ListPauseCandidates(context.Context) ([]store.PauseCand
 func (s *macWindowStore) StampRunActive(context.Context, uuid.UUID) (bool, error) {
 	s.stamps.Add(1)
 	return false, nil
+}
+func (s *macWindowStore) TouchRun(context.Context, uuid.UUID) error {
+	s.touched.Add(1)
+	return nil
 }
 func (s *macWindowStore) MarkRunPaused(context.Context, uuid.UUID, types.PauseReason, *time.Time) (bool, error) {
 	return false, nil
@@ -803,12 +809,62 @@ func TestMacWindowOpensOnceInteractivePrepIsDone(t *testing.T) {
 	}
 }
 
-// An open window keeps the run in use: each re-check that lets it stay stamps the run's presence.
-func TestMacWindowRecheckStampsPresence(t *testing.T) {
-	r := newMacWindowRig(t)
-	r.mustOpen()
-	r.tick()
-	macWindowEventually(t, "a presence stamp", func() bool { return r.st.stamps.Load() >= 1 })
+// TouchRun is called when a window opens and on each re-check that lets it stay, and on no re-check that ends
+// it; over N re-checks the calls never pass one per re-check plus the open. This pins the calls only; it does
+// not exercise the idle reaper.
+func TestMacWindowKeepsTheRunActive(t *testing.T) {
+	t.Run("the open and each re-check that lets it stay touch the run", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		r.mustOpen()
+		if got := r.st.touched.Load(); got != 1 {
+			t.Fatalf("touches after the open = %d, want 1", got)
+		}
+		const n = 4
+		for i := 1; i <= n; i++ {
+			r.tick()
+			want := int32(1 + i)
+			macWindowEventually(t, "a touch per re-check", func() bool { return r.st.touched.Load() >= want })
+		}
+		if got := r.st.touched.Load(); got > n+1 {
+			t.Errorf("touches over %d re-checks = %d, want at most one per re-check plus the open (%d)", n, got, n+1)
+		}
+		if r.st.stamps.Load() < 1 {
+			t.Error("the presence stamp was dropped")
+		}
+		if macWindowRecheckEvery < lifecycle.TouchDebounce {
+			t.Errorf("the re-check interval %v is below the reaper's TouchDebounce %v", macWindowRecheckEvery, lifecycle.TouchDebounce)
+		}
+	})
+	for _, tc := range []struct {
+		name   string
+		change func(r *macWindowRig)
+	}{
+		{"a refused re-check", func(r *macWindowRig) {
+			now := time.Now()
+			r.set(func(run *types.AgentRun) { run.PausedAt = &now })
+		}},
+		{"a revoked credential", func(r *macWindowRig) { r.rev.set(true, nil) }},
+		{"a runner gone offline", func(r *macWindowRig) {
+			r.h.srv.runnerStreams.subsMu.Lock()
+			delete(r.h.srv.runnerStreams.subs, *r.h.run.RunnerID)
+			r.h.srv.runnerStreams.subsMu.Unlock()
+		}},
+		{"an ended run", func(r *macWindowRig) { r.set(func(run *types.AgentRun) { run.State = types.RunKilled }) }},
+	} {
+		t.Run(tc.name+" does not touch", func(t *testing.T) {
+			r := newMacWindowRig(t)
+			r.mustOpen()
+			r.tick()
+			macWindowEventually(t, "the staying re-check's touch", func() bool { return r.st.touched.Load() >= 2 })
+			before := r.st.touched.Load()
+			tc.change(r)
+			r.tick()
+			r.closeRow()
+			if got := r.st.touched.Load(); got != before {
+				t.Errorf("touches = %d after the window lost its authority, want %d", got, before)
+			}
+		})
+	}
 }
 
 // F1: a create with desktop_window at_start leaves a pending grant, and the launch opens under it. No record,

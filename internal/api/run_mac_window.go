@@ -560,6 +560,7 @@ func (s *Server) openMacWindow(ctx context.Context, run types.AgentRun, a macWin
 	data := macWindowData(w.background, trigger, &w.runnerID)
 	data["grant_id"] = w.grantID.String()
 	s.auditMacWindowBegin(ctx, &run.ID, a, w.grantID.String(), "success", data)
+	_ = s.cfg.Store.TouchRun(ctx, run.ID) // an error only leaves the run to the reaper, as in attachKeepalive
 	s.goBackground(func() { s.watchMacWindow(wctx, w) })
 	return w, nil
 }
@@ -753,8 +754,8 @@ func (s *Server) watchMacWindow(ctx context.Context, w *macWindow) {
 // macWindowRecheck asks again what the open asked: the run as it stands now, the person's credential and the
 // rows of macWindowRefusal, with the same own-runner rule (no delegate, no service identity, no operator-owned
 // run). It returns the close reason, "" while the window may stay, and the check that refused. Anything it
-// cannot read ends the window (fail closed). A window that stays stamps the run's presence, so an open window
-// keeps the run from idling out from under the person.
+// cannot read ends the window (fail closed). A window that stays stamps the run's presence and touches the run,
+// so an open window keeps the run from idling out from under the person. A window that ends touches nothing.
 func (s *Server) macWindowRecheck(ctx context.Context, w *macWindow) (reason, by string) {
 	run, err := s.cfg.Store.GetRun(ctx, w.runID)
 	if err != nil {
@@ -779,6 +780,7 @@ func (s *Server) macWindowRecheck(ctx context.Context, w *macWindow) (reason, by
 	switch {
 	case rf == nil:
 		_, _ = s.stampPresence(ctx, w.runID, types.ActorHuman, w.auth.Principal, macWindowSurface)
+		_ = s.cfg.Store.TouchRun(ctx, w.runID) // as attachKeepalive: an error only leaves the run to the reaper
 		return "", ""
 	case rf.err == nil && rf.decision == nil && (rf.body.Reason == reasonMacWindowOffline || rf.body.Reason == reasonMacWindowNotHere):
 		return macWindowRunnerOffline, rf.body.Reason
