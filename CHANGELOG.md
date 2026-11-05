@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- Tool rules in your walls or a wall preset now give the same result in any order; a rule for a named tool takes precedence over `*`.
+
 ## [0.10.0-rc.13] — 2026-11-04
 
 ### Before you upgrade
