@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- Settings: Your walls and wall presets now have a control for every limit they carry: GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
+- Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 
 ### Fixed
 
