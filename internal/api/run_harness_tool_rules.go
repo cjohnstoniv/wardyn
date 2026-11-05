@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -339,6 +340,67 @@ func narrowToolRule(rules []types.ToolRule, nr types.ToolRule) (out []types.Tool
 		return out, replaced, true
 	}
 	return append(out, nr), "", true
+}
+
+// narrowToolRules adds one walls document's rules to base, the run's rules before the document, so the
+// result does not depend on the order the document lists them. For every tool the composed effect is
+// the stricter of what base says and what the document says, and within the document a rule for the
+// named tool beats "*". An allow in the document never narrows and is not read. base is returned as it
+// was when nothing changes.
+func narrowToolRules(base, doc []types.ToolRule) []types.ToolRule {
+	var star types.ToolEffect
+	exact := map[string]types.ToolEffect{}
+	for _, r := range doc {
+		switch {
+		case r.Effect != types.ToolHold && r.Effect != types.ToolDeny:
+		case r.Tool == "*":
+			star = stricterEffect(star, r.Effect)
+		default:
+			exact[r.Tool] = stricterEffect(exact[r.Tool], r.Effect)
+		}
+	}
+	out := slices.Clone(base)
+	if star != "" && effectRank(star) > effectRank(effectiveToolEffect(base, "*")) {
+		if i := slices.IndexFunc(out, func(r types.ToolRule) bool { return r.Tool == "*" }); i >= 0 {
+			out[i].Effect = star
+		} else {
+			out = append(out, types.ToolRule{Tool: "*", Effect: star})
+		}
+	}
+	// A tool the run already names exactly takes the stricter of its rule and the document's for it.
+	for i, r := range out {
+		if r.Tool == "*" {
+			continue
+		}
+		named := star
+		if e, ok := exact[r.Tool]; ok {
+			named = e
+		}
+		out[i].Effect = stricterEffect(r.Effect, named)
+	}
+	// A tool the document names that the run has no exact rule for is pinned where the composed effect
+	// would not already be the stricter of the two.
+	for _, tool := range slices.Sorted(maps.Keys(exact)) {
+		if slices.ContainsFunc(out, func(r types.ToolRule) bool { return r.Tool == tool }) {
+			continue
+		}
+		want := stricterEffect(effectiveToolEffect(base, tool), exact[tool])
+		if effectiveToolEffect(out, tool) != want {
+			out = append(out, types.ToolRule{Tool: tool, Effect: want})
+		}
+	}
+	if slices.Equal(out, base) {
+		return base
+	}
+	return out
+}
+
+// stricterEffect is the higher of a and b by effectRank.
+func stricterEffect(a, b types.ToolEffect) types.ToolEffect {
+	if effectRank(b) > effectRank(a) {
+		return b
+	}
+	return a
 }
 
 // effectRank orders no opinion < allow < hold < deny.

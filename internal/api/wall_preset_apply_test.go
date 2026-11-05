@@ -124,6 +124,35 @@ func TestWallPresetsNeverWiden(t *testing.T) {
 	}
 }
 
+// TestWallPresetToolRulesComposeInAnyOrder: a preset's tool rules read the same in either order, and the
+// preset step's result is never wider than the preset or the policy it starts from for any tool.
+func TestWallPresetToolRulesComposeInAnyOrder(t *testing.T) {
+	srv, _, _ := uvServer(t)
+	star, bashHold := types.ToolRule{Tool: "*", Effect: types.ToolDeny}, types.ToolRule{Tool: "Bash", Effect: types.ToolHold}
+	inherited := types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}}
+	for _, doc := range [][]types.ToolRule{{star, bashHold}, {bashHold, star}} {
+		p := &types.WallPresetOnRun{ID: uuid.NewString(), Name: "Tools", Scope: types.WallPresetScopeOrg, Version: 1,
+			Spec: types.PersonalWallsSpec{ToolRules: &doc}}
+		for name, base := range map[string]types.RunPolicySpec{"no rules": {}, "inherited deny": inherited} {
+			spec, source := base.Clone(), policySourceRecord{knobs: startProvenance(memberProvenance)}
+			if _, refusal := srv.wallPresetRunStep(&spec, &source, p); refusal != nil {
+				t.Fatalf("%v over %s: refusal %+v", doc, name, refusal)
+			}
+			want := types.ToolHold
+			if name == "inherited deny" {
+				want = types.ToolDeny
+			}
+			if effectiveToolEffect(spec.ToolRules, "Bash") != want || effectiveToolEffect(spec.ToolRules, "Glob") != types.ToolDeny {
+				t.Errorf("%v over %s: %+v, want Bash %s and an unnamed tool denied", doc, name, spec.ToolRules, want)
+			}
+			if layerRank(spec.ToolRules, "Bash") < layerRank(doc, "Bash") || layerRank(spec.ToolRules, "Glob") < layerRank(doc, "Glob") ||
+				layerRank(spec.ToolRules, "Bash") < layerRank(base.ToolRules, "Bash") {
+				t.Errorf("%v over %s: %+v is wider than the preset or the policy", doc, name, spec.ToolRules)
+			}
+		}
+	}
+}
+
 // TestWallPresetOnEveryArm: a launch's wall preset binds the default arm (the preview shows it) and the
 // inline arm, where run.create records it and the run row keeps the frozen copy.
 func TestWallPresetOnEveryArm(t *testing.T) {

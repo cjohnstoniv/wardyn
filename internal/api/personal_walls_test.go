@@ -568,6 +568,20 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		if eff := effectiveToolEffect(got.ToolRules, "Read"); eff != types.ToolDeny || effectiveToolEffect(got.ToolRules, "Glob") != types.ToolAllow {
 			t.Errorf("a deny on Read: %v, want Read denied and an unnamed tool still allowed", got.ToolRules)
 		}
+		// The order of a document's rules does not matter: a rule for a named tool beats "*" in either, and
+		// an inherited deny is kept.
+		star, bashHold := types.ToolRule{Tool: "*", Effect: types.ToolDeny}, types.ToolRule{Tool: "Bash", Effect: types.ToolHold}
+		for _, doc := range [][]types.ToolRule{{star, bashHold}, {bashHold, star}} {
+			wall := types.PersonalWallsSpec{ToolRules: rules(doc...)}
+			got = run(wall, nil, types.RunPolicySpec{})
+			if effectiveToolEffect(got.ToolRules, "Bash") != types.ToolHold || effectiveToolEffect(got.ToolRules, "Glob") != types.ToolDeny {
+				t.Errorf("walls %v over no rules: %+v, want Bash held and an unnamed tool denied", doc, got.ToolRules)
+			}
+			got = run(wall, nil, types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}})
+			if effectiveToolEffect(got.ToolRules, "Bash") != types.ToolDeny || effectiveToolEffect(got.ToolRules, "Glob") != types.ToolDeny {
+				t.Errorf("walls %v over an inherited Bash deny: %+v, want Bash still denied", doc, got.ToolRules)
+			}
+		}
 		// A policy with no rules gets none it did not ask for beyond the wall's own.
 		got = run(types.PersonalWallsSpec{ToolRules: rules(types.ToolRule{Tool: "Bash", Effect: types.ToolHold})}, nil, types.RunPolicySpec{})
 		if !slices.Equal(got.ToolRules, []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}) {
