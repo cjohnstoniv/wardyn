@@ -20,6 +20,11 @@ attribution.request_url
 attribution.source
 aws_sigv4
 aws_sigv4.account_id
+aws_sigv4.gateways
+aws_sigv4.gateways.host
+aws_sigv4.gateways.path_prefix
+aws_sigv4.gateways.port
+aws_sigv4.gateways.signing_host
 aws_sigv4.grant_id
 aws_sigv4.hosts
 aws_sigv4.portal_host
