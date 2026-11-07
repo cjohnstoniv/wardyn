@@ -4787,7 +4787,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
   set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — the
-  documented production default, not an optional extra.
+  documented production default, not an optional extra. With SSO configured the chart refuses to render, and wardynd to boot, without it unless `uiSandbox.acceptSharedOrigin` (`WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`) accepts the shared origin.
 - Leaving it unset puts every run's relayed app on the SAME browser origin, separated only by a path-scoped
   cookie.
 - That shared-origin mode is a published residual

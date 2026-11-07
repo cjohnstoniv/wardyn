@@ -87,7 +87,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | Variable | Type | Default | Notes |
 |---|---|---|---|
 | `WARDYN_LISTEN` | string | `:8080` | HTTP listen address (flag `-listen`) |
-| `WARDYN_ADMIN_TOKEN` 🔒 | string | **binary: empty**; compose: `demo-admin-token` | admin bearer gating the public API (flag `-admin-token`). An empty token with no OIDC issuer on a loopback bind turns the gate off. [Details](#wardyn_admin_token) |
+| `WARDYN_ADMIN_TOKEN` 🔒 | string | **binary: empty**; compose: `demo-admin-token` | admin bearer gating the public API (flag `-admin-token`), at least 32 bytes unless the bind is loopback-only. An empty token with no OIDC issuer on a loopback bind turns the gate off. [Details](#wardyn_admin_token) |
 | `WARDYN_PG_DSN` 🔒 | string | (unset, required) | Postgres DSN (flag `-dsn`). Operators who set it should size it **at least 4**; the section gives the lock and listener connections to budget per replica. [Details](#wardyn_pg_dsn) |
 | `WARDYN_PG_MIGRATE_DSN` 🔒 | string | (unset) | optional owner/migrator DSN; splits migrate vs runtime pool (flag `-migrate-dsn`). A migrator that owns nothing cannot run an upgrade's migrations, and wardynd fails closed rather than half-migrating. [Details](#wardyn_pg_migrate_dsn) |
 | `WARDYN_REHEARSE_PG_DSN` 🔒 | string | (unset) | the scratch database `wardynd -recovery-rehearse` reads; an environment variable only, so a password never shows in the process list. The rehearsal refuses the live database and the one the set was taken from. [Recovery set and restore rehearsal](operations/recovery-rehearsal.md) |
@@ -350,6 +350,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
+| `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN` | bool | `false` | override: allow the UI-sandbox gateway to boot with SSO configured and no `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`, so every run's apps share one origin. [Details](#wardyn_allow_ui_sandbox_shared_origin) |
 | `WARDYN_UI_SANDBOX_SESSION_TTL` | duration | `8h` | how long a UI-sandbox relay session stays usable (flag `-ui-sandbox-session-ttl`); shortening this binds the cookies already in browsers. [Details](#wardyn_ui_sandbox_session_ttl) |
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | string | (unset) | inbound cookie policy for the UI-sandbox gateway (flag `-ui-sandbox-strip-cookies`): `allow:<names>` forwards only the listed cookies, `deny:<names>` strips them. Unset forwards every cookie except `wardyn_*`. [Details](#wardyn_ui_sandbox_strip_cookies) |
 | `WARDYN_METRICS_LISTEN` | string | (unset) | dedicated metrics listener address (flag `-metrics-listen`); empty means off. Set, it serves `GET /metrics` in plain HTTP with no credential, and boot refuses an address shared with another listener (`validateMetricsListenConfig`, [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)). [Details](#wardyn_metrics_listen) |
@@ -376,6 +377,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Nominally authenticated: that token is published here, so wardynd warns at boot when it is in use and refuses to start outright if the listen address binds a specific non-loopback interface.
 - Note the recommended `make setup` containerized path additionally writes `WARDYN_LOCAL_MODE=true` into the compose env, so the flagship install runs the no-auth loopback local mode; the bare compose file's own default is the token.
 - There is no `WARDYN_TOKEN` fallback here; that variable is read by the CLI and `wardyn-runnerd setup --claim` only.
+- A token under 32 bytes (`openssl rand -hex 32` makes one) **refuses boot** unless the listen address is loopback-only; the compose stack's `demo-admin-token` keeps the handling above.
+- A wrong guess spends one of a client address's 10 attempts, which refill at one every 10 seconds. Past them every request from that address is answered `429` (`admin_token_rate_limited`, `Retry-After: 10`), the right token included, until one refills; a request that presents the right token spends nothing.
 
 ### `WARDYN_PG_DSN`
 
@@ -1982,7 +1985,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Optional **per-run** origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate.
 - Set, each run's apps get their own browser origin and an enter served on any other host is refused.
 - Unset, every run shares one origin separated only by a path-scoped cookie (a stated residual, logged at boot).
+- Unset with SSO configured (`WARDYN_OIDC_ISSUER`) and the gateway on, boot is **refused** unless [`WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`](#wardyn_allow_ui_sandbox_shared_origin) accepts the shared origin. A deployment with no SSO boots as before.
 - Boot refuses a template with no `{run}` placeholder.
+
+### `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`
+
+- Bool, default `false` (flag `-allow-ui-sandbox-shared-origin`).
+- With SSO configured and the UI-sandbox gateway on (`WARDYN_UI_SANDBOX_LISTEN`), boot is refused while `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` is unset; set this to `true` to accept that every run's apps share one origin.
+- Prefer the template: with the shared origin, a page one run serves can reach another run's app.
+- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`.
 
 ### `WARDYN_UI_SANDBOX_SESSION_TTL`
 

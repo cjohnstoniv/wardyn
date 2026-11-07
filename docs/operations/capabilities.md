@@ -268,7 +268,7 @@ the ADMIN pre-authorized.
 - Off for everyone: migration `0167_service_attach_restriction` restricts the value, so a `*` allow grants nobody.
 - An allow row that names `service_attach` admits its subject; one written for subject `all` admits every sponsor.
 - A deny, a user-type deny included, wins; a super admin sponsor needs the grant too.
-- Asked at the attach-ticket mint only: a withdrawn grant refuses the next ticket and ends no session already open.
+- Asked at the attach-ticket mint only: a withdrawn grant refuses the next ticket and ends no session already open. The sponsorship itself is asked again while a terminal is open: a terminal ends at its next check once the person is no longer the identity's sponsor.
 - A portal's delegated token gets no sponsor reach.
 
 #### `self_host_runner`
