@@ -439,9 +439,10 @@ func (c *RegistryClient) fetch(ctx context.Context, ref Ref, path string, q url.
 		if err != nil {
 			return nil, nil, classify(err, ref.Registry, ref.Registry)
 		}
-		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 && originOf(resp.Request.URL) != originOf(u) {
-			// A redirect led to another origin and it sent the challenge. The registry's credential is not
-			// that origin's: answering would hand it to a realm the registry never chose.
+		if resp.StatusCode == http.StatusUnauthorized && originOf(resp.Request.URL) != originOf(u) {
+			// A redirect led to another origin and it sent the challenge, on the first request or after the
+			// registry accepted its credential. The registry's credential is not that origin's and was not sent
+			// there: answering would hand it to a realm the registry never chose.
 			resp.Body.Close()
 			un := c.unavailable(CauseUnauthorized, resp.Request.URL.Host, ref.Registry, nil)
 			un.Withheld = true
