@@ -208,7 +208,7 @@ func TestPolicyDecisionRefusesMCPCall(t *testing.T) {
 	f.pending(ap.ID)
 }
 
-// raiseMCP posts a raise on the internal route and asserts a 400 with reason, nothing raised, and an
+// raiseMCPRefused posts a raise on the internal route and asserts a 400 with reason, nothing raised, and an
 // auth.fail row naming the reason.
 func raiseMCPRefused(t *testing.T, kind types.ApprovalKind, scope, reason string) {
 	t.Helper()
