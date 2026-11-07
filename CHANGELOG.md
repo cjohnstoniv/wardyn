@@ -26,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
 - The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
 - A terminal opened on a service identity's run now closes at its next check once the person is no longer that identity's sponsor, as a new terminal would be refused.
+- An admin reading another person's terminal text through a run's output now leaves a `run.output.read` row in that run's audit, as replaying its recording does.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
