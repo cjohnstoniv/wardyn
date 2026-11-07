@@ -380,6 +380,11 @@ func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host
 		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
 			fmt.Sprintf("model %q is not on this run's allowed models list", shownModel(model)))
 	}
+	// A listed model is not enough: a rerouting key in the body can send the call to another
+	// (reroute_keys.go). The bytes bodyModel read are held, so this reads nothing again.
+	if check == checkBodyModel && p.rerouteGateRefused(w, r, host, port, release) {
+		return noopRelease, true
+	}
 	return release, false
 }
 

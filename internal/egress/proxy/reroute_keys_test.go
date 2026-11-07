@@ -428,3 +428,26 @@ func TestRerouteKeys_OneNearCapBodyThroughCheckScanAndMeter(t *testing.T) {
 		})
 	}
 }
+
+// A body of no declared length, longer than the scan cap, goes on whole in alert mode: the check
+// reads the cap, writes its row, and the rest follows, with nothing charged after the request.
+func TestRerouteKeys_UnsizedOversizeBodyForwardedWhole(t *testing.T) {
+	old := maxLLMScanBody
+	maxLLMScanBody = 128
+	t.Cleanup(func() { maxLLMScanBody = old })
+	body := `{"model":"claude-sonnet-5","note":"` + strings.Repeat("a", 5000) + `"}`
+	p, up, buf := rrProxy(t, nil, "alert")
+	req := mustLocalReq(t, http.MethodPost, rrAnthropic.brokered, strings.NewReader(body))
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || up.body != body {
+		t.Fatalf("status = %d, upstream got %d bytes, want the %d sent", rec.Code, len(up.body), len(body))
+	}
+	if rows := rrRows(t, buf, rrRule); len(rows) != 1 || !strings.Contains(rows[0].Cause, "unparsable") {
+		t.Fatalf("rows = %+v, want one unparsable row", rows)
+	}
+	if !retainedBudgetEmpty(p) {
+		t.Fatal("bytes still charged after the request returned")
+	}
+}
