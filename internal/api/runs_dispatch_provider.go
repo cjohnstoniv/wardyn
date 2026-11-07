@@ -695,8 +695,16 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
 		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
-		if lane.chosen != nil && lane.chosen.provider.Kind == types.ModelProviderLocalModel {
-			sandboxEnv[envCodexModel] = lane.key.model
+		if lane.chosen != nil {
+			switch lane.chosen.provider.Kind {
+			case types.ModelProviderLocalModel:
+				sandboxEnv[envCodexModel] = lane.key.model
+			case types.ModelProviderCustomEndpoint, types.ModelProviderOpenAIAPIKey:
+				// The Model the admin stored on the harness entry; unset leaves codex on its own default.
+				if lane.key.model != "" {
+					sandboxEnv[envCodexModel] = lane.key.model
+				}
+			}
 		}
 	}
 	return llmTransport{provider: lane.chosen}

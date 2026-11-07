@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- On a configured model gateway's host, the proxy now drops every `x-portkey-*` header the sandbox sends, except the header the stored credential rule owns. Before this, a sandbox could set `x-portkey-custom-host` and send the stored key to a host it chose, through a gateway that honours it.
+
+### Changed
+
+- A Codex Model stored on a custom endpoint or OpenAI key provider now takes effect: runs with the Codex CLI use it. With none stored, Codex keeps its own default.
+
 ## [0.10.0-rc.14] — 2026-11-07
 
 ### Before you upgrade
