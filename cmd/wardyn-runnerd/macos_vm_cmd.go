@@ -467,17 +467,33 @@ func editsCode(root string) bool {
 	return err != nil || el.ModTime().After(pl.ModTime())
 }
 
-// macOSVMDoctorStages is doctor's macOS VM stage: only while macOS waits for setup by hand, not during an
-// edit (editsCode), it names the file that holds the one-time code, never the code.
-func macOSVMDoctorStages() []doctor.Stage {
+// macOSVMDoctorStages is doctor's macOS VM stages. While macOS waits for setup by hand, not during an edit
+// (editsCode), one names the file that holds the one-time code, never the code. With a base, folder-shares
+// says whether a folder can be shared into a run (roots and their source are the drive roots in effect).
+func macOSVMDoctorStages(roots []string, rootsSource string) []doctor.Stage {
 	root, err := macvm.DefaultRoot()
 	if err != nil {
 		return nil
 	}
+	var stages []doctor.Stage
 	if p := setupCodeWaiting(root); p != "" && !editsCode(root) {
-		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p)}
+		stages = append(stages, doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p))
 	}
-	return nil
+	base := macvm.Layout{Root: root}.BaseDir(0)
+	man, err := macvm.ReadManifest(base)
+	if err != nil {
+		return stages
+	}
+	tools, _ := macvm.ReadToolsRecord(base)
+	var fda string
+	if tools.Guest != nil {
+		fda = tools.Guest.FullDiskAccess
+	}
+	var readAt time.Time
+	if rec, ok := macvm.ReadEditRecord(base, man); ok && rec.FullDiskAccess == fda {
+		readAt = rec.ReadAt
+	}
+	return append(stages, folderSharesStage(roots, rootsSource, fda, tools.AgentSignature == macvm.AgentSignedAdHoc, readAt, tools.TriedAt))
 }
 
 // daysAgo is "1 day ago" for one and "<n> days ago" for every other count.

@@ -74,6 +74,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `edit-base` no longer prints the setup-code file's path. It points at the window's Type code and Show code buttons. The guest agent now answers three edit-window requests in tools mode only (open an admin Terminal, trust the install list's certificates, open Full Disk Access), each run as the console user.
 - A runner whose proxy image cannot be pulled at start now waits and tries again (every 15 seconds at first, then every 5 minutes) instead of exiting and restarting; `wardyn-runnerd doctor` shows the next try in its status line, and the organisation is told why once the runner connects. A stop still exits cleanly.
 - An agent no longer sees a remote MCP server's tools that its run's tool rules block: Wardyn leaves them out of the server's tool list, page by page, and still refuses their calls.
+- `wardyn-runnerd doctor` on a Mac with a base now says which folder-share setting is missing: a `folder-shares` stage names the drive root or Full Disk Access to set, and is a skip, never a failure.
 
 ### Fixed
 
