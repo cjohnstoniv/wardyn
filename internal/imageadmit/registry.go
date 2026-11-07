@@ -87,6 +87,9 @@ type Unavailable struct {
 func (u *Unavailable) Error() string {
 	switch u.Cause {
 	case CauseUnauthorized:
+		if u.Withheld {
+			return "checking images from " + u.Registry + " got 401 from an address it redirected to, where its credential is not sent"
+		}
 		if !u.HasCredential {
 			return "checking images from " + u.Registry + " got 401 and no credential is configured for it"
 		}
@@ -440,7 +443,9 @@ func (c *RegistryClient) fetch(ctx context.Context, ref Ref, path string, q url.
 			// A redirect led to another origin and it sent the challenge. The registry's credential is not
 			// that origin's: answering would hand it to a realm the registry never chose.
 			resp.Body.Close()
-			return nil, nil, c.unavailable(CauseUnauthorized, resp.Request.URL.Host, ref.Registry, nil)
+			un := c.unavailable(CauseUnauthorized, resp.Request.URL.Host, ref.Registry, nil)
+			un.Withheld = true
+			return nil, nil, un
 		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			challenge := resp.Header.Values("Www-Authenticate")

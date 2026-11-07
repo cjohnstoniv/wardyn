@@ -248,7 +248,7 @@ func refusal(outs []outcome) Verdict {
 	for _, o := range outs {
 		if m := o.mismatch; m != nil {
 			return Verdict{Reason: SignatureInvalid, Signer: o.signer.name, Want: o.signer.want, WantIssuer: o.signer.wantIssuer,
-				Found: m.identity + m.keyID, FoundIssuer: m.issuer}
+				Found: bounded(m.identity + m.keyID), FoundIssuer: m.issuer}
 		}
 	}
 	v := Verdict{Reason: SignatureMissing}

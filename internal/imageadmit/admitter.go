@@ -198,6 +198,9 @@ func unavailableDetail(ref Ref, err error) string {
 	if errors.As(err, &u) {
 		switch u.Cause {
 		case CauseUnauthorized:
+			if u.Withheld {
+				return "checking images from " + ref.Registry + " got 401 from an address it redirected to, where its credential is not sent"
+			}
 			if u.HasCredential {
 				return "checking images from " + ref.Registry + " got 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"
 			}
