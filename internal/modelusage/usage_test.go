@@ -219,7 +219,8 @@ func TestBodyAtCapIsParsed(t *testing.T) {
 }
 
 func TestGarbageAfterFinalUsageIsUncounted(t *testing.T) {
-	s := `data: {"type":"message_delta","delta":{},"usage":{"output_tokens":3}}` + "\ndata: {oops\n"
+	s := `data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}` + "\n" +
+		`data: {"type":"message_delta","delta":{},"usage":{"output_tokens":3}}` + "\ndata: {oops\n"
 	got := run(ShapeAnthropicMessages, Options{Stream: true}, []byte(s), 0)
 	if got.State != StateUncounted || got.Reason != ReasonParseError || got.Output != 0 {
 		t.Fatalf("got %+v", got)

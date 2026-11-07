@@ -40,7 +40,7 @@ const (
 	ReasonStreamCut          Reason = "stream_cut"           // the stream ended before its final usage
 	ReasonBodyOversize       Reason = "body_oversize"        // body, SSE line or event frame over its cap
 	ReasonParseError         Reason = "parse_error"          // malformed JSON, frame or a negative count
-	ReasonNoUsage            Reason = "no_usage"             // a well-formed answer with no usage object
+	ReasonNoUsage            Reason = "no_usage"             // a well-formed answer with no usage object, or without both the input and output counts
 	ReasonMeterError         Reason = "meter_error"          // the parser itself panicked
 	ReasonUndecodable        Reason = "undecodable"          // the caller could not decompress the body
 )
@@ -194,9 +194,11 @@ type parser struct {
 
 	u     Usage // running max per field
 	seen  bool  // some usage arrived
-	final bool  // the shape's terminal usage arrived
-	done  bool  // OpenAI [DONE] seen
-	ended bool  // a terminal event arrived, with or without usage
+	final bool  // the shape's terminal usage arrived with both required figures
+
+	haveIn, haveOut bool // the required input and output figures have each arrived (possibly across events)
+	done            bool // OpenAI [DONE] seen
+	ended           bool // a terminal event arrived, with or without usage
 
 	bad     Reason // sticky: first failure wins, except Undecodable
 	flushed bool
@@ -372,6 +374,30 @@ func (p *parser) merge(in, out, cacheRead, cacheWrite, reasoning int64) {
 	p.u.CacheWrite = max(p.u.CacheWrite, cacheWrite)
 	p.u.Reasoning = max(p.u.Reasoning, reasoning)
 	p.seen = true
+}
+
+// figures folds one reading into the totals like merge, where in and out are the required figures (nil
+// when absent or null: never read as zero) and the rest are optional. It remembers which required figures
+// have arrived, since a stream can deliver them in different events.
+func (p *parser) figures(in, out *int64, cacheRead, cacheWrite, reasoning int64) {
+	var i, o int64
+	if in != nil {
+		i, p.haveIn = *in, true
+	}
+	if out != nil {
+		o, p.haveOut = *out, true
+	}
+	p.merge(i, o, cacheRead, cacheWrite, reasoning)
+}
+
+// terminal marks the shape's terminal usage. The call is counted only when both required figures have
+// arrived; otherwise it is uncounted/no_usage, the provider having reported no usable figure.
+func (p *parser) terminal() {
+	if p.haveIn && p.haveOut {
+		p.final = true
+		return
+	}
+	p.fail(ReasonNoUsage)
 }
 
 func (p *parser) model(m string) { p.u.Model = cmp.Or(p.u.Model, m) }

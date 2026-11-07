@@ -7,8 +7,8 @@ import "bytes"
 
 // chatUsage is the Chat Completions usage object. prompt_tokens already includes cached tokens.
 type chatUsage struct {
-	PromptTokens        int64 `json:"prompt_tokens"`
-	CompletionTokens    int64 `json:"completion_tokens"`
+	PromptTokens        *int64 `json:"prompt_tokens"`
+	CompletionTokens    *int64 `json:"completion_tokens"`
 	PromptTokensDetails struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
@@ -19,8 +19,8 @@ type chatUsage struct {
 
 // responsesUsage is the Responses API usage object.
 type responsesUsage struct {
-	InputTokens        int64 `json:"input_tokens"`
-	OutputTokens       int64 `json:"output_tokens"`
+	InputTokens        *int64 `json:"input_tokens"`
+	OutputTokens       *int64 `json:"output_tokens"`
 	InputTokensDetails struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"input_tokens_details"`
@@ -40,8 +40,8 @@ func (p *parser) mergeChat(e *chatEnvelope) {
 		return
 	}
 	u := e.Usage
-	p.merge(u.PromptTokens, u.CompletionTokens, u.PromptTokensDetails.CachedTokens, 0, u.CompletionTokensDetails.ReasoningTokens)
-	p.final = true
+	p.figures(u.PromptTokens, u.CompletionTokens, u.PromptTokensDetails.CachedTokens, 0, u.CompletionTokensDetails.ReasoningTokens)
+	p.terminal()
 }
 
 func (p *parser) chatBody(b []byte) {
@@ -79,8 +79,8 @@ func (p *parser) mergeResponses(e *responsesEnvelope) {
 		return
 	}
 	u := e.Usage
-	p.merge(u.InputTokens, u.OutputTokens, u.InputTokensDetails.CachedTokens, 0, u.OutputTokensDetails.ReasoningTokens)
-	p.final = true
+	p.figures(u.InputTokens, u.OutputTokens, u.InputTokensDetails.CachedTokens, 0, u.OutputTokensDetails.ReasoningTokens)
+	p.terminal()
 }
 
 func (p *parser) responsesBody(b []byte) {
