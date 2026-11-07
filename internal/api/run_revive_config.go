@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,4 +189,29 @@ func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
 		return nil, err
 	}
 	return proxy.LoadConfigBytes(b)
+}
+
+// reviveReassertCeiling is reassertProxyCeiling for reviveRunProxy, with the denied run.revive row a
+// refusal of the git broker or the Azure CLI lane writes before it is returned.
+func (s *Server) reviveReassertCeiling(ctx context.Context, run types.AgentRun, cfg *proxy.Config, c ownerCeiling, layers []sealLayer,
+	actorType types.ActorType, actor string,
+) (reasserted, *reviveError) {
+	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
+	if rerr != nil && (rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI) {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
+	}
+	return re, rerr
+}
+
+// revivedStoredConfig is the revived config as the run row stores it. The stored row stays the
+// organisation's: a run on a runner keeps the inspection corpus its laptop copy drops, as dispatch stores it
+// (classifyLocalDispatch). A remote run's stored config is cfgJSON itself.
+func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Config, corpus inspectionCorpus, cfgJSON []byte) ([]byte, *reviveError) {
+	if remotePlacement(run.Placement) {
+		return cfgJSON, nil
+	}
+	org := *cfg
+	org.Policy = corpus.restoredOn(cfg.Policy)
+	return encodeRevivedConfig(ctx, &org)
 }

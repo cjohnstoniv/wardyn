@@ -229,12 +229,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// layers it read, so a credential the boundary withholds goes as one the profile denies does.
 	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
 	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
-	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
+	re, rerr := s.reviveReassertCeiling(ctx, run, cfg, c, layers, actorType, actor)
 	if rerr != nil {
-		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
-			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
-				mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
-		}
 		return reviveResult{}, rerr
 	}
 	imageMark, rerr := s.reviveImageDigestRefusal(ctx, run, actorType, actor)
@@ -264,15 +260,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	// The stored row stays the organisation's: a run on a runner keeps the inspection corpus its
-	// laptop copy drops, as dispatch stores it (classifyLocalDispatch).
-	storedJSON := cfgJSON
-	if !remotePlacement(run.Placement) {
-		org := *cfg
-		org.Policy = corpus.restoredOn(cfg.Policy)
-		if storedJSON, rerr = encodeRevivedConfig(ctx, &org); rerr != nil {
-			return reviveResult{}, rerr
-		}
+	storedJSON, rerr := revivedStoredConfig(ctx, run, cfg, corpus, cfgJSON)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 
 	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
