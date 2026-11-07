@@ -33,7 +33,9 @@ const PolicyDigestDatum = "policy_digest"
 // policy_digest key removed, so no writer's data can carry the key unless the recorder put it there. A
 // stamped row whose data is not a JSON object keeps it whole under "data", the way StampDryRun does.
 func StampPolicyDigest(data json.RawMessage, digest string) json.RawMessage {
-	if digest == "" && !bytes.Contains(data, []byte(`"`+PolicyDigestDatum+`"`)) {
+	// An escaped spelling of the key ("policy\u005fdigest") reads as the key too, so the quick exit
+	// needs neither the literal key nor any backslash.
+	if digest == "" && !bytes.Contains(data, []byte(`"`+PolicyDigestDatum+`"`)) && bytes.IndexByte(data, '\\') < 0 {
 		return data
 	}
 	m := map[string]json.RawMessage{}
