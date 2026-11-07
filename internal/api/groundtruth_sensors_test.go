@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ type nodeSensorStore struct {
 	run     types.AgentRun
 	events  []types.AuditEvent
 	beat    types.AuditEvent
+	listErr error // ListGroundtruthSensors fails with it when set
 }
 
 func (s *nodeSensorStore) UpsertGroundtruthSensor(_ context.Context, g store.GroundtruthSensor) error {
@@ -43,6 +45,9 @@ func (s *nodeSensorStore) UpsertGroundtruthSensor(_ context.Context, g store.Gro
 func (s *nodeSensorStore) ListGroundtruthSensors(_ context.Context, since time.Time) ([]store.GroundtruthSensor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	var out []store.GroundtruthSensor
 	for _, g := range s.sensors {
 		if g.LastBeat.After(since) {
@@ -450,5 +455,34 @@ func TestGroundtruthPodEventAfterLeaseEndedDowngrades(t *testing.T) {
 				t.Fatalf("run=%v reason=%q, want run cleared with %s", got.RunID, ed.Reason, tc.wantReason)
 			}
 		})
+	}
+}
+
+// TestHealthzEbpfNodeReadFailureIsDegraded: a failed per-node read (say a split-role install missing
+// the grant on groundtruth_sensors) must not fall back to the newest heartbeat anywhere, which would
+// read healthy while another node is dead. It reads degraded, with the same reason anonymously. A
+// successful read of zero nodes keeps today's answer.
+func TestHealthzEbpfNodeReadFailureIsDegraded(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	beat := groundtruth.HeartbeatEventWithDropped(0, 6, 0, healthyKinds)
+	beat.Time = now.Add(-10 * time.Second) // fresh and healthy on its own
+
+	srv := nodeSensorServer(h, &nodeSensorStore{beat: beat, listErr: errors.New("permission denied for table groundtruth_sensors")}, now)
+	h.srv = srv
+	status := srv.ebpfGroundtruthStatus(context.Background())
+	if status["state"] != "degraded" || status["reason"] != "node sensor health could not be read" {
+		t.Fatalf("status = %v, want degraded with the node-read reason", status)
+	}
+	if anon := healthzEbpf(t, h); anon["state"] != "degraded" || anon["reason"] != "node sensor health could not be read" {
+		t.Errorf("anonymous ebpf_groundtruth = %v, want degraded with the same reason", anon)
+	}
+
+	today := nodeSensorServer(h, stubHeartbeatStore{ev: beat}, now)
+	zero := nodeSensorServer(h, &nodeSensorStore{beat: beat}, now)
+	want, _ := json.Marshal(today.ebpfGroundtruthStatus(context.Background()))
+	got, _ := json.Marshal(zero.ebpfGroundtruthStatus(context.Background()))
+	if string(got) != string(want) {
+		t.Fatalf("zero-node status = %s\nwant today's    %s", got, want)
 	}
 }
