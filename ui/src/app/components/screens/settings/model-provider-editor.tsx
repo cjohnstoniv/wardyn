@@ -766,7 +766,9 @@ function GatewayIdentity({
     : needsAddress
       ? g.NEEDS_ADDRESS(directHost(draft))
       : undefined;
-  const disabled = !operator || !!reason;
+  // Turning identity off is always safe: a sign-in row already on where the install cannot sign can be switched off.
+  const offOnly = sso && refusedKind && draft.gatewayOn;
+  const disabled = !operator || (!!reason && !offOnly);
   // Switch takes no aria-describedby, so the sentence is attached to the control here, to be read with it.
   const describedBy = reason ? reasonId : [noteId, !operator && reasonId].filter(Boolean).join(" ");
   React.useEffect(() => {

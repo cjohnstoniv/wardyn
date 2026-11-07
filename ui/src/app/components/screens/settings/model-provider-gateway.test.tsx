@@ -415,11 +415,13 @@ describe("a Bedrock key row", () => {
     expect(screen.getByLabelText(E.ROUTE_THROUGH)).toBeInvalid();
   });
 
-  it("switching to SSO where the install cannot sign keeps the switch's state and says why it is unavailable", async () => {
+  it("switching to SSO where the install cannot sign keeps the switch on, still able to turn off, and says why it is unavailable", async () => {
     const { user } = renderEditor(BEDROCK_ON);
     expect(sw()).toHaveAttribute("aria-checked", "true");
     await user.click(sso());
-    expect(sw()).toBeDisabled();
+    // Already on, so it can still be turned off; only turning it on is refused here.
+    expect(sw()).toBeEnabled();
+    expect(sw()).toHaveAttribute("aria-checked", "true");
     expect(document.getElementById(sw().getAttribute("aria-describedby")!)).toHaveTextContent(G.NOT_AVAILABLE.bedrock_sso);
     expect(screen.queryByText(G.CHIP)).not.toBeInTheDocument();
     await user.click(bearer());
