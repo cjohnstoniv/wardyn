@@ -184,6 +184,10 @@ func run() error {
 	if err := installBootTransport(http.DefaultTransport, trustedCAPool, f); err != nil {
 		return err
 	}
+	// After the transport, which image admission's registry client copies (image_admission.go).
+	if _, err := newImageRegistry(os.Getenv); err != nil {
+		return err
+	}
 	// (Validated before the DB connect on purpose: a typo'd path fails in
 	// milliseconds instead of after a 30s connect budget.)
 

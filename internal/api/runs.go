@@ -363,6 +363,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markRunCreateExempt(ctx, createDigestInput(req, f.carriedImage), createData)
+	stampImageAdmission(createData, f.admission)
 	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
@@ -482,6 +483,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		VMMachine:        macOSBaseMachine(req), // a macOS VM's picked base, until the Mac records its machine
 		Experience:       req.Experience,
 		ImageInput:       &imageInput,
+		ImageAdmission:   f.admission,
 		Shape:            storedRunShape(req),
 		CorrelationID:    correlationID(req.CorrelationID),
 		Service:          service,

@@ -207,6 +207,9 @@ type AgentRun struct {
 	// named or an attached workspace's base image set, "" when the run named none (the convention image),
 	// nil for a run created before 0249. A revive re-runs create's decision on it (site_config_images.go).
 	ImageInput *string `json:"-"`
+	// ImageAdmission is the image admission verdict for the member's image (ImageAdmissionVerdict); nil when
+	// admission was off, the run named no member image, an operator started it, or the run predates it.
+	ImageAdmission *ImageAdmissionVerdict `json:"image_admission,omitempty"`
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;

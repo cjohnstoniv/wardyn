@@ -64,9 +64,9 @@ func (a *fakeAdmitter) Require(adm *types.SiteImageAdmission, ref string, site b
 	return imageadmit.Requirements{Ref: ref}, nil, nil
 }
 
-func (a *fakeAdmitter) Admit(_ context.Context, ref string, req imageadmit.Requirements) (imageadmit.Verdict, error) {
+func (a *fakeAdmitter) Admit(_ context.Context, req imageadmit.Requirements) (imageadmit.Verdict, error) {
 	a.mu.Lock()
-	a.admits = append(a.admits, ref)
+	a.admits = append(a.admits, req.Ref)
 	a.mu.Unlock()
 	if a.admit != nil {
 		return a.admit(req)
@@ -90,7 +90,7 @@ func admissionSite(mode string) types.SiteConfig {
 }
 
 func admissionServer(site types.SiteConfig, a ImageAdmitter) *Server {
-	return &Server{cfg: Config{Store: &capStore{site: site}, ImageAdmitter: a}}
+	return &Server{cfg: Config{Store: &capStore{site: site}, ImageAdmissionConfig: ImageAdmissionConfig{ImageAdmitter: a}}}
 }
 
 type admissionRun struct {
@@ -228,7 +228,9 @@ func TestImageAdmissionPinnedRefForms(t *testing.T) {
 // TestImageAdmissionEnforceRefusesEachReason: each refusal is its reason, its status and a sentence naming
 // the image as typed.
 func TestImageAdmissionEnforceRefusesEachReason(t *testing.T) {
-	registryDown := &imageadmit.Unavailable{Cause: imageadmit.CauseUnreachable, Host: "registry.example.com", Registry: "registry.example.com"}
+	registryDown := &imageadmit.Unavailable{Cause: imageadmit.CauseUnreachable, Host: "registry.example.com", Registry: "registry.example.com",
+		Err: errors.New("dial tcp 10.0.0.9:443: connect: connection refused")}
+	const downDetail = "registry.example.com could not be reached"
 	for _, tc := range []struct {
 		name    string
 		require func(bool, []string) (*imageadmit.Verdict, error)
@@ -256,11 +258,12 @@ func TestImageAdmissionEnforceRefusesEachReason(t *testing.T) {
 		{"attestation missing", nil, func(imageadmit.Requirements) (imageadmit.Verdict, error) {
 			return imageadmit.Verdict{Reason: imageadmit.AttestationMissing, Digest: admitDigest, Signer: admitSigner, Want: "https://slsa.dev/provenance/v1"}, nil
 		}, http.StatusForbidden, string(imageadmit.AttestationMissing), []string{admitTagRef, "https://slsa.dev/provenance/v1", admitSigner}, 1},
-		{"registry unavailable", nil, func(imageadmit.Requirements) (imageadmit.Verdict, error) { return imageadmit.Verdict{}, registryDown },
-			http.StatusServiceUnavailable, string(imageadmit.AdmissionUnavailable), []string{admitTagRef, registryDown.Error()}, 1},
+		{"registry unavailable", nil, func(imageadmit.Requirements) (imageadmit.Verdict, error) {
+			return imageadmit.Verdict{Reason: imageadmit.AdmissionUnavailable, Detail: downDetail}, registryDown
+		}, http.StatusServiceUnavailable, string(imageadmit.AdmissionUnavailable), []string{admitTagRef, downDetail}, 1},
 		{"trust root unreadable", func(bool, []string) (*imageadmit.Verdict, error) {
-			return nil, errors.New("trust root github-private could not be read")
-		}, nil, http.StatusServiceUnavailable, string(imageadmit.AdmissionUnavailable), []string{admitTagRef, "trust root github-private could not be read"}, 0},
+			return nil, errors.New("image admission policy is invalid: trust root github-private: open /etc/wardyn/sigstore/root.json: permission denied")
+		}, nil, http.StatusServiceUnavailable, string(imageadmit.AdmissionUnavailable), []string{admitTagRef, "trust root file"}, 0},
 	} {
 		for _, mode := range []foldMode{foldCreate, foldPreflight} {
 			a := &fakeAdmitter{require: tc.require, admit: tc.admit}
@@ -277,6 +280,9 @@ func TestImageAdmissionEnforceRefusesEachReason(t *testing.T) {
 				if !strings.Contains(b.Error, s) {
 					t.Errorf("%s (mode %d): sentence %q does not say %q", tc.name, mode, b.Error, s)
 				}
+			}
+			if strings.Contains(b.Error, "10.0.0.9") || strings.Contains(b.Error, "/etc/wardyn") {
+				t.Errorf("%s (mode %d): sentence %q carries the logged error", tc.name, mode, b.Error)
 			}
 			if _, ad := a.calls(); ad != tc.admits {
 				t.Errorf("%s (mode %d): %d registry checks, want %d", tc.name, mode, ad, tc.admits)
@@ -314,7 +320,8 @@ func TestImageAdmissionAuditNeverRefuses(t *testing.T) {
 			return imageadmit.Verdict{Reason: imageadmit.SignatureMissing, Digest: admitDigest}, nil
 		}, imageadmit.SignatureMissing},
 		"registry down": {nil, func(imageadmit.Requirements) (imageadmit.Verdict, error) {
-			return imageadmit.Verdict{}, &imageadmit.Unavailable{Cause: imageadmit.CauseTimeout, Host: "registry.example.com"}
+			return imageadmit.Verdict{Reason: imageadmit.AdmissionUnavailable, Detail: "the check took longer than 20 seconds"},
+				&imageadmit.Unavailable{Cause: imageadmit.CauseTimeout, Host: "registry.example.com"}
 		}, imageadmit.AdmissionUnavailable},
 	} {
 		a := &fakeAdmitter{require: tc.require, admit: tc.admit}
@@ -442,7 +449,7 @@ func TestImageAdmissionQueueStartRechecks(t *testing.T) {
 // TestImageAdmissionFailsClosed: an unreadable site config refuses, and with the mode on and no admitter
 // built, enforce refuses with the unavailable reason while audit only warns.
 func TestImageAdmissionFailsClosed(t *testing.T) {
-	broken := &Server{cfg: Config{Store: admitSiteUnreadable{&capStore{}}, ImageAdmitter: &fakeAdmitter{}}}
+	broken := &Server{cfg: Config{Store: admitSiteUnreadable{&capStore{}}, ImageAdmissionConfig: ImageAdmissionConfig{ImageAdmitter: &fakeAdmitter{}}}}
 	if got := runAdmission(broken, memberCtx(nil), foldCreate, admitTagRef, nil, nil); got.ok || got.resp.Code != http.StatusInternalServerError {
 		t.Errorf("unreadable site config: ok=%v %d", got.ok, got.resp.Code)
 	}
@@ -474,5 +481,20 @@ func TestImageAdmissionStepIsInTheFold(t *testing.T) {
 	}
 	if !(idx["stepRunEnd"] < at && at < idx["stepHostCapacity"]) {
 		t.Errorf("stepImageAdmission at %d; want between stepRunEnd (%d) and stepHostCapacity (%d)", at, idx["stepRunEnd"], idx["stepHostCapacity"])
+	}
+}
+
+// TestImageAdmissionReasonsMatchImageadmit: the wire reasons are imageadmit's closed set, value for value.
+func TestImageAdmissionReasonsMatchImageadmit(t *testing.T) {
+	for api, ia := range map[string]imageadmit.Reason{
+		reasonImageAdmissionNoPolicy:    imageadmit.NoPolicy,
+		reasonImageSignatureMissing:     imageadmit.SignatureMissing,
+		reasonImageSignatureInvalid:     imageadmit.SignatureInvalid,
+		reasonImageAttestationMissing:   imageadmit.AttestationMissing,
+		reasonImageAdmissionUnavailable: imageadmit.AdmissionUnavailable,
+	} {
+		if api != string(ia) {
+			t.Errorf("reason %q != imageadmit %q", api, ia)
+		}
 	}
 }

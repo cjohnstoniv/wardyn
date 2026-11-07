@@ -555,6 +555,9 @@ type QueueStart struct {
 	// ImageInput is the image the start's fold held to the digest rule (types.AgentRun.ImageInput), so a
 	// revive re-checks what started, not what joined the queue; nil keeps the stored one.
 	ImageInput *string
+	// ImageAdmission is the image admission verdict the start's fold reached (types.AgentRun.ImageAdmission),
+	// written as it is: nil clears the create's, since the start is what dispatches.
+	ImageAdmission *types.ImageAdmissionVerdict
 	// WallPreset is the frozen copy of the wall preset the start's fold took, nil for none.
 	WallPreset *types.WallPresetOnRun
 }
@@ -606,19 +609,23 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 	if err != nil {
 		return types.AgentRun{}, false, err
 	}
+	imageAdmission, err := imageAdmissionJSON(st.ImageAdmission)
+	if err != nil {
+		return types.AgentRun{}, false, err
+	}
 	run, err := scanRun(q.QueryRow(ctx, `
 		UPDATE agent_runs SET spiffe_id=$2, confinement_class=$3, model_provider_id=$4, autonomy_level=$5, ends_at=$6,
 			wait_budget_sec=$7, run_limits=$8, unit_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
 			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now(),
 			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20, inner_walls=$21, restriction_ids=$22,
-			image_input=COALESCE($23, image_input), wall_preset=$24
+			image_input=COALESCE($23, image_input), wall_preset=$24, image_admission=$25
 		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = ''
 		RETURNING `+runCols,
 		id, st.SPIFFEID, string(st.ConfinementClass), st.ModelProviderID, string(st.AutonomyLevel), st.EndsAt,
 		st.WaitBudgetSec, limits, st.UnitID, st.LifetimeCapAt, string(st.LifetimeCapSource),
 		string(st.Placement), st.PlacementFilled, st.RunnerID, string(st.EvidenceSource), st.RunnerPoolExecutor,
 		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB, walls, restrictionIDsParam(st.RestrictionIDs),
-		st.ImageInput, wallPreset))
+		st.ImageInput, wallPreset, imageAdmission))
 	if errors.Is(err, ErrNotFound) {
 		return types.AgentRun{}, false, nil
 	}
