@@ -44,6 +44,10 @@ type bootFlags struct {
 	// (bug-rbac-1) — a configured SSO deployment must not silently lose its
 	// RBAC to one stray env var.
 	allowLocalModeWithOIDC *bool
+	// allowUISharedOrigin is WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN, the hatch for
+	// validateUISandboxSharedOrigin: with SSO configured, the UI-sandbox gateway boots
+	// without a per-run origin template only when it is set.
+	allowUISharedOrigin *bool
 	// MEMBER-MODE DESKTOP (W-MEMB, docs/design/member-role-desktop.md). memberMode
 	// asserts the topology in which the human at the keyboard is a MEMBER and the
 	// operator authority lives elsewhere (an org IdP / MDM): it refuses to start
@@ -488,6 +492,7 @@ func parseBootFlags() *bootFlags {
 		localTrustedPeers:      flagEnv("local-trusted-peers", "WARDYN_LOCAL_TRUSTED_PEERS", "", "with -local-trust-forwarder, the only non-loopback peers trusted (IPs or CIDRs, comma-separated); empty resolves them at boot: the default route's gateway and wardynd's own addresses"),
 		localTrustFwd:          flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, also accept the forwarder peers -local-trusted-peers names (by default the gateway and own addresses resolved at boot) beside a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
 		allowLocalModeWithOIDC: flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, which disables the configured SSO/RBAC deployment; normally refused (default false)"),
+		allowUISharedOrigin:    flagBool("allow-ui-sandbox-shared-origin", "WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN", false, "allow the UI-sandbox gateway to run with SSO configured and no WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE, so every run's apps share one origin; normally refused (default false)"),
 		memberMode:             flagBool("member-mode", "WARDYN_USER_DESKTOP", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
 		memberRoots:            flagEnv("member-workspace-roots", "WARDYN_USER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a member's own local_dir workspace source may live under. Empty (default) means members may not mount host directories at all; point it at a dedicated projects directory, never $HOME"),
 		memberRootsMap:         flagEnv("member-workspace-roots-map", "WARDYN_USER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email; a listed principal's entry replaces the shared list rather than adding to it`),

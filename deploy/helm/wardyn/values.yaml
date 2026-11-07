@@ -797,6 +797,10 @@ uiSandbox:
   # origin separated only by a path-scoped cookie — a published residual
   # (threatmodel/THREAT-MODEL.md §5 #18), not a detail.
   originTemplate: ""
+  # With SSO configured (env.WARDYN_OIDC_ISSUER) and no originTemplate the chart
+  # refuses to render and wardynd refuses to boot, because every run's apps would
+  # share one origin. true accepts that (WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN).
+  acceptSharedOrigin: false
 
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
 # Its podSelector governs the control-plane pod ONLY (app.kubernetes.io/

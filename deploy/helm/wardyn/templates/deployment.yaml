@@ -709,6 +709,13 @@ spec:
             - name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE
               value: {{ . | quote }}
             {{- end }}
+            {{- if and (include "wardyn.envValue" (dict "ctx" $ "name" "WARDYN_OIDC_ISSUER")) (not $ui.originTemplate) (not (include "wardyn.allowUISharedOrigin" $)) }}
+            {{- fail "wardyn: uiSandbox.originTemplate is required when uiSandbox.enabled=true and SSO (WARDYN_OIDC_ISSUER) is configured: without it every run's apps share one origin, so a page one run serves can reach another run's app. Set uiSandbox.originTemplate (e.g. https://run-{run}.ui.example.com, needs wildcard DNS and a wildcard certificate), or set uiSandbox.acceptSharedOrigin=true to accept the shared origin" }}
+            {{- end }}
+            {{- if and $ui.acceptSharedOrigin (not $ui.originTemplate) }}
+            - name: WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN
+              value: "true"
+            {{- end }}
             {{- end }}
             {{- if $ml.enabled }}
             - name: WARDYN_METRICS_LISTEN

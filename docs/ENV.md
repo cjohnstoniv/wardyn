@@ -349,6 +349,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
+| `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN` | bool | `false` | override: allow the UI-sandbox gateway to boot with SSO configured and no `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`, so every run's apps share one origin. [Details](#wardyn_allow_ui_sandbox_shared_origin) |
 | `WARDYN_UI_SANDBOX_SESSION_TTL` | duration | `8h` | how long a UI-sandbox relay session stays usable (flag `-ui-sandbox-session-ttl`); shortening this binds the cookies already in browsers. [Details](#wardyn_ui_sandbox_session_ttl) |
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | string | (unset) | inbound cookie policy for the UI-sandbox gateway (flag `-ui-sandbox-strip-cookies`): `allow:<names>` forwards only the listed cookies, `deny:<names>` strips them. Unset forwards every cookie except `wardyn_*`. [Details](#wardyn_ui_sandbox_strip_cookies) |
 | `WARDYN_METRICS_LISTEN` | string | (unset) | dedicated metrics listener address (flag `-metrics-listen`); empty means off. Set, it serves `GET /metrics` in plain HTTP with no credential, and boot refuses an address shared with another listener (`validateMetricsListenConfig`, [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)). [Details](#wardyn_metrics_listen) |
@@ -1977,7 +1978,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Optional **per-run** origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate.
 - Set, each run's apps get their own browser origin and an enter served on any other host is refused.
 - Unset, every run shares one origin separated only by a path-scoped cookie (a stated residual, logged at boot).
+- Unset with SSO configured (`WARDYN_OIDC_ISSUER`) and the gateway on, boot is **refused** unless [`WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`](#wardyn_allow_ui_sandbox_shared_origin) accepts the shared origin. A deployment with no SSO boots as before.
 - Boot refuses a template with no `{run}` placeholder.
+
+### `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`
+
+- Bool, default `false` (flag `-allow-ui-sandbox-shared-origin`).
+- With SSO configured and the UI-sandbox gateway on (`WARDYN_UI_SANDBOX_LISTEN`), boot is refused while `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` is unset; set this to `true` to accept that every run's apps share one origin.
+- Prefer the template: with the shared origin, a page one run serves can reach another run's app.
+- The Helm chart sets it from `uiSandbox.acceptSharedOrigin`.
 
 ### `WARDYN_UI_SANDBOX_SESSION_TTL`
 
