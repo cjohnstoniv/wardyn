@@ -664,3 +664,31 @@ func TestMCPApproveEachStaleApprovedPollNeverRespends(t *testing.T) {
 		t.Fatalf("upstream hits %d, want 2: two approvals send two calls", f.up.hitCount())
 	}
 }
+
+// TestMCPCallsSpentApprovalNotReclaimedAfterKeyForgotten: a call F reads approval A from the
+// approved fast path, waiter W spends A and leaves (the key is forgotten), and call N recreates
+// the key waiting on B. A must not be claimable again: F would send it a second time.
+func TestMCPCallsSpentApprovalNotReclaimedAfterKeyForgotten(t *testing.T) {
+	const k = "K"
+	a, b := uuid.New(), uuid.New()
+	var c mcpCalls
+	// 1. W waits on A, which is approved, and has not claimed it yet.
+	c.admit(k)
+	c.install(k, a)
+	c.update(k, a, apApproved)
+	// 2. F admits and reads A on the approved fast path.
+	fid, fstate, _ := c.admit(k)
+	// 3. W claims A, sends, and leaves.
+	c.claim(k, a)
+	c.leave(k)
+	// 4. N admits and waits on B.
+	c.admit(k)
+	c.install(k, b)
+	// 5. F claims what it read.
+	if fstate == apApproved && fid == a && c.claim(k, a) {
+		t.Fatal("approval A was claimed twice: one approval sends one call")
+	}
+	if c.claim(k, a) {
+		t.Fatal("spent approval A is claimable after its key was recreated")
+	}
+}
