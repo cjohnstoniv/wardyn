@@ -24,6 +24,16 @@ chart/console/IdP split, and the derivation rules behind a signed cookie.
   - which is what `POST`/`DELETE /access/mappings`' posture-flip guard warns an admin about before they trip it (see "Managing them" in [Capabilities](capabilities.md)).
 - The admin token and local mode are **always admin** — a single shared credential with no per-human identity to key a role off (the token *is* the admin).
 - That is the documented ceiling of the whole gate (`requireOperator`/`isOperator`, [`internal/api/http.go`](../../internal/api/http.go)), not an oversight.
+### Admin runs
+
+- Where admins sign in with SSO, we recommend turning on `WARDYN_GOVERN_ADMIN_RUNS`. An admin's test run then gets what a member would get.
+- It governs SSO admin sessions and admin-role personal API tokens.
+- The admin token and local mode stay ungoverned. Their runs carry `governance_exempt`.
+- It refuses Record Mode unless `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT=recording`.
+- Check CI first: a pipeline that uses an admin-role personal token becomes governed.
+- It stays off by default, so an upgrade changes nothing. Steps: [Constrained-admin mode](member-mode.md#constrained-admin-mode).
+- With the switch off, an admin run's Review names what a member would get.
+
 ## Who decides who gets in: chart vs console vs IdP
 
 Three surfaces share this decision, and only one of them is live without a restart.

@@ -23,6 +23,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
+
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 
 ### Fixed
