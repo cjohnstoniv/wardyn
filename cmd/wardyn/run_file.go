@@ -20,7 +20,7 @@ import (
 // runFileFlags are the flags that may stand beside --file: the run's name, when
 // it starts, and what to do with the run once it exists.
 var runFileFlags = map[string]bool{"file": true, "title": true, "description": true, "wall-preset": true, "wait": true, "timeout": true, "max-wait": true, "json": true, "dry-run": true,
-	"start-at": true, "time-zone": true, "machine-kind": true, "macos-base": true, "correlation-id": true}
+	"start-at": true, "time-zone": true, "machine-kind": true, "macos-base": true, "correlation-id": true, "idempotency-key": true}
 
 // runFileRequest reads the document, has the server's door check it, and maps it
 // to the create request: every intent field is the request field of the same
@@ -36,7 +36,7 @@ func runFileRequest(cmd *cobra.Command, c *sdk.Client, file, title, description 
 		}
 	})
 	if len(clash) > 0 {
-		return req, fmt.Errorf("--file carries the whole run: remove %s (only --title, --description, --wall-preset, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --correlation-id, --json and --dry-run go with it)", strings.Join(clash, ", "))
+		return req, fmt.Errorf("--file carries the whole run: remove %s (only --title, --description, --wall-preset, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --correlation-id, --idempotency-key, --json and --dry-run go with it)", strings.Join(clash, ", "))
 	}
 	format := ""
 	if file == "-" {
