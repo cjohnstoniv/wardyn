@@ -179,6 +179,8 @@ export interface AgentRun {
   // shape its experience, workload and tools fit. Absent when they fit more than one, for a run
   // from an older client, or one created before the field.
   shape?: RunShape;
+  // SHA-256 of the run's effective policy, written once at dispatch (Go: types.AgentRun.PolicyDigest); the run's later audit rows carry it as data.policy_digest. Absent before dispatch.
+  policy_digest?: string;
   correlation_id?: string; // The caller's own reference for the run, given at create (Go: types.AgentRun.CorrelationID); absent when none was.
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
