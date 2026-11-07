@@ -508,6 +508,24 @@ describe("a Bedrock sign-in row", () => {
     expect(screen.getByText(G.ADDRESS_CLEARED)).toBeInTheDocument();
   });
 
+  it("a stored-on row on an install that cannot sign can be switched off and saved, but not back on", async () => {
+    const { user } = renderEditor(SSO_ON, ssoList([SSO_ON], false));
+    expect(sw()).toHaveAttribute("aria-checked", "true");
+    expect(sw()).toBeEnabled();
+    expect(document.getElementById(sw().getAttribute("aria-describedby")!)).toHaveTextContent(UNAVAILABLE);
+    await user.click(sw());
+    expect(sw()).toHaveAttribute("aria-checked", "false");
+    expect(sw()).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    expect(putBody().providers[0]).not.toHaveProperty("gateway_identity");
+  });
+
+  it("another person still sees a stored-on row's switch dimmed when the install cannot sign", () => {
+    renderEditor(SSO_ON, ssoList([SSO_ON], false), false);
+    expect(sw()).toBeDisabled();
+  });
+
   it("another person sees the switch dimmed, with the admin-only reason", () => {
     renderEditor(SSO_ON, ssoList([SSO_ON], true), false);
     expect(sw()).toBeDisabled();
