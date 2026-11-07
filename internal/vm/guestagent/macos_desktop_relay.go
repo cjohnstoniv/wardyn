@@ -211,6 +211,10 @@ type replayConn struct {
 
 func (c *replayConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
+// lsofBound is how long the peer check may take inside Apple authentication's own budget: lsof lists every
+// process's files, which a loaded guest can slow past it.
+var lsofBound = 5 * time.Second
+
 // lsofRootHolds asks lsof which processes hold the far end of c, a loopback TCP connection, and refuses
 // unless there is one and every one is root's.
 func lsofRootHolds(ctx context.Context, run CmdRunner, c net.Conn) error {
@@ -219,8 +223,13 @@ func lsofRootHolds(ctx context.Context, run CmdRunner, c net.Conn) error {
 	if !ok || !rok {
 		return errors.New("not a TCP connection")
 	}
-	out, err := run.Run(ctx, "/usr/sbin/lsof", "-nP", "-iTCP@"+local.String(), "-Fpun")
+	lctx, cancel := context.WithTimeout(ctx, lsofBound)
+	defer cancel()
+	out, err := run.Run(lctx, "/usr/sbin/lsof", "-nP", "-iTCP@"+local.String(), "-Fpun")
 	if err != nil {
+		if ctx.Err() == nil && lctx.Err() != nil {
+			return fmt.Errorf("lsof took longer than %s", lsofBound)
+		}
 		return fmt.Errorf("lsof: %w", err)
 	}
 	return rootHoldsEnd(out, remote.String()+"->"+local.String())
