@@ -42,6 +42,9 @@ type eachCP struct {
 	newState types.ApprovalState // the state a new row starts in; PENDING when empty
 	// approveOnPoll approves a PENDING row when it is polled for the n-th time (0 = never).
 	approveOnPoll int
+	// stall, when set, holds the first APPROVED answer to a poll until it is closed; stalled is
+	// closed once that answer is held.
+	stall, stalled chan struct{}
 }
 
 func newEachCP(t *testing.T) *eachCP {
@@ -109,7 +112,16 @@ func newEachCP(t *testing.T) *eachCP {
 					if c.approveOnPoll != 0 && row.polls >= c.approveOnPoll && row.state == types.ApprovalPending {
 						row.state = types.ApprovalApproved
 					}
-					_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: row.id, State: row.state})
+					answer := types.ApprovalRequest{ID: row.id, State: row.state}
+					if c.stall != nil && row.state == types.ApprovalApproved {
+						release := c.stall
+						c.stall = nil
+						close(c.stalled)
+						c.mu.Unlock()
+						<-release
+						c.mu.Lock()
+					}
+					_ = json.NewEncoder(w).Encode(answer)
 					return
 				}
 			}
@@ -605,5 +617,78 @@ func TestMCPApproveEachOtherCallsUntouched(t *testing.T) {
 	f.up.mu.Unlock()
 	if sent != body || cp.count() != 0 {
 		t.Fatalf("sent %q, rows %d; want the body unchanged and nothing asked", sent, cp.count())
+	}
+}
+
+// TestMCPApproveEachStaleApprovedPollNeverRespends: two calls wait on approval A of one call key.
+// One answer saying A is approved is held back while the other call spends A, and a later call
+// spends approval B. The held answer then arrives: A is spent for good, so nothing is sent a third
+// time.
+func TestMCPApproveEachStaleApprovedPollNeverRespends(t *testing.T) {
+	f, cp := newEachFixture(t)
+	f.p.mcp.setApproveEach(&MCPApproveEachConfig{Windows: map[string]int{"codex-cli": 300}})
+	call := eachCall(1, "delete_issue", `{"id":"ENG-1"}`)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); f.post(t, mcpToken("codex-cli"), "linear", call) }()
+	}
+	waitEachRows(t, cp, 1)
+	time.Sleep(50 * time.Millisecond) // both are waiting on A
+	release := make(chan struct{})
+	cp.mu.Lock()
+	cp.stall, cp.stalled = release, make(chan struct{})
+	stalled := cp.stalled
+	cp.mu.Unlock()
+	cp.decide(0, types.ApprovalApproved)
+	<-stalled // one waiter's A=APPROVED answer is held
+	deadline := time.Now().Add(5 * time.Second)
+	for f.up.hitCount() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("upstream hits %d, want the other waiter to spend A", f.up.hitCount())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A third call raises B, which is approved and spent.
+	third := make(chan struct{})
+	go func() { defer close(third); f.post(t, mcpToken("codex-cli"), "linear", call) }()
+	waitEachRows(t, cp, 2)
+	cp.decide(1, types.ApprovalApproved)
+	<-third
+	if f.up.hitCount() != 2 {
+		t.Fatalf("upstream hits %d after B, want 2", f.up.hitCount())
+	}
+	close(release) // the stale A=APPROVED answer arrives
+	wg.Wait()
+	if f.up.hitCount() != 2 {
+		t.Fatalf("upstream hits %d, want 2: two approvals send two calls", f.up.hitCount())
+	}
+}
+
+// TestMCPCallsSpentApprovalNotReclaimedAfterKeyForgotten: a call F reads approval A from the
+// approved fast path, waiter W spends A and leaves (the key is forgotten), and call N recreates
+// the key waiting on B. A must not be claimable again: F would send it a second time.
+func TestMCPCallsSpentApprovalNotReclaimedAfterKeyForgotten(t *testing.T) {
+	const k = "K"
+	a, b := uuid.New(), uuid.New()
+	var c mcpCalls
+	// 1. W waits on A, which is approved, and has not claimed it yet.
+	c.admit(k)
+	c.install(k, a)
+	c.update(k, a, apApproved)
+	// 2. F admits and reads A on the approved fast path.
+	fid, fstate, _ := c.admit(k)
+	// 3. W claims A, sends, and leaves.
+	c.claim(k, a)
+	c.leave(k)
+	// 4. N admits and waits on B.
+	c.admit(k)
+	c.install(k, b)
+	// 5. F claims what it read.
+	if fstate == apApproved && fid == a && c.claim(k, a) {
+		t.Fatal("approval A was claimed twice: one approval sends one call")
+	}
+	if c.claim(k, a) {
+		t.Fatal("spent approval A is claimable after its key was recreated")
 	}
 }
