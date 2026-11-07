@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,11 +57,12 @@ func (f *reviveFixture) reviveInPool(row *store.RunnerPoolCatalogueRow, executor
 	f.st.run.RunnerPoolID, f.st.run.RunnerPoolExecutor = &pool, executor
 }
 
-// reviveAsOwnerInGroups is the revive by the run's owner, signed in with a group snapshot.
-func (f *reviveFixture) reviveAsOwnerInGroups(t *testing.T, groups ...string) (int, string) {
+// reviveAsOwnerSession is the revive by the run's owner; truncated marks the group snapshot partial, and
+// no groups at all (nil) is a session with no snapshot.
+func (f *reviveFixture) reviveAsOwnerSession(t *testing.T, truncated bool, groups ...string) (int, string) {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{V: oidc.SessionCodecVersion, Sub: f.run.CreatedBy, Email: ownerEmail, Role: oidc.RoleUser,
-		UserType: types.UserTypeStandard, Groups: groups, Expiry: time.Now().UTC().Add(time.Hour)})
+		UserType: types.UserTypeStandard, Groups: groups, GroupsTruncated: truncated, Expiry: time.Now().UTC().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,9 +71,10 @@ func (f *reviveFixture) reviveAsOwnerInGroups(t *testing.T, groups ...string) (i
 }
 
 // TestRevive_RechecksThePoolUsePolicyForTheOwner: a person a pool's use policy no longer names cannot
-// revive a run on it, as they could not launch there. The owner's own session is judged by their groups;
-// anyone else's revive by what the run records of the owner, so a group row counts as possibly matching
-// and a user row only for the owner's sub.
+// revive a run on it, as they could not launch there. The owner's own session with a complete group
+// snapshot is judged by their groups; anyone else's revive, and an owner whose snapshot is missing or
+// truncated, by what the run records of the owner, so a group row never admits them and a user row only
+// for the owner's sub.
 func TestRevive_RechecksThePoolUsePolicyForTheOwner(t *testing.T) {
 	group := func(g string) types.RunnerPoolSubject {
 		return types.RunnerPoolSubject{SubjectType: types.CapabilitySubjectGroup, Subject: g}
@@ -79,19 +82,28 @@ func TestRevive_RechecksThePoolUsePolicyForTheOwner(t *testing.T) {
 	user := func(u string) types.RunnerPoolSubject {
 		return types.RunnerPoolSubject{SubjectType: types.CapabilitySubjectUser, Subject: u}
 	}
+	// theOwner stands for the run's owner in a row, filled in once the fixture's run exists.
+	const theOwner = "<the owner>"
 	for _, tc := range []struct {
 		name    string
 		policy  []types.RunnerPoolSubject // nil: no use policy
 		gone    bool                      // the pool is no longer in the owner's catalogue
 		asOwner bool
 		groups  []string
+		partial string // "truncated": the snapshot is partial; "none": the session has no snapshot
 		refused bool
 	}{
 		{name: "owner still in a named group", policy: []types.RunnerPoolSubject{group("sre")}, asOwner: true, groups: []string{"sre"}},
 		{name: "owner left the named group", policy: []types.RunnerPoolSubject{group("sre")}, asOwner: true, groups: []string{"design"}, refused: true},
 		{name: "no use policy", asOwner: true, groups: []string{"design"}},
 		{name: "pool gone from the catalogue", gone: true, asOwner: true, groups: []string{"sre"}, refused: true},
-		{name: "admin, a group row could match the owner", policy: []types.RunnerPoolSubject{group("sre")}},
+		{name: "owner, truncated snapshot, group row only", policy: []types.RunnerPoolSubject{group("sre")}, asOwner: true, groups: []string{"sre"}, partial: "truncated", refused: true},
+		{name: "owner, no snapshot, group row only", policy: []types.RunnerPoolSubject{group("sre")}, asOwner: true, partial: "none", refused: true},
+		{name: "owner, truncated snapshot, a user row names them", policy: []types.RunnerPoolSubject{group("sre"), user(theOwner)},
+			asOwner: true, groups: []string{"sre"}, partial: "truncated"},
+		{name: "admin, a group row never admits the owner", policy: []types.RunnerPoolSubject{group("sre")}, refused: true},
+		{name: "admin, a user row names the owner", policy: []types.RunnerPoolSubject{user(theOwner)}},
+		{name: "admin, a row for the owner's user type", policy: []types.RunnerPoolSubject{{SubjectType: types.CapabilitySubjectUserType, Subject: types.UserTypeStandard}}},
 		{name: "admin, a user row for another person", policy: []types.RunnerPoolSubject{user("someone.else")}, refused: true},
 		{name: "admin, no use policy"},
 		{name: "admin, pool gone from the catalogue", gone: true, refused: true},
@@ -102,15 +114,24 @@ func TestRevive_RechecksThePoolUsePolicyForTheOwner(t *testing.T) {
 			if !tc.gone {
 				row = &store.RunnerPoolCatalogueRow{Pool: types.RunnerPool{Name: "SRE", Scope: types.RunnerPoolOrganization}}
 				if tc.policy != nil {
-					row.Policy = &types.RunnerPoolUsePolicy{Subjects: tc.policy}
+					subjects := slices.Clone(tc.policy)
+					for i := range subjects {
+						if subjects[i].Subject == theOwner {
+							subjects[i].Subject = types.CanonicalUserSubject(f.run.CreatedBy)
+						}
+					}
+					row.Policy = &types.RunnerPoolUsePolicy{Subjects: subjects}
 				}
 			}
 			f.reviveInPool(row, "", nil)
 			var code int
 			var body string
-			if tc.asOwner {
-				code, body = f.reviveAsOwnerInGroups(t, tc.groups...)
-			} else {
+			switch {
+			case tc.asOwner && tc.partial == "none":
+				code, body = f.reviveAsOwnerSession(t, false)
+			case tc.asOwner:
+				code, body = f.reviveAsOwnerSession(t, tc.partial == "truncated", tc.groups...)
+			default:
 				code, body = f.reviveAs(t, false)
 			}
 			if !tc.refused {
@@ -136,7 +157,9 @@ func TestRevive_RechecksTheRemoteRunnerPeoplePolicyForTheOwner(t *testing.T) {
 		runner  *types.RemoteRunner // nil: the runner is gone
 		asOwner bool
 		groups  []string
-		refused bool
+		// truncated marks the owner's group snapshot partial.
+		truncated bool
+		refused   bool
 	}{
 		{name: "everyone", runner: &types.RemoteRunner{ID: rid, PeoplePools: types.PeoplePoolsEveryone}, asOwner: true, groups: []string{"design"}},
 		{name: "policy switched off", runner: &types.RemoteRunner{ID: rid, PeoplePools: types.PeoplePoolsOff}, asOwner: true, groups: []string{"design"}, refused: true},
@@ -146,8 +169,12 @@ func TestRevive_RechecksTheRemoteRunnerPeoplePolicyForTheOwner(t *testing.T) {
 			PeopleSubjects: []types.RunnerPoolSubject{{SubjectType: types.CapabilitySubjectGroup, Subject: "sre"}}}, asOwner: true, groups: []string{"design"}, refused: true},
 		{name: "runner gone", asOwner: true, groups: []string{"design"}, refused: true},
 		{name: "admin, policy switched off", runner: &types.RemoteRunner{ID: rid, PeoplePools: types.PeoplePoolsOff}, refused: true},
-		{name: "admin, listed group could match the owner", runner: &types.RemoteRunner{ID: rid, PeoplePools: types.PeoplePoolsListed,
-			PeopleSubjects: []types.RunnerPoolSubject{{SubjectType: types.CapabilitySubjectGroup, Subject: "sre"}}}},
+		{name: "admin, a listed group never admits the owner", runner: &types.RemoteRunner{ID: rid, PeoplePools: types.PeoplePoolsListed,
+			PeopleSubjects: []types.RunnerPoolSubject{{SubjectType: types.CapabilitySubjectGroup, Subject: "sre"}}}, refused: true},
+		{name: "admin, everyone", runner: &types.RemoteRunner{ID: rid, PeoplePools: types.PeoplePoolsEveryone}},
+		{name: "owner, truncated snapshot, listed group", runner: &types.RemoteRunner{ID: rid, PeoplePools: types.PeoplePoolsListed,
+			PeopleSubjects: []types.RunnerPoolSubject{{SubjectType: types.CapabilitySubjectGroup, Subject: "sre"}}},
+			asOwner: true, groups: []string{"sre"}, truncated: true, refused: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, _ := newOwnerFixture(t)
@@ -159,7 +186,7 @@ func TestRevive_RechecksTheRemoteRunnerPeoplePolicyForTheOwner(t *testing.T) {
 			var code int
 			var body string
 			if tc.asOwner {
-				code, body = f.reviveAsOwnerInGroups(t, tc.groups...)
+				code, body = f.reviveAsOwnerSession(t, tc.truncated, tc.groups...)
 			} else {
 				code, body = f.reviveAs(t, false)
 			}

@@ -17,17 +17,17 @@ import (
 // runner's people policy still admits them. Create and the queue ask both of the caller; a revive asks
 // them of the owner, as the other owner re-checks do, with the same sentences.
 //
-// The owner's own session is resolved in full. Anyone else knows the owner only by the sub and the user
-// type stamped on the run, so a use or people policy row counts when it could match them: a user row
-// naming their sub, a row for their stamped type, or any group row (the groups are not recorded on the
-// run, as ownerMembershipRefusal reads them). A pool that is no longer in the owner's catalogue (deleted)
-// admits nobody.
+// The owner's own session, when its group snapshot is present and complete, matches on its real groups.
+// Anyone else knows the owner only by the sub and the user type stamped on the run, and an owner whose
+// snapshot is missing or truncated matches nothing by group, as a launch reads it (callerSubjects.permits):
+// only a user row naming their sub or a row for their stamped type admits them. A group is never assumed.
+// A pool that is no longer in the owner's catalogue (deleted) admits nobody.
 func (s *Server) ownerPoolRefusal(ctx context.Context, run types.AgentRun) (*ownerRefusal, error) {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if run.RunnerPoolID == nil || run.OperatorOwned || !ok {
 		return nil, nil
 	}
-	subj, owner, session, err := s.revivePoolSubjects(ctx, run)
+	subj, owner, err := s.revivePoolSubjects(ctx, run)
 	if err != nil {
 		return nil, err
 	}
@@ -35,27 +35,8 @@ func (s *Server) ownerPoolRefusal(ctx context.Context, run types.AgentRun) (*own
 	if err != nil {
 		return nil, err
 	}
-	// withGroups is subj for one policy: the owner's session as resolved, anyone else's with every group
-	// the policy names, since the owner's own groups are unknown.
-	withGroups := func(subjects []types.RunnerPoolSubject) callerSubjects {
-		if session {
-			return subj
-		}
-		c := subj
-		c.groups = nil
-		for _, sub := range subjects {
-			if sub.SubjectType == types.CapabilitySubjectGroup {
-				c.groups = append(c.groups, sub.Subject)
-			}
-		}
-		return c
-	}
 	row, found := catalogueRow(rows, *run.RunnerPoolID)
-	var policy []types.RunnerPoolSubject
-	if found && row.Policy != nil {
-		policy = row.Policy.Subjects
-	}
-	if !found || !withGroups(policy).permits(row, owner) {
+	if !found || !subj.permits(row, owner) {
 		return &ownerRefusal{status: runnerpool.ReasonNotFound.Status(), reason: string(runnerpool.ReasonNotFound), msg: runnerpool.NotFoundMsg()}, nil
 	}
 	rs, ok := s.cfg.Store.(store.RemoteRunnerStore)
@@ -66,7 +47,7 @@ func (s *Server) ownerPoolRefusal(ctx context.Context, run types.AgentRun) (*own
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
-	if err != nil || !withGroups(rr.Runner.PeopleSubjects).admitsPeople(rr.Runner) {
+	if err != nil || !subj.admitsPeople(rr.Runner) {
 		return &ownerRefusal{status: runnerpool.ReasonMemberMismatch.Status(), reason: string(runnerpool.ReasonMemberMismatch),
 			msg: runnerpool.RemoteNotAvailableMsg(run.RunnerPoolExecutor)}, nil
 	}
@@ -74,18 +55,18 @@ func (s *Server) ownerPoolRefusal(ctx context.Context, run types.AgentRun) (*own
 }
 
 // revivePoolSubjects is the run owner's subjects and pool owner id for the pool checks: the caller's own
-// session when the caller is the owner and it can answer in full (session true), else what the run row
-// records of them. A user type deleted since sign-in leaves the session unable to answer, so the row
+// session when the caller is the owner and it can answer in full, else what the run row records of them,
+// with no groups. A user type deleted since sign-in leaves the session unable to answer, so the row
 // reading decides, as for anyone else.
-func (s *Server) revivePoolSubjects(ctx context.Context, run types.AgentRun) (callerSubjects, string, bool, error) {
+func (s *Server) revivePoolSubjects(ctx context.Context, run types.AgentRun) (callerSubjects, string, error) {
 	if sub := oidcHumanFromContext(ctx); sub != "" && sub == run.CreatedBy && !oidcGroupsTruncatedFromContext(ctx) {
 		c, err := s.callerSubjects(ctx)
 		if err != nil && !errors.Is(err, errUserTypeUnknown) {
-			return callerSubjects{}, "", false, err
+			return callerSubjects{}, "", err
 		}
 		if err == nil && !c.stale {
-			return c, poolOwner(ctx), true, nil
+			return c, poolOwner(ctx), nil
 		}
 	}
-	return callerSubjects{users: []string{types.CanonicalUserSubject(run.CreatedBy)}, userType: run.UserType}, run.CreatedBy, false, nil
+	return callerSubjects{users: []string{types.CanonicalUserSubject(run.CreatedBy)}, userType: run.UserType}, run.CreatedBy, nil
 }
