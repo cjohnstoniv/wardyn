@@ -200,9 +200,9 @@ What you see tells you which one is missing:
 
 | What you see | Missing | Fix |
 |---|---|---|
-| "outside the workspace roots" at Review or when the run is made | Workspace roots | The operator sets `WARDYN_USER_WORKSPACE_ROOTS` (and `_MAP`), and `WARDYN_USER_WRITABLE_ROOTS` for a writable share |
-| "shares no folders", or "outside every --drive-root" | Drive roots | `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` |
-| A macOS run stops within 10 seconds and names Full Disk Access | Full Disk Access | Grant it to the guest agent in `edit-base` |
+| "is outside every member workspace root", or "configures no member workspace roots" | Workspace roots | The operator sets `WARDYN_USER_WORKSPACE_ROOTS` (and `_MAP`), and `WARDYN_USER_WRITABLE_ROOTS` for a writable share |
+| "which shares no folders", "is outside every --drive-root its runner shares", or "this runner shares no folder" | Drive roots | `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` |
+| A macOS run stops within 10 seconds with "approve Full Disk Access for the Wardyn guest agent in edit-base" | Full Disk Access | Grant it to the guest agent in `edit-base` |
 
 Drive roots:
 
