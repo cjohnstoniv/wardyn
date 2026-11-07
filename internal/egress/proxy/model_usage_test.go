@@ -638,12 +638,12 @@ func TestUsageMeter_RemoteRunnerMustSayItReplaysUsage(t *testing.T) {
 		_, _, ok := p.usageShape(httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", nil))
 		return ok
 	}
-	c := accept(t, rs, <-f.sessions, 1, 0, 10, 1<<20)
+	c := accept(t, rs, f.next(), 1, 0, 10, 1<<20)
 	if metered() {
 		t.Fatal("metered behind a runner whose accept did not say it replays usage rows")
 	}
 	_ = c.Close()
-	c = <-f.sessions
+	c = f.next()
 	if h := readFrame(t, c); h.T != FrameHello {
 		t.Fatalf("hello = %+v", h)
 	}
@@ -658,7 +658,7 @@ func TestUsageMeter_RemoteRunnerMustSayItReplaysUsage(t *testing.T) {
 		t.Fatal("not metered behind a runner that replays usage rows")
 	}
 	_ = c.Close()
-	accept(t, rs, <-f.sessions, 3, 0, 10, 1<<20)
+	accept(t, rs, f.next(), 3, 0, 10, 1<<20)
 	if metered() {
 		t.Fatal("still metered after reconnecting to an older runner")
 	}
@@ -728,7 +728,7 @@ func TestUsageMeter_RemoteFinalCreditLosesNoUsageRow(t *testing.T) {
 		p := newProxy(Options{RunID: rs.runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
 			Dial: redirectDial(upstreamAddr(up.srv)), TLSClientConfig: testInsecureTLSConfig, Sink: &decisionSink{remote: rs},
 			Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
-		c := <-f.sessions
+		c := f.next()
 		if h := readFrame(t, c); h.T != FrameHello {
 			t.Fatalf("hello = %+v", h)
 		}
@@ -790,7 +790,10 @@ func TestUsageMeter_AdmittedWithoutUsageNeverMeters(t *testing.T) {
 	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		close(reached)
-		<-answer
+		select {
+		case <-answer:
+		case <-time.After(10 * time.Second): // the test is over; do not hold the server open
+		}
 		_, _ = io.WriteString(w, `{"type":"message","model":"claude-x","usage":{"input_tokens":11,"output_tokens":7}}`)
 	}))
 	t.Cleanup(up.Close)
@@ -798,16 +801,20 @@ func TestUsageMeter_AdmittedWithoutUsageNeverMeters(t *testing.T) {
 	p := newProxy(Options{RunID: rs.runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
 		Dial: redirectDial(upstreamAddr(up)), TLSClientConfig: testInsecureTLSConfig, Sink: &decisionSink{remote: rs},
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
-	c := accept(t, rs, <-f.sessions, 1, 0, 1, 1<<20) // an older runner: no usage, one record of credit
-	done := make(chan *httptest.ResponseRecorder)
+	c := accept(t, rs, f.next(), 1, 0, 1, 1<<20) // an older runner: no usage, one record of credit
+	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		rec := httptest.NewRecorder()
 		p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-x"}`)), anthropicHost, 443)
 		done <- rec
 	}()
-	<-reached
+	select {
+	case <-reached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call never reached the upstream")
+	}
 	_ = c.Close()
-	c = <-f.sessions // the runner, upgraded, takes usage rows; no new credit
+	c = f.next() // the runner, upgraded, takes usage rows; no new credit
 	if h := readFrame(t, c); h.T != FrameHello {
 		t.Fatalf("hello = %+v", h)
 	}
@@ -819,7 +826,12 @@ func TestUsageMeter_AdmittedWithoutUsageNeverMeters(t *testing.T) {
 	}
 	rs.mu.Unlock()
 	close(answer)
-	rec := <-done
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call never finished")
+	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
