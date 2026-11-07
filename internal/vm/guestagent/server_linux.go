@@ -392,7 +392,7 @@ func (s *Server) writeFile(f File) error {
 
 // errRestarted is the refusal of an exec after the agent restarted: its Init marker is there, but its
 // memory of the run's env is not, and an exec would run without the proxy, the CA and the secrets.
-var errRestarted = errors.New("the guest agent restarted and lost the run's environment; the run must be restarted")
+var errRestarted = errors.New("the guest agent restarted and lost the run's environment; end this run and start a new one")
 
 func (s *Server) command(er ExecRequest) (*exec.Cmd, error) {
 	if len(er.Argv) == 0 {

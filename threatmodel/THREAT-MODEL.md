@@ -525,7 +525,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Crossing | Guard | Limit |
 |---|---|---|
 | Guest ↔ network (Docker) | QEMU's only link is the network relay (`wardyn-vmnet`, in the proxy image), which hands connections to allowed hosts to the run's proxy | A connection to the proxy itself passes unchanged and is checked as a container's is |
-| Guest agent ↔ runner | One host session at a time on a virtio-serial port (`ServePort` in [`internal/vm/guestagent/port_linux.go`](../internal/vm/guestagent/port_linux.go)). A terminal or command fails when the runner cannot tell whether a run is a VM | After the guest agent restarts, it refuses new terminals and commands (`errRestarted`); the run must be restarted |
+| Guest agent ↔ runner | One host session at a time on a virtio-serial port (`ServePort` in [`internal/vm/guestagent/port_linux.go`](../internal/vm/guestagent/port_linux.go)). A terminal or command fails when the runner cannot tell whether a run is a VM | After the guest agent restarts, it refuses new terminals and commands (`errRestarted`); only a new run recovers |
 | Shared folders ↔ the host | The folders a container on this runner would get, one unprivileged `virtiofsd` container each; no other host folder is shared | A guest write lands as the runner's user. A hard link planted inside a folder reads and writes through to its target |
 | Guest memory ↔ the host's disk | The guest has no swap (`CheckNoSwap`), so its sign-in store stays in guest memory | QEMU does not lock guest memory, so the host may page it, sign-ins included, to its swap or hibernation file |
 
