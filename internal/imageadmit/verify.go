@@ -4,6 +4,7 @@
 package imageadmit
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -38,6 +39,13 @@ var errNotStatement = errors.New("the bundle signs no in-toto statement, so it n
 // in-toto statement names the digest as a subject, and it was signed by the signer's identity. It reads
 // nothing from the network.
 func Check(r Requirements, digest string, bundles [][]byte) Verdict {
+	return CheckCandidates(r, digest, Candidates{Bundles: bundles})
+}
+
+// CheckCandidates is Check over referrer bundles and legacy cosign layers together, so a signature from one
+// source and a required attestation from the other admit the image together.
+func CheckCandidates(r Requirements, digest string, c Candidates) Verdict {
+	bundles := c.Bundles
 	d, err := sha256Digest(digest)
 	if err != nil {
 		return Verdict{Reason: SignatureMissing, Digest: digest, Detail: err.Error()}
@@ -48,7 +56,7 @@ func Check(r Requirements, digest string, bundles [][]byte) Verdict {
 	if len(bundles) > MaxCandidatesPerSigner {
 		bundles = bundles[:MaxCandidatesPerSigner]
 	}
-	cands := parse(bundles)
+	cands := append(parse(bundles), legacyCandidates(c.Legacy, digest)...)
 	var primary *outcome
 	if len(r.AnyOf) > 0 {
 		outs := make([]outcome, 0, len(r.AnyOf))
@@ -91,6 +99,9 @@ func Check(r Requirements, digest string, bundles [][]byte) Verdict {
 type candidate struct {
 	b   *bundle.Bundle
 	err error
+	// payload is set for a legacy cosign signature: the payload its message signature covers, which
+	// legacyCandidate checked names the image digest.
+	payload []byte
 }
 
 func parse(bundles [][]byte) []candidate {
@@ -146,7 +157,10 @@ func (s *Signer) evaluate(d []byte, cands []candidate) outcome {
 			o.note(c.err)
 			continue
 		}
-		if c.b.Bundle.GetDsseEnvelope() == nil {
+		artifact := verify.WithArtifactDigest("sha256", d)
+		if c.payload != nil {
+			artifact = verify.WithArtifact(bytes.NewReader(c.payload))
+		} else if c.b.Bundle.GetDsseEnvelope() == nil {
 			o.note(errNotStatement)
 			continue
 		}
@@ -161,12 +175,15 @@ func (s *Signer) evaluate(d []byte, cands []candidate) outcome {
 		if s.identity != nil {
 			who = verify.WithoutIdentitiesUnsafe() // matched below, so a refusal can say who signed instead
 		}
-		res, err := s.verifier.Verify(c.b, verify.NewPolicy(verify.WithArtifactDigest("sha256", d), who))
+		res, err := s.verifier.Verify(c.b, verify.NewPolicy(artifact, who))
 		if err != nil {
 			o.note(err)
 			continue
 		}
 		predicate := res.Statement.GetPredicateType()
+		// A legacy .sig is what `cosign sign` writes, a signature with no predicate: it is the signer's
+		// signature whatever the signer's predicate set, the built-in signer's included.
+		isSignature := c.payload != nil || s.sigPredicates[predicate]
 		by := signed{keyID: s.want}
 		if s.identity != nil {
 			cert := res.Signature.Certificate
@@ -176,16 +193,18 @@ func (s *Signer) evaluate(d []byte, cands []candidate) outcome {
 			}
 			by = signed{identity: cert.SubjectAlternativeName, issuer: cert.Extensions.Issuer}
 			if err := s.identity.Verify(*cert); err != nil {
-				if s.sigPredicates[predicate] && o.mismatch == nil {
+				if isSignature && o.mismatch == nil {
 					o.mismatch = &by
 				}
 				continue
 			}
 		}
-		if s.sigPredicates[predicate] && o.signed == nil {
+		if isSignature && o.signed == nil {
 			o.signed = &by
 		}
-		o.attested[predicate] = true
+		if c.payload == nil {
+			o.attested[predicate] = true
+		}
 	}
 	return o
 }

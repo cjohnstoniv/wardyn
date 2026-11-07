@@ -122,6 +122,14 @@ func (s *Signer) ResignLegacySET(l LegacyLayer) LegacyLayer {
 	return l
 }
 
+// LoggingTo is s whose CT log and Rekor are to's: certificates from s's Fulcio, logged where to's trust root
+// accepts them.
+func (s *Signer) LoggingTo(to *Signer) *Signer {
+	c := *s
+	c.rekorKey, c.rekorID, c.ctKey, c.ctID = to.rekorKey, to.rekorID, to.ctKey, to.ctID
+	return &c
+}
+
 func (s *Signer) legacySignature(key *ecdsa.PrivateKey, payload, verifierPEM []byte, noTlog bool) LegacyLayer {
 	digest := sha256.Sum256(payload)
 	sig, err := ecdsa.SignASN1(rand.Reader, key, digest[:])

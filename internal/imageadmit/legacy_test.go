@@ -127,10 +127,12 @@ func TestLegacySwappedCertificateAnnotationFails(t *testing.T) {
 }
 
 // The chain annotation comes from the registry, so it never adds trust: a certificate from another CA fails
-// even when the annotation names that CA.
+// even when the annotation names that CA and the trusted logs logged it.
 func TestLegacyChainAnnotationIsNotTrusted(t *testing.T) {
 	s, other := releasesigtest.New(t), releasesigtest.New(t)
-	wantReason(t, checkLegacy(t, compile(t, s, corpCI()), other.LegacySignature(sigPayload(), ciOpts())), imageadmit.SignatureMissing)
+	v := checkLegacy(t, compile(t, s, corpCI()), other.LoggingTo(s).LegacySignature(sigPayload(), ciOpts()))
+	wantReason(t, v, imageadmit.SignatureMissing)
+	mustContain(t, v.Detail, "leaf certificate")
 }
 
 // vendorKeyTlog is vendorKey with transparency_log set.
