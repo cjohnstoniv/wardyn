@@ -339,7 +339,9 @@ func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, stag
 // window boots spec for the person's session on a window boot (a tools boot like the headless ones) on the
 // no-egress prep network, and draws its VM in scr's window with the edit's text and the Show code control,
 // until the guest shuts down. The window's close button asks the guest to (WindowText.AskStop), and the
-// window stays up until it has.
+// window stays up until it has. Once the VM has stopped, the boot's stop answers whether that was the
+// guest's own shutdown: a stop through the boot's ctl.sock (ErrStage2Stopped) is the edit's error, so the
+// copy is never rechecked or swapped in.
 func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowScreen) error {
 	nw, err := o.PrepNet()
 	if err != nil {
@@ -357,11 +359,18 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowSc
 	if err != nil {
 		return fmt.Errorf("macvm: the edit window's boot: %w", err)
 	}
-	defer func() {
+	stopped := false
+	stopBoot := func() error {
+		stopped = true
 		sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
 		defer cancel()
-		if err := stop(sctx); err != nil {
-			o.Log.Warn("macvm: the edit window's VM did not shut down cleanly", "err", err.Error())
+		return stop(sctx)
+	}
+	defer func() {
+		if !stopped {
+			if err := stopBoot(); err != nil {
+				o.Log.Warn("macvm: the edit window's VM did not shut down cleanly", "err", err.Error())
+			}
 		}
 	}()
 	wg, ok := g.(WindowGuest)
@@ -387,6 +396,9 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowSc
 	defer w.Close()
 	select {
 	case <-wg.Done():
+		if err := stopBoot(); err != nil {
+			return fmt.Errorf("macvm: the edit window's boot: %w", err)
+		}
 		if st := wg.State(); st == StateError {
 			return errors.New("macvm: the edit window's guest stopped with an error")
 		}
