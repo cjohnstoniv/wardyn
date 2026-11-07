@@ -8,7 +8,7 @@
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
 import { KEPT_MACHINE_REASON, type KeptMachineReason } from "../../../../lib/kept-machine-refusals";
-import type { NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
+import type { ImageAdmissionReason, NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
 import type { ScheduleReason } from "../../../../lib/schedule-refusals";
@@ -69,11 +69,12 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
-  placement_invalid: "document", image_conflict: "document", image_digest_required: "document", allowed_image_invalid: "document",
+  placement_invalid: "document", image_conflict: "document", image_digest_required: "document", image_admission_no_policy: "document", image_signature_missing: "document",
+  image_signature_invalid: "document", image_attestation_missing: "document", image_admission_unavailable: "document", allowed_image_invalid: "document",
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
   workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",
