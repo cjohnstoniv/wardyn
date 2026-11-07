@@ -768,3 +768,49 @@ func TestUsageRecordFitsItsReservation(t *testing.T) {
 		t.Fatalf("a usage row takes %d (spool) / %d (sink) bytes, over its reservation %d", local, remote, spoolUsageRecordBytes)
 	}
 }
+
+// A call admitted while the runner took no usage rows reserved none, so it never meters, even when the
+// sink reconnects to a runner that takes them before the answer arrives: a row with no reservation
+// would meet the spent credit and be dropped (and counted as a refusal).
+func TestUsageMeter_AdmittedWithoutUsageNeverMeters(t *testing.T) {
+	reached, answer := make(chan struct{}), make(chan struct{})
+	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(reached)
+		<-answer
+		_, _ = io.WriteString(w, `{"type":"message","model":"claude-x","usage":{"input_tokens":11,"output_tokens":7}}`)
+	}))
+	t.Cleanup(up.Close)
+	rs, f := startedSink(t)
+	p := newProxy(Options{RunID: rs.runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
+		Dial: redirectDial(upstreamAddr(up)), TLSClientConfig: testInsecureTLSConfig, Sink: &decisionSink{remote: rs},
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
+	c := accept(t, rs, <-f.sessions, 1, 0, 1, 1<<20) // an older runner: no usage, one record of credit
+	done := make(chan *httptest.ResponseRecorder)
+	go func() {
+		rec := httptest.NewRecorder()
+		p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-x"}`)), anthropicHost, 443)
+		done <- rec
+	}()
+	<-reached
+	_ = c.Close()
+	c = <-f.sessions // the runner, upgraded, takes usage rows; no new credit
+	if h := readFrame(t, c); h.T != FrameHello {
+		t.Fatalf("hello = %+v", h)
+	}
+	writeFrame(t, c, SinkFrame{T: FrameAccept, Gen: 2, Usage: true})
+	writeFrame(t, c, SinkFrame{T: FrameGrant, Gen: 2, Through: 1, Bytes: 1 << 20})
+	rs.mu.Lock()
+	for rs.gen != 2 {
+		rs.cond.Wait()
+	}
+	rs.mu.Unlock()
+	close(answer)
+	rec := <-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if n, refused := remoteUsageRows(t, rs), refusedTotal(rs); n != 0 || refused != 0 {
+		t.Fatalf("usage rows %d, refusals %d: the call metered without a reservation and its row was dropped", n, refused)
+	}
+}
