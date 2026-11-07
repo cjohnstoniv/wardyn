@@ -118,6 +118,8 @@ type Report struct {
 	Checkpoints []CheckpointResult `json:"checkpoints"`
 	Events      []EventResult      `json:"events"`
 	Failures    []Failure          `json:"failures"`
+	// Policies is the verdict on each verified row that carries a policy_digest stamp.
+	Policies []PolicyResult `json:"policies,omitempty"`
 }
 
 // OK reports that no check failed. A withheld event fails no check (its content was not checked at all), so
@@ -302,6 +304,7 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 		rep.Checkpoints = append(rep.Checkpoints, res)
 		prevText, prevSt = c.Statement, &st
 	}
+	checkPolicies(b, &rep)
 	return rep
 }
 

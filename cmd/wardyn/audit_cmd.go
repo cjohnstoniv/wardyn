@@ -99,7 +99,8 @@ func auditCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&filter.Actor, "actor", "", "only events by this principal (e.g. alice@corp.example)")
 	cmd.Flags().StringVar(&filter.ActorType, "actor-type", "", "only events from this actor type (human|agent|system|service)")
 	cmd.Flags().StringVar(&filter.Outcome, "outcome", "", "only events with this outcome (success|denied|failure)")
-	cmd.AddCommand(auditExportPartitionCmd(client), auditRetentionCmd(client))
+	cmd.AddCommand(auditExportPartitionCmd(client), auditRetentionCmd(client),
+		auditReceiptCmd(client), auditCheckpointsCmd(client), auditKeysCmd(client), auditVerifyCmd())
 	return cmd
 }
 

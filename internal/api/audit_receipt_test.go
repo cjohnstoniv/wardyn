@@ -151,7 +151,9 @@ func (w *receiptWorld) server(t *testing.T) (*Server, *harness) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, w.fake)
 	cfg.OIDC = &oidc.Authenticator{}
+	// Both fields live in Config's embedded AuditReceiptConfig (the interval is the one field this lane expects added to it).
 	cfg.AuditReceiptKeys = func() []auditreceipt.PublicKey { return []auditreceipt.PublicKey{w.pub} }
+	cfg.AuditCheckpointInterval = 30 * time.Second
 	return New(cfg), h
 }
 
@@ -227,8 +229,8 @@ func TestAuditReceipt_PendingUntilCheckpoint409(t *testing.T) {
 	srv, _ := w.server(t)
 	sec := ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
 	rec := doSSO(t, srv, http.MethodGet, eventQuery(w.ids[1], w.ids[7]), sec, "")
-	if rec.Code != http.StatusConflict || respReason(rec) != "audit_receipt_pending" || rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("a row past the last checkpoint = %d %s Retry-After %q, want 409 audit_receipt_pending with Retry-After", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"))
+	if rec.Code != http.StatusConflict || respReason(rec) != "audit_receipt_pending" || rec.Header().Get("Retry-After") != "30" {
+		t.Fatalf("a row past the last checkpoint = %d %s Retry-After %q, want 409 audit_receipt_pending with Retry-After 30 (the interval)", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"))
 	}
 	if rec := doSSO(t, srv, http.MethodGet, eventQuery(w.ids[1]), sec, ""); rec.Code != http.StatusOK {
 		t.Fatalf("a covered row = %d %s, want 200", rec.Code, rec.Body.String())

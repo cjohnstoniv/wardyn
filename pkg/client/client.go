@@ -26,7 +26,7 @@
 //     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
-//     ExportAuditPartition, AuditRetention, DropAuditPartition
+//     ExportAuditPartition, AuditRetention, DropAuditPartition, AuditReceipt, AuditCheckpoints, AuditReceiptKeys
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
 //     SetMySecret, DeleteMySecret

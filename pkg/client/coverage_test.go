@@ -122,7 +122,7 @@ func routeFamilies() map[string][]string {
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace", "SetWorkspaceOwningUnit"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
-		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
+		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition", "AuditReceipt", "AuditCheckpoints", "AuditReceiptKeys"},
 		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
 		"drives":      {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
