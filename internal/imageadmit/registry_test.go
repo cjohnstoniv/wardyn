@@ -238,7 +238,7 @@ func TestCredentialsNeverSentToPlainHTTPRealm(t *testing.T) {
 	if hits.Load() != 0 {
 		t.Fatalf("plain-http realm got %d requests, want 0", hits.Load())
 	}
-	if strings.Contains(err.Error(), "p") && strings.Contains(err.Error(), ":p@") {
+	if strings.Contains(err.Error(), "dTpw") { // base64("u:p") begins dTpw
 		t.Errorf("error leaks credentials: %v", err)
 	}
 }
