@@ -82,5 +82,5 @@ docs/POLICIES.md=22420 share=12 # 22420 measured (-88: version narration and fil
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
-examples/policies/README.md=1446 share=5
+examples/policies/README.md=1423 share=5 # -23 (docs fix), measured: history lines came out
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

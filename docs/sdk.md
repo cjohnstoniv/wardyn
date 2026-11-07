@@ -202,7 +202,7 @@ The spec always strict-decodes as a policy. Whether it passes policy validation 
 
 #### `changes`
 
-Never `null`. Each item is a `cause` (`workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `walls`, `wall_preset`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`, `overlay`, `unit`, `walls`, `wall_preset`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `unit` (the governance unit's name) for `unit`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
 Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle
@@ -1279,16 +1279,11 @@ confusing. Upgrade the CLI and any SDK callers before requiring a second approve
 
 ## Renamed in 0.8
 
-Issue #658: the attach route family had three different sub-resource shapes.
-`POST /runs/{id}/profile` was a noun where every sibling POST is a verb.
-And one concept spelled itself four ways across the wire, Go, audit and the Helm
-chart.
+The attach route family had three sub-resource shapes, and one concept was spelled four ways across the wire, Go, audit and the Helm chart.
 
-- Each HTTP route below keeps its OLD path mounted as a chi alias for one
-  minor (this doc's release plus one); the SDK and CLI already call the NEW
-  path.
-- The chart key is a clean break, no alias — see
-  [`deploy/helm/wardyn/README.md`](../deploy/helm/wardyn/README.md)'s "User drives" section.
+- Each HTTP route below keeps its old path mounted as a chi alias for one minor; the SDK and CLI call the new path.
+- The chart key is a clean break with no alias; see the "User drives" section of [`deploy/helm/wardyn/README.md`](../deploy/helm/wardyn/README.md).
+- The 0.8.4 CLI command renames are listed in [releases/0.8.md](releases/0.8.md).
 
 | Old | New | Kind |
 |---|---|---|
@@ -1297,10 +1292,6 @@ chart.
 | `POST /runs/{id}/profile` | `POST /runs/{id}/profile/synthesize` | HTTP route, aliased for one minor |
 | Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias); the chart refuses `userDrives.enabled=true` |
 | Helm `userDrives.reclaim.enabled` | Helm `drives.reclaim.enabled` | Chart value, clean break (no alias); never released under the old name |
-| `approvals list\|get`, `approve`, `deny` | `wardyn approval list\|get\|approve\|deny` | CLI command, clean break (no alias), 0.8.4 |
-| `logs <run-id>` | `wardyn run logs <run-id>` | CLI command, clean break (no alias), 0.8.4 |
-| `sessions list\|revoke` | `wardyn session list\|revoke` | CLI command, clean break (no alias), 0.8.4 |
-| `drive apply`, `governance apply`, `preset apply` | `wardyn drive set`, `wardyn governance set`, `wardyn preset set` | CLI command, clean break (no alias), 0.8.4 |
 
 ### Azure DevOps capabilities (#1409)
 
