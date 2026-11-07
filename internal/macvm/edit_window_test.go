@@ -61,8 +61,11 @@ func TestEditWindowCloseAsksTheGuestToShutDown(t *testing.T) {
 	if n := e.scr.win(0).closes(); n != 1 {
 		t.Errorf("the window was closed %d times, want once after the guest stopped", n)
 	}
-	if e.boots != 2 {
-		t.Errorf("%d headless boots: the recheck did not run after the window", e.boots)
+	if e.boots != 2 || e.stops != 1 {
+		t.Errorf("%d headless boots, window boot stopped %d times: want the recheck after one clean stop", e.boots, e.stops)
+	}
+	if rec, ok := macvm.ReadEditRecord(e.base, mustReady(t, e.base)); !ok || rec.Recheck != macvm.EditRecheckPassed {
+		t.Errorf("a closed window's copy was not swapped in: %+v %v", rec, ok)
 	}
 
 	e = newEdit(t)
@@ -111,4 +114,32 @@ func TestEditWindowGetsTheCodeControl(t *testing.T) {
 	if e.codeSeen.Account != "wardyn-admin" || e.codeSeen.Code == "" || e.codeSeen.Code != e.g.codes[0] {
 		t.Errorf("the code file held %+v while the window was up, want the code the guest took", e.codeSeen)
 	}
+}
+
+// A window boot stopped through its ctl.sock (a control client's stop, not the window's close) ends the
+// edit with that stop's error: no recheck boot runs and the copy is discarded, so runs keep the old base.
+func TestEditWindowStoppedThroughItsCtlSockDiscardsTheCopy(t *testing.T) {
+	e := newEdit(t)
+	e.stopErr = errors.Join(macvm.ErrStage2Stopped, nil)
+	e.scr.onOpen = func(macvm.WindowText) { e.windows[0].end() }
+	_, err := macvm.EditBase(editCtx(t), e.opts)
+	if !errors.Is(err, macvm.ErrStage2Stopped) {
+		t.Fatalf("err %v, want the ctl.sock stop", err)
+	}
+	if e.boots != 1 || e.stops != 1 {
+		t.Fatalf("%d headless boots, window boot stopped %d times: want no recheck", e.boots, e.stops)
+	}
+	if strings.Contains(e.out.String(), macvm.EditCheckingLine) {
+		t.Errorf("the edit went on to its checks:\n%s", e.out.String())
+	}
+	e.oldBaseKept(t)
+}
+
+func mustReady(t *testing.T, base string) macvm.Manifest {
+	t.Helper()
+	m, err := macvm.ReadyBase(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

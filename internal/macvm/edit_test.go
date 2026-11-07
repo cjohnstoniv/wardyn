@@ -89,6 +89,16 @@ func (g *windowGuest) State() macvm.MachineState {
 
 func (g *windowGuest) stopsAsked() int { g.mu.Lock(); defer g.mu.Unlock(); return g.stops }
 
+// end stops the VM without the guest being asked, as a stop through the boot's ctl.sock does.
+func (g *windowGuest) end() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stops == 0 {
+		g.stops = -1
+		close(g.done)
+	}
+}
+
 // editScreen is the fake edit window: it records each window's text and VM and, once the window is up, does
 // what the person does: reads the code from the file the window names, then clicks the close button.
 type editScreen struct {
@@ -119,6 +129,8 @@ type editFix struct {
 	specs    []macvm.MachineSpec // and what they booted
 	nics     []*os.File          // on which NIC
 	ignore   bool                // the window boots' guests ignore the close
+	stopErr  error               // what the window boots' stop answers
+	stops    int                 // and how often it was called
 	log      bytes.Buffer
 	sealed   string // the admin password the base kept at prepare
 	desktop  string // the desktop mode the base has before the edit
@@ -154,7 +166,7 @@ func newEdit(t *testing.T) *editFix {
 		WindowBoot: func(_ context.Context, spec macvm.MachineSpec, nic *os.File) (macvm.ToolsGuest, func(context.Context) error, error) {
 			w := &windowGuest{editGuest: e.g, ignore: e.ignore, done: make(chan struct{})}
 			e.windows, e.specs, e.nics = append(e.windows, w), append(e.specs, spec), append(e.nics, nic)
-			return w, func(context.Context) error { return nil }, nil
+			return w, func(context.Context) error { e.stops++; return e.stopErr }, nil
 		},
 		Now: func() time.Time { return time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC) },
 	}
