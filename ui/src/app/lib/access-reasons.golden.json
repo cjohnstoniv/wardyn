@@ -1,5 +1,13 @@
 [
   {
+    "key": "approve_each_default",
+    "text": "Approve each call names one MCP tool. Add it as a rule for that tool."
+  },
+  {
+    "key": "approve_each_no_remote_mcp",
+    "text": "Approve each call works for a tool of a remote MCP server this run reaches through the proxy. Turn one on for this harness."
+  },
+  {
     "key": "attended_no_skip",
     "text": "In an interactive run Claude Code asks you before it acts, and this run's settings don't let it skip asking."
   },

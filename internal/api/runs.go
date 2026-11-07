@@ -322,7 +322,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// …and the managed-settings one, read off the run's bound runner and the
 	// settled tool lane, which the gate above could not see.
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: autonomy.Level,
-		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, &run)...)
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place, comps: comps}, &run)...)
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)

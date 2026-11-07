@@ -98,7 +98,7 @@ type (
 
 	// ToolRule is one tool name and what to do with it, carried in
 	// RunPolicySpec.ToolRules and AgentOverrides.ToolRules; ToolEffect is its
-	// allow, hold or deny.
+	// allow, hold, approve_each or deny.
 	ToolRule   = types.ToolRule
 	ToolEffect = types.ToolEffect
 

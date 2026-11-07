@@ -336,6 +336,11 @@ func TestAttendedRulesMapApproveEach(t *testing.T) {
 	if rules[0].Effect != types.ToolApproveEach {
 		t.Error("attendedToolRules rewrote the policy's rules in place")
 	}
+	// The door that checks the names before dispatch accepts an approve_each rule on an MCP tool.
+	interactive := createRunRequest{Agent: claudeCodeHarness, Interactive: true}
+	if refusal := attendedToolNamesRefusal(interactive, types.RunPolicySpec{ToolRules: rules}); refusal != nil {
+		t.Errorf("an interactive run with approve_each refused at create: %+v", refusal.body)
+	}
 	if got := (dispatchParams{Policy: types.RunPolicySpec{ToolRules: rules}, Components: comps}).attendedToolRules(); got != nil {
 		t.Errorf("a background run has no attended rules: %v", got)
 	}
