@@ -9,7 +9,11 @@
  * such a rune sits inside a string, where the escape reads as the same character; `keepNewline` keeps its layout.
  */
 export function escapeUnsafeRunes(s: string, keepNewline = false): string {
-  return s.replace(/[\p{Cc}\p{Cf}]/gu, (c) => (keepNewline && c === "\n" ? c : `\\u${c.codePointAt(0)!.toString(16).padStart(4, "0")}`));
+  return s.replace(/[\p{Cc}\p{Cf}]/gu, (c) => {
+    if (keepNewline && c === "\n") return c;
+    // JSON's \u takes four hex digits: a rune above U+FFFF is its two UTF-16 halves, as the CLI writes it.
+    return Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, "0")}`).join("");
+  });
 }
 
 const GO_ESCAPES: Record<string, string> = { "\u0007": "\\a", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\v": "\\v", '"': '\\"', "\\": "\\\\" };
