@@ -771,3 +771,38 @@ func TestUsageMeter_RemoteRunnerMustSayItReplaysUsage(t *testing.T) {
 		t.Fatal("still metered after reconnecting to an older runner")
 	}
 }
+
+// A proxy that makes the run's local spool itself (nothing there yet) claims nothing for the runner
+// that reads it: that runner may predate usage rows, so no usage row is written and every row passes
+// the older runner's hash.
+func TestUsageMeter_ProxyMadeSpoolGetsNoUsageRow(t *testing.T) {
+	runID := uuid.New()
+	dir := filepath.Join(t.TempDir(), "spool")
+	sink, err := newLocalDecisionSink(dir, runID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := newUsageUpstream(t, true)
+	p := newProxy(Options{RunID: runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
+		Dial: redirectDial(upstreamAddr(up.srv)), TLSClientConfig: testInsecureTLSConfig, Sink: sink,
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-x"}`)), anthropicHost, 443)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	_ = sink.close(context.Background())
+	rows := spoolRows(t, dir)
+	if len(rows) == 0 {
+		t.Fatal("the spool holds no rows: the call's allow row is missing")
+	}
+	for _, raw := range rows {
+		var row runnerspool.Record
+		if err := json.Unmarshal(raw, &row); err != nil || row.Decision.Usage != nil {
+			t.Fatalf("row %s: a usage row in a spool the proxy made (%v)", raw, err)
+		}
+		if !oldRunnerRowHashOK(t, raw) {
+			t.Fatalf("an older runner refuses row %s", raw)
+		}
+	}
+}
