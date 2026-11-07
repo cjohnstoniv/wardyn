@@ -457,7 +457,7 @@ func TestUsageMeter_OffLeavesTheAnswerAlone(t *testing.T) {
 			t.Errorf("off=%v: wrapped=%v", off, wrapped)
 		}
 		if _, _, metered := p.usageShape(httptest.NewRequest(http.MethodPost, "/v1/messages", nil)); metered == off {
-			t.Errorf("off=%v: usageShape metered=%v, so admission reserves the wrong room", off, metered)
+			t.Errorf("off=%v: usageShape metered=%v", off, metered)
 		}
 	}
 }
@@ -501,93 +501,6 @@ func TestUsageMeter_WhatIsNotMetered(t *testing.T) {
 		if n := len(usageRows(t, buf)); n != 0 {
 			t.Errorf("%s %s %d: %d usage rows, want none", tc.method, tc.path, tc.status, n)
 		}
-	}
-}
-
-// worstUsageRow is a usage row with every string at its cut and made of bytes JSON escapes to six.
-func worstUsageRow(p *Proxy) egress.DecisionLog {
-	long := strings.Repeat("\x01", 4096)
-	r := httptest.NewRequest(http.MethodPost, "https://x/model/"+strings.Repeat("a", 4096)+"/invoke", nil)
-	dl := decisionLog(p.reqOf(r, long, 443), egress.Allow, ruleSourceLLMUsage)
-	dl.Request.Host = cutUsageField(long, usageFieldBytes)
-	dl.Request.Path = cutUsageField(long, usagePathBytes)
-	dl.GatewayCallID = uuid.NewString()
-	max := int64(1<<63 - 1)
-	dl.Usage = &egress.ModelUsage{CallID: uuid.New(), Vendor: "anthropic", Host: dl.Request.Host, Model: cutUsageField(long, usageFieldBytes),
-		Input: max, Output: max, CacheRead: max, CacheWrite: max, Reasoning: max, State: "uncounted", Reason: "stream_without_usage"}
-	return dl
-}
-
-// The largest usage row, as the spool charges it (its JSON plus 1 KiB), fits the room admission adds,
-// and that room fits what a reservation keeps after its first row.
-func TestUsageRecordFitsItsReservation(t *testing.T) {
-	b, err := json.Marshal(worstUsageRow(newProxy(Options{RunID: uuid.New()})))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if size := int64(len(maskDecisionBytes(b))) + 1024; size > spoolUsageRecordBytes {
-		t.Fatalf("a usage row charges %d bytes, over spoolUsageRecordBytes %d", size, spoolUsageRecordBytes)
-	}
-	if spoolUsageRecordBytes > spoolFollowUpBytes {
-		t.Fatal("spoolUsageRecordBytes is over spoolFollowUpBytes, so the room is not kept after the allow row")
-	}
-}
-
-// On the runner's local spool, a metered request reserves room for its usage row: after the largest
-// allow row its reservation could hold, the worst usage row is still charged to the reservation (so
-// it never meets a full spool, which would latch the audit gap). A request the meter cannot wrap, or
-// any request with metering off, reserves no such room.
-func TestUsageMeter_SpoolReservationFitsAllowAndUsage(t *testing.T) {
-	runID := uuid.New()
-	sink, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), runID, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sink.close(context.Background()) })
-	p := newProxy(Options{RunID: runID, Sink: sink})
-	metered := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", nil)
-	plain := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/files", nil)
-	if d := p.spoolReservationBytes(metered) - p.spoolReservationBytes(plain); d != spoolUsageRecordBytes+int64(len("messages")-len("files"))*12 {
-		t.Fatalf("a metered request reserves %d more than a plain one, want the usage room", d)
-	}
-	p.meterOff = true
-	if a, b := p.spoolReservationBytes(metered), p.spoolReservationBytes(plain); a-b != int64(len("messages")-len("files"))*12 {
-		t.Fatalf("metering off still reserves usage room: %d vs %d", a, b)
-	}
-	p.meterOff = false
-
-	need := p.spoolReservationBytes(metered)
-	id, err := sink.reserve(context.Background(), need)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.WithValue(metered.Context(), spoolTicketKey{}, id)
-	metered = metered.WithContext(ctx)
-	// The largest allow row the request's own bound covers: a cause padded until the row is charged
-	// exactly the reservation without the usage room.
-	allow := decisionLog(p.reqOf(metered, anthropicHost, 443), egress.Allow, ruleSourceLLMMITM)
-	b, _ := json.Marshal(allow)
-	allow.Cause = strings.Repeat("c", int(need-spoolUsageRecordBytes)-len(b)-1024-len(`,"cause":""`))
-	sink.emit(allow)
-	sink.mu.Lock()
-	left := sink.reservations[id].bytes
-	sink.mu.Unlock()
-	if left < spoolUsageRecordBytes {
-		t.Fatalf("after the allow row the reservation keeps %d bytes, under the usage room %d", left, spoolUsageRecordBytes)
-	}
-	row := worstUsageRow(p)
-	row.Request.AuditReservation = id
-	rb, _ := json.Marshal(row)
-	sink.emit(row)
-	sink.mu.Lock()
-	after, lost := sink.reservations[id].bytes, sink.localErr
-	sink.mu.Unlock()
-	if lost != nil || left-after != int64(len(maskDecisionBytes(rb)))+1024 {
-		t.Fatalf("the usage row was not charged to its reservation: kept %d then %d, latched %v", left, after, lost)
-	}
-	depth, _, _, err := sink.local.Stats(context.Background())
-	if err != nil || depth != 2 {
-		t.Fatalf("spool depth %d (%v), want the allow and the usage rows", depth, err)
 	}
 }
 
@@ -675,63 +588,42 @@ func spoolRows(t *testing.T, dir string) [][]byte {
 	return out
 }
 
-// A runner's local spool is replayed by wardyn-runnerd, whose release may predate usage rows: its
-// cursor refuses a row whose hash it cannot reproduce, and replay stops there. A spool an older
-// runner made (no usage_records in its manifest) gets no usage row from this proxy, so every row
-// passes the older runner's hash; a spool this release's runner made gets the usage row.
+// A runner's local spool is replayed by wardyn-runnerd, whose cursor refuses a row whose hash it
+// cannot reproduce, and replay stops there. Only a runner from before usage rows still has its proxy
+// write the spool itself, so a spool that runner made gets no usage row, and every row passes its hash.
 func TestUsageMeter_OlderRunnerSpoolStillReplays(t *testing.T) {
-	for _, olderRunner := range []bool{true, false} {
-		runID := uuid.New()
-		dir := filepath.Join(t.TempDir(), "spool")
-		made, err := runnerspool.Open(dir, runID)
-		if err != nil {
-			t.Fatal(err)
+	runID := uuid.New()
+	dir := filepath.Join(t.TempDir(), "spool")
+	made, err := runnerspool.Open(dir, runID) // the runner makes the spool before the proxy starts
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = made.Close()
+	sink, err := newLocalDecisionSink(dir, runID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := newUsageUpstream(t, true)
+	p := newProxy(Options{RunID: runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
+		Dial: redirectDial(upstreamAddr(up.srv)), TLSClientConfig: testInsecureTLSConfig, Sink: sink,
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-x"}`)), anthropicHost, 443)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	_ = sink.close(context.Background())
+	rows := spoolRows(t, dir)
+	if len(rows) == 0 {
+		t.Fatal("the spool holds no rows: the call's allow row is missing")
+	}
+	for _, raw := range rows {
+		var row runnerspool.Record
+		if err := json.Unmarshal(raw, &row); err != nil || !row.ValidHash() || row.Decision.Usage != nil {
+			t.Fatalf("row %s: unreadable, or a usage row (%v)", raw, err)
 		}
-		_ = made.Close()
-		if olderRunner { // the manifest an older runner writes: no usage_records
-			b, err := os.ReadFile(filepath.Join(dir, "state.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var m map[string]any
-			if err := json.Unmarshal(b, &m); err != nil {
-				t.Fatal(err)
-			}
-			delete(m, "usage_records")
-			b, _ = json.Marshal(m)
-			if err := os.WriteFile(filepath.Join(dir, "state.json"), b, 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		sink, err := newLocalDecisionSink(dir, runID, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		up := newUsageUpstream(t, true)
-		p := newProxy(Options{RunID: runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
-			Dial: redirectDial(upstreamAddr(up.srv)), TLSClientConfig: testInsecureTLSConfig, Sink: sink,
-			Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
-		rec := httptest.NewRecorder()
-		p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-x"}`)), anthropicHost, 443)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
-		}
-		_ = sink.close(context.Background())
-		usage := 0
-		for _, raw := range spoolRows(t, dir) {
-			var row runnerspool.Record
-			if err := json.Unmarshal(raw, &row); err != nil || !row.ValidHash() {
-				t.Fatalf("row %s: this release's runner refuses it (%v)", raw, err)
-			}
-			if row.Decision.Usage != nil {
-				usage++
-			}
-			if olderRunner && !oldRunnerRowHashOK(t, raw) {
-				t.Fatalf("an older runner refuses row %s: its replay would stop here", raw)
-			}
-		}
-		if want := map[bool]int{true: 0, false: 1}[olderRunner]; usage != want {
-			t.Fatalf("older runner %v: %d usage rows in the spool, want %d", olderRunner, usage, want)
+		if !oldRunnerRowHashOK(t, raw) {
+			t.Fatalf("an older runner refuses row %s: its replay would stop here", raw)
 		}
 	}
 }

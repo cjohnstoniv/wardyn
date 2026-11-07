@@ -58,13 +58,7 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, err
 	}
-	usage, err := spool.UsageRecords(context.Background())
-	if err != nil {
-		lock.Close()
-		spool.Close()
-		return nil, err
-	}
-	return &decisionSink{local: spool, localUsage: usage, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]spoolReservation{}}, nil
+	return &decisionSink{local: spool, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]spoolReservation{}}, nil
 }
 
 // spoolReservation is one admitted request's hold on the spool: the activity
@@ -117,21 +111,13 @@ const spoolRetryAfter = "1"
 // sentence can name the target again) plus the record's envelope, never more
 // than the largest wire record.
 // Reserving every request at the wire maximum held a 32 MiB spool to 32
-// requests in flight. A request the model-token meter may wrap (usageShape)
-// adds room for its usage row, sent after the answer, within the same
-// MaxRecordBytes ceiling: runnerspool.Full and the remote grant treat that as
-// the largest reservation. A scanned POST already reserves the ceiling, so
-// its usage row fits unless the allow row's findings fill the last 12 KiB.
+// requests in flight.
 func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
-	var usage int64
-	if _, _, metered := p.usageShape(r); metered {
-		usage = spoolUsageRecordBytes
-	}
 	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff &&
 		(bodyBearingMethod(r.Method) || p.scanner.InspectForwardEgress() && r.URL.RawQuery != "") {
 		return runnerspool.MaxRecordBytes
 	}
-	return min(int64(2*6*(len(r.URL.String())+len(r.Host)+len(r.Method))+spoolRecordEnvelope)+usage, runnerspool.MaxRecordBytes)
+	return min(int64(2*6*(len(r.URL.String())+len(r.Host)+len(r.Method))+spoolRecordEnvelope), runnerspool.MaxRecordBytes)
 }
 
 // Reserve the request's own record bound before forwarding. The mutex covers both

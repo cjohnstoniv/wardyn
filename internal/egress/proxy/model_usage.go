@@ -25,23 +25,19 @@ import (
 // ruleSourceLLMUsage marks the row carrying one metered model call's token counts.
 const ruleSourceLLMUsage = "llm:usage"
 
-// spoolUsageRecordBytes is what admission adds to a metered request's spool reservation, so its
-// usage row always fits once its allow row did. It must stay within spoolFollowUpBytes, which is
-// what a reservation keeps after its first row. usageFieldBytes cuts the row's strings so its size
-// has this fixed bound (TestUsageRecordFitsItsReservation).
+// usageFieldBytes and usagePathBytes cut a usage row's strings, so the row stays a few KiB however
+// long the request target: on a runner it rides the sink's credit after the call's allow row.
 const (
-	spoolUsageRecordBytes = 12 << 10
-	usageFieldBytes       = 256
-	usagePathBytes        = 512
+	usageFieldBytes = 256
+	usagePathBytes  = 512
 )
 
 // maxDecodedUsageBytes bounds how much a compressed answer is inflated for the meter. Past it the
 // meter stops reading (the answer still relays whole) and the call is uncounted, body_oversize.
 const maxDecodedUsageBytes = 256 << 20
 
-// usageShape is the metered format of r: a POST to a path naming a model API the parsers read. The
-// admission reservation and the meter both ask it, so the meter never wraps a request whose usage
-// row has no room reserved.
+// usageShape is the metered format of r: a POST to a path naming a model API the parsers read, on a
+// proxy that meters and a sink whose reader replays usage rows.
 func (p *Proxy) usageShape(r *http.Request) (modelusage.Shape, string, bool) {
 	if p.meterOff || !p.sink.takesUsage() || r.Method != http.MethodPost || r.URL == nil {
 		return "", "", false
@@ -50,17 +46,16 @@ func (p *Proxy) usageShape(r *http.Request) (modelusage.Shape, string, bool) {
 }
 
 // takesUsage reports whether the sink's reader replays usage rows. A runner's spool is replayed by
-// wardyn-runnerd, which may predate them: its spool hash would refuse the row and stop replay, so the
-// runner must say so (the local spool's manifest, the remote sink's accept). The control plane's own
-// endpoint upgrades before proxies do.
+// wardyn-runnerd, which may predate them: its spool hash would refuse the row and stop replay. So the
+// remote sink meters only while the connected runner's accept says it replays them, and a local spool
+// never does: only a runner from before usage rows still has its proxy write the spool itself
+// (preparedSpool). The control plane's own endpoint upgrades before proxies do.
 func (s *decisionSink) takesUsage() bool {
 	switch {
-	case s == nil:
+	case s == nil || s.local != nil:
 		return false
 	case s.remote != nil:
 		return s.remote.usage.Load()
-	case s.local != nil:
-		return s.localUsage
 	}
 	return true
 }
