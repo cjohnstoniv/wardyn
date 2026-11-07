@@ -238,6 +238,12 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     ]);
   });
 
+  it("AgentRun.policy_digest is an omitempty Go tag and an optional TS key", () => {
+    expect(typesGo).toMatch(/PolicyDigest\s+string\s+`json:"policy_digest,omitempty"`/);
+    const body = /export\s+interface\s+AgentRun\b[^{]*\{([\s\S]*?)\n\}/.exec(runsTs)?.[1] ?? "";
+    expect(body).toMatch(/\bpolicy_digest\?:/);
+  });
+
   it("AgentRun.has_recording is a pointer omitted when unprojected, optional in TS (#3715)", () => {
     expect(typesGo).toMatch(/HasRecording\s+\*bool\s+`json:"has_recording,omitempty"`/);
     expect(typesGo).toMatch(/RecordingBytes\s+int64\s+`json:"recording_bytes,omitempty"`/);
