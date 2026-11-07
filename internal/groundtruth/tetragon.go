@@ -153,12 +153,15 @@ func (m *Mapper) MapLine(line []byte) (types.AuditEvent, bool) {
 	return m.Map(ev)
 }
 
-// nodeOf is the node an event came from: the line's node_name, else the Mapper's.
+// nodeOf is the node an event is stamped with: the Mapper's own node when it is
+// set, else the line's node_name. The sensor's heartbeat is keyed by the same
+// node, so events and beats join on one value even when Tetragon's node_name is
+// its hostname rather than the Kubernetes node name.
 func (m *Mapper) nodeOf(ev TetragonEvent) string {
-	if ev.NodeName != "" {
-		return ev.NodeName
+	if m.node != "" {
+		return m.node
 	}
-	return m.node
+	return ev.NodeName
 }
 
 func (m *Mapper) mapExec(e *TetragonProcessExec, node string) (types.AuditEvent, bool) {

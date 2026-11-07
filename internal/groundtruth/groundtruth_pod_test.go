@@ -100,8 +100,25 @@ func TestMapperWithNodeFillsMissingNodeName(t *testing.T) {
 		t.Errorf("data.node = %q, want node-b", d.Node)
 	}
 	ev, _ = NewMapper(mappedCorrelator()).WithNode("node-b").MapLine([]byte(podExecLine))
+	if d := decodeData(t, ev); d.Node != "node-b" {
+		t.Errorf("data.node = %q, want the sensor's node node-b", d.Node)
+	}
+}
+
+// The sensor's own node wins over the export line's node_name: the heartbeat is
+// keyed by the sensor's node, so events must carry the same value to join it.
+func TestMapperNodeSensorWinsOverLine(t *testing.T) {
+	ev, _ := NewMapper(mappedCorrelator()).WithNode("node-b").MapLine([]byte(podExecLine))
+	if d := decodeData(t, ev); d.Node != "node-b" {
+		t.Errorf("data.node = %q, want the sensor's node node-b over the line's node-a", d.Node)
+	}
+}
+
+// With no sensor node the line's node_name is still used.
+func TestMapperNodeFallsBackToLine(t *testing.T) {
+	ev, _ := NewMapper(mappedCorrelator()).MapLine([]byte(podExecLine))
 	if d := decodeData(t, ev); d.Node != "node-a" {
-		t.Errorf("data.node = %q, want the event's own node_name node-a", d.Node)
+		t.Errorf("data.node = %q, want the line's node_name node-a", d.Node)
 	}
 }
 

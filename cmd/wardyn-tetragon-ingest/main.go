@@ -201,7 +201,7 @@ func run() error {
 		})
 		// Live container->run index off `docker events`: a snapshot alone cannot see
 		// a container that starts and exits between two polls, and its kernel events
-		// then correlate as unmapped (correlator.go's E1 finding).
+		// then correlate as unmapped. The watch keeps the index current.
 		go corr.Watch(ctx)
 	}
 	go every(ctx, statsIval, func() {
