@@ -163,6 +163,11 @@ func TestCreateRunKeyReplay(t *testing.T) {
 		t.Fatalf("replay = %d %q replayed=%q %s; want the first answer %d %q %s", second.Code, second.Header().Get("Location"),
 			second.Header().Get("Idempotent-Replayed"), second.Body, first.Code, first.Header().Get("Location"), first.Body)
 	}
+	for _, w := range []*httptest.ResponseRecorder{first, second} {
+		if w.Header().Get("Content-Type") != "application/json" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("answer headers = %v, want application/json and nosniff", w.Header())
+		}
+	}
 	if n := runsTitled(t, pool, task); n != 1 {
 		t.Errorf("runs = %d, want 1", n)
 	}
