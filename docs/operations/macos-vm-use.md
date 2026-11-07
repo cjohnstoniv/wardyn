@@ -237,6 +237,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 | The runner cannot open a window | `409` `mac_window_runner_too_old` | "This Mac's runner can't open a window. Upgrade it to this server's version." |
 | The run is paused | `409` `mac_window_paused` | "This run is paused. You can open its window once it is running again." |
 | The run is still being prepared | `409` `mac_window_preparing` | "This run is still being prepared; the window opens when preparation finishes." |
+| The run's desktop settings are still being applied | `409` `mac_window_preparing` | "This run's desktop settings are still being applied; the window opens when they are." |
 | The run already has a window | `409` `mac_window_open` | "This run's window is already open on `<computer>`." |
 | Your session was cut off | `403` `mac_window_revoked` | "This session is no longer authorized, so Wardyn won't open a window. Sign in again." |
 | A browser desktop with control did not close in time | `409` `mac_window_desktop_control` | "A browser desktop that has control of this run didn't close in time, so Wardyn can't open the window. Close it and open the window again." |
@@ -247,6 +248,18 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 - A runner older than 0.10.0-rc.12 does not report the window, so it reads as "can't open a window".
 - A read of the site config or the run that fails refuses the open.
 - `mac_window.state` is `open`, `window_open`, `site_off`, `governance`, `sign_ins_off`, `not_your_mac`, `unrecorded`, `offline`, `runner_too_old`, `not_here`, `paused`, `preparing`, `unconfirmed` or `not_run_owner`. Only `open` shows a button.
+
+### The run's settings in the window
+
+- Terminal and apps opened from the Dock or Finder in the window get the run's non-secret settings: the proxy, the CA bundle, the provider's sign-in files and placeholders, and the git identity.
+  - `env_secret` values are not in the window's Terminal or desktop. They are in `wardyn attach`.
+  - Shell and loader startup variables (`ZDOTDIR`, `ENV`, `BASH_ENV`, `FPATH`, `PS4`, `PROMPT_COMMAND`, `DYLD_*`, `LD_*`) are never passed.
+- The guest applies them once the agent account is signed in at the console, waiting up to 10 minutes. An app opened before the window shows ready, or a login item that auto-login started first, may need a relaunch.
+- Only zsh reads them from a file: one line in `/etc/zshenv` that the agent account's zsh sources. A bash or sh Terminal profile gets nothing from it.
+- **While they are pending.** `wardyn window <run> --status` says `preparing` with the sentence above. A window asked for at create waits for them, up to about 10 minutes, and the run's start is not held.
+- **If they fail.** The window opens, and the status says why: "the agent account was not signed in", "the desktop session did not take them" or "they were not confirmed in time". Run `agent-run --session-env-retry` in the window's Terminal to retry.
+- **After a logout inside a run.** The window's apps lose the proxy settings until you run that retry command. Nothing applies them again by itself.
+- In the guest, `cat /var/run/wardyn/session-env.status` reads `session_env=pending`, `session_env=set vars=<n> via=<asuser|user|retry|none>` or `session_env=failed reason=<not_signed_in|setenv_failed>`.
 
 ### Closing a window
 
@@ -278,7 +291,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 
 ### Apps that use only the system trust store
 
-Before a run starts, Wardyn asks the guest to trust the run's proxy certificate in its System keychain, for TLS only. macOS 26 refuses this without a person ([#3923](https://github.com/cjohnstoniv/wardyn/issues/3923)). The run goes on, and its `run.dispatch` audit row says `keychain_trust` `not_trusted`, reason `refused`.
+Before a run starts, Wardyn asks the guest to trust the run's proxy certificate in its System keychain, for TLS only. macOS 26 refuses this without a person ([#3923](https://github.com/cjohnstoniv/wardyn/issues/3923)). The run goes on, and its `run.dispatch` audit row says `keychain_trust` `not_trusted`, reason `refused`. The table says which apps that affects.
 
 | App or tool | Host marked Inspected | Host marked Tunnel only | Tunnel only, behind a TLS-inspecting proxy |
 |---|---|---|---|
@@ -289,7 +302,9 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 - **Your organisation's root.** Trust it by hand in `edit-base` ([The organisation CA](macos-vm-base-image.md#the-organisation-ca)). That reaches a Tunnel only host.
 - **The run's proxy certificate.** Trusting it by hand can't help: the certificate is new for each run.
 - **Which hosts are which.** The run's Policy tab and `wardyn run policy` mark each host.
-- **Testing with `nscurl`.** `nscurl` can print a TLS failure (`-9802`) against a Tunnel only host behind a TLS-inspecting proxy and still exit 0: read its output, not its exit code. Check with `curl` and the CA variables set.
+- **Testing a host.** In the guest, run `/usr/local/libexec/wardyn-guest-agent tls-check <host>`. It checks the way the system-trust apps do and honours `HTTPS_PROXY` and `NO_PROXY`. It exits 0 when the host is trusted, 1 when TLS failed, and 2 for a usage or network error.
+  - `nscurl` can print a TLS failure (`-9802`) and still exit 0, so don't trust its exit code.
+  - For a tool that reads a CA variable, check with `curl` and the CA variables set.
 - **`kubectl`.** A kubeconfig that names a CA may not use the system trust store. The one a kubectl component writes names the run's proxy certificate.
 
 ### Folders
@@ -300,14 +315,16 @@ A shared folder needs three settings, in three places:
 |---|---|---|
 | The workspace roots, and the writable roots for a writable share | The organisation's server: `WARDYN_USER_WORKSPACE_ROOTS` (or a member's entry in `WARDYN_USER_WORKSPACE_ROOTS_MAP`), `WARDYN_USER_WRITABLE_ROOTS` | The server's operator |
 | The runner's drive roots | The Mac: `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` in a managed profile | The Mac's person, or the MDM |
-| Full Disk Access for the guest agent | The base image, once, in `edit-base` | Whoever edits the base |
+| Full Disk Access for the guest agent | The base image, once, in `edit-base` (its window has a Full Disk Access button) | Whoever edits the base |
 
 A folder has to pass all three. The rules and the failures are below.
 
 - Shared into the guest at `/Users/agent/…` (a workspace's `/home/agent/…` path), with the same rules and read-only or writable choice as a container.
 - A run reads a shared folder only once the guest agent has Full Disk Access in the base. macOS asks a privacy question for each network volume, and nobody can answer it inside a run. Grant it once in `edit-base` ([Editing a base](macos-vm-base-image.md#editing-a-base)).
   - Without it, a run with a shared folder stops before it starts, within 10 seconds, and names this fix.
-  - A guest agent signed ad hoc, as in a package built without a Developer ID, loses the grant at each tools update, so grant it again in `edit-base`. One signed with a Developer ID keeps it. Wardyn's released package is currently built without one.
+  - The runner signs each guest agent it pushes with a signing identity it makes once on that Mac, so the grant can last through tools updates. The first tools update after an upgrade changes the signature: grant it once more.
+  - If signing fails, the agent is pushed signed ad hoc and loses the grant at each tools update. `wardyn-runnerd macos-vm status` says which.
+  - A base moved to another Mac, or another login on the same Mac, loses the grant once: the identity is per Mac and per login.
   - Full Disk Access lifts macOS's privacy prompts for every process a run starts in the guest. POSIX permissions still apply, and each run's guest is its own clone.
 - A folder macOS protects (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security → Files and Folders first.
 - A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn protects; share a project folder inside it.

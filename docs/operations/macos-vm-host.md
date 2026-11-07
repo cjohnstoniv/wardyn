@@ -166,6 +166,7 @@
 | `macos-vm.noindex/bases/` and `cache/` | The logged-in user only |
 | `macos-vm.noindex/prepare.log` | The logged-in user. No password or secret value is logged |
 | `macos-vm.noindex/setup-code.json` | The logged-in user only (mode `0600`). It exists only while macOS waits for setup by hand or an `edit-base` session. The window can show its code on a click |
+| `macos-vm.noindex/agent-signing/` (`key.pem`, `cert.pem`, `.lock`) | The logged-in user only (directory `0700`, `key.pem` `0600`). This login's guest agent signing identity, which only `wardyn-macvm` reads. A base moved to another Mac or login loses its Full Disk Access grant once |
 
 - The helper runs as the logged-in user, never root, with one entitlement: to use Apple's virtualization. It has no networking entitlement.
 - The VM listens on no TCP port on the Mac, and the proxy's credential injection never leaves Docker.

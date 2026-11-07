@@ -24,6 +24,7 @@
 | Installing the package failed and macOS VMs stay off | A login held the admission lock for over 10 seconds. Reinstall the package |
 | The runner says the ledger is busy | Another account holds the lock, or the ledger is crowded with entries. See [The shared ledger](macos-vm-host.md#the-shared-ledger) |
 | A third VM refused | The Mac already runs two, or preparing holds one |
+| Both VM slots stay taken after an upgrade or a restart loop | At start the runner ends the `update-tools` and `prepare` helpers an earlier start left. It logs "macOS VM: ended a helper a previous runner left"; nothing to do. A helper it can't read stays: end it by hand |
 | `max` is 0 | Docker's memory leaves no budget, the Mac has too little free disk, or a per-run limit is below the base's minimum ([How many VMs a Mac offers](macos-vm-host.md#how-many-vms-a-mac-offers)) |
 | A run ended because the Mac ran low on disk | Free space fell below 5 GiB, possibly held by snapshots ([Disk](macos-vm-host.md#disk)) |
 | The runner says the Mac needs a restart | The framework still holds a slot. Restart the Mac |
@@ -33,8 +34,10 @@
 | `prepare` says setup by hand needs this Mac's desktop | It ran over SSH, outside the signed-in desktop, or with sudo. Run it in Terminal on the Mac, signed in at its desktop |
 | Preparing stopped at the Remote Login check | Port 22 did not refuse, or the guest was not shown live on the same boot. No base was published; run `prepare` again |
 | `edit-base` says the base was prepared before Wardyn kept its admin password | The base comes from an older release, and macOS will not let root change its setup account's password without the old one. Run `wardyn-runnerd macos-vm prepare --new-image`, then `edit-base` again |
+| A tools update says "A tools update of this macOS base is already running." | Another tools update or a prepare holds the base's update lock. The second update now fails at once instead of waiting. Wait for the running one to finish, then run it again |
 | A tools update stops removing a CA, saying macOS 26 can refuse that | The update stops, and the old base stays ready and still trusts the old CA. Change the list as you want it and run `wardyn-runnerd macos-vm prepare --new-image`, which builds a new base from it |
 | `edit-base` says the guest did not take the one-time code | The setup account's password in the guest is not the one Wardyn keeps, or was changed in the session. Runs keep the old base. If it fails again before the window opens, run `prepare --new-image` |
+| After an upgrade, `wardyn-runnerd doctor` says "waiting for the proxy image; next try at <time>" | Not in the registry yet. The runner stays up and retries after 15 s, 30 s, 1 and 2 minutes, then every 5. The organisation is told stage `proxy-image` at the first connect |
 | The runner logs that it offers none and names `--per-run-memory` or `--per-run-cpu` | A per-run limit is below the base's minimum. Raise it ([How many VMs a Mac offers](macos-vm-host.md#how-many-vms-a-mac-offers)) |
 
 The runner drawer shows most of these from fixed codes and numbers the runner reports. Whether someone is logged in goes only as yes or no, and no user or account name is sent. In an error, the runner's home folder shows as `~`.
@@ -72,6 +75,8 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 | A folder shared read-only refuses writes from the guest | Read-only folders |
 | Without Full Disk Access for the guest agent, its listing of a share as `agent` waits as a run's read of a file does, and with it the listing answers | Folder shares: the refusal that names the fix. If the listing does not wait, a run can still hang on its first read |
 | A Full Disk Access grant made in `edit-base` survives the recheck and reaches each run's clone | Folder shares on every run |
+| A guest agent signed on this Mac keeps its Full Disk Access through a tools update | Folder shares after an update. `macos-vm status` shows what the base last read |
+| The run's settings reach the window's apps (`launchctl setenv` as the user), and zsh reads the line in `/etc/zshenv` | [The run's settings in the window](macos-vm-use.md#the-runs-settings-in-the-window) |
 | `gh` and `kubectl` against a host marked Inspected, in a macOS VM run | Whether they fail TLS as [the table](macos-vm-use.md#apps-that-use-only-the-system-trust-store) says |
 | A `ca` item trusted by hand in `edit-base` stays trusted in each run's clone | Apps that use only the system trust store, on Tunnel only hosts behind a TLS-inspecting proxy |
 | The runner refuses a share of a whole home folder, /Users or /private/var on a real Mac, before the VM starts | Folders: what a run may share |

@@ -84,16 +84,23 @@
 `wardyn-runnerd macos-vm edit-base` boots the ready base once, in a window, for an attended session. Use it to turn on Screen Sharing with control when `status` says `view only` (on a macOS 26 base the desktop stays view only, [#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)), or to change the guest by hand. Runs keep using the current base until the edited one passes its checks.
 
 1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
-2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The command names the file that holds the code, `setup-code.json`, as setup by hand does.
-3. The command's first line says it edits a copy of the VM base, not this Mac. It then prints that the copy takes about 2 minutes to start, and the copy boots in a window. Click Show code in the window.
+2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The code goes to `setup-code.json`, readable by you only. The window types it or shows it on a click.
+3. The command's first line says it edits a copy of the VM base, not this Mac. It then prints that the copy takes about 2 minutes to start, and the copy boots in a window.
+   - It says the code is `wardyn-admin`'s password. Click Type code in the window to type it at a prompt, or Show code to read it.
    - The copy is meant to have no internet during the session.
    - **Who you are signed in as.** The base turns on auto-login for `agent`, so the copy may open at `agent`'s desktop, not at a login window. As `agent` you have no `sudo` and cannot read `/Library/Wardyn/stage`.
-   - **Administrator steps.** Open Terminal (Spotlight may not answer in the guest; use Finder > Go > Utilities), run `su wardyn-admin` and give the one-time code as the password.
+   - **Administrator steps.** Click Open admin Terminal in the window. It opens Terminal in the guest at `su - wardyn-admin`: click Type code, then press Return.
+     - By hand, open Terminal (Spotlight may not answer in the guest; use Finder > Go > Utilities), run `su wardyn-admin` and give the one-time code as the password.
    - **If the window opens on macOS's setup pages.** Continue without a network, as in setup by hand. The recheck refuses any account Wardyn did not make, so make none.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
-   - For folder shares, open System Settings > Privacy & Security > Full Disk Access, click +, press Command-Shift-G, type `/usr/local/libexec/wardyn-guest-agent`, and turn it on.
-   - The grant is meant to stay in the base and reach every run's guest, where Full Disk Access lifts macOS's privacy prompts for every process the run starts. Wardyn gives no button for it.
-   - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact `sudo security add-trusted-cert` command. Nothing runs it for you: run each in the admin Terminal, check the subject and SHA-256, and confirm macOS's prompt.
+   - For folder shares, click Full Disk Access in the window. It opens System Settings at Full Disk Access in the guest and shows the guest agent in Finder: drag `/usr/local/libexec/wardyn-guest-agent` into the list and turn it on.
+     - By hand, click +, press Command-Shift-G, type that path, and turn it on.
+   - The grant is meant to stay in the base and reach every run's guest, where Full Disk Access lifts macOS's privacy prompts for every process the run starts.
+   - Grant it once. Wardyn signs the guest agent on this Mac, so the grant can last through tools updates. The first tools update after an upgrade changes the signature: grant it once more.
+   - The base trusts the signing certificate for code signing only. When the base could not trust it (macOS 26 can refuse), the Terminal where you started `edit-base` lists the "guest agent signing certificate" with a `-p codeSign` command, and Trust the list's CAs includes it.
+   - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact `sudo security add-trusted-cert` command.
+     - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate, and each asks for the code.
+     - Check each subject and SHA-256 and confirm macOS's prompt. With nothing to trust the button does nothing and says so.
 5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a fresh random password, which the copy keeps for the next edit, and the code file is deleted.
@@ -111,6 +118,9 @@
   - The edit prints the same lines, with the desktop mode, when the recheck finishes.
   - They record that boot. They are not live, and a read that failed says it could not be read, never trusted or allowed.
   - The Full Disk Access read is one open of macOS's protected TCC database by the guest agent. It reads nothing from the file and writes nothing.
+  - `status` also says how the base's guest agent is signed: on this Mac, or ad hoc, which loses Full Disk Access at each tools update. A signing certificate the base does not trust yet is named, with the instruction to run `edit-base`.
+  - After a tools update, `status` can say Full Disk Access is unknown. Recheck it in `edit-base`.
+  - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signing_cert` (`trusted` or `not_trusted`) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
 
 ## The prep proxy
 
@@ -176,7 +186,7 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
 3. Stage 2 goes on either way: a CA that reads `not_trusted` does not stop preparing.
 
 - `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
-  - `edit-base` prints this command for each such item, with its subject and SHA-256, and runs nothing itself.
+  - `edit-base` prints this command for each such item, with its subject and SHA-256, and runs nothing itself. The Trust the list's CAs button in its window opens a Terminal that runs them, as the admin.
   - A certificate trusted by hand reaches hosts that need only the system trust store. A host marked Inspected still needs the run's proxy certificate.
   - The list is a file on the Mac ([Customising the base](#customising-the-base)). Whoever can write that file decides which certificates `edit-base` offers; the console does not edit it.
 - A tools update removes a CA the list no longer pins, with its trust settings, by its SHA-1.
