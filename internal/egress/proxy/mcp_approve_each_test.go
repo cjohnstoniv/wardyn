@@ -309,6 +309,23 @@ func TestMCPApproveEachSendsExactlyWhatWasShown(t *testing.T) {
 	}
 }
 
+// TestMCPApproveEachKeepsTheClientsIDText: the id goes to the server as the client wrote it, so the answer
+// carries an id the client matches byte for byte.
+func TestMCPApproveEachKeepsTheClientsIDText(t *testing.T) {
+	f, cp := newEachFixture(t)
+	cp.approveOnPoll = 1
+	body := `{"jsonrpc":"2.0","id":1.0,"method":"tools/call","params":{"name":"delete_issue","arguments":{"id":"ENG-1"}}}`
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", body); rec.Code != http.StatusOK || f.up.hitCount() != 1 {
+		t.Fatalf("answer %d %q, upstream hits %d", rec.Code, rec.Body.String(), f.up.hitCount())
+	}
+	f.up.mu.Lock()
+	sent := string(f.up.body)
+	f.up.mu.Unlock()
+	if !strings.HasPrefix(sent, `{"jsonrpc":"2.0","id":1.0,"method":"tools/call"`) {
+		t.Fatalf("upstream body %s, want the id 1.0 as sent", sent)
+	}
+}
+
 // TestMCPApproveEachOncePerApproval: one approval sends one call. Two identical calls in flight
 // on it forward once; the other asks again.
 func TestMCPApproveEachOncePerApproval(t *testing.T) {
@@ -372,7 +389,7 @@ func TestMCPApproveEachDeclineIsSticky(t *testing.T) {
 	cp.newState = types.ApprovalDenied
 	call := eachCall(1, "delete_issue", `{"id":"ENG-1"}`)
 	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", call), "A person declined this call")
-	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", call), "refused for the rest of this run")
+	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", call), "identical retries are refused")
 	if cp.count() != 1 || f.up.hitCount() != 0 {
 		t.Fatalf("rows %d, upstream hits %d; want one row and nothing sent", cp.count(), f.up.hitCount())
 	}
