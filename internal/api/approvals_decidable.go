@@ -180,8 +180,8 @@ func (s *Server) mayDecide(r *http.Request, ap types.ApprovalRequest, run types.
 // decidableKindAndOwner mirrors authorizeUserDecision's verdict (the 404/403
 // gates), given ap/run already in hand: a security operator decides any kind
 // (isSecurityOperator); otherwise only an egress_domain approval or a
-// structural Azure DevOps escalation (adoEscalationScope) on a run the
-// caller owns (ownsRunOrAdmin) — and, for the plain egress_domain case only,
+// structural Azure DevOps escalation (adoEscalationScope) or MCP call
+// (isMCPCallRow) on a run the caller owns (ownsRunOrAdmin) — and, for the plain egress_domain case only,
 // the caller must additionally hold the row's own host as an egress_host
 // capability grant (capSeamAllowed). An ADO escalation needs no capability
 // check here: ownership is authorizeUserDecision's whole member rule for
@@ -198,13 +198,14 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 		return true
 	}
 	_, isADO := adoEscalationScope(ap)
-	if ap.Kind != types.ApprovalEgressDomain && !isADO {
+	isMCP := isMCPCallRow(ap)
+	if ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP {
 		return false
 	}
 	if !s.ownsRunOrAdmin(r, run) {
 		return false
 	}
-	if isADO {
+	if isADO || isMCP {
 		return true
 	}
 	allowed, err := s.capSeamAllowed(r.Context(), capEgressHost, approvalHost(ap))

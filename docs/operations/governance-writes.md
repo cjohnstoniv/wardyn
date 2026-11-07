@@ -10,7 +10,7 @@ an operator follows to turn one on and run the queue.
 - Set `WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain` approval may not be the human who created the run.
 - Off by default, because it would deadlock every single-operator deployment.
 - A self-*deny* is refused too. A refusal is a `403` recorded as `authz.denied` with `reason: second_human_required`, landing **before** the decision is written, so a refused decision leaves the approval `PENDING`.
-- Scoped to `egress_domain` only; `credential` and every other `tool_call` approval are admin-only, and the one a run's owner may decide, an Azure DevOps access request, has its own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`.
+- Scoped to `egress_domain` only; `credential` and every other `tool_call` approval are admin-only, and the two a run's owner may decide, an Azure DevOps access request and one MCP call, have their own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`.
 - The rule cannot apply to a run with an empty `created_by` (a system-created follow-on run): it has no human creator.
 - **Local mode REFUSES the switch** (`503`): it authenticates nobody, so the decider and the run's `created_by` both come from the client-supplied, DEV-ONLY `X-Wardyn-Principal` header, and no request can prove a second human decided.
 - Configure SSO to use this switch, or leave it unset. The refusal covers only `egress_domain` decisions.
@@ -18,7 +18,7 @@ an operator follows to turn one on and run the queue.
 **Optional: the same for Azure DevOps capability escalations.**
 
 - A member may decide an Azure DevOps capability escalation on a run they own; ownership is the whole member rule, so a creator can approve their own, admin-class capabilities included.
-- Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who creates the run can neither approve nor deny its Azure DevOps escalation; a different administrator decides.
+- Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who creates the run can neither approve nor deny its Azure DevOps escalation or MCP call approval; a different administrator decides.
 - It is a separate switch, off by default, with every rule above:
   - the same `403` / `second_human_required`, the approval left `PENDING`, the `503` in local mode (plus a boot warning), and the `admin-token` break-glass, whose `approval.second_human.bypass` row names this switch in its `switch` field.
 - Each switch governs only its own kind.

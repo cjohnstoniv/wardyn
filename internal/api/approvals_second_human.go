@@ -32,8 +32,9 @@ const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 func EgressSecondHumanEnabled() bool { return envEnabled(envEgressSecondHuman) }
 
 // envCapabilitySecondHuman is envEgressSecondHuman's twin for Azure DevOps
-// capability escalations (a tool_call approval known by adoEscalationScope): the
-// human who DECIDES one must not be the human who created the run. Without it,
+// capability escalations (a tool_call approval known by adoEscalationScope) and
+// for one MCP call (isMCPCallRow): the human who DECIDES one must not be the
+// human who created the run. Without it,
 // ownership is the whole member rule, so a run's creator can approve their own
 // escalation, admin-class capabilities included. DEFAULT OFF, for the same
 // single-operator-deadlock reason as the egress switch.
@@ -54,7 +55,7 @@ func secondHumanGate(ap types.ApprovalRequest) (name string, on bool) {
 	if ap.Kind == types.ApprovalEgressDomain {
 		return envEgressSecondHuman, envEnabled(envEgressSecondHuman)
 	}
-	if _, isADO := adoEscalationScope(ap); isADO {
+	if _, isADO := adoEscalationScope(ap); isADO || isMCPCallRow(ap) { // one MCP call: the same owner rule
 		return envCapabilitySecondHuman, envEnabled(envCapabilitySecondHuman)
 	}
 	return "", false
@@ -251,6 +252,12 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	}
 	if !authored {
 		return "", true
+	}
+	if sw == envCapabilitySecondHuman && isMCPCallRow(ap) {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you created this run, so someone else approves or denies this MCP call").
+			OnRun(ap.RunID).With("tool", mcpCallTool(ap)))
+		return "", false
 	}
 	if sw == envCapabilitySecondHuman {
 		sc, _ := adoEscalationScope(ap)

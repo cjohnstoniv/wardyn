@@ -238,11 +238,11 @@ resolves your drive the same way, in a dry run too:
 - You may decide an `egress_domain` approval on a run you own.
 - `credential` and `tool_call` approvals stay admin-only regardless of who owns
   the run — see [OPERATIONS.md](OPERATIONS.md) for why.
-- One `tool_call` is the exception: an Azure DevOps access request raised by a run you own, which you may decide up to the ceiling an administrator set.
+- Two `tool_call`s on a run you own are the exception. You may decide an Azure DevOps access request up to the ceiling an administrator set, and approve once an MCP call a tool rule marks `approve_each`.
 - If your deployment sets `WARDYN_EGRESS_SECOND_HUMAN=1`, you cannot decide
   your own run's egress approval yourself.
 - That's four-eyes working as intended, not a failure.
-- The same holds for your own run's Azure DevOps access request if it sets
+- The same holds for your own run's Azure DevOps access request or MCP call if it sets
   `WARDYN_CAPABILITY_SECOND_HUMAN=1`: then someone else must decide it.
 
 ## Who approves a governance change
