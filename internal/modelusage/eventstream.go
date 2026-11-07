@@ -39,6 +39,10 @@ func (p *parser) drainFrames() {
 			return
 		}
 		p.onFrame(f)
+		if p.bad != "" {
+			// The handler failed the parse, which drops the buffer: there is nothing left to reslice.
+			return
+		}
 		p.buf = append(p.buf[:0], p.buf[total:]...)
 	}
 }

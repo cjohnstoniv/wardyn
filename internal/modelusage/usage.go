@@ -230,8 +230,11 @@ func (p *parser) Undecodable() {
 	p.buf = nil
 }
 
-func (p *parser) Write(b []byte) (int, error) {
-	n := len(b)
+// Write always reports the whole input as written with a nil error: the parser sits in a tee on the
+// provider response, and a short write or an error there would abort it. A panic is recovered into
+// meter_error and leaves the named results as set here.
+func (p *parser) Write(b []byte) (n int, err error) {
+	n = len(b)
 	if p.bad != "" || len(b) == 0 {
 		return n, nil
 	}
