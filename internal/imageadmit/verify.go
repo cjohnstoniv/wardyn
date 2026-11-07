@@ -29,7 +29,7 @@ var defaultSignaturePredicates = []string{PredicateCosignSign, PredicateSLSAProv
 // Bounds on what one check reads.
 const (
 	MaxBundleBytes         = 1 << 20 // a larger bundle is refused before it is parsed
-	MaxCandidatesPerSigner = 16      // only the first candidates are verified
+	MaxCandidatesPerSigner = 16      // only the first candidates, bundles then legacy layers, are verified
 )
 
 var errNotStatement = errors.New("the bundle signs no in-toto statement, so it names no image")
@@ -57,6 +57,9 @@ func CheckCandidates(r Requirements, digest string, c Candidates) Verdict {
 		bundles = bundles[:MaxCandidatesPerSigner]
 	}
 	cands := append(parse(bundles), legacyCandidates(c.Legacy, digest)...)
+	if len(cands) > MaxCandidatesPerSigner { // one bound over both sources, bundles first
+		cands = cands[:MaxCandidatesPerSigner]
+	}
 	var primary *outcome
 	if len(r.AnyOf) > 0 {
 		outs := make([]outcome, 0, len(r.AnyOf))

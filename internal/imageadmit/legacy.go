@@ -46,7 +46,8 @@ type LegacyLayer struct {
 }
 
 // Candidates are the signatures read for one image: Sigstore bundles from its OCI referrers, and the layers
-// of its legacy cosign tags. Each source is bounded by MaxCandidatesPerSigner on its own.
+// of its legacy cosign tags. Each source is bounded by MaxCandidatesPerSigner on its own, and Check
+// bounds the two together.
 type Candidates struct {
 	Bundles [][]byte
 	Legacy  []LegacyLayer

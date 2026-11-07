@@ -132,11 +132,14 @@ func (a *Admitter) check(ctx context.Context, req Requirements, ref Ref, key cac
 // bundles reads the Sigstore bundles that refer to digest: from at most MaxReferrers referrers in all, and only
 // the first MaxCandidatesPerSigner bundles, since Check verifies no more. A referrer whose manifest or blob is
 // missing, too large or not its digest is skipped, as an unsigned one is; a registry that cannot be read fails
-// the whole check.
+// the whole check. A referrers index that does not parse lists none.
 func (a *Admitter) bundles(ctx context.Context, repo Ref, digest string) ([][]byte, error) {
 	var refs []Descriptor
 	for _, at := range bundleArtifactTypes {
 		ds, err := a.reg.Referrers(ctx, repo, digest, at)
+		if errors.Is(err, ErrMalformed) { // an index that does not parse names no bundle: unsigned, as an empty one is
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -221,7 +224,7 @@ func unavailableDetail(ref Ref, err error) string {
 	case errors.Is(err, context.Canceled):
 		return "the check was cancelled"
 	case errors.Is(err, ErrNotFound):
-		return ref.Registry + " has no image " + image
+		return ref.Registry + " has no image " + image + " (check the name and tag)"
 	case errors.Is(err, ErrDigestMismatch):
 		return ref.Registry + " answered content that does not match its digest"
 	case errors.Is(err, ErrTooLarge):
