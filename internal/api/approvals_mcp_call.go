@@ -175,7 +175,12 @@ func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, k
 			}
 		}
 	}
-	s.auditAuthFailedAs(r, internalApprovalActor, reason)
+	// One constant per call, so the auth.fail enum guard can read every reason this row carries.
+	if reason == reasonMCPCallTooLarge {
+		s.auditAuthFailedAs(r, internalApprovalActor, reasonMCPCallTooLarge)
+	} else {
+		s.auditAuthFailedAs(r, internalApprovalActor, reasonMCPCallScopeInvalid)
+	}
 	writeErrorReason(w, http.StatusBadRequest, reason, msg)
 	return nil, true
 }
