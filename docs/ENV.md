@@ -314,7 +314,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
 | `WARDYN_SANDBOX_PROXY_URL` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`). A VM run needs it as `http://host:3128`, the port Wardyn's proxy listens on, and refuses any other form |
 | `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file holding the host-sensor token. wardynd keeps it fresh and, when the internal TLS listener runs, also writes its internal CA certificate beside it as `control-plane-ca.pem` for `wardyn-tetragon-ingest` |
-| `WARDYN_GROUNDTRUTH_TOKEN_SECRET` | string | (unset) | Kubernetes sensor only: `<namespace>/<name>` of the Secret the sensor DaemonSet mounts. wardynd patches the token and its internal CA (`token`, `control-plane-ca.pem`) into it on the same cadence as the file, and needs only `patch` on that one Secret. Set it or `WARDYN_GROUNDTRUTH_TOKEN_FILE`, never both, or boot is refused; it also needs a Kubernetes build of wardynd. While set, each CC2 or CC3 run gets one `kernel.sensor.bypass` row from wardynd, because the host sensor cannot see inside gVisor or Kata guests |
+| `WARDYN_GROUNDTRUTH_TOKEN_SECRET` | string | (unset = off) | Kubernetes sensor: `<namespace>/<name>` of the Secret it mounts. wardynd patches `token` and `control-plane-ca.pem` into it, needing `patch` on that Secret only. Never with `WARDYN_GROUNDTRUTH_TOKEN_FILE`. While set, CC2/CC3 runs get a `kernel.sensor.bypass` row |
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup probe resolves (only `curl`). Refs should be multi-arch indexes; for one architecture per tag add `<key>@arm64` or `@amd64` beside the required plain key ([why](adoption/corp-image-authoring.md#multi-arch-images)) |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it. [Details](#wardyn_allow_agent_telemetry) |
@@ -2379,9 +2379,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GROUNDTRUTH_BATCH` | int | `64` | max events per POST batch (flag `-batch`) |
 | `WARDYN_GROUNDTRUTH_BUFFER` | int | `4096` | event buffer before backpressure drops (flag `-buffer`) |
 | `WARDYN_GROUNDTRUTH_BLIND_RUNS` | CSV | (unset) | run ids the host sensor is blind to, CC3/Kata (flag `-blind-runs`) |
-| `WARDYN_GROUNDTRUTH_SOURCE` | `docker` \| `k8s` | `docker` | where events are tied to runs: `docker`, the Compose sidecar, or `k8s`, a Kubernetes DaemonSet, which reads each event's pod (flag `-source`) |
-| `WARDYN_GROUNDTRUTH_K8S_NAMESPACES` | CSV | (unset) | `k8s` source: the namespaces Wardyn runs agent pods in; events from any other namespace are not tied to a run (flag `-k8s-namespaces`) |
-| `WARDYN_NODE_NAME` | string | (unset) | `k8s` source: this sensor's node, from the downward API `spec.nodeName`; sent on the heartbeat and on each event (flag `-node-name`) |
+| `WARDYN_GROUNDTRUTH_SOURCE` | string | `docker` | `docker` (the Compose sidecar) or `k8s` (a DaemonSet that reads each event's pod) (flag `-source`) |
+| `WARDYN_GROUNDTRUTH_K8S_NAMESPACES` | CSV | (unset) | `k8s` source: the namespaces of Wardyn's agent pods; other namespaces stay unmapped (flag `-k8s-namespaces`) |
+| `WARDYN_NODE_NAME` | string | (unset) | `k8s` source: this sensor's node (downward API `spec.nodeName`), sent with heartbeats and events (flag `-node-name`) |
 | `WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS` | bool | `false` | opt-in: forward kernel exec/connect/write events the host sensor could not correlate to a Wardyn-managed run (other containers, the bare host) to the audit sink/SIEM. OFF by default so the undeletable audit log stays sandbox-scoped (flag `-forward-unmapped-host-events`) |
 
 ### `WARDYN_CONTROL_PLANE_CA_FILE`
