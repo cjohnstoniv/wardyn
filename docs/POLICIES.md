@@ -1426,7 +1426,7 @@ So an entry a pattern matches is judged one of two ways:
 |---|---|---|---|
 | `cpu_millis` | `int` | `2000` (2 vCPU) | Milli-CPU cap. |
 | `memory_mib` | `int` | `4096` | Hard memory cap, MiB. |
-| `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. A Linux VM run can't enforce it yet, so a policy that sets it is refused for `machine_kind: linux_vm` (`request_field_unavailable`). |
+| `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. A Linux VM run refuses a policy that sets it. |
 | `disk_mib` | `int` | the pool's or server's default, else none | Main-drive size, MiB. A size the policy writes is a requirement: `overlay2` needs `xfs` with `pquota`, `btrfs`/`zfs` enforce it, other drivers run UNCAPPED with a warning, and Kubernetes enforces it by eviction. See [`disk_mib`](#disk_mib). |
 
 ### `disk_mib`
@@ -1440,7 +1440,7 @@ So an entry a pattern matches is judged one of two ways:
   - so a run whose policy sets `disk_mib` is **refused by the daemon at create** instead of starting without the cap its policy promised.
   - That is deliberate: a promised cap must not silently evaporate.
 - `btrfs`/`zfs` enforce it natively.
-- **A Linux VM run can't enforce a disk size yet.** A `disk_mib` the run's policy writes is refused for `machine_kind: linux_vm` (`main_drive_unenforceable`) whatever the runner reports for containers; a requested or default size is shown but not enforced, with a line saying so.
+- A Linux VM run refuses a policy `disk_mib`, since its disk is not capped; a requested size runs with a warning.
 - On a driver that cannot take a `size` option at all (`vfs`, `fuse-overlayfs`, …) **Docker warns and a soft size proceeds UNCAPPED** — `applyDiskQuota` returns without setting `StorageOpt`. A size the policy writes is refused before then (below).
 - **On Kubernetes the cap is enforced by EVICTION**: `disk_mib` becomes the agent container's `resources.limits[ephemeral-storage]`
   - (with a small fixed 256Mi request rather than the cap — a node short on allocatable ephemeral storage can newly reject the pod),
