@@ -222,6 +222,8 @@ func TestAdmitUnavailableSentences(t *testing.T) {
 	}{
 		{"401 without a credential", un(imageadmit.CauseUnauthorized, false), "checking images from " + h + " got 401 — no credential for it in WARDYN_REGISTRY_AUTH_FILE"},
 		{"401 with a credential", un(imageadmit.CauseUnauthorized, true), "checking images from " + h + " got 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"},
+		{"401 where a redirect led", &imageadmit.Unavailable{Cause: imageadmit.CauseUnauthorized, Host: "cdn.example", Registry: h, HasCredential: true, Withheld: true},
+			"checking images from " + h + " got 401 from an address it redirected to, where its credential is not sent"},
 		{"403", un(imageadmit.CauseForbidden, true), "checking images from " + h + " got 403"},
 		{"unreachable", un(imageadmit.CauseUnreachable, false), "a host met while checking images from " + h + " could not be reached"},
 		{"untrusted TLS", un(imageadmit.CauseTLS, false), "a TLS certificate met while checking images from " + h + " is not trusted (WARDYN_TRUSTED_CA_FILE)"},

@@ -80,6 +80,7 @@ type Unavailable struct {
 	Host          string
 	Registry      string
 	HasCredential bool // a credential for Registry was configured (meaningful for CauseUnauthorized)
+	Withheld      bool // the 401 came from another origin a redirect led to, where Registry's credential is never sent
 	Err           error
 }
 

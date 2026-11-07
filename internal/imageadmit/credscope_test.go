@@ -103,8 +103,11 @@ func TestChallengeFromAnotherOriginIsNotAnsweredWithTheRegistryCredential(t *tes
 			defer cancel()
 			_, err := c.Blob(ctx, mustRef(t, host(reg)+"/team/app"), layerDesc())
 			var un *Unavailable
-			if !errors.As(err, &un) || un.Cause != CauseUnauthorized {
-				t.Fatalf("err = %v, want Unavailable{unauthorized}", err)
+			if !errors.As(err, &un) || un.Cause != CauseUnauthorized || !un.Withheld {
+				t.Fatalf("err = %v, want Unavailable{unauthorized, withheld}", err)
+			}
+			if want := "checking images from " + host(reg) + " got 401 from an address it redirected to, where its credential is not sent"; un.Error() != want {
+				t.Fatalf("Error() = %q, want %q", un.Error(), want)
 			}
 			if got := e.seen(); len(got) != 0 {
 				t.Fatalf("the CDN's realm received a request: %v", got)
