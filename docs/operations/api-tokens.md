@@ -275,7 +275,7 @@ a new login ends the last.
   - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it. The next sign-in's bind is not audited; it shows as the identity's new principal on People.
 - `POST /people` answers `409` rather than create an ambiguous identity.
   - That happens when the email already names another known subject, when the subject is already known under a different email, when the subject differs from a known one only by case, or when the subject is another person's email.
-  - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see "Some subjects never sign in").
+  - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see [Some subjects never sign in](who-gets-in.md)).
 - Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`, or the person's own `DELETE /api/v1/me/tokens/{id}`.
 ## Invitations and service identities
 
