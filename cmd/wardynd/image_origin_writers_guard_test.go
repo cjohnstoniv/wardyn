@@ -23,8 +23,9 @@ import (
 // TestImageOriginWardynHasOneWriter pins the provenance a revive trusts. Revive skips the image check for a run
 // whose recorded origin is "wardyn" (run_revive_image.go#Server.reviveImageAdmission), and nothing else on the row
 // marks a run Wardyn launched itself, so that origin must be written only by newStepRun. A new reference to the
-// constant, a "wardyn" literal as an origin, or a new caller of the scoped origin writers fails here instead of
-// relying on someone grepping for it. Extend a list only with a writer whose origin no request can choose.
+// constant, a "wardyn" literal set as an origin (in a composite literal or an assignment), or a new caller of the
+// scoped origin writers fails here instead of relying on someone grepping for it. It is a census of symbols, call
+// sites and literals, not a data-flow proof. Extend a list only with a writer whose origin no request can choose.
 func TestImageOriginWardynHasOneWriter(t *testing.T) {
 	root := repoRoot(t)
 	want := map[string][]string{
@@ -72,6 +73,14 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 				}
 				got[name][rel+":"+fn] = true
 			}
+			isWardyn := func(e ast.Expr) bool {
+				lit, ok := e.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return false
+				}
+				v, _ := strconv.Unquote(lit.Value)
+				return v == "wardyn"
+			}
 			walk := func(n ast.Node, fn string) {
 				ast.Inspect(n, func(n ast.Node) bool {
 					switch x := n.(type) {
@@ -81,12 +90,14 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 						if x.Name == "ImageOriginWardyn" {
 							record(x.Name, fn)
 						}
-					case *ast.KeyValueExpr:
-						if k, ok := x.Key.(*ast.Ident); ok && k.Name == "Origin" {
-							if lit, ok := x.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-								if v, _ := strconv.Unquote(lit.Value); v == "wardyn" {
-									literalOrigins = append(literalOrigins, rel+":"+fn)
-								}
+					case *ast.KeyValueExpr: // Verdict{Origin: "wardyn"}
+						if k, ok := x.Key.(*ast.Ident); ok && k.Name == "Origin" && isWardyn(x.Value) {
+							literalOrigins = append(literalOrigins, rel+":"+fn)
+						}
+					case *ast.AssignStmt: // v.Origin = "wardyn", or one of several targets
+						for i, lhs := range x.Lhs {
+							if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Origin" && len(x.Rhs) == len(x.Lhs) && isWardyn(x.Rhs[i]) {
+								literalOrigins = append(literalOrigins, rel+":"+fn)
 							}
 						}
 					}
