@@ -508,8 +508,9 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
 		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
-		ImageInput: &imageInput,
-		WallPreset: f.source.wallPreset,
+		ImageInput:     &imageInput,
+		ImageAdmission: f.admission, // the start checked the image again; it dispatches under this verdict
+		WallPreset:     f.source.wallPreset,
 	})
 	switch {
 	case errors.Is(err, store.ErrRunnerAtCapacity):

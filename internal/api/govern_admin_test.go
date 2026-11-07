@@ -354,6 +354,7 @@ var governSiteElsewhere = map[string]string{
 	"unionDirectGitHubEgress":  "none: direct GitHub egress union, no switch-on test",
 	"imageDigestVerdict":       "test: run_image_digest_test.go",
 	"reviveImageDigestRefusal": "test: run_image_digest_test.go",
+	"imageAdmission":           "test: run_image_admission_test.go",
 	"macOSBaseAllowedFor":      "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 }
 

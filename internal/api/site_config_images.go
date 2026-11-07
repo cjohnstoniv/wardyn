@@ -15,6 +15,7 @@ import (
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 
+	"github.com/cjohnstoniv/wardyn/internal/imageadmit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -207,9 +208,10 @@ func auditSiteImages(datum map[string]any, before, im *types.SiteImages, named b
 const siteImageRootMax = 1 << 20
 
 // validateSiteImageAdmission is PUT /site-config's check of images.admission: the block's shape (types) with
-// the image-grant grammar for each images entry, and each trust root's file, read here as branding's logo
-// is, so a bad path or file refuses the write rather than every later run. Every message starts
-// "images.admission". A body with no admission block is valid.
+// the image-grant grammar for each images entry, each trust root's file, read here as branding's logo is,
+// and then run create's own compile of the block, so a setting the run check would refuse refuses the write
+// rather than every later run. Every message starts "images.admission". A body with no admission block is
+// valid.
 func validateSiteImageAdmission(im *types.SiteImages) error {
 	if im == nil || im.Admission == nil {
 		return nil
@@ -221,6 +223,9 @@ func validateSiteImageAdmission(im *types.SiteImages) error {
 		if err := checkImageTrustedRootFile(r.Path); err != nil {
 			return fmt.Errorf("images.admission: trusted root %q: %w", r.Name, err)
 		}
+	}
+	if err := imageadmit.CheckSite(im.Admission, imageadmit.Options{}); err != nil {
+		return fmt.Errorf("images.admission: %w", err)
 	}
 	return nil
 }

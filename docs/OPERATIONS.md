@@ -3984,6 +3984,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0259` (`0259_audit_checkpoints`) creates the append-only `audit_checkpoints` table; a split-role install grants `INSERT, SELECT` on it to each role that may call `audit_append`, and nothing else.
 - `0260` (`0260_delegate_cut_in_flight`) adds `delegates.cut_in_flight_at` (`0094`'s table): when a portal's revoke also cut the gateway access of the runs it launched; NULL on every existing row; no grant changes.
 - `0261` (`0261_groundtruth_sensors`) creates `groundtruth_sensors`: each ground-truth sensor's latest heartbeat, one row per Kubernetes node (`''` for the Compose sensor), which `/healthz` reads to judge every node. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`.
+- `0262` (`0262_agent_runs_image_admission`) adds `agent_runs.image_admission` (`0001`'s table): the image admission verdict a run's create recorded for its member image; NULL on every existing row; no grant changes.
 - `0263` (`0263_agent_runs_policy_generations`) adds `agent_runs.policy_generations` (`0001`'s table): the run's policy generations, one per revive after dispatch's, each with its digest and its proxy's run token ids; `[]` on every existing row; no grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the

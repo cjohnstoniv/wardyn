@@ -188,6 +188,11 @@ func run() error {
 	if err := installBootTransport(http.DefaultTransport, trustedCAPool, f); err != nil {
 		return err
 	}
+	// After the transport, which image admission's registry client copies (image_admission.go).
+	imageAdmission, err := newImageAdmitter(os.Getenv)
+	if err != nil {
+		return err
+	}
 	// (Validated before the DB connect on purpose: a typo'd path fails in
 	// milliseconds instead of after a 30s connect budget.)
 
@@ -402,10 +407,11 @@ func run() error {
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	receiptKeys, checkpointStatus := startAuditCheckpoints(rootCtx, *f.auditCheckpointInterval, bootKeys, st, maskedRec)
 	srv := api.New(api.Config{
-		SweeperLease: leader,
-		SweepHealth:  ticks,
-		Store:        st,
-		Identity:     idp,
+		ImageAdmissionConfig: api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
+		SweeperLease:         leader,
+		SweepHealth:          ticks,
+		Store:                st,
+		Identity:             idp,
 		// Reads its row on first use, so an install with identity off has no key
 		// and takes no query per anonymous JWKS request past one each 30 seconds.
 		GatewayIdentity: bootKeys.gatewayIdentity(),

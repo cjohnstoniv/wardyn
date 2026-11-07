@@ -127,7 +127,8 @@ func (s *Signer) Sign(sums []byte, o Options) []byte {
 		Content: &protobundle.Bundle_MessageSignature{MessageSignature: &protocommon.MessageSignature{
 			MessageDigest: &protocommon.HashOutput{Algorithm: protocommon.HashAlgorithm_SHA2_256, Digest: digest[:]}, Signature: sig}}}
 	if !o.NoTlog {
-		pb.VerificationMaterial.TlogEntries = []*protorekor.TransparencyLogEntry{s.tlogEntry(der, digest[:], sig, time.Now().Unix())}
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+		pb.VerificationMaterial.TlogEntries = []*protorekor.TransparencyLogEntry{s.tlogEntry(certPEM, digest[:], sig, time.Now().Unix())}
 	}
 	out, err := protojson.Marshal(pb)
 	s.check(err)
@@ -242,12 +243,12 @@ func (s *Signer) sct(pre []byte) pkix.Extension {
 	return pkix.Extension{Id: asn1.ObjectIdentifier(ctx509.OIDExtensionCTSCT), Value: value}
 }
 
-// tlogEntry is a hashedrekord entry for the signature, with the test Rekor's promise and inclusion proof.
-func (s *Signer) tlogEntry(certDER, digest, sig []byte, integrated int64) *protorekor.TransparencyLogEntry {
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+// tlogEntry is a hashedrekord entry for the signature, signed by the holder of verifierPEM (a certificate or a
+// public key), with the test Rekor's promise and inclusion proof.
+func (s *Signer) tlogEntry(verifierPEM, digest, sig []byte, integrated int64) *protorekor.TransparencyLogEntry {
 	body, err := json.Marshal(map[string]any{"apiVersion": "0.0.1", "kind": "hashedrekord", "spec": map[string]any{
 		"data":      map[string]any{"hash": map[string]any{"algorithm": "sha256", "value": hex.EncodeToString(digest)}},
-		"signature": map[string]any{"content": base64.StdEncoding.EncodeToString(sig), "publicKey": map[string]any{"content": base64.StdEncoding.EncodeToString(certPEM)}}}})
+		"signature": map[string]any{"content": base64.StdEncoding.EncodeToString(sig), "publicKey": map[string]any{"content": base64.StdEncoding.EncodeToString(verifierPEM)}}}})
 	s.check(err)
 	return s.logged("hashedrekord", body, integrated)
 }

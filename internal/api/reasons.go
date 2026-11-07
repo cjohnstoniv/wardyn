@@ -858,3 +858,12 @@ const (
 	reasonAuditReceiptStoreUnavailable = "audit_receipt_store_unavailable" // 501: needs the Postgres store
 	reasonAuditReceiptReadFailed       = "audit_receipt_read_failed"       // 500: the receipt could not be read or assembled
 )
+
+// Image admission's refusals (run_image_admission.go): the same values as imageadmit.Reason.
+const (
+	reasonImageAdmissionNoPolicy    = "image_admission_no_policy"   // no signer the site trusts covers the member's image, or a signer the profile requires does not or is undefined
+	reasonImageSignatureMissing     = "image_signature_missing"     // no signature on the image's digest from a signer that covers it
+	reasonImageSignatureInvalid     = "image_signature_invalid"     // signed, but by another identity or key than the covering signer requires
+	reasonImageAttestationMissing   = "image_attestation_missing"   // the signer did not attest a type it requires
+	reasonImageAdmissionUnavailable = "image_admission_unavailable" // the image's registry or a trust root could not be read (503)
+)

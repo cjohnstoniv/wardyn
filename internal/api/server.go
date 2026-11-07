@@ -412,8 +412,7 @@ type Config struct {
 	// attach lease (live_bus.go). Nil keeps each replica to its own process, as before.
 	LiveBus *livebus.Bus
 	// ADORunPATs, when non-nil, keeps each `minted_pat` run's current token in Postgres so every
-	// replica serves the one any replica created (ado_run_pat_cache.go). Nil keeps it in this
-	// process.
+	// replica serves the one any replica created (ado_run_pat_cache.go). Nil keeps it in this process.
 	ADORunPATs *adorunpat.Store
 	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no non-interactive run
 	// keeps an output tail for GET /runs/{id}/output (run_output.go).
@@ -469,6 +468,7 @@ type Config struct {
 	AuditCoalesceWindow time.Duration
 	HostCapacityConfig
 	AuditReceiptConfig
+	ImageAdmissionConfig
 	// MaxConcurrentRuns caps non-terminal runs across the whole deployment, every
 	// replica and every creation door (env WARDYN_MAX_CONCURRENT_RUNS); 0 or less
 	// is unlimited. Past it every door answers 422 run_quota (createRun); POST /runs
