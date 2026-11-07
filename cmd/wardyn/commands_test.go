@@ -941,6 +941,43 @@ func TestApprovalsGetCmd_FindsByIDWithinRun(t *testing.T) {
 	}
 }
 
+// TestApprovalGetShowsMCPCall: `approval get` prints the tool, the server and the call's arguments for an MCP
+// call row, and every digit of every number survives: adjacent integers past 2^53 and a decimal a float64
+// cannot keep. A server that sends call_text is read as sent; an older one gets the same text made from the
+// raw scope, never through a float.
+func TestApprovalGetShowsMCPCall(t *testing.T) {
+	args := json.RawMessage(`{"ids":[9007199254740993,9007199254740995],"price":1.0000000000000001}`)
+	scope := types.MCPCallScope{Tool: "mcp__jira__delete_issue", MCPServer: "jira", MCPHost: "jira.example.com", Arguments: args}
+	key, err := scope.ComputeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope.CallSHA256 = key
+	raw, _ := json.Marshal(scope)
+	runID, id := uuid.New(), uuid.New()
+	for name, text := range map[string]*types.MCPCallText{"server text": types.MCPCallTextOf(raw), "older server": nil} {
+		t.Run(name, func(t *testing.T) {
+			srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+				{ID: id, RunID: runID, Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedScope: raw, CallText: text},
+			})
+			out := &strings.Builder{}
+			root := rootCmd()
+			root.SetArgs([]string{"approval", "get", id.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+			root.SetOut(out)
+			root.SetErr(&strings.Builder{})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("approval get: %v", err)
+			}
+			got := out.String()
+			for _, want := range []string{"TOOL:", "mcp__jira__delete_issue", "SERVER:", "jira.example.com", "ARGUMENTS:", "9007199254740993", "9007199254740995", "1.0000000000000001"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("output lacks %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestApprovalsGetCmd_NotFound: the ID isn't in --run's approvals.
 func TestApprovalsGetCmd_NotFound(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
