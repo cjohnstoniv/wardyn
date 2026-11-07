@@ -24,7 +24,7 @@ README.md=1993 share=35 # -442 (front-door docs): the duplicate overview, 17 unl
 # docs/README.md 793 adds 26 over 767 (0.9.3 K7): the organisation-runner-in-a-cluster row, measured.
 # docs/README.md 810 measured at the 0.9.3 forward-port: both index rows above.
 # docs/README.md 846 = ours 829 + theirs 827 - base 810 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
-docs/README.md=987 share=35 # -30 (front-door docs): the index is grouped by reader and gains the VM pages, monitoring, key rotation, model provider and recording-read rows; row wording is shortened; measured.
+docs/README.md=1002 share=35 # 1002 measured (+15 over 987, measured): image signature checks, pointer and field rows; earlier: -30 (front-door docs): the index is grouped by reader and gains the VM pages, monitoring, key rotation, model provider and recording-read rows; row wording is shortened; measured.
 # docs/README.md 824 adds 14 over 810, measured (0.10 LAY-A): the org walls task row.
 # docs/README.md 827 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.

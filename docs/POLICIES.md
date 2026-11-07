@@ -618,6 +618,20 @@ What the check does and does not settle:
 | The list | `GET /me/machines` answers `allowed: false` with `reason` `governance_unit` |
 | Not affected | A machine already kept stays listed, and its owner can still delete it |
 
+## `required_image_signers`
+
+`required_image_signers` is a limit on a governance profile, not a field of a run's policy. It names image signers that every image a profile's people name must also pass ([image signature checks](operations/image-signature-checks.md)).
+
+| Part | Behaviour |
+|---|---|
+| Default | Absent or empty. The site setting `images.admission` alone decides |
+| Names | Site signers from `images.admission.signers`, or `wardyn-release`. Any other name is refused `400` when the profile is saved |
+| Site mode | Held even while the site mode is `off` or `audit`: the named signers are enforced for this profile's people. A profile can only tighten |
+| Composition | The union of the layers' names. A layer cannot remove a name another layer sets |
+| Effect | An image a named signer does not cover is refused `403` `image_admission_no_policy`, naming the profile requirement |
+| Signer removed later | The profile's people fail closed with `image_admission_no_policy`, naming the missing signer |
+| Not affected | Operators. A profile never names keys, identities or roots |
+
 ## Approval decision scopes
 
 - An approve/deny decision on an `egress_domain` approval carries a **scope** — how far that one decision reaches.

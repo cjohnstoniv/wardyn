@@ -20,7 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A governance profile's `github_capabilities` now limits its members' runs, and a run's GitHub CLI access is limited to the run's own GitHub capabilities. A run that relied on wider access is now refused or gets only the GitHub capabilities both lists name.
 - A file or variable secret that reaches the 8-byte minimum only with its trailing line break is no longer delivered to a run and can no longer be saved: output shows it without the break, which can't be masked. Store a longer value.
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
-- Image admission is off by default: no image check runs until a security operator sets site setting `images.admission.mode` to `audit` or `enforce`. A governance profile that lists `required_image_signers` holds its members to those signers even while the site mode is off.
+- Image admission is off by default: no image check runs until a security operator sets site setting `images.admission.mode` to `audit` or `enforce`. A governance profile that lists `required_image_signers` holds its members to those signers even while the site mode is off. Turning `enforce` on refuses reviving runs created before it was on; start a new run.
 - Model token counting is on by default and needs no setting. Turning it off with `WARDYN_MODEL_USAGE=off` needs the proxy image you pin (`WARDYN_PROXY_IMAGE`, `k8s.proxyImage`, a runner's proxy) at 0.10.0 or later: an older proxy refuses a run config that carries the opt-out. With the default config an older proxy starts and does not count. Runs on a runner older than 0.10.0 are not counted, because that runner cannot read the count rows. To move a runner back below 0.10.0, first stop its runs and keep it connected to the organisation until its spool is delivered: no `spools/*/0*.json` file is left in its state directory. An older runner replays every kept spool, ended runs included, before it reports ready, and stops at a count row it cannot read.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
@@ -53,6 +53,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Image signature checks at run create (`images.admission`): with it set to `enforce`, a member's image must be signed (Sigstore keyless or a public key) by a signer the organisation trusts for that image, with any attestations it requires, and the run uses the exact digest that was checked. `audit` reports without refusing. Off by default. Governance profiles can require named signers with `required_image_signers`. See [image signature checks](docs/operations/image-signature-checks.md).
 - Approvals: the run's owner or an administrator approves one MCP call that a tool rule marks `approve_each`, once, and an approval rule never does. `WARDYN_CAPABILITY_SECOND_HUMAN` (off by default) also makes someone other than the run's creator decide it.
 - Tool rules can mark a remote MCP tool `approve_each`: each call waits for a person to approve that call with its exact arguments, and Wardyn sends exactly what was approved, once. It works for Codex CLI too. Nothing changes until a rule says `approve_each`.
 - Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
@@ -112,6 +113,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VM runs: a Terminal opened in the window, and apps started from the Dock or Finder, now get the run's non-secret settings (the proxy, the CA bundle, the provider sign-in files, the git identity), so Claude Code in the window's Terminal is signed in. A run's secret variables (`env_secret`) are never placed in the window's Terminal or desktop. An app already open when the window shows ready may need a relaunch. While the settings are being applied, `wardyn window --status` and the run page say so, and an at-start window waits for them (up to ten minutes) without holding the run's start; if they could not be applied, the window still opens and the status names the reason and the retry, `agent-run --session-env-retry` in the window's Terminal.
 - Watching a macOS VM run's desktop from the browser now shows the agent's desktop instead of a macOS login window ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). It is on by default, with no setting: where the Mac's Screen Sharing does not let the run's account sign in, the view shows the login window as before, and `/var/run/wardyn/desktop-view.status` in the run says why. The Mac's base gets this with its next tools update, which the runner starts on its own after the upgrade.
 - Review now refuses an Azure DevOps capability list that reaches past the provider's ceiling (`ado_capabilities_above_ceiling`), with the same sentence launch gave, instead of letting the run fail after the click. It is on by default and refuses nothing launch would not.
+
+### Security
+
+- A run's image check is made where the run is created and the run is pinned to the checked digest, so an image re-tagged after the check is not what runs.
 
 ### Known issues
 

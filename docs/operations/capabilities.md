@@ -73,7 +73,7 @@ the ADMIN pre-authorized.
   - It is checked when a run is created, previewed (Review), or starts after waiting in a queue, and for a service identity's run, which is a member's.
   - Reviving or restarting a run checks it again, on the image the run's create checked and under the rule as it is then. A run whose image was not pinned, made while the rule was off or before this release, is refused until a new run starts. The run owner's authority decides: an operator's run stays exempt, marked `image_digest_exempt` on the run.revive row, and an admin reviving a member's run is bound as the member. Extending a run does not check it.
   - Set it with `PUT /api/v1/site-config` (`"images": {"require_digest": true}`); a body that omits `images` keeps the stored value, and the change is on the `site_config.write` audit row as `images_require_digest`. There is no console control yet.
-  - It reads only the reference as typed: it does not look the image up in a registry, and it cannot verify a signature. For cluster-side enforcement, see [image admission](image-admission.md).
+  - It reads only the reference as typed: it does not look the image up in a registry, and it cannot verify a signature. To require a signature too, see [image signature checks](image-signature-checks.md). For cluster-side enforcement, see [image admission](image-admission.md).
   - Not run in CI against a real cluster or registry: the tests cover the control plane's decision.
 - That rule is also why `agent` narrows rather than widens:
   - launching an agent is something every member could already do,

@@ -8,10 +8,11 @@
 
 ## What Wardyn does and does not do
 
-- Wardyn's control plane never reads a registry. It links no registry client, and a test fails the build if one appears ([`cmd/wardynd/registry_read_guard_test.go`](../../cmd/wardynd/registry_read_guard_test.go)).
-- On Kubernetes, an image is pulled by the node's kubelet. No registry request and no pull credential passes through `wardynd` ([the guard's comment](../../cmd/wardynd/registry_read_guard_test.go)).
-- So `wardynd` cannot check a signature for you. The check belongs at the cluster's admission door, where the pod is created.
-- What `wardynd` does check is the digest rule, `images.require_digest` ([capabilities](capabilities.md)), on the reference as typed. It applies at revive too: a kept run whose image was not pinned, made while the rule was off or before this release, is refused until a new run starts.
+- By default Wardyn's control plane reads no registry.
+- [Image signature checks](image-signature-checks.md), once an operator turns them on, read only the registries the operator names, through [`internal/imageadmit`](../../internal/imageadmit/). A test fails the build if any other registry client appears ([`cmd/wardynd/registry_read_guard_test.go`](../../cmd/wardynd/registry_read_guard_test.go)).
+- On Kubernetes, an image is pulled by the node's kubelet. No image pull and no pull credential passes through `wardynd` ([the guard's comment](../../cmd/wardynd/registry_read_guard_test.go)).
+- Wardyn's own check covers the image a member names at run create, before the pod exists. The check below covers every pod in the cluster, whoever created it.
+- Without signature checks on, `wardynd` checks only the digest rule, `images.require_digest` ([capabilities](capabilities.md)), on the reference as typed. It applies at revive too: a kept run whose image was not pinned, made while the rule was off or before this release, is refused until a new run starts.
 
 ## The identity to trust
 

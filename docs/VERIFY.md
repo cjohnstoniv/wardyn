@@ -64,6 +64,7 @@ cosign verify \
 - It is an exact match, not a pattern, so a signature made for any other release tag does not verify, and neither does one verified against some other identity.
 - A release promoted from an earlier build carries a signature for its own tag, because a promotion is dispatched on the release tag.
 - If a command here fails for a tag you trust, do not loosen the identity to a pattern, report it.
+- wardynd can enforce the same identity for you at run create: signer `wardyn-release` in [image signature checks](operations/image-signature-checks.md).
 
 ## 2. Read the SBOM
 
