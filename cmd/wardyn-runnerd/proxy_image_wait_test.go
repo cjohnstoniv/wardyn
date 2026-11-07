@@ -213,3 +213,45 @@ func TestWaitingKeepsTheStartupFailureForTheOrganisation(t *testing.T) {
 		t.Errorf("status after stop = %+v, want no next try", st)
 	}
 }
+
+// The start's wait as production wires it (the offline log's waiting as the report): while the image is
+// missing, status.json shows the proxy-image stage, the reason and the next try, and a stop during the
+// wait returns at once. The sleep is faked; the whole wait is bounded in seconds.
+func TestWaitingStatusCarriesTheReasonAndTheNextTry(t *testing.T) {
+	dir := t.TempDir()
+	log := newOfflineLog(dir, nil)
+	log.reportTo(newStatusWriter(dir))
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	before := time.Now()
+	var seen runnerStatus
+	sleep := func(ctx context.Context, d time.Duration) error {
+		st, err := loadStatus(statusPath(dir))
+		if err != nil {
+			t.Errorf("status while waiting: %v", err)
+		}
+		seen = st
+		stop() // a stop arrives during the wait
+		return ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForProxyImage(ctx, "ghcr.io/x/proxy:1", func(context.Context) error { return imageMissing() }, log.waiting, sleep)
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait did not end within 5 seconds of a stop")
+	}
+	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "stopped while waiting for the proxy image") {
+		t.Errorf("waitForProxyImage = %v, want the image failure joined with the stop", err)
+	}
+	if seen.Stage != types.RunnerStageProxyImage || !strings.Contains(seen.LastError, "proxy image ghcr.io/x/proxy:1 is not on this engine") {
+		t.Errorf("status while waiting = stage %q, last error %q; want the proxy-image stage and its reason", seen.Stage, seen.LastError)
+	}
+	first := proxyImageDelays[0]
+	if seen.NextRetryAt == nil || seen.NextRetryAt.Before(before.Add(first-first/10)) || seen.NextRetryAt.After(time.Now().Add(first+first/10)) {
+		t.Errorf("status next_retry_at = %v, want about %v after the first try", seen.NextRetryAt, first)
+	}
+}
