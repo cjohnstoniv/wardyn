@@ -221,7 +221,6 @@ describe("DesktopViewer", () => {
     sockets[0].serve(HANDSHAKE);
     expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
     expect(screen.getByText(DESKTOP.viewOnlyBody)).toBeInTheDocument();
-    expect(screen.getByText(DESKTOP.loginWindowNote)).toBeInTheDocument();
     expect(screen.queryByText(DESKTOP.backgroundWatchBody)).toBeNull();
     expect(screen.queryByText(DESKTOP.phoneBody)).toBeNull();
     const canvas = screen.getByTestId("desktop-canvas");
@@ -253,7 +252,6 @@ describe("DesktopViewer", () => {
     sockets[0].serve(HANDSHAKE);
     expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
     expect(screen.getByText(DESKTOP.backgroundWatchBody)).toBeInTheDocument();
-    expect(screen.getByText(DESKTOP.loginWindowNote)).toBeInTheDocument();
     expect(screen.queryByText(DESKTOP.viewOnlyBody)).toBeNull();
     const canvas = screen.getByTestId("desktop-canvas");
     expect(canvas).toHaveAttribute("tabindex", "-1");

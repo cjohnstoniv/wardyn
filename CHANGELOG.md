@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The desktop viewer and the run page no longer show the line about a macOS login window. The macOS VM docs note that the macOS 27 prepare flow creates only the setup account and that nothing beyond macOS 26 is promised as tested.
+
 ## [0.10.0-rc.14] — 2026-11-07
 
 ### Before you upgrade

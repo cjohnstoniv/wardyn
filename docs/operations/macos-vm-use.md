@@ -109,7 +109,7 @@ A background run has no terminal, SSH or web door. This is the one exception: th
   - It opens through `POST /runs/{id}/desktop/watch-ticket`. A declared noVNC app, the desktop's files, a sign-in and a terminal stay refused ([Errors](../sdk.md#reason-branch-on-this-never-on-errors-prose)).
 - **The exposure.** A background run has no terminal, so what a person sees of it is its logs and audit trail. A screen can show what those keep out: a secret in a GUI app, a document, anything the run puts on screen.
   - Turn the site switch off, or set the profile limit, where that is not acceptable.
-  - On macOS 26 the viewer may show the guest's login window, not its apps ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)).
+- **macOS 27.** Its prepare flow creates only the setup account, and Wardyn's own prepare steps set the run user's first-login settings on 27 as on 26. Pane names change by version, so nothing beyond macOS 26 is promised as tested.
 - **Recording.** A watch is recorded when the run is at Screen and actions ([Recording](#recording)).
   - The audit log shows `ui.open` and `ui.close` with `view_only` and `background`, never the picture.
 
