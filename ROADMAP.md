@@ -74,7 +74,7 @@ Not built:
 | Kubernetes parity with Docker | Open gaps listed in [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md) "Known gaps" |
 | CC3/Vault (Kata) packaged and GA | Experimental |
 | Signed action receipts | Not built; the audit hash chain ships (migration `0047`) |
-| Separation of duty on the control plane, inside the super-admin tier | Not built; `security_admin` separates governance authority ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
+| Separation of duty on the control plane (super-admin tier) | Not built; `security_admin` separates governance authority ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
 
 ### Git-token ref confinement
 
