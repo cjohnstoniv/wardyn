@@ -28,7 +28,7 @@ The spec is frozen on the run at create, with its defaults filled. It cannot cha
 - A `health` block needs a `port`. A `port` alone is not checked: the supervisor probes only when `health` is set.
 - Any other `health.probe` is `400 run_mode_invalid`, field `service.health.probe`.
 - `port` names the port the health check connects to. It opens that port to nobody.
-- To open a service's port from the run page, mark it **Callable from outside** in New Run. A background run opens only inbound ports, and its owner is always one of the callers. Inbound apps must be turned on for you.
+- To open a service's port from the run page, mark it **Callable from outside the run** in New Run. A background run opens only inbound ports, and its owner is always one of the callers. Inbound apps must be turned on for you.
 - A service created under an idle pause gets this warning on its 201: "Your admin pauses runs nobody is using, so this service will be paused while it waits for requests."
 
 ## What runs in the sandbox

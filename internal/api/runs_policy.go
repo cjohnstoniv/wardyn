@@ -517,12 +517,15 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 	if policyID == nil {
 		spec := ceiling.Spec.Clone()
 		clampStoredFileSize(&spec, "the governance profile ceiling")
-		// A ceiling's azure_devops_capabilities and github_capabilities are
-		// bounds, not grants: handed to a member as their spec either would
-		// replace the row's default_profile with the widest list they may
-		// choose. Only a choice the member (or a selected row) made is honoured.
+		// A ceiling's azure_devops_capabilities is a bound, not a grant: handed
+		// to a member as their spec it would replace the row's default_profile
+		// with the widest list they may choose. Only a choice the member (or a
+		// selected row) made is honoured. Its github_capabilities stays: nothing
+		// on GitHub reads that list as a grant, so the run carrying it only
+		// narrows the run (pushes withheld without code_write, the GitHub CLI
+		// kept to the list), which is the profile's wall for the member.
 		if !s.runUngoverned(ctx) {
-			spec.AzureDevOpsCapabilities, spec.GitHubCapabilities = nil, nil
+			spec.AzureDevOpsCapabilities = nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
 		if ceiling.Unit != nil {

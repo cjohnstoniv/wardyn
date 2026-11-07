@@ -651,7 +651,9 @@ func (d *Driver) EnsureProxyImage(ctx context.Context) error {
 
 // CanReplaceProxy — see runner.ProxyReviver: Docker always can.
 func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	return nil
@@ -675,11 +677,18 @@ func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
 // place, so its logs still name the cause; the next revive removes it by name
 // before starting another.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
+		return err
+	}
+	// A run whose network may have an address on the Docker host (one from before the upgrade) is
+	// refused while its proxy still runs; this error is not ErrProxyReplaceFailed either.
+	if err := d.checkRunNetwork(ctx, internalNetName(id), remedyNewRun); err != nil {
 		return err
 	}
 	var cp struct {
@@ -732,11 +741,18 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 // back, and an agent started first could take the address its own hosts
 // entry pins as wardyn-proxy. Recording dirs are prepared again as at create.
 func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
+		return err
+	}
+	// A kept agent goes back onto the network it was created on, so a network from before the upgrade,
+	// which may have an address on the Docker host, refuses the start.
+	if err := d.checkRunNetwork(ctx, internalNetName(id), remedyNewRun); err != nil {
 		return err
 	}
 	p, err := d.cli.ContainerInspect(ctx, proxyContainerName(id), client.ContainerInspectOptions{})

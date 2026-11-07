@@ -105,8 +105,9 @@ binary:
   states the vendor terms that bind anyone who builds and runs it themselves.
   The product images (`wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`) contain no such component.
 
-You do not have to take any of this on trust: every published image is
+You do not have to take any of this on trust: every release image is
 cosign-signed and carries an attested CycloneDX SBOM and build provenance.
+The continuous `wardynd:latest` and `:sha-` tags are signed only.
 [`docs/VERIFY.md`](docs/VERIFY.md) is the copy-pasteable procedure.
 
 One thing to know before your scanner reads that SBOM. A Vite bundle strips

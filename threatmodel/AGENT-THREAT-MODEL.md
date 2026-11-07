@@ -103,7 +103,7 @@ would claim coverage of a framework nothing here is tested against.
 
 - 🟢 **mitigated, with a published exception list.**
 - Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary that refuses to start if it does not hold.
-- The two operator overrides that boot the canary past a failure it would otherwise refuse to start on are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5's "Operator overrides that boot past a fail-closed gate"
+- The operator overrides that boot past these gates are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5's "Operator overrides that boot past a fail-closed gate"
   - rather than restated here,
   - because a second copy of that list is how it drifts
 

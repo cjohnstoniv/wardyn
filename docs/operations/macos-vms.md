@@ -993,7 +993,7 @@ The Mac never mounts, checks or repairs the volume. It hands the file to the VM 
 | `prepare` says setup by hand needs this Mac's desktop | It ran over SSH, outside the signed-in desktop, or with sudo. Run it in Terminal on the Mac, signed in at its desktop |
 | Preparing stopped at the Remote Login check | Port 22 did not refuse, or the guest was not shown live on the same boot. No base was published; run `prepare` again |
 | `edit-base` says the base was prepared before Wardyn kept its admin password | The base comes from an older release, and macOS will not let root change its setup account's password without the old one. Run `wardyn-runnerd macos-vm prepare --new-image`, then `edit-base` again |
-| A tools update stops removing a CA, saying macOS 26 can refuse that | The update stops, and the old base stays ready and still trusts the old CA. Change the list as you want it and run `prepare --reprepare`, which builds a base from it |
+| A tools update stops removing a CA, saying macOS 26 can refuse that | The update stops, and the old base stays ready and still trusts the old CA. Change the list as you want it and run `wardyn-runnerd macos-vm prepare --new-image`, which builds a new base from it |
 | `edit-base` says the guest did not take the one-time code | The setup account's password in the guest is not the one Wardyn keeps, or was changed in the session. Runs keep the old base. If it fails again before the window opens, run `prepare --new-image` |
 | The runner logs that it offers none and names `--per-run-memory` or `--per-run-cpu` | A per-run limit is below the base's minimum. Raise it ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)) |
 

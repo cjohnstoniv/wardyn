@@ -222,6 +222,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.prepareRecordingDirs(ctx, agentResp.ID)
 	}
 	d.keepExecOutput(agentContainerName(spec.RunID), spec.ExecOutput)
+	d.notVMs.Store(agentContainerName(spec.RunID), struct{}{}) // made as a container: no VM lookup needs to ask the engine
 
 	return runner.Sandbox{
 		// The deterministic name, not agentResp.ID: Docker's API accepts either for every call this
@@ -308,14 +309,37 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 // back, doesn't satisfy IpamConf.IsStatic). So the daemon picks a subnet on a network it is then
 // asked to remove, and the network is created asking for that subnet; a race that takes it in
 // between makes the create fail on the overlap, and the pick is retried.
+//
+// Both ways of picking the subnet create the same shape (runNetworkOptions), and the created network is
+// read back and checked (checkRunNetwork) before anything joins it.
 func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string) (string, error) {
-	name := internalNetName(runID)
-	if d.cfg.RunSubnetPool.IsValid() {
-		return d.createPoolRunNetwork(ctx, name, labels)
+	isolated, err := d.runNetworkIsolation(ctx)
+	if err != nil {
+		return "", err
 	}
+	name := internalNetName(runID)
+	var id string
+	if d.cfg.RunSubnetPool.IsValid() {
+		id, err = d.createPoolRunNetwork(ctx, name, runNetworkOptions(labels, isolated))
+	} else {
+		id, err = d.createDaemonRunNetwork(ctx, name, runNetworkOptions(labels, isolated))
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := d.checkRunNetwork(ctx, id, remedyDaemon); err != nil {
+		// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand it.
+		_, _ = d.cli.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
+		return "", err
+	}
+	return id, nil
+}
+
+// createDaemonRunNetwork creates network name as base asks, on a subnet the daemon picks.
+func (d *Driver) createDaemonRunNetwork(ctx context.Context, name string, base client.NetworkCreateOptions) (string, error) {
 	var err error
 	for range 3 {
-		opts := client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: labels}
+		opts := base
 		var subnet netip.Prefix
 		if subnet, err = d.daemonSubnet(ctx, name, opts); err != nil {
 			break
@@ -389,11 +413,12 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 // Fails closed: a run id it cannot resolve is an error, never a success that left the proxy up.
 // The AWS credential caches are wiped first (wipeAWSCaches): the kept layer must not hold them.
 // A wipe that failed is answered, once the end itself has succeeded, as runner.ErrAWSCacheWipeFailed.
-func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
+func (d *Driver) EndSandbox(ctx context.Context, ref string) (endErr error) {
 	wipeErr := d.wipeAWSCaches(ctx, ref)
 	if v := d.vmFor(ctx, ref); v != nil {
 		d.vmPowerdown(ctx, v, ref)
-		defer d.warnVMSidecars(ctx, v.runID)
+		// A sidecar that would not go is answered, not only logged: the end is retried until it converges.
+		defer func() { endErr = errors.Join(endErr, d.removeVMSidecars(ctx, v.runID)) }()
 	}
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {

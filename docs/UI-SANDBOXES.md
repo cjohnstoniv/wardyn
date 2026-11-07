@@ -554,6 +554,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 | | Set it when the relay's parent domain is shared with other applications — see "Header hygiene" below |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. |
 | | **The documented default for a production deployment, and the recommendation for any install with more than one user**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below. |
+| | With SSO configured, boot is refused while it is unset unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin (chart: `uiSandbox.originTemplate` or `uiSandbox.acceptSharedOrigin`) |
 | | Put `{run}` in the first host label: the console's CSP turns that label into a wildcard |
 
 - **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
@@ -633,7 +634,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
-| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
+| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes (never the text, nor a digest of it); or app, reason |
 | `ui.input.drop` | a view-only desktop's relay dropped the first key and the first pointer move on a desktop socket (once for each socket a viewer opens) | app, input (never the input itself) |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
@@ -793,7 +794,8 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     binding and the service-worker cap keep another user's app out of that origin
     in your browser, but host mode is the boundary the browser itself enforces.
   - Set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` for any install with more than one
-    user, wherever wildcard DNS is available.
+    user, wherever wildcard DNS is available. With SSO configured, wardynd refuses to start without it
+    unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin.
   - An app's own `Origin` check is not a per-run barrier in path mode.
     - Every run's page carries the same `Origin` there.
     - So the app cannot tell one run's page from another's.

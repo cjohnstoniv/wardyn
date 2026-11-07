@@ -610,8 +610,9 @@ func currentInternalHosts(stored []types.InternalHost, sc types.SiteConfig) []ty
 	})
 }
 
-// reviveOwnerRecheck runs the re-checks above for a revive, before its claim,
-// strips the model credentials no provider authored
+// reviveOwnerRecheck runs the re-checks above for a revive, before its claim, and
+// the owner's runner pool use policy and remote-hosted runner people policy
+// (ownerPoolRefusal). It strips the model credentials no provider authored
 // (stripRevivedModelInjections), and rebuilds cfg's deployment parts. The
 // strip comes after the refusals that do not read cfg's injections, so a
 // refused revive audits no drops, and before the credential re-check, which
@@ -636,6 +637,9 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 	ref, err := s.gatewayIdentityRefusal(ctx, cfg)
 	if err == nil && ref == nil {
 		ref, err = s.ownerCapabilityRefusal(ctx, run, actor == run.CreatedBy, runRepos(run, cfg))
+	}
+	if err == nil && ref == nil {
+		ref, err = s.ownerPoolRefusal(ctx, run)
 	}
 	if err == nil && ref == nil {
 		ref, err = s.modelProviderRefusal(ctx, run)

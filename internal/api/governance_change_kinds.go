@@ -100,6 +100,9 @@ type heldUnitWrite struct {
 //     carries the full git_pat dominance contract), and its member CPU and memory cap is no higher
 //     (memberCapOf).
 //
+// A re-parent that takes the unit out from under a lock its old parents hold is held too (a lock
+// removed from above, reparentDropsLocks), whichever proof would otherwise admit it.
+//
 // A write that changes the contact is held even when Leq holds: a contact is who a refused person is
 // told to ask, and nothing proves a new one is not a redirect. So is a rename that can change which
 // profile a person is given (renameMaySelect), whichever proof would otherwise admit it. Nothing else
@@ -107,7 +110,7 @@ type heldUnitWrite struct {
 func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
 	byID := unitsByID(all)
 	cur, exists := byID[p.ID]
-	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) {
+	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) || s.reparentDropsLocks(all, cur, p) {
 		return false
 	}
 	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(unitContactAfter(cur, p))) {

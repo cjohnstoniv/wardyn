@@ -14,6 +14,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - If your walls or a wall preset set `*` to hold or deny, tools the run's policy allows by name are now held or denied too. To keep such a tool open, remove the `*` rule and name the tools you want held or denied instead.
+- A `WARDYN_ADMIN_TOKEN` shorter than 32 bytes now stops wardynd starting unless it listens on loopback only (the compose stack's `demo-admin-token` is unchanged). Set a longer one, for example `openssl rand -hex 32`.
+- With SSO configured, the UI-sandbox gateway now refuses to start without `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`, and the Helm chart refuses to render unless a per-run origin is set, through `uiSandbox.originTemplate` or `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` in `env` or `extraEnv`. Set a per-run origin such as `https://run-{run}.ui.example.com`, or accept the shared origin with `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` (chart: `uiSandbox.acceptSharedOrigin`).
+- Docker runs now need Docker Engine 28 or later and an updated runner, because a run's network is now made without an address on the Docker host. On an older engine (Podman reports one) a run is refused unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, which keeps the old network. Runs started before the upgrade keep their old network until they stop; restarting or reviving one is refused unless that setting is on.
+- A governance profile's `github_capabilities` now limits its members' runs, and a run's GitHub CLI access is limited to the run's own GitHub capabilities. A run that relied on wider access is now refused or gets only the GitHub capabilities both lists name.
+- A file or variable secret that reaches the 8-byte minimum only with its trailing line break is no longer delivered to a run and can no longer be saved: output shows it without the break, which can't be masked. Store a longer value.
+- Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
 
 ### Added
 
@@ -21,10 +27,32 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A Linux VM run's terminal, commands and agent start now always run inside the VM. If the runner can't tell whether a run is a VM, the request fails and can be retried; if Linux VM sandboxes were turned off (or failed their start-up check) after the VM started, the request is refused, and the run can still be stopped or ended, including when its audit log fills up.
+- In focus mode, switching the side panel to another widget after one failed to display now shows the new widget instead of the previous error.
+- Run networks no longer carry an address on the Docker host.
 - A window open on your Mac through `wardyn window` now counts as activity, so idle auto-stop no longer stops a macOS VM run while someone works in its window.
 - Revoking a personal API token, or ending a CLI session, now closes a `wardyn window` that it opened. An at-start window asked for with an API token or a CLI sign-in before the upgrade does not open; open it again with `wardyn window`.
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
 - The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
+- A Linux VM run now ends when its harness exits, even when a background process it started still holds its output open; the stray processes are stopped, and the harness gets a terminal when it asks for one, as in a container.
+- Terminals and commands in an interactive Linux VM run now trust the run's TLS-interception certificate: the files the certificate variables name are written when the VM starts, so `curl`, `pip` and `aws` no longer fail on a missing CA file.
+- A Linux VM run's harness output is kept on the VM's disk instead of its memory, is capped at 64 MiB with a closing line that says so, and a full memory disk can no longer block pausing the agent.
+- After the VM's agent service restarts, a new terminal or command is refused with a reason instead of running without the run's proxy and credentials.
+- A Linux VM run no longer silently drops a limit it cannot enforce: a policy disk size or process limit is refused with a plain sentence, and a requested disk size is shown as not enforced.
+- Ending a Linux VM run now wipes the AWS sign-in caches inside the guest before it is kept, and reports it when it cannot.
+- Starting a sign-in in a browser of your own on a Linux VM run is now refused instead of freezing the VM (pausing the VM's agent to sign in still works), a Linux VM's output recovery is refused with a reason, and a VM run's folder-share cleanup is retried until it finishes.
+- A secret delivered to a run as a file or variable, with line breaks inside it (a private key, a kubeconfig), is now hidden in terminal output, live attach and recordings even when the terminal prints its lines with CR LF ends, or only some of its lines.
+- The audit row for a clipboard transfer through a desktop window no longer carries a SHA-256 of the text; it records the direction and size only.
+- A governance profile's GitHub capabilities now limit members' runs, as documented.
+- A terminal opened on a service identity's run now closes at its next check once the person is no longer that identity's sponsor, as a new terminal would be refused.
+- An admin reading another person's terminal text through a run's output now leaves a `run.output.read` row in that run's audit, as replaying its recording does.
+- Repeated wrong admin tokens from one address are now answered `429` with `Retry-After`, the right token included, until an attempt refills (10 attempts, then one every 10 seconds). A request that presents the right token is never counted.
+- Reviving a run now re-checks its runner pool's use policy and people policy, as starting one does: a run whose pool was deleted, or no longer admits the run's owner, is refused.
+- Moving a governance profile to a new parent is now held for approval when the move takes it out from under a lock.
+- Opening a `wardyn window` that was asked for with a credential Wardyn can no longer check is now refused with a plain sentence (403) instead of an error.
+- Settings: saving an unrelated change no longer reorders stored capabilities, and walls errors now point at their field.
+- The console's Content-Security-Policy now sets `form-action`, and the console sends `Permissions-Policy` and, under TLS, `Strict-Transport-Security`.
+- The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
 
 ## [0.10.0-rc.13] — 2026-11-04
 

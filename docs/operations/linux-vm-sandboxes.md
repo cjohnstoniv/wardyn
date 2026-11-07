@@ -26,6 +26,7 @@
 | Sign-ins | The desktop's keychain and browser profiles are kept in the guest's memory and are gone when the guest shuts down ([Sign-ins in the desktop](#sign-ins-in-the-desktop)) |
 
 - Not in this release: session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
+- Also not in this release: a disk size or process limit. A policy that sets `disk_mib` or `pids_limit` is refused for a Linux VM run.
 - Linux VMs need a pool where every runner offers them; a mixed pool refuses them.
 - Windows VMs are not available yet. `machine_kind` takes `container`, `linux_vm` and `macos_vm` only.
 - **A Linux desktop VM is your own image for now.** The reference guest image has no desktop ([`deploy/images/vm-linux/Dockerfile`](../../deploy/images/vm-linux/Dockerfile)). To get a desktop, build an image that meets the [guest image contract](#the-guest-image-contract) and adds one, and name it with `--image`. Wardyn does not ship an official Linux desktop VM image yet.

@@ -1260,7 +1260,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
-| `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
+| `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would, and the macOS VM machines they kept, each deleted as their own delete would (`kept_machines` in the row's detail); a drive or machine a run still holds, or whose Mac is away, stays and fails the scope, naming it |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`), their delegated tokens, and the Azure DevOps token rows of their runs that are revoked or past their expiry |
 
@@ -1276,12 +1276,18 @@ erases one person's retained records by explicit scope, in one audited act
 - A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
-- Two tables keep a person's name after every scope, on purpose:
+- These records keep a person's name or address after every scope, on purpose. No scope removes them, and Wardyn has no `DELETE /people/{principal}`:
+  - `agent_runs.created_by` stays on every run the person created. The scopes blank a run's task, title, description and correlation ID, not its owner, which the run's access check and its 404 for others rest on.
+  - `people` (`principal`, `email`) stays: its unique-email index (`people_email_lower_uniq`) is what stops a second identity taking the address.
+  - `principal_identities` (`email_lower`, `scim_user_name`, `scim_external_id`) stays, and a SCIM purge makes it a permanent tombstone so the person cannot be reactivated or sign in again.
+  - `ssh_public_keys.principal`, `api_tokens.principal` and `workspaces.owned_by` stay. Reassign a workspace first ([ownership and offboarding](operations/ownership-and-offboarding.md)).
+  - The audit `actor` of a row stays in the clear under the default seal (see "Retention, erasure and GDPR").
   - `aws_sso_spent_tokens.owner` names whose AWS sign-in a spent refresh-token fingerprint came from. It holds no
     credential, and the reaper deletes each row 90 days after it was written.
   - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
     replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
     `secret_owner_generations` below would.
+  - `secret_owner_generations` keeps the subject id (below).
 - The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
   erasure again once they expire to delete them.
@@ -3004,6 +3010,13 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 
 > [!WARNING]
 > Accepted: a runner started against a different Docker daemon than the one holding its sandboxes (another `DOCKER_HOST`) finds every sandbox gone, and its running runs end `FAILED`. No setting turns this off.
+
+### Docker host: run networks
+
+- Docker sandboxes need Docker Engine 28.0.0 or later. Each run's network then has no address on the Docker host, so the agent reaches its proxy and nothing on the host.
+- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`.
+- A network keeps the shape it was created with. A run started before the upgrade is refused a restart or a revive; start a new run instead.
+- A daemon whose `default-network-opts` turn IPv6 on for bridge networks refuses runs.
 
 ### Docker host: one subnet per run
 
@@ -4774,7 +4787,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - If `uiSandbox.enabled` is on ([deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md#ui-sandbox-gateway)),
   set `uiSandbox.originTemplate` (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) too — the
-  documented production default, not an optional extra.
+  documented production default, not an optional extra. With SSO configured the chart refuses to render, and wardynd to boot, without it unless `uiSandbox.acceptSharedOrigin` (`WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN`) accepts the shared origin.
 - Leaving it unset puts every run's relayed app on the SAME browser origin, separated only by a path-scoped
   cookie.
 - That shared-origin mode is a published residual

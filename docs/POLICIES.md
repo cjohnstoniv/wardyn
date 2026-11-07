@@ -145,6 +145,7 @@
 - A narrower choice is always honoured, and a member's list that the bound cuts down says what was dropped in the `201`'s `warnings` (and the run's `run.create` `clamp_warnings`);
   - a choice that leaves nothing permitted refuses the launch with reason `ado_capabilities_none_permitted` rather than falling back to the default, and `POST /runs/preflight` refuses it with the same reason.
 - An unset choice stays unset (the row's `default_profile` applies), including for a member who launches with no policy at all; the governance list is never inherited unasked.
+- A governance profile's `azure_devops_capabilities` adds standing access above the row's `default_profile`; it is not a wall below it, so it cannot make a unit read-only. Use `eligible_grants` or a second provider row for that.
 - An admin's own run keeps its list, bounded by the ceiling alone.
 - Inert for a run not on that lane.
 - See [AZURE-DEVOPS.md](AZURE-DEVOPS.md).
@@ -153,7 +154,8 @@
 
 - The GitHub twin of `azure_devops_capabilities`: this run's GitHub capabilities in place of a GitHub provider row's `default_profile`, chosen only within the row's `capability_ceiling`.
 - Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`.
-- A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused), and a ceiling's list is never handed to a member as their choice.
+- A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused).
+- A profile's list bounds its members' runs, the GitHub CLI included: a member who names none gets the profile's list, and a list sharing none with it is refused.
 - Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. Entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall also narrows the GitHub CLI's capabilities ([Your walls](#your-walls)).
 
 ### Brokered GitHub: the denies you did not write
@@ -202,13 +204,13 @@
 - If you run a brokered policy with `allow_all_egress`, the broker route is the only *convenient* route, not the only one.
 - It is what git itself uses, since a clone/push URL carries a name, never a bare IP.
 
-### `git_pat` is never-resident too, as of 0.7
+### `git_pat` is not resident while the broker is on
 
 - Through 0.6 the two git lanes had opposite credential postures, and the asymmetry was the gap rather than a design:
 
 | Lane | Credential |
 |---|---|
-| `github_token` | minted proxy-side, injected on the outbound leg — **never in the sandbox**, per-repo, ref-confined, ≤1h |
+| `github_token` | minted proxy-side and injected on the outbound leg, not in the sandbox, when the run is brokered for a repo; per-repo, ref-confined, ≤1h |
 | `git_pat` (GitLab, Bitbucket) | handed to the **in-sandbox** credential helper — **resident** for the life of the run, at whatever scope the operator's PAT carries |
 | Azure DevOps | the person's own credential (a token Wardyn creates for the run, their Entra token, or one they pasted in), injected proxy-side — **never in the sandbox**. There is no shared `git_pat` lane; see [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
 
@@ -971,7 +973,7 @@ What the check does and does not settle:
 ## `desktop` — `DesktopControls`
 
 - What may cross a desktop's edge, one rule per direction. Each is `allowed` or `blocked`; an omitted field keeps its default.
-- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard.transfer` by direction, size and SHA-256, never by content.
+- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard.transfer` by direction and size alone, never by content.
 - The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
 - A member's policy that leaves `desktop` out gets its ceiling's controls; one that sets them can only block more, the defaults included.
 - What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
@@ -1426,7 +1428,7 @@ So an entry a pattern matches is judged one of two ways:
 |---|---|---|---|
 | `cpu_millis` | `int` | `2000` (2 vCPU) | Milli-CPU cap. |
 | `memory_mib` | `int` | `4096` | Hard memory cap, MiB. |
-| `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. |
+| `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. A Linux VM run refuses a policy that sets it. |
 | `disk_mib` | `int` | the pool's or server's default, else none | Main-drive size, MiB. A size the policy writes is a requirement: `overlay2` needs `xfs` with `pquota`, `btrfs`/`zfs` enforce it, other drivers run UNCAPPED with a warning, and Kubernetes enforces it by eviction. See [`disk_mib`](#disk_mib). |
 
 ### `disk_mib`
@@ -1440,6 +1442,7 @@ So an entry a pattern matches is judged one of two ways:
   - so a run whose policy sets `disk_mib` is **refused by the daemon at create** instead of starting without the cap its policy promised.
   - That is deliberate: a promised cap must not silently evaporate.
 - `btrfs`/`zfs` enforce it natively.
+- A Linux VM run refuses a policy `disk_mib`, since its disk is not capped; a requested size runs with a warning.
 - On a driver that cannot take a `size` option at all (`vfs`, `fuse-overlayfs`, …) **Docker warns and a soft size proceeds UNCAPPED** — `applyDiskQuota` returns without setting `StorageOpt`. A size the policy writes is refused before then (below).
 - **On Kubernetes the cap is enforced by EVICTION**: `disk_mib` becomes the agent container's `resources.limits[ephemeral-storage]`
   - (with a small fixed 256Mi request rather than the cap — a node short on allocatable ephemeral storage can newly reject the pod),

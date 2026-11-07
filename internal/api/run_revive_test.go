@@ -59,6 +59,16 @@ func (s *reviveStore) ListGovernanceMemberships(context.Context) ([]types.Govern
 	return allRowsFor(s.profiles), nil
 }
 
+// ListMembershipsFor is the same table as the owner's own session reads it: each unit's `all` row matches
+// every caller.
+func (s *reviveStore) ListMembershipsFor(context.Context, []string, []string, string) ([]store.MembershipMatch, error) {
+	out := make([]store.MembershipMatch, 0, len(s.profiles))
+	for i, m := range allRowsFor(s.profiles) {
+		out = append(out, store.MembershipMatch{Membership: m, Unit: s.profiles[i]})
+	}
+	return out, nil
+}
+
 func (s *reviveStore) PutRunProxyConfig(_ context.Context, id uuid.UUID, sealed []byte) error {
 	plain, err := kek.Open(s.key, sealed, runProxyConfigAAD(id))
 	if err != nil {

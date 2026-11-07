@@ -10,7 +10,7 @@
 // the page. Both renderers now mount widgets through WidgetSlot, so this suite
 // asserts the SAME contract twice: one throwing widget, the session survives.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -135,6 +135,15 @@ describe("one throwing widget is contained — in BOTH renderers of RUN_WIDGETS"
     // The dock's boundary names the WIDGET, so the operator is told which card
     // failed rather than being handed a blank overlay.
     expect(screen.getByText(/Something went wrong rendering Egress/)).toBeInTheDocument();
+  });
+
+  it("switching the dock to a healthy widget drops the previous widget's error", () => {
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.getByText(/Something went wrong rendering Egress/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show Sandbox" }));
+    expect(screen.getByRole("region", { name: "Sandbox" })).toBeInTheDocument();
+    expect(screen.queryByText(/Something went wrong rendering/)).toBeNull();
+    expect(screen.queryByText("unmapped wire value")).toBeNull();
   });
 });
 
