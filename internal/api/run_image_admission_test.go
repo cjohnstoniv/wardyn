@@ -504,7 +504,9 @@ func TestImageAdmissionReasonsMatchImageadmit(t *testing.T) {
 func TestImageAdmissionGovernedAdminIsChecked(t *testing.T) {
 	admin := operatorCtx(capSub, capEmail, oidc.RoleAdmin)
 	for _, on := range []bool{false, true} {
-		a := &fakeAdmitter{require: func(bool, []string) (*imageadmit.Verdict, error) { return &imageadmit.Verdict{Reason: imageadmit.NoPolicy}, nil }}
+		a := &fakeAdmitter{require: func(bool, []string) (*imageadmit.Verdict, error) {
+			return &imageadmit.Verdict{Reason: imageadmit.NoPolicy}, nil
+		}}
 		s := admissionServer(admissionSite(types.ImageAdmissionEnforce), a)
 		s.cfg.GovernAdminRuns = on
 		got := runAdmission(s, admin, foldCreate, admitTagRef, nil, nil)
