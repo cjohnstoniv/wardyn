@@ -13,6 +13,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
+  Without it a `POST /api/v1/runs` that sends an `Idempotency-Key` fails. An upgrade from before 0.10.0-rc.12 also
+  needs every grant the 0.10.0-rc.12 notes list: `SELECT, INSERT, UPDATE, DELETE` on `wall_presets`, `kept_machines`,
+  `workloads`, `workload_bindings`, `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`,
+  `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`,
+  `governance_restrictions`, `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and
+  `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
+  `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 - If your walls or a wall preset set `*` to hold or deny, tools the run's policy allows by name are now held or denied too. To keep such a tool open, remove the `*` rule and name the tools you want held or denied instead.
 - A `WARDYN_ADMIN_TOKEN` shorter than 32 bytes now stops wardynd starting unless it listens on loopback only (the compose stack's `demo-admin-token` is unchanged). Set a longer one, for example `openssl rand -hex 32`.
 - With SSO configured, the UI-sandbox gateway now refuses to start without `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`, and the Helm chart refuses to render unless a per-run origin is set, through `uiSandbox.originTemplate` or `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` in `env` or `extraEnv`. Set a per-run origin such as `https://run-{run}.ui.example.com`, or accept the shared origin with `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` (chart: `uiSandbox.acceptSharedOrigin`).

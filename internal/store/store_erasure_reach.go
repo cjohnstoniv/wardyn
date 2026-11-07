@@ -54,3 +54,16 @@ func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (i
 	}
 	return tag.RowsAffected(), nil
 }
+
+// DeleteRunCreateKeysOf deletes every POST /runs Idempotency-Key of one of principals, direct or through
+// a delegate, bound or not: a kept answer names the person's run. It returns the rows it deleted.
+func (s PG) DeleteRunCreateKeysOf(ctx context.Context, principals []string) (int64, error) {
+	if len(principals) == 0 {
+		return 0, nil
+	}
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_create_keys WHERE principal = ANY($1)`, principals)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete idempotency keys: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
