@@ -322,3 +322,54 @@ func TestDecideAuditCarriesCallSHA(t *testing.T) {
 		t.Fatalf("stored decision_scope = %q, want once", ap.DecisionScope)
 	}
 }
+
+// A scope must spell each of its own keys once, in lower case: encoding/json matches keys in any
+// case and keeps the last, so a variant or a repeat could hash one tool while the console shows
+// another. And the display name must be the one the raw tool name maps to.
+func TestInternalRaiseRefusesAmbiguousMCPCallScope(t *testing.T) {
+	del, err := types.MCPCallKey("corp", "delete", json.RawMessage(`{}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, scope := range map[string]string{
+		"case variant":                  `{"tool":"mcp__corp__read","Tool":"mcp__corp__delete","mcp_server":"corp","arguments":{},"call_sha256":"` + del + `"}`,
+		"duplicate":                     `{"tool":"mcp__corp__read","tool":"mcp__corp__delete","mcp_server":"corp","arguments":{},"call_sha256":"` + del + `"}`,
+		"variant only":                  `{"Tool":"mcp__corp__delete","mcp_server":"corp","arguments":{},"call_sha256":"` + del + `"}`,
+		"display is not the raw tool's": `{"tool":"mcp__corp__read","mcp_tool":"delete","mcp_server":"corp","arguments":{},"call_sha256":"` + del + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raiseMCPRefused(t, types.ApprovalToolCall, scope, "mcp_call_scope_invalid")
+		})
+	}
+	// A raw name the display maps: the display is that mapping, so it passes.
+	dot, err := types.MCPCallKey("corp", "delete.issue", json.RawMessage(`{}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t)
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, uuid.New()),
+		`{"kind":"tool_call","requested_scope":{"tool":"mcp__corp__delete_issue","mcp_tool":"delete.issue","mcp_server":"corp","arguments":{},"call_sha256":"`+dot+`"}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("a display name mapped from its raw name: %d %s, want 201", w.Code, w.Body.String())
+	}
+}
+
+// The row stores the scope as validated, re-marshalled from its typed form with canonical
+// arguments: never the raw bytes, so an unknown key or another spelling never reaches a reader.
+func TestInternalRaiseStoresTheValidatedMCPCallScope(t *testing.T) {
+	key, err := types.MCPCallKey("jira", "delete_issue", json.RawMessage(`{"b":1,"a":2}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t)
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, uuid.New()),
+		`{"kind":"tool_call","requested_scope":{"tool":"mcp__jira__delete_issue","mcp_server":"jira","arguments":{ "b": 1, "a": 2.0 },"note":"x","call_sha256":"`+key+`"}}`)
+	if w.Code != http.StatusCreated || len(h.approvals.requested) != 1 {
+		t.Fatalf("status %d body %s, %d rows; want 201 and one row", w.Code, w.Body.String(), len(h.approvals.requested))
+	}
+	want, _ := json.Marshal(types.MCPCallScope{Tool: "mcp__jira__delete_issue", MCPServer: "jira",
+		Arguments: json.RawMessage(`{"a":2,"b":1}`), CallSHA256: key})
+	if got := string(h.approvals.requested[0].RequestedScope); got != string(want) {
+		t.Fatalf("stored scope\n got %s\nwant %s", got, want)
+	}
+}
