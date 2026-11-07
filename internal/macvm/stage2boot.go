@@ -154,6 +154,28 @@ func (v *stage2VM) netFD(f *os.File) error {
 func (v *stage2VM) subscribe() (<-chan Event, func()) { return v.events.subscribe() }
 func (v *stage2VM) desktopPassword() (string, error)  { return "", ErrNoDesktopPassword }
 
+// bridgeNetFD waits for runnerd's net_fd and bridges it to a new guest network pair, whose guest end it
+// returns. Each thing it opens is closed by an entry it appends to undo, in the order opened.
+func (c Stage2BootConfig) bridgeNetFD(ctx context.Context, v *stage2VM, undo *[]func()) (*os.File, error) {
+	attach, err := waitNetFD(ctx, v, cmpDuration(c.NetWait, 2*time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	attachConn, err := net.FileConn(attach)
+	_ = attach.Close()
+	if err != nil {
+		return nil, fmt.Errorf("macvm: network descriptor: %w", err)
+	}
+	*undo = append(*undo, func() { _ = attachConn.Close() })
+	guestNet, hostNet, err := NewNetPair()
+	if err != nil {
+		return nil, err
+	}
+	*undo = append(*undo, func() { _ = guestNet.Close(); _ = hostNet.Close() })
+	go func() { _ = (&Bridge{Guest: hostNet, Attach: attachConn, Stderr: logWriter{c.Log}}).Run() }()
+	return guestNet, nil
+}
+
 // boot is the stage-2 boot on runnerd's net_fd, or on nic when it is set (a window boot), whose guest is then
 // a windowGuest. The caller keeps nic and closes it after stop.
 func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec, key []byte, nic *os.File) (ToolsGuest, func(context.Context) error, error) {
@@ -193,22 +215,10 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec, key []byte
 	}
 	go serveControl(ctl, v)
 	if nic == nil {
-		attach, err := waitNetFD(ctx, v, cmpDuration(c.NetWait, 2*time.Minute))
+		guestNet, err := c.bridgeNetFD(ctx, v, &undo)
 		if err != nil {
 			return fail(err)
 		}
-		attachConn, err := net.FileConn(attach)
-		_ = attach.Close()
-		if err != nil {
-			return fail(fmt.Errorf("macvm: network descriptor: %w", err))
-		}
-		undo = append(undo, func() { _ = attachConn.Close() })
-		guestNet, hostNet, err := NewNetPair()
-		if err != nil {
-			return fail(err)
-		}
-		undo = append(undo, func() { _ = guestNet.Close(); _ = hostNet.Close() })
-		go func() { _ = (&Bridge{Guest: hostNet, Attach: attachConn, Stderr: logWriter{c.Log}}).Run() }()
 		spec.Net = guestNet
 	}
 	if err := thermalGate(c.Engine); err != nil {
