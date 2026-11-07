@@ -380,7 +380,7 @@ const (
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
 	reasonApprovalRuleNotFound      = "approval_rule_not_found"      // no approval rule has that name
 	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
-	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
+	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, one MCP call, a run no service identity created, or a match that no longer holds
 	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
 	reasonApprovalRuleHostDenied    = "approval_rule_host_denied"    // a person's deny for this host still stands on this run, so a rule does not decide it
 
@@ -839,4 +839,10 @@ const (
 	reasonIdempotencyKeyInvalid  = "idempotency_key_invalid"   // 400: not one value of 1-255 visible ASCII characters
 	reasonIdempotencyKeyReused   = "idempotency_key_reused"    // 422: the key was used with a different request in the last 24 hours
 	reasonIdempotencyKeyInFlight = "idempotency_key_in_flight" // 409: a request with the key is still being answered; Retry-After says when to try again
+)
+
+// One MCP call's approval raise on the internal route (approvals_mcp_call.go).
+const (
+	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid" // 400: a requested_scope carrying call_sha256 that is not the hash of its own server, tool and arguments, repeats a key or spells one in another case, shows a tool name that is not its raw tool's, or is on a kind other than tool_call
+	reasonMCPCallTooLarge     = "mcp_call_too_large"     // 400: an MCP call larger than a person can be shown (arguments over 32 KiB, or a scope over 64 KiB)
 )

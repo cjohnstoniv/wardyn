@@ -16,7 +16,7 @@
 # SESS-M12: docs/USERS.md 4903 adds 119 over 4784, measured: the Session lifetime section.
 # docs/USERS.md 4920 adds 17 over 4903, measured: a folder can sit on your own runner, checked there, not scanned.
 # docs/USERS.md 4932 adds 12 over 4920, measured (rc.12): an image grant may be a registry prefix.
-docs/USERS.md=4954 share=35 # 4954 measured (+17: sign-out direction and other devices stated exactly); 4937 measured (-20: the two session sections merge; walls and presets get a short section); earlier: +25 (0.10.1, measured 4957: an admin reading terminal text through a run output writes a run.output.read row)
+docs/USERS.md=4966 share=35 # +12 (rc.14, measured 4966: a run owner approves one MCP call); 4954 measured (+17: sign-out direction and other devices stated exactly); 4937 measured (-20: the two session sections merge; walls and presets get a short section); earlier: +25 (0.10.1, measured 4957: an admin reading terminal text through a run output writes a run.output.read row)
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.
