@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -26,6 +27,8 @@ type generationStore struct {
 	*reviveStore
 	gmu   sync.Mutex
 	state types.RunPolicyState
+	// failAdvance is how many more AdvanceRunPolicyGeneration calls fail, as a database blip would.
+	failAdvance int
 }
 
 var _ store.RunPolicyGenerations = (*generationStore)(nil)
@@ -33,6 +36,10 @@ var _ store.RunPolicyGenerations = (*generationStore)(nil)
 func (s *generationStore) AdvanceRunPolicyGeneration(_ context.Context, _ uuid.UUID, digest string, retired []string, fresh string) (int, error) {
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
+	if s.failAdvance > 0 {
+		s.failAdvance--
+		return 0, errors.New("write policy generation: connection reset")
+	}
 	var gen int
 	s.state, gen = s.state.Advance(digest, retired, fresh)
 	return gen, nil
@@ -188,5 +195,58 @@ func TestRevivedConfigLoadsOnPreviousProxy(t *testing.T) {
 	f.newConfig(t)
 	if k := refusedByPreviousProxy(t, f.rr.replaced[0]); k != "" {
 		t.Errorf("the previous release's proxy refuses the revived config's key %q", k)
+	}
+}
+
+// replacedDecisionStamp posts a decision from every proxy the revive started, on the token its config
+// carries, and returns the stamps they got.
+func replacedDecisionStamps(t *testing.T, f *reviveFixture, host string) [][2]any {
+	t.Helper()
+	var out [][2]any
+	for _, raw := range f.rr.replaced {
+		cfg, err := proxy.LoadConfigBytes(raw)
+		if err != nil {
+			t.Fatalf("a replacement config does not load: %v", err)
+		}
+		postGenerationDecision(t, f, cfg.RunToken, host)
+		d, g := generationStampOf(t, f, "egress.allow", host)
+		out = append(out, [2]any{d, g})
+	}
+	return out
+}
+
+// A revive whose generation write fails never leaves a new proxy's rows stamped with the old policy:
+// the new proxy enforces the tightened policy, so a decision it makes must never claim d1. Once the
+// store recovers, the next revive stamps the new proxy's decisions with generation 2.
+func TestRevive_FailedGenerationWriteNeverStampsTheOldPolicy(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		f, gs, _ := newGenerationFixture(t)
+		attempt := func() bool {
+			if live {
+				return f.restart(t).OK
+			}
+			return f.revive(t) == http.StatusOK
+		}
+		if live {
+			f.st.run.LostAt, f.st.run.LostReason = nil, ""
+		}
+		gs.failAdvance = 1
+		ok := attempt()
+		for _, st := range replacedDecisionStamps(t, f, "during.example") {
+			if st[0] == "d1" || st[1] == 1 {
+				t.Errorf("live=%v: a proxy started by the revive whose generation write failed is stamped %v/%v, the old policy", live, st[0], st[1])
+			}
+		}
+		if ok || len(f.rr.replaced) > 0 {
+			continue // the failure already shows above; a second revive of a replaced proxy proves nothing more
+		}
+		if !attempt() {
+			t.Fatalf("live=%v: the revive after the store recovered failed", live)
+		}
+		cfg := f.newConfig(t)
+		postGenerationDecision(t, f, cfg.RunToken, "after.example")
+		if d, g := generationStampOf(t, f, "egress.allow", "after.example"); d == "d1" || g != 2 {
+			t.Errorf("live=%v: after recovery the new proxy's decision is stamped %q/%d, want generation 2", live, d, g)
+		}
 	}
 }
