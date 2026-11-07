@@ -25,6 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Revoking a personal API token, or ending a CLI session, now closes a `wardyn window` that it opened. An at-start window asked for with an API token or a CLI sign-in before the upgrade does not open; open it again with `wardyn window`.
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
 - The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
+- A terminal opened on a service identity's run now closes at its next check once the person is no longer that identity's sponsor, as a new terminal would be refused.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
