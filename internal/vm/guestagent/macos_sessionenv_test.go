@@ -383,6 +383,25 @@ func TestApplySessionEnvStaysPendingWhileTheSetterIsBlocked(t *testing.T) {
 	}
 }
 
+// A setter that never returns does not hold the status at pending past the wait: the step ends, and the
+// status says failed with a reason, so the host can say so and offer the retry.
+func TestApplySessionEnvFailsWhenTheSetterOutlastsTheWait(t *testing.T) {
+	p := sessionEnvPaths(t)
+	g := newGUIFake(true)
+	g.block, g.entered = make(chan struct{}), make(chan struct{})
+	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}, SessionEnvEvery: time.Millisecond, SessionEnvWait: 200 * time.Millisecond}
+	done := d.StartSessionEnv(context.Background(), p, 502, map[string]string{"WARDYN_RUN_ID": "r1"}, nil, nil)
+	t.Cleanup(func() { close(g.block); <-done })
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the settings step is still going with the setter blocked past the wait")
+	}
+	if st, err := ReadSessionEnvStatus(p); err != nil || st.State != SessionEnvFailed || st.Reason != SessionEnvSetenvFailed {
+		t.Errorf("status with the setter blocked past the wait = %+v, %v; want failed setenv_failed", st, err)
+	}
+}
+
 func TestSetSessionEnvRetriesAsTheUserWhenGetenvDisagrees(t *testing.T) {
 	g := newGUIFake(false) // the asuser form does not take
 	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}}
