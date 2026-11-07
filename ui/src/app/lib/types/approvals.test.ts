@@ -207,3 +207,19 @@ describe("isHeld — push_content is a bounded proxy hold, not an unconditional 
     expect(isHeld(approval({ kind: "push_content", requested_at: "not-a-date" }))).toBe(true);
   });
 });
+
+describe("canDecideApproval for one MCP call", () => {
+  const mcp = { grant_id: undefined, requested_scope: { tool: "mcp__jira__x", mcp_server: "jira", call_sha256: "ab".repeat(32) } };
+  it("lets the run's owner decide it, and an admin, and follows the server's per-row verdict", () => {
+    expect(canDecideApproval(false, "tool_call", { ...mcp })).toBe(true);
+    expect(canDecideApproval(false, "tool_call", { ...mcp, decidable: true })).toBe(true);
+    expect(canDecideApproval(false, "tool_call", { ...mcp, decidable: false })).toBe(false);
+    expect(canDecideApproval(true, "tool_call", { ...mcp, decidable: false })).toBe(true);
+  });
+  it("gives no other tool_call to a member: a plain row, an Azure DevOps row, or a call with no row", () => {
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: { tool: "Bash", cmd: "ls" } })).toBe(false);
+    expect(canDecideApproval(false, "tool_call", { grant_id: "g1", requested_scope: { lane: "azure_devops", call_sha256: "ab".repeat(32) } })).toBe(false);
+    expect(canDecideApproval(false, "tool_call")).toBe(false);
+  });
+});
+

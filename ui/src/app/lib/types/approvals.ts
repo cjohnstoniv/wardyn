@@ -81,6 +81,11 @@ export interface ApprovalRequest {
   // is absent when none is left. Both are absent on a DECIDED row.
   escalation_tier?: number;
   sla_due_at?: string;
+  // call_text: an MCP call row's arguments and extra params as text, made by the server from the canonical bytes. The
+  // card and the CLI show and copy these strings as they are: reading the scope's JSON here would round an integer
+  // past 2^53 and shorten a long decimal, while the approval binds the exact value. Absent on every other row, and on a
+  // row from a server older than this field (the card then offers Deny only).
+  call_text?: MCPCallText;
   // decidable (#2604): the list route's verdict on whether THIS caller may approve or deny this PENDING row
   // (kind, ownership, and the egress_host grant for a member's egress_domain row). Absent when the server did not
   // compute it, then canDecideApproval's role-and-kind guess is all there is. Four-eyes is not folded in.
@@ -102,8 +107,12 @@ export interface ApprovalRequest {
 // at all, not something this predicate needs to re-check. It does NOT know the
 // egress_host capability: when an admin withholds that grant the server refuses
 // a member's egress_domain decision with capability_egress_host, and the strip
-// turns the row's buttons off on that first refusal.
-export function canDecideApproval(operator: boolean, kind: ApprovalKind): boolean {
+// turns the row's buttons off on that first refusal. One MCP call is the one tool_call a member may decide (pass the row).
+export function canDecideApproval(
+  operator: boolean,
+  kind: ApprovalKind,
+  row?: Pick<ApprovalRequest, "grant_id" | "requested_scope" | "decidable">,
+): boolean {
   // credential_reauth is NOT DECIDABLE BY ANYONE, security operator included:
   // it is resolved by its owner signing in, and the server answers 409 to an
   // approve or a deny (decide()'s rule 3b). A Deny would read as an act of
@@ -111,7 +120,11 @@ export function canDecideApproval(operator: boolean, kind: ApprovalKind): boolea
   // the sidecar's next resolve would raise a fresh row. The console renders a
   // door for this kind instead of an Approve/Deny pair.
   if (kind === "credential_reauth") return false;
-  return operator || kind === "egress_domain";
+  if (operator) return true;
+  // One MCP call: its run's owner decides it too (the list is owner-scoped, so a row on screen is the viewer's own),
+  // and the server's per-row verdict leads when it sent one. This is the only tool_call a member may decide.
+  if (row && isMCPCallRequest({ kind, ...row })) return row.decidable ?? true;
+  return kind === "egress_domain";
 }
 
 // approve/deny's optional third argument — egress_domain only (the server
@@ -221,6 +234,35 @@ export function isAdoCapabilityRequest<T extends Pick<ApprovalRequest, "kind" | 
   a: T,
 ): a is T & { requested_scope: AdoCapabilityScope } {
   return a.kind === "tool_call" && !!a.grant_id && a.requested_scope?.lane === "azure_devops";
+}
+
+// The scope of one MCP call's approval (internal/types/mcp_call.go MCPCallScope). `arguments` and `extra` are here only
+// to read their shape: a number in them has already passed through JSON.parse, so nothing renders them. The card
+// renders call_text instead.
+export interface MCPCallScope {
+  tool: string;
+  mcp_server: string;
+  mcp_host?: string;
+  mcp_tool?: string;
+  arguments?: unknown;
+  extra?: unknown;
+  call_sha256: string;
+  harness?: string;
+  hold_seconds?: number;
+}
+
+// MCPCallText mirrors internal/types.MCPCallText: the canonical arguments and extra params, indented, as text.
+export interface MCPCallText {
+  arguments: string;
+  extra?: string;
+}
+
+// Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256.
+export function isMCPCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
+  a: T,
+): a is T & { requested_scope: MCPCallScope } {
+  const key = a.requested_scope?.call_sha256;
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "";
 }
 
 export function isAdoConsentRequest(
