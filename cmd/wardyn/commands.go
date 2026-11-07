@@ -551,7 +551,13 @@ func printMCPCall(w io.Writer, a types.ApprovalRequest) {
 	if sc.MCPHost != "" {
 		server += " (" + sc.MCPHost + ")"
 	}
-	fmt.Fprintf(w, "TOOL:      %s\nSERVER:    %s\nARGUMENTS:\n%s\n", sc.Tool, server, text.Arguments)
+	// The call key binds the raw method the server knows, which the display name can hide: delete.issue and
+	// delete_issue both read mcp__jira__delete_issue. The raw name has its own line.
+	raw := sc.MCPTool
+	if raw == "" {
+		raw = strings.TrimPrefix(sc.Tool, "mcp__"+sc.MCPServer+"__")
+	}
+	fmt.Fprintf(w, "TOOL:      %s\nSERVER TOOL: %s\nSERVER:    %s\nARGUMENTS:\n%s\n", sc.Tool, raw, server, text.Arguments)
 	if text.Extra != "" {
 		fmt.Fprintf(w, "EXTRA:\n%s\n", text.Extra)
 	}
