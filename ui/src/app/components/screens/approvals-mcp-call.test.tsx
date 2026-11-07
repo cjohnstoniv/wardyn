@@ -138,6 +138,26 @@ describe("the MCP call card, from the wire", () => {
     expect(await navigator.clipboard.readText()).toBe('{\n  "note": "a\\u202eb"\n}');
   });
 
+  it("shows and copies astral format runes as surrogate escapes, so the JSON still means the approved argument", async () => {
+    const original = { args: '{\n  "note": "a\u{E0001}b"\n}', extra: '{\n  "tags": ["\u{1D173}"]\n}' };
+    const r = row();
+    r.call_text = { arguments: original.args, extra: original.extra };
+    mockRows = [r];
+    renderScreen(false, true, "admin@acme.example");
+    const card = await screen.findByTestId("mcp-call-card");
+    const shown = {
+      args: within(card).getByRole("region", { name: C.ARGUMENTS }).textContent!,
+      extra: within(card).getByRole("region", { name: C.EXTRA }).textContent!,
+    };
+    expect(JSON.parse(shown.args)).toEqual(JSON.parse(original.args));
+    expect(JSON.parse(shown.extra)).toEqual(JSON.parse(original.extra));
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole("button", { name: C.COPY_ARGUMENTS }));
+    expect(await navigator.clipboard.readText()).toBe(shown.args);
+    await user.click(within(card).getByRole("button", { name: C.COPY_EXTRA }));
+    expect(await navigator.clipboard.readText()).toBe(shown.extra);
+  });
+
   it("approves and denies straight through with no scope", async () => {
     mockRows = [row()];
     approveMock.mockResolvedValue(undefined);
