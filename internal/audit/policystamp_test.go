@@ -117,3 +117,36 @@ func TestPolicyStampRecorder_CoalescedSummaryStamped(t *testing.T) {
 		}
 	}
 }
+
+// The reserved key is read as JSON reads it, so an escaped spelling of it is removed too.
+func TestPolicyStampRecorder_StripsEscapedWriterKey(t *testing.T) {
+	withDigest, without := uuid.New(), uuid.New()
+	lookup := func(_ context.Context, id uuid.UUID) (string, error) {
+		switch id {
+		case withDigest:
+			return "real", nil
+		case without:
+			return "", nil
+		}
+		return "", errors.New("db down")
+	}
+	failed := uuid.New()
+	forged := json.RawMessage(`{"policy_digest":"forged","k":1}`)
+	for name, tc := range map[string]struct {
+		run  *uuid.UUID
+		want string
+	}{
+		"no run":               {nil, `{"k":1}`},
+		"empty digest":         {&without, `{"k":1}`},
+		"failed lookup":        {&failed, `{"k":1}`},
+		"digest overwrites it": {&withDigest, `{"k":1,"policy_digest":"real"}`},
+	} {
+		inner := &captureRecorder{}
+		if err := (PolicyStampRecorder{Inner: inner, Lookup: lookup}).Record(context.Background(), types.AuditEvent{RunID: tc.run, Data: forged}); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(inner.got[0].Data); got != tc.want {
+			t.Errorf("%s: data = %s, want %s", name, got, tc.want)
+		}
+	}
+}
