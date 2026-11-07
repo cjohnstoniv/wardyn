@@ -93,3 +93,6 @@ const PairPendingMax = pairPendingMax
 
 // ReadPairKey is the one check every boot makes of a base's (or a clone's) pairing key in dir.
 func ReadPairKey(dir string) ([]byte, error) { return readPairKey(dir) }
+
+// TypableCode is typableCode, the edit's one-time code generator.
+func TypableCode(n int) ([]byte, error) { return typableCode(n) }

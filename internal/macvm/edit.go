@@ -313,12 +313,16 @@ func setAdminCode(ctx context.Context, g EditGuest, staging string, code []byte)
 	return nil
 }
 
+// editCodeLen is the edit's one-time code's length, in typableAlphabet: about 43 bits, for a code that only
+// opens an offline copy at this Mac and that the recheck replaces.
+const editCodeLen = 10
+
 // mintCode changes the setup admin's password to a fresh one-time code in a headless boot, which staging's
 // AdminPasswordFile then holds, offers the waiting profiles there (offerProfiles, from staging's tools.json)
 // and, once the boot has stopped, writes the code to the setup-code file (0600), which only the person at
 // this Mac reads. It returns wardyn-admin's copies' paths.
 func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, staging string) (offered []string, err error) {
-	code, err := randomCode(8)
+	code, err := typableCode(editCodeLen)
 	if err != nil {
 		return nil, err
 	}
