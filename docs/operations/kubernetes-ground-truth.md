@@ -55,7 +55,7 @@ helm upgrade wardyn deploy/helm/wardyn --reuse-values \
 - A mapped event is a `kernel.*` audit row on the run. It shows in the run's Audit tab, and the run gives the creating principal as in [the join](#the-join).
 - An unmapped event is dropped and counted in `wardyn_groundtruth_dropped_unmapped_total`. It is not stored.
 - wardynd re-checks a mapped event. One from a pod outside the runs namespace (`namespace_not_runs`), or for a run that ended over 15 minutes ago (`run_ended`), loses its run and is stored as unmapped with that reason.
-- Each sensor sends a `kernel.sensor.ping` heartbeat that names its node. `/healthz` reports every node: see [Monitoring](monitoring.md#per-node-sensor-health).
+- Each sensor sends a `kernel.sensor.ping` heartbeat that names its node. `/healthz` lists every node once two are live: see [Monitoring](monitoring.md#per-node-sensor-health).
 
 ### Runs the sensor cannot see
 
