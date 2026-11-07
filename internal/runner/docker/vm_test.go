@@ -1240,3 +1240,105 @@ func TestVMEndRetriesAShareCleanup(t *testing.T) {
 		t.Fatalf("the QEMU container after the end = removed %v, %+v; want stopped and kept", c.removed, c.state)
 	}
 }
+
+// A restarted driver that cannot classify a ref (the engine's inspect fails) never takes it for a
+// container: the sign-in verbs and the AWS wipe fail closed, run nothing in the QEMU container, and
+// a retry once the engine answers reaches the right place.
+func TestVMLookupFailureFailsTheSigninVerbsAndWipeClosed(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "mark")
+	old := awsCacheWipeArgv
+	awsCacheWipeArgv = []string{"sh", "-c", "echo wiped > " + mark}
+	t.Cleanup(func() { awsCacheWipeArgv = old })
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Env = map[string]string{runner.AWSProfileRecordEnv: "cHJvZmlsZQ=="}
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fail := func(n int) {
+		r.f.mu.Lock()
+		r.f.inspectFailures = n
+		r.f.mu.Unlock()
+	}
+	fresh := func() *Driver {
+		d := newTestDriver(r.f)
+		if err := d.EnableVM(r.vc); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	d := fresh()
+	fail(1)
+	if err := d.SignalMain(ctx, sb.Ref, "SIGSTOP"); err == nil || errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("SignalMain with the lookup failing = %v, want the lookup's error", err)
+	}
+	d = fresh()
+	fail(1)
+	if _, err := d.ExecStreamAs(ctx, sb.Ref, runner.SigninPersonUser, runner.ExecSpec{Argv: []string{"true"}}); err == nil || errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("ExecStreamAs with the lookup failing = %v, want the lookup's error", err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running || c.state.Paused {
+		t.Errorf("the QEMU container after the failed lookups = %+v, want untouched", c.state)
+	}
+	d = fresh()
+	if err := d.SignalMain(ctx, sb.Ref, "SIGSTOP"); !errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("SignalMain once the lookup answers = %v, want ErrSigninUnsupported", err)
+	}
+
+	d = fresh()
+	fail(2) // the wipe's own inspect, then the lookup's
+	if err := d.wipeAWSCaches(ctx, sb.Ref); !errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+		t.Errorf("wipe with the lookup failing = %v, want ErrAWSCacheWipeFailed", err)
+	}
+	r.f.mu.Lock()
+	execs := len(r.f.execLog)
+	r.f.mu.Unlock()
+	if _, serr := os.Stat(mark); serr == nil || execs != 0 {
+		t.Errorf("the failed lookup ran a wipe: guest wrote %v, %d container execs", serr == nil, execs)
+	}
+	if err := d.wipeAWSCaches(ctx, sb.Ref); err != nil {
+		t.Fatalf("wipe once the lookup answers = %v", err)
+	}
+	if _, serr := os.Stat(mark); serr != nil {
+		t.Errorf("the retry did not wipe in the guest: %v", serr)
+	}
+}
+
+// An end whose lookups fail still stops the QEMU container: the wipe reports failed (so the audit
+// row says so), and containment never waits on a lookup or a wipe.
+func TestVMEndStopsTheContainerWhenTheLookupFails(t *testing.T) {
+	for name, failures := range map[string]int{
+		"the wipe's lookup fails":                   2,
+		"the wipe's and the end's own lookups fail": 3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newVMRig(t)
+			spec := vmSpec()
+			spec.Env = map[string]string{runner.AWSProfileRecordEnv: "cHJvZmlsZQ=="}
+			ctx := context.Background()
+			sb, err := r.d.CreateSandbox(ctx, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := newTestDriver(r.f)
+			if err := d.EnableVM(r.vc); err != nil {
+				t.Fatal(err)
+			}
+			r.f.mu.Lock()
+			r.f.inspectFailures = failures
+			r.f.mu.Unlock()
+			if err := d.EndSandbox(ctx, sb.Ref); !errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+				t.Fatalf("EndSandbox = %v, want ErrAWSCacheWipeFailed", err)
+			}
+			if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+				t.Fatalf("the QEMU container after the end = removed %v, %+v; want stopped and kept", c.removed, c.state)
+			}
+			if !r.container(t, proxyContainerName(spec.RunID)).removed {
+				t.Error("the end left the run's proxy")
+			}
+		})
+	}
+}

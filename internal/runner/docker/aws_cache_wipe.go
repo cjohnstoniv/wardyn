@@ -64,9 +64,14 @@ func (d *Driver) wipeAWSCaches(ctx context.Context, ref string) error {
 		// re-asserted on a kept sandbox lands here every pass, so this is not logged.
 		return fmt.Errorf("%w: the sandbox was not running", runner.ErrAWSCacheWipeFailed)
 	}
-	if v := d.vmFor(ctx, ref); v != nil {
+	// A ref the engine cannot classify is never taken for a container: the wipe would exec in the QEMU container.
+	v, lerr := d.vmLookup(ctx, ref)
+	switch {
+	case lerr != nil:
+		err = lerr
+	case v != nil:
 		err = d.vmAWSCacheWipe(ctx, v)
-	} else {
+	default:
 		err = d.containerAWSCacheWipe(ctx, ref)
 	}
 	switch {

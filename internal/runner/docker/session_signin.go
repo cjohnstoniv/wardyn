@@ -24,8 +24,13 @@ func (d *Driver) ExecStreamAs(ctx context.Context, ref, user string, spec runner
 	if user == "" {
 		return nil, errors.New("docker: exec stream as: no user")
 	}
-	if d.vmFor(ctx, ref) != nil {
-		// A VM's exec runs as the guest agent's user, never as user: refuse rather than run the person's stack as the agent.
+	// A VM's exec runs as the guest agent's user, never as user: refuse rather than run the person's
+	// stack as the agent. A ref the engine cannot classify is refused too, never taken for a container.
+	v, err := d.vmLookup(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if v != nil {
 		return nil, runner.ErrSigninUnsupported
 	}
 	return d.execStream(ctx, ref, user, spec)
@@ -36,9 +41,13 @@ func (d *Driver) ExecStreamAs(ctx context.Context, ref, user string, spec runner
 // delivered from.
 //
 // A VM ref is refused (runner.ErrSigninUnsupported): its main process is the hypervisor, and a stop
-// would freeze the whole guest.
+// would freeze the whole guest. So is a ref the engine cannot classify (its lookup error).
 func (d *Driver) SignalMain(ctx context.Context, ref, signal string) error {
-	if d.vmFor(ctx, ref) != nil {
+	v, err := d.vmLookup(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if v != nil {
 		return runner.ErrSigninUnsupported
 	}
 	if _, err := d.cli.ContainerKill(ctx, ref, client.ContainerKillOptions{Signal: signal}); err != nil {
