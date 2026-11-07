@@ -454,6 +454,11 @@ A run gets what every layer allows. The run's policy record names the layer that
 
 ### B14 — macOS VM guest vs. the Mac that runs it
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/img/macos-vm-run-dark.svg">
+  <img src="../docs/img/macos-vm-run.svg" alt="A macOS VM run on a Mac: under the runner's login, wardyn-runnerd, the wardyn-macvm helper holding the guest, the run's socket folder, and Docker with the run's relay and proxy, the guest's one NIC being its only way out.">
+</picture>
+
 - **[0.10, off by default]** A run with `machine_kind: macos_vm` is a macOS guest under Apple's Virtualization framework on a company-managed Mac ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md)). B12 holds for it: the Mac's person is root there, and no control binds them.
 - **The boundary is Apple's hypervisor.** The guest's only NIC is wired to the run's own relay and proxy in Docker, with no NAT device. Egress, recording, the clipboard rules and audit are enforced outside the guest.
 - **What the guest can reach in our code.** Four bounded inputs: the guest agent session, the network bridge's frames, a strict RFB shim that ends the session on any server message it does not know, and a DHCP responder that answers one fixed lease. The helper runs as the logged-in user, never root, with one virtualization entitlement.
@@ -477,7 +482,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 | Crossing | Guard | Residual |
 |---|---|---|
 | Guest ↔ Mac network | One FileHandle NIC to the run's relay and proxy; no NAT; stage-one preparation has no egress at all. The guest's connection to the proxy itself (`HTTPS_PROXY`) goes unchanged to the agent port and is decided as a container's, with no TLS server-name check. The relay's own requests use a separate proxy port the guest cannot open | #96 |
-| Guest agent ↔ runner | Guest-initiated vsock; the same session parser as Linux VMs | #96 |
+| Guest agent ↔ runner | Guest-initiated vsock, which the VM's own `wardyn-macvm` helper joins to `agent.sock` for the runner to dial; the same session parser as Linux VMs | #96 |
 | Desktop ↔ gateway | A runner-side RFB shim on a socket only the helper reaches; the existing ticket, clipboard filter and recording. The recording is of what the runner relays, so the person's own runner can alter the frames. Frames are never secret-masked (masking runs on terminal bytes): a secret the desktop shows is in the recording, and Review says so. A task run's agent output cast is masked, and where the masker cannot vouch for bytes it drops them and marks the cast incomplete (`mask_gap`): the gap is marked, not filled. The shim socket is mode `0700`, so any process under the runner's own login on the Mac can reach it | #96 |
 | Window ↔ the Mac's display | A grant for the run's own person on their own runner's Mac, re-checked every 30 seconds, one window per run, the browser desktop view only beside it, an ungranted window audited; unrecorded by design | #96 |
 | Other local accounts ↔ the VM ledger | A root-owned, sticky ledger: it can deny service, never admit past the cap | #96 |
@@ -4576,7 +4581,7 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 | No resident secrets | Late-bound, proxy-injected credentials with output masking 🟢 **[shipped]**: [gaps and exceptions](#no-resident-secrets). | AT-1.1: agent reading secrets from sandbox env/disk |
 | Env-var proxy bypass defended | L0 🟢 **[shipped]** (no route off the host; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
 | Egress enforced outside the sandbox | L0/L1 🟢 **[shipped]** | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
-| Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[planned]** | The MCP-blind-firewall class — only the L2 half is active today; L3 does not exist yet, so this row is NOT "always active" for tool-call egress until L3 ships |
+| Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3's decision half ships (`tool_rules`, `wardyn-toolgate`) and is cooperative; its interception half is planned, so this row is NOT "always active" for tool-call egress until that ships |
 | Approval mints credential | B5 coupling, ID + AU 🟢 **[shipped]** | Scope-widening between approval and issuance |
 | Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟡 **[planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU 🟢 **[shipped]** | Insider hiding behind agent identity |
