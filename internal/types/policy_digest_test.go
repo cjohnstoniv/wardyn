@@ -137,3 +137,29 @@ func TestPolicyDigest_NamesTheContent(t *testing.T) {
 		t.Error("a Clone has a different digest from its original")
 	}
 }
+
+// TestPolicyDigest_IgnoresScopeSpelling: a grant scope is a json.RawMessage, which Marshal keeps in the
+// writer's member order and escape spelling, while the audit table's JSONB reorders keys and rewrites
+// strings. All spellings of one scope are one policy, so they are one digest, and so is the spec read
+// back from a row whose scope the database has rewritten.
+func TestPolicyDigest_IgnoresScopeSpelling(t *testing.T) {
+	withScope := func(scope string) RunPolicySpec {
+		return RunPolicySpec{AllowedDomains: []string{"api.example.com"},
+			EligibleGrants: []GrantSpec{{Kind: GrantGitPAT, Scope: json.RawMessage(scope), TTLSeconds: 60}}}
+	}
+	canonical := withScope(`{"host":"api.example.com","secret_name":"s","n":100,"nested":{"a":1,"b":[true,null,"x"]}}`)
+	want := canonical.Digest()
+	for name, scope := range map[string]string{
+		"reordered members":  `{"secret_name":"s","host":"api.example.com","nested":{"b":[true,null,"x"],"a":1},"n":100}`,
+		"escaped characters": `{"host":"api\u002eexample.com","secret_name":"\u0073","n":100,"nested":{"a":1,"b":[true,null,"x"]}}`,
+		"whitespace":         "{ \"host\" : \"api.example.com\",\n\"secret_name\":\"s\",\"n\":100,\"nested\":{\"a\":1,\"b\":[true,null,\"x\"]} }",
+		"number spelling":    `{"host":"api.example.com","secret_name":"s","n":1e2,"nested":{"a":1.0,"b":[true,null,"x"]}}`,
+	} {
+		if got := withScope(scope).Digest(); got != want {
+			t.Errorf("%s: digest %s != %s", name, got, want)
+		}
+	}
+	if withScope(`{"host":"other.example.com","secret_name":"s","n":100,"nested":{"a":1,"b":[true,null,"x"]}}`).Digest() == want {
+		t.Error("a scope naming another host has the same digest")
+	}
+}

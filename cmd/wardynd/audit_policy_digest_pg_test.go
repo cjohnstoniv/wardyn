@@ -48,7 +48,9 @@ func TestAuditChain_PolicyDigestSurvivesMaskingAndSealing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	spec := types.RunPolicySpec{AllowedDomains: []string{"api.example.com"}, FirstUseApproval: types.FirstUseAlwaysDeny}
+	spec := types.RunPolicySpec{AllowedDomains: []string{"api.example.com"}, FirstUseApproval: types.FirstUseAlwaysDeny,
+		// A scope is a RawMessage that keeps the writer's member order, which the database's JSONB rewrites.
+		EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"secret_name":"s","host":"api.example.com"}`), TTLSeconds: 60}}}
 	runID := uuid.New()
 	if _, err := pool.Exec(t.Context(),
 		`INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target, policy_digest)
