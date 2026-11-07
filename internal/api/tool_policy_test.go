@@ -501,7 +501,7 @@ func TestToolPolicy_HarnessFactsOfferWhatTheServerAccepts(t *testing.T) {
 		if f.Default.Effective != types.ToolHold || f.Default.Source != c.src || f.Enforcer != toolEnforcerHarness {
 			t.Errorf("%q: default %+v enforcer %s, want hold from %+v", c.level, f.Default, f.Enforcer, c.src)
 		}
-		if got := avail(f.Default.Options); !maps.Equal(got, map[types.ToolEffect]string{types.ToolAllow: c.skip, types.ToolDeny: "attended_rules_unavailable"}) {
+		if got := avail(f.Default.Options); !maps.Equal(got, map[types.ToolEffect]string{types.ToolAllow: c.skip, types.ToolApproveEach: "approve_each_default", types.ToolDeny: "attended_rules_unavailable"}) {
 			t.Errorf("%q: default greyed %v", c.level, got)
 		}
 		if len(f.PolicyRules) != 1 || f.PolicyRules[0].Tool != "Bash" {

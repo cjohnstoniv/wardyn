@@ -191,17 +191,13 @@ func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
 	return proxy.LoadConfigBytes(b)
 }
 
-// reviveReassertCeiling is reassertProxyCeiling for reviveRunProxy, with the denied run.revive row a
-// refusal of the git broker or the Azure CLI lane writes before it is returned.
-func (s *Server) reviveReassertCeiling(ctx context.Context, run types.AgentRun, cfg *proxy.Config, c ownerCeiling, layers []sealLayer,
-	actorType types.ActorType, actor string,
-) (reasserted, *reviveError) {
-	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
-	if rerr != nil && (rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI) {
+// auditReviveCeilingRefusal writes the denied run.revive row for a ceiling refusal of the git broker or the
+// Azure CLI lane, before reviveRunProxy returns it; any other refusal writes none here.
+func (s *Server) auditReviveCeilingRefusal(ctx context.Context, run types.AgentRun, rerr *reviveError, actorType types.ActorType, actor string) {
+	if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
 	}
-	return re, rerr
 }
 
 // revivedStoredConfig is the revived config as the run row stores it. The stored row stays the

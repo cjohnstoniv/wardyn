@@ -318,7 +318,12 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
-	if msg := s.unitRequiredSignersRefusal(r.Context(), req); msg != "" {
+	// required_image_signers names must be signers the site defines: on the profile's own limits and on its overlay.
+	msg = s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", req.Limits.RequiredImageSigners)
+	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
+		msg = s.requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
+	}
+	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
 		return
 	}
@@ -403,6 +408,21 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	data := s.unitWriteSuccessData(r, id, saved, effective, unitAdmin, putCreates)
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
+	}
+	warns := s.unitWriteWarnings(r.Context(), saved, effective)
+	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
+}
+
+// unitWriteSuccessData is a stored write's governance.unit.write row data, with the unit admin's scope when one
+// wrote it. A PUT that created the profile is logged here, before the row is recorded.
+func (s *Server) unitWriteSuccessData(r *http.Request, id uuid.UUID, saved types.GovernanceUnit, effective *ResolvedUnit,
+	unitAdmin, putCreates bool,
+) map[string]any {
 	data := unitWriteAuditData(saved, effective)
 	if unitAdmin {
 		data = unitScopeAudit(data, r, s.auditUnitScope(r.Context(), saved.ID, false))
@@ -413,23 +433,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY would refuse it",
 			"unit_id", id.String())
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
-	if mode == govBypass {
-		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
-	}
-	warns := s.unitWriteWarnings(r.Context(), saved, effective)
-	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
-}
-
-// unitRequiredSignersRefusal is the write's required_image_signers check: each name must be a signer the site
-// defines, on the profile's own limits and then on its overlay. "" when both pass.
-func (s *Server) unitRequiredSignersRefusal(ctx context.Context, req governanceUnitRequest) string {
-	msg := s.requiredImageSignersRefusal(ctx, "limits.required_image_signers", req.Limits.RequiredImageSigners)
-	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
-		msg = s.requiredImageSignersRefusal(ctx, "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
-	}
-	return msg
+	return data
 }
 
 // unitWriteWarnings are the saved write's answer warnings: the omissions of an uncomposed profile, the
