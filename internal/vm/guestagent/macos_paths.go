@@ -45,6 +45,15 @@ const (
 	// MacRunDir is the guest's counterpart of the Linux /run/wardyn, where a delivered secret lands: a
 	// macOS guest has no /run (its system volume is sealed).
 	MacRunDir = "/var/run/wardyn"
+	// MacSessionEnvPath is the shell file of a run's non-secret settings, which zsh reads through the
+	// hook in MacZshEnvPath: root's and read-only to the agent account, so only the agent process
+	// changes what every zsh on the clone sources.
+	MacSessionEnvPath = MacRunDir + "/session-env.zsh"
+	// MacSessionEnvStatusPath says whether those settings reached the window's GUI session: one
+	// session_env= line (SessionEnvStatus), never a value.
+	MacSessionEnvStatusPath = MacRunDir + "/session-env.status"
+	// MacZshEnvPath is the system-wide zsh file that carries the hook.
+	MacZshEnvPath = "/etc/zshenv"
 )
 
 // EnvManagedFiles names the managed files a run's Init wrote, for the launcher's check that each is in

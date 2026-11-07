@@ -292,7 +292,7 @@ func (s *Server) initDesktop(ctx context.Context, ca []string, pw string, deskto
 			set = true
 		}
 	}
-	if err := s.Desktop.SetSessionEnv(ctx, ca); err != nil {
+	if _, err := s.Desktop.SetSessionEnv(ctx, ca); err != nil {
 		slog.Warn("guest agent: CA variables not set in the desktop session", "err", err)
 	}
 	return set

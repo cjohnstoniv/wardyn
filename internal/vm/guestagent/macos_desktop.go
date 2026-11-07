@@ -219,26 +219,26 @@ func parsePointer(s string) (Pointer, error) {
 // SetSessionEnv sets env (KEY=VALUE) in the console user's GUI session, so apps started from it after
 // this see it. A session that is not up yet (ErrNoConsoleUser) is skipped, not an error: the caller
 // logs it. That a launched app reads the variables is unproven (MAC-PROOF P11).
-func (d *Desktop) SetSessionEnv(ctx context.Context, env []string) error {
+func (d *Desktop) SetSessionEnv(ctx context.Context, env []string) (via string, err error) {
 	if len(env) == 0 {
-		return nil
+		return "", nil
 	}
 	uid, err := d.Console.Console(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, kv := range env {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
-			return fmt.Errorf("session variable %q is not KEY=VALUE", k)
+			return "", fmt.Errorf("session variable %q is not KEY=VALUE", k)
 		}
 		// launchctl asuser keeps root's identity in the user's namespace, which is what setenv needs.
 		args := []string{"asuser", strconv.FormatUint(uint64(uid), 10), "/bin/launchctl", "setenv", k, v}
 		if _, err := d.Run.Run(ctx, "/bin/launchctl", args...); err != nil {
-			return fmt.Errorf("set %s in the desktop session: %w", k, err)
+			return "", fmt.Errorf("set %s in the desktop session: %w", k, err)
 		}
 	}
-	return nil
+	return "asuser", nil
 }
 
 // servePointer answers the pointer position (Pointer); 409 with nobody at the console. Only tools mode
