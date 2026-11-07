@@ -144,3 +144,43 @@ func TestBedrockInvokeLoneHeaderIsUncounted(t *testing.T) {
 	expect(t, got, Usage{Input: 17, Output: 9, State: StateCounted})
 	expect(t, run(ShapeBedrockInvoke, hdr("0", "5"), []byte(`{"results":[]}`), 0), Usage{Output: 5, State: StateCounted})
 }
+
+// message_start's output_tokens is a placeholder: only a non-null output_tokens on a message_delta is the
+// final count. Input and cache figures still carry over from message_start.
+func TestAnthropicOutputCountsOnlyFromTheTerminalDelta(t *testing.T) {
+	const start = `{"type":"message_start","message":{"model":"m","usage":{"input_tokens":12,"output_tokens":1}}}`
+	delta := func(u string) string { return `{"type":"message_delta","usage":` + u + `}` }
+	sse := func(events ...string) []byte {
+		var b []byte
+		for _, e := range events {
+			b = append(b, "data: "...)
+			b = append(b, e...)
+			b = append(b, "\n\n"...)
+		}
+		return b
+	}
+	chunks := func(events ...string) []byte {
+		var b []byte
+		for _, e := range events {
+			b = append(b, chunk(e)...)
+		}
+		return b
+	}
+	paths := []struct {
+		name  string
+		shape Shape
+		opts  Options
+		build func(...string) []byte
+	}{
+		{"anthropic stream", ShapeAnthropicMessages, Options{Stream: true}, sse},
+		{"bedrock invoke stream", ShapeBedrockInvokeStream, Options{}, chunks},
+	}
+	for _, p := range paths {
+		for _, u := range []string{`{}`, `{"output_tokens":null}`} {
+			got := run(p.shape, p.opts, p.build(start, delta(u)), 0)
+			expect(t, got, Usage{Model: "m", State: StateUncounted, Reason: ReasonNoUsage})
+		}
+		got := run(p.shape, p.opts, p.build(start, delta(`{"output_tokens":0}`)), 0)
+		expect(t, got, Usage{Model: "m", Input: 12, Output: 1, State: StateCounted})
+	}
+}
