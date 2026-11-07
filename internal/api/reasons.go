@@ -846,3 +846,15 @@ const (
 	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid" // 400: a requested_scope carrying call_sha256 that is not the hash of its own server, tool and arguments, repeats a key or spells one in another case, shows a tool name that is not its raw tool's, or is on a kind other than tool_call
 	reasonMCPCallTooLarge     = "mcp_call_too_large"     // 400: an MCP call larger than a person can be shown (arguments over 32 KiB, or a scope over 64 KiB)
 )
+
+// The signed audit receipt, checkpoint and key routes (audit_receipt.go).
+const (
+	reasonAuditReceiptRequestInvalid   = "audit_receipt_request_invalid"   // 400: events or one run, in the shapes the route reads
+	reasonAuditReceiptNotFound         = "audit_receipt_not_found"         // 404: no such audit event, or the run has no audit rows
+	reasonAuditReceiptPending          = "audit_receipt_pending"           // 409: newer than the last signed checkpoint; retry after Retry-After
+	reasonAuditReceiptUnchained        = "audit_receipt_unchained"         // 409: in no checkpoint and will never be (no row hash, or before signing began)
+	reasonAuditReceiptTooLarge         = "audit_receipt_too_large"         // 413: more events or checkpoints than one receipt carries
+	reasonAuditReceiptSigningOff       = "audit_receipt_signing_off"       // 503: checkpoint signing is off, or its key could not be loaded
+	reasonAuditReceiptStoreUnavailable = "audit_receipt_store_unavailable" // 501: needs the Postgres store
+	reasonAuditReceiptReadFailed       = "audit_receipt_read_failed"       // 500: the receipt could not be read or assembled
+)

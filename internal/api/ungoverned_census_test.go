@@ -46,6 +46,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"audit.go:auditRowsFor":                                    {2, "authz-only: audit read scope, and host detail below a super admin"},
 	"audit.go:auditScope":                                      {1, "authz-only: audit read scope"},
 	"audit_partition_export.go:exportAuditPartition":           {2, "authz-only: audit export tier, and host detail below a super admin"},
+	"audit_receipt.go:handleAuditReceipt":                      {1, "authz-only: host detail below a super admin"},
 	"boundary_meet.go:boundaryEndPlan":                         {1, "E: an ungoverned caller's end change is held to the boundary's maximum"},
 	"capabilities.go:capAllowed":                               {1, "R: capability admission; the spec it admits meets the boundary at resolve"},
 	"capabilities.go:newCapBatch":                              {1, "R: capability admission; the spec it admits meets the boundary at resolve"},
