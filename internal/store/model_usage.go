@@ -87,27 +87,27 @@ func insertModelUsageTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID, u egres
 	return tag.RowsAffected() == 1, nil
 }
 
-// runnerRowEvents is the audit events a replayed spool row becomes. A row carrying a model call's token
-// counts is not an egress decision: it is stored in the same tx (evidence runner_asserted, like its
-// siblings) and writes no audit row. With drop (PG.ModelUsageOff) the row is acknowledged and stored nowhere.
-func runnerRowEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID, r runnerspool.Record, drop bool) ([]types.AuditEvent, error) {
+// runnerRowEvents is the audit events a replayed spool row becomes, and whether the row stored a new model
+// usage row. A row carrying a model call's token counts is not an egress decision: it is stored in the same
+// tx (evidence runner_asserted, like its siblings) and writes no audit row. With drop (PG.ModelUsageOff) the
+// row is acknowledged and stored nowhere. A call id already stored stores nothing and reports false.
+func runnerRowEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID, r runnerspool.Record, drop bool) ([]types.AuditEvent, bool, error) {
 	u := r.Decision.Usage
 	if u == nil {
-		return runnerDecisionEvents(ctx, tx, runnerID, runID, r)
+		events, err := runnerDecisionEvents(ctx, tx, runnerID, runID, r)
+		return events, false, err
 	}
 	if drop {
-		return nil, nil
+		return nil, false, nil
 	}
 	at := r.Decision.Request.Time
 	if at.IsZero() {
 		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	if _, err := insertModelUsageTx(ctx, tx, runID, *u, at, types.RunEvidenceRunnerAsserted); err != nil {
-		return nil, err
-	}
-	return nil, nil
+	stored, err := insertModelUsageTx(ctx, tx, runID, *u, at, types.RunEvidenceRunnerAsserted)
+	return nil, stored, err
 }
 
 func (s PG) InsertModelUsage(ctx context.Context, runID uuid.UUID, u egress.ModelUsage, at time.Time, evidence string) (bool, error) {
