@@ -5,18 +5,7 @@
 - How a run's lease is captured, extended and ended, and what reviving a kept run can and can't do.
 - The full audit contract for every event named here is [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md)'s `run.end.set`, `run.wait_budget.set`, `run.ended`, `run.ended.expired`, `run.lost`, `run.lost.expired` and `run.revive` rows.
 
-```mermaid
-flowchart LR
-    running["RUNNING"] -->|ends_at passes| kept["KEPT<br/>agent stopped, proxy gone"]
-    running -->|kill| gone["torn down"]
-    kept -->|grace expires| gone
-    kept -->|extend, revive| running
-```
-
 ## Capturing the lease
-
-> [!NOTE]
-> The long-holds design (RL-0..RL-11) landed across 0.8; this page covers what is actually wired today. The diagram's "extend, revive" edge is narrower than it looks: only an interactive run, extended past its own end and still inside its files grace, is eligible for revive (`reviveEligible`, [`internal/api/run_revive.go`](../../internal/api/run_revive.go), #1061).
 
 Every run captures a **lease** at create:
 
@@ -36,7 +25,7 @@ Every run captures a **lease** at create:
 | --- | --- |
 | Moving the end LATER, within the captured maximum | Always allowed |
 | Shortening it, granting "No end," or changing the wait | Needs the captured `user_changes_limits` gate; an over-ask is capped at the limit and the response says so |
-| A run already kept by its own end, still inside its files grace | Allowed — moving `ends_at` into the future is the first step toward reviving it (#1061) |
+| A run already kept by its own end, still inside its files grace | Allowed — moving `ends_at` into the future is the first step toward reviving it |
 | A run kept by its own end, past its files grace | Refused: "its end cannot be moved" — start a new run |
 
 - Every extend also re-checks the owner's CURRENT authority over the run's agent, workspaces, model provider, stored policy and git provider, and that the owner's profile still allows the run's placement (`placement_denied`).
@@ -44,25 +33,26 @@ Every run captures a **lease** at create:
 
 ## End
 
-A run's own lease is what ends it — there is no separate "end now" action.
+A run's lease ends it, or someone ends it now.
 
-- **Kill** (`POST /runs/{id}/kill`) ends it immediately, with no grace. A different, faster and more forceful path, available to any admin (not just the owner or a super admin), tearing down broker credentials, identity and the sandbox all at once.
-- **Kept**: when `ends_at` passes instead, the periodic lease sweep stops the run and, substrate and grace allowing, KEEPS it:
+- **End run** (the console button, or `POST /runs/{id}/kill`) ends it at once, with no grace, tearing down broker credentials, identity and the sandbox together. Any admin may, not only the owner or a super admin.
+- **Kept**: when `ends_at` passes, the periodic lease sweep stops the run and, substrate and grace allowing, keeps it:
 
 | Component | When the run is kept |
 | --- | --- |
 | Agent container | Stopped (not removed) |
-| Proxy sidecar | Stopped and removed, so the run has no network |
+| Proxy | Stopped and removed, so the run has no network |
 | Approvals and credentials | Pending approvals are cancelled; broker credentials get a best-effort, audit-only revoke |
 
-- The run's own identity is NOT revoked, so the run stays `RUNNING` and holds its quota slot until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or a kill.
+- The run's own identity is not revoked, so the run stays `RUNNING` and holds its quota slot until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or an End run.
+- A run lost to an outage or a reboot (`run.lost`) is a separate path; see [Revive](#revive).
 - `run.ending_soon` warns at 24h, 1h and 10m before the end.
 - A kept run's token is refused all the same: every `/internal/*` door refuses it (ended, or lost to a reboot or an outage) with `403` and an `authz.denied` row, reason `run_kept`. Nothing can mint a credential, resolve an injection or decide an approval with it.
 - Only the three tail uploads are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
 
 ### Where the proxy config lives while kept
 
-No container holds the proxy's rendered configuration at rest (#1176): its per-run TLS-MITM CA private key, its run token and any authenticated upstream-proxy URL.
+No container holds the proxy's rendered configuration at rest: its per-run TLS-MITM CA private key, its run token and any authenticated upstream-proxy URL.
 
 - On Docker the proxy reads the configuration from its stdin once at start, so neither the container's config nor its environment carries it, and the proxy is removed when the run is kept.
 - Kept for a revive instead is one database row per run (`run_proxy_configs`), sealed with AES-256-GCM under the `wardyn-run-config-key` boot key.
@@ -70,8 +60,8 @@ No container holds the proxy's rendered configuration at rest (#1176): its per-r
 - The row is deleted when the run goes terminal, with a purge at boot and on the orphan sweep's cadence behind it (threat model residual 59).
 - The kept agent container still holds whatever the agent wrote to its own writable layer for the whole grace window. Nothing on the run's page or in the admin runs list reports how much that is today.
 
-> [!IMPORTANT]
-> **Upgrading to this release:** a run started before it has no stored proxy config, so it can't be revived (`409`, start a new run). It runs, ends and is torn down as before. `WARDYN_PROXY_IMAGE` must name a proxy image from this release or later: an older proxy doesn't read its config from stdin and exits at start.
+- A run with no stored proxy config (one started before the row existed) can't be revived: `409`, start a new run. It runs, ends and is torn down as before.
+- `WARDYN_PROXY_IMAGE` must name a proxy image from the same release as wardynd: an older proxy doesn't read its config from stdin and exits at start.
 
 ## Revive
 
@@ -92,7 +82,7 @@ Revive is refused, nothing changed, when:
 - The run is past its end and not yet extended — extend it first.
 - The run is already kept by its own end, and either it's a task run (not interactive) or it's past its files grace — the agent can't be started again; start a new run instead.
 
-A live run, one lost to an `outage` or a `reboot`, or a kept run that's interactive, extended past its own end and still inside its files grace (#1061), is revivable today.
+A live run, one lost to an `outage` or a `reboot`, or a kept run that's interactive, extended past its own end and still inside its files grace, is revivable (`reviveEligible`, [`internal/api/run_revive.go`](../../internal/api/run_revive.go)).
 
 - Admins get the same path in bulk over LIVE runs only: `POST /admin/runs/restart` ("Restart with current limits") and `GET /admin/runs/proxy-window` (listing runs on an out-of-window proxy release).
 - A revived run keeps its ORIGINAL agent image: a reboot revive restarts the same, already-created agent container rather than recreating it from an agent image an operator may have since patched.
@@ -100,7 +90,7 @@ A live run, one lost to an `outage` or a `reboot`, or a kept run that's interact
 
 ## Rename
 
-`PATCH /runs/{id}/title` (#1197) lets the run's OWNER change its title. It's a display field, not part of the lease above, so it needs no captured limit and is allowed in ANY run state, including a terminal or kept one.
+`PATCH /runs/{id}/title` lets the run's OWNER change its title. It's a display field, not part of the lease above, so it needs no captured limit and is allowed in ANY run state, including a terminal or kept one.
 
 - The gate is OWNER ONLY (`ownsRun`), stricter than every other `/runs/{id}` route: neither an admin nor a `security_admin` may rename someone else's run — both get the byte-identical 404 a non-owner gets.
 - A rename carries no security or incident-response warrant the way `GET /runs/{id}`'s inspect-or-stop bypass or the lease PATCH's owner-or-SUPER bypass do.
@@ -108,11 +98,11 @@ A live run, one lost to an `outage` or a `reboot`, or a kept run that's interact
 
 ## Kubernetes cannot keep, revive, restart or pause a run
 
-The k8s runner substrate doesn't implement the optional runner capabilities the docker driver does. A k8s agent pins its sidecar proxy's pod IP, so there's no "same address, new container" to replace, and a stopped pod is gone, not kept.
+The Kubernetes substrate doesn't implement the optional runner capabilities the Docker driver does. An agent pod pins its proxy pod's IP, so there's no "same address, new container" to replace, and a stopped pod is gone, not kept.
 
-- A k8s run's end and limits still fire on schedule — that half is NOT a gap.
-- But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window; the pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
-- Its proxy config reaches the sidecar through a per-run Secret staged into an in-memory volume (#688), not stdin. Since the run is never kept, that Secret lives exactly as long as the run and is never re-created from the stored row.
+- A Kubernetes run's end and limits still fire on schedule.
+- But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
+- Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
 - The row is still written for a k8s run (and deleted with it), unused until k8s can revive.
 
 See [Kubernetes: known gaps](kubernetes-known-gaps.md) for the revive and restart refusals.
