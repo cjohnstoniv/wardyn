@@ -52,8 +52,9 @@ const (
 
 // AgentSigningIdentity is this Mac's guest agent signing certificate, kept in dir (0700) with its key
 // (0600). The first caller makes them, under a lock on dir so two helpers make one; every later call reads
-// them back. They are never made again while the certificate reads: a new one would drop every Full Disk
-// Access grant given to the old one in this Mac's bases.
+// them back. Only a missing certificate makes a new identity: a new one would drop every Full Disk Access
+// grant given to the old one in this Mac's bases, so a certificate whose key is missing or unreadable is
+// refused and kept, and the person decides to start over.
 func AgentSigningIdentity(ctx context.Context, dir string) (*x509.Certificate, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("macvm: the agent signing directory: %w", err)
@@ -105,20 +106,45 @@ func AgentSigningIdentity(ctx context.Context, dir string) (*x509.Certificate, e
 	return x509.ParseCertificate(der)
 }
 
-// readAgentSigningCert reads dir's certificate: os.ErrNotExist when the identity is not made yet.
+// readAgentSigningCert reads dir's certificate and checks its key is there and is the certificate's. It
+// returns os.ErrNotExist only when the certificate is missing (the identity is not made yet); any other
+// failure keeps both files and says how to start over.
 func readAgentSigningCert(dir string) (*x509.Certificate, error) {
 	b, err := os.ReadFile(filepath.Join(dir, agentSigningCert))
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, agentSigningKey)); err != nil {
-		return nil, fmt.Errorf("macvm: the agent signing key beside its certificate: %w", err)
+	var cert *x509.Certificate
+	if blk, _ := pem.Decode(b); blk == nil || blk.Type != "CERTIFICATE" {
+		err = fmt.Errorf("%s is not a PEM certificate", filepath.Join(dir, agentSigningCert))
+	} else if cert, err = x509.ParseCertificate(blk.Bytes); err == nil {
+		err = checkAgentSigningKey(filepath.Join(dir, agentSigningKey), cert)
+	}
+	if err != nil {
+		// %v, not %w: a missing key must not read as an identity not made yet.
+		return nil, fmt.Errorf("macvm: this Mac's guest agent signing identity in %s does not read (%v); it is kept, and the agent is signed ad hoc. To start over, remove %s; then grant Full Disk Access again in edit-base", dir, err, dir)
+	}
+	return cert, nil
+}
+
+// checkAgentSigningKey says whether the key at path reads and is cert's.
+func checkAgentSigningKey(path string, cert *x509.Certificate) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
 	}
 	blk, _ := pem.Decode(b)
-	if blk == nil || blk.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("macvm: %s is not a PEM certificate", filepath.Join(dir, agentSigningCert))
+	if blk == nil {
+		return fmt.Errorf("%s is not a PEM key", path)
 	}
-	return x509.ParseCertificate(blk.Bytes)
+	key, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
+	if err != nil {
+		return fmt.Errorf("%s: %v", path, err)
+	}
+	if rk, ok := key.(*rsa.PrivateKey); !ok || !rk.PublicKey.Equal(cert.PublicKey) {
+		return fmt.Errorf("%s is not the certificate's key", path)
+	}
+	return nil
 }
 
 // writeFileAtomic writes b to path, at mode, through a temp file and a rename.

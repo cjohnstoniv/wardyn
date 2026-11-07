@@ -241,8 +241,12 @@ func agentSignatureLines(rec macvm.ToolsRecord) []string {
 	case rec.AgentSignature == macvm.AgentSignedThisMac:
 		lines = append(lines, "guest agent: signed on this Mac")
 	}
-	if rec.Guest != nil && rec.Guest.FullDiskAccess != "" {
+	switch {
+	case rec.Guest != nil && rec.Guest.FullDiskAccess != "":
 		lines = append(lines, "Full Disk Access: "+rec.Guest.FullDiskAccess+" (as the base last read it)")
+	case rec.AgentSignature != "":
+		// The update could not carry the reading across to the new agent (another signature).
+		lines = append(lines, "Full Disk Access: unknown; recheck it in macos-vm edit-base")
 	}
 	return lines
 }

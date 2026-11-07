@@ -182,8 +182,9 @@ type Stage2Input struct {
 	// Kept is a derivation's (DeriveBase): the tools.json of the Standard it cloned, whose tools it keeps.
 	Kept *ToolsRecord
 	// AgentSignature is how the guest agent the base held before this stage 2 was signed (a tools
-	// update's): Full Disk Access as the running agent reads it says something of a newly pushed build only
-	// when both are signed on this Mac.
+	// update's), and AgentSigningCertSHA256 the certificate it was signed with: Full Disk Access as the
+	// running agent reads it says something of a newly pushed build only when both are signed on this Mac
+	// with the same certificate, so their designated requirement is the same.
 	AgentSignature         string
 	AgentSigningCertSHA256 string
 }
@@ -212,8 +213,8 @@ type ToolsResult struct {
 	ItemsDigest string
 	// Guest is the guest posture read at the end of stage 2.
 	Guest *GuestPosture
-	// AgentSignature is how the pushed agent is signed, and AgentSigningCert whether the guest trusts
-	// the signing certificate.
+	// AgentSignature is how the pushed agent is signed, AgentSigningCert whether the guest trusts the
+	// signing certificate, and AgentSigningCertSHA256 that certificate's SHA-256.
 	AgentSignature, AgentSigningCert string
 	AgentSigningCertSHA256           string
 }
@@ -319,8 +320,12 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	}
 	if err == nil {
 		res.Guest = readPosture(ctx, g, res.Items)
-		// The agent answering is the one this boot started with, not the build just pushed.
-		if res.AgentVersion != "" && (in.AgentSignature != AgentSignedThisMac || res.AgentSignature != AgentSignedThisMac) {
+		// The agent answering is the one this boot started with, not the build just pushed: its answer
+		// holds for the new build only when the same certificate signed both. Otherwise it is unknown
+		// until edit-base reads it again.
+		same := in.AgentSignature == AgentSignedThisMac && res.AgentSignature == AgentSignedThisMac &&
+			in.AgentSigningCertSHA256 != "" && in.AgentSigningCertSHA256 == res.AgentSigningCertSHA256
+		if res.AgentVersion != "" && !same {
 			res.Guest.FullDiskAccess = ""
 		}
 	}
@@ -430,7 +435,9 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		}
 		res.AgentRun, res.AgentSignature = true, AgentSignedAdHoc
 		if signed != nil {
-			res.AgentSignature, res.AgentSigningCert = AgentSignedThisMac, trustAgentCert(ctx, g, signed.Cert, o.Log)
+			sum := sha256.Sum256(signed.Cert)
+			res.AgentSignature, res.AgentSigningCertSHA256 = AgentSignedThisMac, hex.EncodeToString(sum[:])
+			res.AgentSigningCert = trustAgentCert(ctx, g, signed.Cert, o.Log)
 		}
 	}
 	var cltErr error
@@ -740,6 +747,8 @@ type ToolsRecord struct {
 	// code signing (ItemTrusted or ItemNotTrusted).
 	AgentSignature   string `json:"agent_signature,omitempty"`
 	AgentSigningCert string `json:"agent_signing_cert,omitempty"`
+	// AgentSigningCertSHA256 is the SHA-256 of the certificate the agent is signed with (this_mac only).
+	AgentSigningCertSHA256 string `json:"agent_signing_cert_sha256,omitempty"`
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -754,7 +763,8 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
-		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature, AgentSigningCert: r.AgentSigningCert}
+		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature, AgentSigningCert: r.AgentSigningCert,
+		AgentSigningCertSHA256: r.AgentSigningCertSHA256}
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
@@ -911,7 +921,8 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		DiskPath: filepath.Join(nb, DiskFile), AuxPath: filepath.Join(nb, AuxFile),
 	}
 	prev, _ := ReadToolsRecord(base)
-	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items, AgentSignature: prev.AgentSignature})
+	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items, AgentSignature: prev.AgentSignature,
+		AgentSigningCertSHA256: prev.AgentSigningCertSHA256})
 	if res.ToolsDial != "" {
 		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial, ToolsDialAt: time.Now().UnixNano()})
 	}
