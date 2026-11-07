@@ -12,9 +12,9 @@ import (
 )
 
 // encodeFrame builds one AWS event-stream message: prelude (total length, header length, CRC of those eight
-// bytes), headers, payload, and a CRC of everything before it. Layout per
-// https://docs.aws.amazon.com/transcribe/latest/dg/event-stream.html (the Bedrock runtime uses the same
-// framing). Headers here are string-typed (type 7), plus whatever raw header bytes a test appends.
+// bytes), headers, payload, and a CRC of everything before it (the AWS event-stream framing; no vendor page
+// was fetched for it, so the layout is from the format as implemented by the AWS SDKs). Headers here are
+// string-typed (type 7), plus whatever raw header bytes a test appends.
 func encodeFrame(eventType, messageType string, payload []byte, rawHeaders ...[]byte) []byte {
 	var h bytes.Buffer
 	str := func(name, val string) {
