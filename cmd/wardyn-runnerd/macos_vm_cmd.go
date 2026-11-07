@@ -323,7 +323,7 @@ func (m *macOSVMs) editReadLines() []string {
 	return append(lines, fmt.Sprintf("Full Disk Access for the guest agent, read at the last edit (%s): %s", when, cmp.Or(rec.FullDiskAccess, "could not be read")))
 }
 
-// statusNow is the clock the base's age is read against (tests replace it).
+// statusNow is the clock status lines are read against: the base's age and a runner's next try (tests replace it).
 var statusNow = time.Now
 
 // writeText prints the status for a person.

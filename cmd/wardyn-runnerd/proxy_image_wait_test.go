@@ -137,6 +137,9 @@ func TestWaitForProxyImageEndsOnCancel(t *testing.T) {
 }
 
 func TestStatusShowsTheNextImageTry(t *testing.T) {
+	prev := statusNow
+	statusNow = func() time.Time { return statusAt }
+	t.Cleanup(func() { statusNow = prev })
 	r := newRig(t)
 	next := statusAt.Add(30 * time.Second)
 	st := offlineAt(types.RunnerStageProxyImage, "relay: the proxy image x is not on this engine")
@@ -151,6 +154,21 @@ func TestStatusShowsTheNextImageTry(t *testing.T) {
 	r.writeStatus(t, "", st)
 	if s := stage(t, r.run(doctorOptions{}), "status"); strings.Contains(s.Detail, "next try") {
 		t.Errorf("stopped runner status %q, want no next try", s.Detail)
+	}
+}
+
+// A next try that is already in the past is not shown: the file is a runner's leftover.
+func TestStatusHidesANextImageTryInThePast(t *testing.T) {
+	prev := statusNow
+	statusNow = func() time.Time { return statusAt.Add(time.Minute) }
+	t.Cleanup(func() { statusNow = prev })
+	r := newRig(t)
+	next := statusAt.Add(30 * time.Second)
+	st := offlineAt(types.RunnerStageProxyImage, "relay: the proxy image x is not on this engine")
+	st.State, st.NextRetryAt = "starting", &next
+	r.writeStatus(t, "", st)
+	if s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "status"); strings.Contains(s.Detail, "next try") {
+		t.Errorf("status detail %q, want no next try once it is in the past", s.Detail)
 	}
 }
 

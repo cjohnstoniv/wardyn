@@ -358,7 +358,8 @@ func statusStage(path string) doctor.Stage {
 		last += "; warning: peers-only not in effect: organisation older (its proxy image " + st.PeersOnlyRefusedBy +
 			" refused allowed_peers, so run proxies serve any peer until it is upgraded)"
 	}
-	if st.NextRetryAt != nil && st.State == "starting" {
+	// A next try already in the past is a leftover (a runner killed while it waited), not a plan.
+	if st.NextRetryAt != nil && st.State == "starting" && st.NextRetryAt.After(statusNow()) {
 		last += "; waiting for the proxy image; next try at " + st.NextRetryAt.UTC().Format(time.RFC3339)
 	}
 	since := st.Since.UTC().Format(time.RFC3339)
