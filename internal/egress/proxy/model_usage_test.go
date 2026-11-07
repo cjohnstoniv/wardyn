@@ -751,6 +751,19 @@ func TestUsageMeter_RemoteFinalCreditLosesNoUsageRow(t *testing.T) {
 	}
 }
 
+// A byte that is not UTF-8 is replaced, never a reason to drop the rest of the field; the cut still lands
+// on a rune boundary.
+func TestCutUsageFieldKeepsTheTailOfAnInvalidField(t *testing.T) {
+	long := "/model/\xff" + strings.Repeat("a", 600)
+	got := cutUsageField(long, usagePathBytes)
+	if want := "/model/\uFFFD" + strings.Repeat("a", usagePathBytes-len("/model/\uFFFD")); got != want {
+		t.Fatalf("cut = %d bytes %q, want %d bytes", len(got), got, len(want))
+	}
+	if got := cutUsageField(strings.Repeat("\u00e9", 10), 5); got != "\u00e9\u00e9" {
+		t.Fatalf("cut mid-rune = %q", got)
+	}
+}
+
 // The largest usage row fits the reservation admission makes for it, as the local spool charges a row
 // (its JSON plus 1 KiB) and as the remote sink frames it (a record body).
 func TestUsageRecordFitsItsReservation(t *testing.T) {
