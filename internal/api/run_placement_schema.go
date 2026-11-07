@@ -29,7 +29,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[adoStandingBound]():      strings.Fields("operator governance"),
 	reflect.TypeFor[bedrockAuth]():           strings.Fields("env egressHosts ready bearer runtimeHost runtimePort region model ssoInject ssoAccountID ssoRoleName ssoRegion ssoProxyInject sigv4Hosts sigv4Why sigv4Gateway residentGrant maskErr"),
 	reflect.TypeFor[bedrockCredGrade]():      strings.Fields("graded host"),
-	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts signing"),
+	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts signing gateway"), // gateway: the gateway's host name for the audit row, no credential
 	reflect.TypeFor[chosenProvider]():        strings.Fields("provider owner"),
 	reflect.TypeFor[componentConfig]():       strings.Fields("ordinal source selfDefined env"),
 	// componentMCP Launch/EnvNames: a self-defined row's command is the person's own; an org row's MCP server that runs in the sandbox is refused on a local runner (localMCPOrgServerMsg); values are judged as componentConfig env
