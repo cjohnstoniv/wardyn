@@ -607,6 +607,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DEFAULT_LABEL` | mock | When a tool has no rule |
 | `EFFECT_ALLOW` | mock | Run it |
 | `EFFECT_HOLD` | mock | Ask first |
+| `EFFECT_APPROVE_EACH` | deviation (lead wording 2026-11-07, MCP approve each call) | Approve each call |
 | `EFFECT_DENY` | mock | Block it |
 | `DEFAULT_HELP_GATED` | pending (W-30) | Ask first holds the call until an admin approves it. |
 | `DEFAULT_HELP_OPERATOR` | pending (W-30) | Ask first holds the call until you or another admin approves it. |
@@ -621,6 +622,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_FOLLOWS` | mock | Calls to an MCP server follow this harness's tool rules, as `mcp__<server>__<tool>`. |
 | `MCP_NONE` | mock | None added. Add an MCP server below and it appears here. |
 | `MCP_ASKS` | pending (W-44) | The harness asks before an MCP tool runs; Wardyn does not hold the call. |
+| `MCP_APPROVE_EACH` | deviation (lead wording 2026-11-07, MCP approve each call) | Wardyn asks a person to approve each exact call before sending it. |
 | `RULE_TITLE(name)` | mock | Add a tool rule for {name} |
 | `RULE_INTRO` | pending (W-31) | Name one tool exactly, for example WebFetch or `mcp__jira__create_issue`. Rules for parts of a command are coming soon. |
 | `RULE_TOOL` | mock | Tool |
