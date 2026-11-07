@@ -8,9 +8,11 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -325,5 +327,35 @@ func TestReapFailedReadDoesNotEscalateEarly(t *testing.T) {
 	rr.m.reapOrphanHelpers(context.Background())
 	if got := rr.signals(); !slices.Equal(got, []string{"TERM 40"}) {
 		t.Fatalf("with the process table unreadable: signals %q, want no SIGKILL", got)
+	}
+}
+
+// A reap that stands down because the ledger cannot be read, or this process is not in the process
+// table, says so once: the symptom is both VM slots staying taken.
+func TestReapStandingDownLogsOneWarning(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop func(rr *reapRig)
+		want string
+	}{
+		{"ledger unreadable", func(rr *reapRig) { _ = os.RemoveAll(rr.r.dir) }, "ledger"},
+		{"this process not in the table", func(rr *reapRig) { rr.drop(os.Getpid()) }, "process table"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := newReapRig(t)
+			tc.stop(rr)
+			var logs strings.Builder
+			var mu sync.Mutex
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(lockedWriter{&mu, &logs}, nil)))
+			defer slog.SetDefault(prev)
+			rr.m.reapOrphanHelpers(context.Background())
+			mu.Lock()
+			got := logs.String()
+			mu.Unlock()
+			if n := strings.Count(got, "level=WARN"); n != 1 || !strings.Contains(got, tc.want) {
+				t.Errorf("log %q: want exactly one WARN naming %q", got, tc.want)
+			}
+		})
 	}
 }
