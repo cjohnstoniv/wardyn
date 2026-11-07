@@ -281,7 +281,7 @@ func requestIsInteractive(req createRunRequest) bool {
 // refusal deployment-wide, on an upgrade that changed no configuration. Absent
 // row, absent behaviour change.
 //
-// approve_each is left out on purpose: counting it would refuse a Codex or command run the broker can
+// approve_each is left out on purpose: counting it would refuse a Codex CLI or command run the broker can
 // still ask about. A background run of a gated harness reaches the hold lane through applyToolPosture,
 // which reads the composed rules that carry the ceiling's approve_each (resolvePolicy clones them).
 func governanceHoldRules(ceiling governanceCeiling) bool {
