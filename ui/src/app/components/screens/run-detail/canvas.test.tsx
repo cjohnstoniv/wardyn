@@ -232,6 +232,24 @@ describe("RunCanvas — loading a layout", () => {
   });
 });
 
+describe("RunCanvas — layout presets", () => {
+  it("offers the presets as a labelled group whose buttons say which one is pressed", async () => {
+    const user = userEvent.setup();
+    render(<RunCanvas ctx={ctx()} />);
+    await screen.findByRole("heading", { name: "Egress" });
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+    const group = screen.getByRole("group", { name: RUN_COCKPIT.layoutPresets });
+    const live = within(group).getByRole("button", { name: RUN_COCKPIT.layoutPreset("Live") });
+    const finished = within(group).getByRole("button", { name: RUN_COCKPIT.layoutPreset("Finished") });
+    expect(live).toHaveAttribute("aria-pressed", "true");
+    expect(finished).toHaveAttribute("aria-pressed", "false");
+    await user.click(finished);
+    expect(finished).toHaveAttribute("aria-pressed", "true");
+    expect(live).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
 describe("RunCanvas — saving", () => {
   it("PUTs the preset and the placed widgets in wire shape", async () => {
     const user = userEvent.setup();
