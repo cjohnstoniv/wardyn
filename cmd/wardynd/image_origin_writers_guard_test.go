@@ -56,16 +56,16 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 			}
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
-			if strings.HasPrefix(rel, "internal/store/") {
-				return nil // the store implements SetRunImageAdmission; its callers are what is counted
-			}
+			// The store implements SetRunImageAdmission, so only its callers outside the store are counted; the
+			// origin constant and a "wardyn" origin literal are checked in the store too.
+			inStore := strings.HasPrefix(rel, "internal/store/")
 			f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 			if perr != nil {
 				t.Errorf("parse %s: %v", rel, perr)
 				return nil
 			}
 			record := func(name, fn string) {
-				if _, ok := want[name]; !ok {
+				if _, ok := want[name]; !ok || (inStore && name == "SetRunImageAdmission") {
 					return
 				}
 				if got[name] == nil {
@@ -138,9 +138,10 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 // sqlComments matches SQL line and block comments, which prose about Wardyn fills.
 var sqlComments = regexp.MustCompile(`(?s)--[^\n]*|/\*.*?\*/`)
 
-// sqlWritingWardynOrigin is the store side the AST walk above skips: every Go string literal under internal/store
-// and every migration statement that names image_admission, holding "wardyn" in any case (the store writes the
-// column only from a bound verdict, so a literal there is a second writer).
+// sqlWritingWardynOrigin is the SQL side the AST walk above cannot read: a Go string literal under internal/store,
+// or a migration statement, that itself names image_admission and holds "wardyn" in any case (the store writes the
+// column only from a bound verdict, so such a literal is a second writer). A literal split across strings, or
+// built at run time, is outside this check.
 func sqlWritingWardynOrigin(t *testing.T, root string) []string {
 	t.Helper()
 	var sites []string
