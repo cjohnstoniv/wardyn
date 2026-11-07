@@ -33,7 +33,7 @@ Built, from 0.10.0-rc.1 to rc.13:
 
 | Item | Status |
 |---|---|
-| Organisation outer walls with a dry-run report, bound super admins and an audited break-glass, every limit naming its layer, a final seal | Built |
+| The Wardyn boundary with a dry-run report, bound super admins and an audited break-glass, every limit naming its layer, a final seal | Built |
 | Linux VM sandboxes, with the proxy as the VM's only network | Built |
 | macOS VM sandboxes on company-managed Macs, and `wardyn window` for the Mac's own window | Built as a preview, off by default |
 | A governed local-model endpoint for the person's own GPU | Built |

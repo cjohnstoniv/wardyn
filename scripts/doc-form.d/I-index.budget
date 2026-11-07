@@ -11,7 +11,7 @@
 # README.md 2354 = ours 2339 + theirs 2344 - base 2329 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # 0.10 SI-POLICY: docs/README.md 843 adds 16 over 827: the approval-rules task row, measured.
 # docs/README.md 862 = ours 846 + theirs 843 - base 827 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-README.md=1994 share=35 # 1994 measured (+1 over 1993, measured: the barrier guide link in the confinement row); earlier: -442 (front-door docs): the duplicate overview, 17 unlinked video rows and the second install recipe are cut; first-run steps get their own section; measured.
+README.md=2027 share=35 # 2027 measured (+33 at rc.14: the unlisted-host modes bullet); earlier: 1994 measured (+1 over 1993, measured: the barrier guide link in the confinement row); earlier: -442 (front-door docs): the duplicate overview, 17 unlinked video rows and the second install recipe are cut; first-run steps get their own section; measured.
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
@@ -33,4 +33,4 @@ docs/README.md=1009 share=35 # 1009 measured at the rc.14 W3 merge of imgadm-doc
 # docs/TRY-IT.md 3309 adds 55 over 3254 (setup sets the server runner's limits): make setup sets the server runner's limits; measured.
 # 0.9.4 L8: docs/TRY-IT.md 3371 adds 62 over 3309: the brokered-repo note, the setup-token wording and the rc-safe tag.
 # docs/TRY-IT.md 3421 adds 7 over 3414, measured: Setup's image row does not flag the install's pin.
-docs/TRY-IT.md=3343 share=35 # 3343 measured (the organisation default barrier); 3321 before; -108 (front-door docs): written for the one-line install first with a from-a-clone table; model-provider history, the git warning and slop are cut; still over the 3,000 ceiling until the provider kinds move to operations/integrations.md; measured.
+docs/TRY-IT.md=3104 share=35 # 3104 measured (-239 at rc.14: the provider kinds moved to operations/integrations.md); still 104 over the 3,000 ceiling; earlier: 3343 measured (the organisation default barrier); 3321 before; -108 (front-door docs): written for the one-line install first with a from-a-clone table; model-provider history, the git warning and slop are cut; still over the 3,000 ceiling until the provider kinds move to operations/integrations.md; measured.

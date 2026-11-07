@@ -2704,7 +2704,7 @@ These risks are **not closed by v1 Wardyn**.
       - What bounds it: the deny lists and `egress_host` capability rows, the private-address guard (§4.2), the model-host and one-credential-per-host refusals, masking of the registered bytes, and the audit trail.
       - A value the agent encodes or splits is not masked (§4.1).
       - Nothing in Wardyn holds or refuses such a run unless the organisation sets `components.autonomy_cap` or a governance profile's rubric binds it (`componentAutonomyCap` in [`internal/api/runs_autonomy_components.go`](../internal/api/runs_autonomy_components.go)).
-      - That is the owner's stated choice: the organisation's outer wall is the limit.
+      - That is the owner's stated choice: the organisation's settings are the limit.
     - (b) **An allowed host can echo a header credential back into the sandbox.**
       - The proxy relays the response as it arrives (§5.1a, "Never resident is not never readable").
       - On a component a person defined, the echoed value is that person's own secret: its header grant is `owner_only` (`componentGrant` in [`internal/api/components_run.go`](../internal/api/components_run.go)).

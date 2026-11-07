@@ -1,7 +1,7 @@
 # Launch navigates (#125) — canon
 
-Design record for issue #125: a launch that answers 2xx navigates straight to the run page, warnings
-and all, instead of holding the New Run screen behind an "Open run" button. Owner-approved mock; the
+Design record: a launch that answers 2xx navigates straight to the run page, warnings
+and all, instead of holding the New Run screen behind an "Open run" button. The
 strings below are frozen, byte-for-byte.
 
 ## Frozen strings

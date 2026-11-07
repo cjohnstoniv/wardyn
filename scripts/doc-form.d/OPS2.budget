@@ -6,7 +6,7 @@
 # docs/operations/hybrid-laptops.md 5297 adds 19 (0.10.0 SEC-1b review), measured: the placeholder limits, otherwise held as before.
 # docs/operations/hybrid-laptops.md 5412 = ours 5369 + theirs 5297 - base 5254 at the 0.10 W4d merge of SEC-1b onto the train.
 # docs/operations/hybrid-laptops.md 5560 = ours 5404 + theirs 5410 - base 5254 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-docs/operations/integrations.md=1460 share=30 # What New Run states, Azure Foundry design detail, the CLI sign-in and capability sections and the round-trip removed or moved (-1303)
+docs/operations/integrations.md=1782 share=30 # 1782 measured (+68 at rc.14: the API-key header per kind and the proxy-signed Bedrock case); 1714 measured (+254 at rc.14: the provider kinds, setup-token note and Bedrock rules moved in from TRY-IT.md); earlier: What New Run states, Azure Foundry design detail, the CLI sign-in and capability sections and the round-trip removed or moved (-1303)
 # docs/operations/launch-presets.md 432 adds 42: the preset-version-restarts-on-recreate line (0.9.3 FIN-B2).
 docs/operations/launch-presets.md=432 share=35
 # docs/operations/console-branding.md 947 adds 4 at the 0.10 W4c merge of OC-BE1 9b75afa00 onto the train, measured: the lane head measured 947 against its own 943 budget.

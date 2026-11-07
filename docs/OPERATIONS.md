@@ -3618,7 +3618,7 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
 - The probe reads curl's own `num_connects`, because a timeout alone cannot tell an accepted-then-tarpitted dial from one that never left the sandbox.
 - `test-redirect` only.
 
-### Directory autocomplete: the one path where the daemon dials out
+### Directory autocomplete: outbound calls to Entra and Graph
 
 - Everything above this line is **sandbox** egress — what a run may reach, brokered by the proxy sidecar.
 - `WARDYN_DIRECTORY_PROVIDER=entra` opts into something different in kind, and it is written here so it is never discovered as a surprise in a firewall log.

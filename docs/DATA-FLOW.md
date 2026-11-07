@@ -16,7 +16,7 @@ the code that makes it true; there is no separate "trust us" layer.
   - Microsoft Graph and the Entra token endpoint, for the identity-directory connector (`internal/directory`) and the Entra sign-in paths;
   - Azure DevOps (`dev.azure.com`, `vssps.dev.azure.com`), for the Azure DevOps PAT API;
   - Azure Key Vault (`vault.azure.net`), when the key service or secret store is Azure Key Vault.
-- Each has its row below, and [Directory autocomplete](OPERATIONS.md#directory-autocomplete-the-one-path-where-the-daemon-dials-out) covers the directory connector.
+- Each has its row below, and [Directory autocomplete](OPERATIONS.md#directory-autocomplete-outbound-calls-to-entra-and-graph) covers the directory connector.
 
 - The one telemetry source in the system that is *not* Wardyn's is the agent harness's own:
   - Claude Code ships its own Datadog usage telemetry (`http-intake.logs.us5.datadoghq.com`), which egress policy sees and can gate like any other host —

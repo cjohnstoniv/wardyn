@@ -1,6 +1,6 @@
-# Session continuity — frozen strings (#1995, mock M12)
+# Session continuity — frozen strings (#1995)
 
-Owner-approved mock M12, option A. The console module is `ui/src/app/lib/session-continuity-copy.ts`;
+The console module is `ui/src/app/lib/session-continuity-copy.ts`;
 `session-continuity-copy.test.ts` parses the table below and compares every row with it byte for
 byte. Reused, not restated: the gate's fallback sentence (`SESSION_ENDED_REASON`,
 [reauth-in-place-canon.md](reauth-in-place-canon.md)), the "Sign in to continue" dialog, and the

@@ -197,22 +197,7 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
 - Wardyn never substitutes. A run whose provider cannot credential it is refused at create, naming the provider and what to fix. A run with no provider at all launches with only a warning.
 - The operator-held paths (a key in the operator's secret store, the managed subscription, Bedrock boot configuration) are retired: `wardyn secret set` refuses the model-credential names, and boot refuses the old variables ([ENV.md](ENV.md) lists them).
 
-The kinds:
-
-- **API key** (`anthropic_api_key`, `openai_api_key`): each person stores their own key for the provider. The proxy injects `x-api-key` at startup; **never resident**.
-- **Claude subscription** (`anthropic_subscription`): each person signs in to the provider from Getting started.
-  - A short-lived sign-in sandbox runs `claude setup-token`. The captured token is stored age-encrypted in that person's own namespace and injected proxy-side as `Authorization: Bearer`.
-  - The sandbox holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
-  - It needs a Claude Code image pinned in `WARDYN_AGENT_IMAGES` (from a clone, `make agent-images-core` builds one). The one-line install's `agent-base` is not one.
-
-> [!WARNING]
-> - **Security note:** a `claude setup-token` is **long-lived (~1 year)** and does **not** auto-rotate — it sits age-encrypted at rest in the secret store, masked from all streams, host-pinned to `api.anthropic.com`, and never enters a run's sandbox. It exists only in the short-lived sign-in sandbox that captures it, which stops when idle.
-> - Protect `deploy/compose/.env` and the postgres volume, and revoke the token in the Anthropic console if a host is compromised.
-
-- **AWS Bedrock** is a provider of kind `bedrock_sso` (each person signs in with AWS; the region, model and base URL live on the provider record) or `bedrock_bearer`.
-  - With `bedrock_bearer`, each person stores a Bedrock bearer token, proxy-injected as `Authorization: Bearer` into `bedrock-runtime.*`, **never resident**.
-  - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
-  - A `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [threat model §5.1a](../threatmodel/THREAT-MODEL.md#51a-llm-egress-content-inspection--the-honest-claims-contract)).
+The kinds (API key, Claude subscription, AWS Bedrock) and their rules are in [Integrations](operations/integrations.md#the-provider-kinds).
 
 ## Level 2.5 — record a session, rerun it as a governed unit
 
