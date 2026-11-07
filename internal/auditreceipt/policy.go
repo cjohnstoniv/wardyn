@@ -36,7 +36,8 @@ type PolicyResult struct {
 	Action     string    `json:"action"`
 	Digest     string    `json:"policy_digest"`
 	Status     string    `json:"status"`
-	// Resolve is, for a linked action row, the seq of the run.policy.resolve row that records its policy.
+	// Resolve is, for a linked action row, the seq of a run.policy.resolve row with matching policy content (the
+	// same digest); it does not show that this row ran under that resolve.
 	Resolve int64 `json:"resolve_seq,omitempty"`
 }
 
@@ -49,8 +50,9 @@ const resolveAction = "run.policy.resolve"
 var maskedMarkers = []string{"<secret-hidden>", `<secret-hidden>`, `"mask_scope"`}
 
 // checkPolicies recomputes each verified run.policy.resolve row's digest and links the stamped rows of the
-// bundle to the resolve row they ran under. Only a row whose content re-hashed is read: a withheld or failed
-// row's data is whatever the bundle says, so it carries no verdict and links nothing.
+// bundle to the first resolve row with matching policy content (an equal digest). Only a row whose content
+// re-hashed is read: a withheld or failed row's data is whatever the bundle says, so it carries no verdict and
+// links nothing.
 func checkPolicies(b Bundle, rep *Report) {
 	var results []PolicyResult
 	linkable := map[string]int64{} // digest -> seq of the (verified or masked) resolve row carrying it

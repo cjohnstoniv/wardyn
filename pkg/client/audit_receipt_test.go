@@ -29,6 +29,12 @@ func TestAuditReceipt_WireNames(t *testing.T) {
 			if r.URL.Query().Get("run_id") == "" && len(r.URL.Query()["event"]) == 0 {
 				t.Errorf("a receipt request names neither event nor run_id")
 			}
+			// As the API does: after_seq and limit page a run's receipt only.
+			if r.URL.Query().Get("run_id") == "" && (r.URL.Query().Has("after_seq") || r.URL.Query().Has("limit")) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"after_seq and limit page a run's receipt: use them with run_id","reason":"audit_receipt_request_invalid"}`))
+				return
+			}
 			if r.URL.Query().Get("event") == ev1.String() && r.URL.Query()["event"][1] == uuid.Nil.String() {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusConflict)
@@ -52,12 +58,12 @@ func TestAuditReceipt_WireNames(t *testing.T) {
 	c := &client.Client{BaseURL: srv.URL, Token: "t"}
 	ctx := context.Background()
 
-	// Events: one event parameter each, after_seq and limit named as the server reads them.
-	b, _, err := c.AuditReceipt(ctx, client.AuditReceiptQuery{EventIDs: []uuid.UUID{ev1, ev2}, AfterSeq: 4, Limit: 7})
+	// Events: one event parameter each, and no paging.
+	b, _, err := c.AuditReceipt(ctx, client.AuditReceiptQuery{EventIDs: []uuid.UUID{ev1, ev2}})
 	if err != nil {
 		t.Fatalf("AuditReceipt: %v", err)
 	}
-	if gotPath != "/api/v1/audit/receipt" || len(gotQuery["event"]) != 2 || gotQuery.Get("after_seq") != "4" || gotQuery.Get("limit") != "7" || gotQuery.Get("run_id") != "" {
+	if gotPath != "/api/v1/audit/receipt" || len(gotQuery["event"]) != 2 || gotQuery.Has("after_seq") || gotQuery.Has("limit") || gotQuery.Get("run_id") != "" {
 		t.Errorf("request = %s ? %v", gotPath, gotQuery)
 	}
 	if b.Format != "wardyn-audit-receipt/2" || b.NextAfterSeq != 812 || len(b.Checkpoints) != 1 {
@@ -76,6 +82,23 @@ func TestAuditReceipt_WireNames(t *testing.T) {
 	}
 	if gotQuery.Get("run_id") != run.String() || len(gotQuery["event"]) != 0 || gotQuery.Get("after_seq") != "" {
 		t.Errorf("run request query = %v", gotQuery)
+	}
+
+	// A run's receipt pages: after_seq and limit named as the server reads them.
+	if _, _, err := c.AuditReceipt(ctx, client.AuditReceiptQuery{RunID: run, AfterSeq: 4, Limit: 7}); err != nil {
+		t.Fatalf("AuditReceipt by run, paged: %v", err)
+	}
+	if gotQuery.Get("run_id") != run.String() || len(gotQuery["event"]) != 0 || gotQuery.Get("after_seq") != "4" || gotQuery.Get("limit") != "7" {
+		t.Errorf("paged run request query = %v", gotQuery)
+	}
+
+	// Events with paging: the server refuses the pair, and the APIError names the reason.
+	for _, q := range []client.AuditReceiptQuery{{EventIDs: []uuid.UUID{ev2}, AfterSeq: 4}, {EventIDs: []uuid.UUID{ev2}, Limit: 7}} {
+		_, _, err := c.AuditReceipt(ctx, q)
+		var refused *client.APIError
+		if !errors.As(err, &refused) || refused.Status != http.StatusBadRequest || refused.Reason != "audit_receipt_request_invalid" {
+			t.Errorf("events with paging %+v: err = %v; want a 400 audit_receipt_request_invalid", q, err)
+		}
 	}
 
 	// A request that names both, or neither, is refused before it is sent.

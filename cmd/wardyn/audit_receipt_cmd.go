@@ -325,9 +325,9 @@ func printVerifyReport(w io.Writer, rep auditreceipt.Report) {
 	for _, p := range rep.Policies {
 		switch p.Status {
 		case auditreceipt.PolicyLinked:
-			fmt.Fprintf(w, "policy seq %d %s: policy=%d\n", p.Seq, p.Action, p.Resolve)
+			fmt.Fprintf(w, "policy seq %d %s: matching policy content at seq %d\n", p.Seq, p.Action, p.Resolve)
 		case auditreceipt.PolicyUnlinked:
-			fmt.Fprintf(w, "policy seq %d %s: stamped %.12s, its resolve row is not in this bundle\n", p.Seq, p.Action, p.Digest)
+			fmt.Fprintf(w, "policy seq %d %s: stamped %.12s, no matching policy content in this bundle\n", p.Seq, p.Action, p.Digest)
 		default:
 			fmt.Fprintf(w, "policy seq %d %s: %s\n", p.Seq, p.Action, p.Status)
 		}

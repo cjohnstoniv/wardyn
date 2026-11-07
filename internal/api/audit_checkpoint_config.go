@@ -6,6 +6,7 @@ package api
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auditreceipt"
 	"github.com/cjohnstoniv/wardyn/internal/auditsign"
@@ -21,6 +22,9 @@ type AuditReceiptConfig struct {
 	// AuditCheckpointStatus is the signer's status for the wardyn_audit_checkpoint_* metrics. Nil (the
 	// interval is 0) omits the series.
 	AuditCheckpointStatus *auditsign.Status
+	// AuditCheckpointInterval is how often the signer writes a checkpoint (WARDYN_AUDIT_CHECKPOINT_INTERVAL, 0 is
+	// off); a pending receipt's Retry-After is this interval (audit_receipt.go).
+	AuditCheckpointInterval time.Duration
 }
 
 // writeAuditCheckpoint emits the checkpoint signer's series. They are this process's: with WARDYN_HA the

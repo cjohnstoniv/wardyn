@@ -591,8 +591,9 @@ func run() error {
 		RunConfigKey:     feats.runConfigKey,
 		// Admits every run unless a WARDYN_HOST_* limit is set.
 		HostCapacityConfig: api.HostCapacityConfig{HostCapacity: hostcapacity.New(f.hostCapacity.limits(), hostcapacity.ReadProc)},
-		AuditReceiptConfig: api.AuditReceiptConfig{AuditReceiptKeys: receiptKeys, AuditCheckpointStatus: checkpointStatus},
-		MaxConcurrentRuns:  *f.hostCapacity.maxConcurrentRuns,
+		AuditReceiptConfig: api.AuditReceiptConfig{AuditReceiptKeys: receiptKeys, AuditCheckpointStatus: checkpointStatus,
+			AuditCheckpointInterval: *f.auditCheckpointInterval},
+		MaxConcurrentRuns: *f.hostCapacity.maxConcurrentRuns,
 		// Set with WARDYN_GROUNDTRUTH_TOKEN_SECRET: dispatch records the CC2/CC3 sensor gap.
 		GroundtruthSensorConfig: api.GroundtruthSensorConfig{GroundtruthK8sSensor: gtK8sSensor},
 		// rootCtx is the daemon-lifetime base context for detached background
