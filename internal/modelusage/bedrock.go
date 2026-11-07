@@ -87,9 +87,14 @@ func (p *parser) mergeMetrics(m *invocationMetrics) {
 // body agreeing is not double counting.
 func (p *parser) invokeBody(b []byte) {
 	if h := p.o.Header; h != nil {
-		in, okIn := headerCount(h.Get(headerInputTokens))
-		out, okOut := headerCount(h.Get(headerOutputTokens))
-		if okIn || okOut {
+		in, inSet, inOK := headerCount(h.Get(headerInputTokens))
+		out, outSet, outOK := headerCount(h.Get(headerOutputTokens))
+		if (inSet && !inOK) || (outSet && !outOK) {
+			// A figure that is there but cannot be read is never counted as zero.
+			p.fail(ReasonParseError)
+			return
+		}
+		if inSet || outSet {
 			p.merge(in, out, 0, 0, 0)
 			p.final = true
 		}
@@ -112,9 +117,14 @@ func (p *parser) invokeBody(b []byte) {
 	}
 }
 
-func headerCount(v string) (int64, bool) {
+// headerCount reads one token-count header: set is false for an absent (empty) header, ok is false for
+// a present value that is not a non-negative integer.
+func headerCount(v string) (n int64, set, ok bool) {
+	if v == "" {
+		return 0, false, false
+	}
 	n, err := strconv.ParseInt(v, 10, 64)
-	return n, err == nil && n >= 0
+	return n, true, err == nil && n >= 0
 }
 
 // invokeFrame reads InvokeModelWithResponseStream chunk events: each payload is {"bytes": <base64>} and the
