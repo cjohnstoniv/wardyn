@@ -162,18 +162,22 @@ func TestARDClientKeepsTheFirstDeclineForTheBoot(t *testing.T) {
 }
 
 func TestARDClientBoundsAStalledServer(t *testing.T) {
-	var far net.Conn
-	client := &rfbauth.ARDClient{Dial: func(context.Context) (net.Conn, error) {
-		near, f := net.Pipe()
-		far = f
-		return near, nil
-	}}
+	near, far := net.Pipe()
+	defer far.Close()
+	client := &rfbauth.ARDClient{Dial: func(context.Context) (net.Conn, error) { return near, nil }}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	start := time.Now()
-	_, _, err := client.Open(ctx, "agent", []byte("pw"))
-	if !errors.Is(err, os.ErrDeadlineExceeded) || time.Since(start) > 5*time.Second {
-		t.Fatalf("Open against a silent server = %v after %v, want a deadline error near 200ms", err, time.Since(start))
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.Open(ctx, "agent", []byte("pw"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Open against a silent server = %v, want a deadline error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Open against a silent server still waits after 5s; its deadline is 200ms")
 	}
-	_ = far.Close()
 }

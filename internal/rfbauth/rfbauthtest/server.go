@@ -46,7 +46,8 @@ type Server struct {
 	Prime *big.Int
 	// Private is the server's Diffie-Hellman private key. Nil picks a fresh one per sign-in.
 	Private *big.Int
-	// Session runs on a signed-in connection after ServerInit. Nil closes the connection.
+	// Session runs on a signed-in connection after ServerInit. Nil holds it, reading and discarding,
+	// until the client closes it.
 	Session func(net.Conn)
 
 	conns, signIns atomic.Int64
@@ -86,10 +87,13 @@ func ServerInit() []byte {
 }
 
 func (s *Server) serve(c net.Conn) {
-	ok := s.handshake(c)
-	if ok && s.Session != nil {
+	switch {
+	case !s.handshake(c):
+	case s.Session != nil:
 		s.Session(c)
 		return
+	default:
+		_, _ = io.Copy(io.Discard, c)
 	}
 	_ = c.Close()
 }
