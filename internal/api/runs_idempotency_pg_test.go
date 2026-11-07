@@ -385,8 +385,9 @@ func TestCreateRunKeyStaleAttemptCannotInsert(t *testing.T) {
 	}
 }
 
-// TestCreateRunKeyReconstructedReplay: a key whose answer was not kept answers 409 while its first
-// request may still be answering, then a 201 rebuilt from the run, with no warnings.
+// TestCreateRunKeyReconstructedReplay: a key whose answer was not kept answers 409 while the claim that
+// bound it is inside its lease (its first request may still be answering), however old the key, then a
+// 201 rebuilt from the run, with no warnings, once the lease is over.
 func TestCreateRunKeyReconstructedReplay(t *testing.T) {
 	srv, pool := pgHarness(t)
 	body, task := uniqueBody()
@@ -404,6 +405,12 @@ func TestCreateRunKeyReconstructedReplay(t *testing.T) {
 		t.Fatalf("within the lease = %d %s, want 409 idempotency_key_in_flight", w.Code, w.Body)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE run_create_keys SET created_at = now() - interval '10 minutes' WHERE key_sha256 = $1`, keySHA(key)); err != nil {
+		t.Fatal(err)
+	}
+	if w := postRunWithKey(t, srv, key, body); w.Code != http.StatusConflict || errorReason(w) != "idempotency_key_in_flight" {
+		t.Fatalf("an old key inside its lease = %d %s, want 409 idempotency_key_in_flight", w.Code, w.Body)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run_create_keys SET claim_until = now() - interval '1 second' WHERE key_sha256 = $1`, keySHA(key)); err != nil {
 		t.Fatal(err)
 	}
 	w := postRunWithKey(t, srv, key, body)

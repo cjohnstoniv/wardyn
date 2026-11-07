@@ -407,3 +407,35 @@ func TestDeleteRunCreateKeysOf(t *testing.T) {
 		t.Errorf("erase of nobody = %d, %v; want 0", n, err)
 	}
 }
+
+// TestRunCreateKeyDoneReportsLease: a bound key says whether the lease of the claim that bound it (or
+// took it over) is still live, so a caller can tell a first request that may still be answering from one
+// that will never save its answer.
+func TestRunCreateKeyDoneReportsLease(t *testing.T) {
+	pool := runsPGPool(t)
+	pg := store.NewPG(pool)
+	k := newRunCreateKey("request-a")
+	c := claimKey(t, pg, k)
+	r := newRun(types.RunPending)
+	r.CreatedBy = k.Principal
+	if _, err := createKeyed(pg, k.RunCreateKeyID, c.Token, r); err != nil {
+		t.Fatalf("create under the claim: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+
+	live := claimKey(t, pg, k)
+	if live.State != store.RunCreateKeyDone || !live.LeaseLive || !live.ClaimUntil.After(live.CreatedAt) {
+		t.Fatalf("a bound key inside its lease = %+v, want Done with a live lease ending after its first use", live)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE run_create_keys SET created_at = now() - interval '1 hour'
+		WHERE principal = $1 AND via = $2 AND key_sha256 = $3`, k.Principal, k.Via, k.KeySHA256); err != nil {
+		t.Fatal(err)
+	}
+	if aged := claimKey(t, pg, k); !aged.LeaseLive {
+		t.Fatalf("an old key whose claim is still leased = %+v, want a live lease (the lease, not the age, decides)", aged)
+	}
+	expireLease(t, pool, k.RunCreateKeyID)
+	if gone := claimKey(t, pg, k); gone.State != store.RunCreateKeyDone || gone.LeaseLive || gone.ClaimUntil.IsZero() {
+		t.Fatalf("a bound key past its lease = %+v, want Done with the lease over and its end reported", gone)
+	}
+}
