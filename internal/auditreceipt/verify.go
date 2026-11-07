@@ -150,21 +150,7 @@ func (r Report) Complete() bool { return r.OK() && r.Withheld() == 0 }
 // every failure is reported.
 func VerifyBundle(b Bundle, keys Keys) Report {
 	rep := Report{Format: b.Format, Checkpoints: []CheckpointResult{}, Events: []EventResult{}, Failures: []Failure{}}
-	fail := func(cp int, seq int64, reason, format string, args ...any) {
-		rep.Failures = append(rep.Failures, Failure{Checkpoint: cp, Seq: seq, Reason: reason, Detail: fmt.Sprintf(format, args...)})
-	}
-
-	pinned := map[string]PublicKey{}
-	for _, k := range keys.Keys {
-		switch {
-		case len(k.PublicKey) != ed25519.PublicKeySize || KeyID(k.PublicKey) != k.Kid:
-			fail(-1, 0, ReasonBadKey, "pinned key %q is not the key its kid names", k.Kid)
-		case pinned[k.Kid].Kid != "":
-			fail(-1, 0, ReasonBadKey, "pinned key %q is listed twice", k.Kid)
-		default:
-			pinned[k.Kid] = k
-		}
-	}
+	pinned := rep.pinKeys(keys)
 
 	events := 0
 	for _, c := range b.Checkpoints {
@@ -172,13 +158,13 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 	}
 	switch {
 	case b.Format != ReceiptFormat && b.Format != CheckpointsFormat:
-		fail(-1, 0, ReasonFormat, "format %q is neither %q nor %q (no other bundle layout is read)", b.Format, ReceiptFormat, CheckpointsFormat)
+		rep.fail(-1, 0, ReasonFormat, "format %q is neither %q nor %q (no other bundle layout is read)", b.Format, ReceiptFormat, CheckpointsFormat)
 		return rep
 	case len(b.Checkpoints) == 0:
-		fail(-1, 0, ReasonFormat, "the bundle holds no checkpoint")
+		rep.fail(-1, 0, ReasonFormat, "the bundle holds no checkpoint")
 		return rep
 	case b.Format == ReceiptFormat && events == 0:
-		fail(-1, 0, ReasonFormat, "a receipt that names no event proves nothing about any event")
+		rep.fail(-1, 0, ReasonFormat, "a receipt that names no event proves nothing about any event")
 	}
 
 	var prevText string
@@ -186,7 +172,7 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 	for i, c := range b.Checkpoints {
 		st, err := ParseStatement(c.Statement)
 		if err != nil {
-			fail(i, 0, ReasonStatement, "%v", err)
+			rep.fail(i, 0, ReasonStatement, "%v", err)
 			rep.Checkpoints = append(rep.Checkpoints, CheckpointResult{})
 			for _, ev := range c.Events {
 				rep.Events = append(rep.Events, EventResult{Checkpoint: i, Seq: ev.Row.Seq, ID: ev.Row.ID, Action: ev.Row.Action})
@@ -198,107 +184,16 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 		before := len(rep.Failures)
 
 		// 1. The signature, with the pinned key the kid names.
-		k, known := pinned[st.Kid]
-		switch {
-		case !known:
-			fail(i, st.SeqLo, ReasonUnknownKid, "no pinned key has kid %s", st.Kid)
-		case k.Retired:
-			fail(i, st.SeqLo, ReasonKeyRetired, "kid %s is retired (treated as possibly stolen)", st.Kid)
-		case !ed25519.Verify(k.PublicKey, []byte(c.Statement), c.Signature):
-			fail(i, st.SeqLo, ReasonBadSignature, "the signature does not verify with kid %s", st.Kid)
-		default:
-			res.Signed = true
-		}
-
+		res.Signed = rep.checkSignature(i, st, c, pinned)
 		// 2. The prev link to the checkpoint before it in the bundle.
-		linked := false
-		if i > 0 {
-			if want := StatementHash(prevText); st.Prev != want {
-				fail(i, st.SeqLo, ReasonPrev, "prev %q is not the previous statement's hash %s (a checkpoint is missing or was replaced)", st.Prev, want)
-			} else {
-				linked = prevSt != nil
-			}
-		}
-
+		linked := rep.checkPrevLink(i, st, prevText, prevSt)
 		// 3. The hash list.
-		if b.Format == CheckpointsFormat && (len(c.RowHashes) > 0 || len(c.Seqs) > 0 || len(c.Events) > 0) {
-			fail(i, st.SeqLo, ReasonFormat, "a checkpoint export carries no rows")
-		}
-		if len(c.Events) > 0 && len(c.RowHashes) == 0 {
-			fail(i, st.SeqLo, ReasonFormat, "events without their checkpoint's hash list")
-		}
-		if len(c.Seqs) > 0 && len(c.RowHashes) == 0 {
-			fail(i, st.SeqLo, ReasonSeqList, "seqs without their checkpoint's hash list")
-		}
-		listOK := false
-		if len(c.RowHashes) > 0 {
-			listOK = true
-			if int64(len(c.RowHashes)) != st.Rows {
-				fail(i, st.SeqLo, ReasonRows, "%d hashes for %d signed rows", len(c.RowHashes), st.Rows)
-				listOK = false
-			}
-			if d := Fold(st.Prev, c.RowHashes); d != st.Digest {
-				fail(i, st.SeqLo, ReasonDigest, "the hash list folds to %s, the signed digest is %s", d, st.Digest)
-				listOK = false
-			}
-			if c.RowHashes[len(c.RowHashes)-1] != st.HeadHash {
-				fail(i, st.SeqHi, ReasonHead, "the last hash is not the signed head_hash")
-				listOK = false
-			}
-			if err := checkSeqList(c.Seqs, len(c.RowHashes), st); err != nil {
-				fail(i, st.SeqLo, ReasonSeqList, "%v", err)
-				listOK = false
-			} else if d := SeqDigest(c.Seqs, c.RowHashes); d != st.SeqDigest {
-				fail(i, st.SeqLo, ReasonSeqDigest, "the seqs and hashes digest to %s, the signed seq_digest is %s", d, st.SeqDigest)
-				listOK = false
-			}
-		}
+		listOK := rep.checkHashList(i, st, c, b.Format)
 		res.Inclusion = listOK && len(rep.Failures) == before
 
 		// 4. The events.
 		for _, ev := range c.Events {
-			r := EventResult{Checkpoint: i, Seq: ev.Row.Seq, ID: ev.Row.ID, Action: ev.Row.Action}
-			evBefore := len(rep.Failures)
-			seq := ev.Row.Seq
-			if seq < st.SeqLo || seq > st.SeqHi {
-				fail(i, seq, ReasonSeq, "seq %d is outside the checkpoint's %d-%d", seq, st.SeqLo, st.SeqHi)
-			}
-			if ev.Index < 0 || ev.Index >= len(c.RowHashes) {
-				fail(i, seq, ReasonIndex, "index %d is outside the %d-entry hash list", ev.Index, len(c.RowHashes))
-				rep.Events = append(rep.Events, r)
-				continue
-			}
-			// A row's hash does not cover its seq: only the signed seq list says which seq the row at this index has.
-			if len(c.Seqs) == len(c.RowHashes) && seq != c.Seqs[ev.Index] {
-				fail(i, seq, ReasonSeqMismatch, "seq %d is not entry %d of the signed seq list (%d)", seq, ev.Index, c.Seqs[ev.Index])
-			}
-			if ev.Row.RowHash == nil || *ev.Row.RowHash != c.RowHashes[ev.Index] {
-				fail(i, seq, ReasonHashList, "the row's row_hash is not entry %d of the signed hash list", ev.Index)
-			}
-			var wantPrev string
-			checkPrev := true
-			switch {
-			case ev.Index > 0:
-				wantPrev = c.RowHashes[ev.Index-1]
-			case linked:
-				wantPrev = prevSt.HeadHash
-			default:
-				checkPrev = false // the first row of the bundle's first checkpoint: nothing here to link it to
-			}
-			if checkPrev && (ev.Row.PrevHash == nil || *ev.Row.PrevHash != wantPrev) {
-				fail(i, seq, ReasonPrevHash, "the row's prev_hash is not the hash of the row before it")
-			}
-			if len(ev.RedactedFields) > 0 {
-				if err := checkRedaction(ev); err != nil {
-					fail(i, seq, ReasonRedaction, "%v", err)
-				} else {
-					r.Withheld = true
-				}
-			} else if ev.Row.RowHash != nil && RowHash(ev.Row) != *ev.Row.RowHash {
-				fail(i, seq, ReasonRowHash, "the row's content does not hash to its row_hash (it was altered)")
-			}
-			r.OK = len(rep.Failures) == evBefore && res.Signed && res.Inclusion && !r.Withheld
-			rep.Events = append(rep.Events, r)
+			rep.Events = append(rep.Events, rep.checkEvent(i, st, c, ev, linked, prevSt, res))
 		}
 
 		rep.Checkpoints = append(rep.Checkpoints, res)
@@ -306,6 +201,143 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 	}
 	checkPolicies(b, &rep)
 	return rep
+}
+
+// fail records one failed check.
+func (r *Report) fail(cp int, seq int64, reason, format string, args ...any) {
+	r.Failures = append(r.Failures, Failure{Checkpoint: cp, Seq: seq, Reason: reason, Detail: fmt.Sprintf(format, args...)})
+}
+
+// pinKeys indexes the pinned keys by kid, failing a key that is not the key its kid names or is listed twice.
+func (r *Report) pinKeys(keys Keys) map[string]PublicKey {
+	pinned := map[string]PublicKey{}
+	for _, k := range keys.Keys {
+		switch {
+		case len(k.PublicKey) != ed25519.PublicKeySize || KeyID(k.PublicKey) != k.Kid:
+			r.fail(-1, 0, ReasonBadKey, "pinned key %q is not the key its kid names", k.Kid)
+		case pinned[k.Kid].Kid != "":
+			r.fail(-1, 0, ReasonBadKey, "pinned key %q is listed twice", k.Kid)
+		default:
+			pinned[k.Kid] = k
+		}
+	}
+	return pinned
+}
+
+// checkSignature is check 1: the statement's signature with the pinned key its kid names. It reports whether
+// the signature verified.
+func (r *Report) checkSignature(i int, st Statement, c Checkpoint, pinned map[string]PublicKey) bool {
+	k, known := pinned[st.Kid]
+	switch {
+	case !known:
+		r.fail(i, st.SeqLo, ReasonUnknownKid, "no pinned key has kid %s", st.Kid)
+	case k.Retired:
+		r.fail(i, st.SeqLo, ReasonKeyRetired, "kid %s is retired (treated as possibly stolen)", st.Kid)
+	case !ed25519.Verify(k.PublicKey, []byte(c.Statement), c.Signature):
+		r.fail(i, st.SeqLo, ReasonBadSignature, "the signature does not verify with kid %s", st.Kid)
+	default:
+		return true
+	}
+	return false
+}
+
+// checkPrevLink is check 2: the prev link to the checkpoint before it in the bundle. It reports whether the
+// checkpoint links to a parsed previous statement, whose head_hash its first row may then be held to.
+func (r *Report) checkPrevLink(i int, st Statement, prevText string, prevSt *Statement) bool {
+	if i == 0 {
+		return false
+	}
+	if want := StatementHash(prevText); st.Prev != want {
+		r.fail(i, st.SeqLo, ReasonPrev, "prev %q is not the previous statement's hash %s (a checkpoint is missing or was replaced)", st.Prev, want)
+		return false
+	}
+	return prevSt != nil
+}
+
+// checkHashList is check 3: the hash list's count, fold to the digest and last hash to head_hash, and the seqs
+// (one per hash, ascending over the signed range, digested with the hashes to seq_digest). It reports whether
+// the list was present and passed every one of those checks.
+func (r *Report) checkHashList(i int, st Statement, c Checkpoint, format string) bool {
+	if format == CheckpointsFormat && (len(c.RowHashes) > 0 || len(c.Seqs) > 0 || len(c.Events) > 0) {
+		r.fail(i, st.SeqLo, ReasonFormat, "a checkpoint export carries no rows")
+	}
+	if len(c.Events) > 0 && len(c.RowHashes) == 0 {
+		r.fail(i, st.SeqLo, ReasonFormat, "events without their checkpoint's hash list")
+	}
+	if len(c.Seqs) > 0 && len(c.RowHashes) == 0 {
+		r.fail(i, st.SeqLo, ReasonSeqList, "seqs without their checkpoint's hash list")
+	}
+	if len(c.RowHashes) == 0 {
+		return false
+	}
+	listOK := true
+	if int64(len(c.RowHashes)) != st.Rows {
+		r.fail(i, st.SeqLo, ReasonRows, "%d hashes for %d signed rows", len(c.RowHashes), st.Rows)
+		listOK = false
+	}
+	if d := Fold(st.Prev, c.RowHashes); d != st.Digest {
+		r.fail(i, st.SeqLo, ReasonDigest, "the hash list folds to %s, the signed digest is %s", d, st.Digest)
+		listOK = false
+	}
+	if c.RowHashes[len(c.RowHashes)-1] != st.HeadHash {
+		r.fail(i, st.SeqHi, ReasonHead, "the last hash is not the signed head_hash")
+		listOK = false
+	}
+	if err := checkSeqList(c.Seqs, len(c.RowHashes), st); err != nil {
+		r.fail(i, st.SeqLo, ReasonSeqList, "%v", err)
+		listOK = false
+	} else if d := SeqDigest(c.Seqs, c.RowHashes); d != st.SeqDigest {
+		r.fail(i, st.SeqLo, ReasonSeqDigest, "the seqs and hashes digest to %s, the signed seq_digest is %s", d, st.SeqDigest)
+		listOK = false
+	}
+	return listOK
+}
+
+// checkEvent is check 4 for one event: its seq inside the range and the signed seq at its index, its row_hash
+// at its index, its prev_hash the hash before it (the previous checkpoint's head_hash for index 0 when linked),
+// and its content re-hashed unless withheld. res is the checkpoint's result so far (signature and inclusion).
+func (r *Report) checkEvent(i int, st Statement, c Checkpoint, ev Event, linked bool, prevSt *Statement, res CheckpointResult) EventResult {
+	er := EventResult{Checkpoint: i, Seq: ev.Row.Seq, ID: ev.Row.ID, Action: ev.Row.Action}
+	evBefore := len(r.Failures)
+	seq := ev.Row.Seq
+	if seq < st.SeqLo || seq > st.SeqHi {
+		r.fail(i, seq, ReasonSeq, "seq %d is outside the checkpoint's %d-%d", seq, st.SeqLo, st.SeqHi)
+	}
+	if ev.Index < 0 || ev.Index >= len(c.RowHashes) {
+		r.fail(i, seq, ReasonIndex, "index %d is outside the %d-entry hash list", ev.Index, len(c.RowHashes))
+		return er
+	}
+	// A row's hash does not cover its seq: only the signed seq list says which seq the row at this index has.
+	if len(c.Seqs) == len(c.RowHashes) && seq != c.Seqs[ev.Index] {
+		r.fail(i, seq, ReasonSeqMismatch, "seq %d is not entry %d of the signed seq list (%d)", seq, ev.Index, c.Seqs[ev.Index])
+	}
+	if ev.Row.RowHash == nil || *ev.Row.RowHash != c.RowHashes[ev.Index] {
+		r.fail(i, seq, ReasonHashList, "the row's row_hash is not entry %d of the signed hash list", ev.Index)
+	}
+	var wantPrev string
+	checkPrev := true
+	switch {
+	case ev.Index > 0:
+		wantPrev = c.RowHashes[ev.Index-1]
+	case linked:
+		wantPrev = prevSt.HeadHash
+	default:
+		checkPrev = false // the first row of the bundle's first checkpoint: nothing here to link it to
+	}
+	if checkPrev && (ev.Row.PrevHash == nil || *ev.Row.PrevHash != wantPrev) {
+		r.fail(i, seq, ReasonPrevHash, "the row's prev_hash is not the hash of the row before it")
+	}
+	if len(ev.RedactedFields) > 0 {
+		if err := checkRedaction(ev); err != nil {
+			r.fail(i, seq, ReasonRedaction, "%v", err)
+		} else {
+			er.Withheld = true
+		}
+	} else if ev.Row.RowHash != nil && RowHash(ev.Row) != *ev.Row.RowHash {
+		r.fail(i, seq, ReasonRowHash, "the row's content does not hash to its row_hash (it was altered)")
+	}
+	er.OK = len(r.Failures) == evBefore && res.Signed && res.Inclusion && !er.Withheld
+	return er
 }
 
 // checkSeqList accepts a checkpoint's seqs only as the signer reads them: one per hash, strictly ascending,
