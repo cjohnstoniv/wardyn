@@ -75,7 +75,7 @@ func TestDispatch_ResolveRowCarriesItsOwnDigest(t *testing.T) {
 		t.Errorf("resolve row policy_digest = %q, digest recomputed from its data = %q; want them equal and non-empty", stamped.PolicyDigest, spec.Digest())
 	}
 	if got, _ := ds.lookup(context.Background(), run.ID); got.Digest != stamped.PolicyDigest {
-		t.Errorf("stored digest = %q, want %q", got, stamped.PolicyDigest)
+		t.Errorf("stored digest = %q, want %q", got.Digest, stamped.PolicyDigest)
 	}
 }
 
