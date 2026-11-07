@@ -168,7 +168,7 @@ The layers of the code, and the interface each extension implements, are mapped 
 - A run is created `PENDING`, or `QUEUED` when its runner pool is at its cap, where it holds nothing. A freed slot moves it to `PENDING`; an ended wait ends it `FAILED`.
 - Dispatch moves `PENDING` to `STARTING`, and the sandbox coming up moves it to `RUNNING`. A build error before dispatch, a launch error, an agent error or a gone sandbox ends it `FAILED`; an agent exit 0 ends it `COMPLETED`.
 - A kill switch ends any live state `KILLED`. So does a running run's lifetime end: a background run's end, or any run's maximum lifetime.
-- A run whose end passed, or whose agent container exited or lost the control plane past its token's life, is kept. It stays `RUNNING` with no network until its files' grace ends, then `STOPPED` ([Run lifetime](docs/operations/run-lifetime.md)).
+- A run whose end passed, or whose agent container exited or lost the control plane past its token's life, is kept when its substrate can keep a sandbox (Docker can; Kubernetes cannot) and the deployment sets a positive ended-run grace. A kept run stays `RUNNING` with no network until its files' grace ends, then `STOPPED`. Any other run is `STOPPED` and torn down at once ([Run lifetime](docs/operations/run-lifetime.md)).
 - An idle stop, `WARDYN_RUN_MAX_AGE` and a computer folder brought back to its own computer also end a run `STOPPED`.
 - `COMPLETED`, `FAILED`, `STOPPED`, and `KILLED` are terminal.
 - `WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved
@@ -381,15 +381,17 @@ The layers of the code, and the interface each extension implements, are mapped 
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/img/credential-mint-dark.svg"><img src="docs/img/credential-mint.svg" alt="Minting a credential an approval covers: approve, snapshot, mint, then return it only from the transaction that re-reads the approval unchanged and writes minted_jti."></picture>
 
-- This describes a grant with `requires_approval: true`.
+- This describes a grant with `requires_approval: true`, on the once-only path.
+- An explicit `git_pat` run lease is the exception: after the first mint, a re-mint under the same scope skips the `minted_jti` write, and `credential.mint` is marked `lease: true` ([member runs](docs/operations/member-runs.md)).
 - Approval records the human decision only; the credential is minted **later**,
   when the run's own proxy or git-helper requests it (`MintForGrant`) —
   - returned only from
     the Postgres transaction that re-verifies the `APPROVED` approval for that
     exact run and grant and claims `minted_jti`,
   - so the minted scope always equals
-    the approved scope and a grant can never mint twice.
-  - Every minted credential lasts at most an hour; one the commit refuses is revoked at its issuer where it has one.
+    the approved scope and, off a run lease, a grant never mints twice.
+  - A newly issued GitHub token lasts at most an hour. A stored `git_pat` is returned as stored: its one-hour expiry bounds how long Wardyn offers it, not the PAT's own validity.
+  - A GitHub token the commit refuses is never returned, and its revocation at GitHub is attempted, best effort.
 - `api_key` grants are then
   injected proxy-side (the agent never sees them); a GitHub App token and a `git_pat`
   (broker on) are set at the proxy, and a PAT reaches `git` through
