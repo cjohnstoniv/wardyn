@@ -49,6 +49,7 @@ decision_sink.key
 decision_sink.spki_sha256
 decision_sink.url
 decision_spool_dir
+disable_model_usage
 forge_hosts
 gateway_identity
 gateway_identity.audience

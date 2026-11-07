@@ -63,7 +63,12 @@ func (publicResolver) LookupIP(host string) ([]net.IP, error) {
 // drainSink reads emitted decision logs from a buffer (one JSON object/line).
 func lastDecision(t *testing.T, buf *bytes.Buffer) egress.DecisionLog {
 	t.Helper()
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if !strings.Contains(l, `"rule_source":"`+ruleSourceLLMUsage+`"`) { // a model call's token counts, sent after its decision
+			lines = append(lines, l)
+		}
+	}
 	if len(lines) == 0 || lines[0] == "" {
 		t.Fatalf("no decision logged")
 	}
