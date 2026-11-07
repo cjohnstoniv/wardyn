@@ -30,7 +30,7 @@ var _ runner.OutputRecoverer = (*Driver)(nil)
 // process's memory, which does not survive the restart this exists for.
 func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
 	if d.vmFor(ctx, ref) != nil {
-		return errVMUnsupported
+		return fmt.Errorf("%w: %w", runner.ErrOutputUnrecoverable, errVMUnsupported)
 	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {

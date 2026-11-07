@@ -39,6 +39,10 @@ import (
 // labelMachineKind marks the QEMU container: every per-ref method looks for it.
 const labelMachineKind = "wardyn.machine-kind"
 
+// labelAWSProfile marks a QEMU container whose run was staged an AWS profile (runner.AWSProfileRecordEnv).
+// The container carries no env of its own (the run's env goes to the guest), so the kept end reads this.
+const labelAWSProfile = "wardyn.aws-profile"
+
 // envInteractiveStart is the sandbox env the control plane sets for interactive_start: agent.
 const envInteractiveStart = "WARDYN_INTERACTIVE_START"
 
@@ -220,6 +224,14 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	if (len(spec.Mounts) > 0 || len(spec.Drives) > 0) && !d.vmConfig().Virtiofs {
 		return errors.New(errVMNoFolderShare)
 	}
+	if spec.Resources.DiskMiB > 0 {
+		if !spec.Resources.DiskMiBSoft {
+			return errors.New("docker: a Linux VM run can't enforce a disk limit yet; remove disk_mib or use a container run")
+		}
+		// A requested or default size is advisory, as a container's is on a host that cannot cap it: say so, run on.
+		slog.Warn("wardyn/docker: a Linux VM run has no disk cap; the soft disk size is not enforced",
+			slog.Int64("disk_mib", spec.Resources.DiskMiB), slog.String("run_id", spec.RunID.String()))
+	}
 	if spec.RecordWithin(d.cfg.Record) {
 		return errors.New("docker: a Linux VM sandbox is not recorded in this release; turn recording off for this run")
 	}
@@ -346,6 +358,9 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	}
 	labels := d.labels(spec.RunID, componentAgent, spec.Labels)
 	labels[labelMachineKind] = string(types.MachineLinuxVM)
+	if spec.Env[runner.AWSProfileRecordEnv] != "" {
+		labels[labelAWSProfile] = "1"
+	}
 	name := agentContainerName(spec.RunID)
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:       name,
@@ -642,23 +657,24 @@ func (d *Driver) startVMNet(ctx context.Context, spec runner.SandboxSpec, netDir
 	return nil
 }
 
-// maxVMShares bounds the virtiofsd names removeVMSidecars tries when removals keep failing.
+// maxVMShares bounds the virtiofsd names removeVMSidecars tries.
 const maxVMShares = 64
 
 // removeVMSidecars removes a run's network relay, virtiofsd and prep containers. Their names are deterministic
-// and their count small, so no list is needed: the shares end at the first absent one. A failed
+// and their count small, so no list is needed: every share index up to maxVMShares is tried. A failed
 // removal does not stop the others; every failure is returned.
 func (d *Driver) removeVMSidecars(ctx context.Context, runID uuid.UUID) error {
 	var errs []error
-	remove := func(name string) bool {
-		_, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
-		if err != nil && !isNotFound(err) {
+	remove := func(name string) {
+		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 			errs = append(errs, fmt.Errorf("docker: remove %s: %w", name, err))
 		}
-		return err == nil || !isNotFound(err)
 	}
 	remove(vmnetName(runID))
-	for n := 0; n < maxVMShares && remove(vmfsName(runID, n)); n++ {
+	// Every bounded index, whether or not an earlier one was already removed: a retry after one
+	// removal failed must still reach the share that failed.
+	for n := 0; n < maxVMShares; n++ {
+		remove(vmfsName(runID, n))
 	}
 	for _, what := range []string{"export", "image", "overlay"} {
 		remove(vmPrepName(runID, what))

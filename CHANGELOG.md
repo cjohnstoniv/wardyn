@@ -29,6 +29,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Terminals and commands in an interactive Linux VM run now trust the run's TLS-interception certificate: the files the certificate variables name are written when the VM starts, so `curl`, `pip` and `aws` no longer fail on a missing CA file.
 - A Linux VM run's harness output is kept on the VM's disk instead of its memory, is capped at 64 MiB with a closing line that says so, and a full memory disk can no longer block pausing the agent.
 - After the VM's agent service restarts, a new terminal or command is refused with a reason instead of running without the run's proxy and credentials.
+- A Linux VM run no longer silently drops a limit it cannot enforce: a policy disk size or process limit is refused with a plain sentence, and a requested disk size is shown as not enforced.
+- Ending a Linux VM run now wipes the AWS sign-in caches inside the guest before it is kept, and reports it when it cannot.
+- Starting a desktop sign-in on a Linux VM run is now refused instead of freezing the VM, a Linux VM's output recovery is refused with a reason, and a VM run's folder-share cleanup is retried until it finishes.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
