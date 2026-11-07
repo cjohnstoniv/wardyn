@@ -114,6 +114,7 @@ func TestMacOSVMInstallListChangeStartsAToolsUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer serving(m)()
 	m.checkItems(man)
 	if asked != 0 {
 		t.Fatal("no list and no record asked for an update")
@@ -140,6 +141,73 @@ func TestMacOSVMInstallListChangeStartsAToolsUpdate(t *testing.T) {
 	m.checkItems(drifted)
 	if asked != 2 {
 		t.Fatalf("a bad list or a drifted agent: %d updates", asked)
+	}
+}
+
+// A runnerd that is not serving yet (its proxy image still missing) starts no install-list update either;
+// once serving, a changed list asks for one.
+func TestMacOSVMInstallListUpdateWaitsUntilServing(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	var asked int
+	m.toolsUpdate = func(macvm.Manifest) { asked++ }
+	man, err := macvm.ReadManifest(m.layout.BaseDir(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.items.file = writeBaseList(t, t.TempDir(), strings.Repeat("a", 64))
+	m.checkItems(man)
+	m.checkItems(man)
+	if asked != 0 {
+		t.Fatalf("%d install-list updates asked before serving", asked)
+	}
+	defer serving(m)()
+	m.checkItems(man)
+	m.checkItems(man)
+	if asked != 1 {
+		t.Fatalf("%d install-list updates asked once serving, want 1", asked)
+	}
+}
+
+// An install-list update whose start was refused is asked again, but not before 10 minutes have passed;
+// once one started for that list it is never asked again, and a newer list is asked for at once.
+func TestMacOSVMInstallListUpdateRetriedAfterARefusedStart(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	now := time.Now()
+	prevNow := driftNow
+	driftNow = func() time.Time { return now }
+	t.Cleanup(func() { driftNow = prevNow })
+	var asked int
+	m.toolsUpdate = func(macvm.Manifest) { asked++ } // a refused start records nothing
+	man, err := macvm.ReadManifest(m.layout.BaseDir(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	m.items.file = writeBaseList(t, dir, strings.Repeat("a", 64))
+	defer serving(m)()
+	m.checkItems(man)
+	now = now.Add(5 * time.Minute)
+	m.checkItems(man)
+	if asked != 1 {
+		t.Fatalf("%d asks within 10 minutes of a refused start, want 1", asked)
+	}
+	now = now.Add(6 * time.Minute)
+	m.checkItems(man)
+	if asked != 2 {
+		t.Fatalf("%d asks after 11 minutes, want the refused start asked again", asked)
+	}
+	m.driftStarted(m.driftKey(man)) // what startToolsUpdate records when the update starts
+	now = now.Add(time.Hour)
+	m.checkItems(man)
+	if asked != 2 {
+		t.Fatalf("%d asks: a list whose update started was asked again", asked)
+	}
+	m.items.file = writeBaseList(t, dir, strings.Repeat("b", 64))
+	m.checkItems(man)
+	if asked != 3 {
+		t.Fatalf("%d asks: a newer list was not asked for", asked)
 	}
 }
 
