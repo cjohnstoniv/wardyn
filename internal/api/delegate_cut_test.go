@@ -201,6 +201,27 @@ func TestRevokeDelegateCutBadValue(t *testing.T) {
 	}
 }
 
+// A query the server cannot parse is refused before anything is written: a malformed value, a
+// malformed duplicate beside a good one, and a semicolon separator would otherwise be dropped and
+// read as a plain revoke that leaves the runs their gateway access.
+func TestRevokeDelegateCutMalformedQuery(t *testing.T) {
+	for _, q := range []string{"?cut_in_flight=%74rue%ZZ", "?cut_in_flight=true&cut_in_flight=%ZZ", "?cut_in_flight=true;x=1"} {
+		t.Run(q, func(t *testing.T) {
+			f := newGatewayFixture(t)
+			d := f.delegatedRun(t)
+			if w := f.revokeDelegate(t, d.ID, q); w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonInvalidCutInFlightParam {
+				t.Fatalf("revoke = %d %s, want 400 %s (a dropped parameter read as a plain revoke)", w.Code, w.Body, reasonInvalidCutInFlightParam)
+			}
+			if got, err := f.st.GetDelegateByID(context.Background(), d.ID); err != nil || got.RevokedAt != nil || got.CutInFlightAt != nil {
+				t.Errorf("portal after a refused revoke = %+v %v, want live and not cut", got, err)
+			}
+			if rows := f.revokeRows(t); len(rows) != 0 {
+				t.Errorf("refused revoke wrote %v", rows)
+			}
+		})
+	}
+}
+
 // A delegated run's mint that cannot read its portal fails closed; a portal that is gone refuses as
 // a cut; a run a person launched themselves reads nothing.
 func TestGatewayMintViaStoreFailureFailsClosed(t *testing.T) {
