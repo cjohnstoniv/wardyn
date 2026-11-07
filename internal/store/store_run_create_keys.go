@@ -168,8 +168,8 @@ func readRunCreateKey(ctx context.Context, q Querier, k RunCreateKey, token uuid
 			return false, fmt.Errorf("store: take over idempotency key: %w", err)
 		}
 		if tag.RowsAffected() != 1 {
-			// The row is locked FOR UPDATE above, so only a clock edge between the read and the update
-			// lands here; the lease is then still live.
+			// The row is locked FOR UPDATE above, so only a lease ending exactly at now() (the
+			// transaction's start) lands here; it is treated as still live.
 			out.State = RunCreateKeyInFlight
 			return true, nil
 		}
