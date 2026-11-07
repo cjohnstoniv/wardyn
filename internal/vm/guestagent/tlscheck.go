@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -147,9 +148,18 @@ func dialTLSCheck(ctx context.Context, getenv func(string) string, target string
 	if proxy == nil {
 		return d.DialContext(ctx, "tcp", target)
 	}
-	conn, err := d.DialContext(ctx, "tcp", proxy.Host)
+	// The run proxy speaks plain http. Refuse any other scheme before a byte is written, so a CONNECT
+	// and the URL's credentials never go in the clear to a port that expects TLS.
+	if proxy.Scheme != "http" {
+		return nil, fmt.Errorf("proxy %s: the run proxy is http, so a %s:// proxy URL is not supported", proxy.Host, proxy.Scheme)
+	}
+	proxyAddr := proxy.Host
+	if proxy.Port() == "" {
+		proxyAddr = net.JoinHostPort(proxy.Hostname(), "80")
+	}
+	conn, err := d.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
-		return nil, fmt.Errorf("proxy %s: %w", proxy.Host, err)
+		return nil, fmt.Errorf("proxy %s: %w", proxyAddr, err)
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
@@ -157,25 +167,26 @@ func dialTLSCheck(ctx context.Context, getenv func(string) string, target string
 	req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: target}, Host: target, Header: http.Header{}}
 	if u := proxy.User; u != nil {
 		pw, _ := u.Password()
-		req.SetBasicAuth(u.Username(), pw)
+		req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u.Username()+":"+pw)))
 	}
 	if err := req.Write(conn); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("proxy %s: %w", proxy.Host, err)
+		return nil, fmt.Errorf("proxy %s: %w", proxyAddr, err)
 	}
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("proxy %s: %w", proxy.Host, err)
+		return nil, fmt.Errorf("proxy %s: %w", proxyAddr, err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		_ = conn.Close()
-		return nil, fmt.Errorf("proxy %s refused the tunnel: %s", proxy.Host, resp.Status)
+		return nil, fmt.Errorf("proxy %s refused the tunnel: %s", proxyAddr, resp.Status)
 	}
 	_ = conn.SetDeadline(time.Time{})
 	if br.Buffered() > 0 {
+		_ = conn.Close()
 		return nil, errors.New("proxy sent data before the handshake")
 	}
 	return conn, nil
