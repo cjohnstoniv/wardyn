@@ -8,6 +8,8 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -620,6 +623,115 @@ func TestUsageMeter_DefaultConfigLoadsOnThePreviousProxy(t *testing.T) {
 		}
 		if slicesContainsLine(string(b), "disable_model_usage") {
 			t.Errorf("%s lists disable_model_usage, but that release predates it", name)
+		}
+	}
+}
+
+// oldRunnerRowHashOK decodes a spool row with the record shape of the runner release before usage rows
+// (DecisionLog without Usage) and checks its hash the way that runner's cursor does: re-marshal with
+// the hash blanked, SHA-256, compare.
+func oldRunnerRowHashOK(t *testing.T, raw []byte) bool {
+	t.Helper()
+	var decision []reflect.StructField
+	for f := range reflect.TypeFor[egress.DecisionLog]().Fields() {
+		if f.Name != "Usage" {
+			decision = append(decision, f)
+		}
+	}
+	var record []reflect.StructField
+	for f := range reflect.TypeFor[runnerspool.Record]().Fields() {
+		if f.Name == "Decision" {
+			f.Type = reflect.StructOf(decision)
+		}
+		record = append(record, f)
+	}
+	row := reflect.New(reflect.StructOf(record))
+	if err := json.Unmarshal(raw, row.Interface()); err != nil {
+		t.Fatalf("an older runner cannot decode %s: %v", raw, err)
+	}
+	hash := row.Elem().FieldByName("Hash")
+	want := hash.String()
+	hash.SetString("")
+	b, _ := json.Marshal(row.Interface())
+	sum := sha256.Sum256(b)
+	return want == hex.EncodeToString(sum[:])
+}
+
+// spoolRows reads every record file a local spool holds.
+func spoolRows(t *testing.T, dir string) [][]byte {
+	t.Helper()
+	names, err := filepath.Glob(filepath.Join(dir, "0*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [][]byte
+	for _, n := range names {
+		b, err := os.ReadFile(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// A runner's local spool is replayed by wardyn-runnerd, whose release may predate usage rows: its
+// cursor refuses a row whose hash it cannot reproduce, and replay stops there. A spool an older
+// runner made (no usage_records in its manifest) gets no usage row from this proxy, so every row
+// passes the older runner's hash; a spool this release's runner made gets the usage row.
+func TestUsageMeter_OlderRunnerSpoolStillReplays(t *testing.T) {
+	for _, olderRunner := range []bool{true, false} {
+		runID := uuid.New()
+		dir := filepath.Join(t.TempDir(), "spool")
+		made, err := runnerspool.Open(dir, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = made.Close()
+		if olderRunner { // the manifest an older runner writes: no usage_records
+			b, err := os.ReadFile(filepath.Join(dir, "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(b, &m); err != nil {
+				t.Fatal(err)
+			}
+			delete(m, "usage_records")
+			b, _ = json.Marshal(m)
+			if err := os.WriteFile(filepath.Join(dir, "state.json"), b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sink, err := newLocalDecisionSink(dir, runID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		up := newUsageUpstream(t, true)
+		p := newProxy(Options{RunID: runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
+			Dial: redirectDial(upstreamAddr(up.srv)), TLSClientConfig: testInsecureTLSConfig, Sink: sink,
+			Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
+		rec := httptest.NewRecorder()
+		p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-x"}`)), anthropicHost, 443)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+		}
+		_ = sink.close(context.Background())
+		usage := 0
+		for _, raw := range spoolRows(t, dir) {
+			var row runnerspool.Record
+			if err := json.Unmarshal(raw, &row); err != nil || !row.ValidHash() {
+				t.Fatalf("row %s: this release's runner refuses it (%v)", raw, err)
+			}
+			if row.Decision.Usage != nil {
+				usage++
+			}
+			if olderRunner && !oldRunnerRowHashOK(t, raw) {
+				t.Fatalf("an older runner refuses row %s: its replay would stop here", raw)
+			}
+		}
+		if want := map[bool]int{true: 0, false: 1}[olderRunner]; usage != want {
+			t.Fatalf("older runner %v: %d usage rows in the spool, want %d", olderRunner, usage, want)
 		}
 	}
 }
