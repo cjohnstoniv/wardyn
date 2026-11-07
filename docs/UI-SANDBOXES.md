@@ -9,51 +9,17 @@
 
 ## The noVNC image, and what relaying a DESKTOP costs
 
-- `deploy/images/novnc/` ships a graphical desktop as a relayed app —
-  `make agent-image-novnc`, declared as `"name": "novnc"`.
-- It changed no server
-  code, which was the whole prediction: an app rides the image, not a seam.
-- **Base:** `agent-base` — the same default the code-server (`vscode/`) image
-  uses.
-- agent-base is the image contract with no vendor CLI and is what this
-  project publishes; an X stack layered on node + npm + a vendor CLI is surface
-  for nothing.
-- **Measured, not estimated:** ~565 MB over agent-base (code-server costs ~228 MiB
-  for comparison — an X stack is simply expensive).
-- Listening ~1s into the 20s
-  `uiEnsureWaitSecs` budget.
-- If a change pushes size past ~1.4 GB, drop `xterm`
-  then `openbox` before raising the ceiling — a relayed app needs neither.
-- **Published with every release**, like `agent-vscode` (#141).
-- The trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
-  desktop turned out to be exactly the supply-chain workstream predicted here,
-  now landed.
-- It is still **not available on the desktop tier by default**
-  (neither image is wired into `WARDYN_AGENT_IMAGES` automatically); see the
-  note at the top.
-- **Confinement: both images run under CC2 (gVisor).** Measured, on a daemon with
-  `runsc` registered — note that is the **native** `dockerd`, not Docker Desktop's
-  socket, so `docker info --format '{{.Runtimes}}'` against the right daemon is
-  the first step:
+- The desktop of a VM run, a window on your Mac and desktop sign-ins in a VM are in [macOS virtual machines](operations/macos-vms.md) and [Linux VM sandboxes](operations/linux-vm-sandboxes.md).
+- `deploy/images/novnc/` ships a graphical desktop as a relayed app: `make agent-image-novnc`, declared as `"name": "novnc"`. It is built `FROM agent-base`, is about 565 MB larger on disk (`agent-vscode` adds about 228 MiB), and listens about 1 second into the 20 s `uiEnsureWaitSecs` budget.
+- Both images are published with every release. Neither is wired into `WARDYN_AGENT_IMAGES` on the desktop tier; see [Deployment](#4-deployment).
+- Both images start under gVisor (`--runtime=runsc`, on a daemon with `runsc` registered):
 
 | Image | Under `--runtime=runsc` |
 |---|---|
 | `agent-vscode` (code-server, Node) | listening in ~1s |
 | `agent-novnc` (Xvfb + openbox + xterm + x11vnc + websockify) | listening in ~1s; X socket present, all five processes up, `x11vnc` serving `RFB 003.008`, noVNC serving its page |
 
-- The X stack was the open question — it does far more with shared memory and
-  ioctls than a Node server does, and gVisor reimplements those.
-- It works
-  unmodified.
-- `runsc` there reports `apparmor: false` and `cgroup v2: false`, which
-  is expected for gVisor and did not matter to either image.
-- **Parity:** `make test-e2e-ui-sandbox` is **Docker-only and has no `-k8s`
-  sibling**, unlike `test-e2e-ssh`.
-- The honest gap is narrow, because the
-  transport itself *is* conformance-covered on both substrates
-  (`ExecStreamLoopbackRelay`); what is Docker-only is the browser-level lane above
-  it.
-- Stated rather than left silent.
+- `make test-e2e-ui-sandbox` runs on Docker only; there is no Kubernetes counterpart. The transport is covered on both substrates (`ExecStreamLoopbackRelay`).
 
 ### Three ceilings a graphical desktop raises that an editor does not
 
@@ -68,11 +34,7 @@
   Ownership, revocation and portal grant are re-checked per new connection and every 30 s on an open one (upgraded streams: at start).
   The role is the sign-in snapshot, bounded by it.
 
-- None of these is new in 0.7 — they are properties of the relay, documented in
-  [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
-- They are repeated here because a desktop makes
-  each of them bigger, and because the decision to ship it anyway was taken with
-  them in view rather than around them.
+- These are properties of the relay, documented in [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md). A desktop makes each of them larger.
 
 ### Signing in to websites inside the desktop (0.10, off by default)
 
@@ -104,7 +66,7 @@
 - This deployment's own Docker runner only. A run on a self-hosted runner, a
   pool or Kubernetes starts on `agent-novnc` with no sign-in lane, and a
   sign-in on it answers `desktop_signin_runner_unsupported`. The console has no
-  button for it yet.
+  button for a container desktop's sign-in; a VM run's desktop has one ([Sign-ins in the desktop](operations/linux-vm-sandboxes.md#sign-ins-in-the-desktop)).
 - `make test-image-novnc-signin` is the sign-in image's own gate.
 
 ## The desktop's clipboard
