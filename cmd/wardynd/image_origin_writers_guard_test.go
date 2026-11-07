@@ -23,8 +23,8 @@ import (
 // TestImageOriginWardynHasOneWriter pins the provenance a revive trusts. Revive skips the image check for a run
 // whose recorded origin is "wardyn" (run_revive_image.go#Server.reviveImageAdmission), and nothing else on the row
 // marks a run Wardyn launched itself, so that origin must be written only by newStepRun. A new reference to the
-// constant, a "wardyn" literal set as an origin (in a composite literal or an assignment), or a new caller of the
-// scoped origin writers fails here instead of relying on someone grepping for it. It is a census of symbols, call
+// constant, a "wardyn" literal set as an origin (in a composite literal or an assignment), a new caller of the
+// scoped origin writers, or a new door to newStepRun fails here instead of relying on someone grepping for it. It is a census of symbols, call
 // sites and literals, not a data-flow proof. Extend a list only with a writer whose origin no request can choose.
 func TestImageOriginWardynHasOneWriter(t *testing.T) {
 	root := repoRoot(t)
@@ -46,6 +46,20 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 			"internal/api/run_image_pin.go:recordConventionAudit",
 			"internal/api/run_image_pin.go:recordImageOrigin",
 		},
+		// Every run newStepRun makes carries the origin, so each door to it is a Wardyn-launched step whose image
+		// no request chooses.
+		"newStepRun": {
+			"internal/api/harnesscred.go:launchHarnessLoginRun",
+			"internal/api/site_config_probe_capacity.go:newProbeRun",
+			"internal/api/source_scan.go:launchSourceScanRun",
+			"internal/api/workspace_run_launch.go:newWorkspaceStepRun",
+		},
+		"newProbeRun": {
+			"internal/api/site_config_probe.go:runSiteConfigProbe",
+		},
+		"newWorkspaceStepRun": {
+			"internal/api/workspace_run_launch.go:launchRecordRun",
+		},
 	}
 	got := map[string]map[string]bool{}
 	var literalOrigins []string
@@ -56,16 +70,13 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 			}
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
-			// The store implements SetRunImageAdmission, so only its callers outside the store are counted; the
-			// origin constant and a "wardyn" origin literal are checked in the store too.
-			inStore := strings.HasPrefix(rel, "internal/store/")
 			f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 			if perr != nil {
 				t.Errorf("parse %s: %v", rel, perr)
 				return nil
 			}
 			record := func(name, fn string) {
-				if _, ok := want[name]; !ok || (inStore && name == "SetRunImageAdmission") {
+				if _, ok := want[name]; !ok {
 					return
 				}
 				if got[name] == nil {
