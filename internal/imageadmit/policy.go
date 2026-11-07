@@ -70,7 +70,9 @@ type SignerSpec struct {
 }
 
 // KeylessSpec is a Fulcio certificate identity: an exact identity or an anchored pattern, the OIDC issuer,
-// and optionally the source repository the certificate must name.
+// and optionally the source repository the certificate must name. IdentityRegexp must match the whole
+// identity: it is matched as a group between \A and \z, so an alternation like ^a|b$ cannot match a prefix
+// or a suffix. The issuer is always an exact string.
 type KeylessSpec struct {
 	Issuer           string `json:"issuer"`
 	Identity         string `json:"identity,omitempty"`
@@ -277,7 +279,13 @@ func (s *Signer) compileKeyless(k KeylessSpec, roots map[string]trustRoot) (trus
 	if s.verifier, err = verify.NewVerifier(tr.material, opts...); err != nil {
 		return trustRoot{}, err
 	}
-	san, err := verify.NewSANMatcher(k.Identity, k.IdentityRegexp)
+	// The matcher finds the pattern anywhere in the identity, and alternation binds looser than ^ and $, so
+	// group the authored text and pin it to the whole identity.
+	re := k.IdentityRegexp
+	if re != "" {
+		re = `\A(?:` + re + `)\z`
+	}
+	san, err := verify.NewSANMatcher(k.Identity, re)
 	if err != nil {
 		return trustRoot{}, err
 	}
