@@ -191,6 +191,7 @@ var queryParamNotAnID = map[string]string{
 	"uid":                       "GET /model-providers-entra/signin: the azure_foundry provider row the sign-in is for, a deployment record and not a principal's entity; the capture is bound to the caller's own session subject and stored in their own namespace whatever the row, and a uid that is not an azure_foundry row is refused",
 	"component":                 "GET /components-entra/signin: the organisation's Azure CLI component the sign-in is for, a deployment record and not a principal's entity; a row the caller may not attach answers as the run doors answer it, and the capture is bound to the caller's own session subject and stored in their own namespace",
 	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
+	"cut_in_flight":             "DELETE /admin/delegates/{id} (security tier): true or false, whether the revoke also cuts the gateway access of the runs the portal launched; names no row",
 	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"since":                     "audit time filter; narrows an already-scoped feed",
@@ -312,6 +313,18 @@ func queryParamReads(t *testing.T) map[string]map[string]bool {
 		inner, ok := sel.X.(*ast.SelectorExpr)
 		return ok && inner.Sel.Name == "URL"
 	}
+	isParseQueryCall := func(e ast.Expr) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "ParseQuery" {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "url"
+	}
 	out := map[string]map[string]bool{}
 	for _, f := range files {
 		for _, d := range f.Decls {
@@ -333,6 +346,12 @@ func queryParamReads(t *testing.T) map[string]map[string]bool {
 						if id, ok := as.Lhs[i].(*ast.Ident); ok && isQueryCall(rhs) {
 							vals[id.Name] = true
 						}
+					}
+				}
+				// q, err := url.ParseQuery(r.URL.RawQuery): a strict parse that refuses what URL.Query drops.
+				if as, ok := n.(*ast.AssignStmt); ok && len(as.Rhs) == 1 && len(as.Lhs) == 2 && isParseQueryCall(as.Rhs[0]) {
+					if id, ok := as.Lhs[0].(*ast.Ident); ok {
+						vals[id.Name] = true
 					}
 				}
 				return true

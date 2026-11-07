@@ -447,7 +447,7 @@ A service identity is automation that runs under its own name. It is not a perso
 |---|---|
 | `POST /api/v1/admin/delegates` `{"name":"…","idp_client_id":"<the portal's client id>","group":"<group>"}` | register a portal; the `credential` (`wdp_…`) is in this response only, the row keeps its hash |
 | `GET /api/v1/admin/delegates` | every portal, revoked ones included (admin or `security_admin`) |
-| `DELETE /api/v1/admin/delegates/{id}` | revoke it (admin or `security_admin`) |
+| `DELETE /api/v1/admin/delegates/{id}` | revoke it (admin or `security_admin`); `?cut_in_flight=true` also cuts the gateway access of the runs it launched, and on a revoked portal cuts it then |
 
 - The portal acts only for people in its `group`, matched against the group claim of the person's own token (canonicalized the way a sign-in snapshot is).
 - `idp_client_id` cannot be Wardyn's own client id.
@@ -506,3 +506,4 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
   - Revoking the portal ends it at the next re-check.
   - Open WebSocket streams are the exception: a terminal or relayed socket already established keeps working until it closes or the run ends.
   - Runs a portal launched keep running after it is revoked: they are the person's runs.
+  - With `?cut_in_flight=true` those runs also get no more gateway tokens ([When a run's gateway access ends](ai-gateway.md#when-a-runs-gateway-access-ends)). It is off by default, so a revoke changes nothing else for the person's work.

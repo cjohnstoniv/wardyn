@@ -697,6 +697,13 @@ const (
 	reasonGatewayIdentityUnavailable = "gateway_identity_unavailable"
 )
 
+// A portal revoke with ?cut_in_flight=true (gateway_identity_cut.go): the runs it launched get no more
+// gateway tokens (403 on the mint, 409 on a revive), and a value of the parameter that is not true or false.
+const (
+	reasonGatewayAccessCut        = "gateway_access_cut"
+	reasonInvalidCutInFlightParam = "invalid_cut_in_flight_param"
+)
+
 // A run refused at create because its laptop local model is on a port the runner's person has not allowed
 // (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
 const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"

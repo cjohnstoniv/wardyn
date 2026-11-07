@@ -407,7 +407,7 @@ func TestAttachAuthority_TicketDelegationWithdrawn(t *testing.T) {
 		}
 		_, ends[i] = rig.dial(t, nil, tok, readOnly)
 	}
-	if _, err := rig.ast.RevokeDelegate(context.Background(), via.Delegate, time.Now()); err != nil {
+	if _, _, err := rig.ast.RevokeDelegate(context.Background(), via.Delegate, time.Now(), false); err != nil {
 		t.Fatal(err)
 	}
 	wantAuthEnded(t, ends)

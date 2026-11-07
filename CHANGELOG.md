@@ -31,6 +31,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `governance_restrictions`, `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and
   `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
   `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
+- Revoking a portal still leaves the runs it launched their gateway access, as before. To cut it, pass `cut_in_flight=true` when you revoke; on an already revoked portal it cuts it then.
 
 ### Added
 
@@ -41,6 +42,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A portal can name the agent acting for a person. `POST /api/v1/token` accepts an `actor_token` your identity provider issued to the portal, and every audit row the delegated token writes names the agent in `data.via.actor`. On by default with no setting: the agent is recorded, never given access, and a portal that sends no `actor_token` sees no change.
 - `POST /api/v1/workloads/{name}/preview` answers what an apply would do: created, updated or unchanged, each changed field, whether a run starts and which run it replaces, and the refusal the apply would meet. It stores nothing. A service identity's token may call it.
 - Run identity for an Amazon Bedrock provider people sign in to with SSO. With `WARDYN_AWS_SIGV4_AT_PROXY` on, Wardyn signs each Bedrock request as the person for the regional Bedrock address and sends it to your gateway with the run's identity token. The gateway forwards it to AWS unchanged. Off unless an admin turns it on for the provider.
+- Revoking a portal can also cut the gateway access of the runs it launched: `DELETE /api/v1/admin/delegates/{id}?cut_in_flight=true`. Their gateway calls are refused within about half the provider's token lifetime. Off by default.
 
 ### Changed
 

@@ -26,6 +26,10 @@ type Delegate struct {
 	CreatedAt        time.Time  `json:"created_at"`
 	LastUsedAt       *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+	// CutInFlightAt is when a revoke also cut the gateway access of the runs this portal
+	// launched (DELETE /admin/delegates/{id}?cut_in_flight=true): from then on no run it
+	// launched gets a gateway token. nil, the default, leaves those runs their access.
+	CutInFlightAt *time.Time `json:"cut_in_flight_at,omitempty"`
 	// Credential is the plaintext portal credential, on the register
 	// response ONLY; the row stores its hash.
 	Credential string `json:"credential,omitempty"`
