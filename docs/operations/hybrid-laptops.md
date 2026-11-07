@@ -184,7 +184,27 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - A proxy older than the organisation refuses a configuration that carries a field it does not know, because the proxy reads its configuration strictly. The run then fails to start rather than running with a rule dropped, so pin only an image from the organisation's own release.
 - To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
 
-### Drive roots on a laptop runner
+### Sharing a folder: the settings
+
+<a id="drive-roots-on-a-laptop-runner"></a>
+
+A shared folder has to pass every setting below.
+
+| Setting | Where | Who sets it | macOS VM only |
+|---|---|---|---|
+| Workspace roots, and writable roots for a writable share | The organisation's server: `WARDYN_USER_WORKSPACE_ROOTS` (or a member's entry in `WARDYN_USER_WORKSPACE_ROOTS_MAP`), `WARDYN_USER_WRITABLE_ROOTS` | The server's operator | |
+| Drive roots | The runner: `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` in a managed profile | The machine's person, or the MDM | |
+| Full Disk Access for the guest agent | The base image, once, in `edit-base` ([Editing a base](macos-vm-base-image.md#editing-a-base)) | Whoever edits the base | yes |
+
+What you see tells you which one is missing:
+
+| What you see | Missing | Fix |
+|---|---|---|
+| "is outside every member workspace root", or "configures no member workspace roots" | Workspace roots | The operator sets `WARDYN_USER_WORKSPACE_ROOTS` (and `_MAP`), and `WARDYN_USER_WRITABLE_ROOTS` for a writable share |
+| "which shares no folders", "is outside every --drive-root its runner shares", or "this runner shares no folder" | Drive roots | `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` |
+| A macOS run stops within 10 seconds with "approve Full Disk Access for the Wardyn guest agent in edit-base" | Full Disk Access | Grant it to the guest agent in `edit-base` |
+
+Drive roots:
 
 - A drive bound to a person's own runner mounts only below a **drive root** the runner advertises, and a folder bound to it only inside one, or the root itself. With none, the organisation refuses drives and bound folders on it.
 - The person gives the installed service its roots when they set it up: `wardyn-runnerd setup --drive-root /Volumes/team-share --drive-root /srv/x`. Setup writes them to `runnerd.json` as `drive_root`; a rerun with `--drive-root` replaces the list, and a rerun without it keeps it. The roots are not in the unit or the LaunchAgent.
