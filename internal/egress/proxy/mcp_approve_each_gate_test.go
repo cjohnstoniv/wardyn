@@ -162,7 +162,7 @@ func TestGateApproveEachDeclineSticky(t *testing.T) {
 	if d := findDecision(t, f.buf, "policy:tool-approve-each-declined"); d.Decision != egress.Deny || d.ApprovalID == nil {
 		t.Fatalf("decision %+v, want a deny naming the declined row", d)
 	}
-	wantText(t, f.post(t, mcpToken("claude-code"), "linear", eachCall(1, "delete_issue", `{"id":"ENG-1"}`)), "refused for the rest of this run")
+	wantText(t, f.post(t, mcpToken("claude-code"), "linear", eachCall(1, "delete_issue", `{"id":"ENG-1"}`)), "identical retries are refused")
 	if cp.count() != 1 || f.up.hitCount() != 0 {
 		t.Fatalf("rows %d, upstream hits %d; want the broker to refuse without asking", cp.count(), f.up.hitCount())
 	}
