@@ -229,7 +229,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// committed, so good events are never half-dropped behind a 4xx. Validation is
 	// read-only (kernel-prefix check + run_id existence), so doing it up front is
 	// cheap and side-effect-free.
-	var runsNamespaces []string // resolved on the first Kubernetes event
+	var ownNamespaces []string // the control plane's own runs namespace, resolved on the first Kubernetes event
 	for i := range batch.Events {
 		ev := &batch.Events[i]
 		// Enforce the kernel.* namespace (fail closed): the host sensor may only
@@ -263,10 +263,10 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 			// A Kubernetes event (data.pod set) is held to where and when the
 			// run's pod could exist. Downgrades, never rejects, as above.
 			if pod := groundtruthEventPod(ev.Data); pod != "" {
-				if runsNamespaces == nil {
-					runsNamespaces = groundtruthRunsNamespaces()
+				if ownNamespaces == nil && run.RunnerID == nil && run.RunnerPoolExecutor == "" {
+					ownNamespaces = groundtruthRunsNamespaces()
 				}
-				if reason := s.groundtruthPodRefusal(run, pod, runsNamespaces); reason != "" {
+				if reason := s.groundtruthPodRefusal(run, pod, ownNamespaces); reason != "" {
 					ev.RunID = nil
 					ev.Data = downgradeToUnmapped(ev.Data, reason)
 				}
@@ -338,29 +338,63 @@ func groundtruthEventPod(data json.RawMessage) string {
 // groundtruthPodRefusal is why a Kubernetes kernel event must lose its run,
 // or "" when it keeps it:
 //
-//	namespace_not_runs — the pod is not in a namespace runs are placed in, so
-//	                     it is not a run's pod whatever its name says;
-//	run_ended          — the run reached a terminal state more than
-//	                     groundtruthLateEvents ago, so a pod re-created
-//	                     under the same name after teardown cannot write
-//	                     into it. The clock is the terminal transition
-//	                     (EndedAt), which later writes to the run do not
-//	                     move; UpdatedAt stands in only on a row without it.
-func (s *Server) groundtruthPodRefusal(run types.AgentRun, pod string, runsNamespaces []string) string {
+//	namespace_not_runs — the pod is not in a namespace the run's cluster
+//	                     places runs in, so it is not a run's pod whatever
+//	                     its name says (see groundtruthRunNamespaces);
+//	run_ended          — the run's pod has been gone for more than
+//	                     groundtruthLateEvents, so a pod re-created under
+//	                     the same name after teardown cannot write into it.
+//	                     Gone from the terminal transition (EndedAt, which
+//	                     later writes to the run do not move; UpdatedAt only
+//	                     on a row without it), or from when its lease ended
+//	                     (LostAt with LostReason ended): such a run stays
+//	                     RUNNING until the ended-run grace, without a pod.
+//
+// ownNamespaces is the control plane's own runs namespace, used for a run on
+// the in-process driver.
+func (s *Server) groundtruthPodRefusal(run types.AgentRun, pod string, ownNamespaces []string) string {
 	ns, _, ok := strings.Cut(pod, "/")
-	if !ok || ns == "" || !slices.Contains(runsNamespaces, ns) {
+	if namespaces, known := s.groundtruthRunNamespaces(run, ownNamespaces); known && (!ok || ns == "" || !slices.Contains(namespaces, ns)) {
 		return "namespace_not_runs"
 	}
-	if run.State.IsTerminal() {
-		ended := run.UpdatedAt
-		if run.EndedAt != nil {
-			ended = *run.EndedAt
-		}
-		if s.cfg.Now().Sub(ended) > groundtruthLateEvents {
-			return "run_ended"
-		}
+	var gone *time.Time
+	switch {
+	case run.State.IsTerminal() && run.EndedAt != nil:
+		gone = run.EndedAt
+	case run.State.IsTerminal():
+		gone = &run.UpdatedAt
+	case run.LostReason == types.LostEnded && run.LostAt != nil:
+		gone = run.LostAt
+	}
+	if gone != nil && s.cfg.Now().Sub(*gone) > groundtruthLateEvents {
+		return "run_ended"
 	}
 	return ""
+}
+
+// groundtruthRunNamespaces is the namespaces run's pod may be in, and whether
+// the control plane knows them. A run on the in-process driver is in the
+// control plane's own cluster: ownNamespaces. A run on a self-hosted runner is
+// in that runner's cluster: the namespaces the runner advertised with its
+// capabilities (TargetFacts.RunsNamespaces). Unknown, so not checked, when
+// that runner is offline or advertises none (an older runner), and for a run
+// on a remote-hosted runner, whose cluster this control plane has no source
+// for. An unknown answer keeps the event's run, as before the check existed:
+// the sensor token cannot name the cluster it runs in, so refusing would
+// downgrade every event from a cluster the control plane cannot see into.
+func (s *Server) groundtruthRunNamespaces(run types.AgentRun, ownNamespaces []string) ([]string, bool) {
+	switch {
+	case run.RunnerID != nil:
+		facts, ok := s.runnerFacts(*run.RunnerID)
+		if !ok || len(facts.RunsNamespaces) == 0 {
+			return nil, false
+		}
+		return facts.RunsNamespaces, true
+	case run.RunnerPoolExecutor != "":
+		return nil, false
+	default:
+		return ownNamespaces, true
+	}
 }
 
 // groundtruthServiceAccountNamespace is where the kubelet projects a pod's

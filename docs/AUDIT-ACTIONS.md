@@ -882,8 +882,8 @@ A [service identity](operations/api-tokens.md#service-identities) is its own act
 - This stream is **detection, not prevention** (see the package doc comment) — it never blocks, and it is blind inside CC3/Kata microVM guests.
 - A kernel event whose run id fails a check is still recorded, with `run_id` cleared, `data.correlation=unmapped` and `data.reason`:
   - `run_id_not_found`: no such run.
-  - `namespace_not_runs`: a Kubernetes event (`data.pod` set) from a pod outside the namespace runs are placed in.
-  - `run_ended`: a Kubernetes event for a run that ended more than 15 minutes ago.
+  - `namespace_not_runs`: a Kubernetes event (`data.pod` set) from a pod outside the namespaces its run's cluster places runs in. Not checked when wardynd does not know them (a runner that is offline or advertises none).
+  - `run_ended`: a Kubernetes event for a run that ended, or whose lease ended, more than 15 minutes ago.
 
 | Action | When | Where | Status | Consumers |
 |---|---|---|---|---|
