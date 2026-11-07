@@ -110,12 +110,15 @@ func legacyCandidates(layers []LegacyLayer, digest string) []candidate {
 	return out
 }
 
+// legacyCandidate's errors name what is wrong with the layer in fixed words, or with a value Wardyn computed
+// (the blob's sha256, the image digest): every field of the layer is registry content, which a registry sent a
+// Basic credential could set to that credential, so none is repeated.
 func legacyCandidate(l LegacyLayer, digest string) (candidate, error) {
 	if l.Descriptor.Size > MaxBundleBytes || len(l.Blob) > MaxBundleBytes {
 		return candidate{}, fmt.Errorf("its blob is larger than %d bytes", MaxBundleBytes)
 	}
 	if sum256(l.Blob) != l.Descriptor.Digest {
-		return candidate{}, fmt.Errorf("%w: blob %s", ErrDigestMismatch, bounded(l.Descriptor.Digest))
+		return candidate{}, fmt.Errorf("%w: its blob hashes to %s, not its descriptor's digest", ErrDigestMismatch, sum256(l.Blob))
 	}
 	ann := l.Descriptor.Annotations
 	material, err := legacyMaterial(ann)
@@ -144,10 +147,10 @@ func legacyCandidate(l LegacyLayer, digest string) (candidate, error) {
 		}
 		pb.Content = &protobundle.Bundle_DsseEnvelope{DsseEnvelope: env}
 	default:
-		return candidate{}, fmt.Errorf("media type %q is not a cosign signature or attestation", bounded(l.Descriptor.MediaType))
+		return candidate{}, errors.New("its media type is not a cosign signature or attestation")
 	}
 	if c.b, err = bundle.NewBundle(pb); err != nil {
-		return candidate{}, fmt.Errorf("it is not a valid bundle: %v", err)
+		return candidate{}, errors.New("it is not a valid bundle")
 	}
 	return c, nil
 }
@@ -165,13 +168,13 @@ func legacyPayloadNames(payload []byte, digest string) error {
 		} `json:"critical"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("its payload is not JSON: %v", err)
+		return errors.New("its payload is not JSON")
 	}
 	if p.Critical.Type != simpleSigningType {
-		return fmt.Errorf("its payload type is %q, not %q", bounded(p.Critical.Type), simpleSigningType)
+		return fmt.Errorf("its payload type is not %q", simpleSigningType)
 	}
 	if p.Critical.Image.Digest != digest {
-		return fmt.Errorf("it signs image %s, not %s", bounded(p.Critical.Image.Digest), digest)
+		return fmt.Errorf("it signs another image, not %s", digest)
 	}
 	return nil
 }
@@ -187,7 +190,7 @@ func legacyEnvelope(blob []byte) (*protodsse.Envelope, error) {
 		} `json:"signatures"`
 	}
 	if err := json.Unmarshal(blob, &e); err != nil {
-		return nil, fmt.Errorf("its envelope is not readable: %v", err)
+		return nil, errors.New("its envelope is not readable")
 	}
 	if len(e.Signatures) != 1 {
 		return nil, fmt.Errorf("its envelope has %d signatures, not one", len(e.Signatures))
@@ -247,11 +250,11 @@ func legacyTlogEntry(raw string) (*protorekor.TransparencyLogEntry, error) {
 		} `json:"Payload"`
 	}
 	if err := json.Unmarshal([]byte(raw), &rb); err != nil {
-		return nil, fmt.Errorf("its Rekor bundle annotation is not readable: %v", err)
+		return nil, errors.New("its Rekor bundle annotation is not readable")
 	}
 	body, err := base64.StdEncoding.DecodeString(rb.Payload.Body)
 	if err != nil {
-		return nil, fmt.Errorf("its Rekor entry body is not base64: %v", err)
+		return nil, errors.New("its Rekor entry body is not base64")
 	}
 	logID, err := hex.DecodeString(rb.Payload.LogID)
 	if err != nil || len(logID) == 0 {

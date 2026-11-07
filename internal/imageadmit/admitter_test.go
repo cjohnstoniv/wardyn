@@ -228,7 +228,7 @@ func TestAdmitUnavailableSentences(t *testing.T) {
 		{"timeout", un(imageadmit.CauseTimeout, false), "the check took longer than 20 seconds"},
 		{"deadline", context.DeadlineExceeded, "the check took longer than 20 seconds"},
 		{"server error", un(imageadmit.CauseServer, false), h + " answered with an error"},
-		{"refused target", un(imageadmit.CauseRefused, false), h + " is not an address Wardyn contacts"},
+		{"refused target", un(imageadmit.CauseRefused, false), h + " or an address it named is not one Wardyn contacts"},
 		{"no such tag", imageadmit.ErrNotFound, h + " has no image team/app:1.4"},
 		{"lying registry", imageadmit.ErrDigestMismatch, h + " answered content that does not match its digest"},
 	} {

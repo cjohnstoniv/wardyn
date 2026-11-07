@@ -186,30 +186,31 @@ func unavailable(ref Ref, digest string, err error) Verdict {
 }
 
 // unavailableDetail is why a check could not be made, for the sentence "Wardyn could not check image <ref>:
-// <detail>. Try again, or ask an admin." It names hosts and settings, never a credential.
+// <detail>. Try again, or ask an admin." It names the registry the image ref names and settings, never a
+// credential, and never a host a redirect or token realm named (Unavailable.Host), which the registry chose.
 func unavailableDetail(ref Ref, err error) string {
 	var u *Unavailable
 	if errors.As(err, &u) {
 		switch u.Cause {
 		case CauseUnauthorized:
 			if u.HasCredential {
-				return u.Host + " answered 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"
+				return ref.Registry + " answered 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"
 			}
-			return u.Host + " answered 401 — no credential for it in WARDYN_REGISTRY_AUTH_FILE"
+			return ref.Registry + " answered 401 — no credential for it in WARDYN_REGISTRY_AUTH_FILE"
 		case CauseForbidden:
-			return u.Host + " answered 403"
+			return ref.Registry + " answered 403"
 		case CauseTLS:
-			return "the TLS certificate " + u.Host + " presented is not trusted (WARDYN_TRUSTED_CA_FILE)"
+			return "the TLS certificate " + ref.Registry + " presented is not trusted (WARDYN_TRUSTED_CA_FILE)"
 		case CauseTimeout:
 			return timeoutDetail
 		case CauseServer:
-			return u.Host + " answered with an error"
+			return ref.Registry + " answered with an error"
 		case CauseRefused:
-			return u.Host + " is not an address Wardyn contacts"
+			return ref.Registry + " or an address it named is not one Wardyn contacts"
 		case CauseAuthFile:
 			return "WARDYN_REGISTRY_AUTH_FILE could not be read"
 		}
-		return u.Host + " could not be reached"
+		return ref.Registry + " could not be reached"
 	}
 	image := ref.Repo + ":" + ref.Tag
 	if ref.Digest != "" {
@@ -270,12 +271,12 @@ func LogCause(err error) string {
 	return "other"
 }
 
-// LogHost is the host that answered or was refused, for wardynd's log beside LogCause; "" when the error
-// names none. Unavailable.Host is a host name only, never a credential.
-func LogHost(err error) string {
+// LogRegistry is the registry the image ref names, for wardynd's log beside LogCause; "" when the error is
+// not an *Unavailable. It is never the host a redirect or token realm named, which the registry chose.
+func LogRegistry(err error) string {
 	var u *Unavailable
 	if errors.As(err, &u) {
-		return u.Host
+		return u.Registry
 	}
 	return ""
 }

@@ -44,11 +44,11 @@ func TestRefusalDetailNeverRepeatsSignatureMaterial(t *testing.T) {
 			l.Descriptor.MediaType = "application/" + echoMarker
 			return l
 		}(),
-		"payload type":    sigLayer(`{"critical":{"type":"`+echoMarker+`"}}`, nil),
-		"payload digest":  sigLayer(`{"critical":{"type":"`+simpleSigningType+`","image":{"docker-manifest-digest":"sha256:`+echoMarker+`"}}}`, nil),
-		"payload JSON":    sigLayer(`{"critical":{"type":`+echoMarkerNum+`}}`, nil),
-		"rekor JSON":      sigLayer(goodPayload, map[string]string{annotationBundle: `{"Payload":{"body":` + echoMarkerNum + `}}`}),
-		"rekor body":      sigLayer(goodPayload, map[string]string{annotationBundle: `{"Payload":{"body":"` + echoMarker + `"}}`}),
+		"payload type":   sigLayer(`{"critical":{"type":"`+echoMarker+`"}}`, nil),
+		"payload digest": sigLayer(`{"critical":{"type":"`+simpleSigningType+`","image":{"docker-manifest-digest":"sha256:`+echoMarker+`"}}}`, nil),
+		"payload JSON":   sigLayer(`{"critical":{"type":`+echoMarkerNum+`}}`, nil),
+		"rekor JSON":     sigLayer(goodPayload, map[string]string{annotationBundle: `{"Payload":{"body":` + echoMarkerNum + `}}`}),
+		"rekor body":     sigLayer(goodPayload, map[string]string{annotationBundle: `{"Payload":{"body":"` + echoMarker + `"}}`}),
 		"envelope JSON": func() LegacyLayer {
 			l := sigLayer(`{"payloadType":`+echoMarkerNum+`}`, nil)
 			l.Descriptor.MediaType = LegacyAttestationMediaType

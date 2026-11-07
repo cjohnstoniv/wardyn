@@ -65,7 +65,7 @@ func TestLegacySignatureForAnotherDigestFails(t *testing.T) {
 	other := releasesigtest.SimpleSigningPayload(dockerRef, "sha256:"+otherHex)
 	v := checkLegacy(t, compile(t, s, corpCI()), s.LegacySignature(other, ciOpts()))
 	wantReason(t, v, imageadmit.SignatureMissing)
-	mustContain(t, v.Detail, "sha256:"+otherHex)
+	mustContain(t, v.Detail, "signs another image")
 }
 
 func TestLegacySignaturePayloadOfAnotherTypeFails(t *testing.T) {

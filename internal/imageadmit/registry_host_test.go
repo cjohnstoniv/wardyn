@@ -82,7 +82,7 @@ func TestUnavailableNamesTheRegistryNotAHostItChose(t *testing.T) {
 			if !errors.As(err, &u) || v.Reason != AdmissionUnavailable {
 				t.Fatalf("verdict %+v, err %v: want image_admission_unavailable from an *Unavailable", v, err)
 			}
-			for what, got := range map[string]string{"Detail": v.Detail, "Error()": err.Error(), "log": LogHost(err)} {
+			for what, got := range map[string]string{"Detail": v.Detail, "Error()": err.Error(), "log": LogRegistry(err)} {
 				if strings.Contains(got, marker) || !strings.Contains(got, registry) {
 					t.Errorf("%s = %q: want the registry %s, never the %s host", what, got, registry, marker)
 				}

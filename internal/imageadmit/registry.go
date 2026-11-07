@@ -70,8 +70,9 @@ const (
 )
 
 // Unavailable is a registry read that failed for a reason outside the image's content.
-// Host is the host that answered or was refused (it can be a token realm); Registry is the one being read.
-// It never carries a credential.
+// Host is the host that answered or was refused (it can be a token realm or a redirect's destination, which the
+// registry chose); Registry is the one the image ref names. Only Registry is ever printed. It never carries a
+// credential.
 type Unavailable struct {
 	Cause         Cause
 	Host          string
@@ -84,25 +85,52 @@ func (u *Unavailable) Error() string {
 	switch u.Cause {
 	case CauseUnauthorized:
 		if !u.HasCredential {
-			return u.Host + " answered 401 and no credential is configured for it"
+			return u.Registry + " answered 401 and no credential is configured for it"
 		}
-		return u.Host + " answered 401 for the configured credential"
+		return u.Registry + " answered 401 for the configured credential"
 	case CauseForbidden:
-		return u.Host + " answered 403"
+		return u.Registry + " answered 403"
 	case CauseTLS:
-		return fmt.Sprintf("the TLS certificate %s presented is not trusted", u.Host)
+		return fmt.Sprintf("the TLS certificate %s presented is not trusted", u.Registry)
 	case CauseTimeout:
-		return fmt.Sprintf("%s did not answer in time", u.Host)
+		return fmt.Sprintf("%s did not answer in time", u.Registry)
 	case CauseRefused:
-		return fmt.Sprintf("%s was not contacted: %v", u.Host, u.Err)
+		if reason := u.ownReason(); reason != "" {
+			return fmt.Sprintf("%s was not contacted: %s", u.Registry, reason)
+		}
+		return u.Registry + " was not contacted: it or an address it named is not one Wardyn contacts"
 	case CauseAuthFile:
-		return fmt.Sprintf("the credential for %s could not be looked up: %v", u.Host, u.Err)
+		return fmt.Sprintf("the credential for %s could not be looked up: %v", u.Registry, u.Err)
 	}
-	if u.Err != nil {
-		return fmt.Sprintf("%s could not be read: %v", u.Host, u.Err)
+	if reason := u.ownReason(); reason != "" {
+		return fmt.Sprintf("%s could not be read: %s", u.Registry, reason)
 	}
-	return u.Host + " could not be read"
+	return u.Registry + " could not be read"
 }
+
+// ownReason is Err's text when this package wrote all of it (a status code, a token realm refused before any
+// request, the auth file's error); "" for a transport error, whose text holds the URL and addresses a redirect
+// or realm named.
+func (u *Unavailable) ownReason() string {
+	var al authLookupError
+	if errors.As(u.Err, &al) {
+		return al.Error()
+	}
+	var ue *url.Error
+	if u.Err == nil || u.Cause == CauseUnreachable || errors.As(u.Err, &ue) {
+		return ""
+	}
+	return u.Err.Error()
+}
+
+// authLookupError is the auth file failing for a redirect destination. Its text is the auth file's error, never
+// the destination, which the registry chose.
+type authLookupError struct{ err error }
+
+func (e authLookupError) Error() string {
+	return "reading the credential for a redirect destination: " + e.err.Error()
+}
+func (e authLookupError) Unwrap() error { return e.err }
 
 func (u *Unavailable) Unwrap() error { return u.Err }
 
@@ -212,12 +240,12 @@ func (c *RegistryClient) checkRedirect(req *http.Request, via []*http.Request) e
 		return fmt.Errorf("stopped after %d redirects", MaxRedirects)
 	}
 	if req.URL.Scheme != "https" {
-		return fmt.Errorf("%w: redirect to %s", ErrRefusedTarget, req.URL.Scheme)
+		return fmt.Errorf("%w: a redirect to an address that is not https", ErrRefusedTarget)
 	}
 	if req.Context().Value(tokenRequestKey{}) != nil && originOf(req.URL) != originOf(via[len(via)-1].URL) {
 		// A token request carries the registry's credential (a Basic header or a refresh token in the body,
 		// which a 307 or 308 replays). It is never followed to another origin.
-		return fmt.Errorf("%w: the token realm redirected to %s", ErrRefusedTarget, req.URL.Host)
+		return fmt.Errorf("%w: the token realm redirected to another origin", ErrRefusedTarget)
 	}
 	// Go copies the ORIGINAL request's headers onto every hop and keeps Authorization for subdomains and across
 	// ports, so the copied header is never trusted. Each hop's Authorization is rebuilt from what is approved
@@ -233,7 +261,7 @@ func (c *RegistryClient) checkRedirect(req *http.Request, via []*http.Request) e
 		a, ok, err := c.auth.Lookup(normalizeHost(req.URL.Host))
 		if err != nil {
 			// Not an anonymous request: the destination may expect the credential that could not be read.
-			return fmt.Errorf("reading the credential for %s: %w", req.URL.Host, err)
+			return authLookupError{err}
 		}
 		if ok && a.Username != "" {
 			req.SetBasicAuth(a.Username, a.Password)
@@ -280,7 +308,8 @@ func (c *RegistryClient) Manifest(ctx context.Context, ref Ref) (*Manifest, erro
 func parseManifest(body []byte, hdr http.Header, wantDigest string) (*Manifest, error) {
 	got := sum256(body)
 	if wantDigest != "" && got != wantDigest {
-		return nil, fmt.Errorf("%w: asked for %s, the bytes are %s", ErrDigestMismatch, wantDigest, got)
+		// The digest asked for is not repeated: for a referrer it is a descriptor the registry served.
+		return nil, fmt.Errorf("%w: the bytes are %s, not the digest asked for", ErrDigestMismatch, got)
 	}
 	if h := hdr.Get("Docker-Content-Digest"); strings.HasPrefix(h, "sha256:") && h != got {
 		// The announced value is not repeated: a registry that was sent a Basic credential could echo it here.
@@ -295,7 +324,7 @@ func parseManifest(body []byte, hdr http.Header, wantDigest string) (*Manifest, 
 		Annotations  map[string]string `json:"annotations"`
 	}
 	if err := json.Unmarshal(body, &j); err != nil {
-		return nil, fmt.Errorf("manifest %s is not JSON: %w", got, err)
+		return nil, fmt.Errorf("manifest %s is not JSON", got)
 	}
 	mt := j.MediaType
 	if ct, _, _ := strings.Cut(hdr.Get("Content-Type"), ";"); mt == "" {
@@ -358,7 +387,7 @@ func (c *RegistryClient) LegacyTag(ctx context.Context, ref Ref, subject, suffix
 // Blob fetches the blob d describes (at most MaxBlobBytes) and verifies size and digest before returning it.
 func (c *RegistryClient) Blob(ctx context.Context, ref Ref, d Descriptor) ([]byte, error) {
 	if !sha256Re.MatchString(d.Digest) {
-		return nil, fmt.Errorf("blob digest %q is not sha256", d.Digest)
+		return nil, errors.New("a blob descriptor's digest is not sha256")
 	}
 	if d.Size < 0 || d.Size > MaxBlobBytes {
 		return nil, fmt.Errorf("%w: blob %s is %d bytes, the bound is %d", ErrTooLarge, d.Digest, d.Size, MaxBlobBytes)
@@ -402,13 +431,13 @@ func (c *RegistryClient) fetch(ctx context.Context, ref Ref, path string, q url.
 		}
 		resp, err := c.hc.Do(req)
 		if err != nil {
-			return nil, nil, classify(err, ref.Registry)
+			return nil, nil, classify(err, ref.Registry, ref.Registry)
 		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 && originOf(resp.Request.URL) != originOf(u) {
 			// A redirect led to another origin and it sent the challenge. The registry's credential is not
 			// that origin's: answering would hand it to a realm the registry never chose.
 			resp.Body.Close()
-			return nil, nil, c.unavailable(CauseUnauthorized, resp.Request.URL.Host, resp.Request.URL.Host, nil)
+			return nil, nil, c.unavailable(CauseUnauthorized, resp.Request.URL.Host, ref.Registry, nil)
 		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			challenge := resp.Header.Values("Www-Authenticate")
@@ -433,10 +462,10 @@ func (c *RegistryClient) finish(resp *http.Response, ref Ref, limit int64) ([]by
 	case resp.StatusCode == http.StatusOK:
 		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 		if err != nil {
-			return nil, nil, classify(err, answered)
+			return nil, nil, classify(err, answered, ref.Registry)
 		}
 		if int64(len(body)) > limit {
-			return nil, nil, fmt.Errorf("%w: more than %d bytes from %s", ErrTooLarge, limit, answered)
+			return nil, nil, fmt.Errorf("%w: more than %d bytes from %s", ErrTooLarge, limit, ref.Registry)
 		}
 		return body, resp.Header, nil
 	case resp.StatusCode == http.StatusNotFound:
@@ -458,8 +487,9 @@ func (c *RegistryClient) unavailable(cause Cause, host, registry string, err err
 	return &Unavailable{Cause: cause, Host: host, Registry: registry, HasCredential: has, Err: err}
 }
 
-// classify maps a transport error to an Unavailable. A caller's cancellation is returned as is.
-func classify(err error, fallbackHost string) error {
+// classify maps a transport error to an Unavailable for registry, the one the image ref names. A caller's
+// cancellation is returned as is.
+func classify(err error, fallbackHost, registry string) error {
 	host := fallbackHost
 	var ue *url.Error
 	if errors.As(err, &ue) {
@@ -467,7 +497,7 @@ func classify(err error, fallbackHost string) error {
 			host = u.Host
 		}
 	}
-	u := &Unavailable{Host: host, Registry: fallbackHost, Err: err, Cause: CauseUnreachable}
+	u := &Unavailable{Host: host, Registry: registry, Err: err, Cause: CauseUnreachable}
 	var (
 		unknownCA *x509.UnknownAuthorityError
 		hostErr   x509.HostnameError
@@ -527,7 +557,7 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 		return "", &Unavailable{Cause: CauseRefused, Host: ref.Registry, Registry: ref.Registry, Err: fmt.Errorf("%w: the token realm is not a usable URL", ErrRefusedTarget)}
 	}
 	if realm.Scheme != "https" {
-		return "", &Unavailable{Cause: CauseRefused, Host: realm.Host, Registry: ref.Registry, Err: fmt.Errorf("%w: the token realm is %s, not https", ErrRefusedTarget, realm.Scheme)}
+		return "", &Unavailable{Cause: CauseRefused, Host: realm.Host, Registry: ref.Registry, Err: fmt.Errorf("%w: the token realm is not https", ErrRefusedTarget)}
 	}
 	// The token is cached under the scope fetch computed, whatever spelling the challenge asks for.
 	cacheScope := scope
@@ -565,7 +595,7 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return "", classify(err, realm.Host)
+		return "", classify(err, realm.Host, ref.Registry)
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
