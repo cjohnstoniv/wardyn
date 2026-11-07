@@ -17,7 +17,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A `WARDYN_ADMIN_TOKEN` shorter than 32 bytes now stops wardynd starting unless it listens on loopback only (the compose stack's `demo-admin-token` is unchanged). Set a longer one, for example `openssl rand -hex 32`.
 - With SSO configured, the UI-sandbox gateway now refuses to start without `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`, and the Helm chart refuses to render unless a per-run origin is set, through `uiSandbox.originTemplate` or `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` in `env` or `extraEnv`. Set a per-run origin such as `https://run-{run}.ui.example.com`, or accept the shared origin with `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` (chart: `uiSandbox.acceptSharedOrigin`).
 - Docker runs now need Docker Engine 28 or later and an updated runner, because a run's network is now made without an address on the Docker host. On an older engine (Podman reports one) a run is refused unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, which keeps the old network. Runs started before the upgrade keep their old network until they stop; restarting or reviving one is refused unless that setting is on.
-- A governance profile's `github_capabilities` now limits its members' runs, and a run's GitHub CLI access is limited to the run's own GitHub capabilities. A run that relied on wider access is now refused or gets read-only access.
+- A governance profile's `github_capabilities` now limits its members' runs, and a run's GitHub CLI access is limited to the run's own GitHub capabilities. A run that relied on wider access is now refused or gets only the GitHub capabilities both lists name.
+- A file or variable secret that reaches the 8-byte minimum only with its trailing line break is no longer delivered to a run and can no longer be saved: output shows it without the break, which can't be masked. Store a longer value.
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
 
 ### Added
@@ -50,7 +51,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Moving a governance profile to a new parent is now held for approval when the move takes it out from under a lock.
 - Opening a `wardyn window` that was asked for with a credential Wardyn can no longer check is now refused with a plain sentence (403) instead of an error.
 - Settings: saving an unrelated change no longer reorders stored capabilities, and walls errors now point at their field.
-- The console now sends `form-action`, `Permissions-Policy` and, under TLS, `Strict-Transport-Security` headers.
+- The console's Content-Security-Policy now sets `form-action`, and the console sends `Permissions-Policy` and, under TLS, `Strict-Transport-Security`.
 - The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
 
 ## [0.10.0-rc.13] — 2026-11-04
