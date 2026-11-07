@@ -17,8 +17,8 @@ import (
 )
 
 // rerouteKeys are the top-level body keys a model gateway reads to send a call to a model other
-// than the one the body names, or to read messages the scan never reads. Claude Code and Codex
-// send none of them. The list is fixed: it is the set the supported gateways act on, and a key
+// than the one the body names, or to read messages the scan never reads. Claude Code and the Codex
+// CLI send none of them. The list is fixed: it is the set the supported gateways act on, and a key
 // outside it is the gateway's own business. Keys match without regard to case, as the model key
 // does.
 var rerouteKeys = []string{
