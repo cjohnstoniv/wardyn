@@ -544,3 +544,62 @@ func TestHealthz_IdempotentRunCreate(t *testing.T) {
 		t.Errorf("idempotent_run_create = %v, want true", body["idempotent_run_create"])
 	}
 }
+
+// TestCreateRunKeyReplayAfterRunTasksErasure: once a person's run tasks are erased, a same-key retry is
+// rebuilt from the erased run (no task, title or description) and makes no second run; another
+// person's kept answer is untouched.
+func TestCreateRunKeyReplayAfterRunTasksErasure(t *testing.T) {
+	srv, pool := pgHarness(t)
+	ctx := context.Background()
+	task := "idem-erase-" + uuid.NewString()
+	body := `{"agent":"claude-code","repo":"acme/widgets","task":"` + task + `","title":"` + task + `-title","description":"` + task + `-desc"}`
+	key := uuid.NewString()
+	first := postRunWithKey(t, srv, key, body)
+	if first.Code != http.StatusCreated || !strings.Contains(first.Body.String(), task) {
+		t.Fatalf("first = %d %s, want a 201 carrying the task", first.Code, first.Body)
+	}
+	var run types.AgentRun
+	if err := json.Unmarshal(first.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another person's keyed run with a kept answer.
+	st := store.NewPG(pool)
+	bob := store.RunCreateKeyID{Principal: "bob-" + uuid.NewString()[:8], KeySHA256: keySHA(uuid.NewString())}
+	claim, err := st.ClaimRunCreateKey(ctx, store.RunCreateKey{RunCreateKeyID: bob, RequestSHA256: "r"}, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobRun := run
+	bobRun.ID, bobRun.CreatedBy = uuid.New(), bob.Principal
+	bobRun.SPIFFEID = "spiffe://wardyn.local/agent-run/" + bobRun.ID.String()
+	if _, err := st.CreateRun(store.WithRunCreateKey(ctx, bob, claim.Token), bobRun); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.SaveRunCreateResponse(ctx, bob, claim.Token, 201, "/b", []byte(`{"task":"bob"}`)); err != nil || !ok {
+		t.Fatalf("bob's save = %v %v", ok, err)
+	}
+
+	if _, err := srv.eraseRunTasks(ctx, run.CreatedBy); err != nil {
+		t.Fatalf("erase run tasks: %v", err)
+	}
+	w := postRunWithKey(t, srv, key, body)
+	if w.Code != http.StatusCreated || w.Header().Get("Idempotent-Replayed") != "true" || strings.Contains(w.Body.String(), task) {
+		t.Fatalf("replay after the erase = %d replayed=%q %s; want a rebuilt 201 with no erased field", w.Code, w.Header().Get("Idempotent-Replayed"), w.Body)
+	}
+	if createdID(t, w) != run.ID || runsTitled(t, pool, task) != 0 {
+		t.Errorf("replay names %s (want %s); runs still carrying the task = %d, want 0", createdID(t, w), run.ID, runsTitled(t, pool, task))
+	}
+	var runs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE created_by = $1 AND created_at >= $2`, run.CreatedBy, run.CreatedAt).Scan(&runs); err != nil || runs != 1 {
+		t.Errorf("runs created by the caller since the first = %d (%v), want 1", runs, err)
+	}
+	var bound uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT run_id FROM run_create_keys WHERE key_sha256 = $1 AND response_body IS NULL`, keySHA(key)).Scan(&bound); err != nil || bound != run.ID {
+		t.Errorf("the key after the erase names %s (%v), want %s with no kept body", bound, err, run.ID)
+	}
+	var bobBody []byte
+	if err := pool.QueryRow(ctx, `SELECT response_body FROM run_create_keys WHERE principal = $1 AND key_sha256 = $2`, bob.Principal, bob.KeySHA256).Scan(&bobBody); err != nil || string(bobBody) != `{"task":"bob"}` {
+		t.Errorf("bob's kept answer = %q (%v), want it untouched", bobBody, err)
+	}
+}

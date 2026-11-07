@@ -439,3 +439,58 @@ func TestRunCreateKeyDoneReportsLease(t *testing.T) {
 		t.Fatalf("a bound key past its lease = %+v, want Done with the lease over and its end reported", gone)
 	}
 }
+
+// TestClearRunCreateResponsesOf: erasing a person's run tasks clears the answers kept for keys naming
+// their runs and keeps each key bound to its run; another person's answer stays; a save that arrives
+// after the clear keeps nothing.
+func TestClearRunCreateResponsesOf(t *testing.T) {
+	pool := runsPGPool(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	bind := func(k store.RunCreateKey, createdBy string) (uuid.UUID, uuid.UUID) {
+		t.Helper()
+		c := claimKey(t, pg, k)
+		r := newRun(types.RunPending)
+		r.CreatedBy = createdBy
+		if _, err := createKeyed(pg, k.RunCreateKeyID, c.Token, r); err != nil {
+			t.Fatalf("create under the claim: %v", err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+		return c.Token, r.ID
+	}
+	alice, bob := "erase-"+uuid.NewString()[:8], "keep-"+uuid.NewString()[:8]
+	saved := newRunCreateKey("request-a")
+	late := newRunCreateKey("request-b")
+	other := newRunCreateKey("request-c")
+	savedToken, savedRun := bind(saved, alice)
+	lateToken, lateRun := bind(late, alice)
+	otherToken, _ := bind(other, bob)
+	for _, s := range []struct {
+		k     store.RunCreateKey
+		token uuid.UUID
+	}{{saved, savedToken}, {other, otherToken}} {
+		if ok, err := pg.SaveRunCreateResponse(ctx, s.k.RunCreateKeyID, s.token, 201, "/x", []byte(`{"task":"secret"}`)); err != nil || !ok {
+			t.Fatalf("save = %v %v", ok, err)
+		}
+	}
+
+	n, err := pg.ClearRunCreateResponsesOf(ctx, alice)
+	if err != nil || n != 2 {
+		t.Fatalf("clear = %d %v, want alice's 2 keys", n, err)
+	}
+	if ok, err := pg.SaveRunCreateResponse(ctx, late.RunCreateKeyID, lateToken, 201, "/x", []byte(`{"task":"secret"}`)); err != nil || ok {
+		t.Fatalf("a save after the clear = %v %v, want nothing kept", ok, err)
+	}
+	for _, c := range []struct {
+		k   store.RunCreateKey
+		run uuid.UUID
+	}{{saved, savedRun}, {late, lateRun}} {
+		got := claimKey(t, pg, c.k)
+		if got.State != store.RunCreateKeyDone || got.RunID != c.run || got.Response != nil || !got.ResponseErased {
+			t.Errorf("alice's key after the clear = %+v, want Done naming %s with no answer, marked erased", got, c.run)
+		}
+	}
+	if got := claimKey(t, pg, other); got.Response == nil || got.ResponseErased || !bytes.Equal(got.Response.Body, []byte(`{"task":"secret"}`)) {
+		t.Errorf("bob's key after alice's clear = %+v, want his answer kept", got)
+	}
+}
