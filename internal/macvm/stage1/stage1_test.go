@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1/stage1test"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"github.com/cjohnstoniv/wardyn/internal/vmnet"
@@ -71,7 +72,56 @@ var wantArgv = [][]string{
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"),
+	// The base settings: sw_vers first, whose values the host checks and renders into the stamps, then the
+	// table's rows in order, the agent's through sudo -H -u agent.
+	root("/usr/bin/sw_vers", "-productVersion"),
+	root("/usr/bin/sw_vers", "-buildVersion"),
+	saRow("MiniBuddyLaunchReason", "-int", "0"),
+	saRow("MiniBuddyShouldLaunchToResumeSetup", "-bool", "false"),
+	saRow("SkipFirstLoginOptimization", "-bool", "true"),
+	saRow("SkipExpressSettingsUpdating", "-bool", "true"),
+	saRow("LastPreLoginTasksPerformedBuild", "-string", "25G83"),
+	saRow("LastPreLoginTasksPerformedVersion", "-string", "26.6.2"),
+	saRow("LastSeenBuddyBuildVersion", "-string", "25G83"),
+	saRow("LastSeenCloudProductVersion", "-string", "26.6.2"),
+	saRow("LastSeenDiagnosticsProductVersion", "-string", "26.6.2"),
+	saRow("LastSeenAgeRangeSelectionProductVersion", "-string", "26.6.2"),
+	saRow("DidSeeAccessibility", "-bool", "true"),
+	saRow("DidSeeActivationLock", "-bool", "true"),
+	saRow("DidSeeAppStore", "-bool", "true"),
+	saRow("DidSeeAppearanceSetup", "-bool", "true"),
+	saRow("DidSeeApplePaySetup", "-bool", "true"),
+	saRow("DidSeeCloudSetup", "-bool", "true"),
+	saRow("DidSeeLockdownMode", "-bool", "true"),
+	saRow("DidSeePrivacy", "-bool", "true"),
+	saRow("DidSeeScreenTime", "-bool", "true"),
+	saRow("DidSeeSetupSequence", "-bool", "true"),
+	saRow("DidSeeSiriSetup", "-bool", "true"),
+	saRow("DidSeeSyncSetup", "-bool", "true"),
+	saRow("DidSeeSyncSetup2", "-bool", "true"),
+	saRow("DidSeeTermsOfAddress", "-bool", "true"),
+	saRow("DidSeeTouchIDSetup", "-bool", "true"),
+	saRow("DidSeeiCloudLoginForStorageServices", "-bool", "true"),
+	saRow("DidSeeAppleIntelligence", "-bool", "true"),
+	agentRoot("/usr/bin/defaults", "write", "/Users/agent/Library/Preferences/com.apple.HIToolbox", "AppleFnUsageType", "-int", "0"),
+	agentRoot("/usr/bin/defaults", "write", "-g", "NSQuitAlwaysKeepsWindows", "-bool", "false"),
+	agentRoot("/usr/bin/defaults", "-currentHost", "write", "com.apple.loginwindow", "TALLogoutSavesState", "-bool", "false"),
+	root("/usr/bin/mdutil", "-a", "-i", "off"),
+	root("/usr/bin/defaults", "write", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory", "AutoSubmit", "-bool", "false"),
+	root("/usr/bin/defaults", "write", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory", "ThirdPartyDataSubmit", "-bool", "false"),
+	root("/bin/chmod", "644", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"),
+	root("/usr/bin/chgrp", "admin", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"),
 	root("/usr/sbin/systemsetup", "-f", "-setremotelogin", "off"),
+}
+
+// agentRoot is argv as the agent user, under stage 1's sudo.
+func agentRoot(argv ...string) []string {
+	return root(append([]string{"/usr/bin/sudo", "-H", "-u", "agent", "--"}, argv...)...)
+}
+
+// saRow writes one key of the agent's Setup Assistant domain by its absolute path, as the agent.
+func saRow(key string, typ, val string) []string {
+	return agentRoot("/usr/bin/defaults", "write", "/Users/agent/Library/Preferences/com.apple.SetupAssistant", key, typ, val)
 }
 
 type fixture struct {
@@ -408,6 +458,49 @@ func TestCommandTableCitesItsStep(t *testing.T) {
 		if !slices.Contains(steps, c.Step) || c.ID == "" || len(c.Argv) == 0 {
 			t.Errorf("%+v: every row names its §3.4 step, an id and an argv", c)
 		}
+	}
+}
+
+// The stamps come from the guest's sw_vers, read over the same login. A value outside the fixed patterns is
+// refused by the host before any base-settings row runs, and the base is not published.
+func TestBaseSettingsRefuseAnUnpatternedSwVers(t *testing.T) {
+	for name, set := range map[string]func(*stage1test.Server){
+		"version with a command": func(s *stage1test.Server) { s.ProductVersion = "26.6.2; reboot" },
+		"version with one part":  func(s *stage1test.Server) { s.ProductVersion = "26" },
+		"build with a space":     func(s *stage1test.Server) { s.BuildVersion = "25G83 x" },
+		"build in lower case":    func(s *stage1test.Server) { s.BuildVersion = "25g83" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, provPass)
+			set(f.srv)
+			_, err := f.b.Bootstrap(context.Background(), f.input(false))
+			var se *StepError
+			if !errors.As(err, &se) || !errors.Is(err, basesettings.ErrRelease) {
+				t.Fatalf("err = %v; want a StepError wrapping ErrRelease", err)
+			}
+			for _, a := range argvs(f.srv.Execs()) {
+				if slices.Contains(a, "com.apple.SetupAssistant") || strings.Contains(strings.Join(a, " "), "/Users/agent/Library/Preferences/com.apple.SetupAssistant") {
+					t.Fatalf("a Setup Assistant row ran after a refused sw_vers: %q", a)
+				}
+			}
+		})
+	}
+}
+
+// A base-settings row that is Optional and fails is skipped like any Optional row; one that is not stops
+// stage 1 at its step.
+func TestBaseSettingsOptionalRowFailureIsSkipped(t *testing.T) {
+	f := newFixture(t, provPass)
+	f.srv.Fail = func(argv []string) bool { return slices.Contains(argv, "DidSeeAppleIntelligence") }
+	if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+		t.Fatalf("an Optional row failing stopped stage 1: %v", err)
+	}
+	f = newFixture(t, provPass)
+	f.srv.Fail = func(argv []string) bool { return slices.Contains(argv, "DidSeeCloudSetup") }
+	_, err := f.b.Bootstrap(context.Background(), f.input(false))
+	var se *StepError
+	if !errors.As(err, &se) || se.Step != "7f" {
+		t.Fatalf("err = %v; want a StepError at step 7f", err)
 	}
 }
 
