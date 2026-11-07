@@ -67,6 +67,11 @@ type RunCreateKeyClaim struct {
 	RunID     uuid.UUID          // RunCreateKeyDone
 	Response  *RunCreateResponse // RunCreateKeyDone, when an answer was kept
 	CreatedAt time.Time          // the key's first use (every state but Claimed of a new row)
+	// ClaimUntil is when the lease of the key's latest claim ends, and LeaseLive whether it was still
+	// ahead of the database clock at the read. Both are read before any takeover and are unset for a new
+	// row. A Done key with no saved answer and a live lease may still be answering its first request.
+	ClaimUntil time.Time
+	LeaseLive  bool
 }
 
 // RunCreateKeyStore keeps POST /runs Idempotency-Keys. A claim leases the key to one request; the run
@@ -138,15 +143,16 @@ func readRunCreateKey(ctx context.Context, q Querier, k RunCreateKey, token uuid
 		body     []byte
 	)
 	err := q.QueryRow(ctx, `SELECT request_sha256, claim_until > now(), run_id, response_status, response_location,
-			response_body, created_at
+			response_body, created_at, claim_until
 		FROM run_create_keys WHERE principal = $1 AND via = $2 AND key_sha256 = $3 FOR UPDATE`,
-		k.Principal, k.Via, k.KeySHA256).Scan(&request, &live, &runID, &status, &location, &body, &out.CreatedAt)
+		k.Principal, k.Via, k.KeySHA256).Scan(&request, &live, &runID, &status, &location, &body, &out.CreatedAt, &out.ClaimUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: read idempotency key: %w", err)
 	}
+	out.LeaseLive = live
 	switch {
 	case request != k.RequestSHA256:
 		out.State = RunCreateKeyMismatch

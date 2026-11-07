@@ -166,7 +166,7 @@ func (s *Server) createRunUnderKey(w http.ResponseWriter, r *http.Request, keys 
 // answer's warnings. A key whose first request may still be answering is in flight.
 func (s *Server) replayRunCreate(w http.ResponseWriter, r *http.Request, claim store.RunCreateKeyClaim) {
 	rebuilt := claim.Response == nil
-	if rebuilt && time.Since(claim.CreatedAt) < runCreateKeyLease {
+	if rebuilt && claim.LeaseLive {
 		writeRunCreateKeyInFlight(w)
 		return
 	}
