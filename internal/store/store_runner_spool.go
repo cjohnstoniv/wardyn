@@ -53,7 +53,7 @@ func (s PG) IngestRunnerDecision(ctx context.Context, runnerID uuid.UUID, row ru
 	if duplicate {
 		return false, tx.Commit(ctx)
 	}
-	events, err := runnerDecisionEvents(ctx, tx, runnerID, run.ID, row)
+	events, err := runnerRowEvents(ctx, tx, runnerID, run.ID, row)
 	if err != nil {
 		return false, err
 	}
