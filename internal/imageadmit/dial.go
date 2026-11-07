@@ -47,29 +47,36 @@ func defaultGuard() *targetGuard {
 // several refuses the host. A name this machine cannot resolve is an error, except when viaProxy: the
 // operator's forward proxy resolves names itself, and what it resolves them to is the operator's boundary.
 func (g *targetGuard) check(ctx context.Context, host string, viaProxy bool) error {
+	_, err := g.resolve(ctx, host, viaProxy)
+	return err
+}
+
+// resolve is check that also returns the addresses it approved: the literal address itself, or the
+// local answer for a name. It is empty for a name the forward proxy is left to resolve.
+func (g *targetGuard) resolve(ctx context.Context, host string, viaProxy bool) ([]net.IP, error) {
 	host = strings.Trim(host, "[]")
 	if ip := net.ParseIP(host); ip != nil {
 		if g.refuse(ip) {
-			return fmt.Errorf("%w: %s is a loopback, link-local or metadata address", ErrRefusedTarget, host)
+			return nil, fmt.Errorf("%w: %s is a loopback, link-local or metadata address", ErrRefusedTarget, host)
 		}
-		return nil
+		return []net.IP{ip}, nil
 	}
 	ips, err := g.lookup(ctx, host)
 	if err != nil || len(ips) == 0 {
 		if viaProxy {
-			return nil
+			return nil, nil
 		}
 		if err == nil {
 			err = errors.New("no addresses")
 		}
-		return fmt.Errorf("resolving %s: %w", host, err)
+		return nil, fmt.Errorf("resolving %s: %w", host, err)
 	}
 	for _, ip := range ips {
 		if g.refuse(ip) {
-			return fmt.Errorf("%w: %s resolves to %s, a loopback, link-local or metadata address", ErrRefusedTarget, host, ip)
+			return nil, fmt.Errorf("%w: %s resolves to %s, a loopback, link-local or metadata address", ErrRefusedTarget, host, ip)
 		}
 	}
-	return nil
+	return ips, nil
 }
 
 // control is the dialer Control hook: the last check, on the address actually being connected to.
@@ -108,14 +115,9 @@ func guardedTransport(base *http.Transport, g *targetGuard) http.RoundTripper {
 		if err != nil {
 			return nil, err
 		}
-		if err := g.check(ctx, h, false); err != nil {
+		ips, err := g.resolve(ctx, h, false)
+		if err != nil {
 			return nil, err
-		}
-		ips := []net.IP{net.ParseIP(h)}
-		if ips[0] == nil {
-			if ips, err = g.lookup(ctx, h); err != nil {
-				return nil, err
-			}
 		}
 		var last error
 		for _, ip := range ips {
