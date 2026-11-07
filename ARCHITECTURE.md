@@ -382,7 +382,7 @@ The layers of the code, and the interface each extension implements, are mapped 
 
 ### Invariant 2, mechanically
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/img/credential-mint-dark.svg"><img src="docs/img/credential-mint.svg" alt="Minting a credential an approval covers: approve, snapshot, mint, then return it only from the transaction that re-reads the approval unchanged and writes minted_jti."></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/img/credential-mint-dark.svg"><img src="docs/img/credential-mint.svg" alt="Minting a credential an approval covers: approve, snapshot, mint, then return it only from the transaction that re-reads the approval unchanged and, for a once-only grant, writes minted_jti."></picture>
 
 - This describes a grant with `requires_approval: true`, on the once-only path.
 - An explicit `git_pat` run lease is the exception: after the first mint, a re-mint under the same scope skips the `minted_jti` write, and `credential.mint` is marked `lease: true` ([member runs](docs/operations/member-runs.md)).
