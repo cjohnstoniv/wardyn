@@ -43,8 +43,9 @@ type orphanHelper struct {
 //   - that entry is gone, or is not claimed by this very process (pid and start) and its owner is gone.
 //
 // A helper that claimed its entry is the VM's and is adopted, as before. Each one gets SIGTERM; after
-// reapGrace the ledger is read again, a helper that claimed its entry meanwhile is kept, and the rest get
-// SIGKILL. Then the finished entries are released.
+// reapGrace the process table and the ledger are read again: a helper that claimed its entry meanwhile
+// is kept, one that is no longer the same process is left alone, and the rest get SIGKILL. A read that
+// fails kills none. Then the finished entries are released.
 func (m *macOSVMs) reapOrphanHelpers(ctx context.Context) {
 	if m == nil || m.ledger == nil {
 		return
@@ -74,15 +75,26 @@ func (m *macOSVMs) reapOrphanHelpers(ctx context.Context) {
 	if len(ended) == 0 {
 		return
 	}
-	live := m.waitOrphans(ctx, ended)
-	if counted, err = m.ledger.Counted(); err != nil {
-		// Without the entries a claim cannot be told apart: kill none.
-		slog.Warn("macOS VM: read the ledger before killing helpers a previous runner left", "error", err.Error())
+	m.waitOrphans(ctx, ended)
+	// SIGKILL only on a fresh read of both: the process table (the same pid, start and argv, so a pid
+	// reused meanwhile is never hit) and the ledger (still unclaimed). Either read failing kills none;
+	// the next start looks again.
+	procs, err = m.host.Processes()
+	if err == nil {
+		counted, err = m.ledger.Counted()
+	}
+	if err != nil {
+		slog.Warn("macOS VM: helpers a previous runner left were not killed: they could not be checked again", "error", err.Error())
+		m.reconcilePrepare()
 		return
 	}
 	for _, o := range ended {
+		live, err := m.stillOrphan(procs, o)
 		switch {
-		case !slices.Contains(live, o):
+		case err != nil:
+			slog.Warn("macOS VM: a helper a previous runner left was not killed: it could not be checked again", "pid", o.pid, "error", err.Error())
+			continue
+		case !live:
 		case claimedBy(counted, o):
 			slog.Info("macOS VM: kept a helper a previous runner left: it took its ledger entry", "pid", o.pid, "entry", o.entry)
 			continue
@@ -142,24 +154,39 @@ func procAlive(procs []admission.Proc, pid int, start int64) bool {
 	return slices.ContainsFunc(procs, func(p admission.Proc) bool { return p.PID == pid && p.Start == start })
 }
 
-// waitOrphans waits up to reapGrace for the helpers to exit and returns those still running.
-func (m *macOSVMs) waitOrphans(ctx context.Context, hs []orphanHelper) []orphanHelper {
+// waitOrphans waits until reapGrace ends, ctx ends, or a read of the process table shows none of the
+// helpers. A read that fails proves nothing, so the wait goes on.
+func (m *macOSVMs) waitOrphans(ctx context.Context, hs []orphanHelper) {
 	deadline := time.Now().Add(reapGrace)
 	for {
-		procs, err := m.host.Processes()
-		if err != nil {
-			return hs
+		if procs, err := m.host.Processes(); err == nil &&
+			!slices.ContainsFunc(hs, func(o orphanHelper) bool { return procAlive(procs, o.pid, o.start) }) {
+			return
 		}
-		live := slices.DeleteFunc(slices.Clone(hs), func(o orphanHelper) bool { return !procAlive(procs, o.pid, o.start) })
-		if len(live) == 0 || !time.Now().Before(deadline) {
-			return live
+		if !time.Now().Before(deadline) {
+			return
 		}
 		select {
 		case <-ctx.Done():
-			return live
+			return
 		case <-time.After(min(50*time.Millisecond, reapGrace/4)):
 		}
 	}
+}
+
+// stillOrphan: o is, in procs, still the same process (pid and start), this user's, named as the
+// helper, with the argv it was ended for. An error when its argv cannot be read again.
+func (m *macOSVMs) stillOrphan(procs []admission.Proc, o orphanHelper) (bool, error) {
+	i := slices.IndexFunc(procs, func(p admission.Proc) bool { return p.PID == o.pid && p.Start == o.start })
+	if i < 0 || procs[i].UID != m.uid || !strings.HasPrefix(procs[i].Name, admission.HelperProcess) {
+		return false, nil
+	}
+	argv, err := admission.Args(m.host, o.pid)
+	if err != nil {
+		return false, err
+	}
+	sub, runner, entry := parseJobArgv(argv)
+	return sub == o.sub && runner == m.runnerID && entry == o.entry, nil
 }
 
 // parseJobArgv reads a helper's sub-command (argv[1]) and its --runner-id and --ledger-entry values, in
