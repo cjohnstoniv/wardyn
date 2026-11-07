@@ -41,12 +41,36 @@ func TestMultilineRenderingsMaskTerminalOutput(t *testing.T) {
 }
 
 func TestMultilineRenderingsSingleLineControl(t *testing.T) {
-	if got := MultilineRenderings([]byte("sk-single-line-secret\n")); got != nil {
-		t.Fatalf("a single-line value got renderings %q", got)
+	if got := MultilineRenderings([]byte("sk-single-line-secret")); got != nil {
+		t.Fatalf("a value with no line break got renderings %q", got)
 	}
 	m := maskerFor("sk-single-line-secret", nil)
 	if got := string(m.Mask([]byte("key=sk-single-line-secret\r\n"))); got != "key=<secret-hidden>\r\n" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// A one-line value stored with a trailing line break is printed without it
+// followed by CR LF, so the value as stored never matches.
+func TestMultilineRenderingsTrailingBreakOfOneLine(t *testing.T) {
+	const val = "sk-throwaway-example-12345\n"
+	got := MultilineRenderings([]byte(val))
+	if len(got) != 1 || string(got[0]) != "sk-throwaway-example-12345" {
+		t.Fatalf("got %q, want the value without its line break", got)
+	}
+	m := maskerFor(val, got)
+	pty := "$ echo $TOKEN\r\nsk-throwaway-example-12345\r\n"
+	cast, err := json.Marshal(pty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string]string{"CRLF": pty, "JSON-escaped": `[0.5,"o",` + string(cast) + `]`} {
+		if out := string(m.Mask([]byte(in))); bytes.Contains([]byte(out), []byte("sk-throwaway-example-12345")) {
+			t.Errorf("%s output leaks the value: %q", name, out)
+		}
+	}
+	if out := string(maskerFor(val, nil).Mask([]byte(pty))); !bytes.Contains([]byte(out), []byte("sk-throwaway-example-12345")) {
+		t.Errorf("control: the stored value alone was expected to miss CRLF output, got %q", out)
 	}
 }
 
@@ -56,7 +80,7 @@ func TestMultilineRenderingsLines(t *testing.T) {
 	for _, g := range got {
 		lines = append(lines, string(g))
 	}
-	want := []string{"ab\nlongenough-line\ncd", "ab\r\nlongenough-line\r\ncd", "longenough-line"}
+	want := []string{"ab\r\nlongenough-line\r\ncd", "ab\nlongenough-line\ncd", "ab\r\nlongenough-line\r\ncd", "longenough-line"}
 	if len(lines) != len(want) {
 		t.Fatalf("got %q, want %q", lines, want)
 	}

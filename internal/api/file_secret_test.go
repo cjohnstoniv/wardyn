@@ -633,4 +633,7 @@ func TestSecretRenderings_MultilineValue(t *testing.T) {
 	if single := envSecretRenderings([]byte("sk-single-line-secret")); len(single) != 1 {
 		t.Errorf("a single-line variable has %d renderings, want 1", len(single))
 	}
+	if got := envSecretRenderings([]byte("sk-single-line-secret\n")); len(got) != 2 || string(got[1]) != "sk-single-line-secret" {
+		t.Errorf("a one-line variable with a trailing break has renderings %q, want it as stored and without the break", got)
+	}
 }

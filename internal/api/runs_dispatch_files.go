@@ -165,23 +165,16 @@ func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run ty
 	return s.completeMaskManifest(ctx, run)
 }
 
-// fileSecretRenderings is what a delivered file's value is masked as: the
-// bytes as stored, those bytes without a trailing line break when that
-// differs — the form a shell's command substitution reads the file into — and,
-// for a value with a line break inside it, the renderings a terminal prints
-// (envSecretRenderings).
-func fileSecretRenderings(val []byte) [][]byte {
-	out := envSecretRenderings(val)
-	if trimmed := bytes.TrimRight(val, "\r\n"); len(trimmed) != len(val) {
-		out = append(out, trimmed)
-	}
-	return out
-}
+// fileSecretRenderings is what a delivered file's value is masked as: the same
+// renderings as a variable's (envSecretRenderings), which include the bytes
+// without a trailing line break — the form a shell's command substitution
+// reads the file into.
+func fileSecretRenderings(val []byte) [][]byte { return envSecretRenderings(val) }
 
 // envSecretRenderings is what a delivered variable's value is masked as: the
-// bytes as stored and, for a value with a line break inside it, the forms a
-// terminal prints it in — CR LF line ends, and each line alone
-// (secretmask.MultilineRenderings).
+// bytes as stored, those bytes without a trailing line break, and, for a value
+// with a line break inside it, the forms a terminal prints it in — CR LF line
+// ends, and each line alone (secretmask.MultilineRenderings).
 func envSecretRenderings(val []byte) [][]byte {
 	return append([][]byte{val}, secretmask.MultilineRenderings(val)...)
 }
