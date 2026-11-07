@@ -498,3 +498,18 @@ func TestImageAdmissionReasonsMatchImageadmit(t *testing.T) {
 		}
 	}
 }
+
+// TestImageAdmissionGovernedAdminIsChecked: with GovernAdminRuns on, an admin's own run is governed, so its
+// image is checked as a member's is; with it off the admin is an operator and is not checked.
+func TestImageAdmissionGovernedAdminIsChecked(t *testing.T) {
+	admin := operatorCtx(capSub, capEmail, oidc.RoleAdmin)
+	for _, on := range []bool{false, true} {
+		a := &fakeAdmitter{require: func(bool, []string) (*imageadmit.Verdict, error) { return &imageadmit.Verdict{Reason: imageadmit.NoPolicy}, nil }}
+		s := admissionServer(admissionSite(types.ImageAdmissionEnforce), a)
+		s.cfg.GovernAdminRuns = on
+		got := runAdmission(s, admin, foldCreate, admitTagRef, nil, nil)
+		if r, _ := a.calls(); got.ok == on || (r == 1) != on {
+			t.Errorf("GovernAdminRuns=%v: ok=%v requires=%d; want checked and refused only when on", on, got.ok, r)
+		}
+	}
+}
