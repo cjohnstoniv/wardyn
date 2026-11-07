@@ -98,7 +98,7 @@ func TestADOCeilingRefusedAtTheDryDoors(t *testing.T) {
 					t.Fatalf("%s = %d, want %d: %s", path, w.Code, tc.wantCode, w.Body.String())
 				}
 				if tc.wantReason == "" {
-					if strings.Contains(w.Body.String(), `"reason"`) {
+					if strings.Contains(w.Body.String(), adoAboveCeilingReason) || strings.Contains(w.Body.String(), "ado_capabilities_none_permitted") {
 						t.Errorf("%s refused a list that passes: %s", path, w.Body.String())
 					}
 					continue
