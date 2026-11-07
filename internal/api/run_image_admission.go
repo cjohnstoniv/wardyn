@@ -58,7 +58,7 @@ const (
 	imageSignatureMissingMsg = "Image %s has no signature from a signer this organisation trusts for it (%s). " +
 		"Sign it and push the signature to its registry, or launch with a signed image"
 	imageSignatureInvalidMsg    = "Image %s is signed, but not by a signer this organisation trusts for it: found %s from %s; %s requires %s from %s"
-	imageSignatureInvalidKeyMsg = "Image %s is signed, but not by a signer this organisation trusts for it: signed with key %s; %s requires key %s"
+	imageSignatureInvalidKeyMsg = "Image %s is signed, but not with a key this organisation trusts for it; %s requires key %s"
 	imageAttestationMissingMsg  = "Image %s has no %s attestation signed by %s, which this organisation requires"
 	// The second %s is the check's own cause (imageadmit.Verdict.Detail): a host and what it answered.
 	imageAdmissionUnavailableMsg = "Wardyn could not check image %s: %s. Try again, or ask an admin"
@@ -236,7 +236,8 @@ func imageAdmissionRefusal(ref string, v imageadmit.Verdict) *runRefusal {
 	case imageadmit.SignatureInvalid:
 		reason = reasonImageSignatureInvalid
 		if v.FoundIssuer == "" && v.WantIssuer == "" {
-			msg = fmt.Sprintf(imageSignatureInvalidKeyMsg, named, v.Found, v.Signer, v.Want)
+			// A key signer never learns which key signed: the other key cannot be verified, only named by the bundle.
+			msg = fmt.Sprintf(imageSignatureInvalidKeyMsg, named, v.Signer, v.Want)
 		} else {
 			msg = fmt.Sprintf(imageSignatureInvalidMsg, named, v.Found, v.FoundIssuer, v.Signer, v.Want, v.WantIssuer)
 		}

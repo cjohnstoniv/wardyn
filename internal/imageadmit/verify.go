@@ -167,10 +167,11 @@ func (s *Signer) evaluate(d []byte, cands []candidate) outcome {
 			o.note(errNotStatement)
 			continue
 		}
-		// A bundle naming another key is that key's signature; it cannot verify under this signer's key.
+		// A bundle naming another key cannot verify under this signer's key. The hint is unsigned material a
+		// registry can set to anything, so it is never repeated as the key that signed.
 		if hint := c.b.Bundle.GetVerificationMaterial().GetPublicKey().GetHint(); s.keyHints != nil && hint != "" && !s.keyHints[hint] {
 			if o.mismatch == nil {
-				o.mismatch = &signed{keyID: bounded(hint)}
+				o.mismatch = &signed{}
 			}
 			continue
 		}
