@@ -354,7 +354,8 @@ type gatewayTokenHolder struct {
 // until half-life; from then on the call waits for a refresh (the mint is
 // bounded by h.timeout), so a refusal is seen before the call is forwarded. A
 // refresh that fails but may pass leaves the held token serving to exp, and
-// is asked again once per interval.
+// is asked again after the retry interval, or after half of what is left of
+// the token's life when that is shorter (settleLocked).
 func (h *gatewayTokenHolder) current(ctx context.Context, p *Proxy) (string, error) {
 	h.mu.Lock()
 	if h.cut {
