@@ -174,7 +174,6 @@ func TestGapCovTokenExchangeFormRefusals(t *testing.T) {
 		wantCode string
 	}{
 		{"another grant type", gapCovForm(url.Values{"grant_type": {"client_credentials"}}), "unsupported_grant_type"},
-		{"an actor token", gapCovForm(url.Values{"actor_token": {"x"}}), "invalid_request"},
 		{"another requested token type", gapCovForm(url.Values{"requested_token_type": {tokenTypeIDToken}}), "invalid_request"},
 		{"no subject token", gapCovForm(url.Values{"subject_token": {""}}), "invalid_request"},
 		{"an unknown subject token type", gapCovForm(url.Values{"subject_token_type": {"urn:example:other"}}), "invalid_request"},
