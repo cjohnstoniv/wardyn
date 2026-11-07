@@ -13,11 +13,16 @@
 #   4. renames the export file away and creates a new one (a rotation), appends a second line, and asserts it
 #      arrives too: the DaemonSet mounts the DIRECTORY, so the new file is followed.
 #   5. restarts wardynd, which mints and patches a new token at boot, asserts the Secret's token changed, then
-#      appends a third line and asserts it arrives with the new token in place.
+#      appends a third line and asserts it still arrives.
 #
 # This proves the join (export line -> run -> audit row), the rotation through the chart's mount, node
-# health and token delivery. It does NOT prove a real sensor: no Tetragon runs here (that needs a kernel
-# with BTF), so the line is made up and its fields follow Tetragon's gRPC reference.
+# health, that wardynd updates the Secret, and that delivery continued after it did. It does NOT prove that
+# the sensor picked up the new token through the mounted Secret: the sensor re-reads its token only after
+# wardynd rejects the one it holds, so the third line can arrive on the cached token. That 401, re-read and
+# retry path is covered by a unit test (TestEventSink_RotatedFileIsReadAfterRejection), and the mounted
+# projection refreshing in a live pod is not proven by this script.
+# It does NOT prove a real sensor either: no Tetragon runs here (that needs a kernel with BTF), so the line
+# is made up and its fields follow Tetragon's gRPC reference.
 #
 # GUARD: self-skips unless WARDYN_TEST_K8S=1 (exit 77, common.sh's skip_lane). It runs helm upgrade on the
 # cluster it finds, so a hand run must also set WARDYN_ACK_SHARED_QUICKSTART=1 to say that cluster is
@@ -164,7 +169,7 @@ token1="${token0}"
 for _ in $(seq 1 60); do token1="$(secret_token)"; [[ "${token1}" != "${token0}" && -n "${token1}" ]] && break; sleep 2; done
 [[ "${token1}" != "${token0}" ]]; check "Secret ${SECRET} holds a new token after the restart" $?
 append gtjob-third
-audit_has gtjob-third; check "audit: a line written after the new token arrived" $?
+audit_has gtjob-third; check "audit: a line written after the Secret was updated still arrived (not proof the new token was used)" $?
 
 kc -n "${NAMESPACE}" logs "daemonset/${SENSOR_DS}" --tail=200 >"${EVIDENCE_DIR}/sensor.log" 2>&1 || true
 api "/api/v1/audit?run_id=${RUN_ID}" >"${EVIDENCE_DIR}/audit.json" 2>/dev/null || true
