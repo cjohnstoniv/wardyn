@@ -485,3 +485,100 @@ func TestCheckpointLoop_OtherSignerAdvancedSignsLoneRow(t *testing.T) {
 	}
 	checkSigned(t, a, st)
 }
+
+// retireScenario signs a checkpoint with a key, then rotates with -retire-previous and returns the signer now
+// holding the new key, the retired key (a thief's) and the store.
+func retireScenario(t *testing.T) (*Signer, *Key, *fakeStore) {
+	t.Helper()
+	ctx := context.Background()
+	st := &fakeStore{}
+	raw := mustNewKey(t)
+	s, _ := newTestSigner(t, st)
+	old := mustLoad(t, raw)
+	s.Key = old
+	s.Tick(ctx)
+	st.appendRows(3)
+	s.Tick(ctx) // C1 over seq 1-3 by the old key; its own audit row lands at seq 4
+	if st.inserts != 1 {
+		t.Fatalf("setup: inserts=%d, want the first checkpoint", st.inserts)
+	}
+	rotated, err := Rotate(raw, true, t0.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	s.Key = mustLoad(t, rotated)
+	return s, old, st
+}
+
+// After -retire-previous the old key is treated as stolen. A checkpoint it signs, inserted by someone with
+// database write access, is not this install's: the signer does not chain to it. It counts a foreign row, logs
+// it, and starts a new genesis from the chain head, and it keeps signing (a legitimate retire must not stop it).
+func TestCheckpointLoop_RetiredKeyCheckpointIsNotChained(t *testing.T) {
+	ctx := context.Background()
+	s, old, st := retireScenario(t)
+	st.appendRows(2) // seq 5, 6
+	forgedStm := auditreceipt.Statement{Format: auditreceipt.CheckpointFormat, Kid: old.KeyID(), SeqLo: 5, SeqHi: 6, Rows: 2,
+		HeadHash: fakeHash(6), Digest: fakeHash(1), SeqDigest: fakeHash(2), SignedAt: t0.Format(time.RFC3339Nano)}
+	text := string(forgedStm.Bytes())
+	st.cps = append(st.cps, Checkpoint{SeqLo: 5, SeqHi: 6, Kid: old.KeyID(), Statement: text, Signature: old.Sign([]byte(text))})
+	st.appendRows(1) // seq 7
+
+	s.Tick(ctx)
+	if got := s.Status.Snapshot().Failures[ReasonForeignRow]; got != 1 {
+		t.Fatalf("foreign_row = %d after a retired-key checkpoint, want 1", got)
+	}
+	if s.latched {
+		t.Fatalf("the signer latched: a retire must not stop signing")
+	}
+	s.Tick(ctx) // nothing new above the new genesis point
+	st.appendRows(2)
+	s.Tick(ctx)
+	if st.inserts != 2 {
+		t.Fatalf("inserts = %d, want a new checkpoint over the rows after the chain head", st.inserts)
+	}
+	got := st.cps[len(st.cps)-1]
+	stm, err := auditreceipt.ParseStatement(got.Statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stm.Kid != s.Key.KeyID() || stm.Prev != "" || stm.SeqLo != 8 {
+		t.Fatalf("new checkpoint = %+v, want the new key, an empty prev (a new genesis) and seq_lo 8", stm)
+	}
+	if stm.Prev == auditreceipt.StatementHash(text) {
+		t.Fatalf("the signer chained to the retired key's checkpoint")
+	}
+	// One alarm for the one checkpoint, however many ticks follow; and the next checkpoint chains normally.
+	st.appendRows(2)
+	s.Tick(ctx)
+	if st.inserts != 3 || s.Status.Snapshot().Failures[ReasonForeignRow] != 1 {
+		t.Fatalf("inserts=%d foreign_row=%d, want a third checkpoint and still one alarm", st.inserts, s.Status.Snapshot().Failures[ReasonForeignRow])
+	}
+	third, _ := auditreceipt.ParseStatement(st.cps[len(st.cps)-1].Statement)
+	if third.Prev != auditreceipt.StatementHash(got.Statement) {
+		t.Fatalf("the third checkpoint does not chain to the new genesis")
+	}
+}
+
+// A legitimate retire leaves the last checkpoint signed by the retired key. The signer cannot tell it from a
+// forgery, so it reports it once and starts a new genesis; signing never stops.
+func TestCheckpointLoop_LegitimateRetireKeepsSigning(t *testing.T) {
+	ctx := context.Background()
+	s, _, st := retireScenario(t)
+	st.appendRows(2)
+	s.Tick(ctx) // the first tick after the restart: reports the retired-key checkpoint, starts a genesis
+	for i := 0; i < 3; i++ {
+		st.appendRows(2)
+		s.Tick(ctx)
+	}
+	if s.latched || st.inserts < 3 {
+		t.Fatalf("latched=%v inserts=%d: signing did not continue after a retire", s.latched, st.inserts)
+	}
+	if n := s.Status.Snapshot().Failures[ReasonForeignRow]; n != 1 {
+		t.Fatalf("foreign_row = %d, want the retired-key checkpoint reported once", n)
+	}
+	for _, c := range st.cps[1:] {
+		if c.Kid != s.Key.KeyID() {
+			t.Fatalf("a checkpoint after the retire is signed by %s, want the new key", c.Kid)
+		}
+	}
+}
