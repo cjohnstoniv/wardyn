@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/imageadmit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -38,13 +39,15 @@ func (s *Server) wrapBuiltFromPin(ctx context.Context, ws types.Workspace, pin s
 }
 
 // conventionImageAdmission holds the image a run gets by convention (its agent's, its harness set's or an
-// architecture variant of either) to image admission when the site's scope is all and its mode enforce, and
-// returns the ref to dispatch: the pin when it was checked, else image. It runs at launch, where the placed
-// runner's architecture has chosen the image. Operators and the break-glass admin are not checked, as at
-// create; audit mode and scope member leave it unchecked. An admitted image's verdict (the image as
-// configured, its digest and pin) is written to the run before dispatch, so a revive re-checks that digest;
-// a run whose verdict cannot be written is failed. A refusal fails the run (the image is the operator's
-// choice, so the member gets no 403); an unreadable site config refuses, since the mode lives in it.
+// architecture variant of either) to image admission when the site's scope is all, and returns the ref to
+// dispatch: the pin when enforce admitted it, else image. It runs at launch, where the placed runner's
+// architecture has chosen the image. Operators and the break-glass admin are not checked, as at create; scope
+// member leaves it unchecked. Under enforce, an admitted image's verdict (the image as configured, its digest
+// and pin) is written to the run before dispatch, so a revive re-checks that digest; a run whose verdict cannot
+// be written is failed. A refusal fails the run (the image is the operator's choice, so the member gets no
+// 403). Under audit the check is made the same way and its outcome (admitted, or would_refuse with the reason)
+// is written to the run, the only record a detached launch has; nothing is pinned or refused, and a verdict
+// that cannot be written is logged. An unreadable site config refuses, since the mode lives in it.
 func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRun, image string) (string, *runRefusal) {
 	if image == "" || run.MachineKind.IsMacOSVM() {
 		return image, nil
@@ -57,10 +60,15 @@ func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRu
 	if sc.Images != nil {
 		adm = sc.Images.Admission
 	}
-	if adm.EffectiveMode() != types.ImageAdmissionEnforce || adm.EffectiveScope() != types.ImageAdmissionScopeAll || s.runUngoverned(ctx) {
+	mode := adm.EffectiveMode()
+	if mode == types.ImageAdmissionOff || adm.EffectiveScope() != types.ImageAdmissionScopeAll || s.runUngoverned(ctx) {
 		return image, nil
 	}
 	v, refusal := s.checkImage(ctx, adm, image, true, nil)
+	if mode == types.ImageAdmissionAudit {
+		s.recordConventionAudit(ctx, run, image, v, refusal)
+		return image, nil
+	}
 	if refusal != nil {
 		return "", refusal
 	}
@@ -74,6 +82,21 @@ func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRu
 		return "", runServerError("record the convention image's admission", err)
 	}
 	return pinned, nil
+}
+
+// recordConventionAudit writes audit mode's outcome for the convention image to the run: admitted, or
+// would_refuse with the refusal's reason (an unreachable registry included). A write that fails is logged
+// only: audit never changes what runs.
+func (s *Server) recordConventionAudit(ctx context.Context, run types.AgentRun, image string, v imageadmit.Verdict, refusal *runRefusal) {
+	verdict := admittedImage(types.ImageAdmissionAudit, v)
+	if refusal != nil {
+		verdict = &types.ImageAdmissionVerdict{Mode: types.ImageAdmissionAudit, Verdict: types.ImageAdmissionWouldRefuse,
+			Reason: refusal.body.Reason, Digest: v.Digest}
+	}
+	verdict.Ref = image
+	if err := s.cfg.Store.SetRunImageAdmission(ctx, run.ID, verdict); err != nil {
+		slog.WarnContext(ctx, "wardynd: record the convention image's audit verdict", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
 }
 
 // failConventionImage fails a run whose convention image admission refused: the refusal sentence is the run's
