@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -214,6 +215,30 @@ func TestGroundtruthHeartbeatUpsertsNodeSensor(t *testing.T) {
 	}
 	if compose.Node != "" || compose.ObservedTotal != 1 {
 		t.Errorf("Compose row = %+v, want the empty node with observed 1", compose)
+	}
+}
+
+// TestGroundtruthHeartbeatNodeNameIsBounded: a node name past 253 bytes (a DNS name's limit) writes no
+// sensor row, and the beat is still recorded and the batch still accepted.
+func TestGroundtruthHeartbeatNodeNameIsBounded(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &nodeSensorStore{}
+	srv := nodeSensorServer(h, st, now)
+	ok := strings.Repeat("a", 253)
+	long := strings.Repeat("a", 254)
+	postBatch(t, h, srv, groundtruth.HeartbeatEventForNode(ok, 0, 1, 0, nil), groundtruth.HeartbeatEventForNode(long, 0, 1, 0, nil))
+	if len(st.upserts) != 1 || st.upserts[0].Node != ok {
+		t.Fatalf("upserts = %+v, want only the 253-byte node", st.upserts)
+	}
+	beats := 0
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == groundtruth.ActionSensorHeartbeat {
+			beats++
+		}
+	}
+	if beats != 2 {
+		t.Errorf("recorded heartbeats = %d, want both", beats)
 	}
 }
 
