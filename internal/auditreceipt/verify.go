@@ -101,7 +101,8 @@ type CheckpointResult struct {
 }
 
 // EventResult is one event's verdict. Withheld means it is linked into the signed list but its content was
-// not re-hashed.
+// not re-hashed: its action, actor, target and data are whatever the receipt says, so a withheld event is
+// never OK. OK means its content re-hashed to a row_hash in a signed, inclusion-checked list.
 type EventResult struct {
 	Checkpoint int       `json:"checkpoint"`
 	Seq        int64     `json:"seq"`
@@ -119,7 +120,8 @@ type Report struct {
 	Failures    []Failure          `json:"failures"`
 }
 
-// OK reports that no check failed.
+// OK reports that no check failed. A withheld event fails no check (its content was not checked at all), so
+// OK alone is never the verdict on a receipt's content: use Complete.
 func (r Report) OK() bool { return len(r.Failures) == 0 }
 
 // Withheld counts the events whose content was not re-hashed.
@@ -293,7 +295,7 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 			} else if ev.Row.RowHash != nil && RowHash(ev.Row) != *ev.Row.RowHash {
 				fail(i, seq, ReasonRowHash, "the row's content does not hash to its row_hash (it was altered)")
 			}
-			r.OK = len(rep.Failures) == evBefore && res.Signed && res.Inclusion
+			r.OK = len(rep.Failures) == evBefore && res.Signed && res.Inclusion && !r.Withheld
 			rep.Events = append(rep.Events, r)
 		}
 
