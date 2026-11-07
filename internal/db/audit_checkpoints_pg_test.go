@@ -49,11 +49,14 @@ func TestAuditCheckpoints_AppendOnly(t *testing.T) {
 }
 
 // TestAuditCheckpoints_SplitRoleGrants: on a split-role install the app role (the one holding EXECUTE on
-// audit_append, found from the catalog, not by name) may INSERT and SELECT checkpoints and nothing else; a role
-// with only CONNECT may do neither.
+// audit_append, found from the catalog, not by name) may INSERT and SELECT checkpoints and nothing else, even with
+// default privileges that grant it UPDATE and DELETE on new tables; a role with only CONNECT may do neither.
 func TestAuditCheckpoints_SplitRoleGrants(t *testing.T) {
 	ctx := context.Background()
 	f := newUpgradeFixture(t, 3)
+	// The documented split-role posture hands the app role DML on every table created later.
+	pgExec(t, f.owner, fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA %s GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s`,
+		f.schema, f.appRole))
 	f.convert(t)
 	app := f.app(t)
 
