@@ -64,8 +64,9 @@ const (
 	CauseUnreachable  Cause = "unreachable"  // connect or DNS failure
 	CauseTLS          Cause = "tls"          // certificate not trusted
 	CauseTimeout      Cause = "timeout"
-	CauseServer       Cause = "server"  // 5xx, 429 or an unexpected status
-	CauseRefused      Cause = "refused" // a target the client will not contact
+	CauseServer       Cause = "server"    // 5xx, 429 or an unexpected status
+	CauseRefused      Cause = "refused"   // a target the client will not contact
+	CauseAuthFile     Cause = "auth_file" // the registry auth file could not be read when a credential was asked for
 )
 
 // Unavailable is a registry read that failed for a reason outside the image's content.
@@ -94,6 +95,8 @@ func (u *Unavailable) Error() string {
 		return fmt.Sprintf("%s did not answer in time", u.Host)
 	case CauseRefused:
 		return fmt.Sprintf("%s was not contacted: %v", u.Host, u.Err)
+	case CauseAuthFile:
+		return fmt.Sprintf("the credential for %s could not be looked up: %v", u.Host, u.Err)
 	}
 	if u.Err != nil {
 		return fmt.Sprintf("%s could not be read: %v", u.Host, u.Err)
@@ -499,7 +502,8 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 	if c.auth != nil {
 		var err error
 		if cred, have, err = c.auth.Lookup(normalizeHost(ref.Registry)); err != nil {
-			return "", err
+			// A local fault, not the image's content: the check fails as unavailable and is never kept.
+			return "", &Unavailable{Cause: CauseAuthFile, Host: ref.Registry, Registry: ref.Registry, Err: err}
 		}
 	}
 	switch scheme {
