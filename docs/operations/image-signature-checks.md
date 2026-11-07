@@ -89,7 +89,7 @@
 - Any other statement is an attestation. It never counts as the signature, so a scan or SBOM attestation by the same identity does not admit an image. Add its type to `signature_predicates` only if you mean it.
 - The statement's subject must be the image digest. A statement about another digest is ignored.
 - Legacy cosign signatures (`sha256-<hex>.sig`) and attestations (`.att`) are read as well as the referrers API.
-- At most 16 signatures are tried per signer, bundles first. An image with 16 or more signature bundles has its legacy signature left unread, so if none of those bundles verifies, the image is refused.
+- At most 16 signatures are tried per signer, bundles first. Once bundles fill those 16, legacy signatures are not tried, though they are still fetched, and a failed fetch still makes the check unavailable.
 - An attestation or signature over 1 MiB is not read. Wardyn's own CycloneDX SBOM is 2.3 to 3.2 MB, so `require_attestations: ["https://cyclonedx.org/bom"]` cannot be met from it.
 - A legacy signature's certificate chain annotation is never trusted. Its signed timestamp counts only when the trust root lists a timestamp authority; a root with a Rekor log needs the signature's Rekor entry.
 
