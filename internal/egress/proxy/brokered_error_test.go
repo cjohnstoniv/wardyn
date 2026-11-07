@@ -135,6 +135,10 @@ func TestBrokeredErrorsParseAsTheProviderSDKError(t *testing.T) {
 			func(w http.ResponseWriter, shape errShape, host string) {
 				p.writeBrokeredFault(w, shape, host, brokeredFault{port: 443, ruleSource: ruleSourceLLM, reason: reasonCredentialUnavailable}, errors.New("injection status 424"))
 			}},
+		{"gateway_access_cut", reasonGatewayAccessCut, 403, 403, "permission_error", "permission_error", gatewayCutSentence, "refresh",
+			func(w http.ResponseWriter, shape errShape, host string) {
+				p.writeBrokeredFault(w, shape, host, brokeredFault{port: 443, ruleSource: ruleSourceLLM, reason: reasonGatewayAccessCut}, errGatewayAccessCut)
+			}},
 		{"upstream_error", reasonUpstreamError, 502, 500, "api_error", "api_error", "the request to it failed", "answered",
 			func(w http.ResponseWriter, shape errShape, host string) {
 				p.writeBrokeredFault(w, shape, host, brokeredFault{port: 443, ruleSource: "builtin:dial-failed"}, errors.New("boom"))
