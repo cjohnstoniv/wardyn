@@ -638,3 +638,27 @@ func TestDiffFallsBackOnOldServer(t *testing.T) {
 		t.Errorf("workload_ 404: err = %v, stderr = %q", err, errOut)
 	}
 }
+
+// TestDiffExitsTwoOnWouldRefuseLaunch: a launch the organisation would refuse is exit 2 with its reason,
+// whether or not the document changed (an unchanged spec whose last launch was refused retries it).
+func TestDiffExitsTwoOnWouldRefuseLaunch(t *testing.T) {
+	file := writeTemplateFile(t, "w.yaml", webYAML)
+	stored := storedWeb(t, webYAML)
+	refuse := sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldRefuse, Reason: "run_cap_reached", Message: "too many runs"}
+	cases := map[string]sdk.WorkloadPreview{
+		"unchanged document": previewOf(t, &stored, "none", sdk.WorkloadUnchanged, refuse),
+	}
+	older := stored
+	older.Description = "an older description"
+	cases["changed document"] = previewOf(t, &older, "update", sdk.WorkloadUpdated, refuse)
+	for name, pv := range cases {
+		if name == "unchanged document" {
+			pv.Changes = []sdk.WorkloadChange{}
+		}
+		rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, pv)})
+		_, _, err := runWithStderr(t, rig, "diff", "-f", file)
+		if err == nil || exitCodeFor(err) != 2 || !strings.Contains(err.Error(), "run_cap_reached: too many runs") {
+			t.Errorf("%s: err = %v (exit %d), want exit 2 naming the reason", name, err, exitCodeFor(err))
+		}
+	}
+}
