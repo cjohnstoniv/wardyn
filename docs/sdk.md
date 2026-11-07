@@ -663,6 +663,8 @@ The run's `machine` request field is `RunMachine`:
 
 `GetModelProviders` (`GET /api/v1/model-providers`, admin) answers a `ModelProvidersRead`: the provider records, and per provider id how many people hold a credential of their own for it. It returns configuration and counts, never a credential value. Changing providers, signing in and storing a credential stay in the console.
 
+`GatewayIdentityBedrockSSO` (`gateway_identity_bedrock_sso`) is true when a `bedrock_sso` provider can send run identity on this install, which needs `WARDYN_AWS_SIGV4_AT_PROXY` on.
+
 ## Error handling
 
 Non-2xx responses are returned as `*client.APIError`:
@@ -761,7 +763,7 @@ start.
 | `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `run_containment_pending` | `403` on token renewal (`identity.renew`): the run's Kubernetes runner deleted it but cannot yet prove it stopped, so its token is never renewed again. The runner's relay fence is what bounds its egress; this is the second layer. |
 | `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. Launch the run again. |
-| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run with `allowed_models` on such a runner is refused `409` with it. |
+| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run with `allowed_models` on such a runner is refused `409` with it. |
 | `gateway_identity_changed` | A run asked for a gateway token, or a revive was asked for, and its model provider was changed or turned off after the run started: `403` on the token, `409` on the revive. Create a new run, or edit the provider back. |
 | `gateway_identity_unavailable` | `503`: Wardyn couldn't read what a gateway token depends on, or the save that turns gateway identity on couldn't make the signing key, so nothing was issued or saved. |
 | `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. |

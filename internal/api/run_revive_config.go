@@ -63,7 +63,9 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		closeGitHubDoor(&cfg.Policy)
 		re.droppedLane = append(re.droppedLane, githubDoorLane)
 	}
-	if cfg.AWSSigV4 != nil && w.withheldAny(cfg.AWSSigV4.Hosts) { // the sandbox holds only the placeholder pair, so the re-signer can go
+	// The sandbox holds only the placeholder pair, so the re-signer can go, with its gateways' routes.
+	if sig := cfg.AWSSigV4; sig != nil && w.withheldAny(slices.Concat(sig.Hosts, awsSigV4GatewayHosts(sig.Gateways))) {
+		cfg.GatewayIdentity = dropSignedGatewayRoutes(cfg.GatewayIdentity, sig.Gateways)
 		cfg.AWSSigV4 = nil
 		re.droppedLane = append(re.droppedLane, awsSigV4Lane)
 	}

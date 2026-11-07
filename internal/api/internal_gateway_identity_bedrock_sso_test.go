@@ -254,6 +254,8 @@ func TestGatewayDispatchBedrockSSORoute(t *testing.T) {
 	if data["aws_signing"] != "proxy" || data["aws_signing_gateway"] != ssoGatewayHost {
 		t.Errorf("run.bedrock.configure = %v, want aws_signing=proxy and aws_signing_gateway=%s", data, ssoGatewayHost)
 	}
+	// The runner fills in how its proxy reaches wardynd; the rest is what dispatch wrote.
+	pc.RunToken, pc.ControlPlaneURL = "run-token", "http://127.0.0.1:8080"
 	raw, err := runner.BuildProxyConfig(spec.RunID, pc, 3128)
 	if err != nil {
 		t.Fatal(err)

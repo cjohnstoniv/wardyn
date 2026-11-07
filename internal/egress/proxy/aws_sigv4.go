@@ -397,6 +397,11 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 	scope := p.sigv4.scopes[hostKey(host)]
 	var route *GatewayIdentityRoute
 	if scope.signHost != "" {
+		if port != scope.port {
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPort,
+				fmt.Sprintf("this run sends to this gateway only on port %d", scope.port))
+			return
+		}
 		if route = p.awsSigV4GatewayRoute(r, host, port, scope); route == nil {
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4GatewayPath,
 				"this run sends to this gateway only under its own path, with no dot segments")
@@ -657,8 +662,13 @@ func (p *Proxy) refuseAWSSigV4Tunnel(w http.ResponseWriter, r *http.Request, hos
 	if !p.isAWSSigV4Host(host) {
 		return false
 	}
-	p.refuseAWSSigV4(w, r, host, port, p.sigv4.scopes[hostKey(host)], awsSigV4Scope,
-		"this run reaches this host only through Wardyn's re-signing door on port 443")
+	scope := p.sigv4.scopes[hostKey(host)]
+	doorPort := 443
+	if scope.signHost != "" {
+		doorPort = scope.port // a gateway's door is on the gateway's own port
+	}
+	p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Scope,
+		fmt.Sprintf("this run reaches this host only through Wardyn's re-signing door on port %d", doorPort))
 	return true
 }
 

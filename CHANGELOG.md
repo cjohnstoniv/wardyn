@@ -23,6 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Run identity for an Amazon Bedrock provider people sign in to with SSO. With `WARDYN_AWS_SIGV4_AT_PROXY` on, Wardyn signs each Bedrock request as the person for the regional Bedrock address and sends it to your gateway with the run's identity token. The gateway forwards it to AWS unchanged. Off unless an admin turns it on for the provider.
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 
 ### Fixed
