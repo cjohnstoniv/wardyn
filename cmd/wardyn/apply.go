@@ -304,8 +304,10 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 					differs++
 					fmt.Fprint(cmd.OutOrStdout(), res.text)
 				}
-				if res.preview != nil && res.preview.Refusal != nil {
-					return usageError(fmt.Errorf("workload/%s would be refused: %s", d.Name, refusalSentence(res.preview.Refusal)))
+				if res.preview != nil {
+					if why := previewRefusal(*res.preview); why != "" {
+						return usageError(fmt.Errorf("workload/%s %s", d.Name, why))
+					}
 				}
 			}
 			if differs > 0 {
@@ -398,7 +400,7 @@ func workloadDryRun(cmd *cobra.Command, c *sdk.Client, docs []sdk.WorkloadDocume
 			return err
 		}
 		pv := res.preview
-		if pv != nil && (pv.Refusal != nil || pv.Launch.State == sdk.WorkloadPreviewWouldRefuse) {
+		if pv != nil && previewRefusal(*pv) != "" {
 			refused++
 		}
 		var pf sdk.PreflightResult
@@ -461,11 +463,23 @@ func refusalSentence(r *sdk.WorkloadPreviewRefusal) string {
 	return fmt.Sprintf("%s: %s", r.Reason, r.Error)
 }
 
+// previewRefusal says why an apply would be refused, by the store or at launch, or "" when it would not.
+// Both commands read it, so they cannot disagree.
+func previewRefusal(pv sdk.WorkloadPreview) string {
+	switch {
+	case pv.Refusal != nil:
+		return "would be refused: " + refusalSentence(pv.Refusal)
+	case pv.Launch.State == sdk.WorkloadPreviewWouldRefuse:
+		return fmt.Sprintf("the launch would be refused: %s: %s", pv.Launch.Reason, pv.Launch.Message)
+	}
+	return ""
+}
+
 // previewSentence is one line about a preview: what the apply does to the stored workload, and whether
 // a run starts.
 func previewSentence(pv sdk.WorkloadPreview) string {
 	if pv.Refusal != nil {
-		return "would be refused: " + refusalSentence(pv.Refusal)
+		return previewRefusal(pv)
 	}
 	s := "would be " + string(pv.Outcome)
 	switch pv.Launch.State {
@@ -475,7 +489,7 @@ func previewSentence(pv sdk.WorkloadPreview) string {
 			s += fmt.Sprintf(" (run %s ends once it runs)", pv.Launch.Replaces)
 		}
 	case sdk.WorkloadPreviewWouldRefuse:
-		s += fmt.Sprintf("; the launch would be refused: %s: %s", pv.Launch.Reason, pv.Launch.Message)
+		s += "; " + previewRefusal(pv)
 	default:
 		s += "; no run starts"
 	}
