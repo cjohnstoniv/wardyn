@@ -217,7 +217,7 @@ func TestApproveEachOnLocalMCPRefused(t *testing.T) {
 
 // Codex CLI and a command-started harness take approve_each on a remote server's tool: the broker
 // pauses the call, not the harness. A hold on the same tool is still refused.
-func TestApproveEachCodexNotRefused(t *testing.T) {
+func TestApproveEachHarnessWithoutGateNotRefused(t *testing.T) {
 	each := types.ToolRule{Tool: "mcp__linear__delete_issue", Effect: types.ToolApproveEach}
 	hold := types.ToolRule{Tool: "mcp__linear__delete_issue", Effect: types.ToolHold}
 	codex := func(r types.ToolRule) client.IncludedTool {
