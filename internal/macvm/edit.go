@@ -400,7 +400,7 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowSc
 	if err != nil {
 		return fmt.Errorf("macvm: the edit window: %w", err)
 	}
-	defer func() { bcancel(); w.Close() }() // the buttons and the live line end before the window does
+	defer func() { bcancel(); buttons.wait(); w.Close() }() // the buttons and the live line end before the window does
 	if lw, ok := w.(LiveWindow); ok {
 		buttons.watch(lw)
 	}

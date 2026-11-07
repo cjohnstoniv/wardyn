@@ -50,6 +50,7 @@ type editButtons struct {
 	mu         sync.Mutex
 	w          LiveWindow // nil until the window is up, and for a window with no live line
 	read, note string
+	watching   sync.WaitGroup
 }
 
 // wire gives text the buttons' callbacks and whether Trust the list's CAs has anything to trust: a ca item
@@ -97,6 +98,9 @@ func (b *editButtons) act(name string, call func(context.Context) (guestagent.Ed
 	}
 }
 
+// wait returns once the live line's reads have stopped (after ctx ends).
+func (b *editButtons) wait() { b.watching.Wait() }
+
 // show sets the live line's read (when not empty) or note, and redraws it.
 func (b *editButtons) show(read, note string) {
 	b.mu.Lock()
@@ -117,12 +121,16 @@ func (b *editButtons) show(read, note string) {
 	b.w.ShowLive(text)
 }
 
-// watch draws the live line in w, reading the guest now and every editLiveEvery until ctx ends.
+// watch draws the live line in w, reading the guest now and every editLiveEvery until ctx ends; wait
+// returns once it has stopped.
 func (b *editButtons) watch(w LiveWindow) {
 	b.mu.Lock()
 	b.w = w
 	b.mu.Unlock()
+	every := editLiveEvery
+	b.watching.Add(1)
 	go func() {
+		defer b.watching.Done()
 		for {
 			rctx, cancel := context.WithTimeout(b.ctx, 30*time.Second)
 			read := b.readGuest(rctx)
@@ -134,7 +142,7 @@ func (b *editButtons) watch(w LiveWindow) {
 			select {
 			case <-b.ctx.Done():
 				return
-			case <-time.After(editLiveEvery):
+			case <-time.After(every):
 			}
 		}
 	}()
