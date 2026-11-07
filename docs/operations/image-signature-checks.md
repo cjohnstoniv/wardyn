@@ -24,7 +24,7 @@
 | `enforce` | Made, and the run uses the checked digest | `403` with a reason below | `503` `image_admission_unavailable` |
 
 - `scope` is `member` (default: the image a member names) or `all` (also the convention image, checked when the run launches).
-- Workspace verify and record runs are not checked, even with `scope: "all"`. They run the workspace's built image, or else the agent image.
+- Runs Wardyn launches itself are not checked, even with `scope: "all"`: workspace record sessions, source scans, harness sign-in and the site-config connectivity probes. They run the workspace's built image, or else the agent image, and revive under any mode.
 - A governance profile that lists `required_image_signers` is held to those signers even while the site mode is `off` or `audit`. A profile can only tighten.
 - A run that was queued is checked again when it starts. `POST /runs/preflight` makes the same check of a member's image, and any audit row it writes carries `dry_run: true`. It cannot check the convention image, which is chosen at launch, once a runner is placed. The policy preview only reports "checked at launch" and reads no registry.
 - `enforce` with no signers and scope `member` is refused when you save it, because it would refuse every image. Use `audit` first.
@@ -38,7 +38,7 @@
 5. Set `mode` to `enforce`.
 
 - While `enforce` is on, a revive re-checks the digest the run's create pinned, never its tag. A run with no pinned digest is refused with `revive_image_not_admitted`: one created before `enforce` was on, or under `audit`, which never pins. Start a new run to use an allowed image.
-- A kept sandbox on an image Wardyn built for the run (a devcontainer or a generated workspace image) is not checked and revives under any mode.
+- A kept sandbox on an image Wardyn built for the run (a devcontainer or a generated workspace image), or from a run Wardyn launched itself (above), is not checked and revives under any mode.
 - Under `enforce` with scope all, a run that named no image and recorded no image origin is refused like one on the convention image. That is a run from an earlier release, or one whose origin record failed to write under `off` or `audit`.
 - The same holds for a member's image while the mode is `off`, when the owner's profile names `required_image_signers`.
 - With `scope: "all"`, a kept run on the convention image is re-checked at the digest its launch recorded. One whose launch recorded no admitted digest is refused the same way.

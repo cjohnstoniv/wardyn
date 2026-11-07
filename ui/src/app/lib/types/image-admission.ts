@@ -26,5 +26,5 @@ export interface ImageAdmissionVerdict {
   // The convention image a launch checked under scope all, as configured; empty for a member's image. A revive re-checks digest under its coverage.
   ref?: string;
   // Where the image came from when the member named none; alone (no mode or verdict) when admission decided nothing.
-  origin?: "convention" | "devcontainer" | "workspace" | (string & {});
+  origin?: "convention" | "devcontainer" | "workspace" | "wardyn" | (string & {});
 }
