@@ -289,7 +289,7 @@ func TestAuditReceipt_SecurityAdminHostRedactedMarked(t *testing.T) {
 			}
 		}
 	}
-	rep := auditreceipt.VerifyBundle(b, w.keys())
+	rep := auditreceipt.VerifyBundle(b.Bundle, w.keys())
 	if marked != 1 || !rep.OK() || rep.Complete() || rep.Withheld() != 1 {
 		t.Fatalf("security_admin receipt: %d marked, failures %+v, withheld %d; want one withheld event and nothing failed", marked, rep.Failures, rep.Withheld())
 	}
