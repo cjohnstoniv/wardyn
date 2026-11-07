@@ -3,43 +3,6 @@
 - This directory contains the OCI image definitions for coding-agent sandboxes governed by Wardyn.
 - Each subdirectory is one agent image, except `common/` (a shared shell library COPY'd into them).
 
-## Download verification
-
-- Every `curl` download in a Dockerfile needs a literal sha256 check of the file it writes. [`scripts/check-image-pins.sh`](../../scripts/check-image-pins.sh) enforces it, including for local-only recipes.
-- The shell forms it accepts are defined in [`scripts/lib/image_downloads.py`](../../scripts/lib/image_downloads.py) and exercised by [`scripts/test-image-pins.sh`](../../scripts/test-image-pins.sh). Unsupported syntax fails with a file and line.
-- A checksum variable must be assigned a literal 64-hex value or validated before the download with `printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'`. The affected recipes also run `sha256sum --strict -c -`.
-
-- Claude's native download pins the manifest before reading the binary's hash.
-- The default version has a baked manifest pin; alternate exact versions require `CLAUDE_MANIFEST_SHA256`.
-- Native downloads refuse `stable`/`latest`; npm and host-staged binaries retain their version/channel behavior.
-- See [native installs](../../docs/adoption/corp-image-authoring.md#native-binary-agent-installs-opt-in-when-public-npm-is-blocked).
-
-- AWS CLI downloads check both the installer zip and detached signature against per-architecture SHA256 pins, then verify the signature with the baked AWS key before extraction.
-- An alternate `AWS_CLI_VERSION` requires both `AWS_CLI_SHA256` and `AWS_CLI_SIG_SHA256`, obtained and reviewed for the target architecture.
-- The Makefile forwards these build arguments.
-- Staged AWS installers still trust the staging host; they do not use the download pins or signature path.
-
-### code-server's embedded shell-quote tracking
-
-- [#1904](https://github.com/cjohnstoniv/wardyn/issues/1904) remains open.
-- Inspection of both official code-server 4.141.1 Linux release archives on 2026-10-27 found the same `@devcontainers/cli` 0.88.0 bundle as 4.139.1 and 4.141.0, and the same shrinkwrap as 4.141.0:
-
-| Artifact | SHA256 |
-| --- | --- |
-| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-amd64.tar.gz) | `45fd3cfbff9fd0c36fe37105859b0f4f7a0544341ca4e322657f5b3caeca1cbe` |
-| [arm64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-arm64.tar.gz) | `898903adc4d28dc23b9147073afe36fcafdb49e6ada8e1007bfc62a330ff9315` |
-| `lib/vscode/node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js` (both) | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833` |
-| `lib/vscode/npm-shrinkwrap.json` (both) | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7` |
-
-- The bundle inlines the old `quote()` implementation: its comment-token branch checks the comment itself but does not reject a line terminator in a following string.
-- Isolating that bundled function reproduces the [upstream advisory](https://github.com/ljharb/shell-quote/security/advisories/GHSA-pqg4-j6r4-53mv) output without executing it as shell.
-- The bundle exports this through `Gb` and imports it as `yp`; the inspected consumer references call `yp.parse`, not `yp.quote`.
-- That limited static inspection found no affected call path; it is not a general reachability proof.
-- The shrinkwrap and the bundled module both still record `shell-quote` 1.10.0.
-
-- The Dockerfile's replacement of the separate module with 1.11.0 changes neither the inlined function nor the shrinkwrap.
-- Keep the tracking issue open and the replacement in place until a candidate [code-server release](https://github.com/coder/code-server/releases) has been inspected for both the embedded code and metadata; a clean scanner result alone does not establish this.
-
 ## Image contract
 
 - Every image that runs a real agent task MUST satisfy the invariants below.
@@ -203,6 +166,43 @@ Two details are load-bearing, and copying a shortened form silently drops them:
    - It deliberately does **not** seed `hasTrustDialogAccepted` or `bypassPermissionsModeAccepted`: the workspace-trust screen is a security prompt, and it stays.
 
 ---
+
+## Download verification
+
+- Every `curl` download in a Dockerfile needs a literal sha256 check of the file it writes. [`scripts/check-image-pins.sh`](../../scripts/check-image-pins.sh) enforces it, including for local-only recipes.
+- The shell forms it accepts are defined in [`scripts/lib/image_downloads.py`](../../scripts/lib/image_downloads.py) and exercised by [`scripts/test-image-pins.sh`](../../scripts/test-image-pins.sh). Unsupported syntax fails with a file and line.
+- A checksum variable must be assigned a literal 64-hex value or validated before the download with `printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'`. The affected recipes also run `sha256sum --strict -c -`.
+
+- Claude's native download pins the manifest before reading the binary's hash.
+- The default version has a baked manifest pin; alternate exact versions require `CLAUDE_MANIFEST_SHA256`.
+- Native downloads refuse `stable`/`latest`; npm and host-staged binaries retain their version/channel behavior.
+- See [native installs](../../docs/adoption/corp-image-authoring.md#native-binary-agent-installs-opt-in-when-public-npm-is-blocked).
+
+- AWS CLI downloads check both the installer zip and detached signature against per-architecture SHA256 pins, then verify the signature with the baked AWS key before extraction.
+- An alternate `AWS_CLI_VERSION` requires both `AWS_CLI_SHA256` and `AWS_CLI_SIG_SHA256`, obtained and reviewed for the target architecture.
+- The Makefile forwards these build arguments.
+- Staged AWS installers still trust the staging host; they do not use the download pins or signature path.
+
+### code-server's embedded shell-quote tracking
+
+- [#1904](https://github.com/cjohnstoniv/wardyn/issues/1904) remains open.
+- Inspection of both official code-server 4.141.1 Linux release archives on 2026-10-27 found the same `@devcontainers/cli` 0.88.0 bundle as 4.139.1 and 4.141.0, and the same shrinkwrap as 4.141.0:
+
+| Artifact | SHA256 |
+| --- | --- |
+| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-amd64.tar.gz) | `45fd3cfbff9fd0c36fe37105859b0f4f7a0544341ca4e322657f5b3caeca1cbe` |
+| [arm64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-arm64.tar.gz) | `898903adc4d28dc23b9147073afe36fcafdb49e6ada8e1007bfc62a330ff9315` |
+| `lib/vscode/node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js` (both) | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833` |
+| `lib/vscode/npm-shrinkwrap.json` (both) | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7` |
+
+- The bundle inlines the old `quote()` implementation: its comment-token branch checks the comment itself but does not reject a line terminator in a following string.
+- Isolating that bundled function reproduces the [upstream advisory](https://github.com/ljharb/shell-quote/security/advisories/GHSA-pqg4-j6r4-53mv) output without executing it as shell.
+- The bundle exports this through `Gb` and imports it as `yp`; the inspected consumer references call `yp.parse`, not `yp.quote`.
+- That limited static inspection found no affected call path; it is not a general reachability proof.
+- The shrinkwrap and the bundled module both still record `shell-quote` 1.10.0.
+
+- The Dockerfile's replacement of the separate module with 1.11.0 changes neither the inlined function nor the shrinkwrap.
+- Keep the tracking issue open and the replacement in place until a candidate [code-server release](https://github.com/coder/code-server/releases) has been inspected for both the embedded code and metadata; a clean scanner result alone does not establish this.
 
 ## Credential and recording flow
 
