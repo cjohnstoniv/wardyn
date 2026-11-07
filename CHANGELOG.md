@@ -16,6 +16,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If your walls or a wall preset set `*` to hold or deny, tools the run's policy allows by name are now held or denied too. To keep such a tool open, remove the `*` rule and name the tools you want held or denied instead.
 - A `WARDYN_ADMIN_TOKEN` shorter than 32 bytes now stops wardynd starting unless it listens on loopback only (the compose stack's `demo-admin-token` is unchanged). Set a longer one, for example `openssl rand -hex 32`.
 - With SSO configured, the UI-sandbox gateway now refuses to start without `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`, and the Helm chart refuses to render unless a per-run origin is set, through `uiSandbox.originTemplate` or `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` in `env` or `extraEnv`. Set a per-run origin such as `https://run-{run}.ui.example.com`, or accept the shared origin with `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` (chart: `uiSandbox.acceptSharedOrigin`).
+- Docker runs now need Docker Engine 28 or later and an updated runner, because a run's network is now made without an address on the Docker host. On an older engine (Podman reports one) a run is refused unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, which keeps the old network. Runs started before the upgrade keep their old network until they stop; restarting or reviving one is refused unless that setting is on.
+- A governance profile's `github_capabilities` now limits its members' runs, and a run's GitHub CLI access is limited to the run's own GitHub capabilities. A run that relied on wider access is now refused or gets read-only access.
+- Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
 
 ### Added
 
