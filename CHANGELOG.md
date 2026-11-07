@@ -54,6 +54,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Approvals: the run's owner or an administrator approves one MCP call that a tool rule marks `approve_each`, once, and an approval rule never does. `WARDYN_CAPABILITY_SECOND_HUMAN` (off by default) also makes someone other than the run's creator decide it.
 - Tool rules can mark a remote MCP tool `approve_each`: each call waits for a person to approve that call with its exact arguments, and Wardyn sends exactly what was approved, once. It works for Codex CLI too. Nothing changes until a rule says `approve_each`.
+- Approvals: the console shows a request to approve one MCP call as its own card (server, tool, the server's own tool name, and the arguments in full) and approves that call once, with no scope choice. Arguments and other parameters come from the new `call_text` on the approval, so a number past 2^53 or a long decimal shows and copies as written; `wardyn approval get` prints the same text.
+- Tool rules: Add a tool rule, the policy editor and Your walls offer Approve each call (`approve_each`) for one MCP tool of a remote server. It is greyed, with the reason, anywhere it cannot apply.
 - Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 - Audit: every audit row of a run written after its policy is resolved now carries `policy_digest`, the SHA-256 of the run's effective policy as recorded in its `run.policy.resolve` row, and `GET /runs/{id}` returns it too. It is on by default and refuses nothing. SIEM parsers that compare a row's `data` object exactly will see the new key; rows written before the run's policy was recorded, rows with no run, and rows a device forwards carry none.
@@ -80,6 +82,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Your walls: a tool rule set to `approve_each` no longer turns into `hold` when the form is opened and saved.
 - The policy editor now locks Azure DevOps capabilities against the ceiling of your own row, even with one organisation, instead of the first row on the provider.
 - A Linux VM run's terminal, commands and agent start now always run inside the VM. If the runner can't tell whether a run is a VM, the request fails and can be retried; if Linux VM sandboxes were turned off (or failed their start-up check) after the VM started, the request is refused, and the run can still be stopped or ended, including when its audit log fills up.
 - In focus mode, switching the side panel to another widget after one failed to display now shows the new widget instead of the previous error.
