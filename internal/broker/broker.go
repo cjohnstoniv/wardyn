@@ -836,6 +836,11 @@ func mintEvent(caller *identity.Claims, grantID, approvalID uuid.UUID, jti strin
 // late in the mint tx as possible, so the chain lock is always acquired AFTER this tx's
 // grant/approval row locks and can never invert a lock order with a concurrent mint.
 func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {
+	stamped, err := stampPolicyDigestTx(ctx, tx, ev)
+	if err != nil {
+		return err
+	}
+	ev.Data = stamped
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
 		return fmt.Errorf("broker: marshal mint audit data: %w", err)

@@ -90,7 +90,7 @@ func TestEgressDecision_CarriesRunPolicyDigest(t *testing.T) {
 	if w := do(t, h.srv, http.MethodPost, "/api/v1/internal/decisions", tok, body); w.Code != http.StatusAccepted {
 		t.Fatalf("decision code = %d, want 202", w.Code)
 	}
-	for _, ev := range h.audit.events {
+	for _, ev := range h.audit.snapshot() {
 		if ev.Action != "egress.allow" {
 			continue
 		}

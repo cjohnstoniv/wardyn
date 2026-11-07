@@ -14,7 +14,8 @@ import (
 // shape of RunPolicySpec and not only the fields a fixture happens to name. It
 // refuses an interface field: a value of unknown type is the one thing that can
 // make Marshal then Unmarshal drift, and the digest is only reproducible from a
-// stored row while it cannot.
+// stored row while it cannot. A json.RawMessage field is allowed (Marshal compacts it, so
+// the first Marshal is already canonical) and is filled with a value that needs escaping.
 func fillSpec(t *testing.T, v reflect.Value, path string) {
 	t.Helper()
 	switch v.Kind() {
@@ -28,6 +29,10 @@ func fillSpec(t *testing.T, v reflect.Value, path string) {
 		v.Set(reflect.New(v.Type().Elem()))
 		fillSpec(t, v.Elem(), path)
 	case reflect.Slice:
+		if v.Type() == reflect.TypeFor[json.RawMessage]() {
+			v.SetBytes([]byte(`{"a":[1,"<&>"]}`))
+			return
+		}
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			v.SetBytes([]byte("b"))
 			return

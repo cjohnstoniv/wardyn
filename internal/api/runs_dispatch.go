@@ -658,6 +658,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// classification are the last writers of the proxy config, and the host marks must describe
 	// the config the runner is sent. Nothing between the snapshot and here reads the envelope.
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
+	s.recordRunPolicyDigest(ctx, run.ID, envelope.RunPolicySpec) // before the row below, so it is stamped too
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
 	if !s.startRunRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr, p.Interactive) {
