@@ -30,6 +30,7 @@ const (
 	annotationSignature   = "dev.cosignproject.cosign/signature"
 	annotationCertificate = "dev.sigstore.cosign/certificate"
 	annotationBundle      = "dev.sigstore.cosign/bundle"
+	annotationTimestamp   = "dev.sigstore.cosign/rfc3161timestamp"
 
 	// legacyBundleMediaType is Sigstore bundle v0.1, the version whose transparency-log entries carry a
 	// promise (the SET) and no inclusion proof, which is all a legacy layer holds.
@@ -60,18 +61,18 @@ type LegacyReader interface {
 // ReadLegacy reads the layers of subject's .sig tag, then its .att tag, at most MaxCandidatesPerSigner in all.
 // A tag the registry does not have adds nothing. A layer over MaxBlobBytes is kept by its descriptor alone and
 // never read: an SBOM attestation is often several MB, and it must not stop the check of the signature beside
-// it. A blob that is missing or not its digest is kept the same way, as one bad candidate. A registry that
-// cannot be read (*Unavailable, a deadline) and a tag manifest that cannot be read are returned unchanged, so
-// the caller can tell an unreachable registry from an unsigned image.
+// it. A blob that is missing or not its digest is kept the same way, as one bad candidate, and a tag manifest
+// that cannot be parsed adds nothing. Only a registry that cannot be read (*Unavailable, a deadline) is
+// returned, unchanged, so the caller can tell an unreachable registry from an unsigned image.
 func ReadLegacy(ctx context.Context, r LegacyReader, ref Ref, subject string) ([]LegacyLayer, error) {
 	var out []LegacyLayer
 	for _, suffix := range []string{".sig", ".att"} {
 		m, err := r.LegacyTag(ctx, ref, subject, suffix)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		}
-		if err != nil {
+		if err != nil && registryDown(err) {
 			return nil, err
+		}
+		if err != nil { // missing, or a manifest that cannot be read: nothing to check from this tag
+			continue
 		}
 		for _, d := range m.Layers {
 			if len(out) == MaxCandidatesPerSigner {
@@ -196,7 +197,9 @@ func legacyEnvelope(blob []byte) (*protodsse.Envelope, error) {
 }
 
 // legacyMaterial is the verification material of a layer: its leaf certificate, or for a key signature an
-// empty key hint, plus the Rekor entry from the bundle annotation. The chain annotation is ignored on purpose:
+// empty key hint, plus the Rekor entry from the bundle annotation and the TSA's response from the
+// rfc3161timestamp annotation. The verifier decides what they must prove: a trust root that names a Rekor log
+// still requires the entry, and a timestamp counts only from a TSA the root names. The chain annotation is ignored on purpose:
 // it comes from the registry, and the signer's trust root supplies the CA certificates.
 func legacyMaterial(ann map[string]string) (*protobundle.VerificationMaterial, error) {
 	vm := &protobundle.VerificationMaterial{}
@@ -216,6 +219,16 @@ func legacyMaterial(ann map[string]string) (*protobundle.VerificationMaterial, e
 			return nil, err
 		}
 		vm.TlogEntries = []*protorekor.TransparencyLogEntry{entry}
+	}
+	if raw := ann[annotationTimestamp]; raw != "" {
+		var ts struct {
+			SignedRFC3161Timestamp []byte `json:"SignedRFC3161Timestamp"`
+		}
+		if err := json.Unmarshal([]byte(raw), &ts); err != nil || len(ts.SignedRFC3161Timestamp) == 0 {
+			return nil, errors.New("its RFC 3161 timestamp annotation is not readable")
+		}
+		vm.TimestampVerificationData = &protobundle.TimestampVerificationData{
+			Rfc3161Timestamps: []*protocommon.RFC3161SignedTimestamp{{SignedTimestamp: ts.SignedRFC3161Timestamp}}}
 	}
 	return vm, nil
 }
