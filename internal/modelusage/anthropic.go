@@ -56,7 +56,11 @@ func (p *parser) anthropicEvent(typ string, msg *anthropicMessage, usage *anthro
 		if msg != nil {
 			p.model(msg.Model)
 			if msg.Usage != nil {
+				// The start's output_tokens is a placeholder: its figure is kept (max per field) but
+				// only a message_delta's output_tokens satisfies the required output count.
+				haveOut := p.haveOut
 				p.mergeAnthropic(msg.Usage)
+				p.haveOut = haveOut
 			}
 		}
 	case "message_delta":
