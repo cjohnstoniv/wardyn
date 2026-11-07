@@ -327,10 +327,11 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			// untouched proxy on a token that can neither renew nor decide,
 			// while its allowlisted egress keeps flowing audit-dark for up to
 			// the lapsed-token sweep's ~1h05m window.
+			// The generation is abandoned first, so the failure row carries the one that still applies.
+			s.abandonRunPolicyGeneration(ctx, run, gen)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 			s.restoreRunTokenLineage(ctx, run.ID, freshJTI, renewed)
-			s.abandonRunPolicyGeneration(ctx, run, gen)
 			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 				loggedMsg(ctx, "the run's proxy was not replaced, and the run keeps its current proxy", err))
 		}
