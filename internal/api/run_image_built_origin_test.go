@@ -44,10 +44,11 @@ func generatedWorkspace() types.Workspace {
 	return ws
 }
 
-// TestImageOriginRecordedAtLaunch: with image admission on (audit or enforce, either scope), a launch on an image
-// Wardyn built (a devcontainer, a generated workspace image) records that origin as not_applicable and asks
-// the admitter nothing; a convention launch under scope all records origin convention with its check. Off
-// records nothing.
+// TestImageOriginRecordedAtLaunch: every launch on an image the member did not name records its origin,
+// whatever the admission mode, and reads no registry for it. An image Wardyn built (a devcontainer, a generated
+// workspace image) and a convention image admission did not check record the origin alone, never a verdict; a
+// convention image checked under scope all records its verdict with origin convention. A record that cannot
+// be written fails the run under enforce and is logged otherwise.
 func TestImageOriginRecordedAtLaunch(t *testing.T) {
 	site := func(mode, scope string) types.SiteConfig {
 		sc := admissionSite(mode)
@@ -75,30 +76,30 @@ func TestImageOriginRecordedAtLaunch(t *testing.T) {
 					if r, n := a.calls(); r != 0 || n != 0 {
 						t.Errorf("launch asked %d Require / %d Admit, want none: admission does not cover a built image", r, n)
 					}
-					got := recordedJSON(t, st)
-					if mode == types.ImageAdmissionOff {
-						if got != "null" {
-							t.Errorf("admission off recorded %s, want nothing", got)
-						}
-						return
-					}
-					for _, want := range []string{`"mode":"` + mode + `"`, `"verdict":"not_applicable"`, `"origin":"` + b.origin + `"`} {
-						if !strings.Contains(got, want) {
-							t.Errorf("recorded %s, want it to hold %s", got, want)
-						}
+					if got, want := recordedJSON(t, st), `{"origin":"`+b.origin+`"}`; got != want {
+						t.Errorf("recorded %s, want %s: the origin alone, whatever the mode", got, want)
 					}
 				})
 			}
 		}
 	}
-	for _, mode := range []string{types.ImageAdmissionEnforce, types.ImageAdmissionAudit} {
-		t.Run("origin that cannot be recorded, "+mode, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, scope string
+		req               createRunRequest
+	}{
+		{"devcontainer, enforce", types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll, built[0].req},
+		{"devcontainer, audit", types.ImageAdmissionAudit, types.ImageAdmissionScopeAll, built[0].req},
+		{"devcontainer, off", types.ImageAdmissionOff, types.ImageAdmissionScopeAll, built[0].req},
+		{"convention image, enforce, scope member", types.ImageAdmissionEnforce, types.ImageAdmissionScopeMember, createRunRequest{Agent: "claude-code"}},
+		{"convention image, off", types.ImageAdmissionOff, types.ImageAdmissionScopeAll, createRunRequest{Agent: "claude-code"}},
+	} {
+		t.Run("origin that cannot be recorded, "+tc.name, func(t *testing.T) {
 			srv, st, _, run := pinFixture(t, nil)
 			audit := &recRecorder{}
-			st.site, st.admissionErr = site(mode, types.ImageAdmissionScopeAll), errors.New("db down")
+			st.site, st.admissionErr = site(tc.mode, tc.scope), errors.New("db down")
 			srv.cfg.Audit, srv.cfg.ImageAdmitter = audit, &fakeAdmitter{}
-			_, _, failed := srv.resolveCreateRunImage(t.Context(), built[0].req, run, nil)
-			if want := mode == types.ImageAdmissionEnforce; failed != want {
+			_, _, failed := srv.resolveCreateRunImage(t.Context(), tc.req, run, nil)
+			if want := tc.mode == types.ImageAdmissionEnforce; failed != want {
 				t.Fatalf("launch failed = %v, want %v: enforce fails a run whose origin cannot be recorded, audit logs it", failed, want)
 			}
 			if !failed {
@@ -110,6 +111,26 @@ func TestImageOriginRecordedAtLaunch(t *testing.T) {
 			row := findAudit(audit.snapshot(), run.ID, "run.dispatch", "failure")
 			if row == nil || strings.Contains(string(row.Data), imageAdmissionRefused) || !strings.Contains(string(row.Data), "could not") {
 				t.Errorf("run.dispatch failure row = %v, want one saying the record could not be written, not that the image was refused", row)
+			}
+		})
+	}
+	for _, tc := range []struct{ mode, scope string }{
+		{types.ImageAdmissionOff, types.ImageAdmissionScopeAll},
+		{types.ImageAdmissionAudit, types.ImageAdmissionScopeMember},
+		{types.ImageAdmissionEnforce, types.ImageAdmissionScopeMember},
+	} {
+		t.Run(fmt.Sprintf("convention image, %s, scope %s: the origin alone", tc.mode, tc.scope), func(t *testing.T) {
+			srv, st, _, run := pinFixture(t, nil)
+			a := &fakeAdmitter{}
+			st.site, srv.cfg.ImageAdmitter = site(tc.mode, tc.scope), a
+			if _, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil); failed {
+				t.Fatal("the launch failed")
+			}
+			if r, n := a.calls(); r != 0 || n != 0 {
+				t.Errorf("launch asked %d Require / %d Admit, want none", r, n)
+			}
+			if got, want := recordedJSON(t, st), `{"origin":"convention"}`; got != want {
+				t.Errorf("recorded %s, want %s", got, want)
 			}
 		})
 	}
