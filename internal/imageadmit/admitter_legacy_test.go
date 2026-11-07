@@ -74,3 +74,17 @@ func TestAdmitLegacyReadFailureIsUnavailableAndNotKept(t *testing.T) {
 		t.Fatalf("after the registry recovered = %+v, %v; want a fresh admission", v, err)
 	}
 }
+
+// A legacy layer whose blob the registry has lost is one bad candidate, skipped as a broken referrer is: the
+// signature beside it still admits.
+func TestAdmitLegacyLayerWithoutItsBlobIsSkipped(t *testing.T) {
+	s := releasesigtest.New(t)
+	f, a := legacyImage(t, s.LegacySignature(sigPayload(), ciOpts()))
+	f.legacyTag(".att", imageadmit.LegacyLayer{Descriptor: imageadmit.Descriptor{MediaType: imageadmit.LegacyAttestationMediaType,
+		Digest: "sha256:" + otherHex, Size: 10}})
+	v, err := admit(t, a, compile(t, s, corpCI()), ref)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	wantReason(t, v, "")
+}

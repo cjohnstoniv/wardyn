@@ -172,7 +172,9 @@ func (f *fakeRegistry) legacyTag(suffix string, ls ...imageadmit.LegacyLayer) {
 	m := &imageadmit.Manifest{MediaType: "application/vnd.oci.image.manifest.v1+json"}
 	for _, l := range ls {
 		m.Layers = append(m.Layers, l.Descriptor)
-		f.blobs[l.Descriptor.Digest] = l.Blob
+		if l.Blob != nil { // a layer with no blob is one the registry has lost
+			f.blobs[l.Descriptor.Digest] = l.Blob
+		}
 	}
 	f.legacy[suffix] = m
 }
