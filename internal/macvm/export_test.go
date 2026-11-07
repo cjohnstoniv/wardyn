@@ -96,3 +96,10 @@ func ReadPairKey(dir string) ([]byte, error) { return readPairKey(dir) }
 
 // TypableCode is typableCode, the edit's one-time code generator.
 func TypableCode(n int) ([]byte, error) { return typableCode(n) }
+
+// SetEditLiveEvery sets how often the edit window reads the guest again, and returns the restore.
+func SetEditLiveEvery(d time.Duration) func() {
+	old := editLiveEvery
+	editLiveEvery = d
+	return func() { editLiveEvery = old }
+}

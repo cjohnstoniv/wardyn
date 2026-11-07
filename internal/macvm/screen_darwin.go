@@ -12,8 +12,9 @@ package macvm
 
 int wardynScreenSession(void);
 void wardynScreenRun(void);
-void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps, const char *codeFile);
-void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop);
+void wardynScreenShow(void *vm, const char *title, const char *steps, const char *codeFile);
+void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop, int canTrust);
+void wardynScreenSetLive(const char *text);
 int wardynScreenConsoleKeys(int *onConsole, int *locked);
 long wardynScreenLockNotices(void);
 int wardynScreenLockNoticed(void);
@@ -85,11 +86,10 @@ func screenReady() error {
 }
 
 // showScreen opens the window on vm (a VZVirtualMachine the caller keeps alive until unlock), with
-// text, and returns its close. When text is Closable, the window's close button asks the guest to shut
-// down through stop, vm's provision handle. text.CodeFile is only a path: the window reads the code from
+// text, and returns its close. text.CodeFile is only a path: the window reads the code from
 // it on a click, and the code never crosses this call. It refuses before AppKit starts when screenReady does. The
 // window is made on the main thread once AppKit runs there, and showScreen returns once it is up.
-func showScreen(vm, stop unsafe.Pointer, text ScreenText, unlock func()) (func(), error) {
+func showScreen(vm unsafe.Pointer, text ScreenText, unlock func()) (func(), error) {
 	if err := screenReady(); err != nil {
 		unlock()
 		return nil, err
@@ -107,11 +107,8 @@ func showScreen(vm, stop unsafe.Pointer, text ScreenText, unlock func()) (func()
 		codeFile = C.CString(text.CodeFile)
 		defer C.free(unsafe.Pointer(codeFile))
 	}
-	if !text.Closable {
-		stop = nil
-	}
-	C.wardynScreenShow(vm, stop, title, steps, codeFile)
-	unlock() // the window's block holds vm and stop now
+	C.wardynScreenShow(vm, title, steps, codeFile)
+	unlock() // the window's block holds vm now
 	screenStartOnce.Do(func() { close(screenStart) })
 	var once sync.Once
 	closeWindow := func() { once.Do(func() { C.wardynScreenClose() }) }
@@ -170,7 +167,7 @@ func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) 
 	title, steps := C.CString(text.Title), C.CString(text.Strip)
 	defer C.free(unsafe.Pointer(title))
 	defer C.free(unsafe.Pointer(steps))
-	C.wardynScreenShowWindow(vm, title, steps, nil, 0)
+	C.wardynScreenShowWindow(vm, title, steps, nil, 0, 0)
 	screenStartOnce.Do(func() { close(screenStart) })
 	w := &macWindow{closed: make(chan struct{}), locked: make(chan struct{})}
 	for deadline := time.Now().Add(screenWait); C.wardynScreenUp() == 0; time.Sleep(50 * time.Millisecond) {
@@ -220,9 +217,14 @@ func (w *macWindow) Close() {
 // windowText is the open edit window's text, whose callbacks its controls call (wardynWindowAction).
 var windowText atomic.Pointer[WindowText]
 
-// windowActionAskStop is the number the edit window's close button passes to wardynWindowAction
-// (WARDYN_WINDOW_ASK_STOP in screen_darwin.m). The strip's buttons add theirs beside it.
-const windowActionAskStop = 0
+// The numbers the edit window's controls pass to wardynWindowAction (WARDYN_WINDOW_* in screen_darwin.m): its
+// close button, then the strip's buttons. Type code has none: it never leaves the window.
+const (
+	windowActionAskStop = iota
+	windowActionAdminTerminal
+	windowActionTrustCAs
+	windowActionFullDiskAccess
+)
 
 // wardynWindowAction runs the callback of the open edit window's control n. The window calls it off the
 // main thread, so a callback may wait on the guest.
@@ -233,12 +235,26 @@ func wardynWindowAction(n C.int) {
 	if t == nil {
 		return
 	}
-	switch int(n) {
-	case windowActionAskStop:
-		if t.AskStop != nil {
-			t.AskStop()
-		}
+	f := map[int]func(){
+		windowActionAskStop:        t.AskStop,
+		windowActionAdminTerminal:  t.AdminTerminal,
+		windowActionTrustCAs:       t.TrustCAs,
+		windowActionFullDiskAccess: t.FullDiskAccess,
+	}[int(n)]
+	if f != nil {
+		f()
 	}
+}
+
+// ShowLive sets the edit window's live line (the guest's read and what the last button did); a run window,
+// or one already closed, has none.
+func (w *macWindow) ShowLive(text string) {
+	if w.text == nil || windowText.Load() != w.text {
+		return
+	}
+	cs := C.CString(text)
+	defer C.free(unsafe.Pointer(cs))
+	C.wardynScreenSetLive(cs)
 }
 
 // macEditScreen is the edit window: the run window's, with the edit's strip and Show code control and a close
@@ -266,7 +282,11 @@ func (macEditScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) {
 	}
 	w := &macWindow{closed: make(chan struct{}), locked: make(chan struct{}), text: &text}
 	windowText.Store(w.text)
-	C.wardynScreenShowWindow(vm, title, steps, codeFile, 1)
+	canTrust := C.int(0)
+	if text.CanTrust {
+		canTrust = 1
+	}
+	C.wardynScreenShowWindow(vm, title, steps, codeFile, 1, canTrust)
 	screenStartOnce.Do(func() { close(screenStart) })
 	for deadline := time.Now().Add(screenWait); C.wardynScreenUp() == 0; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {

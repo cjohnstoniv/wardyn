@@ -34,25 +34,24 @@ const (
 )
 
 // ScreenText is a first boot's window text: its title and the strip of steps under the title bar.
-// Closable gives the window a close button that asks the guest to shut down. CodeFile, the setup-code
-// file's path (not secret), gives the strip a Show code control that reads the code from it on a click;
-// empty gives none. The zero value is setup by hand's window, whose text lives in screen_darwin.m.
+// CodeFile, the setup-code file's path (not secret), gives the strip a Show code control that reads the
+// code from it on a click; empty gives none. The zero value is setup by hand's window, whose text lives
+// in screen_darwin.m.
 type ScreenText struct {
 	Title, Steps string
-	Closable     bool
 	CodeFile     string
 }
 
 // editScreen is the edit window's text. Its lines run in the order a person needs them: the code, the
-// setup questions, who they are and where Terminal is, Full Disk Access, the certificates, then the two
+// setup questions, who they are and the admin Terminal, Full Disk Access, the certificates, then the two
 // checks the recheck makes.
 var editScreen = WindowText{
 	Title: "Wardyn: edit this macOS VM base",
-	Strip: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+	Strip: "Sign in as wardyn-admin with the one-time code: click Type code to type it, or Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
 		"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
-		"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
-		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
-		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
+		"You are signed in as agent. For administrator steps click Open admin Terminal, and type the one-time code when it asks for a password.\n" +
+		"Full Disk Access, for folder shares: click Full Disk Access, then drag the guest agent (" + guestagent.MacAgentBinaryPath + ") from Finder into the list. Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
+		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Click Trust the list's CAs, check each one, and type the one-time code when it asks.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
 }
@@ -392,12 +391,19 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowSc
 			o.Log.Warn("macvm: the edit window's close did not reach the guest", "err", err.Error())
 		}
 	}
+	bctx, bcancel := context.WithCancel(ctx)
+	defer bcancel()
+	buttons := &editButtons{ctx: bctx, g: g, staging: filepath.Dir(spec.DiskPath), o: o}
+	buttons.wire(&text)
 	w, err := scr.Open(ptr, text)
 	runtime.KeepAlive(wg)
 	if err != nil {
 		return fmt.Errorf("macvm: the edit window: %w", err)
 	}
-	defer w.Close()
+	defer func() { bcancel(); w.Close() }() // the buttons and the live line end before the window does
+	if lw, ok := w.(LiveWindow); ok {
+		buttons.watch(lw)
+	}
 	select {
 	case <-wg.Done():
 		if err := stopBoot(); err != nil {

@@ -77,16 +77,18 @@ func TestSetupWindowShowCodeControl(t *testing.T) {
 	if n := strings.Count(m, "dataWithContentsOfFile"); n != 1 {
 		t.Errorf("the code file is read in %d places, want 1", n)
 	}
-	if n := strings.Count(m, "wardynScreenReadCode("); n != 2 {
-		t.Errorf("wardynScreenReadCode appears %d times, want its definition and one call", n)
+	if n := strings.Count(m, "wardynScreenReadCode("); n != 3 {
+		t.Errorf("wardynScreenReadCode appears %d times, want its definition and the Show code and Type code clicks' calls", n)
 	}
-	_, after, ok := strings.Cut(m, "- (void)toggle:(id)sender {\n")
-	if !ok {
-		t.Fatal("screen_darwin.m has no toggle: click action")
-	}
-	body, _, _ := strings.Cut(after, "\n}\n")
-	if !strings.Contains(body, "wardynScreenReadCode(self.codeFile)") {
-		t.Errorf("the click action does not read the file:\n%s", body)
+	for _, click := range []string{"toggle", "typeCode"} {
+		_, after, ok := strings.Cut(m, "- (void)"+click+":(id)sender {\n")
+		if !ok {
+			t.Fatalf("screen_darwin.m has no %s: click action", click)
+		}
+		body, _, _ := strings.Cut(after, "\n}\n")
+		if !strings.Contains(body, "wardynScreenReadCode(self.codeFile)") {
+			t.Errorf("the %s click action does not read the file:\n%s", click, body)
+		}
 	}
 	// What is passed in is the path, never a code.
 	if !strings.Contains(m, "const char *steps, const char *codeFile) {") {
@@ -99,8 +101,9 @@ func TestSetupWindowShowCodeControl(t *testing.T) {
 	}
 }
 
-// Only the setup and edit windows are made by wardynScreenShow, and it is called from one place; a window of
-// another kind (a run's desktop view) must not be given the control, so any new caller shows up here.
+// Only setup by hand's window is made by wardynScreenShow (the edit window is a run window with the edit's
+// controls, wardynScreenShowWindow), and it is called from one place; a window of another kind (a run's
+// desktop view) must not be given the control, so any new caller shows up here.
 func TestScreenShowHasOneCaller(t *testing.T) {
 	files, err := filepath.Glob("*")
 	if err != nil {
@@ -158,11 +161,11 @@ func TestEditWindowControlsInTheRunWindow(t *testing.T) {
 	}
 	m, g := read("screen_darwin.m"), read("screen_darwin.go")
 	for _, want := range []string{
-		"void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop) {",
+		"void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop, int canTrust) {",
 		"- (BOOL)windowShouldClose:(NSWindow *)sender {\n\tdispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{\n\t\twardynWindowAction(WARDYN_WINDOW_ASK_STOP);\n\t});\n\treturn NO;\n}",
 		"#define WARDYN_WINDOW_ASK_STOP 0",
 		"if (wardynScreenViewOnly && !wardynScreenAsksStop && wardynScreenWindow != nil) {",
-		"[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf)];",
+		"[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf, edit, trust)];",
 		"wardynScreenAsksStop = NO;",
 	} {
 		if !strings.Contains(m, want) {
@@ -171,8 +174,8 @@ func TestEditWindowControlsInTheRunWindow(t *testing.T) {
 	}
 	for _, want := range []string{
 		"//export wardynWindowAction\nfunc wardynWindowAction(n C.int) {",
-		"const windowActionAskStop = 0",
-		"C.wardynScreenShowWindow(vm, title, steps, nil, 0)",
+		"windowActionAskStop = iota",
+		"C.wardynScreenShowWindow(vm, title, steps, nil, 0, 0)",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("screen_darwin.go lost the window's callback wiring:\n%s", want)

@@ -1,0 +1,191 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package macvm
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
+)
+
+// EditActionGuest is a window boot's guest that carries the edit window's buttons to the guest agent, over
+// the tools session only (windowGuest): each opens something in the person's session in the VM and takes
+// no input. A refusal with nothing done (nobody signed in, nothing to trust) wraps guestagent.ErrEditRefused.
+type EditActionGuest interface {
+	EditAdminTerminal(ctx context.Context) (guestagent.EditActionResult, error)
+	EditTrustCAs(ctx context.Context) (guestagent.EditActionResult, error)
+	EditFullDiskAccess(ctx context.Context) (guestagent.EditActionResult, error)
+}
+
+// The stage-2 window boot's guest is the one the edit window's buttons reach.
+var _ EditActionGuest = (*windowGuest)(nil)
+
+// LiveWindow is a Window with a line of its strip that Go rewrites: the edit window's read of the guest and
+// what its last button did.
+type LiveWindow interface {
+	Window
+	ShowLive(text string)
+}
+
+// editLiveEvery is how often the edit window reads the certificates' trust and Full Disk Access again.
+var editLiveEvery = 5 * time.Second
+
+// editNoCerts is the strip's words when Trust the list's CAs has nothing to trust.
+const editNoCerts = "The install list has no certificates."
+
+// editButtons is the edit window's buttons and live line, for the window boot's guest g of the copy in
+// staging. Its methods run off the main thread; ctx ends with the window.
+type editButtons struct {
+	ctx     context.Context
+	g       ToolsGuest
+	staging string
+	o       *EditOptions
+
+	mu         sync.Mutex
+	w          LiveWindow // nil until the window is up, and for a window with no live line
+	read, note string
+}
+
+// wire gives text the buttons' callbacks and whether Trust the list's CAs has anything to trust: a ca item
+// in staging's tools.json, or this Mac's agent signing certificate that the base reads as not trusted. A
+// guest without the edit actions gets no callbacks, so its buttons do nothing.
+func (b *editButtons) wire(text *WindowText) {
+	rec, _ := ReadToolsRecord(b.staging)
+	text.CanTrust = hasCA(rec.Items) || rec.AgentSignature == AgentSignedThisMac && rec.AgentSigningCert == ItemNotTrusted
+	eg, ok := b.g.(EditActionGuest)
+	if !ok {
+		return
+	}
+	text.AdminTerminal = b.act("Open admin Terminal", eg.EditAdminTerminal, func(guestagent.EditActionResult) string {
+		return "Terminal is open in the VM at su - wardyn-admin. Type the one-time code there (Type code types it), then press Return."
+	})
+	text.TrustCAs = b.act("Trust the list's CAs", eg.EditTrustCAs, func(r guestagent.EditActionResult) string {
+		n := fmt.Sprintf("%d certificates", r.Certificates)
+		if r.Certificates == 1 {
+			n = "1 certificate"
+		}
+		return "Terminal is open in the VM with " + n + " to trust. Check each one, and type the one-time code each time it asks (Type code types it)."
+	})
+	text.FullDiskAccess = b.act("Full Disk Access", eg.EditFullDiskAccess, func(r guestagent.EditActionResult) string {
+		if r.Revealed {
+			return "System Settings is open at Full Disk Access in the VM, and Finder shows the guest agent: drag it into the list and turn it on."
+		}
+		return "System Settings is open at Full Disk Access in the VM. Add " + guestagent.MacAgentBinaryPath + " with its + button, and turn it on."
+	})
+}
+
+// act is a button's callback: it asks the guest for the action and shows what came of it.
+func (b *editButtons) act(name string, call func(context.Context) (guestagent.EditActionResult, error), done func(guestagent.EditActionResult) string) func() {
+	return func() {
+		res, err := call(b.ctx)
+		switch {
+		case errors.Is(err, guestagent.ErrEditRefused):
+			why := strings.TrimPrefix(err.Error(), guestagent.ErrEditRefused.Error())
+			b.show("", name+" did nothing: "+strings.TrimSpace(strings.TrimPrefix(why, ":"))+".")
+		case err != nil:
+			b.o.Log.Warn("macvm: an edit window button did not reach the guest agent", "button", name, "err", err.Error())
+			b.show("", name+" did not reach the guest agent. Try again, or follow the steps above by hand.")
+		default:
+			b.show("", done(res))
+		}
+	}
+}
+
+// show sets the live line's read (when not empty) or note, and redraws it.
+func (b *editButtons) show(read, note string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if read != "" {
+		b.read = read
+	}
+	if note != "" {
+		b.note = note
+	}
+	if b.w == nil {
+		return
+	}
+	text := b.read
+	if b.note != "" {
+		text = strings.TrimPrefix(text+"\n"+b.note, "\n")
+	}
+	b.w.ShowLive(text)
+}
+
+// watch draws the live line in w, reading the guest now and every editLiveEvery until ctx ends.
+func (b *editButtons) watch(w LiveWindow) {
+	b.mu.Lock()
+	b.w = w
+	b.mu.Unlock()
+	go func() {
+		for {
+			rctx, cancel := context.WithTimeout(b.ctx, 30*time.Second)
+			read := b.readGuest(rctx)
+			cancel()
+			if b.ctx.Err() != nil {
+				return
+			}
+			b.show(read, "")
+			select {
+			case <-b.ctx.Done():
+				return
+			case <-time.After(editLiveEvery):
+			}
+		}
+	}()
+}
+
+// readGuest is the live line's read: each ca item of staging's tools.json trusted or not, this Mac's agent
+// signing certificate when the agent is signed with it, and Full Disk Access allowed or refused, as the
+// guest reads them now. A read that fails is "could not be read", never trusted or allowed.
+func (b *editButtons) readGuest(ctx context.Context) string {
+	rec, _ := ReadToolsRecord(b.staging)
+	words := func(state string) string {
+		return map[string]string{ItemTrusted: "trusted", ItemNotTrusted: "not trusted", "allowed": "allowed", "refused": "refused"}[state]
+	}
+	unread := "could not be read"
+	var parts []string
+	verify := func(policy, cert string) string {
+		_, exit, err := b.g.Run(ctx, []string{"/usr/bin/security", "verify-cert", "-L", "-p", policy, "-c", cert})
+		if err != nil {
+			return unread
+		}
+		return words(map[bool]string{true: ItemTrusted, false: ItemNotTrusted}[exit == 0])
+	}
+	for _, r := range rec.Items {
+		if r.Kind == ItemKindCA {
+			parts = append(parts, "certificate "+r.Name+" "+verify("ssl", guestagent.ItemDir(r.Name)+"/"+guestagent.ItemCert))
+		}
+	}
+	if rec.AgentSignature == AgentSignedThisMac {
+		parts = append(parts, "the agent's signing certificate "+verify("codeSign", agentSigningCertPath()))
+	}
+	fda := unread
+	if p, ok := b.g.(interface {
+		Posture(ctx context.Context) (guestagent.ToolsPosture, error)
+	}); ok {
+		if posture, err := p.Posture(ctx); err == nil && words(posture.FullDiskAccess) != "" {
+			fda = words(posture.FullDiskAccess)
+		}
+	}
+	parts = append(parts, "Full Disk Access "+fda)
+	line := "Read by the guest now: " + strings.Join(parts, "; ") + "."
+	if !hasCA(rec.Items) {
+		line = editNoCerts + " " + line
+	}
+	return line
+}
+
+func hasCA(items []ItemRecord) bool {
+	for _, r := range items {
+		if r.Kind == ItemKindCA {
+			return true
+		}
+	}
+	return false
+}
