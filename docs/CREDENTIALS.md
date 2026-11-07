@@ -184,7 +184,8 @@ One mode places a Git credential inside the sandbox:
 > [!WARNING]
 > **Masking matches exact bytes, and some paths are not masked.** The full statement is [Output masking, and the paths it does not cover](../threatmodel/THREAT-MODEL.md#41-output-masking-and-the-paths-it-does-not-cover).
 
-- Masked: the value as registered. That is the raw secret, the formatted header value, a file's value without its trailing line break, and, for a file or variable value with a line break inside it, the value with CR LF line ends and each line of at least 8 bytes alone ([`internal/egress/proxy/inject.go#registerHeaderCredential`](../internal/egress/proxy/inject.go), [`internal/api/runs_dispatch_files.go#fileSecretRenderings`](../internal/api/runs_dispatch_files.go), [`internal/api/runs_dispatch_files.go#envSecretRenderings`](../internal/api/runs_dispatch_files.go)).
+- Masked: the value as registered. That is the raw secret, the formatted header value, and a file's value without its trailing line break ([`internal/egress/proxy/inject.go#registerHeaderCredential`](../internal/egress/proxy/inject.go), [`internal/api/runs_dispatch_files.go#fileSecretRenderings`](../internal/api/runs_dispatch_files.go)).
+- Masked: a file or variable value with a line break inside it, also with CR LF line ends and as each line of at least 8 bytes ([`internal/api/runs_dispatch_files.go#envSecretRenderings`](../internal/api/runs_dispatch_files.go)).
 - Not masked: a base64, hex, split or otherwise rewritten form of the value ([`internal/secretmask/secretmask.go`](../internal/secretmask/secretmask.go)).
 - Not masked: SSH exec, SFTP and direct-tcpip channels ([`internal/api/sshgateway_channels.go`](../internal/api/sshgateway_channels.go)); see [SSH.md](SSH.md#recording).
 - Not masked: casts written through the optional recording mount set by `WARDYN_RECORDING_MOUNT` ([ENV.md](ENV.md)).
