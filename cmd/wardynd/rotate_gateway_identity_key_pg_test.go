@@ -85,7 +85,7 @@ func TestRotateGatewayIdentityKeyMode_EndToEnd(t *testing.T) {
 		t.Errorf("after a rotation: kids = %v", got)
 	}
 
-	*f.rotateGatewayIdentityRetirePrevious = true
+	*f.retirePrevious = true
 	if err := rotateGatewayIdentityKeyMode(f); err != nil {
 		t.Fatalf("rotate and retire: %v", err)
 	}

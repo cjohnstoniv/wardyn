@@ -272,6 +272,8 @@ type bootFlags struct {
 	approvalExpiryAfter    *time.Duration
 	endedRunGrace          *time.Duration
 	auditCoalesceWindow    *time.Duration
+	// auditCheckpointInterval is how often wardynd signs a checkpoint over new audit rows (audit_checkpoint.go).
+	auditCheckpointInterval *time.Duration
 
 	envbuild     *bool
 	envbuildImg  *string
@@ -348,11 +350,14 @@ type bootFlags struct {
 	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
 	rotateAgeKey *string
 	// rotateGatewayIdentityKey is `wardynd -rotate-gateway-identity-key`
-	// (rotate_gateway_identity_key.go), and rotateGatewayIdentityRetirePrevious its
-	// recovery from a stolen key. Destructive like rotateAgeKey, and like it they
-	// have NO env pair: an explicit act on a command line, never on every boot.
-	rotateGatewayIdentityKey            *bool
-	rotateGatewayIdentityRetirePrevious *bool
+	// (rotate_gateway_identity_key.go), rotateAuditReceiptKey is
+	// `wardynd -rotate-audit-receipt-key` (rotate_audit_receipt_key.go), and
+	// retirePrevious either one's recovery from a stolen key. Destructive like
+	// rotateAgeKey, and like it they have NO env pair: an explicit act on a
+	// command line, never on every boot.
+	rotateGatewayIdentityKey *bool
+	rotateAuditReceiptKey    *bool
+	retirePrevious           *bool
 	// migrateSecrets, migrateTo and reconcile are the store-mode maintenance
 	// modes (migrate_secrets.go); like rotateAgeKey they have NO env pair.
 	migrateSecrets *bool
@@ -601,6 +606,8 @@ func parseBootFlags() *bootFlags {
 		// limiter (1/sec) never trips. 0 disables it — every refusal is its own row.
 		auditCoalesceWindow: flagDuration("audit-coalesce-window", "WARDYN_AUDIT_COALESCE_WINDOW", 5*time.Minute, "fold identical consecutive auth.fail audit rows into one summary row when the gap between them is under this window (duration; 0 disables folding)"),
 
+		auditCheckpointInterval: flagDuration("audit-checkpoint-interval", "WARDYN_AUDIT_CHECKPOINT_INTERVAL", time.Minute, "how often wardynd signs a checkpoint over the audit rows appended since the last one, with the wardyn-audit-receipt-key boot key (duration; 0 turns signing off; 1s to 9s is refused)"),
+
 		envbuild:     flagBool("envbuild", "WARDYN_ENVBUILD", false, "enable devcontainer image builds for create-run; requires -tags docker (default false)"),
 		envbuildImg:  flagEnv("envbuild-image", "WARDYN_ENVBUILD_IMAGE", "", "envbuilder OCI image override. Empty (default) uses the upstream default"),
 		envbuildRepo: flagEnv("envbuild-cache-repo", "WARDYN_ENVBUILD_CACHE_REPO", "", "optional OCI registry ref for the envbuilder layer cache; enables daemonless push mode"),
@@ -678,8 +685,11 @@ func parseBootFlags() *bootFlags {
 		// flag.Bool, NOT flagBool: no env pair by design — see the struct field.
 		rotateGatewayIdentityKey: flag.Bool("rotate-gateway-identity-key", false, "maintenance mode, every replica must be stopped: make a new AI gateway identity signing key, "+
 			"publish the old one until its tokens have expired, write a secret.rekey audit row, then exit. See docs/operations/secrets-and-keys.md (default false)"),
-		rotateGatewayIdentityRetirePrevious: flag.Bool("retire-previous", false, "with -rotate-gateway-identity-key only, the recovery from a stolen key: "+
-			"publish the new key alone from now on, so nothing the old keys signed verifies once a gateway refetches. Calls in flight fail until then. See docs/operations/secrets-and-keys.md (default false)"),
+		rotateAuditReceiptKey: flag.Bool("rotate-audit-receipt-key", false, "maintenance mode, every replica must be stopped: make a new audit checkpoint signing key, "+
+			"keep every old public key so old checkpoints still verify, write a secret.rekey audit row, then exit (default false)"),
+		retirePrevious: flag.Bool("retire-previous", false, "with -rotate-gateway-identity-key or -rotate-audit-receipt-key only, the recovery from a stolen key: "+
+			"the gateway key publishes the new key alone from now on, so nothing the old keys signed verifies once a gateway refetches (calls in flight fail until then); "+
+			"the audit key marks the replaced key retired, so wardyn audit verify fails every checkpoint it signed. See docs/operations/secrets-and-keys.md (default false)"),
 
 		// flag.Bool/flag.String, NOT the env helpers: no env pair by design.
 		migrateSecrets: flag.Bool("migrate-secrets", false, "maintenance mode, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit; idempotent and resumable. See docs/operations/secrets-and-keys.md (default false)"),
@@ -768,6 +778,7 @@ func finalizeBootFlags(f *bootFlags) {
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
 	exitOnGovernanceFlags(f)
+	exitOnBadCheckpointInterval(f)
 	exitOnBadPortRule(f)
 	exitOnBadDesktopSignins(f)
 }
