@@ -169,6 +169,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 ![A run from left to right: console or CLI, control plane (wardynd), a sandbox behind Fence, Wall or Vault, the egress proxy, then destinations the run's policy allows, holds for approval or denies. The proxy adds keys on the way out; a policy can also deliver a key to the sandbox as a file or variable.](docs/img/wardyn-run.webp)
 
 - A trusted control plane places each run in an untrusted sandbox, which is a container or a Linux or macOS VM, on the server's host or on a registered runner. Its only path out is its own `wardyn-proxy`, which adds most credentials there ([which, and which the sandbox can read](docs/CREDENTIALS.md)).
+- A host the policy does not list is denied (`always_deny`), denied with a request raised for a person (`deny_with_review`), or held for a person (`wait_for_review`), as the policy's `first_use_approval` sets ([the three modes](docs/POLICIES.md#first_use_approval-modes)).
 - Decision logs flow back into the append-only audit log ([the three audit streams](threatmodel/THREAT-MODEL.md#the-three-audit-streams-mechanically)).
 - Masked session recordings are optional and kept in their own store, with their own retention.
 - Wardyn never *adds* power: a run reaches at most what you can, clamped by policy.

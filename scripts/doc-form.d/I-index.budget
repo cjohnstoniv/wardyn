@@ -11,7 +11,7 @@
 # README.md 2354 = ours 2339 + theirs 2344 - base 2329 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # 0.10 SI-POLICY: docs/README.md 843 adds 16 over 827: the approval-rules task row, measured.
 # docs/README.md 862 = ours 846 + theirs 843 - base 827 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-README.md=1994 share=35 # 1994 measured (+1 over 1993, measured: the barrier guide link in the confinement row); earlier: -442 (front-door docs): the duplicate overview, 17 unlinked video rows and the second install recipe are cut; first-run steps get their own section; measured.
+README.md=2027 share=35 # 2027 measured (+33 at rc.14: the unlisted-host modes bullet); earlier: 1994 measured (+1 over 1993, measured: the barrier guide link in the confinement row); earlier: -442 (front-door docs): the duplicate overview, 17 unlinked video rows and the second install recipe are cut; first-run steps get their own section; measured.
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
