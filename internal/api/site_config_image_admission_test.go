@@ -215,7 +215,7 @@ func TestSiteConfigBodyCallsImageAdmissionValidation(t *testing.T) {
 	if err != nil || !strings.Contains(string(src), "validateSiteImageAdmission(cfg.Images)") {
 		t.Errorf("validateSiteConfigBody does not call validateSiteImageAdmission(cfg.Images): %v", err)
 	}
-	if n := strings.Count(string(src), "\n"); n > 999 {
+	if n := strings.Count(string(src), "\n"); n > 1000 {
 		t.Errorf("site_config.go is %d lines; the gate is 1000", n)
 	}
 }

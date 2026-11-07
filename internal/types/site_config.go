@@ -265,6 +265,8 @@ type SiteImages struct {
 	// admin approved, and only a digest makes that what runs. Off by default.
 	// Operators are not bound by it (their runs are marked in the audit row).
 	RequireDigest bool `json:"require_digest,omitempty"`
+	// Admission is signature admission for member-chosen images (SiteImageAdmission). Absent reads off.
+	Admission *SiteImageAdmission `json:"admission,omitempty"`
 }
 
 // ComponentSettings is SiteConfig.Components. Every field's zero value is the

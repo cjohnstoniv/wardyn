@@ -37,6 +37,8 @@ import (
 //     a deny list, so absent means permitted.
 //   - AllowedMacOSBases: the macOS bases they may pick; an allow list, so
 //     absent means any base a Mac offers.
+//   - RequiredImageSigners: the image signers that must also vouch for their images; a requirement, so
+//     more names is tighter.
 //   - AllowedModels: the hosted models their runs may ask for; an allow list,
 //     so absent means no limit. The run's proxy holds every model request to it.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
@@ -106,6 +108,14 @@ type GovernanceLimits struct {
 	// which refuses a request for any other model; local models keep their own lists. Operators are
 	// exempt, as from every limit.
 	AllowedModels []string `json:"allowed_models,omitempty"`
+	// RequiredImageSigners are site image-admission signers (SiteImageAdmission.Signers, or the built-in
+	// wardyn-release) that must also vouch for a member's image under this profile, whatever the site's own
+	// coverage says. A REQUIREMENT, so more names is tighter: composition unions the lists and Leq asks for a
+	// superset. Empty requires nothing extra. Under site mode off or audit the named signers are enforced
+	// for this profile's members: a profile can opt its people into enforcement, never out. It names
+	// signers only, never keys or identities, so a profile cannot add trust. Operators are exempt, as from
+	// every limit. Off by default: an empty list changes nothing.
+	RequiredImageSigners []string `json:"required_image_signers,omitempty"`
 	// MaxCPUMillis and MaxMemoryMiB cap the sandbox's CPU (millicores) and memory a run under this
 	// profile may be given, whatever its ceiling's own resources or a member's request say. 0 is
 	// unlimited. A CLAMP, NOT A DOOR, like MaxEphemeralDiskMiB. Folded into composer.Clamp at

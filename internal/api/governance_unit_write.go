@@ -318,6 +318,15 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
+	// required_image_signers names must be signers the site defines: on the profile's own limits and on its overlay.
+	msg = s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", req.Limits.RequiredImageSigners)
+	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
+		msg = s.requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
+	}
+	if msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
+		return
+	}
 	write, unitAdmin := s.writeUnit, s.isUnitAdminCaller(r.Context())
 	if unitAdmin {
 		if !s.unitWritePrecheck(w, r, id, status, req) {

@@ -170,6 +170,7 @@ export const LIMIT_FIELDS: Field[] = [
   { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
   // The hint under this row is chosen by what the base lists (modelsHint), so it carries none here.
   { key: ALLOWED_MODELS_KEY, kind: "list", label: ALLOWED_MODELS.LABEL, mono: false },
+  ceilingField("required_image_signers", "list"),
   ceilingField("local_self_defined_components", "false"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
