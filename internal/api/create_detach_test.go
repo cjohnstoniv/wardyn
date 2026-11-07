@@ -95,6 +95,9 @@ func (s *createDetachStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error
 func (s *createDetachStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }
+func (s *createDetachStore) SetRunImageAdmission(context.Context, uuid.UUID, *types.ImageAdmissionVerdict) error {
+	return nil
+}
 
 // No onboarded workspaces in this fixture — the create-run path resolves the
 // referenced workspaces (for the onboarding gate + cred-folding) via

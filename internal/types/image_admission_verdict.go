@@ -4,15 +4,16 @@
 package types
 
 // ImageAdmissionVerdict is what image admission decided for a run's member image at create (or at a queued
-// run's start), kept on the run row (AgentRun.ImageAdmission). It carries only public facts: the digest, the
+// run's start), or what the run's launch recorded for an image the member did not name (Ref, Origin), kept on
+// the run row (AgentRun.ImageAdmission). It carries only public facts: the digest, the
 // signer's name and who signed.
 type ImageAdmissionVerdict struct {
 	// Mode is how the image was held: enforce when it could be refused (the site mode is enforce, or the
 	// member's governance profile requires a signer), audit when it was only reported.
-	Mode string `json:"mode"`
+	Mode string `json:"mode,omitempty"`
 	// Verdict is ImageAdmissionAdmitted, ImageAdmissionWouldRefuse (audit only) or ImageAdmissionNotApplicable
-	// (a macOS VM, which never runs the image).
-	Verdict string `json:"verdict"`
+	// (a macOS VM, which never runs the image). Mode and Verdict are empty only on a record of Origin alone.
+	Verdict string `json:"verdict,omitempty"`
 	// Reason is the refusal reason audit reported (would_refuse only).
 	Reason string `json:"reason,omitempty"`
 	Digest string `json:"digest,omitempty"`
@@ -34,7 +35,19 @@ type ImageAdmissionVerdict struct {
 	// architecture variant) a launch checked under scope all, as configured. Empty for a member's image, whose
 	// ref is the run's ImageInput. A revive re-checks Digest under Ref's coverage.
 	Ref string `json:"ref,omitempty"`
+	// Origin is where the image came from when the member named none, written by every launch whatever the
+	// admission mode: ImageOriginConvention, ImageOriginDevcontainer or ImageOriginWorkspace. Alone (no Mode or
+	// Verdict) when admission decided nothing about the image. Empty for a member's image and for a run launched
+	// before origins were recorded.
+	Origin string `json:"origin,omitempty"`
 }
+
+// ImageAdmissionVerdict.Origin values.
+const (
+	ImageOriginConvention   = "convention"   // the agent's, harness set's or an architecture variant's image
+	ImageOriginDevcontainer = "devcontainer" // built from the request's devcontainer repository
+	ImageOriginWorkspace    = "workspace"    // built from a workspace with no base image: its repo's devcontainer or a generated image
+)
 
 // ImageAdmissionVerdict.Verdict values.
 const (

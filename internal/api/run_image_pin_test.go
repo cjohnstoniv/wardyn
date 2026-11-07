@@ -449,11 +449,12 @@ func TestImageAdmissionScopeAllAuditChecksAndRuns(t *testing.T) {
 			t.Fatalf("dispatched %q (failed %v), want the convention image %q", image, failed, conventional)
 		}
 	})
-	t.Run("off: no probe, nothing recorded", func(t *testing.T) {
+	t.Run("off: no probe, only the origin recorded", func(t *testing.T) {
 		a := &fakeAdmitter{}
 		image, failed, st := launch(t, types.ImageAdmissionOff, a, nil)
-		if r, n := a.calls(); failed || image != conventional || r != 0 || n != 0 || st.recorded() != nil {
-			t.Errorf("off: dispatched %q (failed %v), %d Require / %d Admit, recorded %+v; want none", image, failed, r, n, st.recorded())
+		got := recordedJSON(t, st)
+		if r, n := a.calls(); failed || image != conventional || r != 0 || n != 0 || got != `{"origin":"convention"}` {
+			t.Errorf("off: dispatched %q (failed %v), %d Require / %d Admit, recorded %s; want no check and the origin alone", image, failed, r, n, got)
 		}
 	})
 }

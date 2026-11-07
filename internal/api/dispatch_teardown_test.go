@@ -89,6 +89,9 @@ func (s *dispatchTestStore) SetRunImage(_ context.Context, _ uuid.UUID, image st
 	s.run.Image = image
 	return nil
 }
+func (s *dispatchTestStore) SetRunImageAdmission(context.Context, uuid.UUID, *types.ImageAdmissionVerdict) error {
+	return nil
+}
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
 }
