@@ -634,8 +634,9 @@ func TestDiffFallsBackOnOldServer(t *testing.T) {
 		previewWeb: replyJSON(http.StatusNotFound, map[string]string{"error": "no such workload", "reason": "workload_not_found"}),
 	}))
 	_, errOut, err = runRigWithStderr(t, rig, "diff", "-f", writeTemplateFile(t, "w.yaml", webYAML))
-	if exitCodeFor(err) != 2 || errOut != "" || len(rig.sent(getWeb)) != 0 {
-		t.Errorf("workload_ 404: err = %v, stderr = %q", err, errOut)
+	// An API 4xx keeps its own exit 3 (docs/CI.md), never the skew fallback.
+	if exitCodeFor(err) != 3 || errOut != "" || len(rig.sent(getWeb)) != 0 {
+		t.Errorf("workload_ 404: err = %v (exit %d), stderr = %q", err, exitCodeFor(err), errOut)
 	}
 }
 
