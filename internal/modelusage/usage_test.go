@@ -332,11 +332,22 @@ func TestBedrockInvokeHeadersAndBody(t *testing.T) {
 	body = `{"completion":"x","amazon-bedrock-invocationMetrics":{"inputTokenCount":5,"outputTokenCount":6,"invocationLatency":10,"firstByteLatency":2}}`
 	got = run(ShapeBedrockInvoke, Options{}, []byte(body), 0)
 	expect(t, got, Usage{Input: 5, Output: 6, State: StateCounted})
-	// Neither: uncounted. Garbage header values are ignored.
-	h.Set("X-Amzn-Bedrock-Input-Token-Count", "abc")
-	h.Del("X-Amzn-Bedrock-Output-Token-Count")
-	got = run(ShapeBedrockInvoke, Options{Header: h}, []byte(`{"results":[]}`), 0)
+	// Neither header, no usage in the body: uncounted, no usage.
+	got = run(ShapeBedrockInvoke, Options{Header: http.Header{}}, []byte(`{"results":[]}`), 0)
 	expect(t, got, Usage{State: StateUncounted, Reason: ReasonNoUsage})
+	// A header that is present but malformed or negative makes the call uncounted, even when the
+	// other header is fine: a figure that cannot be read is never counted as zero.
+	for _, bad := range []string{"abc", "-1", "1.5", " "} {
+		h := http.Header{}
+		h.Set("X-Amzn-Bedrock-Input-Token-Count", bad)
+		h.Set("X-Amzn-Bedrock-Output-Token-Count", "9")
+		got = run(ShapeBedrockInvoke, Options{Header: h}, []byte(`{"results":[]}`), 0)
+		expect(t, got, Usage{State: StateUncounted, Reason: ReasonParseError})
+		h.Set("X-Amzn-Bedrock-Input-Token-Count", "17")
+		h.Set("X-Amzn-Bedrock-Output-Token-Count", bad)
+		got = run(ShapeBedrockInvoke, Options{Header: h}, []byte(`{"results":[]}`), 0)
+		expect(t, got, Usage{State: StateUncounted, Reason: ReasonParseError})
+	}
 }
 
 func TestBedrockConverseNonStream(t *testing.T) {
