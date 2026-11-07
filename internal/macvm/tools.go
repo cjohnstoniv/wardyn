@@ -207,6 +207,9 @@ type ToolsResult struct {
 	ItemsDigest string
 	// Guest is the guest posture read at the end of stage 2.
 	Guest *GuestPosture
+	// AgentSignature is how the pushed agent is signed, and AgentSigningCert whether the guest trusts
+	// the signing certificate.
+	AgentSignature, AgentSigningCert string
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -240,6 +243,8 @@ type ToolsOptions struct {
 	Desktop DesktopProbe
 	// Items is the operator's install list (none: no items).
 	Items BaseList
+	// Signer signs the guest agent before it is pushed (nil: it is pushed as built).
+	Signer AgentSigner
 }
 
 // ToolsStage is the Stage2 that boots the base through Boot and applies Tooling.
@@ -712,7 +717,9 @@ type ToolsRecord struct {
 	ItemsDigest string       `json:"items_digest,omitempty"`
 	Items       []ItemRecord `json:"items,omitempty"`
 	// Guest is the guest posture read when the base was last prepared, updated or edited.
-	Guest *GuestPosture `json:"guest,omitempty"`
+	Guest            *GuestPosture `json:"guest,omitempty"`
+	AgentSignature   string        `json:"agent_signature,omitempty"`
+	AgentSigningCert string        `json:"agent_signing_cert,omitempty"`
 }
 
 // ReadToolsRecord reads a base's tools.json.

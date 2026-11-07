@@ -303,7 +303,8 @@ type GuestPosture struct {
 	// MDM is PostureEnrolled or PostureNotEnrolled.
 	MDM string `json:"mdm,omitempty"`
 	// OrgCA is ItemTrusted when every ca item reads trusted, else ItemNotTrusted; empty with no ca item.
-	OrgCA string `json:"org_ca,omitempty"`
+	OrgCA          string `json:"org_ca,omitempty"`
+	FullDiskAccess string `json:"full_disk_access,omitempty"`
 }
 
 // GuestPosture values.

@@ -708,6 +708,9 @@ var ItemSecretPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // ItemAppPattern is the bundle an app item's dmg holds, as it lands in MacApplications.
 var ItemAppPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,95}\.app$`)
 
+// AgentSigningItem is the stage directory of the guest agent's signing certificate.
+const AgentSigningItem = "wardyn-agent-signing"
+
 // ItemDir is item name's stage directory.
 func ItemDir(name string) string { return MacItemStageDir + "/" + name }
 
