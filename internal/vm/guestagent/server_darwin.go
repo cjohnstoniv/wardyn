@@ -285,7 +285,8 @@ func (s *Server) buildCA(files []File) error {
 	return nil
 }
 
-// initDesktop sets the run's VNC password (pw, from Init) and gives the run's non-secret settings to the
+// initDesktop sets the run's VNC password (pw, from Init), adds the agent account to Screen Sharing's access list
+// when the base has one, and gives the run's non-secret settings to the
 // shells and the desktop session (StartSessionEnv), and says whether the password is set. Neither fails
 // the Init: a run without them is agent-only or sees certificate errors in GUI apps, and
 // InitResult.DesktopPasswordSet says which. The GUI session's part runs on after Init answers, until the
@@ -295,6 +296,7 @@ func (s *Server) buildCA(files []File) error {
 func (s *Server) initDesktop(ctx context.Context, env, secret map[string]string, ca []string, pw string, desktop bool) bool {
 	set := false
 	if desktop {
+		s.Desktop.AllowScreenSharing(ctx, s.User)
 		if err := s.Desktop.SetRunPassword(ctx, pw); err != nil {
 			slog.Warn("guest agent: no desktop password for this run", "err", err)
 		} else {

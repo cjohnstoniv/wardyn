@@ -108,9 +108,14 @@ func appleServer() *rfbauthtest.Server {
 	return &rfbauthtest.Server{User: guestagent.MacAgentUser, Password: relayAgentPW, VNCPassword: relayRunPW}
 }
 
+// readStatus reads the status file, waiting for it: the relay writes it as the host's handshake ends.
 func readStatus(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
+	for deadline := time.Now().Add(5 * time.Second); err != nil && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+		b, err = os.ReadFile(path)
+	}
 	if err != nil {
 		t.Fatalf("status file: %v", err)
 	}

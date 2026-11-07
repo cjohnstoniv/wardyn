@@ -153,12 +153,18 @@ func (c *trackedConn) Close() error {
 // side ends, then starts over. track registers the open tunnel (Desktop.Track): it reports false for a
 // run whose desktop is off, which closes the connection, and a Disable closes a tunnel already open.
 // local is the guest's own Screen Sharing and nothing the host sends
-// changes where it dials; a first byte that is not the open byte closes the connection.
-func SpliceDesktop(ctx context.Context, host, local DialFunc, track func(io.Closer) (func(), bool)) error {
-	return spliceDesktop(ctx, host, local, track, redialWait)
+// changes where it dials; a first byte that is not the open byte closes the connection. login, when set,
+// may serve the open tunnel itself (Desktop.ServeConsole); when it reports false the raw splice runs on a
+// fresh dial.
+func SpliceDesktop(ctx context.Context, host, local DialFunc, track func(io.Closer) (func(), bool), login LoginFunc) error {
+	return spliceDesktop(ctx, host, local, track, redialWait, login)
 }
 
-func spliceDesktop(ctx context.Context, host, local DialFunc, track func(io.Closer) (func(), bool), wait time.Duration) error {
+// LoginFunc serves an open desktop tunnel hc itself, dialling local, and says whether it did. When it
+// reports false it has written nothing to hc.
+type LoginFunc func(ctx context.Context, hc net.Conn, local DialFunc) bool
+
+func spliceDesktop(ctx context.Context, host, local DialFunc, track func(io.Closer) (func(), bool), wait time.Duration, login LoginFunc) error {
 	for ctx.Err() == nil {
 		hc, err := host(ctx)
 		if err != nil {
@@ -166,13 +172,13 @@ func spliceDesktop(ctx context.Context, host, local DialFunc, track func(io.Clos
 			sleep(ctx, wait)
 			continue
 		}
-		spliceOne(ctx, hc, local, track)
+		spliceOne(ctx, hc, local, track, login)
 		sleep(ctx, wait)
 	}
 	return nil
 }
 
-func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, track func(io.Closer) (func(), bool)) {
+func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, track func(io.Closer) (func(), bool), login LoginFunc) {
 	defer hc.Close()
 	stop := context.AfterFunc(ctx, func() { _ = hc.Close() })
 	defer stop()
@@ -185,6 +191,9 @@ func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, track func(io.C
 		return
 	}
 	release() // only to check: the tunnel is tracked below, once both ends are open
+	if login != nil && login(ctx, hc, local) {
+		return
+	}
 	lc, err := local(ctx)
 	if err != nil {
 		slog.Warn("guest agent: reach Screen Sharing", "err", err)
@@ -196,14 +205,19 @@ func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, track func(io.C
 		return
 	}
 	defer release()
+	copyBoth(hc, lc)
+}
+
+// copyBoth copies a and b both ways until either side ends; the caller's closes release the other copy.
+func copyBoth(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)
 		done <- struct{}{}
 	}
-	go cp(lc, hc)
-	go cp(hc, lc)
-	<-done // either side ending ends the pairing; the deferred closes release the other copy
+	go cp(b, a)
+	go cp(a, b)
+	<-done
 }
 
 type vsockAddr struct{}

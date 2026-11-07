@@ -71,7 +71,7 @@ func run(out, plist string) error {
 	if err != nil {
 		return fmt.Errorf("this agent's binary: %w", err)
 	}
-	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}}
+	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}, AgentUID: ids.UID}
 	dial := &guestagent.ToolsDialRecord{}
 	cred := &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups}
 	keychain := guestagent.MacKeychain{Run: runner, Dir: out, RecordDir: guestagent.MacRunCARecordDir}
@@ -120,7 +120,7 @@ func run(out, plist string) error {
 	}()
 	go func() {
 		defer wg.Done()
-		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort, key), screenSharing, desktop.Track)
+		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort, key), screenSharing, desktop.Track, desktop.ServeConsole)
 	}()
 	go func() {
 		defer wg.Done()
