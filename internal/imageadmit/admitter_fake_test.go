@@ -22,6 +22,7 @@ type fakeRegistry struct {
 	tags      map[string]string                  // tag -> digest
 	manifests map[string]*imageadmit.Manifest    // digest -> manifest
 	referrers map[string][]imageadmit.Descriptor // artifact type -> referrers of the image
+	legacy    map[string]*imageadmit.Manifest    // legacy tag suffix (".sig", ".att") -> its manifest
 	blobs     map[string][]byte                  // digest -> bytes
 	errs      map[string]error                   // method, or method+":"+id, -> error to return
 	calls     map[string]int                     // method and method+":"+id -> count
@@ -31,7 +32,7 @@ type fakeRegistry struct {
 
 func newFake() *fakeRegistry {
 	return &fakeRegistry{tags: map[string]string{}, manifests: map[string]*imageadmit.Manifest{},
-		referrers: map[string][]imageadmit.Descriptor{}, blobs: map[string][]byte{}, errs: map[string]error{},
+		referrers: map[string][]imageadmit.Descriptor{}, legacy: map[string]*imageadmit.Manifest{}, blobs: map[string][]byte{}, errs: map[string]error{},
 		calls: map[string]int{}}
 }
 
@@ -154,7 +155,26 @@ func (f *fakeRegistry) LegacyTag(_ context.Context, ref imageadmit.Ref, subject,
 	if err := f.count("LegacyTag", subject+suffix); err != nil {
 		return nil, err
 	}
-	return nil, imageadmit.ErrNotFound
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.legacy[suffix]
+	if !ok || subject != digest {
+		return nil, imageadmit.ErrNotFound
+	}
+	cp := *m
+	return &cp, nil
+}
+
+// legacyTag publishes ls as the layers of the image's legacy cosign tag with suffix, as cosign v2 pushes them.
+func (f *fakeRegistry) legacyTag(suffix string, ls ...imageadmit.LegacyLayer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := &imageadmit.Manifest{MediaType: "application/vnd.oci.image.manifest.v1+json"}
+	for _, l := range ls {
+		m.Layers = append(m.Layers, l.Descriptor)
+		f.blobs[l.Descriptor.Digest] = l.Blob
+	}
+	f.legacy[suffix] = m
 }
 
 func (f *fakeRegistry) Blob(_ context.Context, ref imageadmit.Ref, d imageadmit.Descriptor) ([]byte, error) {
