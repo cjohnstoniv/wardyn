@@ -2453,7 +2453,14 @@ grep 'daemon egress proxy configured' <logs>
 | `wardyn_session` | At sign-in | The session |
 | `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`, `wardyn_oidc_widened`, `wardyn_oidc_silent`, `wardyn_oidc_return` | At the start of a sign-in | That sign-in (10 minutes at most), read once |
 | `wardyn_oidc_reauth`, `wardyn_oidc_hint` | When a sign-in completes | Past the session; sign-out clears them |
-| `wardyn_ado_state`, `wardyn_ado_nonce`, `wardyn_ado_pkce` | At the start of the Azure DevOps sign-in | That sign-in |
+| `wardyn_ado_state`, `wardyn_ado_nonce`, `wardyn_ado_pkce` | At the start of the Azure DevOps sign-in | That sign-in (10 minutes at most) |
+| `wardyn_poidc_state`, `wardyn_poidc_nonce`, `wardyn_poidc_pkce` | At the start of an endpoint connection's OIDC sign-in | That sign-in (10 minutes at most) |
+| `wardyn_az_state`, `wardyn_az_nonce`, `wardyn_az_pkce` | At the start of the Azure AI Foundry sign-in | That sign-in (10 minutes at most) |
+| `wardyn_azcli_state`, `wardyn_azcli_nonce`, `wardyn_azcli_pkce` | At the start of the Azure CLI sign-in | That sign-in (10 minutes at most) |
+
+- A sign-in whose cookies are stripped is refused at its callback, so a connection that depends on it cannot be set up.
+- The UI-sandbox gateway is a separate listener and sets two cookies of its own, `wardyn_ui_sess` and `wardyn_ui_bind_<id>`.
+  - Neither is a console cookie, and neither takes the `__Host-` prefix. [UI sandboxes](UI-SANDBOXES.md) gives their scope and lifetime.
 
 - With secure cookies on (TLS served directly, or `WARDYN_TLS_TERMINATED`), each one is written as a `__Host-` cookie (`__Host-wardyn_session`, and so on): `Secure`, `Path=/` and no `Domain`, also under `WARDYN_BASE_PATH`.
 - A browser refuses to store a `__Host-` cookie that breaks any of those rules, so no other host under the console's registrable domain can plant one.

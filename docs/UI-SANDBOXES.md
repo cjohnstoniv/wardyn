@@ -766,11 +766,11 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 
 - This relay puts a sandbox's UI in a **browser**.
 - Two questions follow it
-  around: what about a native IDE, and what about a desktop?
-- Exactly one of them
-  has an answer today, and this section exists so the other one is not mistaken
-  for one.
-- **Nothing in the table below is built, scheduled, or tested**, and
+  around: what about a native IDE, and what about a native desktop client?
+- Only the IDE has a native answer today. A desktop already runs in the browser
+  (the last row below), and this section exists so a native desktop client is not
+  mistaken for something that ships.
+- **No native client in the table below is built, scheduled, or tested**, and
   [ROADMAP.md](../ROADMAP.md) lists no native IDE or remote-desktop path.
 - **What exists today: VS Code Remote-SSH**, over the SSH gateway, with one
   client setting ([SSH.md §5](SSH.md#5-vs-code-remote-ssh)).
@@ -786,12 +786,12 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | JetBrains Gateway | Gateway's normal flow has the **remote** host download a multi-gigabyte IDE backend; the sandbox's only egress is wardyn-proxy under the run's allowlist, so that download has nothing to reach | Nothing built. No Wardyn image carries an IDE backend, and no one has run the client against a sandbox to find out where it stops |
 |  | the same problem `remote.SSH.localServerDownload` solves for VS Code, but with a much larger artifact and no equally simple client switch |  |
 |  | A backend baked into an image, or pushed over the existing SSH transport, is the shape it would take |  |
-| RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client | Nothing built. No image ships an X session, and the desktop's audit/recording story is unwritten |
+| RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client | Nothing built. No image runs `xrdp`, and the native client's audit/recording story is unwritten |
 |  | That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one |  |
 |  | X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route |  |
 | Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
 | Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base`, the same default the vscode image now uses — an X stack does not need a language runtime |
-|  |  | Local-build only. Measured: ~565 MB over the base, listening ~1s into the 20s budget |
+|  |  | Published with every release as `ghcr.io/cjohnstoniv/agent-novnc` ([Verify a release](VERIFY.md)). Measured: ~565 MB over the base, listening ~1s into the 20s budget |
 
 - **Decision criteria.** Before any of these becomes work, all of the following
   have to hold — they are the same properties that made the browser relay

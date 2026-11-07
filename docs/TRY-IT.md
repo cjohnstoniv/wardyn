@@ -47,7 +47,9 @@ Config facts before you customize:
     - containerized picks `demo.json` on a runc-only host, `default.json` when gVisor is registered, and `claude-llm.json` once a real model path is configured;
     - `demo.json` and `default.json` differ not in confinement but in allowed-domains breadth and idle auto-stop (one hour in `default.json`, off in `demo.json`);
     - host mode picks `claude-llm.json`.
-  - An unspecified run defaults to the STRONGEST class the host's runner actually advertises at or above the policy floor, so CC2/CC3 need no policy switch, just the runtime installed.
+  - An unspecified run defaults to the organisation's default class when it is set, offered and at or above the policy floor.
+  - Otherwise it gets the STRONGEST class the host's runner actually advertises at or above the floor.
+  - So with no organisation default, CC2/CC3 need no policy switch, just the runtime installed.
   - The Getting Started **Review** step warns
     - when your stored credential and the live `WARDYN_DEFAULT_POLICY` disagree,
     - and when the policy's confinement floor (an admin override above CC1, say) names a tier this host's runner can't enforce.
