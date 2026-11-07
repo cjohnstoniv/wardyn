@@ -640,6 +640,14 @@ spec:
               value: "k8s"
             - name: WARDYN_K8S_NAMESPACE
               value: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+            {{- if include "wardyn.groundtruthEnabled" . }}
+            {{- /* Not WARDYN_GROUNDTRUTH_TOKEN_FILE: wardynd refuses to boot with both. */}}
+            {{- if hasKey $eff "WARDYN_GROUNDTRUTH_TOKEN_FILE" }}
+            {{- fail "wardyn: groundtruth.k8s.enabled delivers the sensor token through a Secret, so WARDYN_GROUNDTRUTH_TOKEN_FILE must not be set in env or extraEnv: wardynd refuses to boot with both." }}
+            {{- end }}
+            - name: WARDYN_GROUNDTRUTH_TOKEN_SECRET
+              value: {{ printf "%s/%s" (include "wardyn.groundtruthNamespace" .) (include "wardyn.groundtruthSecret" .) | quote }}
+            {{- end }}
             - name: WARDYN_PROXY_IMAGE
               value: {{ .Values.k8s.proxyImage | quote }}
             {{- if .Values.k8s.imagePullSecret }}
