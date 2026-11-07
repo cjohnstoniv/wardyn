@@ -132,6 +132,10 @@ func run() error {
 	client, err := waitForClient(ctx, func() (*http.Client, error) {
 		return controlPlaneClient(*controlURL, *controlCAFile)
 	}, caWaitBound, waitPause)
+	if stoppedDuringWait(ctx, err) {
+		slog.Info("wardyn-tetragon-ingest: shutdown before the control-plane CA appeared")
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("refusing to start: %w", err)
 	}

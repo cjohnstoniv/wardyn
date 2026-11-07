@@ -149,3 +149,29 @@ func caFileBytes(t *testing.T) []byte {
 	}
 	return b
 }
+
+// TestStoppedDuringWait: a SIGTERM during the CA wait is a quiet shutdown (run returns nil, exit 0);
+// giving up at the bound or any real error is still a refusal to start.
+func TestStoppedDuringWait(t *testing.T) {
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	notReady := func() (*http.Client, error) { return nil, errCANotReady }
+
+	_, err := waitForClient(stopped, notReady, time.Minute, waitPause)
+	if !stoppedDuringWait(stopped, err) {
+		t.Fatalf("a cancelled wait must read as a shutdown, got err=%v", err)
+	}
+
+	live := context.Background()
+	p := &capturePause{}
+	_, err = waitForClient(live, notReady, time.Minute, p.pause)
+	if err == nil || stoppedDuringWait(live, err) {
+		t.Fatalf("giving up at the bound must stay a failure, got %v", err)
+	}
+	if stoppedDuringWait(live, errors.New("control-plane CA has no certificate")) {
+		t.Fatal("a real error must stay a failure")
+	}
+	if stoppedDuringWait(live, nil) {
+		t.Fatal("no error is not a shutdown")
+	}
+}

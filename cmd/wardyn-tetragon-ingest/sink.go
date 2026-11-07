@@ -85,6 +85,12 @@ func waitForClient(ctx context.Context, build func() (*http.Client, error), boun
 	}
 }
 
+// stoppedDuringWait reports whether err is the process being told to stop while waitForClient
+// waited: a normal shutdown, not a refusal to start.
+func stoppedDuringWait(ctx context.Context, err error) bool {
+	return err != nil && errors.Is(err, context.Canceled) && ctx.Err() != nil
+}
+
 // controlPlaneClient is the ingest's end of wardynd's internal TLS hop
 // (internal/hoptls), under the proxy's rule: http:// only to a loopback host,
 // and https:// trusts wardynd's internal CA alone — never the system roots.
