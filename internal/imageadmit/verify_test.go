@@ -191,6 +191,7 @@ func TestMessageSignatureBundleIsNotAnImageSignature(t *testing.T) {
 	}
 	v := imageadmit.Check(req, "sha256:"+hex.EncodeToString(sum[:]), [][]byte{s.Sign(manifest, ciOpts())})
 	wantReason(t, v, imageadmit.SignatureMissing)
+	mustContain(t, v.Detail, "in-toto statement")
 }
 
 func TestOversizeBundleRefusedBeforeParsing(t *testing.T) {
