@@ -13,8 +13,8 @@ docs/PLUGGABILITY.md=4194 share=35 # +65 (rc.12 agent-sandbox backend), measured
 # docs/VERIFY.md 1810 adds 6 over 1804 at the 0.10 W4c train, measured: main's "(from 0.10.0 with the `wardyn` CLI)" on the package bullet (ATT-PKG, inside main's slack) beside ATT-INSTALL's installer bullet.
 # docs/VERIFY.md 1821 adds 11 over 1810 (0.10.0 RUNNER-INSTALL, #3312), measured: the sentence before the SHA256SUMS.sigstore.json verify recipe.
 docs/VERIFY.md=1821 share=35
-docs/EXPORT.md=507 share=35
-docs/RECORDING-ROOT-READ.md=332 share=35
+docs/EXPORT.md=472 share=35 # -35, measured: the correction history and the note for reviewers went
+docs/RECORDING-ROOT-READ.md=149 share=35 # -183, measured: rewritten as current behaviour
 docs/adoption/README.md=249 share=35
 # docs/operations/ai-gateway.md 792 measured (an external AI gateway setup): the two hostnames, the config, what the gateway does with a request and what the nightly job asserts.
 # docs/operations/ai-gateway.md 1033 adds 241 over 792, measured: the image section (scan result and what it cannot see), the JWKS start-up and refresh timings, and three corrections to the request table and assertions.

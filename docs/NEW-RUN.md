@@ -1,6 +1,6 @@
 # New run
 
-The New run flow turns a few plain choices into one governed run. This page is for members who launch runs and for operators who decide what members see. Every path ends at the same review, and the server checks policy and availability again when you launch.
+This page is for members who launch runs and for operators who decide what members see. Every path ends at the same review, and the server checks policy and availability again when you launch.
 
 ## Ways to begin
 
@@ -62,6 +62,14 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 - An **Application / server** takes a required **Start command** and one to eight **Ports**, each with a name, a port and a path. The run is interactive and keeps going until you end it or it reaches its lifetime limit.
   - Each port opens from the run page through the web app gateway. Only people who may enter the run can open it, unless the port is [callable from outside](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). Review holds Launch when the gateway is off.
   - **Callable from outside the run** lets the callers under **Who can call it** (people, groups, service identities; **Add a caller**) reach that port through the gateway with no terminal open. It needs inbound access turned on for you.
+- **Machine kind** is **Container** (the default) or **Virtual machine**. A virtual machine has no Fence, Wall or Vault; its barrier reads **The virtual machine**.
+  - **Operating system** is **Linux** or **macOS**. macOS is listed when macOS virtual machines are on.
+  - A macOS VM needs a pool of Macs that offer it. The step names the Mac and the reason when one cannot take the run.
+  - See [macOS virtual machines](operations/macos-vms.md) and [Linux VM sandboxes](operations/linux-vm-sandboxes.md).
+- **Window** (macOS, while `macos_vm.allow_attended_window` is on): **Open in a window on my Mac** opens a window as the run starts. Be at the Mac with its screen unlocked ([Quickstart](operations/macos-vms.md#quickstart-an-interactive-developer-sandbox)).
+- **Between runs** (an interactive macOS VM on your own Mac, while kept machines are on):
+  - **Delete this machine when the run ends**, or **Keep this machine for next time** with an optional **Name**.
+  - **Resume {name}**, with **Start fresh**, picks a machine you kept ([Keeping the machine](operations/macos-vms.md#keeping-the-machine)).
 - **Pool** is required. A pool that cannot take this run stays listed with its reason, such as **No online runners** or **Background only**.
 - The pool panel shows **Total pool capacity**, **Your allowance**, **Waiting**, **Run types** and **Per-run limits**; the strictest limit applies.
 - **Barrier** is **Fence**, **Wall** or **Vault**, weakest to strongest. A barrier that cannot be offered is disabled with its reason. An untouched barrier lets the server choose.
@@ -119,6 +127,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | **Add tools and access** | The catalogue of things you can add |
 | **Network** and **Credentials** | The total the run can reach |
 | **Setup still needed** | Open items, each with a button: **Sign in**, **Choose**, **Add** or **Connect Azure DevOps** |
+| **Wall preset** | **Open**, **Read-only** or **Sealed**, and the saved presets under **More presets**. A preset narrows this run only, on top of your walls ([Wall presets](POLICIES.md#wall-presets)) |
 
 - A run that carries an Azure DevOps credential, on a connection that creates a token for each run, says so under **Credentials**: "Azure DevOps: a token for this run with …. It's revoked when the run ends."
 - If you have not connected, that card also reads "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection." beside **Connect Azure DevOps**.
@@ -161,6 +170,7 @@ Review shows what Wardyn will create and where each value came from. The **Prett
 - **Effective policy** shows "What the sandbox can actually do": barrier, network, credentials, files and tool handling. **Only what I changed** filters it.
   - A policy that grants Azure DevOps access adds one line that starts "Azure DevOps:" and names what it grants.
   - A background run whose policy holds pushes for review adds "Nobody is here to answer, so a push that would be held is refused instead."
+- A chosen wall preset shows as its own line with **Change**, and **Effective policy** has a **Pushes** row. A preset that is no longer available holds Launch until you pick another or **Open**.
 - **YAML** and **JSON** show the draft as a read-only `kind: Run` document with **Copy**. **Edit YAML** (or **Edit JSON**) opens the editor.
 
 ### Blockers and notices
@@ -190,7 +200,7 @@ The **Templates** screen lists saved starting points at `/templates` (User view)
 |---|---|---|
 | **Use** | Anyone who can read the row | Opens New run at Review, on the listed revision |
 | **Rename**, **Delete** | The owner of a personal template; an organisation admin for an organisation one; the group's template managers for a group one | `template_scope_forbidden`, `template_group_unverified` |
-| **Publish to organisation** | An organisation admin, in the Admin view only | Copies the current revision to the organisation |
+| **Publish to organization** | An organisation admin, in the Admin view only | Copies the current revision to the organisation |
 | **Save as template**, **Save as policy** (Review) | You, to **Only me** or a group you manage | Never the organisation from Review |
 
 - [`internal/types/template.go#TemplateAuthorize`](../internal/types/template.go) decides authority. A template you cannot read answers `template_not_found`, like a missing one.
