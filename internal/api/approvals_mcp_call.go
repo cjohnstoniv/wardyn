@@ -47,7 +47,7 @@ func mcpCallDecisionRule(w http.ResponseWriter, ap types.ApprovalRequest, scope 
 		return types.ScopeOnce, true, true
 	}
 	writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
-		`an MCP call approval approves that one call, once: send no decision_scope, or "once"`)
+		`An MCP call approval approves that one call, once: send no decision_scope, or "once"`)
 	return scope, true, false
 }
 
@@ -61,7 +61,7 @@ func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, k
 	if !types.IsMCPCallScope(scope) {
 		return false
 	}
-	const tooLarge = "the MCP call is larger than a person can be shown"
+	const tooLarge = "The MCP call is larger than a person can be shown"
 	reason, msg := reasonMCPCallScopeInvalid, "requested_scope is not the hash of its own MCP call"
 	var sc types.MCPCallScope
 	shaped := kind == types.ApprovalToolCall && json.Unmarshal(scope, &sc) == nil &&

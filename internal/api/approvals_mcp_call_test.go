@@ -221,7 +221,7 @@ func raiseMCPRefused(t *testing.T, kind types.ApprovalKind, scope, reason string
 	if w.Code != http.StatusBadRequest || body.Reason != reason || len(h.approvals.requested) != 0 {
 		t.Fatalf("status %d reason %q, %d rows; want 400 %s and nothing raised", w.Code, body.Reason, len(h.approvals.requested), reason)
 	}
-	if ev := lastAuditEvent(t, h.audit.events, "auth.fail"); !strings.Contains(string(ev.Data), reason) {
+	if ev := lastAuditEvent(t, h.audit.snapshot(), "auth.fail"); !strings.Contains(string(ev.Data), reason) {
 		t.Errorf("auth.fail row %s does not name %s", ev.Data, reason)
 	}
 }
