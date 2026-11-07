@@ -192,6 +192,7 @@ static NSString *wardynScreenReadCode(NSString *path) {
 @property(strong) NSArray<NSButton *> *buttons; // the edit window's button row; empty for other windows
 @property(copy) NSString *codeFile;     // the file's path, not the code
 @property BOOL shown;
+@property BOOL typing; // Type code's keys are being pressed; a click then does nothing
 - (instancetype)initWithBox:(NSView *)box steps:(NSString *)steps codeFile:(NSString *)codeFile buttons:(BOOL)buttons canTrust:(BOOL)canTrust;
 - (void)toggle:(id)sender;
 - (void)typeCode:(id)sender;
@@ -289,8 +290,12 @@ static NSString *wardynScreenReadCode(NSString *path) {
 // typeCode is Type code's click: it reads the code file, as Show code does, and presses each letter's key in
 // the VM's view, 50 ms apart, then leaves the view focused for the person to press Return. The key, not the
 // letter, reaches the guest, which reads it with its own keyboard layout: the code's letters are on the same
-// key on QWERTY, QWERTZ and AZERTY. A code with any other character is not typed at all.
+// key on QWERTY, QWERTZ and AZERTY. A code with any other character is not typed at all. While the keys are
+// being pressed the button is off and a click does nothing, so two codes never interleave.
 - (void)typeCode:(id)sender {
+	if (self.typing) {
+		return;
+	}
 	NSString *code = wardynScreenReadCode(self.codeFile);
 	NSWindow *w = self.box.window;
 	if (code == nil || ![w.contentView isKindOfClass:[VZVirtualMachineView class]]) {
@@ -305,6 +310,9 @@ static NSString *wardynScreenReadCode(NSString *path) {
 	}
 	VZVirtualMachineView *view = (VZVirtualMachineView *)w.contentView;
 	NSTimeInterval t0 = NSApp.currentEvent.timestamp; // the click's
+	NSButton *button = sender;
+	self.typing = YES;
+	button.enabled = NO;
 	[w makeFirstResponder:view];
 	for (NSUInteger i = 0; i < code.length; i++) {
 		unichar c = [code characterAtIndex:i];
@@ -333,6 +341,12 @@ static NSString *wardynScreenReadCode(NSString *path) {
 			}
 		});
 	}
+	// After the last key, on the same queue: the button is on again.
+	__weak WardynScreenStrip *strip = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(code.length * 50 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+		strip.typing = NO;
+		button.enabled = YES;
+	});
 }
 
 // toggle is Show code's click, one of the two places the code file is read (Type code's is the other).

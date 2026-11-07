@@ -359,3 +359,37 @@ func TestEditWindowTypeCodeKeysAndButtons(t *testing.T) {
 		t.Errorf("screen_darwin.go's action numbers are not\n%s", want)
 	}
 }
+
+// A second Type code click while the first one's keys are still being pressed does nothing (screen_darwin.m,
+// pinned by its text): the click is refused before the code file is read, the button is off and the flag set
+// before the first key is scheduled, and both are cleared only after the last key, so two codes never
+// interleave.
+func TestEditWindowTypeCodeIgnoresASecondClickWhileTyping(t *testing.T) {
+	b, err := os.ReadFile("screen_darwin.m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, ok := strings.Cut(string(b), "- (void)typeCode:(id)sender {\n")
+	if !ok {
+		t.Fatal("screen_darwin.m has no typeCode: click action")
+	}
+	body, _, _ = strings.Cut(body, "\n}\n")
+	at := func(s string) int {
+		i := strings.Index(body, s)
+		if i < 0 {
+			t.Fatalf("typeCode lost:\n%s", s)
+		}
+		return i
+	}
+	guard, read := at("\tif (self.typing) {\n\t\treturn;\n\t}\n"), at("wardynScreenReadCode(self.codeFile)")
+	on, off, first := at("\tself.typing = YES;\n\tbutton.enabled = NO;\n"), at("\t\tstrip.typing = NO;\n\t\tbutton.enabled = YES;\n"), at("dispatch_after(")
+	last := strings.LastIndex(body, "dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(code.length * 50 * NSEC_PER_MSEC))")
+	switch {
+	case guard > read:
+		t.Error("a click reads the code file before it checks for a sequence in progress")
+	case on > first:
+		t.Error("the first key is scheduled before the sequence is marked in progress")
+	case last < 0 || last > off || !strings.Contains(body, "(int64_t)(i * 50 * NSEC_PER_MSEC)"):
+		t.Error("the sequence is not cleared after its last key (keys at i*50 ms, the clear at length*50 ms)")
+	}
+}
