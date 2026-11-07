@@ -97,19 +97,10 @@ func (s *Server) auditImageAdmissionDenied(r *http.Request, ref string, v *types
 		mustJSON(map[string]any{"subject": principal, "reason": reason, "image": ref, "image_admission": v})))
 }
 
-// imageAdmission is decideImageAdmission for the request r, and at create (not preflight, a dry run) a
-// refusal also writes its run.create denied row.
-func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried string, profile []string, create bool) (*types.ImageAdmissionVerdict, string, *runRefusal) {
-	v, warning, refusal := s.decideImageAdmission(r.Context(), req, carried, profile)
-	if create && refusal != nil && refusal.body.Reason != "" {
-		s.auditImageAdmissionDenied(r, createDigestInput(req, carried), v, refusal.body.Reason)
-	}
-	return v, warning, refusal
-}
-
-// decideImageAdmission decides the member's image: the verdict the run row and the run.create row keep (nil when
+// imageAdmission decides the member's image: the verdict the run row and the run.create row keep (nil when
 // no check applies), audit mode's warning ("" for none), or the refusal. With a refusal from the check, the
-// verdict is the refused one, for the denied audit row only.
+// verdict is the refused one, for the denied audit row only; at create (not preflight, a dry run) that row
+// is written here.
 //
 // The site config is read before the mode is known, so an unreadable config refuses (500) even on an
 // install whose admission is off: the mode lives in that config, and reading it as off would admit
@@ -121,7 +112,8 @@ func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried s
 // (createDigestInput): the member's image, an attached workspace's base image, or a policy-carried one; the
 // convention image is not a member's choice. Operators and the break-glass admin are not checked, as with
 // the digest rule.
-func (s *Server) decideImageAdmission(ctx context.Context, req createRunRequest, carried string, profile []string) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried string, profile []string, create bool) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+	ctx := r.Context()
 	ref := createDigestInput(req, carried)
 	if ref == "" || s.runUngoverned(ctx) {
 		return nil, "", nil
@@ -151,8 +143,12 @@ func (s *Server) decideImageAdmission(ctx context.Context, req createRunRequest,
 	if held == types.ImageAdmissionEnforce {
 		v, refusal := s.checkImage(ctx, adm, ref, siteEnforced, profile)
 		if refusal != nil {
-			return &types.ImageAdmissionVerdict{Mode: types.ImageAdmissionEnforce, Verdict: imageAdmissionRefused,
-				Reason: refusal.body.Reason, Digest: v.Digest, Signer: v.Signer}, "", refusal
+			refused := &types.ImageAdmissionVerdict{Mode: types.ImageAdmissionEnforce, Verdict: imageAdmissionRefused,
+				Reason: refusal.body.Reason, Digest: v.Digest, Signer: v.Signer}
+			if create {
+				s.auditImageAdmissionDenied(r, ref, refused, refusal.body.Reason)
+			}
+			return refused, "", refusal
 		}
 		pinned, err := imageAdmissionPinnedRef(ref, v.Digest)
 		if err != nil {
