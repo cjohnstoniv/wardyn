@@ -11,10 +11,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestProviderDispatch_CodexModelOnKeyKinds: the Model an admin stores on a codex-cli harness entry
+// TestProviderDispatch_StoredModelOnKeyKinds: the Model an admin stores on a codex-cli harness entry
 // of a custom endpoint or an OpenAI key reaches the sandbox as WARDYN_CODEX_MODEL; with none stored
 // the variable is left unset, so codex keeps its own default.
-func TestProviderDispatch_CodexModelOnKeyKinds(t *testing.T) {
+func TestProviderDispatch_StoredModelOnKeyKinds(t *testing.T) {
 	endpoint := func(model string) types.ModelProvider {
 		p := mpKeyProvider("corp-gw", "uid-gw", types.ModelProviderCustomEndpoint,
 			types.ProviderHarness{Harness: "codex-cli", Path: "/v1", Model: model})
