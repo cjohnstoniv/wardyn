@@ -653,11 +653,11 @@ wardyn audit <id> --json       # a service token reads only its own runs' rows
 - `ci-run.sh` calls the same endpoint before launching.
 - A command that must stay up is a [service](SERVICES.md).
 
-**Retrying a launch.** `wardyn run` sends an `Idempotency-Key` and never retries a create itself. To make a job re-run safe, pass a key that is the same on every re-run of the job and differs between jobs. `ci-run.sh` reads it from `WARDYN_CI_IDEMPOTENCY_KEY`, and both example pipelines set it:
+**Retrying a launch.** `wardyn run` sends an `Idempotency-Key` and never retries a create itself. To make a job re-run safe, pass a key that is the same on every re-run of the job and differs between jobs and between the legs of a matrix. `ci-run.sh` reads it from `WARDYN_CI_IDEMPOTENCY_KEY`, and both example pipelines set it:
 
 ```sh
-WARDYN_CI_IDEMPOTENCY_KEY="${GITHUB_RUN_ID}-${GITHUB_JOB}"         # GitHub Actions
-WARDYN_CI_IDEMPOTENCY_KEY="${BUILD_BUILDID}-${SYSTEM_JOBNAME}"     # Azure Pipelines
+WARDYN_CI_IDEMPOTENCY_KEY="${{ github.run_id }}-${{ github.job }}-${{ strategy.job-index }}"   # GitHub Actions (job-index is the matrix leg)
+WARDYN_CI_IDEMPOTENCY_KEY="${BUILD_BUILDID}-${SYSTEM_JOBNAME}-${SYSTEM_JOBPOSITIONINPHASE:-0}"   # Azure Pipelines (position is set under strategy: parallel)
 wardyn run ... --idempotency-key "$WARDYN_CI_IDEMPOTENCY_KEY"      # the CLI directly
 ```
 
