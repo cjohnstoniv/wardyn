@@ -395,6 +395,18 @@ describe("Your walls: every limit has a control", () => {
     expect(await sent()).toEqual({ tool_rules: [{ tool: "*", effect: "deny" }, { tool: "WebFetch", effect: "hold" }] });
   });
 
+  it("tool rules: an approve_each rule loads as approve_each and is saved as approve_each, not turned into hold", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "mcp__jira__delete_issue", effect: "approve_each" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect((rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement).value).toBe("approve_each");
+    await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
+    setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "WebFetch");
+    await user.click(save());
+    expect(await sent()).toEqual({ tool_rules: [{ tool: "mcp__jira__delete_issue", effect: "approve_each" }, { tool: "WebFetch", effect: "hold" }] });
+  });
+
   it("tool rules: two rules for one tool are marked, say so, and keep Save off", async () => {
     getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "WebFetch", effect: "hold" }, { tool: "WebFetch", effect: "deny" }] } });
     render(<YourWallsCard />);
