@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -557,10 +559,35 @@ func printMCPCall(w io.Writer, a types.ApprovalRequest) {
 	if raw == "" {
 		raw = strings.TrimPrefix(sc.Tool, "mcp__"+sc.MCPServer+"__")
 	}
-	fmt.Fprintf(w, "TOOL:      %s\nSERVER TOOL: %s\nSERVER:    %s\nARGUMENTS:\n%s\n", sc.Tool, raw, server, text.Arguments)
+	// The names come from the remote server and the arguments from the agent: print the names quoted and
+	// escaped, and the JSON with its format and control runes as \u escapes (the same string), so nothing in
+	// them reaches the terminal as a control, a line break or a reordering mark.
+	fmt.Fprintf(w, "TOOL:      %s\nSERVER TOOL: %s\nSERVER:    %s\nARGUMENTS:\n%s\n",
+		strconv.QuoteToASCII(sc.Tool), strconv.QuoteToASCII(raw), strconv.QuoteToASCII(server), jsonForTerminal(text.Arguments))
 	if text.Extra != "" {
-		fmt.Fprintf(w, "EXTRA:\n%s\n", text.Extra)
+		fmt.Fprintf(w, "EXTRA:\n%s\n", jsonForTerminal(text.Extra))
 	}
+}
+
+// jsonForTerminal escapes every control and format rune in indented JSON text as \uXXXX, keeping its newlines.
+// Such a rune can only sit inside a JSON string, where the escape reads as the same character.
+func jsonForTerminal(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteRune(r)
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError:
+			if r > 0xFFFF {
+				fmt.Fprintf(&b, `\u%04x\u%04x`, 0xD800+((r-0x10000)>>10), 0xDC00+((r-0x10000)&0x3FF))
+			} else {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // approvalCmd groups the approval verbs: list and get read, approve and deny
