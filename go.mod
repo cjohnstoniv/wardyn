@@ -19,7 +19,7 @@ require (
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/distribution/reference v0.6.0
 	github.com/go-chi/chi/v5 v5.5.0
-	github.com/go-jose/go-jose/v4 v4.1.6
+	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/certificate-transparency-go v1.4.0
 	github.com/google/go-cmp v0.7.0

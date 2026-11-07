@@ -14,7 +14,7 @@ ARG BASE_IMAGE=wardyn/agent-novnc:local
 
 # The desktop sign-in helper (cmd/wardyn-signin): standard library only, so
 # this stage needs go.mod and the one package, nothing else.
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS signin-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS signin-builder
 ENV GOTOOLCHAIN=local
 WORKDIR /build
 COPY go.mod go.sum ./
