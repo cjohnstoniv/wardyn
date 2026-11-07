@@ -514,6 +514,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		OperatorOwned:   operatorOwned,
 		BreakGlass:      breakGlassReason(ctx) != "",
 		CreatedVia:      createdVia(ctx),
+		CreatedViaActor: createdViaActor(ctx),
 		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
 		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,

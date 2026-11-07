@@ -495,7 +495,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
   - Each exchange writes `delegation.exchange` (actor `delegate:<id>`, target the person).
   - Every row a delegated request writes — the API's, the identity provider's, the attach and UI-gateway rows of a ticket it minted — has the person as actor and `data.via = {"delegate":"<portal id>","grant":"<token id>"}`.
   - When the exchange named an agent, `data.via.actor = {"sub":"…","iss":"…"}` on the rows the delegated request writes, and on the exchange's success row as `actor`.
-  - A run it launches carries `created_via` (the portal id) on the run row and in the API.
+  - A run it launches carries `created_via` (the portal id) on the run row and in the API, and `created_via_actor` (`sub` and `iss`) when the exchange named an agent. The run's gateway tokens and the rows of its queued start and attach tickets carry the same agent.
 - **Revocation.**
   - Revoking the portal ends every delegated token it holds on their next request.
   - `POST /api/v1/sessions/revoke` for the person ends theirs the same way and refuses new exchanges of tokens issued before it.

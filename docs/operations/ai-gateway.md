@@ -157,8 +157,10 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 | `iat` | When the token was issued | Unix seconds |
 | `exp` | `iat` plus the provider's token lifetime, 10 minutes unless set | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
 | `wardyn_format` | `experimental-1` | |
-| `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape |
+| `wardyn_delegate` | The portal's id | Present only on a run a portal launched for the person; see [api-tokens.md](api-tokens.md) |
+| `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape. On a portal run whose portal named the acting agent it nests that agent: `{"sub": "spiffe://<trust domain>/agent-run/<run id>", "act": {"sub": "<agent>", "iss": "<issuer>"}}` |
 
+- The nested agent is provenance. RFC 8693 section 4.1 says prior actors are informational and not to be used in access control decisions, so a gateway rule that reads `act.act.sub` does so on its own judgement.
 - There is no `nbf`. A Wardyn clock ahead of the gateway's drops a token early and one behind gets a `401`: both fail closed.
 - A test holds this table equal to the signer's claim struct.
 

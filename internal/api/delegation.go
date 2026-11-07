@@ -144,6 +144,16 @@ func createdVia(ctx context.Context) *uuid.UUID {
 	return nil
 }
 
+// createdViaActor is the run row's created_via_actor: the agent the portal named on the delegated token,
+// nil when it named none or the request is not delegated.
+func createdViaActor(ctx context.Context) *types.DelegationActor {
+	if via, ok := audit.DelegationFrom(ctx); ok && via.Actor != nil {
+		a := *via.Actor
+		return &a
+	}
+	return nil
+}
+
 // neverOperator reports a caller neither admin tier may answer true for,
 // whatever its context holds: a device, a service identity, an approval rule, or a portal acting for a person (a
 // delegated person is published at the user role anyway; this holds even if

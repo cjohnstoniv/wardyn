@@ -52,6 +52,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Runs launched through a portal name the portal and the acting agent to an AI gateway: gateway tokens carry `wardyn_delegate` and, when the portal named an agent, a nested `act`. The run's `created_via_actor` names the agent, and so do the audit rows of a queued launch's start and of an attach ticket the portal minted. On by default with no setting: a portal that names no agent changes nothing but the new `wardyn_delegate` claim.
 - Approvals: the run's owner or an administrator approves one MCP call that a tool rule marks `approve_each`, once, and an approval rule never does. `WARDYN_CAPABILITY_SECOND_HUMAN` (off by default) also makes someone other than the run's creator decide it.
 - Tool rules can mark a remote MCP tool `approve_each`: each call waits for a person to approve that call with its exact arguments, and Wardyn sends exactly what was approved, once. It works for Codex CLI too. Nothing changes until a rule says `approve_each`.
 - Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
@@ -71,6 +72,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- Gateway tokens for a run a portal launched now carry a `wardyn_delegate` claim holding the portal's id. A gateway rule that logs unknown claims will show it; token validators ignore it.
 - macOS: the runner now signs each guest agent it pushes into a base with a code signing identity made once on that Mac (in the VM directory's `agent-signing/`), and the base trusts that certificate for code signing only, so a Full Disk Access grant can last through tools updates. On by default; if signing fails the agent is pushed signed ad hoc, as before. `macos-vm status` says which. The first tools update after upgrading changes the signature, so grant Full Disk Access once more in edit-base.
 - `wardyn diff` and `wardyn apply --dry-run` ask the server what the apply would do, so they now show refusals the apply would meet and whether a run would start. `apply --dry-run` exits 1 when one would be refused. Against a server without the preview route they fall back to the old client-side comparison and say so on stderr.
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
