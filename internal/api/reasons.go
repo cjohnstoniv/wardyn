@@ -829,6 +829,6 @@ const (
 
 // One MCP call's approval raise on the internal route (approvals_mcp_call.go).
 const (
-	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid" // 400: a requested_scope carrying call_sha256 that is not the hash of its own server, tool and arguments, names another server's tool, or is on a kind other than tool_call
+	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid" // 400: a requested_scope carrying call_sha256 that is not the hash of its own server, tool and arguments, repeats a key or spells one in another case, shows a tool name that is not its raw tool's, or is on a kind other than tool_call
 	reasonMCPCallTooLarge     = "mcp_call_too_large"     // 400: an MCP call larger than a person can be shown (arguments over 32 KiB, or a scope over 64 KiB)
 )
