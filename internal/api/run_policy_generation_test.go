@@ -94,10 +94,13 @@ func newGenerationFixture(t *testing.T) (*reviveFixture, *generationStore, strin
 	return f, gs, id.Token
 }
 
+// postGenerationDecision sends a proxy decision where the proxy sends it: the internal listener. The
+// fixture's hop is TLS, so the console listener answers every /api/v1/internal/ path with a 404.
 func postGenerationDecision(t *testing.T, f *reviveFixture, token, host string) {
 	t.Helper()
 	body, _ := json.Marshal(egress.DecisionLog{Decision: egress.Allow, Request: egress.Request{RunID: f.run.ID, Host: host, Port: 443}, RuleSource: "policy:allowlist"})
-	if w := do(t, f.srv, http.MethodPost, "/api/v1/internal/decisions", token, string(body)); w.Code >= 300 {
+	internal := func(tb testing.TB, _ http.Handler) http.Handler { return panicFails(tb, f.srv.InternalHandler()) }
+	if w := doVia(t, internal, f.srv, http.MethodPost, "/api/v1/internal/decisions", token, string(body)); w.Code >= 300 {
 		t.Fatalf("decision for %s: code %d %s", host, w.Code, w.Body.String())
 	}
 }
