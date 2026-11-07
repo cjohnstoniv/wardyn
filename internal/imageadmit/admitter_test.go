@@ -229,7 +229,7 @@ func TestAdmitUnavailableSentences(t *testing.T) {
 		{"deadline", context.DeadlineExceeded, "the check took longer than 20 seconds"},
 		{"server error", un(imageadmit.CauseServer, false), h + " answered with an error"},
 		{"refused target", un(imageadmit.CauseRefused, false), h + " is not an address Wardyn contacts"},
-		{"no such tag", imageadmit.ErrNotFound, h + " has no image team/app:1.4"},
+		{"no such tag", imageadmit.ErrNotFound, h + " has no image team/app:1.4 (check the name and tag)"},
 		{"lying registry", imageadmit.ErrDigestMismatch, h + " answered content that does not match its digest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,6 +242,18 @@ func TestAdmitUnavailableSentences(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A referrers index that does not parse is the registry's content, not an outage: the image has no
+// signature to read, and the refusal says so rather than that the registry could not be read.
+func TestAdmitMalformedReferrersIndexIsAMissingSignature(t *testing.T) {
+	s, f, a, _ := signedImage(t)
+	f.setErr("Referrers", fmt.Errorf("%w: manifest is not JSON", imageadmit.ErrMalformed))
+	v, err := admit(t, a, compile(t, s, corpCI()), ref)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	wantReason(t, v, imageadmit.SignatureMissing)
 }
 
 // Concurrent checks of one image under one policy share one set of signature reads.

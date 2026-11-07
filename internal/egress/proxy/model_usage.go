@@ -266,14 +266,17 @@ func usageVendor(s modelusage.Shape) string {
 	return "bedrock"
 }
 
-// cutUsageField cuts s to at most n bytes on a rune boundary.
+// cutUsageField cuts s to at most n bytes on a rune boundary. A byte that is not valid UTF-8 becomes
+// U+FFFD (the form the row's JSON would carry), so one stray byte never shortens the field.
 func cutUsageField(s string, n int) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "\uFFFD")
+	}
 	if len(s) <= n {
 		return s
 	}
-	s = s[:n]
-	for len(s) > 0 && !utf8.ValidString(s) {
-		s = s[:len(s)-1]
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
-	return s
+	return s[:n]
 }

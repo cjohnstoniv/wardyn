@@ -49,6 +49,8 @@ var (
 	ErrNotFound = errors.New("not found in the registry")
 	// ErrDigestMismatch means bytes did not hash to the digest they were asked for or announced.
 	ErrDigestMismatch = errors.New("content does not match its digest")
+	// ErrMalformed means the registry answered a referrers index that does not parse: its content, not an outage.
+	ErrMalformed = errors.New("not a valid referrers index")
 	// ErrTooLarge means a response exceeded its bound.
 	ErrTooLarge = errors.New("response larger than its bound")
 
@@ -327,7 +329,7 @@ func (c *RegistryClient) Referrers(ctx context.Context, ref Ref, subject, artifa
 	}
 	m, err := parseManifest(body, hdr, "")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
 	out := make([]Descriptor, 0, min(len(m.Manifests), MaxReferrers))
 	for _, d := range m.Manifests {

@@ -19,6 +19,8 @@ export interface ImageAdmissionVerdict {
   issuer?: string;
   key_id?: string;
   attestations?: string[];
+  // True when the verdict came from the admitter's cache rather than a registry read for this create.
+  cached?: boolean;
   // Why the site's own signers would refuse the image under audit, when the profile's enforced signers admitted it.
   site_audit?: string;
 }

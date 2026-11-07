@@ -285,7 +285,7 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 		Long: "Ask the server what an apply of each workload would do, and show it against the stored workload of\n" +
 			"the same name as a unified diff of both written as YAML. Exits 0 when every workload is equal, 1 when\n" +
 			"any differs or is not stored yet, and 2 or more on an error or a spec the apply would be refused, as\n" +
-			"`diff` and `kubectl diff` do. Writes nothing.",
+			"`diff` and `kubectl diff` do. It checks every workload and names each one the apply would refuse. Writes nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			docs, err := readWorkloadDocs(cmd, file)
@@ -295,6 +295,7 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 			c := client()
 			differs := 0
 			warned := false
+			var refused []string
 			for _, d := range docs {
 				res, err := diffWorkload(cmd.Context(), cmd.ErrOrStderr(), &warned, c, d)
 				if err != nil {
@@ -306,9 +307,12 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 				}
 				if res.preview != nil {
 					if why := previewRefusal(*res.preview); why != "" {
-						return usageError(fmt.Errorf("workload/%s %s", d.Name, why))
+						refused = append(refused, fmt.Sprintf("workload/%s %s", d.Name, why))
 					}
 				}
+			}
+			if len(refused) > 0 {
+				return usageError(errors.New(strings.Join(refused, "; ")))
 			}
 			if differs > 0 {
 				return &exitError{code: 1, err: fmt.Errorf("%d workload(s) differ from the stored ones", differs)}
@@ -384,7 +388,7 @@ type workloadDryRunReport struct {
 	Name      string               `json:"name"`
 	Differs   bool                 `json:"differs"`
 	Diff      string               `json:"diff,omitempty"`
-	Preflight sdk.PreflightResult  `json:"preflight"`
+	Preflight *sdk.PreflightResult `json:"preflight,omitempty"`
 	Preview   *sdk.WorkloadPreview `json:"preview,omitempty"`
 }
 
@@ -403,9 +407,9 @@ func workloadDryRun(cmd *cobra.Command, c *sdk.Client, docs []sdk.WorkloadDocume
 		if pv != nil && previewRefusal(*pv) != "" {
 			refused++
 		}
-		var pf sdk.PreflightResult
-		if pv != nil && pv.Launch.Preflight != nil {
-			pf = *pv.Launch.Preflight
+		var pf *sdk.PreflightResult // nil when the preview carries none: --json then has no preflight entry
+		if pv != nil {
+			pf = pv.Launch.Preflight
 		}
 		if pv == nil {
 			req, err := sdk.RunDocumentRequest(res.norm.Intent)
@@ -413,9 +417,11 @@ func workloadDryRun(cmd *cobra.Command, c *sdk.Client, docs []sdk.WorkloadDocume
 				return fmt.Errorf("workload/%s: %w", d.Name, err)
 			}
 			req.Title, req.Description, req.RunIn = res.norm.Name, res.norm.Description, res.norm.RunIn
-			if pf, err = c.Preflight(cmd.Context(), req); err != nil {
+			got, err := c.Preflight(cmd.Context(), req)
+			if err != nil {
 				return fmt.Errorf("workload/%s: %w", d.Name, err)
 			}
+			pf = &got
 		}
 		if asJSON {
 			reports = append(reports, workloadDryRunReport{Name: d.Name, Differs: res.differs, Diff: res.text, Preflight: pf, Preview: pv})
@@ -427,8 +433,8 @@ func workloadDryRun(cmd *cobra.Command, c *sdk.Client, docs []sdk.WorkloadDocume
 			fmt.Fprintf(w, "workload/%s unchanged\n", d.Name)
 		}
 		fmt.Fprint(w, res.text)
-		if pv == nil || pv.Launch.Preflight != nil {
-			if err := printPreflightResult(w, pf); err != nil {
+		if pf != nil {
+			if err := printPreflightResult(w, *pf); err != nil {
 				return err
 			}
 		}

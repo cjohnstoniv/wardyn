@@ -159,6 +159,7 @@ export const RUN_COCKPIT = {
   ...RUN_WAIT,
   // Phase-2 layout controls (the canvas + its edit-mode toolbar).
   layoutPreset: (preset: string) => `layout: ${preset}`,
+  layoutPresets: "Layout preset",
   addWidget: "Add widget",
   editLayout: "Edit layout",
   editing: "Editing layout",

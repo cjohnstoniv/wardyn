@@ -62,7 +62,7 @@ var mcpApproveEachSecond = time.Second
 // What the agent reads when its call was not sent.
 const (
 	mcpCallWaitingText  = "Wardyn is waiting for a person to approve this call (request %s). It was not sent. Call the tool again with the same arguments to keep waiting, or to send it once it is approved. A call with different arguments asks again."
-	mcpCallDeclinedText = "A person declined this call, so Wardyn did not send it. The same call is refused for the rest of this run; a call with different arguments asks again."
+	mcpCallDeclinedText = "A person declined this call, so Wardyn did not send it. This request and identical retries are refused; a call with different arguments asks again."
 	mcpCallClosedText   = "The request for this call closed without a decision, so Wardyn did not send it. Call the tool again to ask again."
 	mcpCallTooLargeText = "This call's arguments are larger than Wardyn can show a person (32 KiB), so it was not sent."
 	mcpCallBusyText     = "Too many calls are already waiting for a person in this run. Try again later."
@@ -320,7 +320,7 @@ func (x *mcpExchange) readCall(m mcpMessage) (approveEachCall, string, error) {
 		return approveEachCall{}, "", err
 	}
 	canon := func(raw []byte) []byte { out, _ := types.CanonicalJSON(raw); return out } // checked above
-	return approveEachCall{id: m.id, scope: scope, body: buildMCPCall(canon(m.id), canon(params["name"]), scope, canon(progress))}, "", nil
+	return approveEachCall{id: m.id, scope: scope, body: buildMCPCall(m.id, canon(params["name"]), scope, canon(progress))}, "", nil
 }
 
 // callScope is the scope of one call of srv's raw tool with the given arguments and extra params
@@ -353,7 +353,8 @@ func (p *Proxy) callScope(srv *mcpServer, harness, raw string, args, extra json.
 }
 
 // buildMCPCall is the request sent for an approved call: the broker's own envelope around the
-// canonical arguments and extra params the person saw, and of _meta only the progress token.
+// canonical arguments and extra params the person saw, and of _meta only the progress token. The id is the
+// client's own text (1.0 stays 1.0), so the server answers with the id the client sent.
 func buildMCPCall(id, name []byte, s types.MCPCallScope, progress []byte) []byte {
 	var b bytes.Buffer
 	b.WriteString(`{"jsonrpc":"2.0","id":`)

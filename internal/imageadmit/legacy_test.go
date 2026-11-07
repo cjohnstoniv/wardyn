@@ -390,3 +390,26 @@ func TestReadLegacySkipsOversizeLayers(t *testing.T) {
 	wantReason(t, v, imageadmit.SignatureMissing)
 	mustContain(t, v.Detail, "larger than")
 }
+
+// A bundle and a legacy layer count against the same bound: one signer verifies at most
+// MaxCandidatesPerSigner candidates in all, bundles first.
+func TestBundlesAndLegacyLayersShareOneBound(t *testing.T) {
+	s := releasesigtest.New(t)
+	p := compile(t, s, corpCI())
+	req, refused := p.Require(ref, true, nil)
+	if refused != nil {
+		t.Fatal(refused)
+	}
+	junk := make([][]byte, imageadmit.MaxCandidatesPerSigner-1)
+	for i := range junk {
+		junk[i] = []byte(`{}`)
+	}
+	good := s.LegacySignature(sigPayload(), ciOpts())
+	check := func(nJunk int) imageadmit.Verdict {
+		return imageadmit.CheckCandidates(req, digest, imageadmit.Candidates{Bundles: junk[:nJunk], Legacy: layers(good)})
+	}
+	wantReason(t, check(0), "")
+	wantReason(t, check(len(junk)), "")
+	over := append(junk, []byte(`{}`))
+	wantReason(t, imageadmit.CheckCandidates(req, digest, imageadmit.Candidates{Bundles: over, Legacy: layers(good)}), imageadmit.SignatureMissing)
+}

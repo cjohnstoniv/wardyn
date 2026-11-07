@@ -206,6 +206,15 @@ func TestImageAdmissionEnforceAdmitsAndPins(t *testing.T) {
 
 // TestImageAdmissionPinnedRefForms: a digest ref keeps its digest, a familiar name is made canonical, and a
 // ref already pinned to another digest is pinned to the verified one.
+// The run row says whether the verdict was read from the registry for this create or served from the cache.
+func TestAdmittedImageKeepsCached(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		if got := admittedImage(types.ImageAdmissionEnforce, imageadmit.Verdict{Digest: "sha256:x", Cached: cached}); got.Cached != cached {
+			t.Errorf("Cached = %v for a verdict with Cached = %v", got.Cached, cached)
+		}
+	}
+}
+
 func TestImageAdmissionPinnedRefForms(t *testing.T) {
 	other := "sha256:" + strings.Repeat("9", 64)
 	for in, want := range map[string]string{

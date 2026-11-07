@@ -24,6 +24,9 @@ type ImageAdmissionVerdict struct {
 	Issuer       string   `json:"issuer,omitempty"`
 	KeyID        string   `json:"key_id,omitempty"`
 	Attestations []string `json:"attestations,omitempty"`
+	// Cached is true when the verdict came from the admitter's cache (up to an hour old) rather than a read of
+	// the registry for this create.
+	Cached bool `json:"cached,omitempty"`
 	// SiteAudit is the reason the site's own signers would refuse the image under audit, when the governance
 	// profile's enforced signers admitted it.
 	SiteAudit string `json:"site_audit,omitempty"`

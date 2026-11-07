@@ -19,7 +19,8 @@ import (
 // stamped with that generation. The new policy is recorded as run.policy.generation: data.policy as
 // auditablePolicy writes it, so its digest can be recomputed from the row, beside data.generation, and
 // the row is stamped with its own generation. It runs before the new proxy starts, so that proxy's
-// first row is stamped too. A store without generations returns 0 and no error. A failed write is an
+// first row is stamped too. A store without generations returns 0 and no error, and the revive then runs unstamped (generation 0 also
+// disables the abandon): Postgres implements RunPolicyGenerations, and any other production store must. A failed write is an
 // error, and the revive must not start the new proxy (reviveGenerationFailed): with no generation on
 // record, the new proxy's rows would be stamped with the old policy it no longer enforces.
 func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, retiring string, renewed renewedTokens, fresh string) (int, error) {

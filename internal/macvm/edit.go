@@ -407,6 +407,7 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowSc
 	buttons := &editButtons{ctx: bctx, g: g, staging: filepath.Dir(spec.DiskPath), o: o}
 	buttons.wire(&text)
 	w, err := scr.Open(ptr, text)
+	// The window's block retains the VM; this keeps wg (and so ptr's boot) reachable for the Open call only.
 	runtime.KeepAlive(wg)
 	if err != nil {
 		return fmt.Errorf("macvm: the edit window: %w", err)

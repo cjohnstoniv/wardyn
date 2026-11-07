@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/imageadmit"
@@ -216,5 +217,17 @@ func TestFingerprintFollowsPolicyRootAndProfile(t *testing.T) {
 	current = rootB
 	if fp(spec, true, nil) == base {
 		t.Error("a trust root change at the same path kept the fingerprint")
+	}
+}
+
+// The reason a root could not be read comes from the reader, which may be the caller's: the refusal says
+// which root, never the reader's own text.
+func TestCompileRootReadErrorIsAFixedMessage(t *testing.T) {
+	s := releasesigtest.New(t)
+	read := func(string) ([]byte, error) { return nil, errors.New("secret-from-the-reader") }
+	_, err := imageadmit.Compile(imageadmit.Config{TrustedRoots: []imageadmit.RootSpec{{Name: "r", Path: "/etc/wardyn/r.json"}}},
+		imageadmit.Options{Version: "1.2.3", PublicGoodRoot: testRoot(t, s), ReadFile: read})
+	if err == nil || !errors.Is(err, imageadmit.ErrPolicy) || strings.Contains(err.Error(), "secret-from-the-reader") {
+		t.Fatalf("err = %v, want an ErrPolicy that names the root and not the reader's text", err)
 	}
 }
