@@ -257,7 +257,8 @@ func TestImagePinWorkspaceWrapReuse(t *testing.T) {
 // TestImageAdmissionScopeAllChecksTheConventionImage: with scope all and mode enforce, the image a governed run
 // gets by convention (no member image) is checked at launch and dispatched as its pin. A failure fails the run
 // with the refusal sentence as its hint and a run.dispatch failure row; it is the operator's image, so there
-// is no 403. Scope member, audit, an operator and a member's own image leave the convention image unchecked.
+// is no 403. Scope member, off, an operator and a member's own image leave the convention image unchecked
+// (audit: TestImageAdmissionScopeAllAuditChecksAndRuns).
 func TestImageAdmissionScopeAllChecksTheConventionImage(t *testing.T) {
 	site := func(mode, scope string) types.SiteConfig {
 		sc := admissionSite(mode)
@@ -317,7 +318,6 @@ func TestImageAdmissionScopeAllChecksTheConventionImage(t *testing.T) {
 		req  createRunRequest
 	}{
 		{"enforce, scope member", t.Context(), site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeMember), convention},
-		{"audit, scope all", t.Context(), site(types.ImageAdmissionAudit, types.ImageAdmissionScopeAll), convention},
 		{"off", t.Context(), site(types.ImageAdmissionOff, types.ImageAdmissionScopeAll), convention},
 		{"operator, enforce, scope all", admin, site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll), convention},
 	} {
@@ -388,4 +388,72 @@ func TestImageAdmissionScopeAllRecordsTheConventionVerdict(t *testing.T) {
 	if got := st.state(run.ID); got != types.RunFailed {
 		t.Errorf("state = %s, want FAILED", got)
 	}
+}
+
+// TestImageAdmissionScopeAllAuditChecksAndRuns: audit with scope all checks a governed run's convention image at
+// launch the same way enforce does and records the outcome on the run (admitted, or would_refuse with its
+// reason, an unreachable registry included), but never pins it and never fails the launch: the dispatched image
+// is the convention image as configured, even when the verdict cannot be written. Off asks nothing and records
+// nothing.
+func TestImageAdmissionScopeAllAuditChecksAndRuns(t *testing.T) {
+	site := func(mode string) types.SiteConfig {
+		sc := admissionSite(mode)
+		sc.Images.Admission.Scope = types.ImageAdmissionScopeAll
+		return sc
+	}
+	launch := func(t *testing.T, mode string, a *fakeAdmitter, recordErr error) (string, bool, *pinStore) {
+		t.Helper()
+		srv, st, _, run := pinFixture(t, nil)
+		st.site, st.admissionErr, srv.cfg.ImageAdmitter = site(mode), recordErr, a
+		image, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil)
+		return image, failed, st
+	}
+	conventional, failed, _ := launch(t, types.ImageAdmissionOff, &fakeAdmitter{}, nil)
+	if failed || conventional == "" {
+		t.Fatalf("convention launch with admission off = %q, failed %v", conventional, failed)
+	}
+	unsigned := func(imageadmit.Requirements) (imageadmit.Verdict, error) {
+		return imageadmit.Verdict{Reason: imageadmit.SignatureMissing, Digest: admitDigest, Signers: []string{admitSigner}}, nil
+	}
+	unavailable := func(imageadmit.Requirements) (imageadmit.Verdict, error) {
+		return imageadmit.Verdict{Reason: imageadmit.AdmissionUnavailable, Detail: "registry.example.com could not be reached"}, errors.New("dial: refused")
+	}
+	for _, tc := range []struct {
+		name         string
+		admit        func(imageadmit.Requirements) (imageadmit.Verdict, error)
+		verdict, why string
+	}{
+		{"unsigned: would refuse", unsigned, types.ImageAdmissionWouldRefuse, reasonImageSignatureMissing},
+		{"registry unreachable: would refuse", unavailable, types.ImageAdmissionWouldRefuse, reasonImageAdmissionUnavailable},
+		{"signed: admitted", nil, types.ImageAdmissionAdmitted, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &fakeAdmitter{admit: tc.admit}
+			image, failed, st := launch(t, types.ImageAdmissionAudit, a, nil)
+			if failed || image != conventional {
+				t.Fatalf("dispatched %q (failed %v), want the convention image %q as configured", image, failed, conventional)
+			}
+			if !slices.Equal(a.admits, []string{conventional}) {
+				t.Errorf("Admit refs = %q, want one check of %q", a.admits, conventional)
+			}
+			v := st.recorded()
+			if v == nil || v.Mode != types.ImageAdmissionAudit || v.Verdict != tc.verdict || v.Reason != tc.why ||
+				v.Ref != conventional || v.PinnedRef != "" {
+				t.Errorf("recorded verdict %+v, want audit %s (%q) for %q, never pinned", v, tc.verdict, tc.why, conventional)
+			}
+		})
+	}
+	t.Run("a verdict that cannot be written does not fail the launch", func(t *testing.T) {
+		image, failed, _ := launch(t, types.ImageAdmissionAudit, &fakeAdmitter{admit: unsigned}, errors.New("db down"))
+		if failed || image != conventional {
+			t.Fatalf("dispatched %q (failed %v), want the convention image %q", image, failed, conventional)
+		}
+	})
+	t.Run("off: no probe, nothing recorded", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		image, failed, st := launch(t, types.ImageAdmissionOff, a, nil)
+		if r, n := a.calls(); failed || image != conventional || r != 0 || n != 0 || st.recorded() != nil {
+			t.Errorf("off: dispatched %q (failed %v), %d Require / %d Admit, recorded %+v; want none", image, failed, r, n, st.recorded())
+		}
+	})
 }
