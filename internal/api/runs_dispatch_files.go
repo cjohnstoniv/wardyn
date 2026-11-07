@@ -113,6 +113,8 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 				skip = "the grant is owner_only and the run's owner has no secret of that name of their own"
 			case gerr != nil || len(val) == 0:
 				skip = "secret could not be resolved"
+			case secretmask.TrimmedTooShort(val):
+				skip = errSecretTrimmedTooShort.Error()
 			case s.maskDispatchValue(ctx, run.ID, fileSecretRenderings(val)...) != nil:
 				skip = "the run's masking manifest could not record the value"
 			default:
@@ -169,6 +171,11 @@ func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run ty
 // without a trailing line break — the form a shell's command substitution
 // reads the file into.
 func fileSecretRenderings(val []byte) [][]byte { return envSecretRenderings(val) }
+
+// errSecretTrimmedTooShort is why a file or variable secret is not delivered when
+// it reaches the masking minimum only by its trailing line break: output carries
+// it without the break, which the masker cannot hide.
+var errSecretTrimmedTooShort = errors.New("the stored value is shorter than the masking minimum without its trailing line break, so it cannot be masked")
 
 // envSecretRenderings is what a delivered variable's value is masked as: the
 // bytes as stored, those bytes without a trailing line break, and, for a value

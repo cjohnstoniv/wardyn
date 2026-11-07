@@ -90,3 +90,21 @@ func TestMultilineRenderingsLines(t *testing.T) {
 		}
 	}
 }
+
+// A value that reaches MinLen only by its trailing line break is printed without it, shorter than
+// the masker hides, so the delivery sinks refuse it; a value long enough either way, and a short one
+// with no break (refused by the length check itself), are not this case.
+func TestTrimmedTooShort(t *testing.T) {
+	for in, want := range map[string]bool{
+		"AbC1234\n":               true,
+		"AbC1234\r\n":             true,
+		"AbC12345\n":              false,
+		"AbC12345":                false,
+		"AbC1234":                 false,
+		"sk-single-line-secret\n": false,
+	} {
+		if got := TrimmedTooShort([]byte(in)); got != want {
+			t.Errorf("TrimmedTooShort(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

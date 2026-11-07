@@ -31,3 +31,12 @@ func MultilineRenderings(val []byte) [][]byte {
 	}
 	return out
 }
+
+// TrimmedTooShort reports a value the masker cannot hide once its trailing line
+// break is gone: at least MinLen bytes as stored, fewer without the break. A
+// terminal or a shell's command substitution prints that shorter form, so a
+// sink must not hand such a value out.
+func TrimmedTooShort(val []byte) bool {
+	body := bytes.TrimRight(val, "\r\n")
+	return len(body) < len(val) && len(body) < MinLen
+}

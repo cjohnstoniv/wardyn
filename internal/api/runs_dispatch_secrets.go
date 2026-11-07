@@ -26,6 +26,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -237,6 +238,8 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 				skip = "the grant is owner_only and the run's owner has no secret of that name of their own"
 			case gerr != nil || len(val) == 0:
 				skip = "secret could not be resolved"
+			case secretmask.TrimmedTooShort(val):
+				skip = errSecretTrimmedTooShort.Error()
 			case s.maskDispatchValue(ctx, run.ID, envSecretRenderings(val)...) != nil:
 				// On the run's masking manifest before the sandbox can see it.
 				skip = "the run's masking manifest could not record the value"
