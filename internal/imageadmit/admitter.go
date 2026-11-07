@@ -206,6 +206,8 @@ func unavailableDetail(ref Ref, err error) string {
 			return u.Host + " answered with an error"
 		case CauseRefused:
 			return u.Host + " is not an address Wardyn contacts"
+		case CauseAuthFile:
+			return "WARDYN_REGISTRY_AUTH_FILE could not be read"
 		}
 		return u.Host + " could not be reached"
 	}

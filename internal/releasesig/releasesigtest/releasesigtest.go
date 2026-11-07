@@ -52,6 +52,7 @@ type Signer struct {
 	rekorID  string // hex SHA-256 of the Rekor key, as Rekor names its log
 	ctKey    *ecdsa.PrivateKey
 	ctID     [32]byte // SHA-256 of the CT log key, as CT names its log
+	tsa      *timestampAuthority
 }
 
 // Fulcio's issuer (v2) and source repository URI extensions.
@@ -77,6 +78,7 @@ func New(t *testing.T) *Signer {
 	ctDER, err := x509.MarshalPKIXPublicKey(s.ctKey.Public())
 	s.check(err)
 	s.ctID = sha256.Sum256(ctDER)
+	s.tsa = s.newTimestampAuthority()
 	ctHex := hex.EncodeToString(s.ctID[:])
 	s.trust, err = root.NewTrustedRoot(root.TrustedRootMediaType01,
 		[]root.CertificateAuthority{&root.FulcioCertificateAuthority{Root: rootCert, Intermediates: []*x509.Certificate{inter}, URI: "https://fulcio.test"}},
@@ -113,6 +115,7 @@ type Options struct {
 	Identity, Issuer, Repository string
 	NoTlog                       bool // leave the transparency-log entry out
 	NoSCT                        bool // leave the certificate's signed certificate timestamp out
+	RFC3161                      bool // legacy signatures: add the Signer's RFC 3161 timestamp of the signature
 }
 
 // Sign is the SHA256SUMS.sigstore.json the release workflow would publish for sums, signed as o says.

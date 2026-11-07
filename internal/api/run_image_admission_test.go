@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/distribution/reference"
 
@@ -267,7 +268,10 @@ func TestImageAdmissionEnforceRefusesEachReason(t *testing.T) {
 	} {
 		for _, mode := range []foldMode{foldCreate, foldPreflight} {
 			a := &fakeAdmitter{require: tc.require, admit: tc.admit}
-			got := runAdmission(admissionServer(admissionSite(types.ImageAdmissionEnforce), a), memberCtx(nil), mode, admitTagRef, nil, nil)
+			srv, rec := admissionServer(admissionSite(types.ImageAdmissionEnforce), a), &recRecorder{}
+			srv.cfg.Audit, srv.cfg.Now = rec, time.Now
+			got := runAdmission(srv, memberCtx(nil), mode, admitTagRef, nil, nil)
+			wantImageAdmissionDeniedRow(t, tc.name, mode, rec.snapshot(), tc.reason)
 			if got.ok {
 				t.Errorf("%s (mode %d): admitted", tc.name, mode)
 				continue
@@ -288,6 +292,39 @@ func TestImageAdmissionEnforceRefusesEachReason(t *testing.T) {
 				t.Errorf("%s (mode %d): %d registry checks, want %d", tc.name, mode, ad, tc.admits)
 			}
 		}
+	}
+}
+
+// wantImageAdmissionDeniedRow: a create refusal writes one run.create denied row naming the reason, the image
+// and the check; preflight is a dry run and writes none.
+func wantImageAdmissionDeniedRow(t *testing.T, name string, mode foldMode, rows []types.AuditEvent, reason string) {
+	t.Helper()
+	if mode != foldCreate {
+		if len(rows) != 0 {
+			t.Errorf("%s (preflight): %d audit rows, want none", name, len(rows))
+		}
+		return
+	}
+	if len(rows) != 1 || rows[0].Action != "run.create" || rows[0].Outcome != "denied" || rows[0].RunID != nil || rows[0].Actor == "" {
+		t.Errorf("%s (create): audit rows %+v, want one run.create denied row", name, rows)
+		return
+	}
+	var d struct {
+		Subject        string `json:"subject"`
+		Reason         string `json:"reason"`
+		Image          string `json:"image"`
+		ImageAdmission struct {
+			Mode    string `json:"mode"`
+			Verdict string `json:"verdict"`
+			Reason  string `json:"reason"`
+		} `json:"image_admission"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &d); err != nil {
+		t.Fatalf("%s (create): row data %s: %v", name, rows[0].Data, err)
+	}
+	if d.Subject != rows[0].Actor || d.Reason != reason || d.Image != admitTagRef || d.ImageAdmission.Mode != types.ImageAdmissionEnforce ||
+		d.ImageAdmission.Verdict != imageAdmissionRefused || d.ImageAdmission.Reason != reason {
+		t.Errorf("%s (create): row data %s", name, rows[0].Data)
 	}
 }
 

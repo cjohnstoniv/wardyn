@@ -72,7 +72,7 @@ var errImageAdmissionSiteUnreadable = errors.New("read the site config for image
 // stepImageAdmission holds a governed member's image to image admission (images.admission and the
 // profile's required_image_signers), at create and Review. The preview makes no registry read.
 func (s *Server) stepImageAdmission(f *runFold, rec *foldRecorder) bool {
-	v, warning, refusal := s.imageAdmission(f.r.Context(), *f.req, f.carriedImage, f.ceiling.Limits.RequiredImageSigners)
+	v, warning, refusal := s.imageAdmission(f.r, *f.req, f.carriedImage, f.ceiling.Limits.RequiredImageSigners, f.mode == foldCreate)
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
@@ -83,8 +83,28 @@ func (s *Server) stepImageAdmission(f *runFold, rec *foldRecorder) bool {
 	return true
 }
 
+// imageAdmissionRefused is the verdict a refusal's audit row carries; a refused run has no run row.
+const imageAdmissionRefused = "refused"
+
+// auditImageAdmissionDenied writes the run.create denied row for a refusal at create, with the reason and
+// the check's facts, so an admin can find what admission refused. Preflight is a dry run and writes none.
+func (s *Server) auditImageAdmissionDenied(r *http.Request, ref string, v *types.ImageAdmissionVerdict, reason string) {
+	if s.cfg.Audit == nil { // auditEvent stamps from cfg.Now, which a Server assembled without New() lacks
+		return
+	}
+	at, principal := actorFromRequest(r)
+	s.recordAudit(r.Context(), s.auditEvent(nil, at, principal, "run.create", "", "denied",
+		mustJSON(map[string]any{"subject": principal, "reason": reason, "image": ref, "image_admission": v})))
+}
+
 // imageAdmission decides the member's image: the verdict the run row and the run.create row keep (nil when
-// no check applies), audit mode's warning ("" for none), or the refusal.
+// no check applies), audit mode's warning ("" for none), or the refusal. With a refusal from the check, the
+// verdict is the refused one, for the denied audit row only; at create (not preflight, a dry run) that row
+// is written here.
+//
+// The site config is read before the mode is known, so an unreadable config refuses (500) even on an
+// install whose admission is off: the mode lives in that config, and reading it as off would admit
+// unchecked images on an enforcing install.
 //
 // Default off: with the site mode off and no profile signer it returns before any check, so nothing an
 // install refused, wrote or answered changes until an admin turns it on. A profile's signers are enforced
@@ -92,7 +112,8 @@ func (s *Server) stepImageAdmission(f *runFold, rec *foldRecorder) bool {
 // (createDigestInput): the member's image, an attached workspace's base image, or a policy-carried one; the
 // convention image is not a member's choice. Operators and the break-glass admin are not checked, as with
 // the digest rule.
-func (s *Server) imageAdmission(ctx context.Context, req createRunRequest, carried string, profile []string) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried string, profile []string, create bool) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+	ctx := r.Context()
 	ref := createDigestInput(req, carried)
 	if ref == "" || s.runUngoverned(ctx) {
 		return nil, "", nil
@@ -122,7 +143,12 @@ func (s *Server) imageAdmission(ctx context.Context, req createRunRequest, carri
 	if held == types.ImageAdmissionEnforce {
 		v, refusal := s.checkImage(ctx, adm, ref, siteEnforced, profile)
 		if refusal != nil {
-			return nil, "", refusal
+			refused := &types.ImageAdmissionVerdict{Mode: types.ImageAdmissionEnforce, Verdict: imageAdmissionRefused,
+				Reason: refusal.body.Reason, Digest: v.Digest, Signer: v.Signer}
+			if create {
+				s.auditImageAdmissionDenied(r, ref, refused, refusal.body.Reason)
+			}
+			return refused, "", refusal
 		}
 		pinned, err := imageAdmissionPinnedRef(ref, v.Digest)
 		if err != nil {

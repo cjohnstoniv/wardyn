@@ -51,13 +51,17 @@ func SimpleSigningPayload(dockerRef, digest string) []byte {
 }
 
 // LegacySignature is the .sig layer `cosign sign` writes for payload, signed keyless as o says: the
-// certificate and its chain, and the Rekor entry unless o.NoTlog, are annotations.
+// certificate and its chain, the Rekor entry unless o.NoTlog, and the TSA's timestamp when o.RFC3161, are
+// annotations.
 func (s *Signer) LegacySignature(payload []byte, o Options) LegacyLayer {
 	s.t.Helper()
 	key, der := s.leaf(o)
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	l := s.legacySignature(key, payload, certPEM, o.NoTlog)
 	s.addCertificate(l, certPEM)
+	if o.RFC3161 {
+		s.addTimestamp(l)
+	}
 	return l
 }
 

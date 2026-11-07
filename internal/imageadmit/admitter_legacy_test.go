@@ -88,3 +88,16 @@ func TestAdmitLegacyLayerWithoutItsBlobIsSkipped(t *testing.T) {
 	}
 	wantReason(t, v, "")
 }
+
+// A legacy tag manifest that cannot be parsed is one bad source, skipped as a malformed referrer is: the .sig
+// beside it still admits. A registry failure on the same tag still fails the check (above).
+func TestAdmitMalformedLegacyTagIsSkipped(t *testing.T) {
+	s := releasesigtest.New(t)
+	f, a := legacyImage(t, s.LegacySignature(sigPayload(), ciOpts()))
+	f.setErr("LegacyTag:"+digest+".att", errors.New("manifest is not JSON"))
+	v, err := admit(t, a, compile(t, s, corpCI()), ref)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	wantReason(t, v, "")
+}
