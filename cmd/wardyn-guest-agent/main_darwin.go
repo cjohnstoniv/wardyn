@@ -38,6 +38,12 @@ func main() {
 		stop()
 		os.Exit(code)
 	}
+	if len(os.Args) > 1 && os.Args[1] == guestagent.TLSCheckVerb {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		code := guestagent.TLSCheckMain(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	out := flag.String("out", "/var/run/wardyn-guest", "directory for detached execs' output (cleared at boot)")
 	plist := flag.String("plist", guestagent.MacAgentPlistPath, "this agent's LaunchDaemon plist, which tools mode may replace")
 	flag.Parse()

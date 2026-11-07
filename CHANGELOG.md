@@ -22,22 +22,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
 - Image admission is off by default: no image check runs until a security operator sets site setting `images.admission.mode` to `audit` or `enforce`. A governance profile that lists `required_image_signers` holds its members to those signers even while the site mode is off.
 
+
 ### Added
 
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 - Audit: every audit row of a run written after its policy is resolved now carries `policy_digest`, the SHA-256 of the run's effective policy as recorded in its `run.policy.resolve` row, and `GET /runs/{id}` returns it too. It is on by default and refuses nothing. SIEM parsers that compare a row's `data` object exactly will see the new key; rows written before the run's policy was recorded, rows with no run, and rows a device forwards carry none.
+- `wardyn-guest-agent tls-check <host>` inside a macOS VM checks a host the way apps that use only the system trust store do, and exits 1 when TLS fails.
+
 
 ### Changed
 
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
-
-### Changed
-
 - `edit-base` no longer prints the setup-code file's path. It points at the window's Type code and Show code buttons. The guest agent now answers three edit-window requests in tools mode only (open an admin Terminal, trust the install list's certificates, open Full Disk Access), each run as the console user.
+
 
 ### Fixed
 
-- macOS VM runs: a Terminal opened in the window, and apps started from the Dock or Finder, now get the run's non-secret settings (the proxy, the CA bundle, the provider sign-in files, the git identity), so Claude Code in the window's Terminal is signed in. A run's secret variables (`env_secret`) are never placed in the window's Terminal or desktop. An app already open when the window shows ready may need a relaunch. While the settings are being applied, `wardyn window --status` and the run page say so, and an at-start window waits for them (up to ten minutes) without holding the run's start; if they could not be applied, the window still opens and the status names the reason and the retry, `agent-run --session-env-retry` in the window's Terminal.
 - A Linux VM run's terminal, commands and agent start now always run inside the VM. If the runner can't tell whether a run is a VM, the request fails and can be retried; if Linux VM sandboxes were turned off (or failed their start-up check) after the VM started, the request is refused, and the run can still be stopped or ended, including when its audit log fills up.
 - In focus mode, switching the side panel to another widget after one failed to display now shows the new widget instead of the previous error.
 - Run networks no longer carry an address on the Docker host.
@@ -64,6 +64,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Settings: saving an unrelated change no longer reorders stored capabilities, and walls errors now point at their field.
 - The console's Content-Security-Policy now sets `form-action`, and the console sends `Permissions-Policy` and, under TLS, `Strict-Transport-Security`.
 - The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
+- macOS VM runs: a Terminal opened in the window, and apps started from the Dock or Finder, now get the run's non-secret settings (the proxy, the CA bundle, the provider sign-in files, the git identity), so Claude Code in the window's Terminal is signed in. A run's secret variables (`env_secret`) are never placed in the window's Terminal or desktop. An app already open when the window shows ready may need a relaunch. While the settings are being applied, `wardyn window --status` and the run page say so, and an at-start window waits for them (up to ten minutes) without holding the run's start; if they could not be applied, the window still opens and the status names the reason and the retry, `agent-run --session-env-retry` in the window's Terminal.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
