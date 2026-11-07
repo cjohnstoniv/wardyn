@@ -1080,6 +1080,152 @@ func TestVMEndVMFailsClosedWhenTheEngineCannotInspect(t *testing.T) {
 	}
 }
 
+// vmExecCreates counts the docker execs the fake engine was asked to create.
+func (r *vmRig) vmExecCreates() int {
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	return len(r.f.execLog)
+}
+
+func (r *vmRig) failNextInspect() {
+	r.f.mu.Lock()
+	r.f.inspectFailures = 1
+	r.f.mu.Unlock()
+}
+
+// A restarted driver whose one inspect of a VM fails never takes the VM for a container: every
+// guest verb answers an error and creates no docker exec in the QEMU container, and once the engine
+// answers, the verbs reach the guest. A stop needs no answer.
+func TestVMVerbsFailClosedWhenTheLookupFails(t *testing.T) {
+	r := newVMRig(t)
+	ctx := context.Background()
+	spec := vmSpec()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2 := newTestDriver(r.f) // a restarted driver: it must inspect to find the VM
+	if err := d2.EnableVM(r.vc); err != nil {
+		t.Fatal(err)
+	}
+	before := r.vmExecCreates()
+	for name, verb := range map[string]func() error{
+		"attach": func() error { _, err := d2.Attach(ctx, sb.Ref, runner.AttachOptions{}); return err },
+		"exec":   func() error { _, err := d2.Exec(ctx, sb.Ref, []string{"true"}); return err },
+		"exec_stream": func() error {
+			_, err := d2.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"true"}})
+			return err
+		},
+		"start":             func() error { return d2.StartSandbox(ctx, sb.Ref) },
+		"can_replace_proxy": func() error { return d2.CanReplaceProxy(ctx, sb.Ref) },
+		"replace_proxy":     func() error { return d2.ReplaceProxy(ctx, sb.Ref, []byte("{}")) },
+	} {
+		r.failNextInspect()
+		if err := verb(); err == nil || errors.Is(err, errVMUnsupported) {
+			t.Errorf("%s with the engine failing = %v, want the engine's error", name, err)
+		}
+	}
+	if n := r.vmExecCreates(); n != before {
+		t.Fatalf("%d docker execs created in the QEMU container, want 0", n-before)
+	}
+
+	// The engine answers again: the same driver finds the VM and the verbs go to the guest agent.
+	if _, err := d2.Attach(ctx, sb.Ref, runner.AttachOptions{Observer: true}); !errors.Is(err, runner.ErrObserveUnsupported) {
+		t.Fatalf("watching attach after the engine answered = %v, want the VM's own refusal", err)
+	}
+	es, err := d2.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", "echo from-the-guest"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = es.Stdin.Close()
+	var so, se bytes.Buffer
+	done := make(chan struct{})
+	go func() { _, _ = se.ReadFrom(es.Stderr); close(done) }()
+	_, _ = so.ReadFrom(es.Stdout)
+	<-done
+	if code, err := es.Wait(); err != nil || code != 0 || so.String() != "from-the-guest\n" {
+		t.Fatalf("exec stream after the engine answered: %d %v %q", code, err, so.String())
+	}
+	if _, err := d2.Exec(ctx, sb.Ref, []string{"sh", "-c", "exit 4"}); err != nil {
+		t.Fatal(err)
+	}
+	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if code, err := d2.Wait(wctx, sb.Ref); err != nil || code != 4 {
+		t.Fatalf("Wait after the engine answered = %d, %v", code, err)
+	}
+	if n := r.vmExecCreates(); n != before {
+		t.Fatalf("%d docker execs created in the QEMU container, want 0", n-before)
+	}
+
+	d3 := newTestDriver(r.f) // restarted again: its stop meets a failed inspect
+	if err := d3.EnableVM(r.vc); err != nil {
+		t.Fatal(err)
+	}
+	r.failNextInspect()
+	if err := d3.StopSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("stop after a failed inspect = %v", err)
+	}
+	if c := r.container(t, sb.Ref); !c.removed {
+		t.Fatal("a stop that met a failed inspect left the VM")
+	}
+}
+
+// A runner restarted with Linux VM sandboxes off still knows a VM it made by its container: every
+// guest verb is refused with a plain sentence and creates no docker exec in the QEMU container, and
+// the VM can still be ended and stopped.
+func TestVMVerbsRefusedWhenVMsWentOff(t *testing.T) {
+	r := newVMRig(t)
+	ctx := context.Background()
+	spec := vmSpec()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2 := newTestDriver(r.f) // restarted with Linux VM sandboxes off: no EnableVM
+	before := r.vmExecCreates()
+	for name, verb := range map[string]func() error{
+		"attach": func() error { _, err := d2.Attach(ctx, sb.Ref, runner.AttachOptions{}); return err },
+		"exec":   func() error { _, err := d2.Exec(ctx, sb.Ref, []string{"true"}); return err },
+		"exec_stream": func() error {
+			_, err := d2.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"true"}})
+			return err
+		},
+		"start":             func() error { return d2.StartSandbox(ctx, sb.Ref) },
+		"can_replace_proxy": func() error { return d2.CanReplaceProxy(ctx, sb.Ref) },
+		"replace_proxy":     func() error { return d2.ReplaceProxy(ctx, sb.Ref, []byte("{}")) },
+	} {
+		if err := verb(); !errors.Is(err, errVMUnreachable) {
+			t.Errorf("%s on a VM with VM sandboxes off = %v, want refused", name, err)
+		}
+	}
+	if err := d2.RecoverOutput(ctx, sb.Ref, &bytes.Buffer{}); !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		t.Errorf("recover output on a VM with VM sandboxes off = %v, want unrecoverable", err)
+	}
+	if n := r.vmExecCreates(); n != before {
+		t.Fatalf("%d docker execs created in the QEMU container, want 0", n-before)
+	}
+	if _, err := d2.vmLookup(ctx, sb.Ref); !errors.Is(err, errVMUnreachable) {
+		t.Fatalf("a second lookup = %v: a VM must never be remembered as a container", err)
+	}
+
+	if isVM, err := d2.EndVM(ctx, spec.RunID); !isVM || err != nil {
+		t.Fatalf("EndVM with VM sandboxes off = %v, %v; want true, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+		t.Fatalf("the VM after EndVM: removed %v, state %+v; want stopped and kept", c.removed, c.state)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+		t.Fatal("EndVM left the VM's proxy")
+	}
+	if err := d2.StopSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("stop with VM sandboxes off = %v", err)
+	}
+	if c := r.container(t, sb.Ref); !c.removed {
+		t.Fatal("a stop with VM sandboxes off left the VM")
+	}
+}
+
 // An end cut short (the runner stopping, a cancelled pass) can leave the guest asked to power down, the
 // proxy running and the producer unsettled. The next EndVM finishes it: the proxy is removed, the
 // producer settled, the stopped VM kept, and an end of a VM already ended answers nothing wrong.
