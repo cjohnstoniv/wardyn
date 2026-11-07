@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -162,6 +163,7 @@ func TestRevokeDelegateCutAfterRevoke(t *testing.T) {
 	if w := f.mint(t); w.Code != http.StatusOK {
 		t.Fatalf("mint after the plain revoke = %d %s", w.Code, w.Body)
 	}
+	f.now = f.now.Add(time.Minute) // the cut is a later call
 	if w := f.revokeDelegate(t, d.ID, "?cut_in_flight=true"); w.Code != http.StatusNoContent {
 		t.Fatalf("cut of a revoked portal = %d %s, want 204", w.Code, w.Body)
 	}

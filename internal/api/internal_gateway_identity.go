@@ -192,6 +192,10 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 		return
 	}
 	dest, sponsor, ref := s.gatewayMintAdmit(ctx, claims, run, body.ProviderID, body.MCPServer)
+	if ref != nil && ref.reason == reasonGatewayAccessCut {
+		s.refuseGatewayCut(w, run, kind, target, ref, record)
+		return
+	}
 	if ref != nil {
 		refuse(ref)
 		return
@@ -285,11 +289,15 @@ func (d gatewayDest) holder() string {
 func (d gatewayDest) name() string { return cmp.Or(d.provider, d.mcp) }
 
 // gatewayMintAdmit is every check a token depends on past internalAuth: the
-// person, then the provider or MCP server against what was sealed at dispatch (exactly
-// one of providerID and mcpKey is named). It returns the destination the live record
-// sets and, on a service run, the sponsor the token names.
+// person, the portal that launched the run (gatewayMintVia), then the provider
+// or MCP server against what was sealed at dispatch (exactly one of providerID
+// and mcpKey is named). It returns the destination the live record sets and, on
+// a service run, the sponsor the token names.
 func (s *Server) gatewayMintAdmit(ctx context.Context, claims *identity.Claims, run types.AgentRun, providerID, mcpKey string) (gatewayDest, string, *ownerRefusal) {
 	sponsor, ref := s.gatewayMintPerson(ctx, claims, run)
+	if ref == nil {
+		ref = s.gatewayMintVia(ctx, run)
+	}
 	if ref != nil {
 		return gatewayDest{}, "", ref
 	}
@@ -513,6 +521,9 @@ func gatewayBindingHolds(sealed proxy.GatewayIdentityRoute, p types.ModelProvide
 func (s *Server) gatewayIdentityRefusal(ctx context.Context, cfg *proxy.Config) (*ownerRefusal, error) {
 	if len(cfg.GatewayIdentity) == 0 {
 		return nil, nil
+	}
+	if ref, err := s.gatewayReviveCut(ctx, cfg); ref != nil || err != nil {
+		return ref, err
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {

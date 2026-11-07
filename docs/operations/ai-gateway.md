@@ -142,6 +142,25 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 - Each mint is about five store reads. At 60 seconds, 500 concurrent runs come to about 83 reads a second.
 - A rolling wardynd upgrade longer than the outage a run survives fails that run's model calls, so a short life is the admin's trade.
 
+## When a run's gateway access ends
+
+- Each mint checks the run's person, its service identity and sponsor, the portal that launched it, and the provider or MCP server. A refused mint gives no new token.
+- The bound: within half the token lifetime while wardynd is reachable, and up to the held token's expiry if it is not. Requests already forwarded and open streams run to completion.
+
+| Event | A running run's gateway access |
+|---|---|
+| Person suspended or fully revoked | ends: `403` `identity_deactivated` |
+| Service identity suspended or retired | ends: `403` `service_identity_inactive` |
+| Sponsor suspended or fully revoked | ends: `403` `identity_deactivated` |
+| Sponsor handover | continues; new tokens name the new sponsor |
+| Provider or MCP server changed or turned off | ends: `403` `gateway_identity_changed` |
+| Portal revoked | continues, as before |
+| Portal revoked with `cut_in_flight=true` | ends for good: `403` `gateway_access_cut` |
+
+- A cut stops gateway calls only. The run, its files, its other egress, a model key its proxy already holds and an open terminal socket carry on. `POST /api/v1/runs/{id}/kill` stops the run.
+- A token already issued stays valid at the gateway until `exp`, but only the run's proxy holds it. A 60-second `token_lifetime_seconds` cuts within about 30 seconds.
+- A revive of a cut run is refused `409` `gateway_access_cut`.
+
 ## The key set's address
 
 - The key set is the anonymous `GET /.well-known/wardyn-experimental/gateway-jwks.json` on wardynd, under `WARDYN_BASE_PATH` when that is set.

@@ -102,6 +102,7 @@ Renewal moves the end to now plus the lease unit, or to the cap if that is soone
 - A service that stays unknown for a whole lease, such as one on an offline runner, therefore ends.
 - When the cap is the limit, a healthy service is killed at the cap with the reason `max_lifetime_reached`.
 - Changing a service identity's sponsor stops renewal of the services it already runs. They end at their current lease end. Relaunch or apply them again under the new sponsor.
+- A service's gateway access ends when its identity or sponsor is suspended, retired or revoked, and continues under a new sponsor: [When a run's gateway access ends](operations/ai-gateway.md#when-a-runs-gateway-access-ends).
 
 ## Health is the sandbox's claim
 

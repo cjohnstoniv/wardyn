@@ -20,9 +20,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A governance profile's `github_capabilities` now limits its members' runs, and a run's GitHub CLI access is limited to the run's own GitHub capabilities. A run that relied on wider access is now refused or gets only the GitHub capabilities both lists name.
 - A file or variable secret that reaches the 8-byte minimum only with its trailing line break is no longer delivered to a run and can no longer be saved: output shows it without the break, which can't be masked. Store a longer value.
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
+- Revoking a portal still leaves the runs it launched their gateway access, as before. To cut it, pass `cut_in_flight=true` when you revoke; on an already revoked portal it cuts it then.
 
 ### Added
 
+- Revoking a portal can also cut the gateway access of the runs it launched: `DELETE /api/v1/admin/delegates/{id}?cut_in_flight=true`. Their gateway calls are refused within about half the provider's token lifetime. Off by default.
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 
 ### Fixed
