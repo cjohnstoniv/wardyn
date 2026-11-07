@@ -214,6 +214,11 @@ func (c *RegistryClient) checkRedirect(req *http.Request, via []*http.Request) e
 	if originOf(req.URL) == originOf(via[len(via)-1].URL) {
 		return nil
 	}
+	if req.Context().Value(tokenRequestKey{}) != nil {
+		// A token request carries the registry's credential (a Basic header or a refresh token in the body,
+		// which a 307 or 308 replays). It is never followed to another origin.
+		return fmt.Errorf("%w: the token realm redirected to %s", ErrRefusedTarget, req.URL.Host)
+	}
 	req.Header.Del("Authorization")
 	if c.auth != nil {
 		if a, ok, err := c.auth.Lookup(normalizeHost(req.URL.Host)); err == nil && ok && a.Username != "" {
@@ -222,6 +227,9 @@ func (c *RegistryClient) checkRedirect(req *http.Request, via []*http.Request) e
 	}
 	return nil
 }
+
+// tokenRequestKey marks a request to a token realm in its context, which redirects inherit.
+type tokenRequestKey struct{}
 
 func originOf(u *url.URL) string {
 	p := u.Port()
@@ -371,6 +379,12 @@ func (c *RegistryClient) fetch(ctx context.Context, ref Ref, path string, q url.
 		if err != nil {
 			return nil, nil, classify(err, ref.Registry)
 		}
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 && originOf(resp.Request.URL) != originOf(u) {
+			// A redirect led to another origin and it sent the challenge. The registry's credential is not
+			// that origin's: answering would hand it to a realm the registry never chose.
+			resp.Body.Close()
+			return nil, nil, c.unavailable(CauseUnauthorized, resp.Request.URL.Host, resp.Request.URL.Host, nil)
+		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			challenge := resp.Header.Values("Www-Authenticate")
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
@@ -497,6 +511,7 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 		q.Set("service", s)
 	}
 	q.Set("scope", scope)
+	ctx = context.WithValue(ctx, tokenRequestKey{}, true)
 	var req *http.Request
 	if have && cred.IdentityToken != "" {
 		form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {cred.IdentityToken}, "service": {params["service"]}, "scope": {scope}, "client_id": {"wardyn"}}

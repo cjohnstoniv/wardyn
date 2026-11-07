@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -88,30 +87,21 @@ func (g *targetGuard) control(_, address string, _ syscall.RawConn) error {
 // guardedTransport clones base and installs the guard.
 //   - Direct dials resolve with g.lookup, refuse any forbidden answer, then connect to the checked address, so
 //     a name cannot resolve differently between the check and the connection. Control re-checks the address.
-//   - When base.Proxy returns a proxy for a request, the request's target is checked first and a forbidden one
-//     fails before the proxy is told about it. The proxy's own address is the operator's and is not checked.
-func guardedTransport(base *http.Transport, g *targetGuard) *http.Transport {
+//   - The proxy is chosen once per request, in RoundTrip: when base.Proxy returns one, the request's target is
+//     checked first and a forbidden one fails before the proxy is told about it. Only that request's dial to
+//     that proxy skips the address check (the proxy's address is the operator's); any other dial, including a
+//     later direct one to the same host:port, is guarded.
+func guardedTransport(base *http.Transport, g *targetGuard) http.RoundTripper {
 	tr := base.Clone()
 	baseProxy := tr.Proxy
-	var proxies sync.Map // host:port of every proxy handed out
 	tr.Proxy = func(req *http.Request) (*url.URL, error) {
-		if baseProxy == nil {
-			return nil, nil
-		}
-		pu, err := baseProxy(req)
-		if err != nil || pu == nil {
-			return nil, err
-		}
-		if err := g.check(req.Context(), req.URL.Hostname(), true); err != nil {
-			return nil, err
-		}
-		proxies.Store(proxyHostPort(pu), true)
+		pu, _ := req.Context().Value(proxyChoiceKey{}).(*url.URL)
 		return pu, nil
 	}
 	plain := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	guarded := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: g.control}
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if _, ok := proxies.Load(addr); ok {
+		if pu, _ := ctx.Value(proxyChoiceKey{}).(*url.URL); pu != nil && addr == proxyHostPort(pu) {
 			return plain.DialContext(ctx, network, addr)
 		}
 		h, p, err := net.SplitHostPort(addr)
@@ -137,7 +127,33 @@ func guardedTransport(base *http.Transport, g *targetGuard) *http.Transport {
 		}
 		return nil, last
 	}
-	return tr
+	return &guardedRT{tr: tr, baseProxy: baseProxy, g: g}
+}
+
+// proxyChoiceKey carries the proxy selected for one request to the transport's Proxy and DialContext hooks.
+type proxyChoiceKey struct{}
+
+type guardedRT struct {
+	tr        *http.Transport
+	baseProxy func(*http.Request) (*url.URL, error)
+	g         *targetGuard
+}
+
+func (rt *guardedRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	if rt.baseProxy == nil {
+		return rt.tr.RoundTrip(req)
+	}
+	pu, err := rt.baseProxy(req)
+	if err != nil {
+		return nil, err
+	}
+	if pu == nil {
+		return rt.tr.RoundTrip(req)
+	}
+	if err := rt.g.check(req.Context(), req.URL.Hostname(), true); err != nil {
+		return nil, err
+	}
+	return rt.tr.RoundTrip(req.WithContext(context.WithValue(req.Context(), proxyChoiceKey{}, pu)))
 }
 
 func proxyHostPort(u *url.URL) string {
