@@ -228,8 +228,8 @@ func selftestWithheld(baseDir string) []string {
 	return append(lines, agentSignatureLines(rec)...)
 }
 
-// agentSignatureLines say how the base's guest agent is signed and Full Disk Access as the base last read
-// it. Only an agent signed ad hoc loses the grant at each tools update. A record from before the
+// agentSignatureLines say how the base's guest agent is signed, by which signer and why others failed, and
+// Full Disk Access as the base last read it. Only an agent signed ad hoc loses the grant at each tools update. A record from before the
 // signature says nothing.
 func agentSignatureLines(rec macvm.ToolsRecord) []string {
 	var lines []string
@@ -240,6 +240,13 @@ func agentSignatureLines(rec macvm.ToolsRecord) []string {
 		lines = append(lines, "guest agent: signed on this Mac; the base does not trust its certificate yet: run macos-vm edit-base and trust it")
 	case rec.AgentSignature == macvm.AgentSignedThisMac:
 		lines = append(lines, "guest agent: signed on this Mac")
+	}
+	// Which signer the last tools update used, and why each one tried before it failed (path-free).
+	if rec.AgentSigner != "" {
+		lines = append(lines, "guest agent signer: "+rec.AgentSigner)
+	}
+	if len(rec.AgentSignErrors) > 0 {
+		lines = append(lines, "guest agent signing errors: "+strings.Join(rec.AgentSignErrors, "; "))
 	}
 	switch {
 	case rec.Guest != nil && rec.Guest.FullDiskAccess != "":
