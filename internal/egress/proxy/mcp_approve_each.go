@@ -98,15 +98,20 @@ type mcpCallKey struct {
 	spent map[uuid.UUID]bool
 }
 
-// admit files key and takes a waiting slot. An approved or declined call comes back with its
-// state and takes none; one that cannot wait comes back with why. A pending call comes back with
+// admit files key and takes a waiting slot. A call whose current approval is approved spends it
+// here, in the same step, and comes back apApproved to send; a declined one comes back apDenied.
+// Neither takes a slot. One that cannot wait comes back with why. A pending call comes back with
 // the approval to rejoin; one with no current approval with none.
 func (c *mcpCalls) admit(key string) (uuid.UUID, approvalState, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	k := c.byKey[key]
 	switch {
-	case k != nil && k.id != uuid.Nil && k.state != apPending:
+	case k != nil && k.id != uuid.Nil && k.state == apApproved:
+		id := k.id
+		c.spend(key, k)
+		return id, apApproved, ""
+	case k != nil && k.id != uuid.Nil && k.state == apDenied:
 		return k.id, k.state, ""
 	case k == nil && len(c.byKey) >= maxMCPCallKeys:
 		return uuid.Nil, apNone, mcpCallKeysText
@@ -147,35 +152,46 @@ func (c *mcpCalls) tidy(key string, k *mcpCallKey) {
 	}
 }
 
-// claim spends approval id on key: true for exactly one caller, which then sends the call. The
-// caller has read that id is approved; a spent id is refused for as long as an answer naming it
-// could still arrive.
+// claim spends approval id on key, which the caller has read is approved: true for exactly one
+// caller, which then sends the call. Only key's current approval can be claimed, so an answer
+// about any other id (spent, superseded or never installed) sends nothing.
 func (c *mcpCalls) claim(key string, id uuid.UUID) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	k := c.byKey[key]
-	if k == nil || k.spent[id] {
+	if k == nil || id == uuid.Nil || k.id != id || k.state == apDenied {
 		return false
 	}
-	if k.spent == nil {
-		k.spent = map[uuid.UUID]bool{}
-	}
-	k.spent[id] = true
-	if k.id == id {
-		k.id, k.state = uuid.Nil, apNone
-	}
-	c.tidy(key, k)
+	c.spend(key, k)
 	return true
 }
 
-// install makes a newly raised approval key's current one, when the key has none and the id was
-// never spent (a raise answered late with a row that was since used installs nothing).
-func (c *mcpCalls) install(key string, id uuid.UUID) {
+// spend uses key's current approval: it is remembered as spent while a call of key waits, and
+// key has no current approval after it. The caller holds c.mu.
+func (c *mcpCalls) spend(key string, k *mcpCallKey) {
+	if k.spent == nil {
+		k.spent = map[uuid.UUID]bool{}
+	}
+	k.spent[k.id] = true
+	k.id, k.state = uuid.Nil, apNone
+	c.tidy(key, k)
+}
+
+// install files a newly raised approval and says which approval the caller waits on: the new one
+// when key has no current approval, else the current one (a request for this exact call is
+// already open), and uuid.Nil when id was already spent (a raise answered late with a row that was
+// since used), so the caller asks again.
+func (c *mcpCalls) install(key string, id uuid.UUID) uuid.UUID {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if k := c.byKey[key]; k != nil && k.id == uuid.Nil && !k.spent[id] {
+	k := c.byKey[key]
+	switch {
+	case k == nil || k.spent[id]:
+		return uuid.Nil
+	case k.id == uuid.Nil:
 		k.id, k.state = id, apPending
 	}
+	return k.id
 }
 
 // update stores what key's current approval came to, and only that one: an answer about any
@@ -330,28 +346,19 @@ func buildMCPCall(id, name []byte, s types.MCPCallScope, progress []byte) []byte
 // pending for it) and waits on the open request up to the harness's window.
 func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 	calls, key := &x.p.mcp.calls, c.scope.CallSHA256
-	var id uuid.UUID
-	for {
-		var state approvalState
-		var why string
-		id, state, why = calls.admit(key)
-		switch {
-		case state == apApproved:
-			if calls.claim(key, id) {
-				x.forwardApproved(w, c, id)
-				return
-			}
-			continue // another call spent it: this one asks again
-		case state == apDenied:
-			x.record(egress.Deny, ruleSourceMCPApprovalDenied, id, "a declined call, refused for the run")
-			writeToolError(w, c.id, mcpCallDeclinedText)
-			return
-		case why != "":
-			x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, why)
-			writeToolError(w, c.id, why)
-			return
-		}
-		break
+	id, state, why := calls.admit(key)
+	switch {
+	case state == apApproved: // admit spent it for this call
+		x.forwardApproved(w, c, id)
+		return
+	case state == apDenied:
+		x.record(egress.Deny, ruleSourceMCPApprovalDenied, id, "a declined call, refused for the run")
+		writeToolError(w, c.id, mcpCallDeclinedText)
+		return
+	case why != "":
+		x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, why)
+		writeToolError(w, c.id, why)
+		return
 	}
 	defer calls.leave(key)
 	if x.p.approval == nil {
@@ -411,23 +418,29 @@ func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 	}
 }
 
-// ask raises the call's approval and files it pending; uuid.Nil when it could not, the refusal
-// already answered.
+// ask raises the call's approval and returns the one to wait on (install); uuid.Nil when it could
+// not, the refusal already answered. A raise answered with an approval already spent asks once more.
 func (x *mcpExchange) ask(ctx context.Context, w http.ResponseWriter, c approveEachCall) uuid.UUID {
-	id, err := x.raise(ctx, c.scope, uuid.Nil)
-	var refused *raiseRefusedError
-	switch {
-	case errors.As(err, &refused):
-		x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, fmt.Sprintf("the request for an approval was refused (%d)", refused.status))
-		writeToolError(w, c.id, fmt.Sprintf(mcpCallRefusedText, refused.status))
-		return uuid.Nil
-	case err != nil:
-		x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, "the request for an approval could not be raised")
-		writeToolError(w, c.id, mcpCallNoAskText)
-		return uuid.Nil
+	for range 2 {
+		id, err := x.raise(ctx, c.scope, uuid.Nil)
+		var refused *raiseRefusedError
+		switch {
+		case errors.As(err, &refused):
+			x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, fmt.Sprintf("the request for an approval was refused (%d)", refused.status))
+			writeToolError(w, c.id, fmt.Sprintf(mcpCallRefusedText, refused.status))
+			return uuid.Nil
+		case err != nil:
+			x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, "the request for an approval could not be raised")
+			writeToolError(w, c.id, mcpCallNoAskText)
+			return uuid.Nil
+		}
+		if got := x.p.mcp.calls.install(c.scope.CallSHA256, id); got != uuid.Nil {
+			return got
+		}
 	}
-	x.p.mcp.calls.install(c.scope.CallSHA256, id)
-	return id
+	x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, "the request for an approval named one already used")
+	writeToolError(w, c.id, mcpCallNoAskText)
+	return uuid.Nil
 }
 
 // raise posts the call's tool_call approval, or rejoins the pending one when rejoin is set.
