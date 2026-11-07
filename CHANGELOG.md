@@ -27,6 +27,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A run's gateway identity is now refreshed before the first call after its half-life instead of behind it, so a refusal of the refresh applies to that call. A refresh that fails but may pass, such as an unreachable control plane, still leaves the held token in use until it expires. Once the control plane cuts the run's gateway access, the proxy answers every call to that gateway with 403 and stops asking.
 - A Linux VM run's terminal, commands and agent start now always run inside the VM. If the runner can't tell whether a run is a VM, the request fails and can be retried; if Linux VM sandboxes were turned off (or failed their start-up check) after the VM started, the request is refused, and the run can still be stopped or ended, including when its audit log fills up.
 - In focus mode, switching the side panel to another widget after one failed to display now shows the new widget instead of the previous error.
 - Run networks no longer carry an address on the Docker host.
