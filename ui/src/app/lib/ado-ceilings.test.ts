@@ -36,4 +36,10 @@ describe("the Azure DevOps ceiling across organisations (#2146)", () => {
     expect(refusedBy(cs, "policy_admin")).toEqual([]);
     expect(refusedBy(orgCeilings([row("acme", ["code_read"])]), "pr")).toEqual([]);
   });
+
+  it("takes a single row's own ceiling, so one organisation locks against its row and hints nothing", () => {
+    const one = orgCeilings([row("acme", ["code_read"])]);
+    expect(unionCeiling(one)).toEqual(["code_read"]);
+    expect(refusedBy(one, "code_read")).toEqual([]);
+  });
 });
