@@ -162,11 +162,12 @@ func (s *Server) createRunUnderKey(w http.ResponseWriter, r *http.Request, keys 
 }
 
 // replayRunCreate answers a key that names a run: the kept answer byte for byte, or, when none was kept
-// (a crash before it was, or a body over the size cap), a 201 rebuilt from the run without the first
-// answer's warnings. A key whose first request may still be answering is in flight.
+// (a crash before it was, a body over the size cap, or an erasure of the person's run tasks), a 201
+// rebuilt from the run without the first answer's warnings. A key whose first request may still be
+// answering is in flight, unless an erasure cleared its answer.
 func (s *Server) replayRunCreate(w http.ResponseWriter, r *http.Request, claim store.RunCreateKeyClaim) {
 	rebuilt := claim.Response == nil
-	if rebuilt && claim.LeaseLive {
+	if rebuilt && claim.LeaseLive && !claim.ResponseErased {
 		writeRunCreateKeyInFlight(w)
 		return
 	}

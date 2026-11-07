@@ -673,8 +673,8 @@ to launch, and the same value when you retry that launch.
 - For 24 hours from first use, a retry with the same key and body gets the first answer back byte for byte, with
   `Idempotent-Replayed: true`. That is the same status, `Location` and body, a refusal made after the run was
   inserted included. A refusal before the insert keeps nothing, so a retry after you fix its cause is judged afresh.
-- When the first answer was not kept, the replay is a `201` rebuilt from the run, without the first answer's
-  warnings.
+- When the first answer was not kept, or was erased with the person's run tasks, the replay is a `201` rebuilt
+  from the run, without the first answer's warnings.
 - The same key with another body or break-glass reason gets `422` `idempotency_key_reused`. A retry while the first
   request is still being answered gets `409` `idempotency_key_in_flight` with `Retry-After: 1`.
 - `/healthz` reports `"idempotent_run_create": true` when the server honours the key.
