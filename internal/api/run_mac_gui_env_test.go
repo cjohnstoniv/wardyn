@@ -196,3 +196,17 @@ func TestMacWindowIsNotHeldByAGuestThatCannotSayAndNeverHoldsRunStartup(t *testi
 		t.Errorf("a read of the run's window state waited %v", time.Since(start))
 	}
 }
+
+// The per-run answers are dropped when the run ends, so they do not pile up one per run.
+func TestMacGUIEnvEntriesAreDroppedWhenTheRunEnds(t *testing.T) {
+	r, _ := guiEnvRig(t, always("session_env=pending\n", 0))
+	r.h.srv.macGUIEnvFresh(context.Background(), r.h.run)
+	macGUIEnvGaveUp.Store(r.h.run.ID, true)
+	_ = r.h.srv.revokeRunCascade(context.Background(), r.h.run.ID)
+	if _, ok := macGUIEnvSeen.Load(r.h.run.ID); ok {
+		t.Error("the run's last settings answer is still kept after it ended")
+	}
+	if _, ok := macGUIEnvGaveUp.Load(r.h.run.ID); ok {
+		t.Error("the run's gave-up mark is still kept after it ended")
+	}
+}
