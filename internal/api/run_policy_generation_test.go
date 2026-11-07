@@ -52,6 +52,9 @@ func (s *generationStore) AbandonRunPolicyGeneration(_ context.Context, _ uuid.U
 	return nil
 }
 
+// TouchRun is the idle-clock bump a decision makes; the embedded store.Store is nil.
+func (s *generationStore) TouchRun(context.Context, uuid.UUID) error { return nil }
+
 func (s *generationStore) RunPolicyState(ctx context.Context, id uuid.UUID) (types.RunPolicyState, bool, error) {
 	st, err := s.lookup(ctx, id)
 	return st, true, err
