@@ -85,15 +85,15 @@ func (u *Unavailable) Error() string {
 	switch u.Cause {
 	case CauseUnauthorized:
 		if !u.HasCredential {
-			return u.Registry + " answered 401 and no credential is configured for it"
+			return "checking images from " + u.Registry + " got 401 and no credential is configured for it"
 		}
-		return u.Registry + " answered 401 for the configured credential"
+		return "checking images from " + u.Registry + " got 401 for the configured credential"
 	case CauseForbidden:
-		return u.Registry + " answered 403"
+		return "checking images from " + u.Registry + " got 403"
 	case CauseTLS:
-		return fmt.Sprintf("the TLS certificate %s presented is not trusted", u.Registry)
+		return fmt.Sprintf("a TLS certificate met while checking images from %s is not trusted", u.Registry)
 	case CauseTimeout:
-		return fmt.Sprintf("%s did not answer in time", u.Registry)
+		return fmt.Sprintf("checking images from %s got no answer in time", u.Registry)
 	case CauseRefused:
 		if reason := u.ownReason(); reason != "" {
 			return fmt.Sprintf("%s was not contacted: %s", u.Registry, reason)

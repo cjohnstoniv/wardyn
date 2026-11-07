@@ -187,30 +187,32 @@ func unavailable(ref Ref, digest string, err error) Verdict {
 
 // unavailableDetail is why a check could not be made, for the sentence "Wardyn could not check image <ref>:
 // <detail>. Try again, or ask an admin." It names the registry the image ref names and settings, never a
-// credential, and never a host a redirect or token realm named (Unavailable.Host), which the registry chose.
+// credential, and never a host a redirect or token realm named (Unavailable.Host), which the registry chose. The
+// failing request may have gone to such a host, so a sentence says "checking images from <registry>", never that
+// the registry itself answered.
 func unavailableDetail(ref Ref, err error) string {
 	var u *Unavailable
 	if errors.As(err, &u) {
 		switch u.Cause {
 		case CauseUnauthorized:
 			if u.HasCredential {
-				return ref.Registry + " answered 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"
+				return "checking images from " + ref.Registry + " got 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"
 			}
-			return ref.Registry + " answered 401 — no credential for it in WARDYN_REGISTRY_AUTH_FILE"
+			return "checking images from " + ref.Registry + " got 401 — no credential for it in WARDYN_REGISTRY_AUTH_FILE"
 		case CauseForbidden:
-			return ref.Registry + " answered 403"
+			return "checking images from " + ref.Registry + " got 403"
 		case CauseTLS:
-			return "the TLS certificate " + ref.Registry + " presented is not trusted (WARDYN_TRUSTED_CA_FILE)"
+			return "a TLS certificate met while checking images from " + ref.Registry + " is not trusted (WARDYN_TRUSTED_CA_FILE)"
 		case CauseTimeout:
 			return timeoutDetail
 		case CauseServer:
-			return ref.Registry + " answered with an error"
+			return "checking images from " + ref.Registry + " got an error answer"
 		case CauseRefused:
 			return ref.Registry + " or an address it named is not one Wardyn contacts"
 		case CauseAuthFile:
 			return "WARDYN_REGISTRY_AUTH_FILE could not be read"
 		}
-		return ref.Registry + " could not be reached"
+		return "a host met while checking images from " + ref.Registry + " could not be reached"
 	}
 	image := ref.Repo + ":" + ref.Tag
 	if ref.Digest != "" {

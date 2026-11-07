@@ -200,7 +200,7 @@ func TestAdmitUnavailableIsNeverKept(t *testing.T) {
 	v, err := admit(t, a, p, ref)
 	wantReason(t, v, imageadmit.AdmissionUnavailable)
 	var u *imageadmit.Unavailable
-	if !errors.As(err, &u) || v.Detail != "registry.corp.example answered 403" {
+	if !errors.As(err, &u) || v.Detail != "checking images from registry.corp.example got 403" {
 		t.Fatalf("verdict %+v, error %v", v, err)
 	}
 	f.setErr("Referrers", nil)
@@ -220,14 +220,14 @@ func TestAdmitUnavailableSentences(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"401 without a credential", un(imageadmit.CauseUnauthorized, false), h + " answered 401 — no credential for it in WARDYN_REGISTRY_AUTH_FILE"},
-		{"401 with a credential", un(imageadmit.CauseUnauthorized, true), h + " answered 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"},
-		{"403", un(imageadmit.CauseForbidden, true), h + " answered 403"},
-		{"unreachable", un(imageadmit.CauseUnreachable, false), h + " could not be reached"},
-		{"untrusted TLS", un(imageadmit.CauseTLS, false), "the TLS certificate " + h + " presented is not trusted (WARDYN_TRUSTED_CA_FILE)"},
+		{"401 without a credential", un(imageadmit.CauseUnauthorized, false), "checking images from " + h + " got 401 — no credential for it in WARDYN_REGISTRY_AUTH_FILE"},
+		{"401 with a credential", un(imageadmit.CauseUnauthorized, true), "checking images from " + h + " got 401 for its credential in WARDYN_REGISTRY_AUTH_FILE"},
+		{"403", un(imageadmit.CauseForbidden, true), "checking images from " + h + " got 403"},
+		{"unreachable", un(imageadmit.CauseUnreachable, false), "a host met while checking images from " + h + " could not be reached"},
+		{"untrusted TLS", un(imageadmit.CauseTLS, false), "a TLS certificate met while checking images from " + h + " is not trusted (WARDYN_TRUSTED_CA_FILE)"},
 		{"timeout", un(imageadmit.CauseTimeout, false), "the check took longer than 20 seconds"},
 		{"deadline", context.DeadlineExceeded, "the check took longer than 20 seconds"},
-		{"server error", un(imageadmit.CauseServer, false), h + " answered with an error"},
+		{"server error", un(imageadmit.CauseServer, false), "checking images from " + h + " got an error answer"},
 		{"refused target", un(imageadmit.CauseRefused, false), h + " or an address it named is not one Wardyn contacts"},
 		{"no such tag", imageadmit.ErrNotFound, h + " has no image team/app:1.4"},
 		{"lying registry", imageadmit.ErrDigestMismatch, h + " answered content that does not match its digest"},

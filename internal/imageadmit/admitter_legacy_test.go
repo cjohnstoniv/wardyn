@@ -66,7 +66,7 @@ func TestAdmitLegacyReadFailureIsUnavailableAndNotKept(t *testing.T) {
 	v, err := admit(t, a, p, ref)
 	wantReason(t, v, imageadmit.AdmissionUnavailable)
 	var u *imageadmit.Unavailable
-	if !errors.As(err, &u) || v.Detail != "registry.corp.example answered 403" {
+	if !errors.As(err, &u) || v.Detail != "checking images from registry.corp.example got 403" {
 		t.Fatalf("verdict %+v, error %v", v, err)
 	}
 	f.setErr("LegacyTag", nil)
