@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -227,6 +229,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 	// committed, so good events are never half-dropped behind a 4xx. Validation is
 	// read-only (kernel-prefix check + run_id existence), so doing it up front is
 	// cheap and side-effect-free.
+	var runsNamespaces []string // resolved on the first Kubernetes event
 	for i := range batch.Events {
 		ev := &batch.Events[i]
 		// Enforce the kernel.* namespace (fail closed): the host sensor may only
@@ -247,13 +250,26 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// heartbeat) behind it. Only a genuine store failure stays a hard
 		// error (fail closed).
 		if ev.RunID != nil {
-			if _, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID); err != nil {
+			run, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID)
+			if err != nil {
 				if !errors.Is(err, store.ErrNotFound) {
 					writeServerError(w, r, "validate run_id", err)
 					return
 				}
 				ev.RunID = nil
 				ev.Data = downgradeToUnmapped(ev.Data, "run_id_not_found")
+				continue
+			}
+			// A Kubernetes event (data.pod set) is held to where and when the
+			// run's pod could exist. Downgrades, never rejects, as above.
+			if pod := groundtruthEventPod(ev.Data); pod != "" {
+				if runsNamespaces == nil {
+					runsNamespaces = groundtruthRunsNamespaces()
+				}
+				if reason := s.groundtruthPodRefusal(run, pod, runsNamespaces); reason != "" {
+					ev.RunID = nil
+					ev.Data = downgradeToUnmapped(ev.Data, reason)
+				}
 			}
 		}
 	}
@@ -282,6 +298,16 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		// the sensor dies. The sensor sends zero Time on the normal path, so
 		// clamping to our own clock costs nothing and keeps honest degradation.
 		ev.Time = s.cfg.Now().UTC()
+		// Each node sensor's latest beat, for /healthz's per-node health. A
+		// failed write is logged, not retried: the audit row below is the
+		// record, and a node whose row stops moving reads as degraded, which
+		// is the honest direction. Failing the batch instead would stop every
+		// kernel event on, say, a split-role install missing the table grant.
+		if ev.Action == groundtruth.ActionSensorHeartbeat {
+			if err := s.upsertGroundtruthSensor(r.Context(), ev); err != nil {
+				_ = loggedMsg(r.Context(), "record ground-truth sensor health", err)
+			}
+		}
 		if err := s.recordGroundtruthAudit(r.Context(), ev); err != nil {
 			// Propagate as a non-2xx so the sender retries (fail-closed
 			// durability). accepted so far is not reported as success: the caller
@@ -292,6 +318,87 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		accepted++
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": accepted})
+}
+
+// groundtruthLateEvents is how long after a run ends its pod's kernel events
+// are still taken: the same retention the Docker correlator keeps an ended
+// container's mapping for (cmd/wardyn-tetragon-ingest, correlator.go).
+const groundtruthLateEvents = 15 * time.Minute
+
+// groundtruthEventPod is a kernel event's data.pod ("namespace/name"), set
+// only by a sensor on Kubernetes.
+func groundtruthEventPod(data json.RawMessage) string {
+	var d struct {
+		Pod string `json:"pod"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return d.Pod
+}
+
+// groundtruthPodRefusal is why a Kubernetes kernel event must lose its run,
+// or "" when it keeps it:
+//
+//	namespace_not_runs — the pod is not in a namespace runs are placed in, so
+//	                     it is not a run's pod whatever its name says;
+//	run_ended          — the run reached a terminal state more than
+//	                     groundtruthLateEvents ago, so a pod re-created
+//	                     under the same name after teardown cannot write
+//	                     into it. The clock is the terminal transition
+//	                     (EndedAt), which later writes to the run do not
+//	                     move; UpdatedAt stands in only on a row without it.
+func (s *Server) groundtruthPodRefusal(run types.AgentRun, pod string, runsNamespaces []string) string {
+	ns, _, ok := strings.Cut(pod, "/")
+	if !ok || ns == "" || !slices.Contains(runsNamespaces, ns) {
+		return "namespace_not_runs"
+	}
+	if run.State.IsTerminal() {
+		ended := run.UpdatedAt
+		if run.EndedAt != nil {
+			ended = *run.EndedAt
+		}
+		if s.cfg.Now().Sub(ended) > groundtruthLateEvents {
+			return "run_ended"
+		}
+	}
+	return ""
+}
+
+// groundtruthServiceAccountNamespace is where the kubelet projects a pod's
+// own namespace.
+const groundtruthServiceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// groundtruthRunsNamespaces is the namespace the in-process Kubernetes driver
+// places run pods in, resolved as that driver resolves it (its config.go is
+// built only under the k8s tag): WARDYN_K8S_NAMESPACE, else this pod's own
+// namespace, else "default".
+func groundtruthRunsNamespaces() []string {
+	if ns := strings.TrimSpace(os.Getenv("WARDYN_K8S_NAMESPACE")); ns != "" {
+		return []string{ns}
+	}
+	if b, err := os.ReadFile(groundtruthServiceAccountNamespace); err == nil {
+		if ns := strings.TrimSpace(string(b)); ns != "" {
+			return []string{ns}
+		}
+	}
+	return []string{"default"}
+}
+
+// upsertGroundtruthSensor writes a heartbeat's node row: its data.node (""
+// for the Compose sensor), the server-forced time, and the beat's counts. A
+// store without per-node rows writes nothing.
+func (s *Server) upsertGroundtruthSensor(ctx context.Context, ev types.AuditEvent) error {
+	gs, ok := s.cfg.Store.(store.GroundtruthSensorStore)
+	if !ok {
+		return nil
+	}
+	var hb struct {
+		Node string `json:"node"`
+		groundtruthBeat
+	}
+	_ = json.Unmarshal(ev.Data, &hb)
+	return gs.UpsertGroundtruthSensor(ctx, store.GroundtruthSensor{Node: hb.Node, LastBeat: ev.Time,
+		ObservedTotal: hb.ObservedTotal, DroppedTotal: hb.DroppedTotal, DroppedUnmapped: hb.DroppedUnmapped,
+		ObservedByKind: hb.ObservedByKind})
 }
 
 // downgradeToUnmapped marks a kernel event's data unmapped with reason,
