@@ -27,32 +27,31 @@ import (
 // The lines `wardyn-runnerd macos-vm edit-base` prints, from the helper's edit-base (approved copy).
 const (
 	EditStartLine    = "This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks."
-	editCodeLine     = "Sign in as wardyn-admin with the one-time code: click Type code in the window, or Show code to read it."
+	editCodeLine     = "The VM signs in as agent by itself. The one-time code is wardyn-admin's password, for its password prompts: click Type code in the window to type it, or Show code to read it."
 	editProfileLine  = "While signed in as wardyn-admin, open %s, then review and install the staged profile in System Settings."
 	EditCheckingLine = "The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test."
 	editReadyLine    = "The edited base is ready, and runs now use it. Desktop: %s."
 )
 
 // ScreenText is a first boot's window text: its title and the strip of steps under the title bar.
-// Closable gives the window a close button that asks the guest to shut down. CodeFile, the setup-code
-// file's path (not secret), gives the strip a Show code control that reads the code from it on a click;
-// empty gives none. The zero value is setup by hand's window, whose text lives in screen_darwin.m.
+// CodeFile, the setup-code file's path (not secret), gives the strip a Show code control that reads the
+// code from it on a click; empty gives none. The zero value is setup by hand's window, whose text lives
+// in screen_darwin.m.
 type ScreenText struct {
 	Title, Steps string
-	Closable     bool
 	CodeFile     string
 }
 
 // editScreen is the edit window's text. Its lines run in the order a person needs them: the code, the
-// setup questions, who they are and where Terminal is, Full Disk Access, the certificates, then the two
+// setup questions, who they are and the admin Terminal, Full Disk Access, the certificates, then the two
 // checks the recheck makes.
 var editScreen = WindowText{
 	Title: "Wardyn: edit this macOS VM base",
-	Strip: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
-		"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
-		"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
-		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
-		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
+	Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+		"The first time, macOS may ask setup questions. Finish them without adding an Apple account. What you click stays for every run.\n" +
+		"The VM signs in as agent by itself; stay signed in. For administrator steps click Open admin Terminal and type the code when it asks for wardyn-admin's password. If a login window shows instead, sign in there as wardyn-admin with the code.\n" +
+		"Full Disk Access, for folder shares: click Full Disk Access, then drag the guest agent (" + guestagent.MacAgentBinaryPath + ") from Finder into the list. Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
+		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Click Trust the list's CAs, check each one, and type the one-time code when it asks.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
 }
@@ -324,12 +323,16 @@ func setAdminCode(ctx context.Context, g EditGuest, staging string, code []byte)
 	return nil
 }
 
+// editCodeLen is the edit's one-time code's length, in typableAlphabet: about 43 bits, for a code that only
+// opens an offline copy at this Mac and that the recheck replaces.
+const editCodeLen = 10
+
 // mintCode changes the setup admin's password to a fresh one-time code in a headless boot, which staging's
 // AdminPasswordFile then holds, offers the waiting profiles there (offerProfiles, from staging's tools.json)
 // and, once the boot has stopped, writes the code to the setup-code file (0600), which only the person at
 // this Mac reads. It returns wardyn-admin's copies' paths.
 func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, staging string) (offered []string, err error) {
-	code, err := randomCode(8)
+	code, err := typableCode(editCodeLen)
 	if err != nil {
 		return nil, err
 	}
@@ -399,12 +402,19 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowSc
 			o.Log.Warn("macvm: the edit window's close did not reach the guest", "err", err.Error())
 		}
 	}
+	bctx, bcancel := context.WithCancel(ctx)
+	defer bcancel()
+	buttons := &editButtons{ctx: bctx, g: g, staging: filepath.Dir(spec.DiskPath), o: o}
+	buttons.wire(&text)
 	w, err := scr.Open(ptr, text)
 	runtime.KeepAlive(wg)
 	if err != nil {
 		return fmt.Errorf("macvm: the edit window: %w", err)
 	}
-	defer w.Close()
+	defer func() { bcancel(); buttons.wait(); w.Close() }() // the buttons and the live line end before the window does
+	if lw, ok := w.(LiveWindow); ok {
+		buttons.watch(lw)
+	}
 	select {
 	case <-wg.Done():
 		if err := stopBoot(); err != nil {
@@ -563,7 +573,7 @@ func (o *EditOptions) printUntrusted(base string) {
 		}
 		if !header {
 			fmt.Fprintln(o.Out)
-			fmt.Fprintln(o.Out, "Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
+			fmt.Fprintln(o.Out, "Not yet trusted in this base. Click Trust the list's CAs in the window, or run each command in the admin Terminal. Check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
 			header = true
 		}
 		subject, sum := "not available: the install list's file is not the one this base was built from", r.Fingerprint
@@ -587,7 +597,7 @@ func (o *EditOptions) printUntrusted(base string) {
 	}
 	if !header {
 		fmt.Fprintln(o.Out)
-		fmt.Fprintln(o.Out, "Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
+		fmt.Fprintln(o.Out, "Not yet trusted in this base. Click Trust the list's CAs in the window, or run each command in the admin Terminal. Check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
 	}
 	sum := "not available: this Mac's signing certificate does not read"
 	if cert, err := readAgentSigningCert(o.Layout.AgentSigningDir()); err == nil {

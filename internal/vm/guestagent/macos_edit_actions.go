@@ -30,7 +30,8 @@ import (
 // Admin rights still need the setup admin's one-time code, typed by the person.
 //
 //	POST /edit/admin-terminal      open Terminal at `su - wardyn-admin`
-//	POST /edit/trust-cas           open Terminal at one `sudo security add-trusted-cert` per staged ca item
+//	POST /edit/trust-cas           open Terminal at one `sudo security add-trusted-cert` per staged ca item,
+//	                               and one for code signing for the agent's signing certificate if not trusted
 //	POST /edit/full-disk-access    open Privacy & Security > Full Disk Access and show this agent in Finder
 //
 // A request with nobody at the console, or (trust-cas) no staged certificate, is refused with 409 and
@@ -50,8 +51,8 @@ const (
 	maxStagedCert = 1 << 20
 )
 
-// EditActionResult is what an edit action did. Certificates is the staged ca items trust-cas wrote a
-// line for; Revealed says whether full-disk-access showed this agent in Finder (the pane is open either way).
+// EditActionResult is what an edit action did. Certificates is the certificates trust-cas wrote a line
+// for; Revealed says whether full-disk-access showed this agent in Finder (the pane is open either way).
 type EditActionResult struct {
 	Opened       bool `json:"opened"`
 	Certificates int  `json:"certificates,omitempty"`
@@ -137,7 +138,8 @@ func (t *Tools) handleEditAdminTerminal(w http.ResponseWriter, r *http.Request) 
 type stagedCA struct{ name, subject, sha256 string }
 
 // stagedCAs lists the stage directory's ca items in name order: a directory named as an item whose
-// item.cer is a regular file holding one certificate, PEM or DER. Anything else is skipped.
+// item.cer is a regular file holding one certificate, PEM or DER. Anything else is skipped, and so is
+// AgentSigningItem, which is trusted for code signing only (untrustedSigningCert).
 func (t *Tools) stagedCAs() []stagedCA {
 	ents, err := os.ReadDir(t.itemStageDir())
 	if err != nil {
@@ -145,30 +147,57 @@ func (t *Tools) stagedCAs() []stagedCA {
 	}
 	var out []stagedCA
 	for _, e := range ents {
-		if !e.IsDir() || !ItemNamePattern.MatchString(e.Name()) {
+		if !e.IsDir() || !ItemNamePattern.MatchString(e.Name()) || e.Name() == AgentSigningItem {
 			continue
 		}
-		p := filepath.Join(t.itemStageDir(), e.Name(), ItemCert)
-		if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() || fi.Size() > maxStagedCert {
-			continue
+		if c, ok := t.stagedCert(e.Name()); ok {
+			out = append(out, c)
 		}
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		der := raw
-		if blk, _ := pem.Decode(raw); blk != nil {
-			der = blk.Bytes
-		}
-		cert, err := x509.ParseCertificate(der)
-		if err != nil {
-			continue
-		}
-		sum := sha256.Sum256(der)
-		out = append(out, stagedCA{e.Name(), cert.Subject.String(), colonHex(sum[:])})
 	}
 	slices.SortFunc(out, func(a, b stagedCA) int { return strings.Compare(a.name, b.name) })
 	return out
+}
+
+// stagedCert reads item name's staged certificate: a regular item.cer holding one certificate, PEM or DER.
+func (t *Tools) stagedCert(name string) (stagedCA, bool) {
+	p := filepath.Join(t.itemStageDir(), name, ItemCert)
+	if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() || fi.Size() > maxStagedCert {
+		return stagedCA{}, false
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return stagedCA{}, false
+	}
+	der := raw
+	if blk, _ := pem.Decode(raw); blk != nil {
+		der = blk.Bytes
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return stagedCA{}, false
+	}
+	sum := sha256.Sum256(der)
+	return stagedCA{name, cert.Subject.String(), colonHex(sum[:])}, true
+}
+
+// untrustedSigningCert is the guest agent's staged signing certificate (AgentSigningItem) when this guest
+// does not trust it for code signing, as root's `security verify-cert -p codeSign` answers; ok is false
+// when it is not staged or is trusted. A verify that does not run counts as not trusted: the line it adds
+// only asks the person once more.
+func (t *Tools) untrustedSigningCert(ctx context.Context) (stagedCA, bool) {
+	c, ok := t.stagedCert(AgentSigningItem)
+	if !ok {
+		return stagedCA{}, false
+	}
+	run := t.run
+	if run == nil {
+		run = runCombined
+	}
+	_, code, err := run(ctx, []string{"/usr/bin/security", "verify-cert", "-L", "-p", "codeSign", "-c", filepath.Join(t.itemStageDir(), AgentSigningItem, ItemCert)})
+	if err == nil && code == 0 {
+		return stagedCA{}, false
+	}
+	return c, true
 }
 
 func colonHex(b []byte) string {
@@ -183,16 +212,23 @@ func colonHex(b []byte) string {
 // shellQuote is s as one single-quoted shell word.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// trustScript prints each certificate's name, subject and SHA-256, then trusts it as the setup admin.
+// trustScript prints each certificate's name, subject and SHA-256, then trusts it as the setup admin: the
+// ca items for SSL and, when signing is set, the guest agent's signing certificate for code signing only.
 // A subject is the CA's own text, so it is printed quoted (strconv.Quote leaves no newline) and as a
 // printf argument, never as shell.
-func (t *Tools) trustScript(cas []stagedCA) string {
+func (t *Tools) trustScript(cas []stagedCA, signing *stagedCA) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
+	line := func(c stagedCA, label, policy string) {
+		fmt.Fprintf(&b, "printf '%%s\\n' '' %s %s %s\n", shellQuote(label), shellQuote("  subject  "+strconv.Quote(c.subject)), shellQuote("  SHA-256  "+c.sha256))
+		fmt.Fprintf(&b, "/usr/bin/su - %s -c '/usr/bin/sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p %s -k %s %s'\n",
+			MacAdminUser, policy, MacSystemKeychain, filepath.Join(t.itemStageDir(), c.name, ItemCert))
+	}
 	for _, c := range cas {
-		fmt.Fprintf(&b, "printf '%%s\\n' '' %s %s %s\n", shellQuote(c.name), shellQuote("  subject  "+strconv.Quote(c.subject)), shellQuote("  SHA-256  "+c.sha256))
-		fmt.Fprintf(&b, "/usr/bin/su - %s -c '/usr/bin/sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k %s %s'\n",
-			MacAdminUser, MacSystemKeychain, filepath.Join(t.itemStageDir(), c.name, ItemCert))
+		line(c, c.name, "ssl")
+	}
+	if signing != nil {
+		line(*signing, "the guest agent's signing certificate, trusted for code signing only", "codeSign")
 	}
 	b.WriteString("printf '%s\\n' '' 'Finished. You can close this window.'\n")
 	return b.String()
@@ -204,11 +240,15 @@ func (t *Tools) handleEditTrustCAs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cas := t.stagedCAs()
-	if len(cas) == 0 {
+	var signing *stagedCA
+	if c, ok := t.untrustedSigningCert(r.Context()); ok {
+		signing = &c
+	}
+	if len(cas) == 0 && signing == nil {
 		http.Error(w, "the install list has no certificates staged", http.StatusConflict)
 		return
 	}
-	script, err := t.writeEditScript(EditTrustCAsScript, t.trustScript(cas))
+	script, err := t.writeEditScript(EditTrustCAsScript, t.trustScript(cas, signing))
 	if err != nil {
 		slog.Warn("guest agent: tools mode: trust script not written", "err", err)
 		http.Error(w, "the Terminal script was not written", http.StatusInternalServerError)
@@ -218,7 +258,11 @@ func (t *Tools) handleEditTrustCAs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Terminal was not opened", http.StatusInternalServerError)
 		return
 	}
-	writeJSONAny(w, EditActionResult{Opened: true, Certificates: len(cas)})
+	n := len(cas)
+	if signing != nil {
+		n++
+	}
+	writeJSONAny(w, EditActionResult{Opened: true, Certificates: n})
 }
 
 func (t *Tools) handleEditFullDiskAccess(w http.ResponseWriter, r *http.Request) {

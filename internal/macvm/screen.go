@@ -45,11 +45,15 @@ const (
 // The edit window also has CodeFile, the setup-code file's path (not secret), which gives the strip a Show
 // code control that reads the code from the file on a click (the code never crosses into Go), and AskStop,
 // which its close button calls, off the main thread, instead of closing: it asks the guest to shut down, and
-// the window stays up until Close runs.
+// the window stays up until Close runs. Its buttons call AdminTerminal, TrustCAs and FullDiskAccess the same
+// way (nil: the click does nothing); CanTrust false disables Trust the list's CAs, which then has nothing to
+// trust. Its Type code button needs no callback: it reads the code from CodeFile, as Show code does.
 type WindowText struct {
-	Title, Strip string
-	CodeFile     string
-	AskStop      func()
+	Title, Strip                            string
+	CodeFile                                string
+	AskStop                                 func()
+	AdminTerminal, TrustCAs, FullDiskAccess func()
+	CanTrust                                bool
 }
 
 // ErrNotAtMac is what WindowScreen.Ready wraps when the Mac's screen is locked or its console session is not
