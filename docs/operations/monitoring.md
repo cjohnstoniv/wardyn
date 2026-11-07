@@ -41,12 +41,30 @@
 | `wardyn_auth_store_errors_total` | Requests an authentication path couldn't decide because its store read failed and answered `503`. The SSO path records `auth.fail`; every other path records nothing. |
 | `wardyn_ssh_connections_refused_total{bound}` | SSH gateway connections closed at a [bound](../SSH.md#bounds): `handshake`, `source` or `established`; per replica. |
 | `wardyn_device_ingest_failures_suppressed_total` | Counter. Refused device audit pushes whose `device.audit.ingest` row was folded into a streak or dropped by the per-device rate limit. |
+| `wardyn_model_tokens_total{vendor,direction}` | Model tokens counted from providers' answers. `vendor`: `anthropic`, `openai`, `bedrock`, `ollama` or `other`. `direction`: `input`, `output`, `cache_read`, `cache_write` or `reasoning`. No run label. |
 | `wardyn_org_federation_lag` | Gauge, on a hybrid laptop only. Local audit rows the organisation has not yet acknowledged. See [Managed laptops](hybrid-laptops.md). |
 
 - The `wardyn_runner_up` probe is one read-only call (Kubernetes: a namespaced pod list of limit 1, which the chart's Role already grants; Docker: a daemon ping), cached for 5 seconds and bounded by a 3-second deadline.
 - The held figures are summed per runner kind, never across kinds: the basis is requests for `k8s` and caps for `docker`. They are configured reservations, not observed use.
 - `wardyn_sso_refresh_total{outcome="spent"}` increments once per refresh token AWS retires, at the `CreateToken` call that discovers it. Later dispatches on that token short-circuit uncounted, so the series reads how many sessions AWS retired, not how many times people hit a dead one.
 - A climbing `transport_error` or `unavailable` series means the SSO-OIDC endpoint itself is in trouble.
+
+## Model token usage
+
+- Each run's page and `GET /api/v1/runs/{id}/model-usage` show input, output, cache and reasoning tokens per model, counted from the provider's own answer and never estimated. They are readable by the run's owner and admins, for a finished run too.
+- Counts are the provider's. Anthropic and Bedrock input excludes cache tokens; OpenAI input includes cached tokens. Read each model's line by its `vendor`; the totals add the fields as reported.
+- It is on by default. `WARDYN_MODEL_USAGE=off` stops it ([ENV.md](../ENV.md)).
+
+| Not counted | Shown as |
+|---|---|
+| An encrypted connection to a model host that Wardyn did not open | `opaque_tunnels`: tunnels, not calls |
+| A Chat Completions stream without `stream_options.include_usage` (Wardyn does not rewrite the request) | uncounted, `stream_without_usage` |
+| A stream cut before its final usage | partial, `stream_cut` |
+| An answer whose `usage` is missing, for example from a gateway that omits it | uncounted, `no_usage` |
+| A body over 8 MiB, one that does not parse, or a coding Wardyn cannot decode | uncounted, `body_oversize`, `parse_error`, `undecodable` |
+| The meter itself failing | uncounted, `meter_error` |
+| Batch APIs, whose results are fetched later as files, and upgraded (WebSocket) sessions | not seen |
+| An answer that is not a success | not billed, so not recorded |
 
 ## OpenTelemetry logs
 

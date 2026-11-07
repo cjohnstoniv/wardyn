@@ -21,7 +21,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A file or variable secret that reaches the 8-byte minimum only with its trailing line break is no longer delivered to a run and can no longer be saved: output shows it without the break, which can't be masked. Store a longer value.
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
 - Image admission is off by default: no image check runs until a security operator sets site setting `images.admission.mode` to `audit` or `enforce`. A governance profile that lists `required_image_signers` holds its members to those signers even while the site mode is off.
-- Model token counting is on by default and needs no setting. Turning it off with `WARDYN_MODEL_USAGE=off` needs the proxy image you pin (`WARDYN_PROXY_IMAGE`, `k8s.proxyImage`, a runner's proxy) at 0.10.0 or later: an older proxy refuses a run config that carries the opt-out. With the default config an older proxy starts and does not count. Runs on a runner older than 0.10.0 are not counted, because that runner cannot read the count rows. To move a runner back below 0.10.0, first stop its runs and keep it connected to the organisation until its spool is delivered: no `spools/*/0*.json` file is left in its state directory. An older runner replays every kept spool, ended runs included, before it reports ready, and stops at a count row it cannot read.
+- Model token counting is on by default and needs no setting. `WARDYN_MODEL_USAGE=off` turns it off: wardynd then stores no count, and the proxies it starts stop counting. The setting reaches a proxy as an environment variable, so a proxy older than 0.10.0 starts as before and does not count. A runner on another machine starts its proxies from its own environment, so set `WARDYN_MODEL_USAGE=off` there too. Runs on a runner older than 0.10.0 are not counted, because that runner cannot read the count rows. To move a runner back below 0.10.0, first stop its runs and keep it connected to the organisation until its spool is delivered: no `spools/*/0*.json` file is left in its state directory. An older runner replays every kept spool, ended runs included, before it reports ready, and stops at a count row it cannot read.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
   Without it a `POST /api/v1/runs` that sends an `Idempotency-Key` fails. Grant it `SELECT, INSERT` on
@@ -39,7 +39,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   later; an older replica ignores the key.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`. Without
-  it `/healthz` cannot tell Kubernetes node sensors apart and reads only the newest heartbeat. An upgrade from before
+  it `/healthz` cannot tell Kubernetes node sensors apart and reads only the newest heartbeat. Grant it `SELECT, INSERT` on
+  `run_model_usage` too; without it a run's model token counts are not stored. An upgrade from before
   0.10.0-rc.12 also needs `SELECT, INSERT, UPDATE, DELETE` on `wall_presets` and `kept_machines`. An upgrade from
   before 0.10.0-rc.9 also needs every grant the 0.10.0-rc.8 notes list: `SELECT, INSERT, UPDATE, DELETE` on
   `workloads`, `workload_bindings`, `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`,
@@ -53,6 +54,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- The run page now shows each run's model token usage (input, output, cache) per model, counted from the provider's own answers; calls Wardyn can't see into are counted and shown as not counted. `GET /api/v1/runs/{id}/model-usage` returns the same, and `wardyn_model_tokens_total` counts tokens by vendor and direction. `WARDYN_MODEL_USAGE=off` turns it off.
 - Approvals: the run's owner or an administrator approves one MCP call that a tool rule marks `approve_each`, once, and an approval rule never does. `WARDYN_CAPABILITY_SECOND_HUMAN` (off by default) also makes someone other than the run's creator decide it.
 - Tool rules can mark a remote MCP tool `approve_each`: each call waits for a person to approve that call with its exact arguments, and Wardyn sends exactly what was approved, once. It works for Codex CLI too. Nothing changes until a rule says `approve_each`.
 - Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
