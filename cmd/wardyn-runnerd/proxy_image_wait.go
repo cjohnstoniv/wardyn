@@ -41,6 +41,10 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// proxyImageSleep is the wait between proxy image tries at start: sleepCtx, a variable only so a test can
+// end the wait.
+var proxyImageSleep = sleepCtx
+
 // waitForProxyImage runs attempt until the proxy image is there instead of having the service exit and
 // be restarted. Only a failure at the proxy-image stage is waited out; any other result, nil included,
 // is returned at once, so a relay or engine refusal behaves as it did. Each failure goes to report
