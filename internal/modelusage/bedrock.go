@@ -9,6 +9,10 @@ import (
 )
 
 // Bedrock InvokeModel reports token counts in these response headers, ahead of any model-specific body.
+// The two names below are not in AWS's public API reference: the InvokeModel and
+// InvokeModelWithResponseStream pages (docs.aws.amazon.com/bedrock/latest/APIReference) list only the
+// content-type, performance-config and service-tier response headers. They are the names Bedrock is
+// seen to send; a wrong name only leaves the call uncounted (no usage), never miscounted.
 const (
 	headerInputTokens  = "X-Amzn-Bedrock-Input-Token-Count"
 	headerOutputTokens = "X-Amzn-Bedrock-Output-Token-Count"
@@ -63,6 +67,9 @@ func (p *parser) converseFrame(f frame) {
 }
 
 // invocationMetrics is appended by Bedrock to the last body or stream chunk of an InvokeModel call.
+// The key "amazon-bedrock-invocationMetrics" and these two field names are not in AWS's public API
+// reference or the model parameter pages (the Titan pages document inputTextTokenCount instead); a
+// wrong name only leaves the call uncounted.
 type invocationMetrics struct {
 	InputTokenCount  int64 `json:"inputTokenCount"`
 	OutputTokenCount int64 `json:"outputTokenCount"`

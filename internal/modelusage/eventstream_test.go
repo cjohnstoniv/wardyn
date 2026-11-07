@@ -94,7 +94,8 @@ func TestInvokeStreamAnthropicEvents(t *testing.T) {
 }
 
 func TestInvokeStreamMetricsOnly(t *testing.T) {
-	// A non-Anthropic model: only the invocation metrics on the last chunk count.
+	// A non-Anthropic model: only the invocation metrics on the last chunk count. The metrics key is
+	// not in AWS's public API reference (see bedrock.go), so this chunk is illustrative.
 	var s []byte
 	s = append(s, chunk(`{"outputText":"a","index":0}`)...)
 	s = append(s, chunk(`{"outputText":"b","amazon-bedrock-invocationMetrics":{"inputTokenCount":7,"outputTokenCount":2}}`)...)

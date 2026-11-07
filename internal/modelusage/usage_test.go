@@ -317,6 +317,8 @@ func TestReadRequest(t *testing.T) {
 	}
 }
 
+// The header names and the invocationMetrics body key are not in AWS's public API reference (see
+// bedrock.go), so these fixtures are illustrative: the figures are invented.
 func TestBedrockInvokeHeadersAndBody(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Amzn-Bedrock-Input-Token-Count", "17")
