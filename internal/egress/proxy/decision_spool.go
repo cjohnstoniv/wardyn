@@ -111,13 +111,18 @@ const spoolRetryAfter = "1"
 // sentence can name the target again) plus the record's envelope, never more
 // than the largest wire record.
 // Reserving every request at the wire maximum held a 32 MiB spool to 32
-// requests in flight.
+// requests in flight. A request the model-token meter may wrap (usageShape)
+// adds room for its usage row, sent after the answer.
 func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
+	var usage int64
+	if _, _, metered := p.usageShape(r); metered {
+		usage = spoolUsageRecordBytes
+	}
 	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff &&
 		(bodyBearingMethod(r.Method) || p.scanner.InspectForwardEgress() && r.URL.RawQuery != "") {
-		return runnerspool.MaxRecordBytes
+		return runnerspool.MaxRecordBytes + usage
 	}
-	return min(int64(2*6*(len(r.URL.String())+len(r.Host)+len(r.Method))+spoolRecordEnvelope), runnerspool.MaxRecordBytes)
+	return min(int64(2*6*(len(r.URL.String())+len(r.Host)+len(r.Method))+spoolRecordEnvelope), runnerspool.MaxRecordBytes) + usage
 }
 
 // Reserve the request's own record bound before forwarding. The mutex covers both

@@ -21,6 +21,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A file or variable secret that reaches the 8-byte minimum only with its trailing line break is no longer delivered to a run and can no longer be saved: output shows it without the break, which can't be masked. Store a longer value.
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
 - Image admission is off by default: no image check runs until a security operator sets site setting `images.admission.mode` to `audit` or `enforce`. A governance profile that lists `required_image_signers` holds its members to those signers even while the site mode is off.
+- Model token counting is on by default and needs no setting. Turning it off with `WARDYN_MODEL_USAGE=off` needs the proxy image you pin (`WARDYN_PROXY_IMAGE`, `k8s.proxyImage`, a runner's proxy) at 0.10.0 or later: an older proxy refuses a run config that carries the opt-out. With the default config an older proxy starts and does not count.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
   Without it a `POST /api/v1/runs` that sends an `Idempotency-Key` fails. Grant it `SELECT, INSERT` on

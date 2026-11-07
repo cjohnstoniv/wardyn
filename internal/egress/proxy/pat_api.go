@@ -325,6 +325,9 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	allow.Scan = scanSummary
 	allow.GatewayCallID = callID
 	p.emitDialledAllow(allow, host)
+	if d.sign != nil && bedrockServiceLabel(p.sigv4.scopes[hostKey(host)].service) {
+		p.meterUsage(r, host, port, resp, callID) // a re-signed Bedrock call, direct or at a gateway
+	}
 	if d.gateway != nil {
 		p.relayGatewayRoute(w, r, host, port, resp, d.denied, sentToken, callID)
 		return
