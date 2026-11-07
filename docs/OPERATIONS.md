@@ -878,6 +878,8 @@ curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
   - A request that arrives while a sweep is running is refused with **429** and a `Retry-After`; it is not queued.
   - Point your cron at a single caller and let a 429 mean "the answer you want is already being computed".
   - There is deliberately no server-side time limit on a sweep.
+  - A fixed one would cap how large a log can be verified at all.
+  - So the bound is your client's: the sweep is walked in pages and stops between them when the caller goes away.
 
 ### Signed checkpoints and receipts
 
@@ -933,8 +935,6 @@ This checks the signature, the two digests and so that each seq belongs to its r
 > - After a late forged checkpoint from a retired key, the rows between it and the new genesis are not covered by a receipt.
 > - The metrics and the latch are per replica: the replica that signs a tick updates them.
 > - A checkpoint is evidence from the moment it is signed. Rows a database owner rewrote before it was signed are signed as rewritten; the off-box copy of earlier statements is the control.
-  - A fixed one would cap how large a log can be verified at all.
-  - So the bound is your client's: the sweep is walked in pages and stops between them when the caller goes away.
 
 > [!WARNING]
 > **A break is permanent.**
