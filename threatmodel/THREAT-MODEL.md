@@ -843,7 +843,7 @@ is not the deployment described above.**
 
 - SecretRegistry masking (`<secret-hidden>`, `internal/secretmask`) covers the default brokered recording-upload path, audit events and proxy decision logs **[shipped]**.
 - It is **verbatim-match only**.
-- On the upload path the body is asciicast JSON, so each secret's JSON-escaped rendering is masked alongside its raw bytes (`JSONEscapedVariants`), covering multi-line keys and quote/backslash-bearing values.
+- On the upload path the body is asciicast JSON, so each secret's JSON-escaped rendering is masked alongside its raw bytes (`JSONEscapedVariants`), covering quote/backslash-bearing values. A delivered `file_secret` or `env_secret` value with a line break inside it (a PEM key, a kubeconfig) is also registered with CR LF line ends, which is what a terminal prints for each line break, and with each line of at least `MinLen` bytes on its own, so a key printed in a terminal or shown in part is masked (`fileSecretRenderings`, `envSecretRenderings`).
 - A secret SPLIT across two output events by the recorder's PTY read boundaries stays a residual the verbatim match cannot close, since the `"],[t,"o","` framing interrupts the byte run.
 - The live-attach path masks raw PTY bytes and is unaffected.
 - **Verbatim-match means per-RENDERING, not per-credential**, and that is the reading that bites.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -165,13 +166,24 @@ func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run ty
 }
 
 // fileSecretRenderings is what a delivered file's value is masked as: the
-// bytes as stored, plus those bytes without a trailing line break when that
-// differs — the form a shell's command substitution reads the file into.
+// bytes as stored, those bytes without a trailing line break when that
+// differs — the form a shell's command substitution reads the file into — and,
+// for a value with a line break inside it, the renderings a terminal prints
+// (envSecretRenderings).
 func fileSecretRenderings(val []byte) [][]byte {
+	out := envSecretRenderings(val)
 	if trimmed := bytes.TrimRight(val, "\r\n"); len(trimmed) != len(val) {
-		return [][]byte{val, trimmed}
+		out = append(out, trimmed)
 	}
-	return [][]byte{val}
+	return out
+}
+
+// envSecretRenderings is what a delivered variable's value is masked as: the
+// bytes as stored and, for a value with a line break inside it, the forms a
+// terminal prints it in — CR LF line ends, and each line alone
+// (secretmask.MultilineRenderings).
+func envSecretRenderings(val []byte) [][]byte {
+	return append([][]byte{val}, secretmask.MultilineRenderings(val)...)
 }
 
 // fileSecretRunnerDelivers fails the run closed, with its run.create row,

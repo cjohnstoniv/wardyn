@@ -208,7 +208,7 @@ func (s *Server) readResidentValue(ctx context.Context, run types.AgentRun, gran
 		return residentValue{}, err
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "secret.read", secretName, "success", mustJSON(data)))
-	renderings := [][]byte{val}
+	renderings := envSecretRenderings(val)
 	if class != placement.ClassEnvSecret {
 		renderings = fileSecretRenderings(val)
 	}
