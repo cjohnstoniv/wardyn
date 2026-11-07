@@ -37,6 +37,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Starting a desktop sign-in on a Linux VM run is now refused instead of freezing the VM, a Linux VM's output recovery is refused with a reason, and a VM run's folder-share cleanup is retried until it finishes.
 - A secret delivered to a run as a file or variable, with line breaks inside it (a private key, a kubeconfig), is now hidden in terminal output, live attach and recordings even when the terminal prints its lines with CR LF ends, or only some of its lines.
 - The audit row for a clipboard transfer through a desktop window no longer carries a SHA-256 of the text; it records the direction and size only.
+- A governance profile's GitHub capabilities now limit members' runs, as documented.
 
 ## [0.10.0-rc.13] — 2026-11-04
 

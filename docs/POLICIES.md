@@ -154,7 +154,8 @@
 
 - The GitHub twin of `azure_devops_capabilities`: this run's GitHub capabilities in place of a GitHub provider row's `default_profile`, chosen only within the row's `capability_ceiling`.
 - Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`.
-- A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused), and a ceiling's list is never handed to a member as their choice.
+- A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused).
+- A profile's list bounds its members' runs, the GitHub CLI included: a member who names none gets the profile's list, and a list sharing none with it is refused.
 - Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. Entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall also narrows the GitHub CLI's capabilities ([Your walls](#your-walls)).
 
 ### Brokered GitHub: the denies you did not write

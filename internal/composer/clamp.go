@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -177,8 +178,47 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 	}
 
 	warns = clampPushRules(&out, ceiling, warns)
+	warns = clampGitHubCapabilities(&out, ceiling, warns)
 
 	return out, warns
+}
+
+// clampGitHubCapabilities bounds github_capabilities by the ceiling's list: the proposal keeps only
+// the entries the ceiling lists, in its own order, and a proposal that names none, or keeps none,
+// takes the ceiling's list. Nothing on GitHub reads the list as a grant (nothing widens a run to it),
+// so taking the ceiling's list only narrows: pushes to github.com are withheld without code_write
+// and the GitHub CLI keeps only what it lists. A ceiling that names no list bounds nothing here.
+//
+// azure_devops_capabilities is not bounded here: dispatch bounds it, where the run's Azure DevOps
+// row is known (see the clamp coverage guard's exemptions).
+func clampGitHubCapabilities(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if len(ceiling.GitHubCapabilities) == 0 {
+		return warns
+	}
+	var kept, dropped []ghscope.Capability
+	for _, c := range out.GitHubCapabilities {
+		if slices.Contains(ceiling.GitHubCapabilities, c) {
+			kept = append(kept, c)
+		} else {
+			dropped = append(dropped, c)
+		}
+	}
+	if len(dropped) > 0 {
+		names := make([]string, len(dropped))
+		for i, c := range dropped {
+			names[i] = string(c)
+		}
+		w := "github_capabilities: dropped " + strings.Join(names, ",") + ", not in the operator's list"
+		if len(kept) == 0 {
+			w += "; the run takes the operator's list"
+		}
+		warns = append(warns, w)
+	}
+	if len(kept) == 0 {
+		kept = slices.Clone(ceiling.GitHubCapabilities)
+	}
+	out.GitHubCapabilities = kept
+	return warns
 }
 
 // clampResources is Clamp's resource step, split out to keep Clamp readable.
