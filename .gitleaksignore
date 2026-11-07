@@ -166,3 +166,6 @@ c28f27ccc8088866e689b84819c52323a84559d9:internal/api/endpoint_oidc_test.go:gene
 # The MCP call-key test's stand-in for a call's sha256 hex digest (four 0-9a-f
 # cycles), committed as a literal before it became strings.Repeat. A digest, never a credential.
 716c2001921d2c766b84d15f2ab80ce852a932c6:internal/approval/mcp_call_test.go:generic-api-key:15
+# The MCP call console card test's stand-in for a call's sha256 hex digest (four 0-9a-f cycles). A digest,
+# never a credential.
+c2450be019d75f32f496890ed983465c3294528b:ui/src/app/components/screens/approvals-mcp-call.test.tsx:generic-api-key:49

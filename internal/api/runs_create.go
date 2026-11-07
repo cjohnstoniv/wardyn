@@ -675,8 +675,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// creates). resolveWorkspaceImage is fail-open by design (shared with the
 		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
 		// lives here, on the create door, not in it.
-		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" && !prewrappedBase(b) &&
-			strings.TrimSpace(b.Image) != "" && s.cfg.ImageBuilder == nil {
+		if b := imageWS.BaseImage; chosenBaseImageNeedsWrap(b) && s.cfg.ImageBuilder == nil {
 			buildFailed(map[string]any{
 				"base_image": b.Image,
 				"error": "no image builder is wired, so the workspace's chosen base image cannot be wrapped with the " +
@@ -708,18 +707,8 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		}
 	}
 
-	switch origin {
-	case types.ImageOriginConvention:
-		var refusal *runRefusal
-		if image, refusal = s.conventionImageAdmission(ctx, run, image); refusal != nil {
-			s.failConventionImage(ctx, runID, conventional, refusal)
-			return "", nil, true
-		}
-	case types.ImageOriginDevcontainer, types.ImageOriginWorkspace:
-		if refusal := s.recordBuiltImageOrigin(ctx, run, origin); refusal != nil {
-			s.failConventionImage(ctx, runID, image, refusal)
-			return "", nil, true
-		}
+	if image, failed = s.admitResolvedImage(ctx, run, image, conventional, origin); failed {
+		return "", nil, true
 	}
 
 	// Persist the resolved image for provenance (best-effort: a failed write
@@ -737,4 +726,31 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		}
 	}
 	return image, arches, false
+}
+
+// chosenBaseImageNeedsWrap is true when a workspace's base image is an explicit choice that only an image builder
+// can wrap with the agent runtime: not the recommended image, not a ready prewrapped image, and not blank.
+func chosenBaseImageNeedsWrap(b *types.WorkspaceBaseImage) bool {
+	return b != nil && b.Kind != "recommended" && !prewrappedBase(b) && strings.TrimSpace(b.Image) != ""
+}
+
+// admitResolvedImage holds the image resolveCreateRunImage chose to image admission by its origin: the convention
+// image is checked (scope all) and may come back as its pin; an image Wardyn built for the run records its
+// origin. failed is true when the run was failed (conventional names the convention image in the refusal).
+func (s *Server) admitResolvedImage(ctx context.Context, run types.AgentRun, image, conventional, origin string) (string, bool) {
+	switch origin {
+	case types.ImageOriginConvention:
+		admitted, refusal := s.conventionImageAdmission(ctx, run, image)
+		if refusal != nil {
+			s.failConventionImage(ctx, run.ID, conventional, refusal)
+			return "", true
+		}
+		return admitted, false
+	case types.ImageOriginDevcontainer, types.ImageOriginWorkspace:
+		if refusal := s.recordBuiltImageOrigin(ctx, run, origin); refusal != nil {
+			s.failConventionImage(ctx, run.ID, image, refusal)
+			return "", true
+		}
+	}
+	return image, false
 }

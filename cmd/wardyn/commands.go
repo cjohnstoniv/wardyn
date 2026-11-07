@@ -111,6 +111,18 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 	return "  interactive: starts " + startup.Command + "; " + attach
 }
 
+// printRunNotes writes what a created run carries besides its id: a replay line when an earlier attempt with the
+// same idempotency key created it, and the server's advisory warnings (workspace collision, dropped ssh grant).
+// The run is live either way, so silence here is a degraded run no CI artifact records.
+func printRunNotes(w io.Writer, run sdk.CreateRunResult) {
+	if run.Replayed {
+		fmt.Fprintf(w, "run %s was already created by an earlier attempt with this key\n", run.ID)
+	}
+	for _, warning := range run.Warnings {
+		fmt.Fprintf(w, "  warning: %s\n", warning)
+	}
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
@@ -240,15 +252,7 @@ func runCmd(client clientFn) *cobra.Command {
 					fmt.Fprintln(cmd.OutOrStdout(), interactiveLine(body.Startup, run.ID.String()))
 				}
 			}
-			if run.Replayed {
-				fmt.Fprintf(cmd.ErrOrStderr(), "run %s was already created by an earlier attempt with this key\n", run.ID)
-			}
-			// Advisory server warnings (workspace collision, dropped ssh grant):
-			// the run is live either way, so silence here is a degraded run no
-			// CI artifact records.
-			for _, w := range run.Warnings {
-				fmt.Fprintf(cmd.ErrOrStderr(), "  warning: %s\n", w)
-			}
+			printRunNotes(cmd.ErrOrStderr(), run)
 			return seedThenWait(cmd, client(), run.ID, localFolder, localFolderRemote, wait, timeout)
 		},
 	}
@@ -261,7 +265,9 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&correlationID, "correlation-id", "", "your own reference for this run, up to 128 characters of letters, digits and . _ : / - (optional; carried on the run's audit rows sent to audit sinks)")
-	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "make a re-run of this command safe: with the same key, a second launch gets the first run back instead of starting another (1 to 255 visible ASCII characters, kept 24 hours; default a fresh value per call, which protects nothing across processes). In CI use a value stable across a job re-run, such as the build id and job name")
+	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "make a re-run of this command safe: with the same key, a second launch gets the first run back instead of starting another "+
+		"(1 to 255 visible ASCII characters, kept 24 hours; default a fresh value per call, which protects nothing across processes). "+
+		"In CI use a value stable across a job re-run, such as the build id and job name")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	where.register(cmd)
 	machine.register(cmd) // its flag checks send no request, so they run before the wall preset's lookup
