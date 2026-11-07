@@ -488,6 +488,9 @@ func macOSVMDoctorStages(roots []string, rootsSource string) []doctor.Stage {
 	var fda string
 	if tools.Guest != nil {
 		fda = tools.Guest.FullDiskAccess
+		if st, ok := fileVaultStage(tools.Guest.FileVault); ok {
+			stages = append(stages, st)
+		}
 	}
 	var readAt time.Time
 	if rec, ok := macvm.ReadEditRecord(base, man); ok && rec.FullDiskAccess == fda {

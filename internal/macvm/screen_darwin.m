@@ -121,6 +121,7 @@ static NSString *const wardynScreenAdminTerminal = @"Open admin Terminal";
 static NSString *const wardynScreenTypeCode = @"Type code";
 static NSString *const wardynScreenTrustCAs = @"Trust the list's CAs";
 static NSString *const wardynScreenFullDiskAccess = @"Full Disk Access";
+static NSString *const wardynScreenInstallRosetta = @"Install Rosetta";
 static NSString *const wardynScreenNoCerts = @"The install list has no certificates.";
 
 void wardynWindowAction(int n); // screen_darwin.go (cgo export): the open edit window's Go callback n
@@ -130,6 +131,7 @@ void wardynWindowAction(int n); // screen_darwin.go (cgo export): the open edit 
 #define WARDYN_WINDOW_ADMIN_TERMINAL 1
 #define WARDYN_WINDOW_TRUST_CAS 2
 #define WARDYN_WINDOW_FULL_DISK_ACCESS 3
+#define WARDYN_WINDOW_INSTALL_ROSETTA 4
 
 // wardynScreenKeyCode is the key that types c on a US keyboard (kVK_ANSI_*), for the edit code's letters
 // (typableAlphabet in controlcheck.go: on the same key on QWERTY, QWERTZ and AZERTY), or -1 for any other.
@@ -263,6 +265,7 @@ static NSString *wardynScreenReadCode(NSString *path) {
 			trust.toolTip = wardynScreenNoCerts;
 		}
 		add(wardynScreenFullDiskAccess, @selector(act:), WARDYN_WINDOW_FULL_DISK_ACCESS);
+		add(wardynScreenInstallRosetta, @selector(act:), WARDYN_WINDOW_INSTALL_ROSETTA);
 		self.buttons = row;
 	}
 	[self hide];

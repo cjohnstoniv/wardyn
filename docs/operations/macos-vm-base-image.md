@@ -101,6 +101,10 @@
    - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact `sudo security add-trusted-cert` command.
      - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate, and each asks for the code.
      - Check each subject and SHA-256 and confirm macOS's prompt. With nothing to trust the button does nothing and says so.
+   - **Rosetta is off unless you press Install Rosetta**, for Intel-only tools. It runs Apple's installer in the guest through the prep proxy ([The prep proxy](#the-prep-proxy)).
+     - A TLS-inspecting proxy must exempt Apple's hosts (Apple support article 101555).
+     - From macOS 26.4, an Intel app's first launch shows an end-of-Rosetta notice. macOS 27 is the last release with full Rosetta.
+   - **FileVault stays off.** The window and the recheck warn when it reads on. Turn it off in System Settings > Privacy & Security. The base is kept either way.
 5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a fresh random password, which the copy keeps for the next edit, and the code file is deleted.
@@ -120,11 +124,12 @@
   - The Full Disk Access read is one open of macOS's protected TCC database by the guest agent. It reads nothing from the file and writes nothing.
   - `status` also says how the base's guest agent is signed: on this Mac, or ad hoc, which loses Full Disk Access at each tools update. A signing certificate the base does not trust yet is named, with the instruction to run `edit-base`.
   - After a tools update, `status` can say Full Disk Access is unknown. Recheck it in `edit-base`.
+  - `doctor` shows a `file-vault` line when the base last read FileVault as on. It is never a failure.
   - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signing_cert` (`trusted` or `not_trusted`) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
 
 ## The prep proxy
 
-- Stage 2 runs on its own Docker network, made for the job. Its only way out is a prep-only `wardyn-proxy` that allows Apple's software-update hosts on port 443 and nothing else: `swscan.apple.com`, `swcdn.apple.com`, `swdist.apple.com`, `swdownload.apple.com`, `updates.cdn-apple.com`, `mesu.apple.com` and `gdmf.apple.com`.
+- Stage 2 runs on its own Docker network, made for the job. Its only way out is a prep-only `wardyn-proxy` that allows Apple's software-update hosts on port 443 and nothing else: `swscan.apple.com`, `swcdn.apple.com`, `swdist.apple.com`, `swdownload.apple.com`, `updates.cdn-apple.com`, `mesu.apple.com`, `gdmf.apple.com` and `configuration.apple.com`.
 - The proxy holds no credential and does not inspect TLS. The tunnel is opaque, so what is enforced is the host name and port 443. A first use of any other host is denied.
 - The network, proxy and relay are removed when the job's helper exits.
 - **A crash leaves none behind.** At start, before any job gets a network, the runner removes the prep containers and networks that a crash left for its own runner and deployment. A job still in the ledger keeps its own.
@@ -203,6 +208,19 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
   - These include Privacy Preferences Policy Control (TCC), system extension and kernel extension policies, and managed login items.
   - Approve a system extension by hand in `edit-base` instead.
 
+### MDM templates
+
+`deploy/macos-guest/mdm/` holds two profile templates for organisations with MDM. Copy one and replace each `__PLACEHOLDER__`.
+
+| Template | Does | How it installs |
+|---|---|---|
+| `setup-assistant.mobileconfig.template` | Skips the macOS 26 Setup Assistant panes (`SkipSetupItems`) | By hand or MDM. As a `profile` item, one approval in `edit-base` installs it, and the base keeps it |
+| `full-disk-access.mobileconfig.template` | Grants the guest agent Full Disk Access (a TCC payload) | MDM only |
+
+- `__AGENT_PATH__` is `/usr/local/libexec/wardyn-guest-agent`.
+- `__CODE_REQUIREMENT__` is the agent's designated requirement, `identifier "com.wardyn.guest-agent" and certificate root = H"<SHA-1>"`, where the SHA-1 is that of the signing certificate the runner made on the Mac. `codesign -d -r- /usr/local/libexec/wardyn-guest-agent` in `edit-base`'s admin Terminal prints it after `designated => `. Each Mac has its own.
+- `profiles install` can't add either profile since Big Sur. Without MDM, use System Settings.
+
 ### Guest posture
 
 Stage 2 and the `edit-base` recheck read the guest's posture. The caps carry it as the base's `guest`, beside the Mac's own posture and never in it.
@@ -256,7 +274,10 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | `mesu.apple.com` | Software-update asset metadata |
 | `gateway.icloud.com` | iCloud background services |
 | `init-kt.apple.com` | Key transparency lookups |
+| `mask.icloud.com`, `mask-h2.icloud.com` | iCloud Private Relay |
+| `proxy.safebrowsing.apple` | Safari Safe Browsing |
 
+- The list holds exact names, never wildcards. Push courier hosts, Apple News hosts and Apple addresses reached by IP are not on it: a run records a denial for each.
 - The list is `deploy/macos-guest/boot-hosts.json`. It grows only from hosts a real Mac pass records.
 - A run that allows all egress is left as it is.
 - To reach one of these hosts, allow it: an exact name or a wildcard in the run's policy. That host is then handled as any allowed host.

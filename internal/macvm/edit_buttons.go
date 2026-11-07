@@ -79,6 +79,7 @@ func (b *editButtons) wire(text *WindowText) {
 		}
 		return "System Settings is open at Full Disk Access in the VM. Add " + guestagent.MacAgentBinaryPath + " with its + button, and turn it on."
 	})
+	b.wireRosetta(text)
 }
 
 // act is a button's callback: it asks the guest for the action and shows what came of it.
@@ -173,16 +174,22 @@ func (b *editButtons) readGuest(ctx context.Context) string {
 	if rec.AgentSignature == AgentSignedThisMac {
 		parts = append(parts, "the agent's signing certificate "+verify("codeSign", agentSigningCertPath()))
 	}
-	fda := unread
+	fda, fileVault := unread, ""
 	if p, ok := b.g.(interface {
 		Posture(ctx context.Context) (guestagent.ToolsPosture, error)
 	}); ok {
-		if posture, err := p.Posture(ctx); err == nil && words(posture.FullDiskAccess) != "" {
-			fda = words(posture.FullDiskAccess)
+		if posture, err := p.Posture(ctx); err == nil {
+			fileVault = posture.FileVault
+			if words(posture.FullDiskAccess) != "" {
+				fda = words(posture.FullDiskAccess)
+			}
 		}
 	}
 	parts = append(parts, "Full Disk Access "+fda)
 	line := "Read by the guest now: " + strings.Join(parts, "; ") + "."
+	if warn := FileVaultWarning(fileVault); warn != "" {
+		line += " " + warn
+	}
 	if !hasCA(rec.Items) {
 		line = editNoCerts + " " + line
 	}

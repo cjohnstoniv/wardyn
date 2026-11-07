@@ -309,6 +309,9 @@ type GuestPosture struct {
 	// FullDiskAccess is "allowed" or "refused" for the guest agent, as the agent read it; empty when that
 	// read did not say, or when the agent that read it was replaced by a build whose signature may differ.
 	FullDiskAccess string `json:"full_disk_access,omitempty"`
+	// FileVault is guestagent.FileVaultOn or FileVaultOff as the agent read it; empty when that read did
+	// not say. The base is meant to keep it off.
+	FileVault string `json:"file_vault,omitempty"`
 }
 
 // GuestPosture values.
@@ -367,8 +370,13 @@ func readPosture(ctx context.Context, g ToolsGuest, items []ItemRecord) *GuestPo
 	if pg, ok := g.(interface {
 		Posture(ctx context.Context) (guestagent.ToolsPosture, error)
 	}); ok {
-		if tp, err := pg.Posture(ctx); err == nil && (tp.FullDiskAccess == "allowed" || tp.FullDiskAccess == "refused") {
-			p.FullDiskAccess = tp.FullDiskAccess
+		if tp, err := pg.Posture(ctx); err == nil {
+			if tp.FullDiskAccess == "allowed" || tp.FullDiskAccess == "refused" {
+				p.FullDiskAccess = tp.FullDiskAccess
+			}
+			if tp.FileVault == guestagent.FileVaultOn || tp.FileVault == guestagent.FileVaultOff {
+				p.FileVault = tp.FileVault
+			}
 		}
 	}
 	return p
