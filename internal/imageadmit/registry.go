@@ -211,15 +211,21 @@ func (c *RegistryClient) checkRedirect(req *http.Request, via []*http.Request) e
 	if req.URL.Scheme != "https" {
 		return fmt.Errorf("%w: redirect to %s", ErrRefusedTarget, req.URL.Scheme)
 	}
-	if originOf(req.URL) == originOf(via[len(via)-1].URL) {
-		return nil
-	}
-	if req.Context().Value(tokenRequestKey{}) != nil {
+	if req.Context().Value(tokenRequestKey{}) != nil && originOf(req.URL) != originOf(via[len(via)-1].URL) {
 		// A token request carries the registry's credential (a Basic header or a refresh token in the body,
 		// which a 307 or 308 replays). It is never followed to another origin.
 		return fmt.Errorf("%w: the token realm redirected to %s", ErrRefusedTarget, req.URL.Host)
 	}
+	// Go copies the ORIGINAL request's headers onto every hop and keeps Authorization for subdomains and across
+	// ports, so the copied header is never trusted. Each hop's Authorization is rebuilt from what is approved
+	// for that exact origin: the header this client set for it (a Bearer from its own realm, a Basic it chose),
+	// else the credential configured for it.
 	req.Header.Del("Authorization")
+	dest := originOf(req.URL)
+	if g, ok := req.Context().Value(authzGrantKey{}).(authzGrant); ok && g.origin == dest {
+		req.Header.Set("Authorization", g.header)
+		return nil
+	}
 	if c.auth != nil {
 		if a, ok, err := c.auth.Lookup(normalizeHost(req.URL.Host)); err == nil && ok && a.Username != "" {
 			req.SetBasicAuth(a.Username, a.Password)
@@ -227,6 +233,12 @@ func (c *RegistryClient) checkRedirect(req *http.Request, via []*http.Request) e
 	}
 	return nil
 }
+
+// authzGrant is an Authorization value this client set for one origin; redirects inherit it in the request context
+// and reuse it only for that same origin.
+type authzGrant struct{ origin, header string }
+
+type authzGrantKey struct{}
 
 // tokenRequestKey marks a request to a token realm in its context, which redirects inherit.
 type tokenRequestKey struct{}
@@ -365,7 +377,11 @@ func (c *RegistryClient) fetch(ctx context.Context, ref Ref, path string, q url.
 	scope := "repository:" + ref.Repo + ":pull"
 	authz := c.cachedToken(ref.Registry, scope)
 	for attempt := 0; ; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		rctx := ctx
+		if authz != "" {
+			rctx = context.WithValue(ctx, authzGrantKey{}, authzGrant{origin: originOf(u), header: authz})
+		}
+		req, err := http.NewRequestWithContext(rctx, http.MethodGet, u.String(), nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -521,9 +537,15 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 		}
 	} else {
 		realm.RawQuery = q.Encode()
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, realm.String(), nil)
-		if req != nil && have && cred.Username != "" {
-			req.SetBasicAuth(cred.Username, cred.Password)
+		rctx := ctx
+		basic := ""
+		if have && cred.Username != "" {
+			basic = "Basic " + base64.StdEncoding.EncodeToString([]byte(cred.Username+":"+cred.Password))
+			rctx = context.WithValue(ctx, authzGrantKey{}, authzGrant{origin: originOf(realm), header: basic})
+		}
+		req, err = http.NewRequestWithContext(rctx, http.MethodGet, realm.String(), nil)
+		if req != nil && basic != "" {
+			req.Header.Set("Authorization", basic)
 		}
 	}
 	if err != nil {

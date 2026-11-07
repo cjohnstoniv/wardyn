@@ -219,3 +219,16 @@ func TestSameOriginRedirectKeepsTheRegistryToken(t *testing.T) {
 		t.Fatalf("authorized hits = %v, want the blob read and then /storage/blob, both carrying our Bearer", hits)
 	}
 }
+
+func TestCheckRedirectNeverTrustsTheCopiedHeader(t *testing.T) {
+	c := newTestClient(t, nil, testGuard(), nil)
+	prev, _ := http.NewRequest("GET", "https://reg.example.com/a", nil)
+	req, _ := http.NewRequest("GET", "https://reg.example.com/b", nil)
+	req.Header.Set("Authorization", "Bearer copied-by-go")
+	if err := c.checkRedirect(req, []*http.Request{prev}); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("a same-origin hop with no grant kept %q", got)
+	}
+}

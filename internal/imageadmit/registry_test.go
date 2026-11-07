@@ -339,6 +339,9 @@ func TestCheckRedirectOrigins(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := mk(tc.to)
+			// The client grants its header to the origin it was set for; the copy Go made is never the source.
+			fromURL, _ := url.Parse(tc.from)
+			req = req.WithContext(context.WithValue(req.Context(), authzGrantKey{}, authzGrant{origin: originOf(fromURL), header: "Bearer secret"}))
 			err := c.checkRedirect(req, []*http.Request{mk(tc.from)})
 			if tc.refused {
 				if !errors.Is(err, ErrRefusedTarget) {
