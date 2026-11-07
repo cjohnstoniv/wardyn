@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -252,9 +254,16 @@ func TestGateApproveEachDelayedRaiseCannotRespend(t *testing.T) {
 	args := `{"id":"ENG-1"}`
 	cp.holdRaise, cp.raiseHeld = make(chan struct{}), make(chan struct{})
 	release, held := cp.holdRaise, cp.raiseHeld
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(letGo) // an early failure must not leave the control plane's handler blocked
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- gatePost(t, f, "mcp__linear__delete_issue", args) }()
-	<-held
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first gate call never reached the control plane")
+	}
 	if rec := gatePost(t, f, "mcp__linear__delete_issue", args); rec.Code != http.StatusCreated || cp.count() != 1 {
 		t.Fatalf("second gate call: answer %d %q, rows %d; want it folded into the one row", rec.Code, rec.Body.String(), cp.count())
 	}
@@ -262,9 +271,14 @@ func TestGateApproveEachDelayedRaiseCannotRespend(t *testing.T) {
 	if rec := f.post(t, mcpToken("claude-code"), "linear", eachCall(1, "delete_issue", args)); rec.Code != http.StatusOK || f.up.hitCount() != 1 {
 		t.Fatalf("answer %d %q, upstream hits %d; want the call sent once on A", rec.Code, rec.Body.String(), f.up.hitCount())
 	}
-	close(release)
-	if rec := <-done; rec.Code == http.StatusInternalServerError {
-		t.Fatalf("held gate call: answer %d %q", rec.Code, rec.Body.String())
+	letGo()
+	select {
+	case rec := <-done:
+		if rec.Code == http.StatusInternalServerError {
+			t.Fatalf("held gate call: answer %d %q", rec.Code, rec.Body.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the held gate call never finished")
 	}
 	wantText(t, f.post(t, mcpToken("claude-code"), "linear", eachCall(2, "delete_issue", args)), "waiting for a person")
 	if cp.count() != 2 || f.up.hitCount() != 1 {

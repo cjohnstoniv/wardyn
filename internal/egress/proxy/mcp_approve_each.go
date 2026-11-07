@@ -103,12 +103,14 @@ type mcpCalls struct {
 
 // mcpCallKey is one call key's state: its current approval, if any, and the approvals already
 // spent on it. A spent approval is never spent again: its id stays in spent while any call of
-// the key is still waiting, since that call may yet read a delayed answer naming it. Once no call
-// of the key waits, no answer can arrive, so the set is dropped.
+// the key is still waiting, since that call may yet read a delayed answer naming it. A gate call in
+// flight counts the same: its raise may be answered late with an approval already spent. Once no
+// call of the key waits and no gate call is in flight, no answer can arrive, so the set is dropped.
 type mcpCallKey struct {
 	id    uuid.UUID     // the current approval; uuid.Nil when there is none
 	state approvalState // what id came to: apPending, apApproved or apDenied
 	live  int           // calls of this key holding a waiting slot
+	gates int           // gate calls of this key in flight (gateEnter), which hold no waiting slot
 	spent map[uuid.UUID]bool
 }
 
@@ -155,9 +157,9 @@ func (c *mcpCalls) leave(key string) {
 	}
 }
 
-// tidy drops the spent set once no call of key waits, and the key once nothing is left of it.
+// tidy drops the spent set once no call of key waits or is in the gate, and the key once nothing is left of it.
 func (c *mcpCalls) tidy(key string, k *mcpCallKey) {
-	if k.live > 0 {
+	if k.live > 0 || k.gates > 0 {
 		return
 	}
 	k.spent = nil
@@ -580,27 +582,17 @@ func (c *mcpCalls) rawTool(server, shown string) (string, bool) {
 	return "", false
 }
 
-// look is key's current approval as the gate reads it, which holds no waiting slot; full says key
-// is new and the table has no room for it.
-func (c *mcpCalls) look(key string) (id uuid.UUID, state approvalState, full bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if k := c.byKey[key]; k != nil {
-		return k.id, k.state, false
-	}
-	return uuid.Nil, apNone, len(c.byKey) >= maxMCPCallKeys
-}
-
-// file records an approval the gate raised and returns the one to answer: the new one when key
-// has no current approval, else the current one. uuid.Nil when id was already spent or the table
-// is full.
-func (c *mcpCalls) file(key string, id uuid.UUID) uuid.UUID {
+// gateEnter files key for a gate call before it looks or raises, and holds it until gateLeave:
+// the key and its spent set stay while the call is in flight, so a raise answered late with an
+// approval the broker already used finds it spent. It takes no waiting slot, since a gate call
+// holds no connection open. False when key is new and the table has no room for it.
+func (c *mcpCalls) gateEnter(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	k := c.byKey[key]
 	if k == nil {
 		if len(c.byKey) >= maxMCPCallKeys {
-			return uuid.Nil
+			return false
 		}
 		if c.byKey == nil {
 			c.byKey = map[string]*mcpCallKey{}
@@ -608,7 +600,38 @@ func (c *mcpCalls) file(key string, id uuid.UUID) uuid.UUID {
 		k = &mcpCallKey{}
 		c.byKey[key] = k
 	}
-	if k.spent[id] {
+	k.gates++
+	return true
+}
+
+// gateLeave ends a gateEnter.
+func (c *mcpCalls) gateLeave(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if k := c.byKey[key]; k != nil {
+		k.gates--
+		c.tidy(key, k)
+	}
+}
+
+// look is key's current approval as the gate reads it.
+func (c *mcpCalls) look(key string) (id uuid.UUID, state approvalState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if k := c.byKey[key]; k != nil {
+		return k.id, k.state
+	}
+	return uuid.Nil, apNone
+}
+
+// file records an approval a gate call raised and returns the one to answer: the new one when key
+// has no current approval, else the current one. uuid.Nil when id was already spent. The caller
+// is between gateEnter and gateLeave, so key and its spent set are there.
+func (c *mcpCalls) file(key string, id uuid.UUID) uuid.UUID {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := c.byKey[key]
+	if k == nil || k.spent[id] {
 		return uuid.Nil
 	}
 	if k.id == uuid.Nil {
@@ -658,7 +681,12 @@ func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, ma
 		return
 	}
 	calls, key := &p.mcp.calls, scope.CallSHA256
-	id, state, full := calls.look(key)
+	if !calls.gateEnter(key) {
+		passOn() // no room to remember another call: the broker refuses or asks
+		return
+	}
+	defer calls.gateLeave(key)
+	id, state := calls.look(key)
 	if id != uuid.Nil {
 		// A person may have decided since: learn it, so a declined call is refused here and a
 		// closed one asks again.
@@ -672,7 +700,7 @@ func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, ma
 				calls.update(key, id, apNone)
 			}
 		}
-		id, state, full = calls.look(key)
+		id, state = calls.look(key)
 	}
 	switch {
 	case id != uuid.Nil && state == apDenied:
@@ -681,9 +709,6 @@ func (p *Proxy) gateApproveEach(w http.ResponseWriter, r *http.Request, tool, ma
 		return
 	case id != uuid.Nil:
 		writeGateRow(w, http.StatusOK, id)
-		return
-	case full:
-		passOn()
 		return
 	}
 	id, err := p.raiseMCPCall(r.Context(), scope, uuid.Nil)
