@@ -562,6 +562,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 - first-use approval ([`internal/types/policy.go`](internal/types/policy.go): `always_deny` / `deny_with_review` / `wait_for_review`, which holds the *same* in-flight connection open for a live operator decision and resumes it on approve) —
 - each decision itself carries a scope, `once` / `run` / `until` / `always` ([docs/POLICIES.md](docs/POLICIES.md)), bounding how far it reaches from one connection up to a permanent workspace-wide allow/deny;
 - proxy-side credential injection
+- The order of these checks, and each refusal's `rule_source`: [threat model §4.2](threatmodel/THREAT-MODEL.md#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions).
 
 ## Deployment surface (anti-sprawl constraint)
 

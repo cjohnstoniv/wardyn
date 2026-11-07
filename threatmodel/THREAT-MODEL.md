@@ -242,26 +242,14 @@ This document states what Wardyn defends, what it does not, and for each load-be
 | **B14 — macOS VM guest vs. the Mac that runs it** | 🟡 partial **[0.10]** | A macOS guest under Apple's hypervisor on a company-managed Mac: one NIC to the run's own proxy, a managed-Mac gate that is two assertions, and a ledger any local account can starve: [detail](#b14--macos-vm-guest-vs-the-mac-that-runs-it). |
 | **B15 — Linux VM guest vs. the runner host** | 🟡 partial **[0.10]** | A Linux guest under QEMU/KVM in the run's unprivileged agent container (Docker), or the run's pod under the `CC3` RuntimeClass (Kubernetes): [detail](#b15--linux-vm-guest-vs-the-runner-host). |
 
-On a single-operator machine the limits nest: Wardyn never *adds* power beyond
-what the operating user already has.
+A sandbox can at most reach what the operating user can, and Wardyn never adds power beyond it. Each limit layer then only narrows: the Wardyn boundary, the deployment and unit ceilings, restrictions, the run's policy, the person's walls and the run's wall preset.
 
-```mermaid
-flowchart TB
-  %% nesting: containment rings, not flow — this diagram has no edges by design
-  subgraph host["The operating user — everything YOU can do is the hard ceiling"]
-    subgraph ceiling["Wardyn policy ceiling — what the operator allows at all"]
-      subgraph run["One run's grant — the MINIMUM its task needs"]
-        g["repo-scoped, short-lived minted credential<br/>this task's egress allowlist<br/>only onboarded workspace mounts"]
-      end
-    end
-  end
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/img/nested-limits-dark.svg">
+  <img src="../docs/img/nested-limits.svg" alt="Nested limits from the organisation's boundary inward: the Wardyn boundary, the deployment default and unit profiles, restrictions, the run's policy, your walls and the wall preset, each only narrowing the run inside.">
+</picture>
 
-A sandbox can at most reach what the operating user can. Each limit layer then
-only narrows: the Wardyn boundary, the deployment and unit ceilings,
-restrictions, the run's policy, the person's walls and the run's wall preset
-([how it narrows](../docs/operations/boundary.md#how-it-narrows)). A run gets
-what every layer allows.
+A run gets what every layer allows. The run's policy record names the layer that decided each value; the layer names and their order are in [how it narrows](../docs/operations/boundary.md#how-it-narrows).
 
 ### B3 — Sandbox vs. MCP/tool gateway
 
@@ -925,6 +913,23 @@ is not the deployment described above.**
     - **A compromised wardynd process still sees every value it masks**, and a refresh in flight on an old lock holder can still race a new holder across a Postgres failover (the person signs in again).
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/img/egress-checks-dark.svg">
+  <img src="../docs/img/egress-checks.svg" alt="The egress proxy's checks in order: a literal IP address, a host reached only by a brokered route, host, port and method, a repeated private address, an unlisted host's first-use mode and the address after DNS, each with the rule_source of its refusal, then allow and the credential.">
+</picture>
+
+The proxy runs these checks in order (`evaluate`, [`internal/egress/proxy/proxy.go`](../internal/egress/proxy/proxy.go)); the first refusal ends the request.
+
+| Step | Check | Refused as |
+|---|---|---|
+| 1 | A literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `builtin:private-ip` |
+| 2 | A host reached only by a brokered route: an MCP server, a local model server | `brokered:mcp:direct`, `brokered:local-model` |
+| 3 | Host, port and method (`gateConnect`), then a push to a code host under `deny_all` | `policy:denied`, `policy:port`, `policy:method`, `policy:evaluator-error`, `brokered:git:push-deny-all-forge` |
+| 4 | A private address refused before (`privateIPMemoHit`) | Refused again, with no new decision row |
+| 5 | A host the policy does not list, by `first_use_approval`: `always_deny` refuses; `deny_with_review` refuses and raises a request; `wait_for_review` holds until a person answers | `policy:default-deny`; `approval:pending`; `approval:denied`, or `approval:pending` with no answer in time |
+| 6 | The address after DNS (`egressTarget`) | `builtin:private-ip`, `builtin:resolve-failed` |
+| 7 | Allowed, as `policy:allowed` or `approval:<id>`; the proxy adds the credential where it can read the request | |
 
 - A literal-IP target is denied before policy or approval run (`evaluate` step 0, `literalIPGuard`
   in [`internal/egress/proxy/literal_ip_guard.go`](../internal/egress/proxy/literal_ip_guard.go)) —
