@@ -339,7 +339,7 @@ Checkpoints signed by the replaced key keep verifying, so earlier receipts stay 
 
 ### If the key is stolen
 
-`wardynd -rotate-audit-receipt-key -retire-previous` is the same mode, and marks the replaced key retired. A receipt whose checkpoint a retired key signed fails `key_retired`, including genuine ones from before the theft: re-fetch them.
+`wardynd -rotate-audit-receipt-key -retire-previous` is the same mode, and marks the replaced key retired. Unlike an ordinary rotation, where the old key stays valid, a retired key fails every receipt whose checkpoint it signed with `key_retired`, genuine ones from before the theft included. Fetch the key set again to enforce the retirement; fetching a receipt again does not re-sign it, so those receipts stay unverifiable. Your off-box copies of earlier statements are the evidence for that history.
 
 - **What a thief can do.** Forge checkpoints that verify against a key file listing the stolen key, and so cover a rewrite. Retiring it ends that for every verifier that fetches the new file.
 - **A forged checkpoint.** One that reaches the log after wardynd started is logged, counted as `foreign_row` and never chained to; a new genesis starts at the chain head. A forgery already there at the signer's first read after start is chained to. Rows between a late forged checkpoint and the new genesis are not covered by a receipt.
