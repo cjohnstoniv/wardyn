@@ -56,17 +56,15 @@ const (
 		"Ask an admin to update the profile"
 	imageSignatureMissingMsg = "Image %s has no signature from a signer this organisation trusts for it (%s). " +
 		"Sign it and push the signature to its registry, or launch with a signed image"
-	imageSignatureInvalidMsg     = "Image %s is signed, but not by a signer this organisation trusts for it: found %s from %s; %s requires %s from %s"
-	imageSignatureInvalidKeyMsg  = "Image %s is signed, but not by a signer this organisation trusts for it: signed with key %s; %s requires key %s"
-	imageAttestationMissingMsg   = "Image %s has no %s attestation signed by %s, which this organisation requires"
+	imageSignatureInvalidMsg    = "Image %s is signed, but not by a signer this organisation trusts for it: found %s from %s; %s requires %s from %s"
+	imageSignatureInvalidKeyMsg = "Image %s is signed, but not by a signer this organisation trusts for it: signed with key %s; %s requires key %s"
+	imageAttestationMissingMsg  = "Image %s has no %s attestation signed by %s, which this organisation requires"
+	// The second %s is the check's own cause (imageadmit.Verdict.Detail): a host and what it answered.
 	imageAdmissionUnavailableMsg = "Wardyn could not check image %s: %s. Try again, or ask an admin"
-)
-
-// The causes the step itself names in imageAdmissionUnavailableMsg.
-const (
-	imageAdmitterMissingDetail = "image admission is not running in this control plane"
-	imagePolicyUnusableDetail  = "this organisation's image trust settings could not be loaded (a trust root file may be missing or unreadable)"
-	imageNoAnswerDetail        = "the check gave no usable answer"
+	imageAdmitterMissingMsg      = "Wardyn could not check image %s: image admission is not running in this control plane. Ask an admin"
+	imagePolicyUnusableMsg       = "Wardyn could not check image %s: this organisation's image trust settings could not be loaded " +
+		"(a trust root file may be missing or unreadable). Ask an admin"
+	imageNoAnswerMsg = "Wardyn could not check image %s: the check gave no usable answer. Try again, or ask an admin"
 )
 
 var errImageAdmissionSiteUnreadable = errors.New("read the site config for image admission")
@@ -74,11 +72,19 @@ var errImageAdmissionSiteUnreadable = errors.New("read the site config for image
 // stepImageAdmission holds a governed member's image to image admission (images.admission and the
 // profile's required_image_signers), at create and Review. The preview makes no registry read.
 func (s *Server) stepImageAdmission(f *runFold, rec *foldRecorder) bool {
-	return !s.imageAdmission(f).write(s, f.w, f.r)
+	v, warning, refusal := s.imageAdmission(f.r.Context(), *f.req, f.carriedImage, f.ceiling.Limits.RequiredImageSigners)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	f.admission = v
+	if warning != "" {
+		f.policyWarns = append(f.policyWarns, warning)
+	}
+	return true
 }
 
-// imageAdmission decides the member's image and leaves f.admission (the run row's verdict) and, in audit
-// mode, the warning on f.policyWarns.
+// imageAdmission decides the member's image: the verdict the run row and the run.create row keep (nil when
+// no check applies), audit mode's warning ("" for none), or the refusal.
 //
 // Default off: with the site mode off and no profile signer it returns before any check, so nothing an
 // install refused, wrote or answered changes until an admin turns it on. A profile's signers are enforced
@@ -86,23 +92,22 @@ func (s *Server) stepImageAdmission(f *runFold, rec *foldRecorder) bool {
 // (createDigestInput): the member's image, an attached workspace's base image, or a policy-carried one; the
 // convention image is not a member's choice. Operators and the break-glass admin are not checked, as with
 // the digest rule.
-func (s *Server) imageAdmission(f *runFold) *runRefusal {
-	ctx := f.r.Context()
-	ref := createDigestInput(*f.req, f.carriedImage)
+func (s *Server) imageAdmission(ctx context.Context, req createRunRequest, carried string, profile []string) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+	ref := createDigestInput(req, carried)
 	if ref == "" || s.runUngoverned(ctx) {
-		return nil
+		return nil, "", nil
 	}
 	sc, ok := s.siteConfigSnapshot(ctx)
 	if s.cfg.Store != nil && !ok {
-		return runServerError("resolve image admission", errImageAdmissionSiteUnreadable)
+		return nil, "", runServerError("resolve image admission", errImageAdmissionSiteUnreadable)
 	}
 	var adm *types.SiteImageAdmission
 	if sc.Images != nil {
 		adm = sc.Images.Admission
 	}
-	mode, profile := adm.EffectiveMode(), f.ceiling.Limits.RequiredImageSigners
+	mode := adm.EffectiveMode()
 	if mode == types.ImageAdmissionOff && len(profile) == 0 {
-		return nil
+		return nil, "", nil
 	}
 	siteEnforced := mode == types.ImageAdmissionEnforce
 	held := types.ImageAdmissionAudit
@@ -110,65 +115,62 @@ func (s *Server) imageAdmission(f *runFold) *runRefusal {
 		held = types.ImageAdmissionEnforce
 	}
 	// A macOS VM never runs the member image (its only container is the egress proxy), so there is nothing to check.
-	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
-		f.admission = &types.ImageAdmissionVerdict{Mode: held, Verdict: types.ImageAdmissionNotApplicable}
-		return nil
+	if types.MachineKind(req.MachineKind).IsMacOSVM() {
+		return &types.ImageAdmissionVerdict{Mode: held, Verdict: types.ImageAdmissionNotApplicable}, "", nil
 	}
+	var verdict *types.ImageAdmissionVerdict
 	if held == types.ImageAdmissionEnforce {
-		v := s.checkImage(ctx, adm, ref, siteEnforced, profile)
-		if refusal := imageAdmissionRefusal(ref, v); refusal != nil {
-			return refusal
+		v, refusal := s.checkImage(ctx, adm, ref, siteEnforced, profile)
+		if refusal != nil {
+			return nil, "", refusal
 		}
 		pinned, err := imageAdmissionPinnedRef(ref, v.Digest)
 		if err != nil {
-			return runServerError("pin the admitted image", err)
+			return nil, "", runServerError("pin the admitted image", err)
 		}
-		f.admission = admittedImage(types.ImageAdmissionEnforce, v)
-		f.admission.PinnedRef = pinned
+		verdict = admittedImage(types.ImageAdmissionEnforce, v)
+		verdict.PinnedRef = pinned
 	}
 	if mode != types.ImageAdmissionAudit {
-		return nil
+		return verdict, "", nil
 	}
 	// Audit: the site's signers are asked on their own and only reported. Nothing is refused or pinned here.
-	v := s.checkImage(ctx, adm, ref, true, nil)
-	refusal := imageAdmissionRefusal(ref, v)
+	v, refusal := s.checkImage(ctx, adm, ref, true, nil)
 	switch {
-	case refusal != nil && f.admission != nil:
-		f.admission.SiteAudit = refusal.body.Reason
-	case refusal != nil:
-		f.admission = &types.ImageAdmissionVerdict{Mode: types.ImageAdmissionAudit, Verdict: types.ImageAdmissionWouldRefuse,
+	case refusal == nil && verdict == nil:
+		return admittedImage(types.ImageAdmissionAudit, v), "", nil
+	case refusal == nil:
+		return verdict, "", nil
+	case verdict != nil:
+		verdict.SiteAudit = refusal.body.Reason
+	default:
+		verdict = &types.ImageAdmissionVerdict{Mode: types.ImageAdmissionAudit, Verdict: types.ImageAdmissionWouldRefuse,
 			Reason: refusal.body.Reason, Digest: v.Digest}
-	case f.admission == nil:
-		f.admission = admittedImage(types.ImageAdmissionAudit, v)
 	}
-	if refusal != nil {
-		f.policyWarns = append(f.policyWarns, imageAdmissionAuditPrefix+refusal.body.Error)
-	}
-	return nil
+	return verdict, imageAdmissionAuditPrefix + refusal.body.Error, nil
 }
 
-// checkImage is one check: coverage first, with no registry read, then the registry and the signatures. A
-// check that could not be made is an image_admission_unavailable verdict whose Detail is the public cause;
-// its error goes to the log only.
-func (s *Server) checkImage(ctx context.Context, adm *types.SiteImageAdmission, ref string, site bool, profile []string) imageadmit.Verdict {
+// checkImage is one check: coverage first, with no registry read, then the registry and the signatures. The
+// refusal is nil when the image is admitted. An error behind an unavailable answer goes to the log only.
+func (s *Server) checkImage(ctx context.Context, adm *types.SiteImageAdmission, ref string, site bool, profile []string) (imageadmit.Verdict, *runRefusal) {
 	a := s.cfg.ImageAdmitter
 	if a == nil {
-		return imageadmit.Verdict{Reason: imageadmit.AdmissionUnavailable, Detail: imageAdmitterMissingDetail}
+		return imageadmit.Verdict{}, runError(http.StatusServiceUnavailable, reasonImageAdmissionUnavailable, fmt.Sprintf(imageAdmitterMissingMsg, ref))
 	}
 	req, v, err := a.Require(adm, ref, site, profile)
 	switch {
 	case err != nil:
 		slog.ErrorContext(ctx, "api: image admission settings could not be compiled", slog.String("image", ref), slog.Any("err", err))
-		return imageadmit.Verdict{Reason: imageadmit.AdmissionUnavailable, Detail: imagePolicyUnusableDetail}
+		return imageadmit.Verdict{}, runError(http.StatusServiceUnavailable, reasonImageAdmissionUnavailable, fmt.Sprintf(imagePolicyUnusableMsg, ref))
 	case v != nil:
-		return *v
+		return *v, imageAdmissionRefusal(ref, *v)
 	}
 	got, err := a.Admit(ctx, req)
 	if err != nil {
 		slog.WarnContext(ctx, "api: image admission check could not be made", slog.String("image", ref), slog.Any("err", err))
 		got.Reason = imageadmit.AdmissionUnavailable
 	}
-	return got
+	return got, imageAdmissionRefusal(ref, got)
 }
 
 func admittedImage(mode string, v imageadmit.Verdict) *types.ImageAdmissionVerdict {
@@ -210,13 +212,14 @@ func imageAdmissionRefusal(ref string, v imageadmit.Verdict) *runRefusal {
 	case imageadmit.AttestationMissing:
 		reason = reasonImageAttestationMissing
 		msg = fmt.Sprintf(imageAttestationMissingMsg, named, v.Want, v.Signer)
-	default:
-		// AdmissionUnavailable, or a reason this build does not know: never an admission.
-		detail := v.Detail
-		if v.Reason != imageadmit.AdmissionUnavailable || detail == "" {
-			detail = imageNoAnswerDetail
+	case imageadmit.AdmissionUnavailable:
+		if v.Detail != "" {
+			return runError(http.StatusServiceUnavailable, reasonImageAdmissionUnavailable, fmt.Sprintf(imageAdmissionUnavailableMsg, ref, v.Detail))
 		}
-		return runError(http.StatusServiceUnavailable, reasonImageAdmissionUnavailable, fmt.Sprintf(imageAdmissionUnavailableMsg, ref, detail))
+		fallthrough
+	default:
+		// A reason this build does not know is never an admission.
+		return runError(http.StatusServiceUnavailable, reasonImageAdmissionUnavailable, fmt.Sprintf(imageNoAnswerMsg, ref))
 	}
 	return runError(http.StatusForbidden, reason, msg)
 }
