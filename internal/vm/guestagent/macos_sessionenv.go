@@ -297,9 +297,10 @@ func (d *Desktop) StartSessionEnv(ctx context.Context, p SessionEnvPaths, agentU
 	return done
 }
 
-// applySessionEnv waits, up to wait, for the agent account to be at the console, sets env in its GUI
-// session, and records the outcome in the status file. A ctx that ends first (the stop scrub) leaves the
-// status as it was.
+// applySessionEnv waits for the agent account to be at the console, sets env in its GUI session, and
+// records the outcome in the status file. wait bounds the whole step, the set included: a launchctl that
+// never returns ends it failed (setenv_failed), so the status never stays pending past the host's own wait.
+// A ctx that ends first (the stop scrub) leaves the status as it was.
 func (d *Desktop) applySessionEnv(ctx context.Context, p SessionEnvPaths, agentUID uint32, env []string, every, wait time.Duration) SessionEnvStatus {
 	pending := SessionEnvStatus{State: SessionEnvPending}
 	finish := func(st SessionEnvStatus) SessionEnvStatus {
@@ -311,34 +312,49 @@ func (d *Desktop) applySessionEnv(ctx context.Context, p SessionEnvPaths, agentU
 	if len(env) == 0 {
 		return finish(SessionEnvStatus{State: SessionEnvSet, Via: sessionEnvViaNone})
 	}
-	timeout := time.NewTimer(wait)
-	defer timeout.Stop()
+	step, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
 	for {
 		if ctx.Err() != nil {
 			return pending
 		}
-		if uid, err := d.Console.Console(ctx); err == nil && uid == agentUID {
+		if uid, err := d.Console.Console(step); err == nil && uid == agentUID {
 			break
 		}
 		select {
 		case <-ctx.Done():
 			return pending
-		case <-timeout.C:
+		case <-step.Done():
 			return finish(SessionEnvStatus{State: SessionEnvFailed, Reason: SessionEnvNotSignedIn})
 		case <-time.After(every):
 		}
 	}
-	via, err := d.SetSessionEnv(ctx, env)
+	// The setter runs on its own, so one that ignores step's end still cannot hold the status.
+	type result struct {
+		via string
+		err error
+	}
+	res := make(chan result, 1)
+	go func() {
+		via, err := d.SetSessionEnv(step, env)
+		res <- result{via, err}
+	}()
+	var r result
+	select {
+	case r = <-res:
+	case <-step.Done():
+		r.err = fmt.Errorf("the desktop session did not take the settings within %v: %w", wait, step.Err())
+	}
 	switch {
 	case ctx.Err() != nil:
 		return pending
-	case errors.Is(err, ErrNoConsoleUser):
+	case errors.Is(r.err, ErrNoConsoleUser):
 		return finish(SessionEnvStatus{State: SessionEnvFailed, Reason: SessionEnvNotSignedIn})
-	case err != nil:
-		slog.Warn("guest agent: the run's settings are not in the desktop session", "err", err)
+	case r.err != nil:
+		slog.Warn("guest agent: the run's settings are not in the desktop session", "err", r.err)
 		return finish(SessionEnvStatus{State: SessionEnvFailed, Reason: SessionEnvSetenvFailed})
 	}
-	return finish(SessionEnvStatus{State: SessionEnvSet, Vars: len(env), Via: via})
+	return finish(SessionEnvStatus{State: SessionEnvSet, Vars: len(env), Via: r.via})
 }
 
 // SessionEnvRetry is the retry a person runs from the window's Terminal (agent-run --session-env-retry):

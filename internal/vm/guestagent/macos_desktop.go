@@ -47,7 +47,8 @@ type Desktop struct {
 	Console ConsoleUser
 	// VNCSettings is the settings file SetPassword writes; "" is MacVNCSettingsPath.
 	VNCSettings string
-	// SessionEnvEvery and SessionEnvWait are StartSessionEnv's console poll; zero is 2 s and 10 min.
+	// SessionEnvEvery is StartSessionEnv's console poll, and SessionEnvWait bounds its whole GUI step, the set included;
+	// zero is 2 s and 10 min.
 	SessionEnvEvery, SessionEnvWait time.Duration
 
 	mu       sync.Mutex

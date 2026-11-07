@@ -23,9 +23,11 @@ import (
 //     is never held;
 //   - an open asked for by hand while the settings are pending is refused with a sentence, and the same
 //     sentence is the run's window status;
-//   - failed does not hold the window: it opens, and the status says what failed and how to retry.
+//   - failed does not hold the window: it opens, and the status says what failed and how to retry;
+//   - an at-start wait that ends with no answer after the guest said pending (the wait ran out, or the status
+//     could not be read again) counts as failed, so the window opens and says the same.
 //
-// A guest that cannot say (an older one, a paused or unreachable VM) holds nothing.
+// A guest that never says (an older one, a paused or unreachable VM) holds nothing and adds no sentence.
 var (
 	// macGUIEnvPollEvery is how often the at-start wait asks the guest.
 	macGUIEnvPollEvery = 2 * time.Second
@@ -53,6 +55,10 @@ type macGUIEnvEntry struct {
 
 // macGUIEnvSeen is the last answer per run, by run id.
 var macGUIEnvSeen sync.Map
+
+// macGUIEnvGaveUp marks a run, by run id, whose at-start wait ended with no answer after the guest said
+// pending: it counts as failed from then on, unless the guest later says set.
+var macGUIEnvGaveUp sync.Map
 
 // macGUIEnvWaited marks a context whose at-start wait is over, so the open it carries is not refused for
 // settings the wait gave up on.
@@ -123,6 +129,9 @@ func (s *Server) macGUIEnvRefusal(ctx context.Context, run types.AgentRun, reope
 	if reopen || ctx.Value(macGUIEnvWaited{}) != nil {
 		return nil
 	}
+	if _, gaveUp := macGUIEnvGaveUp.Load(run.ID); gaveUp {
+		return nil // counts as failed, which never holds the window
+	}
 	if st, ok := s.macGUIEnvStatus(ctx, run); ok && st.State == guestagent.SessionEnvPending {
 		return runError(409, reasonMacWindowPreparing, macWindowSettingsPendingMsg)
 	}
@@ -133,30 +142,42 @@ func (s *Server) macGUIEnvRefusal(ctx context.Context, run types.AgentRun, reope
 // and returns the context the open goes on with. It runs in the launch's own goroutine.
 func (s *Server) macGUIEnvAwait(ctx context.Context, run types.AgentRun) context.Context {
 	deadline := time.Now().Add(macGUIEnvWait)
-	for {
+	for saidPending := false; ; saidPending = true {
 		st, ok := s.macGUIEnvFresh(ctx, run)
-		if !ok || st.State != guestagent.SessionEnvPending || !time.Now().Before(deadline) {
+		if ok && st.State != guestagent.SessionEnvPending {
+			break // set or failed: the window state says which
+		}
+		if !ok && !saidPending {
+			break // a guest that cannot say (an older one) holds nothing
+		}
+		if !ok || !time.Now().Before(deadline) || ctx.Err() != nil {
+			macGUIEnvGaveUp.Store(run.ID, true) // pending, then no answer: the window opens and says so
 			break
 		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(macGUIEnvPollEvery):
 		}
-		if ctx.Err() != nil {
-			break
-		}
 	}
 	return context.WithValue(ctx, macGUIEnvWaited{}, true)
 }
 
 // macGUIEnvNote words a failed set on the window state of a run whose window may open: the reason and the
-// plain retry.
+// plain retry. An at-start wait that gave up (macGUIEnvGaveUp) is worded the same, unless the guest has since
+// said set.
 func (s *Server) macGUIEnvNote(ctx context.Context, run types.AgentRun, v *macWindowView) {
 	if v.State != macWindowStateOpen || v.Message != "" {
 		return
 	}
-	if st, ok := s.macGUIEnvStatus(ctx, run); ok && st.State == guestagent.SessionEnvFailed {
-		v.Message = "This run's settings could not be applied to the window's desktop (" + macGUIEnvReason(st.Reason) +
+	st, ok := s.macGUIEnvStatus(ctx, run)
+	reason := ""
+	if ok && st.State == guestagent.SessionEnvFailed {
+		reason = macGUIEnvReason(st.Reason)
+	} else if _, gaveUp := macGUIEnvGaveUp.Load(run.ID); gaveUp && (!ok || st.State != guestagent.SessionEnvSet) {
+		reason = "they were not confirmed in time"
+	}
+	if reason != "" {
+		v.Message = "This run's settings could not be applied to the window's desktop (" + reason +
 			"), so apps opened there may not use the run's proxy. To retry, run agent-run --session-env-retry in the window's Terminal."
 	}
 }
