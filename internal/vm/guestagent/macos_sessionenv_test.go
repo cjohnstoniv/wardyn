@@ -422,7 +422,7 @@ func TestApplySessionEnvNeverSetsInAnotherUsersSessionAfterASwitch(t *testing.T)
 func TestSetSessionEnvRetriesAsTheUserWhenGetenvDisagrees(t *testing.T) {
 	g := newGUIFake(false) // the asuser form does not take
 	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}}
-	via, err := d.SetSessionEnv(context.Background(), []string{"HTTPS_PROXY=http://p", "WARDYN_RUN_ID=r1"})
+	via, err := d.SetSessionEnv(context.Background(), 502, []string{"HTTPS_PROXY=http://p", "WARDYN_RUN_ID=r1"})
 	if err != nil || via != "user" {
 		t.Fatalf("via %q, err %v; want the as-user form to take", via, err)
 	}
@@ -437,7 +437,7 @@ func TestSetSessionEnvRetriesAsTheUserWhenGetenvDisagrees(t *testing.T) {
 	// When neither form takes, the error names the step and holds no value.
 	never := &guiFake{vars: map[string]string{}}
 	nd := &Desktop{Run: neverTakes{never}, Console: fakeConsole{uid: 502}}
-	if _, err := nd.SetSessionEnv(context.Background(), []string{"WARDYN_RUN_ID=secretish-value"}); err == nil || strings.Contains(err.Error(), "secretish-value") {
+	if _, err := nd.SetSessionEnv(context.Background(), 502, []string{"WARDYN_RUN_ID=secretish-value"}); err == nil || strings.Contains(err.Error(), "secretish-value") {
 		t.Errorf("err = %v, want a failure that holds no value", err)
 	}
 }

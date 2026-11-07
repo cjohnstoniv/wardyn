@@ -314,36 +314,39 @@ func (d *Desktop) applySessionEnv(ctx context.Context, p SessionEnvPaths, agentU
 	}
 	step, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	for {
-		if ctx.Err() != nil {
-			return pending
-		}
-		if uid, err := d.Console.Console(step); err == nil && uid == agentUID {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return pending
-		case <-step.Done():
-			return finish(SessionEnvStatus{State: SessionEnvFailed, Reason: SessionEnvNotSignedIn})
-		case <-time.After(every):
-		}
-	}
-	// The setter runs on its own, so one that ignores step's end still cannot hold the status.
 	type result struct {
 		via string
 		err error
 	}
-	res := make(chan result, 1)
-	go func() {
-		via, err := d.SetSessionEnv(step, env)
-		res <- result{via, err}
-	}()
 	var r result
-	select {
-	case r = <-res:
-	case <-step.Done():
-		r.err = fmt.Errorf("the desktop session did not take the settings within %v: %w", wait, step.Err())
+	for r.err = ErrConsoleChanged; errors.Is(r.err, ErrConsoleChanged); {
+		for {
+			if ctx.Err() != nil {
+				return pending
+			}
+			if uid, err := d.Console.Console(step); err == nil && uid == agentUID {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return pending
+			case <-step.Done():
+				return finish(SessionEnvStatus{State: SessionEnvFailed, Reason: SessionEnvNotSignedIn})
+			case <-time.After(every):
+			}
+		}
+		// The setter runs on its own, so one that ignores step's end still cannot hold the status. It sets
+		// only in agentUID's session; a console that changed hands since (ErrConsoleChanged) waits again.
+		res := make(chan result, 1)
+		go func() {
+			via, err := d.SetSessionEnv(step, agentUID, env)
+			res <- result{via, err}
+		}()
+		select {
+		case r = <-res:
+		case <-step.Done():
+			r.err = fmt.Errorf("the desktop session did not take the settings within %v: %w", wait, step.Err())
+		}
 	}
 	switch {
 	case ctx.Err() != nil:
