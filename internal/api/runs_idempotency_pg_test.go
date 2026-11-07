@@ -573,6 +573,8 @@ func TestCreateRunKeyReplayAfterRunTasksErasure(t *testing.T) {
 	}
 	bobRun := run
 	bobRun.ID, bobRun.CreatedBy = uuid.New(), bob.Principal
+	// Bob's own text, so the count of runs still carrying the caller's task sees only the caller's run.
+	bobRun.Task, bobRun.Title, bobRun.Description = "bob-task", "bob-title", "bob-desc"
 	bobRun.SPIFFEID = "spiffe://wardyn.local/agent-run/" + bobRun.ID.String()
 	if _, err := st.CreateRun(store.WithRunCreateKey(ctx, bob, claim.Token), bobRun); err != nil {
 		t.Fatal(err)
