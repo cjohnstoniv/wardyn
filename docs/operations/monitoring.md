@@ -192,10 +192,4 @@ metrics:
 > [!WARNING]
 > With `networkPolicy.enabled=false` there is no rule at all, and the port is open to the whole pod network.
 
-## No core dumps, no attaching
-
-wardynd, wardyn-proxy and wardyn-runnerd hold credentials in memory, so each first sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0).
-
-- A crash writes no core file, and a `core_pattern` handler receives nothing.
-- A process of the same user can no longer `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
-- This is intentional and not configurable.
+Process memory protections (no core dumps, no attaching) are covered in [the boundary page](boundary.md#no-core-dumps-no-attaching).
