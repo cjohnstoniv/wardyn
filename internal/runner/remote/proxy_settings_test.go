@@ -39,8 +39,9 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingGitPushWithheld: func(pc *runner.ProxyConfig) {
 		pc.GitPushWithheld = map[string]string{"github.com": "this run may not push"}
 	},
-	runnerwire.ProxySettingForgeHosts:    func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
-	runnerwire.ProxySettingAllowedModels: func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
+	runnerwire.ProxySettingForgeHosts:     func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
+	runnerwire.ProxySettingAllowedModels:  func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
+	runnerwire.ProxySettingMCPApproveEach: func(pc *runner.ProxyConfig) { pc.MCPApproveEach = &proxy.MCPApproveEachConfig{} },
 	runnerwire.ProxySettingAWSSigV4Gateways: func(pc *runner.ProxyConfig) {
 		pc.AWSSigV4 = &proxy.AWSSigV4Config{Gateways: []proxy.AWSSigV4Gateway{{Host: "ai-gw.corp.example", Port: 443,
 			SigningHost: "bedrock-runtime.us-east-1.amazonaws.com"}}}

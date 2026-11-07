@@ -59,7 +59,8 @@ var proxySettingOfField = map[string]string{
 	"ForgeHosts": ProxySettingForgeHosts,
 	// Dropped, the run's proxy holds no model list and admits every model the
 	// governance profile limits.
-	"ModelLimit": ProxySettingAllowedModels,
+	"ModelLimit":     ProxySettingAllowedModels,
+	"MCPApproveEach": ProxySettingMCPApproveEach,
 }
 
 // proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.

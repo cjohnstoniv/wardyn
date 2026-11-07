@@ -67,6 +67,14 @@ const (
 	// could not check, replaced or refused (mcp_list_filter.go).
 	ruleSourceMCPListFiltered   = "brokered:mcp:list-filtered"
 	ruleSourceMCPListUnreadable = "brokered:mcp:list-unreadable"
+
+	// An approve_each call (mcp_approve_each.go): forwarded once approved, still waiting when its
+	// window ended, declined, closed undecided, or refused before anyone was asked.
+	ruleSourceMCPApproved        = "brokered:mcp:approved"
+	ruleSourceMCPApprovalWait    = "brokered:mcp:approval-wait"
+	ruleSourceMCPApprovalDenied  = "brokered:mcp:approval-denied"
+	ruleSourceMCPApprovalClosed  = "brokered:mcp:approval-closed"
+	ruleSourceMCPApprovalRefused = "brokered:mcp:approval-refused"
 )
 
 // mcpServerKeyRE is a server key: the <server> of mcp__<server>__<tool>, so
@@ -77,6 +85,9 @@ var mcpServerKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 type mcpBroker struct {
 	servers  map[string]*mcpServer
 	bindings []MCPBinding
+	// calls and windows are the approve_each state (mcp_approve_each.go).
+	calls   mcpCalls
+	windows map[string]int
 }
 
 // mcpServer is one server and its credential, resolved on first use.
@@ -173,6 +184,8 @@ type mcpExchange struct {
 	harness string
 	server  *mcpServer
 	req     egress.Request
+	// approvalID is the approval an approve_each call is forwarded on; nil for any other request.
+	approvalID *uuid.UUID
 }
 
 func (x *mcpExchange) emit(decision egress.Decision, ruleSource string) {
@@ -215,7 +228,7 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		if body, ok = x.readBody(w); !ok {
 			return
 		}
-		if x.refuseBlockedCalls(w, body) {
+		if x.refuseBlockedCalls(w, body) || x.holdApproveEach(w, body) {
 			return
 		}
 	}
@@ -252,11 +265,12 @@ func (x *mcpExchange) readBody(w http.ResponseWriter) ([]byte, bool) {
 	return body, true
 }
 
-// mcpMessage is one JSON-RPC message of a request body: its id, and the tool a
-// tools/call names.
+// mcpMessage is one JSON-RPC message of a request body: its id, and the tool and
+// raw params a tools/call names.
 type mcpMessage struct {
-	id   json.RawMessage
-	tool string
+	id     json.RawMessage
+	tool   string
+	params json.RawMessage
 }
 
 // parseMCPMessages reads a JSON-RPC body, one message or a batch. Keys are
@@ -305,6 +319,7 @@ func parseMCPMessage(raw json.RawMessage) (mcpMessage, error) {
 	if err := json.Unmarshal(params["name"], &m.tool); err != nil || m.tool == "" {
 		return mcpMessage{}, errors.New("a tools/call names no tool")
 	}
+	m.params = obj["params"]
 	return m, nil
 }
 
@@ -568,6 +583,9 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		return
 	}
 	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)
+	if x.approvalID != nil {
+		allow.RuleSource, allow.ApprovalID = ruleSourceMCPApproved, x.approvalID
+	}
 	allow.GatewayCallID = callID
 	p.emitDialledAllow(allow, s.host)
 	if listActive && !x.filterToolLists(w, resp, callID) {

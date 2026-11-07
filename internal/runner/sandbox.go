@@ -232,6 +232,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		HarnessCredentials:   pc.HarnessCredentials,
 		MCPServers:           pc.MCPServers,
 		MCPBindings:          pc.MCPBindings,
+		MCPApproveEach:       pc.MCPApproveEach,
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
 	}

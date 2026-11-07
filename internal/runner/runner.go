@@ -254,6 +254,9 @@ type ProxyConfig struct {
 	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
 	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
 	ModelLimit      *ModelLimit                         `json:"model_limit,omitempty"`      // the run's governed model list and its Bedrock gateway routes (model_limit.go); nil when no limit binds the run
+	// MCPApproveEach is proxy.Config.MCPApproveEach: set exactly when a dispatched tool rule is
+	// approve_each, so an older proxy refuses the config and the run does not start on it.
+	MCPApproveEach *proxy.MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
