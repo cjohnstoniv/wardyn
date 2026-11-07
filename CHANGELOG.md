@@ -53,6 +53,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Settings: saving an unrelated change no longer reorders stored capabilities, and walls errors now point at their field.
 - The console's Content-Security-Policy now sets `form-action`, and the console sends `Permissions-Policy` and, under TLS, `Strict-Transport-Security`.
 - The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
+- Review now refuses an Azure DevOps capability list that reaches past the provider's ceiling (`ado_capabilities_above_ceiling`), with the same sentence launch gave, instead of letting the run fail after the click. It is on by default and refuses nothing launch would not.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
