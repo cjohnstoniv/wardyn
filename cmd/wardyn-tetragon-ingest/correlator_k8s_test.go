@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 )
 
-const k8sRun = "55555555-5555-5555-5555-555555555555"
+const k8sRun = "5555aaaa-5555-5555-5555-55555555bbbb"
 
 // k8sLine builds a canned Tetragon exec line for a pod.
 func k8sLine(ns, pod, container string) []byte {
@@ -59,8 +59,8 @@ func TestPodCorrelatorMapsOnlyAgentPods(t *testing.T) {
 			}
 		})
 	}
-	if got := mapper.droppedUnmappedCount(); got != 11 {
-		t.Errorf("dropped_unmapped = %d, want 11 (every unmapped pod line counted)", got)
+	if got := mapper.droppedUnmappedCount(); got != 12 {
+		t.Errorf("dropped_unmapped = %d, want 12 (every unmapped pod line counted)", got)
 	}
 }
 
