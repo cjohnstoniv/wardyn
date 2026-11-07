@@ -962,6 +962,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// is holding its PTY. A foreign member gets the byte-identical 404.
 	"GET /api/v1/runs/{id}/files":     {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/resources": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// A run's token usage: read as the run is read (run_model_usage.go).
+	"GET /api/v1/runs/{id}/model-usage": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// A Kubernetes runner's node-loss containment (run_containment.go): read as the run is read; the node
 	// record is the security tier's, mounted with the runner routes.
 	"GET /api/v1/runs/{id}/containment":   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
