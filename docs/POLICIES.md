@@ -145,6 +145,7 @@
 - A narrower choice is always honoured, and a member's list that the bound cuts down says what was dropped in the `201`'s `warnings` (and the run's `run.create` `clamp_warnings`);
   - a choice that leaves nothing permitted refuses the launch with reason `ado_capabilities_none_permitted` rather than falling back to the default, and `POST /runs/preflight` refuses it with the same reason.
 - An unset choice stays unset (the row's `default_profile` applies), including for a member who launches with no policy at all; the governance list is never inherited unasked.
+- A governance profile's `azure_devops_capabilities` adds standing access above the row's `default_profile`; it is not a wall below it, so it cannot make a unit read-only. Use `eligible_grants` or a second provider row for that.
 - An admin's own run keeps its list, bounded by the ceiling alone.
 - Inert for a run not on that lane.
 - See [AZURE-DEVOPS.md](AZURE-DEVOPS.md).

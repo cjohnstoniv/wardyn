@@ -4033,10 +4033,11 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 - the token is never written to `localStorage` unless you opt in;
 - the console is served same-origin;
 - the input uses `type="password"`/`autoComplete="off"`;
-- every response (API, `/healthz`, SPA) carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and a `Content-Security-Policy` — quoted here in full, because a summarised CSP is how the gaps below went uncounted (`securityHeaders`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)):
+- every response (API, `/healthz`, SPA) carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()` and a `Content-Security-Policy`, plus `Strict-Transport-Security: max-age=31536000` when wardynd serves TLS itself or `WARDYN_TLS_TERMINATED` is on — quoted here in full, because a summarised CSP is how the gaps below went uncounted (`securityHeaders`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)):
 
 ```
 default-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none';
+form-action 'self' <UI-sandbox gateway origin, when the gateway is on>;
 connect-src 'self' ws://<console host> wss://<console host>;
 media-src 'self' https://github.com https://release-assets.githubusercontent.com;
 script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';
@@ -4051,8 +4052,8 @@ directive above that is looser than `'self'` is a gap this section has to price,
 since the asset it is pricing is a full-admin bearer token readable by any script
 in this origin. `connect-src` is not among them: it names only the console's own host, plus the one UI-sandbox bind endpoint when the gateway is on.
 
-- **No HSTS.** The default posture is plain http on loopback, where an HSTS header
-  would poison every other `localhost` port.
+- **HSTS only on a TLS deployment.** The default posture is plain http on loopback, where an HSTS header
+  would poison every other `localhost` port, so the header is sent only when wardynd serves TLS or `WARDYN_TLS_TERMINATED` is on.
 - **`style-src 'unsafe-inline'`.** xterm injects a theme `<style>` at runtime.
 - **`connect-src` is bounded, and a bare `ws:`/`wss:` is never emitted.**
   - It is `'self'` plus `ws://<request host> wss://<request host>` (the legacy-WebKit fallback for the PTY-attach WebSocket), plus the UI-sandbox bind URL when the gateway is on (host mode writes its per-run label as a wildcard label under the relay domain; `cspConnectSrc`, `cspUIBindSrc`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)).

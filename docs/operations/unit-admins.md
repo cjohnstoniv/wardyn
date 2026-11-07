@@ -32,7 +32,8 @@
 | `POST /governance/check`, `POST /governance/dry-run` | a target in their units; the boundary target stays the security tier's |
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
 
-- Anything else is refused `403` `unit_scope_denied`: the promotion, the boundary, the restrictions and every other admin route.
+- Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
+  - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.
 - A caller with no grant at all is refused the same reason with "this needs a unit admin or a security admin".
 
 ## Four-eyes

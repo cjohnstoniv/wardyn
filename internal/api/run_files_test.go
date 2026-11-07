@@ -577,3 +577,29 @@ func TestRunFiles_QuotedPathJoinsIntoOneEntry(t *testing.T) {
 		}
 	}
 }
+
+// TestRunFilesScript_GitThatCannotRunIsNotNoRepository runs the real script
+// with a git on PATH that fails: a workspace that holds a repository must not
+// read as "no repository" (exit 3) when git is the thing that is broken.
+func TestRunFilesScript_GitThatCannotRunIsNotNoRepository(t *testing.T) {
+	w := t.TempDir()
+	if err := os.Mkdir(filepath.Join(w, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	stub := filepath.Join(bin, "git")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 127\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", runFilesScript)
+	cmd.Dir = t.TempDir()
+	cmd.Env = []string{"PATH=" + bin, "W=" + w, "R="}
+	out, err := cmd.Output()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() == runFilesExitNoWorkTree || ee.ExitCode() == 0 {
+		t.Fatalf("failing git: err=%v, want a nonzero exit other than %d", err, runFilesExitNoWorkTree)
+	}
+	if string(out) != "path="+w+"\n" {
+		t.Fatalf("failing git: out=%q, want path=%s", out, w)
+	}
+}
