@@ -131,3 +131,42 @@ func TestSetupByHandWindowGetsTheCodeFilePath(t *testing.T) {
 		t.Errorf("setup by hand's window text %+v, want %+v", text, want)
 	}
 }
+
+// The edit window is the run window's code with the edit's controls (screen_darwin.*, built only on a Mac,
+// pinned by its text): its close button calls back into Go off the main thread and leaves the window up
+// until the guest has shut down, a screen lock does not tear it down, and its strip gets the code file. A
+// run window still gets no code file and no callback.
+func TestEditWindowControlsInTheRunWindow(t *testing.T) {
+	read := func(f string) string {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	m, g := read("screen_darwin.m"), read("screen_darwin.go")
+	for _, want := range []string{
+		"void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop) {",
+		"- (BOOL)windowShouldClose:(NSWindow *)sender {\n\tdispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{\n\t\twardynWindowAction(WARDYN_WINDOW_ASK_STOP);\n\t});\n\treturn NO;\n}",
+		"#define WARDYN_WINDOW_ASK_STOP 0",
+		"if (wardynScreenViewOnly && !wardynScreenAsksStop && wardynScreenWindow != nil) {",
+		"[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf)];",
+		"wardynScreenAsksStop = NO;",
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("screen_darwin.m lost the edit window's control:\n%s", want)
+		}
+	}
+	for _, want := range []string{
+		"//export wardynWindowAction\nfunc wardynWindowAction(n C.int) {",
+		"const windowActionAskStop = 0",
+		"C.wardynScreenShowWindow(vm, title, steps, nil, 0)",
+	} {
+		if !strings.Contains(g, want) {
+			t.Errorf("screen_darwin.go lost the window's callback wiring:\n%s", want)
+		}
+	}
+	if strings.Count(g, "C.wardynScreenShowWindow(") != 2 {
+		t.Error("wardynScreenShowWindow is called from other than the run window and the edit window")
+	}
+}
