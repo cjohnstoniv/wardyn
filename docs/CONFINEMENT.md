@@ -13,8 +13,8 @@
 | Barrier | Class | Does not protect against | How it works | Where it runs |
 |---|---|---|---|---|
 | Fence | `CC1` | A kernel exploit or container escape: it shares your machine's kernel | Hardened runc container | Any host |
-| Wall | `CC2` | A flaw in the sandbox software itself (rare); it is not a separate machine | gVisor intercepts system calls | A native Docker engine with `runsc` registered |
-| Vault | `CC3` | A flaw in the virtualization layer itself (very rare) | Kata microVM with its own guest kernel | A host with `/dev/kvm` |
+| Wall | `CC2` | A flaw in the sandbox software itself (rare); it is not a separate machine | gVisor intercepts system calls | A Docker host with the `runsc` runtime installed |
+| Vault | `CC3` | A flaw in the virtualization layer itself (very rare) | Kata microVM with its own guest kernel | A Docker host with a Kata or krun runtime and KVM (`/dev/kvm`) |
 
 ## Pick by agent shape
 
@@ -53,7 +53,7 @@ The smallest sandbox that keeps run-bound audit for a no-shell agent:
 1. Run on Fence (`CC1`) with `allowed_domains` empty and `first_use_approval` set to `always_deny`.
 2. Attach the MCP server as a component. Its host list names only the server.
 3. Turn the server on for the harness that calls it, with `components[].mcp_harnesses`. Left out, it is on for every harness that can take it.
-4. The agent reaches the server only at the broker address. The broker adds the server's credential, strips any credential the sandbox sent, and sends the call itself.
+4. The agent reaches the server only at the broker address. The broker adds the server's credential, strips the credential headers the sandbox sent (`Authorization`, `X-Api-Key` and the other common ones), and sends the call itself.
 5. A `tool_rules` entry with effect `deny` is refused by the broker, and the call is never sent. `approve_each` makes a person approve each call with its exact arguments ([POLICIES.md](POLICIES.md#tool_rules--toolrule)). A `hold` is not enforced by the broker: the harness asks before it calls.
 6. Every other host is refused, and so is the server's own host on the plain or `CONNECT` lane. Every request leaves a decision record for the run.
 
