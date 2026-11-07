@@ -66,7 +66,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
   - **Operating system** is **Linux** or **macOS**. macOS is listed when macOS virtual machines are on.
   - A macOS VM needs a pool of Macs that offer it. The step names the Mac and the reason when one cannot take the run.
   - See [macOS virtual machines](operations/macos-vms.md) and [Linux VM sandboxes](operations/linux-vm-sandboxes.md).
-- **Window** (macOS, while `macos_vm.allow_attended_window` is on): **Open in a window on my Mac** opens a window as the run starts. Be at the Mac with its screen unlocked ([Quickstart](operations/macos-vms.md#quickstart-an-interactive-developer-sandbox)).
+- **Window** (macOS, while `macos_vm.allow_attended_window` is on): **Open in a window on my Mac** opens a window as the run starts. Be at the Mac with its screen unlocked ([Quickstart](operations/macos-vm-use.md#quickstart-an-interactive-developer-sandbox)).
 - **Between runs** (an interactive macOS VM on your own Mac, while kept machines are on):
   - **Delete this machine when the run ends**, or **Keep this machine for next time** with an optional **Name**.
   - **Resume {name}**, with **Start fresh**, picks a machine you kept ([Keeping the machine](operations/macos-vms.md#keeping-the-machine)).
