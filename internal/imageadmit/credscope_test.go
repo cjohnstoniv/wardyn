@@ -141,3 +141,33 @@ func TestChallengeFromAnotherOriginUsesTheCredentialConfiguredForIt(t *testing.T
 		t.Fatalf("blob = %q, err = %v", b, err)
 	}
 }
+
+// The registry first challenges, accepts its credential on the retry and redirects to another origin, which
+// challenges too. The credential is not sent there, so the 401 is not blamed on it.
+func TestChallengeFromAnotherOriginAfterTheRegistryAcceptedItsCredential(t *testing.T) {
+	cdn := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("the other origin received an Authorization header")
+		}
+		w.Header().Set("WWW-Authenticate", `Basic realm="cdn"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer cdn.Close()
+	reg := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, r, "https://127.0.0.1:"+port(cdn)+"/blob", http.StatusFound)
+	}))
+	defer reg.Close()
+	c := newTestClient(t, mapAuth{host(reg): {Username: "alice", Password: "BASIC-SECRET"}}, testGuard(), nil, reg, cdn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := c.Blob(ctx, mustRef(t, host(reg)+"/team/app"), layerDesc())
+	var un *Unavailable
+	if !errors.As(err, &un) || un.Cause != CauseUnauthorized || !un.Withheld {
+		t.Fatalf("err = %v, want Unavailable{unauthorized, withheld}", err)
+	}
+}
