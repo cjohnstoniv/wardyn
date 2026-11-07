@@ -57,6 +57,9 @@ type policyPreviewResponse struct {
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// ImageAdmission is "checked at launch" when launch checks Image's signatures (imageAdmissionPreview);
+	// absent when it checks nothing, so a preview with admission off is unchanged.
+	ImageAdmission client.ImageAdmissionFact `json:"image_admission,omitempty"`
 	// HarnessSet is the preflight's, with the same meaning.
 	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
 	// AllowedModels and AllowedModelsProfile are the preflight's, with the same meaning.

@@ -143,11 +143,12 @@ func (s *Server) markImageDigestExempt(ctx context.Context, image string, data m
 	}
 }
 
-// markRunCreateExempt is the run.create writers' one call for both exemption marks: governance_exempt
-// (the admin switch) and image_digest_exempt.
+// markRunCreateExempt is the run.create writers' one call for every exemption mark: governance_exempt
+// (the admin switch), image_digest_exempt and image_admission_exempt.
 func (s *Server) markRunCreateExempt(ctx context.Context, image string, data map[string]any) {
 	s.markGovernanceExempt(ctx, data)
 	s.markImageDigestExempt(ctx, image, data)
+	s.markImageAdmissionExempt(ctx, image, data)
 }
 
 // carryForwardSiteImages keeps the stored images block when the body does not name it (an older client or a

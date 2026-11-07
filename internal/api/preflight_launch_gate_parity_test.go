@@ -118,7 +118,7 @@ var policyPreviewGateExceptions = map[string]string{
 	"refuseRunCapFull":           "preview does not count runs or enforce quota",
 	"refuseRunFit":               "preview does not read Kubernetes quota",
 	"runFitSpec":                 "preview does not resolve a dispatch fit request",
-	"imageAdmission":             "preview reads no registry; the image signature check is made at launch",
+	"imageAdmission":             "preview reads no registry; it reports image_admission \"checked at launch\" (imageAdmissionPreview) instead",
 }
 
 const policyPreviewGateExceptionsMax = 12
