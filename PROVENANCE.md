@@ -39,11 +39,11 @@ Supporting evidence a reviewer can check independently:
 
 ## Contributors
 
-- Every commit to date is from a single human contributor, apart from dependency-update commits authored by the Dependabot bot.
+- Every commit to date is from the maintainer, apart from dependency-update commits authored by the Dependabot bot and one DCO-signed outside contribution (`229ffe478`).
 - `git shortlog -sne` lists that person under more than one address (a GitHub `noreply` address plus personal ones, from different machines);
   - [`AUTHORS`](AUTHORS) lists the canonical identity, and it is [`AUTHORS`](AUTHORS) — not the shortlog — that defines "The Wardyn Authors" in the copyright notice.
 - Run both: the addresses differ, the human does not.
-- There are no external human contributors yet, and [`GOVERNANCE.md`](GOVERNANCE.md) is candid that the bus factor is one.
+- [`GOVERNANCE.md`](GOVERNANCE.md) is candid that the bus factor is one.
 
 ## Developer Certificate of Origin
 

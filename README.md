@@ -9,7 +9,7 @@
 
 ![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](docs/img/wardyn-walls.webp)
 
-![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.webp)
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds most keys to outbound requests.](docs/img/wardyn-places.webp)
 
 ## Before you start
 
@@ -23,7 +23,7 @@
 ## Install
 
 - Pick by **who runs this box**.
-- Everything here pulls cosign-signed, SBOM-attested images — [`docs/VERIFY.md`](docs/VERIFY.md) checks that — no clone needed.
+- Everything here pulls cosign-signed images, with no clone needed. Release images also carry an SBOM and build provenance; the `:latest` tag is signed only. [`docs/VERIFY.md`](docs/VERIFY.md) checks each.
 
 ### Single-user — you are the operator
 
@@ -35,6 +35,7 @@ curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.13
 
 - Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
 - Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
+- Set the runner's limits before the first run: the server runs in a container and cannot measure the host's disk. Pass the flags `wardyn runner remote propose <id>` prints to `wardyn runner set <id>`, or use the console (Runners, the runner, **Set limits**). `make setup` does this for you.
 - **Only the CLI**, for an organisation's console: `install-cli.sh` (Windows: `install-cli.ps1`), a release asset ([install paths](docs/runner-registration.md#install-the-cli)).
 - **A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
@@ -192,7 +193,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 
 ## Architecture at a glance
 
-![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations allowed, held or denied by policy; the proxy adds keys to outbound requests.](docs/img/wardyn-run.webp)
+![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations allowed, held or denied by policy; the proxy adds most keys to outbound requests.](docs/img/wardyn-run.webp)
 
 ```mermaid
 flowchart LR
@@ -253,7 +254,7 @@ flowchart LR
 - [`LICENSING.md`](LICENSING.md) is the one page to hand your legal team: the grant, what the artifacts contain, redistribution obligations, patents, warranty, and the disclosed risks.
 - [`TRADEMARKS.md`](TRADEMARKS.md) covers what you may call things, which Apache-2.0 §6 deliberately does not.
 
-- Every published image is cosign-signed with an attested SBOM and build provenance — [`docs/VERIFY.md`](docs/VERIFY.md) shows how to check that yourself.
+- Every release image is cosign-signed with an attested SBOM and build provenance. The continuous `wardynd:latest` and `:sha-` tags are signed only. [`docs/VERIFY.md`](docs/VERIFY.md) shows how to check each.
 
 - Contributor sign-off via DCO (`Signed-off-by`).
 - CNCF Sandbox is the governance target, not a status.

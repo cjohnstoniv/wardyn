@@ -529,7 +529,7 @@ func removeRotatedCAs(ctx context.Context, g ToolsGuest, l BaseList, previous []
 	for _, r := range previous {
 		if r.Kind == ItemKindCA && r.SHA1 != "" && !pins[r.SHA256] {
 			if err := untrustCA(ctx, g, guestagent.ItemDir(r.Name)+"/"+guestagent.ItemCert, r.SHA1); err != nil {
-				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w; macOS 26 can refuse that without a person at the guest, and the base stays ready and still trusts the old CA: to drop it, run prepare --reprepare", r.Name, r.Fingerprint, err)
+				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w; macOS 26 can refuse that without a person at the guest, and the base stays ready and still trusts the old CA: to drop it, run wardyn-runnerd macos-vm prepare --new-image", r.Name, r.Fingerprint, err)
 			}
 		}
 		if !names[r.Name] && r.Kind != ItemKindFile {

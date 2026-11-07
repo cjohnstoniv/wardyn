@@ -204,13 +204,13 @@
 - If you run a brokered policy with `allow_all_egress`, the broker route is the only *convenient* route, not the only one.
 - It is what git itself uses, since a clone/push URL carries a name, never a bare IP.
 
-### `git_pat` is never-resident too, as of 0.7
+### `git_pat` is not resident while the broker is on
 
 - Through 0.6 the two git lanes had opposite credential postures, and the asymmetry was the gap rather than a design:
 
 | Lane | Credential |
 |---|---|
-| `github_token` | minted proxy-side, injected on the outbound leg — **never in the sandbox**, per-repo, ref-confined, ≤1h |
+| `github_token` | minted proxy-side and injected on the outbound leg, not in the sandbox, when the run is brokered for a repo; per-repo, ref-confined, ≤1h |
 | `git_pat` (GitLab, Bitbucket) | handed to the **in-sandbox** credential helper — **resident** for the life of the run, at whatever scope the operator's PAT carries |
 | Azure DevOps | the person's own credential (a token Wardyn creates for the run, their Entra token, or one they pasted in), injected proxy-side — **never in the sandbox**. There is no shared `git_pat` lane; see [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
 
