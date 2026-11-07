@@ -103,20 +103,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
-	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
-	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
-	// ground-truth stream. wardynd knows the resolved confinement class here, so
-	// it records the one-time kernel.sensor.bypass audit event itself — making the
-	// gap VISIBLE regardless of whether the operator set the sidecar env var
-	// WARDYN_GROUNDTRUTH_BLIND_RUNS (that path is kept too). Matches the data
-	// shape the sidecar emits (reason="cc3-kata-host-ebpf-blind", run_id) so the
-	// downstream audit/correlation is identical.
-	if run.ConfinementClass == types.CC3 {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "kernel.sensor.bypass",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"reason": "cc3-kata-host-ebpf-blind", "run_id": run.ID.String(),
-			})))
-	}
+	// The host sensor's blind spots (CC3 everywhere, CC2 under the Kubernetes
+	// sensor), recorded by wardynd itself; see recordSensorBypass.
+	s.recordSensorBypass(ctx, run)
 
 	// Sandbox env: non-secret values only (invariant 1). The run token never
 	// appears here — the proxy holds it via ProxyConfig.RunToken and injects it

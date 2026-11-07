@@ -356,7 +356,7 @@ type Config struct {
 
 	HarnessLoginCPUMillis int // WARDYN_HARNESS_LOGIN_CPU_MILLIS; see harnessLoginResources (harnesscred.go)
 	HarnessLoginMemoryMiB int // WARDYN_HARNESS_LOGIN_MEMORY_MIB; ditto — still governance-ceiling capped
-
+	GroundtruthSensorConfig
 	// AWSSSOProxyInject is the kill switch for proxy-side SSO token injection
 	// (WARDYN_AWS_SSO_PROXY_INJECT,
 	// resolved by ResolveAWSSSOProxyInject at boot): when true a captured-AWS-SSO
