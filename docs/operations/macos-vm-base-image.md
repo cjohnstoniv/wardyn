@@ -247,7 +247,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 ## What Wardyn sets in the base
 
-Stage 1 writes these when it prepares a base. Every tools update writes them again, so a base prepared earlier gets them, and the stamps follow a guest macOS update. A row marked Optional is skipped when it fails; skipped rows are listed in `tools.json` as `base_settings_skipped` and as a WARN by `wardyn-runnerd doctor`.
+Stage 1 writes these when it prepares a base. Every tools update writes them again, so a base prepared earlier gets them, and the stamps follow a guest macOS update. In stage 1 every row is skipped when it fails; the route skips any failed row. Skipped rows are listed in `tools.json` as `base_settings_skipped` and as a WARN by `wardyn-runnerd doctor`.
 
 | Setting | Value | Account | Optional | Stage |
 |---|---|---|---|---|
@@ -266,8 +266,8 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 | Setup Assistant and Terminal ended, Terminal's saved state removed | by signal, then `rm -rf` as the agent | agent | no | 2, and edit-base's finish for Terminal |
 | Safari `WarnAboutFraudulentWebsites` (Safe Browsing) | bool false, read back once | agent | yes | 2 |
 
-- The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` is refused.
-- The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" and the next update applies them.
+- The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` skips the whole table.
+- The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" or "the console is not the agent account's", and the next update applies them.
 - The first update after an upgrade is answered by the base's old guest agent, which has no route for this: `tools.json` says "agent predates this setting; run the tools update again". Run the update twice.
 - Rows are read back from disk with `plutil -p`. A key that did not land is skipped as "not found when read back". Key names other than the `DidSee*` panes a real guest listed and the documented global and `mdutil` rows come from community references and are unverified on macOS 26.
 

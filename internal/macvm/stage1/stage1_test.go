@@ -465,46 +465,46 @@ func TestCommandTableCitesItsStep(t *testing.T) {
 	}
 }
 
-// The stamps come from the guest's sw_vers, read over the same login. A value outside the fixed patterns is
-// refused by the host before any base-settings row runs, and the base is not published.
-func TestBaseSettingsRefuseAnUnpatternedSwVers(t *testing.T) {
+// The stamps come from the guest's sw_vers, read over the same login. A value outside the fixed patterns (a
+// six-digit RSR-style build among them) makes the host skip the whole table, with no base-settings row run,
+// and the prepare goes on to Remote Login off.
+func TestBaseSettingsSkippedOnAnUnpatternedSwVers(t *testing.T) {
 	for name, set := range map[string]func(*stage1test.Server){
 		"version with a command": func(s *stage1test.Server) { s.ProductVersion = "26.6.2; reboot" },
 		"version with one part":  func(s *stage1test.Server) { s.ProductVersion = "26" },
 		"build with a space":     func(s *stage1test.Server) { s.BuildVersion = "25G83 x" },
 		"build in lower case":    func(s *stage1test.Server) { s.BuildVersion = "25g83" },
+		"six-digit RSR build":    func(s *stage1test.Server) { s.BuildVersion = "22E772610a" },
+		"sw_vers fails": func(s *stage1test.Server) {
+			s.Fail = func(a []string) bool { return slices.Contains(a, "-buildVersion") }
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, provPass)
 			set(f.srv)
-			_, err := f.b.Bootstrap(context.Background(), f.input(false))
-			var se *StepError
-			if !errors.As(err, &se) || !errors.Is(err, basesettings.ErrRelease) {
-				t.Fatalf("err = %v; want a StepError wrapping ErrRelease", err)
+			if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+				t.Fatalf("an unusable sw_vers failed the prepare: %v", err)
 			}
 			for _, a := range argvs(f.srv.Execs()) {
-				if slices.Contains(a, "com.apple.SetupAssistant") || strings.Contains(strings.Join(a, " "), "/Users/agent/Library/Preferences/com.apple.SetupAssistant") {
-					t.Fatalf("a Setup Assistant row ran after a refused sw_vers: %q", a)
+				if strings.Contains(strings.Join(a, " "), "/Users/agent/Library/Preferences/com.apple.SetupAssistant") || slices.Contains(a, "mdutil") || slices.Contains(a, "/usr/bin/mdutil") {
+					t.Fatalf("a base-settings row ran after an unusable sw_vers: %q", a)
 				}
+			}
+			if f.srv.RemoteLogin() {
+				t.Fatal("stage 1 did not reach Remote Login off")
 			}
 		})
 	}
 }
 
-// A base-settings row that is Optional and fails is skipped like any Optional row; one that is not stops
-// stage 1 at its step.
-func TestBaseSettingsOptionalRowFailureIsSkipped(t *testing.T) {
-	f := newFixture(t, provPass)
-	f.srv.Fail = func(argv []string) bool { return slices.Contains(argv, "DidSeeAppleIntelligence") }
-	if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
-		t.Fatalf("an Optional row failing stopped stage 1: %v", err)
-	}
-	f = newFixture(t, provPass)
-	f.srv.Fail = func(argv []string) bool { return slices.Contains(argv, "DidSeeCloudSetup") }
-	_, err := f.b.Bootstrap(context.Background(), f.input(false))
-	var se *StepError
-	if !errors.As(err, &se) || se.Step != "7f" {
-		t.Fatalf("err = %v; want a StepError at step 7f", err)
+// Every base-settings row is Optional in stage 1: whichever one fails, the prepare goes on.
+func TestBaseSettingsRowFailureIsSkipped(t *testing.T) {
+	for _, key := range []string{"DidSeeAppleIntelligence", "DidSeeCloudSetup", "LastSeenCloudProductVersion", "NSQuitAlwaysKeepsWindows", "/usr/bin/mdutil"} {
+		f := newFixture(t, provPass)
+		f.srv.Fail = func(argv []string) bool { return slices.Contains(argv, key) }
+		if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+			t.Fatalf("%s failing stopped stage 1: %v", key, err)
+		}
 	}
 }
 
@@ -801,7 +801,8 @@ func TestStage1RefusesAnInputWithoutAPairKey(t *testing.T) {
 	}
 }
 
-// Only the screen lock row is optional: a Mac that refuses it must still publish a base.
+// Only the screen lock row and the two sw_vers reads of the base settings are optional (the rows that table
+// renders are all skipped on failure, too): a Mac that refuses them must still publish a base.
 func TestAnOptionalStepFailingDoesNotStopStage1(t *testing.T) {
 	var optional []string
 	for _, c := range commands {
@@ -809,7 +810,7 @@ func TestAnOptionalStepFailingDoesNotStopStage1(t *testing.T) {
 			optional = append(optional, c.ID)
 		}
 	}
-	if !slices.Equal(optional, []string{"screenlock-off"}) {
+	if !slices.Equal(optional, []string{"screenlock-off", "sw-vers-version", "sw-vers-build"}) {
 		t.Fatalf("optional rows = %q", optional)
 	}
 	var logs bytes.Buffer

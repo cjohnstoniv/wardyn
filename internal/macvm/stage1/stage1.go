@@ -154,8 +154,9 @@ func (b *Bootstrapper) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (
 		}
 		if c.ThenBaseSettings {
 			rows, err := s.baseSettingCommands()
-			if err != nil {
-				return macvm.BootstrapResult{}, &StepError{Step: c.Step, Command: c.ID, Err: err}
+			if err != nil { // a macOS version outside the fixed patterns: the table is skipped, not the prepare
+				slog.Warn("stage 1: the base settings were skipped", "step", c.Step, "reason", err.Error())
+				continue
 			}
 			list = slices.Insert(list, i+1, rows...)
 		}

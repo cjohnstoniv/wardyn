@@ -5,7 +5,7 @@ docs/operations/macos-vms.md=2231 share=3 # 2231 measured (+68 over 2133: the ma
 # docs/operations/macos-vm-use.md 6510 measured: quickstart, keeping a machine, windows, watching, recording, limits, folders and drives.
 docs/operations/macos-vm-use.md=6880 share=7 # 6880 measured (+370 over 6510: the run's settings in the window, the guest agent's tls-check, the signing identity and its Full Disk Access grant)
 # docs/operations/macos-vm-base-image.md 4669 measured: preparing, setup by hand, editing a base, the prep proxy, customising, boot-time hosts.
-docs/operations/macos-vm-base-image.md=5346 share=5 # 5346 measured (+404 over 4942: the "What Wardyn sets in the base" table and its notes)
+docs/operations/macos-vm-base-image.md=5363 share=5 # 5363 measured (+421 over 4942: the "What Wardyn sets in the base" table, its notes and the stage 1 skip rule)
 # docs/operations/macos-vm-host.md 3755 measured: VM count, disk, logins, the shared ledger, backups, credentials, the Mac's controls, what the host can see, the run record.
 docs/operations/macos-vm-host.md=3792 share=1 # 3792 measured (+37 over 3755: the agent-signing folder in the file table)
 # docs/operations/macos-vm-troubleshooting.md 2101 measured: where to look, symptoms and fixes, and what has not run on a real Mac.

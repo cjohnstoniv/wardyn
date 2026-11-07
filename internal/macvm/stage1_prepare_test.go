@@ -148,11 +148,12 @@ func isScreenSharingProbe(argv []string) bool {
 	return len(argv) >= len(probe) && slices.Equal(argv[len(argv)-len(probe):], probe) || slices.Contains(argv, "-screenLock") || isOptionalBaseSetting(argv)
 }
 
-// isOptionalBaseSetting is an Optional row of the base-settings table, whose failure stage 1 skips.
+// isOptionalBaseSetting is a sw_vers read or a row of the base-settings table, whose failure stage 1 skips: all
+// of them are Optional in stage 1.
 func isOptionalBaseSetting(argv []string) bool {
-	rows, _ := basesettings.Rows(basesettings.Release{Version: "26.6.2", Build: "25G83"})
-	return slices.ContainsFunc(rows, func(r basesettings.Row) bool {
-		return r.Optional && len(argv) >= len(r.Argv) && slices.Equal(argv[len(argv)-len(r.Argv):], r.Argv)
+	rows, _ := basesettings.Stage1Rows(basesettings.Release{Version: "26.6.2", Build: "25G83"})
+	return slices.Contains(argv, "/usr/bin/sw_vers") || slices.ContainsFunc(rows, func(r basesettings.Row) bool {
+		return len(argv) >= len(r.Argv) && slices.Equal(argv[len(argv)-len(r.Argv):], r.Argv)
 	})
 }
 

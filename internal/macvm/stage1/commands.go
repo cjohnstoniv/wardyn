@@ -125,9 +125,9 @@ var commands = []command{
 	{ID: "updates-macos-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"}},
 
 	// f. the agent's first desktop (the base-settings table): sw_vers first, whose values the host checks and
-	// renders into the stamps, then the rows. Optional rows that fail are skipped.
-	{ID: "sw-vers-version", Step: "7f", Event: "setting the agent's first desktop", Root: true, Argv: []string{"/usr/bin/sw_vers", "-productVersion"}, Capture: captureVersion},
-	{ID: "sw-vers-build", Step: "7f", Root: true, Argv: []string{"/usr/bin/sw_vers", "-buildVersion"}, Capture: captureBuild, ThenBaseSettings: true},
+	// renders into the stamps, then the rows. Every one of them is skipped when it fails, and the whole table when sw_vers prints a value outside the patterns.
+	{ID: "sw-vers-version", Step: "7f", Event: "setting the agent's first desktop", Root: true, Argv: []string{"/usr/bin/sw_vers", "-productVersion"}, Capture: captureVersion, Optional: true},
+	{ID: "sw-vers-build", Step: "7f", Root: true, Argv: []string{"/usr/bin/sw_vers", "-buildVersion"}, Capture: captureBuild, ThenBaseSettings: true, Optional: true},
 
 	// e. Remote Login off, last (§3.4 step 7e).
 	{ID: "remote-login-off", Step: "7e", Event: "turning Remote Login off", Root: true, Argv: []string{"/usr/sbin/systemsetup", "-f", "-setremotelogin", "off"}, MayDropSession: true},
