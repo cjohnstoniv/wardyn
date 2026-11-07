@@ -229,8 +229,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// layers it read, so a credential the boundary withholds goes as one the profile denies does.
 	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
 	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
-	re, rerr := s.reviveReassertCeiling(ctx, run, cfg, c, layers, actorType, actor)
+	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
 	if rerr != nil {
+		s.auditReviveCeilingRefusal(ctx, run, rerr, actorType, actor)
 		return reviveResult{}, rerr
 	}
 	imageMark, rerr := s.reviveImageRefusals(ctx, run, c.requiredImageSigners, actorType, actor)
