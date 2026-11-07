@@ -633,7 +633,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
-| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
+| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes (never the text, nor a digest of it); or app, reason |
 | `ui.input.drop` | a view-only desktop's relay dropped the first key and the first pointer move on a desktop socket (once for each socket a viewer opens) | app, input (never the input itself) |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,

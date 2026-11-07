@@ -108,7 +108,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		}
 		// On the run's masking manifest before it is used anywhere: a value that
 		// cannot be recorded is skipped like one that cannot be read.
-		if err := s.maskDispatchValue(ctx, run.ID, val); err != nil {
+		if err := s.maskDispatchValue(ctx, run.ID, envSecretRenderings(val)...); err != nil {
 			unrecorded++
 			continue
 		}
@@ -237,7 +237,7 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 				skip = "the grant is owner_only and the run's owner has no secret of that name of their own"
 			case gerr != nil || len(val) == 0:
 				skip = "secret could not be resolved"
-			case s.maskDispatchValue(ctx, run.ID, val) != nil:
+			case s.maskDispatchValue(ctx, run.ID, envSecretRenderings(val)...) != nil:
 				// On the run's masking manifest before the sandbox can see it.
 				skip = "the run's masking manifest could not record the value"
 			default:

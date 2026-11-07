@@ -95,8 +95,8 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 	return nil
 }
 
-// auditUIClipboard records one cut text by direction, size and hash. Never its content: the
-// filter does not hand the content over.
+// auditUIClipboard records one cut text by direction and size. Never its content, nor a digest
+// of it (a hash of a pasted password confirms a guess offline): the filter hands over neither.
 func (s *Server) auditUIClipboard(sess uiSession, ev rfbfilter.Event) {
 	if ev.Input != "" {
 		s.auditUISession(sess, "ui.input.drop", ev.Input, "denied", map[string]any{"app": sess.App, "input": ev.Input})
@@ -107,5 +107,5 @@ func (s *Server) auditUIClipboard(sess uiSession, ev rfbfilter.Event) {
 		outcome = "denied"
 	}
 	s.auditUISession(sess, "ui.clipboard.transfer", string(ev.Direction), outcome,
-		map[string]any{"app": sess.App, "direction": string(ev.Direction), "bytes": ev.Bytes, "sha256": ev.SHA256})
+		map[string]any{"app": sess.App, "direction": string(ev.Direction), "bytes": ev.Bytes})
 }
