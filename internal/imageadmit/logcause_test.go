@@ -27,6 +27,12 @@ func TestLogCause_FixedWordsOnly(t *testing.T) {
 		{fmt.Errorf("%s: %w", secret, ErrNotFound), "not_found"},
 		{errors.New(secret), "other"},
 	}
+	if got := LogHost(&Unavailable{Cause: CauseTLS, Host: "realm.example:443", Err: errors.New(secret)}); got != "realm.example:443" {
+		t.Errorf("LogHost = %q, want the answering host", got)
+	}
+	if got := LogHost(errors.New(secret)); got != "" {
+		t.Errorf("LogHost of a plain error = %q, want empty", got)
+	}
 	for _, c := range cases {
 		got := LogCause(c.err)
 		if got != c.want || strings.Contains(got, secret) {

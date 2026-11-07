@@ -175,7 +175,7 @@ func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried s
 }
 
 // checkImage is one check: coverage first, with no registry read, then the registry and the signatures. The
-// refusal is nil when the image is admitted. Why a check could not be made goes to the log as a fixed cause word.
+// refusal is nil when the image is admitted. Why a check could not be made goes to the log as a fixed cause word and the host.
 func (s *Server) checkImage(ctx context.Context, adm *types.SiteImageAdmission, ref string, site bool, profile []string) (imageadmit.Verdict, *runRefusal) {
 	return s.checkImageAt(ctx, adm, ref, ref, site, profile)
 }
@@ -198,7 +198,7 @@ func (s *Server) checkImageAt(ctx context.Context, adm *types.SiteImageAdmission
 	req.Ref = at
 	got, err := a.Admit(ctx, req)
 	if err != nil {
-		slog.WarnContext(ctx, "api: image admission check could not be made", slog.String("image", ref), slog.String("cause", imageadmit.LogCause(err)))
+		slog.WarnContext(ctx, "api: image admission check could not be made", slog.String("image", ref), slog.String("cause", imageadmit.LogCause(err)), slog.String("host", imageadmit.LogHost(err)))
 		got.Reason = imageadmit.AdmissionUnavailable
 	}
 	return got, imageAdmissionRefusal(ref, got)

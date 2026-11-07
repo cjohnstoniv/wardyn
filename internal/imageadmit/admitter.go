@@ -272,3 +272,13 @@ func LogCause(err error) string {
 	}
 	return "other"
 }
+
+// LogHost is the host that answered or was refused, for wardynd's log beside LogCause; "" when the error
+// names none. Unavailable.Host is a host name only, never a credential.
+func LogHost(err error) string {
+	var u *Unavailable
+	if errors.As(err, &u) {
+		return u.Host
+	}
+	return ""
+}
