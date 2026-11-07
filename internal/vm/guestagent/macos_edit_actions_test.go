@@ -281,6 +281,7 @@ func TestEditFullDiskAccessOpensThePaneAndRevealsTheAgent(t *testing.T) {
 	reveal := userArgv(502, "/usr/bin/open", "-R", "/usr/local/libexec/wardyn-guest-agent")
 
 	rig, dir, _ := newEditRig(t)
+	rig.t.AgentBinary = "" // the installed agent's own path
 	if w := rig.do("POST", "/edit/full-disk-access", `{"url":"file:///"}`); w.Code != 200 {
 		t.Fatalf("full-disk-access = %d %s", w.Code, w.Body)
 	}
