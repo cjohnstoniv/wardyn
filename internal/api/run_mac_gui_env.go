@@ -12,6 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
+	"github.com/google/uuid"
 )
 
 // The window and the run's settings. A macOS VM guest applies the run's non-secret settings to the window's
@@ -59,6 +60,12 @@ var macGUIEnvSeen sync.Map
 // macGUIEnvGaveUp marks a run, by run id, whose at-start wait ended with no answer after the guest said
 // pending: it counts as failed from then on, unless the guest later says set.
 var macGUIEnvGaveUp sync.Map
+
+// macGUIEnvForget drops the run's entries; called when the run ends (revokeRunSteps, killTeardownTail).
+func macGUIEnvForget(runID uuid.UUID) {
+	macGUIEnvSeen.Delete(runID)
+	macGUIEnvGaveUp.Delete(runID)
+}
 
 // macGUIEnvWaited marks a context whose at-start wait is over, so the open it carries is not refused for
 // settings the wait gave up on.

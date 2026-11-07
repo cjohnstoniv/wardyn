@@ -244,6 +244,48 @@ func TestZshHookSourcesTheSettingsOnlyForTheAgentAccount(t *testing.T) {
 	}
 }
 
+// /var, /tmp and /etc are links on macOS (to /private/...), and the root-only write walk refuses any link
+// on the way (walkDir), so the paths it writes never name one.
+func TestSessionEnvPathsNameNoLinkedMacDirectory(t *testing.T) {
+	p := DefaultSessionEnvPaths()
+	for _, path := range []string{p.Dir, p.Script, p.Status, p.Zshenv, MacVNCSettingsPath, MacItemStageDir, MacToolsBinDir} {
+		for _, link := range []string{"/var", "/tmp", "/etc"} {
+			if path == link || strings.HasPrefix(path, link+"/") {
+				t.Errorf("%s is under %s, a link on macOS", path, link)
+			}
+		}
+	}
+	// The walk with a linked parent, as /var is: the write through the link is refused, through its target it goes in.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "private", "var", "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("private", "var"), filepath.Join(root, "var")); err != nil {
+		t.Fatal(err)
+	}
+	at := func(dir string) SessionEnvPaths {
+		return SessionEnvPaths{Dir: dir, Script: dir + "/session-env.zsh", Status: dir + "/session-env.status", Zshenv: filepath.Join(root, "zshenv")}
+	}
+	if err := SessionEnvFile(at(filepath.Join(root, "var", "run", "wardyn")), []string{"A=b"}); !errors.Is(err, ErrUnsafeParent) {
+		t.Errorf("a write through a linked parent = %v, want ErrUnsafeParent", err)
+	}
+	if err := SessionEnvFile(at(filepath.Join(root, "private", "var", "run", "wardyn")), []string{"A=b"}); err != nil {
+		t.Errorf("a write through the link's target: %v", err)
+	}
+}
+
+// With no agent account known (uid 0 is root's), the hook is not installed: root's zsh would source the run's
+// settings.
+func TestZshHookIsRefusedWithoutAnAgentAccount(t *testing.T) {
+	p := sessionEnvPaths(t)
+	if err := EnsureZshHook(p, 0); err == nil {
+		t.Error("a hook for uid 0 was installed")
+	}
+	if b, err := os.ReadFile(p.Zshenv); err == nil && strings.Contains(string(b), sessionEnvHookMarker) {
+		t.Errorf("zshenv carries the hook for uid 0: %q", b)
+	}
+}
+
 func TestSessionEnvFileRoundTripsThroughAShell(t *testing.T) {
 	p := sessionEnvPaths(t)
 	env := []string{`Q=it's a "test"`, `CMD=$(id)`, "TICK=`id`", "SPACES=a  b   c", `BS=back\slash`, "PLAIN=ok"}
