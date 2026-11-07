@@ -3971,6 +3971,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0253` (`0253_agent_runs_kept_machine_id`) adds `agent_runs.kept_machine_id` and `agent_runs.kept_machine_mode` (`0001`'s table): the kept machine a macOS VM run kept or resumed and how, with no foreign key so the run's page can say the machine was deleted. It also adds `kept_machines.reset_run_id` and `kept_machines.reset_unconfirmed` (`0250`'s table): a fresh start its Mac has not confirmed, and an earlier one a later attempt replaced. NULL or false on every existing row; no grant changes.
 - `0254` (`0254_agent_runs_correlation_id`) adds `agent_runs.correlation_id` (`0001`'s table): the caller's own reference for a run, empty on every existing row; no grant changes.
 - `0255` (`0255_agent_runs_allowed_models`) adds `allowed_models` to `agent_runs` (`0001`'s table): the governed allowed-models list the run was dispatched under and the profile that set it, replayed on revive and never changed by a later profile edit; NULL when no list binds the run.
+- `0256` (`0256_audit_checkpoints`) creates `audit_checkpoints`: one signed audit checkpoint per row, append-only like `audit_events`, owner included. A split-role install grants `INSERT, SELECT` on it to each role that may call `audit_append` and takes back anything else, default privileges included.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5449,7 +5450,7 @@ What the switch needs, and refuses to render or boot without:
     The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
     credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep, the audit checkpoint signer last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.

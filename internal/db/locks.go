@@ -84,6 +84,10 @@ const (
 	// AuditSweepLockClass admits one audit-chain verify sweep at a time. It is
 	// taken last and only ever tried, never waited for.
 	AuditSweepLockClass int32 = 0x57415357 // ASCII "WASW"
+	// AuditCheckpointLockClass admits one audit checkpoint signer at a time
+	// across replicas. It is only ever tried, never waited for, and the signer
+	// holds no other lock.
+	AuditCheckpointLockClass int32 = 0x5741434B // ASCII "WACK"
 )
 
 // LockOrder is the one documented order. A lock may be taken while holding
@@ -96,7 +100,8 @@ const (
 //	them), then the gateway audience lock (held around a provider save's
 //	document lock and a component save's key and row locks), then the
 //	organisation MCP server key lock (held around a component save's row
-//	lock), then the document locks, and the audit sweep last.
+//	lock), then the document locks, then the audit sweep, and the audit
+//	checkpoint signer last.
 var LockOrder = []int32{
 	RunOpLockClass,
 	ADORunTokenLockClass,
@@ -108,6 +113,7 @@ var LockOrder = []int32{
 	SiteConfigLockClass,
 	CapEnforcementLockClass,
 	AuditSweepLockClass,
+	AuditCheckpointLockClass,
 }
 
 // Lock failures. A refusal (ErrLockBusy, ErrLockNoCapacity, ErrLockUnavailable)

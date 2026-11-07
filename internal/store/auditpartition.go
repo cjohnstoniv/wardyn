@@ -65,9 +65,13 @@ type PartitionDigest struct {
 }
 
 // NewPartitionDigest starts the fold at the manifest's header.
-func NewPartitionDigest(m PartitionManifest) *PartitionDigest {
+func NewPartitionDigest(m PartitionManifest) *PartitionDigest { return NewFoldDigest(m.Header()) }
+
+// NewFoldDigest starts the same fold at sha256(seed): a signed audit checkpoint's digest, seeded with the
+// previous checkpoint's statement hash ("" for the first), as internal/auditreceipt.Fold checks it offline.
+func NewFoldDigest(seed string) *PartitionDigest {
 	p := &PartitionDigest{}
-	sum := sha256.Sum256([]byte(m.Header()))
+	sum := sha256.Sum256([]byte(seed))
 	hex.Encode(p.d[:], sum[:])
 	return p
 }

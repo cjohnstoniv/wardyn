@@ -121,6 +121,10 @@ func TestAuditCheckpointRange_SeededFromPrevHead(t *testing.T) {
 		t.Fatalf("a seed that is not the head's hash: %v, want a break at seq %d", err, auditSeq(t, pool, evs[2].ID))
 	}
 
+	if seq, hash, err := pg.AuditChainHead(ctx); err != nil || seq != hw || hash != evs[4].RowHash {
+		t.Fatalf("AuditChainHead = %d %s %v, want the newest row %d %s", seq, hash, err, hw, evs[4].RowHash)
+	}
+
 	// Nothing new: an empty range, no error.
 	if rows, _, err := pg.AuditCheckpointRange(ctx, hw, evs[4].RowHash, store.AuditCheckpointMaxRows); err != nil || len(rows) != 0 {
 		t.Fatalf("range past the head = %d rows, %v; want none", len(rows), err)
