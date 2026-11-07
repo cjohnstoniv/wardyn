@@ -171,6 +171,17 @@ func TestApplyToolPostureRoutesApproveEach(t *testing.T) {
 	}
 }
 
+// A ceiling's approve_each does not count in governanceHoldRules, so it is the tool posture that keeps a
+// background run of a gated harness from running ungated: an explicit auto becomes hold.
+func TestApplyToolPostureOverridesAutoForApproveEach(t *testing.T) {
+	rule := types.ToolRule{Tool: approveEachTool, Effect: types.ToolApproveEach}
+	req, spec := createRunRequest{Agent: claudeCodeHarness, Task: "t", ToolApprovals: "auto"}, types.RunPolicySpec{ToolRules: []types.ToolRule{rule}}
+	(&Server{}).applyToolPosture(&req, &spec)
+	if req.ToolApprovals != "hold" {
+		t.Errorf("tool_approvals %q, want hold", req.ToolApprovals)
+	}
+}
+
 // Wardyn can ask for each call only of a server it reaches through the proxy. A tool of a server
 // that runs in the sandbox is refused for every harness, however the rule got onto the run.
 func TestApproveEachOnLocalMCPRefused(t *testing.T) {
