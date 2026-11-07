@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/imageadmit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // ImageAdmissionConfig is Config's image admission check, embedded so its wiring lives beside the feature
@@ -122,10 +123,7 @@ func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried s
 	if s.cfg.Store != nil && !ok {
 		return nil, "", runServerError("resolve image admission", errImageAdmissionSiteUnreadable)
 	}
-	var adm *types.SiteImageAdmission
-	if sc.Images != nil {
-		adm = sc.Images.Admission
-	}
+	adm := siteImageAdmission(sc)
 	mode := adm.EffectiveMode()
 	if mode == types.ImageAdmissionOff && len(profile) == 0 {
 		return nil, "", nil
@@ -284,5 +282,43 @@ func imageAdmissionPinnedRef(ref, digest string) (string, error) {
 func stampImageAdmission(data map[string]any, v *types.ImageAdmissionVerdict) {
 	if v != nil {
 		data["image_admission"] = v
+	}
+}
+
+// siteImageAdmission is the site's images.admission block, nil when none is set (which reads as off).
+func siteImageAdmission(sc types.SiteConfig) *types.SiteImageAdmission {
+	if sc.Images == nil {
+		return nil
+	}
+	return sc.Images.Admission
+}
+
+// imageAdmissionPreview is the policy preview's image_admission fact: "checked at launch" when launch would
+// check the member's image (imageAdmission's decisions up to the check itself), "" when it would not: no
+// member image, an operator or the break-glass admin, a macOS VM, or the site mode off with no profile
+// signer. It reads no registry. An unreadable site config reports the check, since launch then refuses.
+func (s *Server) imageAdmissionPreview(ctx context.Context, req createRunRequest, carried string, profile []string) client.ImageAdmissionFact {
+	if createDigestInput(req, carried) == "" || s.runUngoverned(ctx) || types.MachineKind(req.MachineKind).IsMacOSVM() {
+		return ""
+	}
+	if sc, ok := s.siteConfigSnapshot(ctx); ok || s.cfg.Store == nil {
+		if siteImageAdmission(sc).EffectiveMode() == types.ImageAdmissionOff && len(profile) == 0 {
+			return ""
+		}
+	}
+	return client.ImageAdmissionCheckedAtLaunch
+}
+
+// markImageAdmissionExempt stamps image_admission_exempt on a run.create datum when the site mode is on
+// (enforce or audit) and an operator's or the break-glass admin's run names a member image, which admission
+// does not check, so the org can see the runs it did not bind. A profile's signers bind governed callers only,
+// so they never make an operator's run exempt. The key is absent otherwise, and when the site config cannot
+// be read (as with image_digest_exempt), so a deployment with admission off writes the rows it always did.
+func (s *Server) markImageAdmissionExempt(ctx context.Context, image string, data map[string]any) {
+	if image == "" || !s.runUngoverned(ctx) {
+		return
+	}
+	if sc, ok := s.siteConfigSnapshot(ctx); ok && siteImageAdmission(sc).EffectiveMode() != types.ImageAdmissionOff {
+		data["image_admission_exempt"] = true
 	}
 }
