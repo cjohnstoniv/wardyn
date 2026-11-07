@@ -44,7 +44,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 
 | Shape | Sub-line shown | Runs as |
 |---|---|---|
-| **Agent task** | Interactive · Autonomous · Repeat / schedule coming soon | A one-time coding task, driven by you or running on its own |
+| **Agent task** | Interactive · Autonomous | A one-time coding task, driven by you or running on its own |
 | **Environment** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
 | **Application sandbox** | Automation / script · Application / server | A sandboxed command that runs on its own, or a server you open in your browser |
 
@@ -81,7 +81,7 @@ A harness is an agent tool the sandbox holds, such as a coding CLI.
 | Shape | Harnesses |
 |---|---|
 | Agent task, Interactive | At least one. At most one starts with the run, with an optional **Starting prompt** |
-| Agent task, Autonomous | Exactly one, with a required **Task**. **Add another harness** is disabled and marked **Coming soon** |
+| Agent task, Autonomous | One, with a required **Task**. With [`WARDYN_MULTI_AGENT_TASKS`](ENV.md) on, **Add another harness** adds agents that share the sandbox, each with its own **Task**; off, the button is not shown |
 | Environment or Application sandbox | Optional. They are available inside the sandbox and start nothing |
 
 - A harness you cannot pick is disabled with its reason, such as not installed in this server's images or **Not enabled by your admin**.
@@ -94,7 +94,7 @@ The step shows the main drive, one list of items, a starting folder and a mount 
 
 - **Main drive** is the sandbox's own disk, and every run has one. **Size** is in GiB and required. The pool's default fills it, and a size above the cap is clamped with a note naming who set the cap. With no size the step's summary reads "Set a size for the main drive."
 - A chip says whether the runner holds the size: **Enforced**, **Enforced by stopping the run** or **Not enforced on this runner**.
-- **What happens to it** says whether the drive is deleted when the run ends or kept so you can resume. **Reuse it across runs** is disabled and marked **Coming soon**.
+- **What happens to it** says whether the drive is deleted when the run ends or kept so you can resume. **Reuse it across runs** keeps the work folder as one of your drives. It is shown once your admin turns on `keep_main_drive` ([Member drives](OPERATIONS.md#member-drives)), and is disabled with the reason when something blocks it, such as your drive limit.
 
 Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Mount path**.
 
@@ -145,13 +145,13 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 
 | Item | Notes |
 |---|---|
-| CLIs | Azure, GitHub and AWS cards, each named for the row your admin granted (`cli_not_granted` otherwise). **Google Cloud CLI** and **kubectl** are **Coming soon** |
+| CLIs | Azure, GitHub and AWS cards, each named for the row your admin granted (`cli_not_granted` otherwise). **kubectl** is shown with [`WARDYN_KUBECTL_CLI`](ENV.md#wardyn_kubectl_cli) on. There is no Google Cloud CLI card |
 | GitHub CLI | Works only with this run's GitHub repositories (`cli_no_github_repo`). The proxy adds its token |
 | AWS CLI | Role credentials are issued into the sandbox, short-lived. On a run whose model provider is Bedrock, `AWS_REGION` and `AWS_DEFAULT_REGION` are the provider's region and win over the profile's; pass `--region` for another |
 | Organisation components | MCP servers and APIs your admin published, marked **From your organisation** |
 | **Add a secret** | One of your saved secrets as **Request header** (preferred), **Environment variable** or **File** |
 | **Allow a host** | One more host with no credential. Your organisation's ceiling still applies |
-| **Add an MCP server** | A remote server by HTTPS URL with an optional token. Local-command servers are **Coming soon** |
+| **Add an MCP server** | A remote server by HTTPS URL with an optional token. With [`WARDYN_MCP_LOCAL_SERVERS`](ENV.md#wardyn_mcp_local_servers) on, the dialog also offers **Runs in a sandbox**, a command that runs in this run's sandbox |
 | **Custom component** | Hosts and a secret bundled for reuse. Disabled when your organisation does not let you define components |
 
 - Your admin can turn off environment-variable and file delivery (`resident_off`); use a request header then.
