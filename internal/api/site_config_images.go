@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -206,6 +207,10 @@ func auditSiteImages(datum map[string]any, before, im *types.SiteImages, named b
 // siteImageRootMax bounds a trust root file read at write: a real root is a few kilobytes.
 const siteImageRootMax = 1 << 20
 
+// imageTrustedRootDir is the one directory a trusted root file may live in (a variable only so tests can point
+// it at a temporary directory): under /etc/wardyn, where the compose stack mounts WARDYN_MANAGED_DIR.
+var imageTrustedRootDir = "/etc/wardyn/sigstore"
+
 // validateSiteImageAdmission is PUT /site-config's check of images.admission: the block's shape (types) with
 // the image-grant grammar for each images entry, and each trust root's file, read here as branding's logo
 // is, so a bad path or file refuses the write rather than every later run. Every message starts
@@ -225,9 +230,45 @@ func validateSiteImageAdmission(im *types.SiteImages) error {
 	return nil
 }
 
-// checkImageTrustedRootFile reads path and parses it as a Sigstore trusted root.
+// errTrustedRootOutsideDir refuses a trusted root path outside dir.
+func errTrustedRootOutsideDir(dir string) error { return fmt.Errorf("the file must be in %s", dir) }
+
+// trustedRootName is path's name inside dir, rooted ("/name"), when the cleaned path is in dir. The rooted
+// clean leaves no ".." in it, so dir joined with it is in dir.
+func trustedRootName(dir, path string) (string, bool) {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(path) || !strings.HasPrefix(clean, dir+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.Clean("/" + strings.TrimPrefix(clean, dir)), true
+}
+
+// checkImageTrustedRootFile reads path and parses it as a Sigstore trusted root. The path must name a file in
+// imageTrustedRootDir, both as written (cleaned) and once its symbolic links are resolved, and the file is
+// opened through that directory (os.Root), so no other file on the server is read. No message quotes the file.
 func checkImageTrustedRootFile(path string) error {
-	f, err := os.Open(path)
+	dir := filepath.Clean(imageTrustedRootDir)
+	name, ok := trustedRootName(dir, path)
+	if !ok {
+		return errTrustedRootOutsideDir(dir)
+	}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return errors.New("the file cannot be read")
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(dir, name))
+	if err != nil {
+		return errors.New("the file cannot be read")
+	}
+	if name, ok = trustedRootName(realDir, real); !ok {
+		return errTrustedRootOutsideDir(dir)
+	}
+	d, err := os.OpenRoot(realDir)
+	if err != nil {
+		return errors.New("the file cannot be read")
+	}
+	defer d.Close()
+	f, err := d.Open(strings.TrimPrefix(name, "/"))
 	if err != nil {
 		return errors.New("the file cannot be read")
 	}

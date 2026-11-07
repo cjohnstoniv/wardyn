@@ -32,8 +32,29 @@ func admissionSigner(name string) types.ImageSigner {
 }
 
 func TestValidateSiteImageAdmission(t *testing.T) {
-	dir := t.TempDir()
+	dir, outside := t.TempDir(), t.TempDir()
+	was := imageTrustedRootDir
+	imageTrustedRootDir = dir
+	t.Cleanup(func() { imageTrustedRootDir = was })
+	pg, err := os.ReadFile(mustAbs(t, publicGoodRootFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inDir := writeFile(t, filepath.Join(dir, "private.json"), pg)
+	outsideRoot := writeFile(t, filepath.Join(outside, "root.json"), pg)
 	garbage := writeFile(t, filepath.Join(dir, "garbage.json"), []byte("this is not a trusted root"))
+	// A symbolic link that stays in the directory (a mounted Secret's files are links), and one that leaves it.
+	for link, target := range map[string]string{"linked.json": inDir, "escape.json": outsideRoot} {
+		if err := os.Symlink(target, filepath.Join(dir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := func(path string) func(a *types.SiteImageAdmission) {
+		return func(a *types.SiteImageAdmission) {
+			a.TrustedRoots = []types.ImageTrustedRoot{{Name: "private", Path: path}}
+			a.Signers[0].Keyless.TrustedRoot = "private"
+		}
+	}
 	with := func(mut func(a *types.SiteImageAdmission)) *types.SiteImages {
 		a := &types.SiteImageAdmission{Mode: "audit", Signers: []types.ImageSigner{admissionSigner("corp-ci")}}
 		mut(a)
@@ -46,10 +67,8 @@ func TestValidateSiteImageAdmission(t *testing.T) {
 		{"no images block", nil},
 		{"a block without admission", &types.SiteImages{RequireDigest: true}},
 		{"prefix and exact image entries", with(func(*types.SiteImageAdmission) {})},
-		{"a readable trusted root", with(func(a *types.SiteImageAdmission) {
-			a.TrustedRoots = []types.ImageTrustedRoot{{Name: "private", Path: mustAbs(t, publicGoodRootFile)}}
-			a.Signers[0].Keyless.TrustedRoot = "private"
-		})},
+		{"a readable trusted root in the directory", with(root(inDir))},
+		{"a link to a root in the directory", with(root(filepath.Join(dir, "linked.json")))},
 	} {
 		if err := validateSiteImageAdmission(tc.im); err != nil {
 			t.Errorf("%s: refused: %v", tc.name, err)
@@ -69,6 +88,9 @@ func TestValidateSiteImageAdmission(t *testing.T) {
 		{"a trusted root that does not parse", with(func(a *types.SiteImageAdmission) {
 			a.TrustedRoots = []types.ImageTrustedRoot{{Name: "private", Path: garbage}}
 		}), "private"},
+		{"a root outside the directory", with(root(outsideRoot)), "must be in " + dir},
+		{"a ../ escape from the directory", with(root(dir + "/../" + filepath.Base(outside) + "/root.json")), "must be in " + dir},
+		{"a link that leaves the directory", with(root(filepath.Join(dir, "escape.json"))), "must be in " + dir},
 		{"enforce with no signer", &types.SiteImages{Admission: &types.SiteImageAdmission{Mode: "enforce"}}, "audit"},
 		{"a keyless signer with neither identity form", with(func(a *types.SiteImageAdmission) { a.Signers[0].Keyless.Identity = "" }), "identity"},
 	} {
@@ -77,6 +99,8 @@ func TestValidateSiteImageAdmission(t *testing.T) {
 			t.Errorf("%s: accepted", tc.name)
 		} else if !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "images.admission") {
 			t.Errorf("%s: error %q should name images.admission and %q", tc.name, err, tc.want)
+		} else if strings.Contains(err.Error(), "this is not a trusted root") || strings.Contains(err.Error(), "mediaType") {
+			t.Errorf("%s: error %q quotes the file", tc.name, err)
 		}
 	}
 }

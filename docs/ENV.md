@@ -2709,6 +2709,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Compose only — bind-mounts this host directory READ-ONLY at the fixed path `/etc/wardyn` inside the `wardynd` container.
 - The desktop tier's MDM payload ([`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) exports it as `/etc/wardyn` so the MDM-managed `WARDYN_DEFAULT_POLICY`, a HOST path wardynd reads off disk at boot, resolves inside the container too).
 - OR a corporate CA bundle on **any** compose install (point `WARDYN_TRUSTED_CA_FILE` above at a file under this mount, e.g. `/etc/wardyn/corp-ca.pem`).
+- OR a private Sigstore trusted root for image admission: site setting `images.admission.trusted_roots[].path` must name a file in `/etc/wardyn/sigstore` (on Kubernetes, mount it there with `extraVolumes` and `extraVolumeMounts`). A path anywhere else, or a link that leads out of that directory, refuses the write.
 - Unlike `WARDYN_WORKSPACES_ROOT` above, only the HOST side varies — the container side is the literal `/etc/wardyn`.
 - A deployment needing neither leaves it unset and mounts a harmless empty path.
 
