@@ -3980,6 +3980,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0255` (`0255_agent_runs_allowed_models`) adds `allowed_models` to `agent_runs` (`0001`'s table): the governed allowed-models list the run was dispatched under and the profile that set it, replayed on revive and never changed by a later profile edit; NULL when no list binds the run.
 - `0256` (`0256_delegation_actor`) adds `delegated_tokens.actor_sub` and `actor_iss` (`0094`'s table, empty on every existing row), `agent_runs.created_via_actor` (`0001`'s table) and `attach_tickets.via_actor` (`0026`'s table), both NULL on every existing row: the agent a portal named as acting for the person; no grant changes.
 - `0256` (`0256_run_create_keys`) creates `run_create_keys`: one row per `POST /api/v1/runs` `Idempotency-Key`, kept 24 hours. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
+- `0256` (`0256_audit_checkpoints`) creates the append-only `audit_checkpoints` table; a split-role install grants `INSERT, SELECT` on it to each role that may call `audit_append`, and nothing else.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5458,7 +5459,7 @@ What the switch needs, and refuses to render or boot without:
     The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
     credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the gateway audience, the organisation MCP server key, the document locks, the audit sweep, the audit checkpoint signer last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.
