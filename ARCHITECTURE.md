@@ -485,7 +485,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 | `git_pat` (GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg; see [below](#git_pat-mechanism). | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run ([§5.1a](threatmodel/THREAT-MODEL.md#51a-llm-egress-content-inspection--the-honest-claims-contract)); not least-privilege either way; **not available for the SAME forge as a `github_token` grant**; see [below](#git_pat-credential). |
 | `ssh_key`, any host | **proxy SSH agent** — `wardyn-git-helper ssh-exec` bridges each `ssh` to it ([`internal/egress/proxy/ssh_agent.go`](internal/egress/proxy/ssh_agent.go)) | proxy memory only; **not available at all for the SAME forge as a `github_token` grant**; see [below](#ssh_key-credential). |
 
-- **Azure DevOps is not a fourth grant kind.** It has no `git_pat` or `ssh_key` lane: a shared token or key is refused on an Azure DevOps row.
+- **Azure DevOps is not a fourth grant kind.** It has no `git_pat` or `ssh_key` path: a shared token or key is refused on an Azure DevOps row.
   - The credential a run carries is the person's own: a PAT Wardyn creates for the run in their name (`minted_pat`), their Entra token (`bearer`) or a PAT they pasted (`own_pat`).
   - An Azure DevOps Server row is git only.
   - The control plane resolves it from the run's provider row and the proxy injects it. The sandbox never holds it.
@@ -498,7 +498,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 - `git_pat` CAN be proxy-injected, but only through its OWN broker (the row above).
   - On the default `WARDYN_GIT_PAT_BROKER=on`, `agent-run`'s rewrite removes the tunnel rather than injecting into it: the proxy terminates the request and re-originates it with Basic auth.
   - With the broker off, git-over-HTTPS to that host is the same opaque CONNECT tunnel `ssh_key` faces ([`internal/types/types.go`](internal/types/types.go), `GrantGitPAT`/`GrantSSHKey`).
-- Deleting either lane drops a supported SCM.
+- Deleting either path drops an SCM.
 - The helper does not serve the GitHub App path on a **brokered** run, one the broker serves at least one repo for (`WARDYN_GIT_BROKER_REPOS` non-empty).
   - It refuses every GitHub host there rather than print an installation token to stdout inside the sandbox. That token could be pushed straight to `github.com:443`, an opaque tunnel around the broker's receive-pack ref check. The proxy's mint route refuses the same grant id, so the env var is not a way back to it.
   - "Has a grant" and "is brokered" are not the same set. A `github_token` grant covering no repo has no `/wardyn/gh/` route and no injected GitHub deny, so the helper is still its credential path and mints unchanged.
