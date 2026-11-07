@@ -329,6 +329,9 @@ func (h setupHost) serviceStage(ctx context.Context, p setupPaths) doctor.Stage 
 // reads, and no others.
 const orgSetting = "the organisation address (--org, the OrgURL managed preference, or org_url in runnerd.json)"
 
+// statusNow is the clock status lines are read against: the base's age and a runner's next try (tests replace it).
+var statusNow = time.Now
+
 // statusSetting is the setting, and what to set it to, that fixes a connection that failed at stage.
 var statusSetting = map[string][2]string{
 	types.RunnerStageDNS:        {orgSetting, "an address that resolves from this computer (or fix its DNS or VPN)"},
@@ -358,7 +361,8 @@ func statusStage(path string) doctor.Stage {
 		last += "; warning: peers-only not in effect: organisation older (its proxy image " + st.PeersOnlyRefusedBy +
 			" refused allowed_peers, so run proxies serve any peer until it is upgraded)"
 	}
-	if st.NextRetryAt != nil && st.State == "starting" {
+	// A next try already in the past is a leftover (a runner killed while it waited), not a plan.
+	if st.NextRetryAt != nil && st.State == "starting" && st.NextRetryAt.After(statusNow()) {
 		last += "; waiting for the proxy image; next try at " + st.NextRetryAt.UTC().Format(time.RFC3339)
 	}
 	since := st.Since.UTC().Format(time.RFC3339)
