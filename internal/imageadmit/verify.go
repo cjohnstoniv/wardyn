@@ -85,7 +85,7 @@ func Check(r Requirements, digest string, bundles [][]byte) Verdict {
 		}
 	}
 	return Verdict{Digest: digest, Signer: primary.signer.name, Signers: signers, Identity: primary.signed.identity,
-		Issuer: primary.signed.issuer, KeyID: primary.signed.keyID, Attestations: primary.signer.attestations}
+		Issuer: primary.signed.issuer, KeyID: primary.signed.keyID, Attestations: append([]string(nil), primary.signer.attestations...)}
 }
 
 type candidate struct {
