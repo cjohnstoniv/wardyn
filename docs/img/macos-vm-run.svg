@@ -14,11 +14,11 @@
     .tab { fill: #f6f8fa; stroke: #59636e; stroke-width: 1.5; }
     .halo { paint-order: stroke; stroke: #ffffff; stroke-width: 5px; stroke-linejoin: round; }
     .dot { fill: #59636e; }
-    .pill { fill: #0f8a7e; stroke: none; }
+    .pill { fill: #0b766b; stroke: none; }
     .pt { fill: #ffffff; }
     .t { fill: #1f2328; }
     .m { fill: #59636e; }
-    .a { fill: #0f8a7e; }
+    .a { fill: #0b766b; }
     .r { fill: #cf222e; }
     .h { fill: #9a6700; }
     .ln { fill: none; stroke: #59636e; stroke-width: 2; }
