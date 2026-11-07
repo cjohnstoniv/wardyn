@@ -85,13 +85,17 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		} else {
 			args[2] = anchor.Translate(r.UpdatedAt)
 		}
-		if out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...)); e != nil || !keep {
+		if out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...)); e != nil {
+			return e
+		}
+		if e = bindRunCreateKey(ctx, q, out.ID); e != nil || !keep {
 			return e
 		}
 		out, e = insertLaunchIntent(ctx, q, out, r.LaunchIntent)
 		return e
 	}
-	if r.LaunchIntent != nil {
+	// A run with an Idempotency-Key takes the transaction path too, so the key binds with the insert.
+	if r.LaunchIntent != nil || hasRunCreateKey(ctx) {
 		err = s.createRunWithIntent(ctx, write)
 	} else {
 		err = s.guarded(ctx, write)
@@ -175,6 +179,9 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)
+	}
+	if err := bindRunCreateKey(ctx, tx, created.ID); err != nil {
+		return types.AgentRun{}, err
 	}
 	if keep {
 		if created, err = insertLaunchIntent(ctx, tx, created, r.LaunchIntent); err != nil {
