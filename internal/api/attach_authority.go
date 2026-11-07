@@ -133,10 +133,10 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 }
 
 // attachUnitCheck is the attach door asked again of runID as it stands now: the entry rule when entry is
-// set (the ticket lane's, refuseAttachEntry's mayEnterRunOrSponsor, so a sponsorship that has ended or
+// set (the ticket's, refuseAttachEntry's mayEnterRunOrSponsor, so a sponsorship that has ended or
 // cannot be read ends the socket; the grant half, service_attach, stays a mint-time check), then
 // deny_interactive (refuseInteractiveAttach). It returns errAttachAuthorityEnded once either refuses, and the
-// read's error when the run or its profile cannot be read. exempt is the lane's door exemption from
+// read's error when the run or its profile cannot be read. exempt is the door's exemption from
 // deny_interactive, asked of the run.
 func (s *Server) attachUnitCheck(ctx context.Context, runID uuid.UUID, entry, exempt func(types.AgentRun) bool) error {
 	run, err := s.cfg.Store.GetRun(ctx, runID)

@@ -602,8 +602,8 @@ func (s *sponsorLookupStore) ServiceStillSponsored(ctx context.Context, name, sp
 // identity's run is checked against the sponsorship as the handshake did, from the ticket's own authority
 // time. A sponsorship that ended (replaced, suspended or retired), one that began again after the ticket
 // (A to B to A), and a lookup that fails each end it at the next check; a sponsor who still is one, and a
-// person on their own run whatever the service store says, keep it. The check is the one every socket on the
-// ticket lane runs, a writer's and an observer's alike.
+// person on their own run whatever the service store says, keep it. The check is the one a ticket's writer
+// socket and observer socket both run.
 func TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship(t *testing.T) {
 	opened := time.Now().Add(-time.Minute)
 	type sponsorRig struct {
