@@ -163,16 +163,8 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		return Manifest{}, errors.New("macvm: an edit needs an engine, its boots, a prep network and a root")
 	}
 	o.setDefaults()
-	scr := o.Screen
-	if scr == nil {
-		scr = nativeEditScreen
-	}
-	if scr == nil {
-		return Manifest{}, errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
-	}
-	if err := scr.Ready(); geteuid() == 0 || errors.Is(err, ErrNoDesktopSession) {
-		return Manifest{}, ErrEditNoDesktop
-	} else if err != nil {
+	scr, err := o.editScreen()
+	if err != nil {
 		return Manifest{}, err
 	}
 	base := o.Layout.BaseDir(o.Slot)
@@ -270,6 +262,25 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	o.writeRecord(base, m, read)
 	fmt.Fprintf(o.Out, editReadyLine+"\n", o.desktopWords(desktop))
 	return m, nil
+}
+
+// editScreen is the window the edit shows the guest in: o.Screen, else the Mac's own. It refuses when this
+// build cannot open one, when the process runs as root or no one is signed in at the Mac (ErrEditNoDesktop), and
+// when the window check fails otherwise.
+func (o *EditOptions) editScreen() (WindowScreen, error) {
+	scr := o.Screen
+	if scr == nil {
+		scr = nativeEditScreen
+	}
+	if scr == nil {
+		return nil, errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
+	}
+	if err := scr.Ready(); geteuid() == 0 || errors.Is(err, ErrNoDesktopSession) {
+		return nil, ErrEditNoDesktop
+	} else if err != nil {
+		return nil, err
+	}
+	return scr, nil
 }
 
 func (o *EditOptions) setDefaults() {
