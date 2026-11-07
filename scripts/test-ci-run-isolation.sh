@@ -273,7 +273,7 @@ if grep -q 'compose' "$CALLS"; then bad "remote mode touched docker compose: $(h
 
 # 4a''. WARDYN_CI_IDEMPOTENCY_KEY reaches the launch (not the preflight) as --idempotency-key; unset sends none.
 out="$(run_remote WARDYN_CI_IDEMPOTENCY_KEY=build-9-job-1)"; rc=$?
-if [ "$rc" -eq 0 ] && grep -- '--wait' "$WCALLS" | grep -q -- '--idempotency-key build-9-job-1' && ! grep -- '--dry-run' "$WCALLS" | grep -q -- '--idempotency-key'; then
+if [ "$rc" -eq 0 ] && grep -- '--wait' "$WCALLS" | grep -- '--idempotency-key build-9-job-1' >/dev/null && ! grep -- '--dry-run' "$WCALLS" | grep -- '--idempotency-key' >/dev/null; then
     ok "WARDYN_CI_IDEMPOTENCY_KEY is passed to the launch as --idempotency-key"
 else bad "WARDYN_CI_IDEMPOTENCY_KEY did not reach the launch alone (rc=$rc): $(grep -- '--wait\|--dry-run' "$WCALLS" | tr '\n' ' ')"; fi
 out="$(run_remote)"; rc=$?
