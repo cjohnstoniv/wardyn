@@ -439,7 +439,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - The RuntimeClass is set on the agent pod only. The `wardyn-proxy` pod runs on the node's default runtime, outside the guest.
     - Agent limits (`runner.sandbox.defaultResources`, or the policy's resources) become the pod's CPU and memory limits, and its requests equal them unless `runner.sandbox.requestRatio` is set.
     - CC2 stays unadvertised on a cluster with no gVisor (`runsc*`) handler: leave `k8s.runtimeClasses.CC2` empty.
-    - A Linux VM sandbox (`k8s.linuxVM=true`) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
+    - A Linux VM sandbox (`k8s.linuxVM=true` in the `wardyn-runnerd` chart, not this one) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
     - Not proven: CI does not run Kata, because the conformance test skips where none is installed.
     - The unit tests use a fake clientset with class `kata` and handler `kata-qemu`, plus a `kata-vm-isolation` / `kata` row, so this pairing has never run on a real cluster.
     - Unknown: PVC drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
