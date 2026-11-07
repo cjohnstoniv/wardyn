@@ -256,6 +256,7 @@ Profiles and their assignments live in Postgres, so `make reset` / `make reset-a
 1. Export before a reset: `wardyn governance get > governance.json` (`GET /api/v1/governance`).
 2. Restore after: `wardyn governance set governance.json`.
 
-- `set` upserts every named profile **by name** (its unique handle) and every assignment by its natural key (subject_type, subject).
-- A profile the file does not mention is left alone. One present server-side but absent from the file is removed only with `--prune`, which also removes an omitted assignment. It removes assignments before profiles, so a still-referenced profile never trips the delete-while-assigned refusal (`governance_unit_in_use`).
+- `set` upserts every named profile **by name** (its unique handle), except the Default unit, which is the server's own and is never written or pruned. It upserts every membership by its natural key (unit name, subject_type, subject).
+- A person's membership of one unit and of another are two memberships. Moving a person by editing the unit in the file adds the new membership and leaves the old one; removing it takes an explicit delete or a reviewed `--prune`.
+- A profile the file does not mention is left alone. One present server-side but absent from the file is removed only with `--prune`, which also removes an omitted membership. It removes assignments before profiles, so a still-referenced profile never trips the delete-while-assigned refusal (`governance_unit_in_use`).
 - `wardyn governance get > f && wardyn governance set f` is a no-op: unchanged rows are skipped rather than re-written, so a repeat `set` issues no writes and adds no audit rows.
