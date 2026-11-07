@@ -560,7 +560,7 @@ What the check does and does not settle:
 | `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
 | `azure_devops_capabilities` | | The run keeps only capabilities in both your list and its policy's list, or the provider's default profile where the policy names none. Nothing in common refuses the run (`403` `governance_overlay_unsatisfiable`) |
 | `github_capabilities` | | The same for GitHub: the GitHub CLI keeps only your listed capabilities. Without `code_write` (yours or the policy's), git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only; `azure_devops_capabilities` does the same for Azure DevOps `git_pat` pushes. |
-| `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool your walls don't name, the policy's included. A rule never loosens one the run already has, and `allow` is refused |
+| `tool_rules` | | Rules added to the run's: `hold`, `approve_each` or `deny` a tool, or `*` (`hold` or `deny` only) for every tool your walls don't name, the policy's included. A rule never loosens one the run already has, and `allow` is refused |
 | `push_rules.deny_paths` | | Paths added to the run's push deny list. Only more is refused; a path the run already denies stays denied |
 | `push_rules.deny_all` | | `true` only. Refuses every push the run makes |
 | `recording` | | A floor: the run is recorded at least at `terminal` or `screen_actions`. It never lowers the run's level or your organisation's default; `off` is no floor and is refused |
@@ -1003,7 +1003,7 @@ What the check does and does not settle:
   - and the 201 carries a warning saying so (an agent with no tool-approval lane is refused instead)
   - See [three-roles.md § Three roles, and who sets the walls](operations/three-roles.md#three-roles-and-who-sets-the-walls) for the rubric that decides it.
 - The level never rewrites `tool_rules`, but it decides whether they take effect.
-- A background Claude Code run whose resolved policy holds or denies any tool is routed through the tool gate automatically. So is one where the person set a tool rule or default.
+- A background Claude Code run whose resolved policy holds, denies or sets `approve_each` on any tool is routed through the tool gate automatically. So is one where the person set a tool rule or default.
   - Tools the rules do not name keep running without a prompt: when the policy has no `*` rule of its own, the routed run's default is `*: allow`, with provenance `posture`. A policy `*` rule stays in force.
   - A run already on the gated lane (an explicit `tool_approvals: hold`, a governance profile, autonomy `L1`) keeps its own default: an unmatched tool is held.
   - Codex CLI and other harnesses without Wardyn's gate are not routed.
@@ -1050,7 +1050,13 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
-| `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
+| `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), `approve_each` (a person approves each call), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400. |
+
+Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps the stricter. `approve_each` makes every call of one remote MCP tool wait for a person to approve that call with its exact arguments. It is off until a policy, your walls or a run's rules name it, and it only narrows.
+- It is written only on one tool's exact name, `mcp__<server>__<tool>`: not on `*`, a built-in tool or a harness's default.
+- A run is refused when it names a tool of an MCP server that runs in the sandbox: Wardyn can ask only for a server it reaches through the proxy.
+- Codex CLI and a command's harness are not refused, because the proxy pauses the call, not the harness. A `hold` on the same tool still is.
+- An interactive Claude Code run has no gate. Its managed settings carry the rule as `allow` for a remote server turned on for Claude Code, where the proxy asks, and as `deny` otherwise.
 
 
 ## `recording`

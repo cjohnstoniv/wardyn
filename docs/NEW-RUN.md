@@ -140,6 +140,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 - Each harness has a **Model provider** list. The server's default or only candidate stands in until you choose; when it needs your choice the field reads "Required before launch."
 - **When a tool has no rule** is **Run it**, **Ask first** or **Block it**. Your policy can set a floor; an option below it is disabled with the reason (`policy_stricter_default`).
 - A tool rule names one tool exactly, for example `WebFetch` or `mcp__jira__create_issue`. `codex-cli` cannot pause a tool call (`harness_no_hold`).
+- **Approve each call** is a rule for one tool of a remote MCP server the harness has, never the default; Codex CLI can use it. Otherwise it is disabled (`approve_each_no_remote_mcp`, `approve_each_default`).
 
 **Add tools and access** filters by **All**, **CLIs**, **MCP servers**, **APIs** and **Secrets and hosts**. Each card shows the hosts and credential delivery it brings.
 

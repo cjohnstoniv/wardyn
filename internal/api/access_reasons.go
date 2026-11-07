@@ -24,6 +24,8 @@ var accessSentences = map[string]string{
 	"policy_stricter_default":    "Your policy {asks first for|blocks} tools with no rule. A run can only be stricter.",
 	"policy_stricter_tool":       "Your policy {asks first for|blocks} {tool}. A run can only be stricter.",
 	"harness_no_hold":            "Codex CLI can't pause a tool call for approval.",
+	"approve_each_default":       "Approve each call names one MCP tool. Add it as a rule for that tool.",
+	"approve_each_no_remote_mcp": "Approve each call works for a tool of a remote MCP server this run reaches through the proxy. Turn one on for this harness.",
 	"command_no_hold":            "A command can't pause a tool call for approval.",
 	"harness_no_block_builtin":   "Wardyn can't block Codex CLI's own tools. Rules for its MCP tools still apply.",
 	"attended_no_skip":           "In an interactive run Claude Code asks you before it acts, and this run's settings don't let it skip asking.",

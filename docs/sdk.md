@@ -404,7 +404,7 @@ Preflight (`PreflightResult.Access`) and the policy preview answer `access`, one
 - `unlisted`: what happens to a host nothing lists: the effective `mode`, `allow_all`, `hold_sec` for `wait_for_review`, and `decider` (`you`, `admin` or `you_or_admin`, from your `egress_host` capability).
 - `setup`: what is still needed, as checklist rows with a `fix`: `add_secret`, `sign_in` (`target`, and `id` for a component) or `choose_model_provider` (`tool`). A model-provider sign-in names no provider id; sign in to the provider the draft chose.
 - A CLI component's row has kind `cli` and `in_image`: `yes` or `no` for a harness's own image, `unknown` for an image the run names or the operator pinned.
-- `harnesses`: one `ToolPolicyFact` per included harness. It carries the lane its calls take, who enforces it, its default, the policy's locked rules, the effects a person may choose, whether rules may name any tool or MCP tools only, and the MCP servers turned on for it.
+- `harnesses`: one `ToolPolicyFact` per included harness. It carries the lane its calls take, who enforces it, its default, the policy's locked rules, the effects a person may choose (`allow`, `hold`, `approve_each`, `deny`; `approve_each` is offered for rules only, and greyed with `approve_each_default` or `approve_each_no_remote_mcp`), whether rules may name any tool or MCP tools only, and the MCP servers turned on for it.
 - `harnesses` answers for the 0.9 run shape. An older-shape request that sets `seed_auto_tools` is still told that an interactive Claude Code run asks before a tool no rule names; the seeded tools run without asking.
 - Source kinds add `harness` and `posture` to the provenance set; a client shows no chip for a kind it does not know.
 
