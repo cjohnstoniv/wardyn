@@ -41,6 +41,19 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	},
 	runnerwire.ProxySettingForgeHosts:    func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
 	runnerwire.ProxySettingAllowedModels: func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
+	runnerwire.ProxySettingAWSSigV4Gateways: func(pc *runner.ProxyConfig) {
+		pc.AWSSigV4 = &proxy.AWSSigV4Config{Gateways: []proxy.AWSSigV4Gateway{{Host: "ai-gw.corp.example", Port: 443,
+			SigningHost: "bedrock-runtime.us-east-1.amazonaws.com"}}}
+	},
+}
+
+// proxySettingsOf is what ProxySettingsSet names for the case name sets: that setting alone, but for
+// a gateway, which a re-signing grant carries, so its own setting comes first.
+func proxySettingsOf(name string) []string {
+	if name == runnerwire.ProxySettingAWSSigV4Gateways {
+		return []string{runnerwire.ProxySettingAWSSigV4, name}
+	}
+	return []string{name}
 }
 
 // oldCapsJSON is a 0.9.x runner's caps event as it sends it: no proxy_settings key.
@@ -76,8 +89,8 @@ func TestProxySettingsAllNamed(t *testing.T) {
 	for name, set := range proxySettingCases {
 		var pc runner.ProxyConfig
 		set(&pc)
-		if got := runnerwire.ProxySettingsSet(pc); len(got) != 1 || got[0] != name {
-			t.Errorf("%s: ProxySettingsSet = %v", name, got)
+		if got := runnerwire.ProxySettingsSet(pc); !slices.Equal(got, proxySettingsOf(name)) {
+			t.Errorf("%s: ProxySettingsSet = %v, want %v", name, got, proxySettingsOf(name))
 		}
 	}
 }
@@ -102,10 +115,11 @@ func TestCreateSandboxRefusesAProxySettingAnOldRunnerDropsUnread(t *testing.T) {
 			set(&spec.ProxyConfig)
 			_, err := rig.Sub.CreateSandbox(ctxT(t), spec)
 			var pe *remote.ProxySettingError
-			if !errors.As(err, &pe) || pe.Setting != name {
-				t.Fatalf("create = %v, want a ProxySettingError naming %s", err, name)
+			first := proxySettingsOf(name)[0]
+			if !errors.As(err, &pe) || pe.Setting != first {
+				t.Fatalf("create = %v, want a ProxySettingError naming %s", err, first)
 			}
-			if msg := err.Error(); !strings.Contains(msg, "wardyn-runnerd is too old for "+name) || !strings.Contains(msg, "upgrade it") {
+			if msg := err.Error(); !strings.Contains(msg, "wardyn-runnerd is too old for "+first) || !strings.Contains(msg, "upgrade it") {
 				t.Fatalf("message = %q", msg)
 			}
 			if len(rig.Fake.Created) != 0 {
@@ -120,7 +134,7 @@ func TestCreateSandboxAdmitsAProxySettingTheRunnerCarries(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rig := runnertest.NewRig(t, rid)
 			_, spec := create(t, rig, func(s *runner.SandboxSpec) { set(&s.ProxyConfig) })
-			if got := runnerwire.ProxySettingsSet(rig.Fake.Created[0].ProxyConfig); len(got) != 1 || got[0] != name {
+			if got := runnerwire.ProxySettingsSet(rig.Fake.Created[0].ProxyConfig); !slices.Equal(got, proxySettingsOf(name)) {
 				t.Fatalf("the runner received %v for %s (spec %+v)", got, name, spec.ProxyConfig)
 			}
 		})
@@ -284,5 +298,37 @@ func TestAllowedModelsNeedARunnerThatCarriesThem(t *testing.T) {
 	}
 	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, []byte(`{"stripped":true}`)); err != nil {
 		t.Fatalf("a revive with no list was refused: %v", err)
+	}
+}
+
+// A runner that signs AWS requests at its proxy but predates gateways (it reports aws_sigv4 and not
+// aws_sigv4_gateways) would drop the gateway entry unread, so a run with one is refused there before
+// anything is sent; a runner that names it is sent the run with the entry.
+func TestCreateSandboxRefusesAGatewayOnARunnerWithoutIt(t *testing.T) {
+	withGateway := func(s *runner.SandboxSpec) {
+		proxySettingCases[runnerwire.ProxySettingAWSSigV4Gateways](&s.ProxyConfig)
+	}
+	older, err := json.Marshal(slices.DeleteFunc(slices.Clone(runnerwire.ProxySettings), func(s string) bool {
+		return s == runnerwire.ProxySettingAWSSigV4Gateways
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig := runnertest.NewRig(t, rid)
+	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"0.10.0-rc.13","proxy_settings":`+string(older)+`}`)
+	spec := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1}
+	withGateway(&spec)
+	_, err = rig.Sub.CreateSandbox(ctxT(t), spec)
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingAWSSigV4Gateways {
+		t.Fatalf("create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingAWSSigV4Gateways)
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("the refused create reached the runner")
+	}
+	current := runnertest.NewRig(t, rid)
+	create(t, current, withGateway)
+	if sig := current.Fake.Created[0].ProxyConfig.AWSSigV4; sig == nil || len(sig.Gateways) != 1 {
+		t.Fatalf("the runner received aws_sigv4 %+v, want the gateway entry", sig)
 	}
 }
