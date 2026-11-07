@@ -347,3 +347,8 @@ runner:
 maxConcurrentRuns: 25
 trustedProxies: "10.42.0.0/16,fd00:42::/64"
 goMemLimit: "400MiB"
+
+# Image signature checks' registry credentials, the other side of the empty default: a mounted
+# Secret (never created by the chart) and WARDYN_REGISTRY_AUTH_FILE pointing at it.
+imageAdmission:
+  registryAuthSecret: regcred
