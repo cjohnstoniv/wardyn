@@ -3,24 +3,48 @@
 Every row in the append-only audit log ([`internal/types/types.go`](../internal/types/types.go)'s `AuditEvent`) carries a dotted `action` string.
 **OPERATIONS.md and SSH.md point here** rather than re-listing actions themselves.
 
+## Sections
+
+| Section | Covers |
+|---|---|
+| [Runs](#runs) | Run lifecycle, policy resolve, output |
+| [Workspaces & sources](#workspaces--sources) | Workspaces |
+| [Sessions, SSH & UI relay](#sessions-ssh--ui-relay) | Attach, SSH, recordings |
+| [Secrets, credentials & identity](#secrets-credentials--identity) | Secrets, tokens, sign-ins |
+| [Policy, capability & authorization](#policy-capability--authorization) | Policies, governance, drives, walls |
+| [Auth](#auth) | Sign-in, failed auth |
+| [Devices (hybrid enrolment)](#devices-hybrid-enrolment) | Devices, runners, pools |
+| [Service identities](#service-identities) | Service actors |
+| [Delegation (portals)](#delegation-portals) | Portal exchange |
+| [Kernel ground-truth (eBPF/Tetragon stream)](#kernel-ground-truth-ebpftetragon-stream) | Kernel events |
+| [Base images, integrations & site config](#base-images-integrations--site-config) | Admin configuration |
+| [Workspace and agent providers](#workspace-and-agent-providers) | Providers |
+| [System/reaper sources (no HTTP caller)](#systemreaper-sources-no-http-caller) | Retention sweeps |
+| [Sealed fields](#sealed-fields) | Withheld fields |
+
 ## Reading this page
 
 - There is no enum or schema file for it — call sites are the source of truth.
-- So this page is the generated-by-hand vocabulary reference: every action literal live in the tree today, grep-curated from `internal/api`, `internal/broker`, `internal/lifecycle`, `internal/approval`, `internal/identity/embedded`, and `internal/groundtruth`, with its `Data` field names read from that call site.
+- So this page is the hand-curated vocabulary reference: every action literal live in the tree today, grep-curated from `internal/api`, `internal/broker`, `internal/lifecycle`, `internal/approval`, `internal/identity/embedded`, and `internal/groundtruth`, with its `Data` field names read from that call site.
 - To reproduce or extend this table: `grep -rn 'auditEvent(\|"[a-z_]\+\.[a-z_.]\+"' internal/api/*.go` (excluding `_test.go`) finds every call site; each site's `mustJSON(map[string]any{...})` or `Data:` literal is the field list.
 - Audit rows are immutable. Rows written before 0.10.0 keep `governance.profile.write`, `governance.profile.delete`, `governance.assignment.write` and `governance.assignment.delete`, and a `profile` key where 0.10.0 writes `unit`; a query over a span that crosses the upgrade matches both spellings.
 - **Citations here name a SYMBOL, not a line:** `path/file.go#Symbol` for a top-level func, `path/file.go#Type.Method` for a method, `path/doc.md#heading-slug` for a section of another document.
+
+<details>
+<summary>How this page is kept true</summary>
 
 CI enforces doc↔emit parity in both directions:
 
 - `TestAuditActionsDocCitationsAreLive` resolves every one of them with `go/parser` and fails unless the action appears inside that symbol's own body ([`cmd/wardynd/audit_actions_doc_guard_test.go`](../cmd/wardynd/audit_actions_doc_guard_test.go), whose neighbour `TestAuditActionsDocCitesSymbolsNotLineNumbers` keeps the old `file:line` form from creeping back).
 - `TestAuditActionsDoc_EveryEmitHasRow` plus `TestAuditActionsForwardGuardCoversEveryEmitShape` check the other direction.
-- Every emitted action literal has either a row here or an entry in `auditActionAllow` ([`cmd/wardynd/audit_actions_forward_guard_test.go`](../cmd/wardynd/audit_actions_forward_guard_test.go)'s own escape hatch for a literal deliberately outside the registry — empty today, so nothing is currently excluded this way).
+- Every emitted action literal has a row here or an entry in `auditActionAllow` ([`cmd/wardynd/audit_actions_forward_guard_test.go`](../cmd/wardynd/audit_actions_forward_guard_test.go)), which is empty today.
 - All three run in `cmd/wardynd` and gate `make ci` via `cover-check`'s `test-report` suite.
 
 > [!NOTE]
 > The residual gap is narrower now than "no CI check" — a `Data:` field can still go undocumented or drift unguarded (see [`internal/api/audit.go`](../internal/api/audit.go)'s `parseAuditFilter` for the filterable envelope fields, which are stable regardless of action).
 > The action SET is guarded, the per-action field LISTS are not.
+
+</details>
 
 **Stable vs internal**, as the Status column uses them:
 
@@ -83,7 +107,6 @@ Twenty-three exceptions, listed in that test's `auditActionGrammarAllow`:
 - `authz.denied` keeps its past tense (see ["Renamed in 0.8"](#renamed-in-08) below for why — the single heaviest-cited action in the tree and a compatibility surface OPERATIONS.md already commits to by name).
 - `run.ended`, `run.ended.expired` (the lease's end-of-run rows, #568) and `auth.signin_unserialized` (the sign-in lock's no-capacity row) landed on main after this grammar did.
   An audit action name is an append-only public code consumers key on, so none of the three is renamed to fit.
-  The allowlist is the honest record of the gap rather than a silent exception.
 - The same holds for `run.lost` and `run.lost.expired`, the lost-run rows (#574) that sit beside `run.ended` and `run.ended.expired` and name the same kind of kept-run state.
 - `workspace.llm_cred.migrated` and `model_provider.not_converted` are the 0.8.2 upgrade's one-time rows (#548; it converts 0.7.x and 0.8.0 data), written by the migration under the names the issue fixed: each records a conversion that already happened, once.
 - `principal_key.destroyed` keeps the name the key-custody and audit-retention designs fixed before this grammar met it: it records the tombstone that was written.
@@ -1029,9 +1052,6 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 
 ## Notes on completeness
 
-- This table is hand-curated from a source grep, not generated by a build step, but it is CI-gated like the closed-enum DB `CHECK` constraints `internal/db`'s `TestClosedEnumChecksMatchConstants` pins.
-  A newly-added action literal with no row here fails `TestAuditActionsDoc_EveryEmitHasRow` / `TestAuditActionsForwardGuardCoversEveryEmitShape`, and a row whose citation no longer names what it claims fails `TestAuditActionsDocCitationsAreLive` (all three `cmd/wardynd`, gating `make ci`'s `cover-check`).
-- What is NOT enforced is the `Data` field list inside a row — see the next point.
 - `Data` field lists were read from the `mustJSON(map[string]any{...})` or `Data:` literal at the cited call site; a field marked here can still be `omitempty`'d away on a given event (e.g. `error` only appears on a `failure` outcome).
 - Retired in 0.8 (#547), with the AI-kind integrations: `run.workspace_cred.resolve` (an AI integration folded into a run's model access), `run.requirement.grant` (a `secret:` requirement's grant on the agent's model host — now `run.requirement.skip`) and `authz.denied`'s `capability_integration` reason.
   None is emitted any more; rows written before the upgrade keep them.
