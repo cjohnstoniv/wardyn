@@ -882,13 +882,17 @@ A [service identity](operations/api-tokens.md#service-identities) is its own act
 - Defined as named constants (not scattered literals) in [`internal/groundtruth/groundtruth.go#ActionProcessExec`](../internal/groundtruth/groundtruth.go).
   The `kernel.` prefix is enforced by the ground-truth ingest endpoint (any action without it is rejected, fail-closed) and is the field SIEM rules key on alongside `data.stream=ebpf`.
 - This stream is **detection, not prevention** (see the package doc comment) — it never blocks, and it is blind inside CC3/Kata microVM guests.
+- A kernel event whose run id fails a check is still recorded, with `run_id` cleared, `data.correlation=unmapped` and `data.reason`:
+  - `run_id_not_found`: no such run.
+  - `namespace_not_runs`: a Kubernetes event (`data.pod` set) from a pod outside the namespaces its run's cluster places runs in. Not checked when wardynd does not know them (a runner that is offline or advertises none).
+  - `run_ended`: a Kubernetes event for a run that ended, or whose lease ended, more than 15 minutes ago.
 
 | Action | When | Where | Status | Consumers |
 |---|---|---|---|---|
 | `kernel.process.exec` | A process `execve` observed by the kernel sensor | [`internal/groundtruth/groundtruth.go#ActionProcessExec`](../internal/groundtruth/groundtruth.go) | **stable** (const, documented) | [`internal/recordmode/recordmode.go#Capture`](../internal/recordmode/recordmode.go), [`internal/api/healthz.go#groundtruthKinds`](../internal/api/healthz.go) |
 | `kernel.network.connect` | An outbound TCP connect observed by the sensor | [`internal/groundtruth/groundtruth.go#ActionNetworkConnect`](../internal/groundtruth/groundtruth.go) | **stable** (const, documented) | [`internal/recordmode/recordmode.go#Capture`](../internal/recordmode/recordmode.go), [`internal/api/healthz.go#groundtruthKinds`](../internal/api/healthz.go) |
 | `kernel.file.write` | A write to a sensitive path observed by the sensor | [`internal/groundtruth/groundtruth.go#ActionFileWrite`](../internal/groundtruth/groundtruth.go) | **stable** (const, documented) | [`internal/recordmode/recordmode.go#Capture`](../internal/recordmode/recordmode.go) |
-| `kernel.sensor.ping` | Periodic liveness beat from the ingest sidecar (`run_id` NULL) — `/healthz` keys `ebpf_groundtruth` state off this | [`internal/groundtruth/groundtruth.go#ActionSensorHeartbeat`](../internal/groundtruth/groundtruth.go) | **stable** (const, documented) | [`internal/api/healthz.go#Server.ebpfGroundtruthStatus`](../internal/api/healthz.go) (`/healthz`) |
+| `kernel.sensor.ping` | Periodic liveness beat from the ingest sidecar (`run_id` NULL) — `/healthz` keys `ebpf_groundtruth` state off this. A sensor on a Kubernetes node puts the node name in `data.node` and `target`; with two or more nodes, `/healthz` reports the worst node | [`internal/groundtruth/groundtruth.go#ActionSensorHeartbeat`](../internal/groundtruth/groundtruth.go) | **stable** (const, documented) | [`internal/api/healthz.go#Server.ebpfGroundtruthStatus`](../internal/api/healthz.go) (`/healthz`) |
 | `kernel.sensor.bypass` | One-time event for a run the host eBPF sensor cannot see into (CC3/Kata) | [`internal/groundtruth/groundtruth.go#ActionSensorBlind`](../internal/groundtruth/groundtruth.go) | **stable** (const, documented) | — |
 
 ## Base images, integrations & site config

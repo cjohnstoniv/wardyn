@@ -36,6 +36,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   replayed for 24 hours instead of a new run, and a value outside 1 to 255 visible ASCII characters is refused with
   400 `idempotency_key_invalid`. A retry with a key is safe only once every control-plane replica runs 0.10.0 or
   later; an older replica ignores the key.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`. Without
+  it `/healthz` cannot tell Kubernetes node sensors apart and reads only the newest heartbeat. An upgrade from before
+  0.10.0-rc.12 also needs `SELECT, INSERT, UPDATE, DELETE` on `wall_presets` and `kept_machines`. An upgrade from
+  before 0.10.0-rc.9 also needs every grant the 0.10.0-rc.8 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `workloads`, `workload_bindings`, `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`,
+  `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`,
+  `governance_restrictions`, `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and
+  `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
+  `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 
 ### Added
 
