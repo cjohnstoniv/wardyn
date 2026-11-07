@@ -267,6 +267,9 @@ func (s *capStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
 func (s *capStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }
+func (s *capStore) SetRunImageAdmission(context.Context, uuid.UUID, *types.ImageAdmissionVerdict) error {
+	return nil
+}
 
 func (s *capStore) ResolveGovernanceUnit(_ context.Context, _, _ []string, _ string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	if s.govErr != nil {

@@ -38,31 +38,43 @@ func (s *Server) wrapBuiltFromPin(ctx context.Context, ws types.Workspace, pin s
 	return rec != nil && !missing && digest != "" && rec.Inputs.Base.Digest == digest
 }
 
+// imageOriginMember is the origin of an image the member's request or a workspace's base image named. It is
+// never recorded: the member's image is the run's ImageInput.
+const imageOriginMember = "member"
+
+// launchImageAdmission is the site's image admission block as a launch reads it; an unreadable site config
+// refuses, since the mode lives in it.
+func (s *Server) launchImageAdmission(ctx context.Context) (*types.SiteImageAdmission, *runRefusal) {
+	sc, ok := s.siteConfigSnapshot(ctx)
+	if s.cfg.Store != nil && !ok {
+		return nil, runServerError("resolve image admission", errImageAdmissionSiteUnreadable)
+	}
+	if sc.Images == nil {
+		return nil, nil
+	}
+	return sc.Images.Admission, nil
+}
+
 // conventionImageAdmission holds the image a run gets by convention (its agent's, its harness set's or an
 // architecture variant of either) to image admission when the site's scope is all, and returns the ref to
 // dispatch: the pin when enforce admitted it, else image. It runs at launch, where the placed runner's
-// architecture has chosen the image. Operators and the break-glass admin are not checked, as at create; scope
-// member leaves it unchecked. Under enforce, an admitted image's verdict (the image as configured, its digest
-// and pin) is written to the run before dispatch, so a revive re-checks that digest; a run whose verdict cannot
-// be written is failed. A refusal fails the run (the image is the operator's choice, so the member gets no
-// 403). Under audit the check is made the same way and its outcome (admitted, or would_refuse with the reason)
-// is written to the run, the only record a detached launch has; nothing is pinned or refused, and a verdict
-// that cannot be written is logged. An unreadable site config refuses, since the mode lives in it.
+// architecture has chosen the image. Every launch records origin convention on the run, whatever the mode:
+// alone when the image is not checked (admission off, scope member, an operator or the break-glass admin, a
+// macOS VM), else in the check's verdict. Under enforce, an admitted image's verdict (the image as configured,
+// its digest and pin) is written before dispatch, so a revive re-checks that digest; a refusal fails the run
+// (the image is the operator's choice, so the member gets no 403). Under audit the check is made the same way
+// and its outcome (admitted, or would_refuse with the reason) is written; nothing is pinned or refused. A
+// record that cannot be written fails the run under enforce and is logged otherwise. An unreadable site config
+// refuses, since the mode lives in it.
 func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRun, image string) (string, *runRefusal) {
-	if image == "" || run.MachineKind.IsMacOSVM() {
-		return image, nil
-	}
-	sc, ok := s.siteConfigSnapshot(ctx)
-	if s.cfg.Store != nil && !ok {
-		return "", runServerError("resolve image admission", errImageAdmissionSiteUnreadable)
-	}
-	var adm *types.SiteImageAdmission
-	if sc.Images != nil {
-		adm = sc.Images.Admission
+	adm, refusal := s.launchImageAdmission(ctx)
+	if refusal != nil {
+		return "", refusal
 	}
 	mode := adm.EffectiveMode()
-	if mode == types.ImageAdmissionOff || adm.EffectiveScope() != types.ImageAdmissionScopeAll || s.runUngoverned(ctx) {
-		return image, nil
+	if image == "" || run.MachineKind.IsMacOSVM() || mode == types.ImageAdmissionOff ||
+		adm.EffectiveScope() != types.ImageAdmissionScopeAll || s.runUngoverned(ctx) {
+		return image, s.recordImageOrigin(ctx, run, mode, types.ImageOriginConvention)
 	}
 	v, refusal := s.checkImage(ctx, adm, image, true, nil)
 	if mode == types.ImageAdmissionAudit {
@@ -77,7 +89,7 @@ func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRu
 		return "", runServerError("pin the admitted image", err)
 	}
 	verdict := admittedImage(types.ImageAdmissionEnforce, v)
-	verdict.PinnedRef, verdict.Ref = pinned, image
+	verdict.PinnedRef, verdict.Ref, verdict.Origin = pinned, image, types.ImageOriginConvention
 	if err := s.cfg.Store.SetRunImageAdmission(ctx, run.ID, verdict); err != nil {
 		return "", runServerError("record the convention image's admission", err)
 	}
@@ -93,22 +105,54 @@ func (s *Server) recordConventionAudit(ctx context.Context, run types.AgentRun, 
 		verdict = &types.ImageAdmissionVerdict{Mode: types.ImageAdmissionAudit, Verdict: types.ImageAdmissionWouldRefuse,
 			Reason: refusal.body.Reason, Digest: v.Digest}
 	}
-	verdict.Ref = image
+	verdict.Ref, verdict.Origin = image, types.ImageOriginConvention
 	if err := s.cfg.Store.SetRunImageAdmission(ctx, run.ID, verdict); err != nil {
 		slog.WarnContext(ctx, "wardynd: record the convention image's audit verdict", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 }
 
-// failConventionImage fails a run whose convention image admission refused: the refusal sentence is the run's
-// hint, and a run.dispatch failure row carries the reason and the image.
+// recordBuiltImageOrigin records, at every launch whatever the admission mode, that the run's image is one
+// Wardyn built for it (origin devcontainer or workspace). Admission does not cover such an image, so no
+// registry is read; a revive reads the origin and does not refuse the sandbox for having no admitted digest.
+// An unreadable site config refuses, since the mode decides what a failed write does.
+func (s *Server) recordBuiltImageOrigin(ctx context.Context, run types.AgentRun, origin string) *runRefusal {
+	adm, refusal := s.launchImageAdmission(ctx)
+	if refusal != nil {
+		return refusal
+	}
+	return s.recordImageOrigin(ctx, run, adm.EffectiveMode(), origin)
+}
+
+// recordImageOrigin writes the origin alone to the run, no verdict: nothing was decided about the image. A
+// write that fails fails the run under enforce, as the convention image's verdict does, so no sandbox is kept
+// without the record its revive reads; otherwise it is logged, and the run revives as one launched before
+// origins were recorded.
+func (s *Server) recordImageOrigin(ctx context.Context, run types.AgentRun, mode, origin string) *runRefusal {
+	err := s.cfg.Store.SetRunImageAdmission(ctx, run.ID, &types.ImageAdmissionVerdict{Origin: origin})
+	switch {
+	case err == nil:
+		return nil
+	case mode == types.ImageAdmissionEnforce:
+		return runServerError("record the run image's origin", err)
+	}
+	slog.WarnContext(ctx, "wardynd: record the run image's origin", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	return nil
+}
+
+// failConventionImage fails a run whose launch-time image admission refused it, or could not read or write
+// what it needs. A refusal's sentence is the run's hint and its run.dispatch failure row carries the reason;
+// a server error's hint and row say what could not be done, never that the image was refused.
 func (s *Server) failConventionImage(ctx context.Context, runID uuid.UUID, image string, refusal *runRefusal) {
 	ctx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 	defer cancel()
+	hint, data := refusal.body.Error, map[string]any{"image": image}
 	if refusal.err != nil {
-		slog.ErrorContext(ctx, "wardynd: convention image admission failed", slog.String("run_id", runID.String()), slog.Any("err", refusal.err))
+		hint = loggedMsg(ctx, "the launch could not "+refusal.operation, refusal.err)
+		data["error"] = hint
+	} else {
+		data["reason"], data["image_admission"] = refusal.body.Reason, &types.ImageAdmissionVerdict{
+			Mode: types.ImageAdmissionEnforce, Verdict: imageAdmissionRefused, Reason: refusal.body.Reason}
 	}
-	s.failAndRevoke(ctx, runID, types.RunPending, refusal.body.Error)
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.dispatch", runID.String(), "failure",
-		mustJSON(map[string]any{"reason": refusal.body.Reason, "image": image, "image_admission": &types.ImageAdmissionVerdict{
-			Mode: types.ImageAdmissionEnforce, Verdict: imageAdmissionRefused, Reason: refusal.body.Reason}})))
+	s.failAndRevoke(ctx, runID, types.RunPending, hint)
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.dispatch", runID.String(), "failure", mustJSON(data)))
 }

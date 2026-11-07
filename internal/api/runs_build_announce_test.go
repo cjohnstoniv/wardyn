@@ -58,6 +58,9 @@ func (s *buildEventStore) SetRunStatusDetail(_ context.Context, _ uuid.UUID, det
 	return nil
 }
 func (s *buildEventStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+func (s *buildEventStore) SetRunImageAdmission(context.Context, uuid.UUID, *types.ImageAdmissionVerdict) error {
+	return nil
+}
 
 // GetRun serves a live run: a build door reads its run before it builds.
 func (s *buildEventStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {

@@ -13,10 +13,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// reviveImageNotAdmittedMsg refuses a revive while the image is held when the run's create pinned no digest.
-// %s is the image as the run's create named it.
-const reviveImageNotAdmittedMsg = "Image %s was not checked and pinned by image admission when this run started " +
-	"(it started before images.admission enforced it, or in audit mode), so its tag may now name another image"
+// reviveImageNotAdmittedMsg refuses a revive while the image is held when the run has no digest admission
+// pinned at its start. It says only what is true of every such run. %s is the image: the member's as named,
+// the convention image as configured, else the image the run recorded.
+const reviveImageNotAdmittedMsg = "Image %s has no digest that image admission checked and pinned when this run " +
+	"started (admission was off, in audit mode, or did not check this image), so it cannot be re-checked under the " +
+	"policy as it is now"
 
 // reviveImageRefusals is a revive's image decisions in order, the digest rule then image admission, and the
 // marks the run.revive row carries for an owner they exempt.
@@ -42,10 +44,13 @@ func (s *Server) reviveImageRefusals(ctx context.Context, run types.AgentRun, pr
 // nothing (created before admission was enforced, in audit mode, which never pins, or before the run recorded
 // its image) is refused, and its owner starts a new run. Coverage is asked about the image as the create asked
 // it, so a signer entry written for a short name still covers the run whose pin is the canonical name. A
-// sandbox on the convention image (its create named no image) is held only under scope all, by the site's
-// signers alone, at the digest its launch recorded (ImageAdmissionVerdict.Ref); under scope member it stays
-// unchecked. A run whose create named an image is the member's, whatever its verdict records: one that records
-// a convention check holds no admitted pin of that image, so it is refused. The authority is the run
+// run whose create named an image is the member's, whatever its verdict records: a launch's record for another
+// image (an origin, or a convention ref) holds no admitted pin of the member's image, so it is refused. A run
+// whose create named none is classified by the origin its launch recorded: an image Wardyn built for it
+// (devcontainer, workspace) is not covered by admission and never refused here; the convention image is held
+// only under scope all, by the site's signers alone, at the digest its launch recorded (Ref). A run launched
+// before origins were recorded is taken as on the convention image, as before; under scope member it stays
+// unchecked. The authority is the run
 // owner's, as reviveImageDigestRefusal reads it: an exempt owner is not checked, and the mark says so. Audit
 // mode refuses nothing here, as at create. An unreadable site config refuses.
 func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, profile []string, actorType types.ActorType, actor string) (map[string]any, *reviveError) {
@@ -59,10 +64,16 @@ func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, p
 		adm = sc.Images.Admission
 	}
 	mode, recorded := adm.EffectiveMode(), run.ImageAdmission
-	// The sandbox runs the convention image only when its create named no image. A profile's signers bind only a
-	// member's image. stamped: the verdict is a launch's check of the convention image (Ref set).
+	var origin, convRef string
+	if recorded != nil {
+		origin, convRef = recorded.Origin, recorded.Ref
+	}
+	// convention: the create named no image (nil: a row from before ImageInput, handled as the member's,
+	// unpinned). A profile's signers bind only a member's image.
 	convention := run.ImageInput != nil && *run.ImageInput == ""
-	stamped := recorded != nil && recorded.Ref != ""
+	if convention && (origin == types.ImageOriginDevcontainer || origin == types.ImageOriginWorkspace) {
+		return nil, nil // an image Wardyn built for the run: image admission does not cover it
+	}
 	if convention {
 		if adm.EffectiveScope() != types.ImageAdmissionScopeAll {
 			return nil, nil
@@ -84,12 +95,15 @@ func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, p
 	}
 	ref, pin := run.Image, imagePin(run)
 	switch {
-	case convention && stamped:
-		ref = recorded.Ref
-	case convention, run.ImageInput == nil, stamped:
-		pin = "" // nothing was recorded for the image this sandbox runs
+	case convention && origin == types.ImageOriginConvention && convRef != "":
+		ref = convRef
+	case convention, run.ImageInput == nil:
+		pin = "" // nothing admitted was recorded for the image this sandbox runs
 	default:
 		ref = *run.ImageInput
+		if origin != "" || convRef != "" {
+			pin = "" // a launch's record for an image the member did not name: never a pin of the member's
+		}
 	}
 	if pin == "" {
 		return nil, s.reviveImageAdmissionDenied(ctx, run, actorType, actor, ref, "",
