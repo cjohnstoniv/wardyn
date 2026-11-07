@@ -554,6 +554,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			HarnessToolRules:   p.HarnessToolRules,
 			HarnessCredentials: harnessCreds,
 			MCPServers:         mcp.servers, MCPBindings: mcp.bindings,
+			// Present exactly when a rule is approve_each: an older proxy refuses the key.
+			MCPApproveEach: mcpApproveEachMarker(proxyPolicy, p.HarnessToolRules),
 			// The policy a refusal names (runs_dispatch_attribution.go); nil when
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.

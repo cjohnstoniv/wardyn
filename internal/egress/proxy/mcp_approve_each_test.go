@@ -279,7 +279,7 @@ func TestMCPApproveEachSendsExactlyWhatWasShown(t *testing.T) {
 		t.Fatalf("rows %d, want 1", len(rows))
 	}
 	s := rows[0].scope
-	if string(s.Arguments) != `{"a":"<b>&é","z":[1,2]}` || string(s.Extra) != `{"task":{"ttl":1000}}` {
+	if string(s.Arguments) != `{"a":"\u003cb\u003e\u0026é","z":[1,2]}` || string(s.Extra) != `{"task":{"ttl":1000}}` {
 		t.Fatalf("scope arguments %s extra %s", s.Arguments, s.Extra)
 	}
 	f.up.mu.Lock()
