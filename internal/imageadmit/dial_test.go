@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -225,5 +226,83 @@ func TestUnresolvableNameIsLeftToTheForwardProxy(t *testing.T) {
 	}
 	if got := p.hits(); len(got) != 1 || got[0] != "CONNECT internal-only.corp:443" {
 		t.Fatalf("proxy saw %v", got)
+	}
+}
+
+// The proxy exemption belongs to the request that selected the proxy, not to an address remembered
+// for later: a proxy used once must not make the same host:port reachable by a direct dial.
+func TestProxyAddressIsNotRememberedForDirectDials(t *testing.T) {
+	reg := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveManifest(w, imageBody, ociManifestType, "")
+	}))
+	defer reg.Close()
+	p := newFakeProxy(strings.TrimPrefix(reg.URL, "https://"))
+	defer p.srv.Close()
+	proxyHost := strings.TrimPrefix(p.srv.URL, "http://")
+	viaProxy := p.fn()
+	// example.com goes through the proxy; the proxy's own address is NO_PROXY (direct).
+	proxy := func(r *http.Request) (*url.URL, error) {
+		if r.URL.Host == proxyHost {
+			return nil, nil
+		}
+		return viaProxy(r)
+	}
+	g := defaultGuard()
+	g.lookup = func(_ context.Context, h string) ([]net.IP, error) {
+		if ip := net.ParseIP(h); ip != nil {
+			return []net.IP{ip}, nil
+		}
+		return []net.IP{net.ParseIP("10.9.9.9")}, nil
+	}
+	c := newTestClient(t, nil, g, proxy, reg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := c.Manifest(ctx, mustRef(t, "example.com/team/app:1.0")); err != nil {
+		t.Fatalf("first, proxied: %v", err)
+	}
+	before := len(p.hits())
+	_, err := c.Manifest(ctx, mustRef(t, proxyHost+"/admin/x:1"))
+	if !errors.Is(err, ErrRefusedTarget) {
+		t.Fatalf("direct dial of the proxy's address: err = %v, want ErrRefusedTarget", err)
+	}
+	if got := p.hits(); len(got) != before {
+		t.Fatalf("the proxy's address was connected to directly: %v", got[before:])
+	}
+}
+
+func TestRedirectToProxyAddressDirectIsRefused(t *testing.T) {
+	var proxyHost atomic.Value
+	reg := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://"+proxyHost.Load().(string)+"/admin", http.StatusFound)
+	}))
+	defer reg.Close()
+	p := newFakeProxy(strings.TrimPrefix(reg.URL, "https://"))
+	defer p.srv.Close()
+	proxyHost.Store(strings.TrimPrefix(p.srv.URL, "http://"))
+	viaProxy := p.fn()
+	proxy := func(r *http.Request) (*url.URL, error) {
+		if r.URL.Host == proxyHost.Load().(string) {
+			return nil, nil
+		}
+		return viaProxy(r)
+	}
+	g := defaultGuard()
+	g.lookup = func(_ context.Context, h string) ([]net.IP, error) {
+		if ip := net.ParseIP(h); ip != nil {
+			return []net.IP{ip}, nil
+		}
+		return []net.IP{net.ParseIP("10.9.9.9")}, nil
+	}
+	c := newTestClient(t, nil, g, proxy, reg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := c.Manifest(ctx, mustRef(t, "example.com/team/app:1.0"))
+	if !errors.Is(err, ErrRefusedTarget) {
+		t.Fatalf("err = %v, want ErrRefusedTarget", err)
+	}
+	for _, h := range p.hits() {
+		if !strings.HasPrefix(h, "CONNECT example.com") {
+			t.Errorf("the proxy saw %q", h)
+		}
 	}
 }
