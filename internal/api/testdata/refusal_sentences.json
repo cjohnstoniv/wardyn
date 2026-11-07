@@ -572,6 +572,11 @@
   {
     "reason": "second_human_required",
     "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies this MCP call\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this, and an approval rule is never a second human\""
   },
   {
