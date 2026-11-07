@@ -329,6 +329,9 @@ func (h setupHost) serviceStage(ctx context.Context, p setupPaths) doctor.Stage 
 // reads, and no others.
 const orgSetting = "the organisation address (--org, the OrgURL managed preference, or org_url in runnerd.json)"
 
+// statusNow is the clock status lines are read against: the base's age and a runner's next try (tests replace it).
+var statusNow = time.Now
+
 // statusSetting is the setting, and what to set it to, that fixes a connection that failed at stage.
 var statusSetting = map[string][2]string{
 	types.RunnerStageDNS:        {orgSetting, "an address that resolves from this computer (or fix its DNS or VPN)"},
