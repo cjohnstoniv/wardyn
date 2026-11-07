@@ -11,10 +11,11 @@ import (
 	"time"
 )
 
-// adminGet is GET /api/v1/runs with bearer, from the TCP peer remote.
+// adminGet is GET /api/v1/policies/default with bearer, from the TCP peer remote: a read the harness, which
+// has no store, answers 200.
 func adminGet(t *testing.T, srv *Server, remote, bearer string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/policies/default", nil)
 	r.Host = "127.0.0.1"
 	r.RemoteAddr = remote
 	r.Header.Set("Authorization", "Bearer "+bearer)
