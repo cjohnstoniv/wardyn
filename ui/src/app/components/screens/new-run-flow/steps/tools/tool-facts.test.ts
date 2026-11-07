@@ -147,4 +147,3 @@ describe("Approve each call", () => {
     expect(ruleChoices(hold, "Claude Code", "mcp__jira__x").map((c) => [c.effect, c.available])).toEqual([["allow", false], ["hold", false], ["approve_each", true], ["deny", true]]);
   });
 });
-

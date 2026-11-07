@@ -222,4 +222,3 @@ describe("canDecideApproval for one MCP call", () => {
     expect(canDecideApproval(false, "tool_call")).toBe(false);
   });
 });
-
