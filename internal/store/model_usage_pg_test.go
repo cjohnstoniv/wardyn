@@ -150,23 +150,54 @@ func TestPG_RunnerSpoolUsageRowStoresUsageAndNoAudit(t *testing.T) {
 	}
 }
 
-// A replay that fails after the usage insert leaves neither the usage row nor the cursor.
+// A replay whose cursor update fails, after the usage row was inserted, leaves neither the usage row nor
+// the cursor: the throwaway database gets a trigger that refuses the update the replay ends with.
 func TestPG_RunnerSpoolUsageRowRollsBackWithTheCursor(t *testing.T) {
 	pool, st, rn, run, row := spoolPGFixture(t)
 	ctx := context.Background()
+	for _, stmt := range []string{
+		`CREATE FUNCTION refuse_cursor_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'cursor update refused'; END $$`,
+		`CREATE TRIGGER refuse_cursor_update BEFORE UPDATE ON runner_spool_cursors FOR EACH ROW EXECUTE FUNCTION refuse_cursor_update()`,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	u := usageCall("api.anthropic.com", "claude-x", 1, 1)
-	u.State = "guessed"
+	row.Decision.RuleSource = "llm:usage"
 	row.Decision.Usage = &u
+	row.Decision.Request.Time = time.Now().UTC().Truncate(time.Microsecond)
 	row = rehashSpoolRow(t, row)
 	if _, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err == nil {
-		t.Fatal("an invalid usage row was accepted")
+		t.Fatal("the replay succeeded with its cursor update refused")
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_model_usage WHERE call_id=$1`, u.CallID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the usage row outlived its rolled-back replay: %d %v", n, err)
+	}
+	if c, a := spoolCounts(t, pool, run.ID); c != 0 || a != 0 {
+		t.Fatalf("a failed replay advanced %d cursor/%d audit", c, a)
+	}
+}
+
+// With the opt-out on, a replayed usage row is acknowledged and stored nowhere.
+func TestPG_RunnerSpoolUsageRowIsDroppedWhenOff(t *testing.T) {
+	pool, st, rn, run, row := spoolPGFixture(t)
+	ctx := context.Background()
+	st.ModelUsageOff = true
+	u := usageCall("api.anthropic.com", "claude-x", 3, 3)
+	row.Decision.RuleSource = "llm:usage"
+	row.Decision.Usage = &u
+	row = rehashSpoolRow(t, row)
+	if first, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil || !first {
+		t.Fatalf("replay: %v %v", first, err)
 	}
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_model_usage WHERE run_id=$1`, run.ID).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("usage rows %d %v", n, err)
+		t.Fatalf("usage rows with counting off: %d %v", n, err)
 	}
-	if c, a := spoolCounts(t, pool, run.ID); c != 0 || a != 0 {
-		t.Fatalf("a refused row advanced %d cursor/%d audit", c, a)
+	if c, a := spoolCounts(t, pool, run.ID); c != 1 || a != 0 {
+		t.Fatalf("want the row acknowledged and no audit row, got %d cursor/%d audit", c, a)
 	}
 }
 

@@ -199,10 +199,10 @@ type Config struct {
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.
 	TrustedCAPEM string
-	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off,
-	// the default: a bare allowlist host is open on every port), "dry_run" or
-	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
+	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off, the default), "dry_run" or "on"
+	// (80/443 plus host:port entries); off leaves a bare allowlist host open on every port. Desktop VM runs always have it on.
 	EgressPortRule string
+	ModelUsageOff  bool // WARDYN_MODEL_USAGE=off: store no model usage record, whatever a proxy sends; on by default
 	// DesktopSignins is WARDYN_DESKTOP_SIGNINS=on: a run whose policy declares
 	// the desktop gets the person's sign-in store and the proxy's sign-in lane,
 	// and its owner may sign in to websites there (run_desktop_signin.go).

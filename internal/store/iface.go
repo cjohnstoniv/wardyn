@@ -381,6 +381,10 @@ type PG struct {
 	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
 	// nowhere.
 	SIEM audit.Sink
+
+	// ModelUsageOff (WARDYN_MODEL_USAGE=off) makes a runner's replay acknowledge a model usage row and
+	// store nothing. Counting is on by default.
+	ModelUsageOff bool
 }
 
 // now reads the app clock. BOTH readings that make an age must come from here.

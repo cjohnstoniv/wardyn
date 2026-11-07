@@ -60,9 +60,9 @@ const insertModelUsageSQL = `INSERT INTO run_model_usage
 	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 	ON CONFLICT (call_id) DO NOTHING`
 
-// validModelUsage is the stored shape's floor: a call id to key on, a state the parser's closed set
+// ValidModelUsage is the stored shape's floor: a call id to key on, a state the parser's closed set
 // names, text within the lengths the proxy cuts to, and no negative count.
-func validModelUsage(u egress.ModelUsage) bool {
+func ValidModelUsage(u egress.ModelUsage) bool {
 	switch u.State {
 	case "counted", "partial", "uncounted":
 	default:
@@ -76,7 +76,7 @@ func validModelUsage(u egress.ModelUsage) bool {
 
 // insertModelUsageTx stores u inside tx (a runner's replay) and reports whether it was new.
 func insertModelUsageTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID, u egress.ModelUsage, at time.Time, evidence types.RunEvidenceSource) (bool, error) {
-	if !validModelUsage(u) {
+	if !ValidModelUsage(u) {
 		return false, ErrRunnerSpoolRefused
 	}
 	tag, err := tx.Exec(ctx, insertModelUsageSQL, u.CallID, runID, at, u.Vendor, u.Host, u.Model, u.Input, u.Output,
@@ -89,11 +89,14 @@ func insertModelUsageTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID, u egres
 
 // runnerRowEvents is the audit events a replayed spool row becomes. A row carrying a model call's token
 // counts is not an egress decision: it is stored in the same tx (evidence runner_asserted, like its
-// siblings) and writes no audit row.
-func runnerRowEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID, r runnerspool.Record) ([]types.AuditEvent, error) {
+// siblings) and writes no audit row. With drop (PG.ModelUsageOff) the row is acknowledged and stored nowhere.
+func runnerRowEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID, r runnerspool.Record, drop bool) ([]types.AuditEvent, error) {
 	u := r.Decision.Usage
 	if u == nil {
 		return runnerDecisionEvents(ctx, tx, runnerID, runID, r)
+	}
+	if drop {
+		return nil, nil
 	}
 	at := r.Decision.Request.Time
 	if at.IsZero() {
@@ -108,7 +111,7 @@ func runnerRowEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID, 
 }
 
 func (s PG) InsertModelUsage(ctx context.Context, runID uuid.UUID, u egress.ModelUsage, at time.Time, evidence string) (bool, error) {
-	if !validModelUsage(u) {
+	if !ValidModelUsage(u) {
 		return false, fmt.Errorf("store: model usage record is not valid")
 	}
 	tag, err := s.Pool.Exec(ctx, insertModelUsageSQL, u.CallID, runID, at, u.Vendor, u.Host, u.Model, u.Input, u.Output,

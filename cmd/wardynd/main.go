@@ -107,6 +107,7 @@ func main() {
 //nolint:funlen // Deliberate: see the doc comment above — one linear ordered boot sequence kept in one scope on purpose, each phase already extracted into its own helper.
 func run() error {
 	f := parseBootFlags()
+	modelUsageOff := modelUsageOffFromEnv(os.Getenv("WARDYN_MODEL_USAGE"))
 
 	// -gen-age-key: EARLY EXIT before validateConfig / any DB or pool work, so it
 	// needs no DSN. Mirrors the -print-groundtruth-token early-exit pattern.
@@ -398,6 +399,7 @@ func run() error {
 	// WARDYN_ORG_URL is unset.
 	st := store.NewPG(pool)
 	st.SIEM = siem
+	st.ModelUsageOff = modelUsageOff
 	orgFederation, err := checkPostureAndBootHybrid(bootCtx, rootCtx, f, lm.enabled, feats.authn != nil, bootKeys, st, maskedRec)
 	if err != nil {
 		return err
@@ -451,6 +453,7 @@ func run() error {
 		DefaultPolicy:        knobs.defaultPolicy,
 		TrustedCAPEM:         trustedCAPEM,
 		EgressPortRule:       egressPortRule(*f.egressPortRule),
+		ModelUsageOff:        modelUsageOff,
 		DesktopSignins:       *f.desktopSignins == "on",
 		DemoVideoBaseURL:     knobs.demoVideoBaseURL,
 		CLIArtifactBase:      knobs.cliArtifactBase,

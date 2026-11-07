@@ -43,6 +43,14 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 
 	runID := claims.RunID
 
+	// A model call's token counts (rule source llm:usage) are a count and not an egress decision: they are
+	// stored as usage and write no egress row, so a metered call is one decision row plus one usage row.
+	// Nor are they agent activity, so they do not touch the idle clock.
+	if dl.Usage != nil {
+		s.ingestModelUsage(w, r, runID, dl.Usage)
+		return
+	}
+
 	// An egress decision means the agent actually did something, so it resets the
 	// idle clock the reaper reads (agent_runs.updated_at) — the seam
 	// internal/lifecycle documents. Best-effort like the attach keepalive; a nil

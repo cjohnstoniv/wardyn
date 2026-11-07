@@ -93,9 +93,13 @@ func newUsageHarness(t *testing.T, shape ...func(*Config)) (*Server, *usageStore
 }
 
 func seedUsageRun(us *usageStore, createdBy string, provider string) uuid.UUID {
+	return seedUsageRunIn(us, createdBy, provider, types.RunCompleted)
+}
+
+func seedUsageRunIn(us *usageStore, createdBy, provider string, state types.RunState) uuid.UUID {
 	id := uuid.New()
 	us.authzStore.mu.Lock()
-	us.authzStore.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: types.RunCompleted, ModelProviderID: provider}
+	us.authzStore.runs[id] = types.AgentRun{ID: id, CreatedBy: createdBy, State: state, ModelProviderID: provider}
 	us.authzStore.mu.Unlock()
 	return id
 }

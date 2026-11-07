@@ -343,6 +343,7 @@ services:
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
       WARDYN_GIT_APPROVAL_TIMEOUT: "${WARDYN_GIT_APPROVAL_TIMEOUT:-}"
+      WARDYN_MODEL_USAGE: "${WARDYN_MODEL_USAGE:-}"
       # Empty falls back to wardynd's 5m default, so the line is inert until set in .env.
       WARDYN_MIGRATE_TIMEOUT: "${WARDYN_MIGRATE_TIMEOUT:-}"
       # AWS sign-in lane: "on" or empty. "off" was removed in 0.10.0 and

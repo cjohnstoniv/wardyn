@@ -233,14 +233,13 @@ func (s *Server) routes() chi.Router {
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
 
-			// Live-run evidence reads for the run-detail cockpit. All three are
-			// OWNER-OR-ADMIN via getRunAuthorized (a foreign run 404s — no
-			// existence oracle), same gate as GET /runs/{id} above, and all three
-			// are READ-ONLY observations of a sandbox that is already running:
-			// they mint nothing, open no new network path (invariant 3), and
-			// change no run state.
+			// Live-run evidence reads for the run-detail cockpit. All are OWNER-OR-ADMIN
+			// via getRunAuthorized (a foreign run 404s — no existence oracle), same gate
+			// as GET /runs/{id} above, and READ-ONLY: they mint nothing, open no new
+			// network path (invariant 3), and change no run state.
 			r.Get("/runs/{id}/files", s.handleRunFiles)
 			r.Get("/runs/{id}/resources", s.handleRunResources)
+			r.Get("/runs/{id}/model-usage", s.handleRunModelUsage)     // stored token counts; reads a finished run too
 			r.Get("/runs/{id}/containment", s.handleGetRunContainment) // same gate as GET /runs/{id}
 			r.Get("/runs/{id}/attach-holder", s.handleAttachHolder)
 			// The one WRITE in that set: displacing whoever currently holds the
