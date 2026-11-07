@@ -345,14 +345,15 @@ func TestCreateRunKeyStaleAttemptCannotInsert(t *testing.T) {
 		t.Fatalf("takeover = %d %s, want a fresh 201", w.Code, w.Body)
 	}
 	// The stale attempt reaches the insert holding its old claim.
+	h := panicFails(t, srv.Handler())
 	staleSrv := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		srv.Handler().ServeHTTP(w, r.WithContext(store.WithRunCreateKey(r.Context(), id, stale.Token)))
+		h.ServeHTTP(w, r.WithContext(store.WithRunCreateKey(r.Context(), id, stale.Token)))
 	})
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+adminToken)
 	r.Host, r.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	panicFails(t, staleSrv).ServeHTTP(w, r)
+	staleSrv.ServeHTTP(w, r)
 	if w.Code != http.StatusConflict || errorReason(w) != "idempotency_key_in_flight" {
 		t.Fatalf("stale attempt = %d %s, want 409 idempotency_key_in_flight", w.Code, w.Body)
 	}
