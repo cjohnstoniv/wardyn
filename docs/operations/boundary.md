@@ -90,4 +90,4 @@ On Linux, wardynd, wardyn-proxy and wardyn-runnerd hold credentials in memory, s
 - A process of the same user cannot `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
 - This is intentional and not configurable.
 - On other platforms, such as `wardyn-runnerd` on macOS, the call does nothing and Wardyn applies no equivalent hardening.
-- There a crash may write a core file, and a process of the same user can attach.
+- Wardyn does not itself prevent core dumps or same-user debugger attachment there.
