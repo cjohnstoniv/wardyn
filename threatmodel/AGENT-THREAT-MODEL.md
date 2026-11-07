@@ -63,7 +63,7 @@ this space is an axis substitution.
 | 9c | **Supply chain — the image the sandbox is built from** | a hostile base image | 🟡 **partial — the weakest of the three.** A base carrying build-time triggers is refused, but wrapping is not vetting: base content is unscanned, and build steps run on the host **before any confinement class exists** |
 | 10 | **Privilege escalation within the platform** | a member gains operator powers | 🟡 **partial.** A capability-grant model exists with deny-beats-allow precedence — but **every enforcement switch ships off**, so an upgraded deployment enforces nothing until an admin turns kinds on |
 | 11 | **Attribution evasion** | an action cannot be traced to a human sponsor | 🟡 **partial.** The run token carries both the human and the agent. Each audit row has one actor; an agent's rows are typed `agent` and name the run, whose owner is the human |
-| 12 | **Audit tampering** | the record is altered after the fact | 🟡 **partial, deliberately graded.** Append-only enforcement plus a hash chain — which is tamper-**evidence**, not tamper-proofness, and only if a head hash is retained off-box. Session recordings are writable by the run that produces them |
+| 12 | **Audit tampering** | the record is altered after the fact | 🟡 **partial, deliberately graded.** Append-only enforcement plus a hash chain and signed checkpoints — which are tamper-**evidence**, not tamper-proofness, and only if a head hash or checkpoint is retained off-box. Session recordings are writable by the run that produces them |
 | 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** It has no rate limit, batching guard or anomaly signal on approval volume, and only opt-in separation of duty; see [below](#category-13-verdict). |
 | 14 | **Resource abuse / denial of wallet** | the agent burns money rather than data | 🟡 **partial, and the enforced set differs BY SUBSTRATE.** `WARDYN_RUN_MAX_AGE` is off by default, and there is no token-spend or model-call budget anywhere; see [below](#category-14-verdict). |
 
@@ -155,7 +155,7 @@ control. Four owners; the assignments that surprise people are the point.
 | Source-forge rulesets (branch protection and equivalents) | **Operator** — creating one needs repo-admin the platform deliberately does not hold |
 | A credential supplied whole (an unbrokered PAT or SSH key) | **Operator** — bounded by what they issued, not by the platform |
 | The host a run executes on, when it is the developer's own runner | **The developer** — the platform's controls there bind the agent only, and what the host reports is self-reported |
-| Off-box retention of audit head hashes | **Security team / SIEM** — a hash chain detects tampering only against a copy kept somewhere the platform cannot reach |
+| Off-box retention of audit head hashes and signed checkpoints | **Security team / SIEM** — a hash chain detects tampering only against a copy kept somewhere the platform cannot reach; pin `wardyn audit keys` there too |
 | The task, the tools, the sources | **Agent author** — who owns nothing on the enforcement side, by construction |
 | Resistance to prompt injection | **Agent author and model vendor** — explicitly **not** the platform |
 | The taxonomy, residual review, red-team exercises | **Security team** |

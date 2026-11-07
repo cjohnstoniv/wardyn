@@ -190,6 +190,8 @@ if v.State == client.RunPolicyViewRecorded {
 
 The CLI is `wardyn run policy <run-id> [--json]`.
 
+`GET /api/v1/runs/{id}` also returns `policy_digest`: the SHA-256 of the run's effective policy as `run.policy.resolve` records it, or no key before the policy is recorded. It identifies the policy and enforces nothing. Audit rows of the run carry the same value; see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+
 #### Reusing the spec
 
 The spec always strict-decodes as a policy. Whether it passes policy validation depends on the reader and the run.

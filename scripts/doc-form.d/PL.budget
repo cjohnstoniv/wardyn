@@ -13,8 +13,8 @@ docs/PLUGGABILITY.md=4047 share=35 # -147 (docs fix), measured: the code map now
 # docs/VERIFY.md 1810 adds 6 over 1804 at the 0.10 W4c train, measured: main's "(from 0.10.0 with the `wardyn` CLI)" on the package bullet (ATT-PKG, inside main's slack) beside ATT-INSTALL's installer bullet.
 # docs/VERIFY.md 1821 adds 11 over 1810 (0.10.0 RUNNER-INSTALL, #3312), measured: the sentence before the SHA256SUMS.sigstore.json verify recipe.
 # docs/VERIFY.md 1811 = 1821 - 10, measured (0.10.0 docs): the agent-novnc-signin row and the six CLI binaries, offset by merging three release-asset bullets.
-docs/VERIFY.md=1828 share=14 # 1828 measured (+17 over 1811, measured): image signature checks, pointer and field rows
-docs/EXPORT.md=472 share=35 # -35, measured: the correction history and an internal note went
+docs/VERIFY.md=1828 share=14 # 1828 measured at the rc.14 W3 merge of audit-r4 (ours 1828, theirs 1811, base 1811); earlier: 1828 measured (+17 over 1811, measured): image signature checks, pointer and field rows
+docs/EXPORT.md=498 share=35 # 498 measured at the rc.14 W3 merge of audit-r4 (ours 472, theirs 498, base 472); earlier: -35, measured: the correction history and an internal note went
 docs/RECORDING-ROOT-READ.md=149 share=35 # -183, measured: rewritten as current behaviour
 docs/adoption/README.md=244 share=35 # -5, measured: ssh_key status cell
 # docs/operations/ai-gateway.md 792 measured (an external AI gateway setup): the two hostnames, the config, what the gateway does with a request and what the nightly job asserts.

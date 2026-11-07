@@ -320,6 +320,32 @@ Signing moves to the new key at once, so a gateway that has not refetched answer
 
 To find the row, read the audit log for action `secret.rekey` with target `wardyn-gateway-identity-key`. Its `actor` is `wardyn/rotate-gateway-identity-key`. Its data holds `kid`, `replaced_kid`, `retired_previous`, and `previous_retire_at` on a planned rotation.
 
+## The audit receipt key
+
+The Ed25519 key that signs audit checkpoints, so a rewrite of the log by someone who holds the database fails a receipt. The checkpoints, receipts and offline check are in [OPERATIONS.md](../OPERATIONS.md#signed-checkpoints-and-receipts).
+
+- **Storage.** One secret-store row, `wardyn-audit-receipt-key`, made on first start unless `WARDYN_AUDIT_CHECKPOINT_INTERVAL` is `0`. A row that cannot be decrypted or parsed is never replaced.
+- **Public keys.** `wardyn audit keys` lists the current key and every previous one. Save the file where the control plane cannot change it; `wardyn audit verify` trusts only that file.
+
+### Rotating the key
+
+`wardynd -rotate-audit-receipt-key` is a **maintenance mode, not a server start**.
+
+1. Stop every replica. Without `WARDYN_HA` the mode refuses while a daemon holds the single-instance lock. With it no lock can tell, so this step is yours.
+2. Run the mode. It makes a new current key, keeps the replaced key's public half forever, writes a `secret.rekey` audit row and exits. With no key row it refuses, and it never makes a first key.
+3. Start `wardynd`, then run `wardyn audit keys` again and save the file.
+
+Checkpoints signed by the replaced key keep verifying, so earlier receipts stay good against a key file that lists it.
+
+### If the key is stolen
+
+`wardynd -rotate-audit-receipt-key -retire-previous` is the same mode, and marks the replaced key retired. Unlike an ordinary rotation, where the old key stays valid, a retired key fails every receipt whose checkpoint it signed with `key_retired`, genuine ones from before the theft included. Fetch the key set again to enforce the retirement; fetching a receipt again does not re-sign it, so those receipts stay unverifiable. Your off-box copies of earlier statements are the evidence for that history.
+
+- **What a thief can do.** Forge checkpoints that verify against a key file listing the stolen key, and so cover a rewrite. Retiring it ends that for every verifier that fetches the new file.
+- **A forged checkpoint.** One that reaches the log after wardynd started is logged, counted as `foreign_row` and never chained to; a new genesis starts at the chain head. A forgery already there at the signer's first read after start is chained to. Rows between a late forged checkpoint and the new genesis are not covered by a receipt.
+
+To find the row, read the audit log for action `secret.rekey` with target `wardyn-audit-receipt-key`. Its `actor` is `wardyn/rotate-audit-receipt-key`; its data holds `kid`, `replaced_kid` and `retired_previous`.
+
 ## Separating the platform keys
 
 - By default one age key protects everything the `secrets` table holds: people's credentials, and wardynd's own signing, session, UI-session and SSH host keys.

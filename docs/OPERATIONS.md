@@ -852,7 +852,7 @@ row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
 - The qualifier is load-bearing, because the hashes are computed by the write itself.
 - An event written while Postgres is down still reaches your sinks, but unchained, and the drain does not re-stream
   it — see "Completeness survives an outage too" above.
-- Signed receipts (a key the database role cannot reach) are the next rung and are **not built**.
+- Signed checkpoints and receipts are the next rung: see [Signed checkpoints and receipts](#signed-checkpoints-and-receipts).
 
 **Verifying.** Operator-invoked, never automatic:
 
@@ -880,6 +880,61 @@ curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
   - There is deliberately no server-side time limit on a sweep.
   - A fixed one would cap how large a log can be verified at all.
   - So the bound is your client's: the sweep is walked in pages and stops between them when the caller goes away.
+
+### Signed checkpoints and receipts
+
+A rewrite by someone who holds the database can be re-chained, so the chain alone proves nothing against them. A checkpoint is a signature over the newest rows' hashes, made with a key the database cannot read, so a re-chained tail no longer matches what was signed.
+
+- **The key.** The boot key `wardyn-audit-receipt-key` (Ed25519) is made on first start, held in `secrets` and sealed by the age key like the other boot keys. A row that cannot be decrypted or parsed is never replaced with a new key.
+- **The interval.** Every `WARDYN_AUDIT_CHECKPOINT_INTERVAL` (default `1m`) one replica signs up to 10,000 new chained rows, more than one checkpoint in a tick when there are more. Nothing is signed while nothing new was logged. `0` turns signing off; 1s to 9s refuses to boot.
+- **Each checkpoint** is logged as `audit.checkpoint.create` and the whole signed statement goes to every audit sink. A SIEM that keeps it holds a head hash and a signature Wardyn cannot later disown. The statement chains to the previous one through `prev`, so a removed checkpoint shows.
+- **The latch.** The signer reads the newest stored checkpoint before each one. If a row in the range fails its hash link (`chain_break`), or the newest checkpoint is not signed by a key this install holds (`foreign_row`), it stops signing until `wardynd` restarts and logs one ERROR line. It writes no audit row, since the log is the thing in doubt. Watch the metrics under [Monitoring](operations/monitoring.md).
+- **After `-retire-previous`.** A checkpoint signed by the retired key that is already the newest at the signer's first read after start is chained to. One that appears later raises `foreign_row` and starts a new genesis at the chain head, without latching.
+- **A restart before the first checkpoint** moves the start: the first checkpoint begins after the chain head the signer read at its first tick.
+
+**Get a receipt and check it offline.** Pin the keys once, somewhere the control plane cannot change:
+
+```bash
+wardyn audit keys -o keys.json
+wardyn audit receipt --run <run-id> --wait -o receipt.json
+wardyn audit verify receipt.json --keys keys.json; echo $?
+```
+
+- `wardyn audit receipt <event-id>...` does the same for named events. A row is receiptable once its checkpoint is signed, about a minute after it is written; `--wait` asks again until then (`409 audit_receipt_pending`; a row the chain never covered is `audit_receipt_unchained`).
+- A run's receipt is a page: at most 1,000 events, cut at that cap or at the first row not yet checkpointed. When it ends early the CLI names the next `--after-seq`. Explicit events past a cap get 413. Caps: 10 checkpoints carry their row hashes (at most 100,000 hashes in all), 500 more between them carry only the signed statement so the `prev` chain verifies, and an export page holds 1,000 checkpoints.
+- `wardyn audit checkpoints` downloads the signed checkpoints alone. `verify` reports that as "signature checked, inclusion not checked": it shows none was removed, not that a row is in the log. Only a receipt checks inclusion.
+- Both commands need an administrator or `security_admin`. An administrator's receipt carries every field. A `security_admin` gets host detail withheld from some events; they stay linked into the signed list, but their content is unchecked, which is exit 3.
+- `verify` never fetches. Exit 0: every receipted row is what was signed. 1: a check failed, with the seq and reason. 2: the file or keys could not be read, or bad usage. 3: nothing failed but some events were withheld; the first line says how many.
+- A receipt that carries a run's policy rows also reports each stamped row's `policy_digest` as `linked` (a verified `run.policy.resolve` or `run.policy.generation` row in the bundle has matching policy content), `unlinked`, or `masked` (the row it would link to is host-masked); `unknown` stamps are never a mismatch. The match is by equal digest only. It does not prove the run was enforced under that policy.
+
+**Check one receipt by hand** (`openssl` 3 and `jq`; no Wardyn code):
+
+```bash
+i=0   # the checkpoint
+jq -j ".checkpoints[$i].statement" receipt.json > st.txt
+jq -r ".checkpoints[$i].signature" receipt.json | base64 -d > sig.bin
+jq -r --arg k "$(jq -r .kid st.txt)" '.keys[] | select(.kid==$k and (.retired|not)) | .public_key_pem' keys.json > pub.pem
+openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in st.txt -sigfile sig.bin
+# the row hashes fold to the signed digest (prev is "" for the first checkpoint)
+d=$(printf %s "$(jq -r .prev st.txt)" | sha256sum | cut -c1-64)
+for h in $(jq -r ".checkpoints[$i].row_hashes[]" receipt.json); do d=$(printf %s "$d$h" | sha256sum | cut -c1-64); done
+# the seqs: s_0 = sha256("wardyn-audit-seq-digest/1"), then each (seq, hash) pair
+s=$(printf %s wardyn-audit-seq-digest/1 | sha256sum | cut -c1-64)
+paste -d' ' <(jq -r ".checkpoints[$i].seqs[]" receipt.json) <(jq -r ".checkpoints[$i].row_hashes[]" receipt.json) |
+  while read seq h; do s=$(printf '%s%d:%s%d:%s' "$s" ${#seq} "$seq" ${#h} "$h" | sha256sum | cut -c1-64); echo "$s"; done | tail -n1
+jq -r '.digest, .seq_digest' st.txt   # must equal $d and the last line above
+```
+
+This checks the signature, the two digests and so that each seq belongs to its row hash. It does not recompute a row's `row_hash` from its fields: `wardyn audit verify` does.
+
+**Rotating the key** is a maintenance mode, not a server start: `wardynd -rotate-audit-receipt-key`, with `-retire-previous` if the key may be stolen. It is [described with the other boot keys](operations/secrets-and-keys.md#the-audit-receipt-key). An old receipt keeps verifying against a saved key file; a retired key's receipts fail `key_retired`.
+
+> [!WARNING]
+> **Known limitations.**
+> - History before the first checkpoint is covered by the chain, but it is not receiptable one row at a time.
+> - After a late forged checkpoint from a retired key, the rows between it and the new genesis are not covered by a receipt.
+> - The metrics and the latch are per replica: the replica that signs a tick updates them.
+> - A checkpoint is evidence from the moment it is signed. Rows a database owner rewrote before it was signed are signed as rewritten; the off-box copy of earlier statements is the control.
 
 > [!WARNING]
 > **A break is permanent.**
@@ -4503,6 +4558,7 @@ $ kubectl -n wardyn exec deploy/postgres -- dropdb -U wardyn wardyn_restorecheck
 - A
   key that does not match the restored ciphertext is a failed rollout, not a
   surprise at first use — the next section.
+- With signing on (the default) `secrets` also holds `wardyn-audit-receipt-key`. A restore that lacks it mints a new key, and the signer then stops with `foreign_row`, because the newest stored checkpoint is signed by a key it does not hold. Restore the row from the backup ([Signed checkpoints and receipts](#signed-checkpoints-and-receipts)).
 
 ### The age key is a Secret, and the default loses your secrets on boot 2
 

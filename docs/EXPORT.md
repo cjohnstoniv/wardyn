@@ -48,6 +48,7 @@
 | Secret envelope (data keys, key wrapping) | `crypto/aes` and `crypto/cipher` (AES-256-GCM), `crypto/hkdf` (HKDF-SHA-256) |
 | `wardynd-fips` image | the same code built against a pinned Go Cryptographic Module snapshot (`GOFIPS140`); no algorithm of its own |
 | Signing, hashing, key handling | `crypto/{ecdsa,ed25519,rsa,elliptic,hmac,sha256,sha1,subtle,rand}` |
+| Audit checkpoints | `crypto/ed25519` signatures and `crypto/sha256` over the audit log's rows; the public keys are served and the offline check uses `openssl` or `wardyn audit verify` |
 
 The proxy that intercepts TLS for egress policy mints its certificates locally; no key material leaves the deployment.
 
