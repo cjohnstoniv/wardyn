@@ -130,7 +130,8 @@ type trustRoot struct {
 
 // Compile checks cfg and builds the verifiers. Every refusal wraps ErrPolicy.
 func Compile(cfg Config, o Options) (*Policy, error) {
-	if o.ReadFile == nil {
+	ownReader := o.ReadFile == nil
+	if ownReader {
 		// Confined like the site setting's check at write, so a root path stored before that check, or
 		// outside the directory, refuses the compile and is never read.
 		dir := cmp.Or(o.RootDir, rootfile.Dir)
@@ -167,7 +168,10 @@ func Compile(cfg Config, o Options) (*Policy, error) {
 		}
 		b, err := o.ReadFile(r.Path)
 		if err != nil {
-			return nil, fmt.Errorf("%w: trust root %q could not be read: %v", ErrPolicy, r.Name, err)
+			if ownReader { // rootfile's texts name the directory and nothing of the file
+				return nil, fmt.Errorf("%w: trust root %q could not be read: %v", ErrPolicy, r.Name, err)
+			}
+			return nil, fmt.Errorf("%w: trust root %q could not be read", ErrPolicy, r.Name) // a caller's reader may say more than it should
 		}
 		tr, err := root.NewTrustedRootFromJSON(b)
 		if err != nil {
