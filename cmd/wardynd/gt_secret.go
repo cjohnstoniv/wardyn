@@ -60,6 +60,18 @@ func parseGroundtruthTokenSecret(v string) (ns, name string, err error) {
 // unset: no rotator). k8sSensor reports the Secret, which is what tells
 // dispatch the deployment runs the Kubernetes sensor. Both set, a malformed
 // name, or a Secret on a build without Kubernetes support refuses boot.
+// groundtruthTokenTarget names where the rotator writes, for the boot log: "file:<path>", "secret:<ns>/<name>"
+// or "" when neither is set.
+func groundtruthTokenTarget() string {
+	if ref := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_SECRET")); ref != "" {
+		return "secret:" + ref
+	}
+	if file := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); file != "" {
+		return "file:" + file
+	}
+	return ""
+}
+
 func groundtruthTokenDelivery(hop *hopTLS) (write gtTokenWriter, k8sSensor bool, err error) {
 	file := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE"))
 	ref := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_SECRET"))

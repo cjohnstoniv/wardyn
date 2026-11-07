@@ -50,6 +50,9 @@ var gtRotateAfter = time.After
 // remaining TTL (clamped [1m,30m]) so a missed tick never leaves an expired token.
 // A failed mint or write retries in 1m. Best-effort per tick.
 func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, write gtTokenWriter) {
+	// A write that keeps failing the same way (a Secret wardynd never creates and the chart left out) is
+	// logged on the first failure and again when the error changes or the write recovers, not every minute.
+	lastWriteErr := ""
 	for {
 		next := 30 * time.Minute
 		mctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -64,13 +67,22 @@ func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, write gtTokenWr
 			werr := write(wctx, ri.Token)
 			wcancel()
 			if werr != nil {
-				slog.ErrorContext(ctx, "wardynd: groundtruth token rotate: write failed", slog.Any("err", werr))
+				if werr.Error() != lastWriteErr {
+					slog.ErrorContext(ctx, "wardynd: groundtruth token rotate: write failed (retrying every minute)", slog.Any("err", werr))
+				}
+				lastWriteErr = werr.Error()
 				next = time.Minute
-			} else if !ri.Expiry.IsZero() {
-				if half := time.Until(ri.Expiry) / 2; half < time.Minute {
-					next = time.Minute
-				} else if half < 30*time.Minute {
-					next = half
+			} else {
+				if lastWriteErr != "" {
+					slog.InfoContext(ctx, "wardynd: groundtruth token rotate: write recovered")
+					lastWriteErr = ""
+				}
+				if !ri.Expiry.IsZero() {
+					if half := time.Until(ri.Expiry) / 2; half < time.Minute {
+						next = time.Minute
+					} else if half < 30*time.Minute {
+						next = half
+					}
 				}
 			}
 		}

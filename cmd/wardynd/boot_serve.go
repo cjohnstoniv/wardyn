@@ -186,7 +186,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 
 	if gtWrite != nil {
 		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtWrite) })
-		slog.Info("wardynd: groundtruth token rotator started")
+		slog.Info("wardynd: groundtruth token rotator started", slog.String("target", groundtruthTokenTarget()))
 	}
 
 	if approvalExpiry > 0 {
