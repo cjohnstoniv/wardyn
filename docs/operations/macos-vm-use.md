@@ -323,7 +323,8 @@ A folder has to pass all three. The rules and the failures are below.
 - A run reads a shared folder only once the guest agent has Full Disk Access in the base. macOS asks a privacy question for each network volume, and nobody can answer it inside a run. Grant it once in `edit-base` ([Editing a base](macos-vm-base-image.md#editing-a-base)).
   - Without it, a run with a shared folder stops before it starts, within 10 seconds, and names this fix.
   - The runner signs each guest agent it pushes with a signing identity it makes once on that Mac, so the grant can last through tools updates. The first tools update after an upgrade changes the signature: grant it once more.
-  - If signing fails, the agent is pushed signed ad hoc and loses the grant at each tools update. `wardyn-runnerd macos-vm status` says which.
+  - It signs in its own process first, then with `codesign`. Each copy must pass `codesign --verify --strict` before it is pushed.
+  - If signing fails, the agent is pushed signed ad hoc and loses the grant at each tools update. `doctor`'s guest-agent stage fails, and `wardyn-runnerd macos-vm status` says why.
   - A base moved to another Mac, or another login on the same Mac, loses the grant once: the identity is per Mac and per login.
   - Full Disk Access lifts macOS's privacy prompts for every process a run starts in the guest. POSIX permissions still apply, and each run's guest is its own clone.
 - A folder macOS protects (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security → Files and Folders first.
