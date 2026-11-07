@@ -9,6 +9,10 @@ import (
 )
 
 // Bedrock InvokeModel reports token counts in these response headers, ahead of any model-specific body.
+// The two names below are not in AWS's public API reference: the InvokeModel and
+// InvokeModelWithResponseStream pages (docs.aws.amazon.com/bedrock/latest/APIReference) list only the
+// content-type, performance-config and service-tier response headers. They are the names Bedrock is
+// seen to send; a wrong name only leaves the call uncounted (no usage), never miscounted.
 const (
 	headerInputTokens  = "X-Amzn-Bedrock-Input-Token-Count"
 	headerOutputTokens = "X-Amzn-Bedrock-Output-Token-Count"
@@ -63,6 +67,9 @@ func (p *parser) converseFrame(f frame) {
 }
 
 // invocationMetrics is appended by Bedrock to the last body or stream chunk of an InvokeModel call.
+// The key "amazon-bedrock-invocationMetrics" and these two field names are not in AWS's public API
+// reference or the model parameter pages (the Titan pages document inputTextTokenCount instead); a
+// wrong name only leaves the call uncounted.
 type invocationMetrics struct {
 	InputTokenCount  int64 `json:"inputTokenCount"`
 	OutputTokenCount int64 `json:"outputTokenCount"`
@@ -87,9 +94,14 @@ func (p *parser) mergeMetrics(m *invocationMetrics) {
 // body agreeing is not double counting.
 func (p *parser) invokeBody(b []byte) {
 	if h := p.o.Header; h != nil {
-		in, okIn := headerCount(h.Get(headerInputTokens))
-		out, okOut := headerCount(h.Get(headerOutputTokens))
-		if okIn || okOut {
+		in, inSet, inOK := headerCount(h.Get(headerInputTokens))
+		out, outSet, outOK := headerCount(h.Get(headerOutputTokens))
+		if (inSet && !inOK) || (outSet && !outOK) {
+			// A figure that is there but cannot be read is never counted as zero.
+			p.fail(ReasonParseError)
+			return
+		}
+		if inSet || outSet {
 			p.merge(in, out, 0, 0, 0)
 			p.final = true
 		}
@@ -112,9 +124,14 @@ func (p *parser) invokeBody(b []byte) {
 	}
 }
 
-func headerCount(v string) (int64, bool) {
+// headerCount reads one token-count header: set is false for an absent (empty) header, ok is false for
+// a present value that is not a non-negative integer.
+func headerCount(v string) (n int64, set, ok bool) {
+	if v == "" {
+		return 0, false, false
+	}
 	n, err := strconv.ParseInt(v, 10, 64)
-	return n, err == nil && n >= 0
+	return n, true, err == nil && n >= 0
 }
 
 // invokeFrame reads InvokeModelWithResponseStream chunk events: each payload is {"bytes": <base64>} and the
