@@ -18,9 +18,9 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
-	"github.com/cjohnstoniv/wardyn/internal/kek"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -193,7 +193,9 @@ func dispatchSSOGateway(t *testing.T, resign bool, b types.Boundary) (*Server, u
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d %s, want 201", w.Code, w.Body.String())
 	}
-	var created types.AgentRun
+	var created struct {
+		ID uuid.UUID `json:"id"`
+	}
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.ID == uuid.Nil {
 		t.Fatalf("create body %s: %v", w.Body, err)
 	}
