@@ -216,9 +216,22 @@ func TestVerifyBundle_RedactedRowWithheldNotFailed(t *testing.T) {
 	b := Bundle{Format: ReceiptFormat, Checkpoints: []Checkpoint{c}}
 
 	rep := VerifyBundle(b, keysOf(pub))
-	if !rep.OK() || rep.Withheld() != 1 || rep.Complete() || !rep.Events[0].Withheld {
-		t.Fatalf("a host-redacted row: failures %+v, withheld %d, complete %v; want linked, withheld, not complete",
-			rep.Failures, rep.Withheld(), rep.Complete())
+	if !rep.OK() || rep.Withheld() != 1 || rep.Complete() || !rep.Events[0].Withheld || rep.Events[0].OK {
+		t.Fatalf("a host-redacted row: failures %+v, withheld %d, complete %v, event %+v; want linked, withheld, the "+
+			"event not OK, the receipt not complete", rep.Failures, rep.Withheld(), rep.Complete(), rep.Events[0])
+	}
+
+	// Anyone holding the receipt can rewrite a withheld row's shown fields and keep the marker: nothing re-hashes
+	// them, so the event is never OK and the receipt never complete.
+	forged := c
+	forged.Events = append([]Event(nil), c.Events...)
+	forged.Events[0].Row.Actor = "someone-else"
+	forged.Events[0].Row.Target = strp("forged-target")
+	forged.Events[0].Row.Data = strp(`{"backend":"s3","redacted_fields":["host_root"]}`)
+	rep = VerifyBundle(Bundle{Format: ReceiptFormat, Checkpoints: []Checkpoint{forged}}, keysOf(pub))
+	if rep.Complete() || rep.Events[0].OK || !rep.Events[0].Withheld {
+		t.Fatalf("a withheld row with rewritten actor, target and data: complete %v, event %+v; want withheld, "+
+			"the event not OK, the receipt not complete", rep.Complete(), rep.Events[0])
 	}
 
 	// redacted_fields on an action the projector never redacts is a forgery, not a withheld row.
