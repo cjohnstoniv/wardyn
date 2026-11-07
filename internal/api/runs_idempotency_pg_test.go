@@ -121,15 +121,6 @@ func createdID(t *testing.T, w *httptest.ResponseRecorder) uuid.UUID {
 	return out.ID
 }
 
-func auditData(t *testing.T, ev types.AuditEvent) map[string]any {
-	t.Helper()
-	var m map[string]any
-	if err := json.Unmarshal(ev.Data, &m); err != nil {
-		t.Fatal(err)
-	}
-	return m
-}
-
 // TestCreateRunNoKeyByteEqual: a create without the header takes the old path: no replay header, no key
 // row, no key field on run.create, and two such creates are two runs.
 func TestCreateRunNoKeyByteEqual(t *testing.T) {
