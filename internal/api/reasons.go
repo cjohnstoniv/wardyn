@@ -840,3 +840,12 @@ const (
 	reasonIdempotencyKeyReused   = "idempotency_key_reused"    // 422: the key was used with a different request in the last 24 hours
 	reasonIdempotencyKeyInFlight = "idempotency_key_in_flight" // 409: a request with the key is still being answered; Retry-After says when to try again
 )
+
+// Image admission's refusals (run_image_admission.go): the same values as imageadmit.Reason.
+const (
+	reasonImageAdmissionNoPolicy    = "image_admission_no_policy"   // no signer the site trusts covers the member's image, or a signer the profile requires does not or is undefined
+	reasonImageSignatureMissing     = "image_signature_missing"     // no signature on the image's digest from a signer that covers it
+	reasonImageSignatureInvalid     = "image_signature_invalid"     // signed, but by another identity or key than the covering signer requires
+	reasonImageAttestationMissing   = "image_attestation_missing"   // the signer did not attest a type it requires
+	reasonImageAdmissionUnavailable = "image_admission_unavailable" // the image's registry or a trust root could not be read (503)
+)

@@ -543,6 +543,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
+	stampImageAdmission(createData, q.f.admission)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
 	stampIdempotencyKey(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
