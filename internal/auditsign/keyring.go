@@ -132,6 +132,16 @@ func (k *Key) Verify(kid string, msg, sig []byte) bool {
 	return false
 }
 
+// Retired reports whether kid names a previous key that was retired (treated as possibly stolen).
+func (k *Key) Retired(kid string) bool {
+	for _, p := range k.previous {
+		if p.Kid == kid && p.Retired {
+			return true
+		}
+	}
+	return false
+}
+
 // PublicKeys is the key file wardyn audit keys saves: the current key first, then every previous one, newest
 // first. No private material.
 func (k *Key) PublicKeys() []auditreceipt.PublicKey {
