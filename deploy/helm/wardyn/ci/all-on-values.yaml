@@ -359,3 +359,8 @@ groundtruth:
       kubernetes.io/os: linux
     tolerations:
       - operator: Exists
+
+# Image signature checks' registry credentials, the other side of the empty default: a mounted
+# Secret (never created by the chart) and WARDYN_REGISTRY_AUTH_FILE pointing at it.
+imageAdmission:
+  registryAuthSecret: regcred

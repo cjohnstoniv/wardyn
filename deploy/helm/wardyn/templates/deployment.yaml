@@ -557,6 +557,13 @@ spec:
             - name: WARDYN_TRUSTED_CA_FILE
               value: {{ "/etc/wardyn/trusted-ca/ca.pem" | quote }}
             {{- end }}
+            {{- if and (.Values.imageAdmission | default dict).registryAuthSecret (not (hasKey .Values.env "WARDYN_REGISTRY_AUTH_FILE")) }}
+            # Points wardynd at the registry credentials of the named
+            # kubernetes.io/dockerconfigjson Secret, mounted read-only below.
+            # Image signature checks read them; nothing else does.
+            - name: WARDYN_REGISTRY_AUTH_FILE
+              value: {{ "/etc/wardyn/registry-auth/config.json" | quote }}
+            {{- end }}
             {{- if and $dps.existingSecret (not (hasKey .Values.env "WARDYN_DAEMON_PROXY_SECRET")) }}
             # Points wardynd at the operator-managed Secret mounted below — a
             # Secret this chart never creates, since the value is a
@@ -820,6 +827,11 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if (.Values.imageAdmission | default dict).registryAuthSecret }}
+            - name: registry-auth
+              mountPath: /etc/wardyn/registry-auth
+              readOnly: true
+            {{- end }}
             {{- if (.Values.siteConfigSeed | default dict) }}
             - name: site-config-seed
               mountPath: /etc/wardyn/site-config-seed
@@ -865,6 +877,14 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if (.Values.imageAdmission | default dict).registryAuthSecret }}
+        - name: registry-auth
+          secret:
+            secretName: {{ .Values.imageAdmission.registryAuthSecret | quote }}
+            items:
+              - key: .dockerconfigjson
+                path: config.json
         {{- end }}
         {{- if (.Values.siteConfigSeed | default dict) }}
         - name: site-config-seed
