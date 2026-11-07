@@ -86,13 +86,13 @@ func TestTLSCheckThroughProxy(t *testing.T) {
 	}()
 	env := map[string]string{"HTTPS_PROXY": "http://" + pl.Addr().String()}
 	c := tlsChecker{roots: pool, getenv: func(k string) string { return env[k] }}
-	// A name that does not resolve: only the proxy can reach the server.
-	code, out, errw := runTLSCheck(t, c, "127.0.0.1:"+portOf(srv))
-	if code != 0 || connects.Load() != 1 || gotTarget.Load() != "127.0.0.1:"+portOf(srv) {
+	// A name that does not resolve here (the test certificate names it): only the proxy can reach the server.
+	code, out, errw := runTLSCheck(t, c, "example.com:"+portOf(srv))
+	if code != 0 || connects.Load() != 1 || gotTarget.Load() != "example.com:"+portOf(srv) {
 		t.Fatalf("code=%d out=%q err=%q connects=%d target=%v", code, out, errw, connects.Load(), gotTarget.Load())
 	}
 	// Without the pool the same path fails TLS, not the proxy.
-	code, _, errw = runTLSCheck(t, tlsChecker{getenv: c.getenv}, "127.0.0.1:"+portOf(srv))
+	code, _, errw = runTLSCheck(t, tlsChecker{getenv: c.getenv}, "example.com:"+portOf(srv))
 	if code != 1 || !strings.HasPrefix(errw, "TLS failed:") {
 		t.Fatalf("code=%d err=%q", code, errw)
 	}

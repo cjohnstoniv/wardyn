@@ -24,6 +24,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
+- `wardyn-guest-agent tls-check <host>` inside a macOS VM checks a host the way apps that use only the system trust store do, and exits 1 when TLS fails.
 
 ### Fixed
 
