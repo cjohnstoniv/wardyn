@@ -150,6 +150,9 @@ function Usage({ data, live, stale, busy, onRefresh }: { data: ModelUsage; live:
   const countedRows = rows.filter((m) => countedCalls(m) > 0);
   const vendors = [...new Set(countedRows.map((m) => m.vendor))];
   const counted = countedCalls(totals);
+  // The same vendor and model on two endpoints reads as two identical rows; each then names its endpoint.
+  const seen = new Map<string, number>();
+  for (const m of rows) seen.set(`${m.vendor}|${m.model}`, (seen.get(`${m.vendor}|${m.model}`) ?? 0) + 1);
 
   return (
     <div>
@@ -177,7 +180,7 @@ function Usage({ data, live, stale, busy, onRefresh }: { data: ModelUsage; live:
           {rows.length > 1 && (
             <ul className="mt-2.5 border-t border-border">
               {rows.map((m) => (
-                <ModelRow key={`${m.vendor}|${m.host}|${m.model}`} m={m} />
+                <ModelRow key={`${m.vendor}|${m.host}|${m.model}`} m={m} showEndpoint={(seen.get(`${m.vendor}|${m.model}`) ?? 0) > 1} />
               ))}
             </ul>
           )}
@@ -224,7 +227,7 @@ function Notes({ data }: { data: ModelUsage }) {
   );
 }
 
-function ModelRow({ m }: { m: ModelUsageModel }) {
+function ModelRow({ m, showEndpoint }: { m: ModelUsageModel; showEndpoint: boolean }) {
   const hasFigures = countedCalls(m) > 0;
   return (
     <li className="border-b border-border py-2 last:border-b-0 last:pb-0">
@@ -234,6 +237,8 @@ function ModelRow({ m }: { m: ModelUsageModel }) {
         <span className="whitespace-nowrap text-meta text-muted-foreground">{MODEL_USAGE.vendorName(m.vendor)}</span>
         <span className="ml-auto whitespace-nowrap text-meta text-muted-foreground">{MODEL_USAGE.calls(m.calls)}</span>
       </div>
+      {/* Visible text, not a tooltip, so a keyboard or touch reader has the whole address. */}
+      {showEndpoint && <p className="mt-0.5 break-all font-mono text-meta text-muted-foreground">{MODEL_USAGE.endpoint(m.provider, m.host)}</p>}
       {hasFigures && (
         <dl className="mt-1 grid grid-cols-3 gap-2">
           <Figure label={MODEL_USAGE.labelInput} value={count(m.input_tokens)} />

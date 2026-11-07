@@ -108,6 +108,17 @@ describe("ModelUsageWidget totals", () => {
     expect(screen.queryByText(/OpenAI/)).toBeNull();
   });
 
+  it("the same vendor and model on two hosts: each row names its endpoint, other rows do not", async () => {
+    const east = model({ model: "claude-sonnet-4-5", provider: "corp-gateway", host: "llm.east.example.com", input_tokens: 100, output_tokens: 10, calls: 1 });
+    const direct = model({ model: "claude-sonnet-4-5", provider: "api.anthropic.com", host: "api.anthropic.com", input_tokens: 200, output_tokens: 20, calls: 2 });
+    getModelUsageMock.mockResolvedValue(usage([east, direct, claudeHaiku]));
+    await mount(true);
+    const rows = screen.getAllByRole("listitem");
+    expect(within(rows[0]).getByText("corp-gateway · llm.east.example.com")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("api.anthropic.com")).toBeInTheDocument();
+    expect(within(rows[2]).queryByText(/example\.com|anthropic\.com/)).toBeNull();
+  });
+
   it("a long model name wraps and stays on screen in full", async () => {
     const long = "anthropic.claude-sonnet-4-5-20250929-v1:0-with-a-very-long-inference-profile-suffix";
     getModelUsageMock.mockResolvedValue(usage([model({ model: long, calls: 1, input_tokens: 1, output_tokens: 1 }), claudeHaiku]));

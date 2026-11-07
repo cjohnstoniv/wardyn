@@ -41,6 +41,8 @@ export const MODEL_USAGE = {
   calls: (n: number) => plural(n, "call", "calls"),
   // The one-model line above the totals.
   oneModel: (model: string, provider: string, n: number) => `${model} · ${provider} · ${plural(n, "call", "calls")}`,
+  // Which endpoint a row is for: the provider row when one matches, then the host the calls went to.
+  endpoint: (provider: string, host: string) => (provider === "" || provider === host ? host : `${provider} · ${host}`),
   noModelName: "model not reported",
 
   // "Reported so far", then one clause per cache rule among the vendors that have figures.
