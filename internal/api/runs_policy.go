@@ -470,19 +470,33 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 	return envelope.UIApps, nil
 }
 
-// latestPolicyResolve is the run's last decodable run.policy.resolve envelope
-// and when it was written. dispatchRun writes one per run, behind claimDispatch,
-// so last-wins only keeps the read defined if a second ever lands. ok=false when there is none, and every caller fails closed on it.
+// latestPolicyResolve is the policy the run's proxy enforces now, read from its audit events, and when that
+// was written: the last decodable run.policy.resolve envelope, with its policy replaced by the one a later
+// run.policy.generation row records (a revive writes one per generation, {"generation","policy"}), since a
+// revived proxy enforces that. The envelope's other facts stay the dispatch envelope's. dispatchRun writes
+// one resolve per run, behind claimDispatch, so last-wins only keeps the read defined if a second ever
+// lands. ok=false when there is none, and every caller fails closed on it.
 func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
-		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
+		if len(ev.Data) == 0 {
 			continue
 		}
-		var d effectivePolicyDatum
-		if json.Unmarshal(ev.Data, &d) != nil {
-			continue
+		switch canonicalAction(ev.Action) {
+		case "run.policy.resolve":
+			var d effectivePolicyDatum
+			if json.Unmarshal(ev.Data, &d) != nil {
+				continue
+			}
+			envelope, at, ok = d, ev.Time, true
+		case "run.policy.generation":
+			var g struct {
+				Policy *types.RunPolicySpec `json:"policy"`
+			}
+			if json.Unmarshal(ev.Data, &g) != nil || g.Policy == nil {
+				continue
+			}
+			envelope.RunPolicySpec, at, ok = *g.Policy, ev.Time, true
 		}
-		envelope, at, ok = d, ev.Time, true
 	}
 	return envelope, at, ok
 }
