@@ -601,7 +601,7 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
         </RadioGroup>
         {form.only && (
           <div className="flex flex-col gap-1.5 pl-6">
-            <SiteList label={T.SITES_ONLY} sites={form.allowed} text={form.allowedText} onSites={(allowed) => edit({ allowed })} onText={(allowedText) => edit({ allowedText })} />
+            <SiteList errorId={errors?.sites ? eid("sites") : undefined} label={T.SITES_ONLY} sites={form.allowed} text={form.allowedText} onSites={(allowed) => edit({ allowed })} onText={(allowedText) => edit({ allowedText })} />
             <p className="text-xs text-muted-foreground">{T.SITES_ONLY_HINT}</p>
           </div>
         )}

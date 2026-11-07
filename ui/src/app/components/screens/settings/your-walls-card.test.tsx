@@ -590,6 +590,9 @@ describe("Your walls: every limit has a control", () => {
       expect(described(form, YOUR_WALLS.PATHS_PATH_N(1))).toEqual([YOUR_WALLS.PATHS_BLANK]);
       expect(described(form, YOUR_WALLS.GITHUB_CAPS)).toEqual(["github bad", YOUR_WALLS.CAPS_EMPTY]);
       expect(within(form).getByRole("radiogroup", { name: YOUR_WALLS.SITES })).toHaveAttribute("aria-invalid", "true");
+      const only = within(form).getByRole("textbox", { name: YOUR_WALLS.SITES_ONLY });
+      expect(only).toHaveAttribute("aria-invalid", "true");
+      expect(only.getAttribute("aria-describedby")?.split(" ").map((id) => form.querySelector(`[id="${id}"]`)?.textContent)).toEqual(["sites bad"]);
     }
   });
 });
