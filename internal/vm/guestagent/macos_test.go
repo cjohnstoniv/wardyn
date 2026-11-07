@@ -364,7 +364,7 @@ func TestSpliceDesktopRefusesWhenTheDesktopIsOff(t *testing.T) {
 	lb := newBroker()
 	d := &Desktop{}
 	d.Disable()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond, nil) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{DesktopOpenByte})
 	select {
@@ -381,7 +381,7 @@ func TestDisableClosesAnOpenTunnel(t *testing.T) {
 	hb := newBroker()
 	lb := newBroker()
 	d := &Desktop{}
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond, nil) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{DesktopOpenByte})
 	local := lb.next(t)
@@ -410,7 +410,7 @@ func TestSpliceDesktopWaitsForTheOpenByte(t *testing.T) {
 	defer cancel()
 	hb := newBroker()
 	lb := newBroker()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond, nil) }()
 
 	host := hb.next(t)
 	select {
@@ -444,7 +444,7 @@ func TestSpliceDesktopRefusesAnotherFirstByte(t *testing.T) {
 	defer cancel()
 	hb := newBroker()
 	lb := newBroker()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond, nil) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{'R'})
 	select {

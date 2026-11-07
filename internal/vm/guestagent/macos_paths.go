@@ -55,6 +55,9 @@ const (
 	// MacSessionEnvStatusPath says whether those settings reached the window's GUI session: one
 	// session_env= line (SessionEnvStatus), never a value.
 	MacSessionEnvStatusPath = MacSessionEnvDir + "/session-env.status"
+	// MacDesktopViewStatusPath says what the last desktop view showed: one line, view=console, or
+	// view=screen_sharing_login with the reason. Root's, 0644; it never holds a password.
+	MacDesktopViewStatusPath = MacSessionEnvDir + "/desktop-view.status"
 	// MacZshEnvPath is the system-wide zsh file that carries the hook, /etc/zshenv spelled through /private
 	// as /etc is a link too.
 	MacZshEnvPath = "/private/etc/zshenv"

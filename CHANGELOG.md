@@ -48,6 +48,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 - On a remote MCP server where a run's tool rules block a tool, that server's tool lists now leave the blocked tools out, a tool list Wardyn cannot read is answered with an error, and one message from that server larger than 10 MiB ends its response.
 - A run whose tool rules mark a remote MCP tool `approve_each` does not start on a proxy image or runner older than this release: its proxy config carries a key they refuse.
+- Watching a background macOS VM run's desktop now shows its apps, not a login window. If that is not acceptable, turn `macos_vm.allow_background_watch` off before you upgrade.
 
 ### Added
 
@@ -108,6 +109,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The console's Content-Security-Policy now sets `form-action`, and the console sends `Permissions-Policy` and, under TLS, `Strict-Transport-Security`.
 - The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
 - macOS VM runs: a Terminal opened in the window, and apps started from the Dock or Finder, now get the run's non-secret settings (the proxy, the CA bundle, the provider sign-in files, the git identity), so Claude Code in the window's Terminal is signed in. A run's secret variables (`env_secret`) are never placed in the window's Terminal or desktop. An app already open when the window shows ready may need a relaunch. While the settings are being applied, `wardyn window --status` and the run page say so, and an at-start window waits for them (up to ten minutes) without holding the run's start; if they could not be applied, the window still opens and the status names the reason and the retry, `agent-run --session-env-retry` in the window's Terminal.
+- Watching a macOS VM run's desktop from the browser now shows the agent's desktop instead of a macOS login window ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). It is on by default, with no setting: where the Mac's Screen Sharing does not let the run's account sign in, the view shows the login window as before, and `/var/run/wardyn/desktop-view.status` in the run says why. The Mac's base gets this with its next tools update, which the runner starts on its own after the upgrade.
 - A run's gateway identity is now refreshed before the first call after its half-life instead of behind it, so a refusal of the refresh applies to that call. A refresh that fails but may pass, such as an unreachable control plane, still leaves the held token in use until it expires. Once the control plane cuts the run's gateway access, the proxy answers every call to that gateway with 403 and stops asking.
 - Review now refuses an Azure DevOps capability list that reaches past the provider's ceiling (`ado_capabilities_above_ceiling`), with the same sentence launch gave, instead of letting the run fail after the click. It is on by default and refuses nothing launch would not.
 

@@ -13,12 +13,15 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/rfbauth"
 )
 
 // The macOS desktop is the guest's own Screen Sharing. The agent owns three things about it: setting
@@ -50,7 +53,18 @@ type Desktop struct {
 	// SessionEnvEvery is StartSessionEnv's console poll, and SessionEnvWait bounds its whole GUI step, the set included;
 	// zero is 2 s and 10 min.
 	SessionEnvEvery, SessionEnvWait time.Duration
+	// AgentUID is the agent account's uid: the console view signs in only while it is at the console.
+	AgentUID uint32
+	// KCPassword is the agent account's auto-login password file; "" is MacKCPasswordPath.
+	KCPassword string
+	// ViewStatus is the desktop view's status file; "" is MacDesktopViewStatusPath.
+	ViewStatus string
+	// PeerCheck refuses a Screen Sharing connection whose server end is not root's, before any password
+	// is sent on it; nil is the lsof check through Run.
+	PeerCheck func(ctx context.Context, c net.Conn) error
 
+	ardOnce  sync.Once
+	ard      *rfbauth.ARDClient
 	mu       sync.Mutex
 	password string
 	disabled bool
