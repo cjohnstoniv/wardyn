@@ -184,7 +184,8 @@ type Stage2Input struct {
 	// AgentSignature is how the guest agent the base held before this stage 2 was signed (a tools
 	// update's): Full Disk Access as the running agent reads it says something of a newly pushed build only
 	// when both are signed on this Mac.
-	AgentSignature string
+	AgentSignature         string
+	AgentSigningCertSHA256 string
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -214,6 +215,7 @@ type ToolsResult struct {
 	// AgentSignature is how the pushed agent is signed, and AgentSigningCert whether the guest trusts
 	// the signing certificate.
 	AgentSignature, AgentSigningCert string
+	AgentSigningCertSHA256           string
 }
 
 // PinRecord is a pin as stage 2 applied it.

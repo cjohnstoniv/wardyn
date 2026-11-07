@@ -327,7 +327,7 @@ func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 	stage := &macvm.ToolsStage{ToolsOptions: f.opts, Boot: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
 		return g, func(context.Context) error { return nil }, nil
 	}}
-	res, err := stage.Run(context.Background(), macvm.Stage2Input{AgentSignature: macvm.AgentSignedThisMac})
+	res, err := stage.Run(context.Background(), macvm.Stage2Input{AgentSignature: macvm.AgentSignedThisMac, AgentSigningCertSHA256: shaHex(ms.cert)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,8 +351,13 @@ func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 	if res.AgentSignature != macvm.AgentSignedThisMac || res.AgentSigningCert != macvm.ItemTrusted {
 		t.Fatalf("signature %q cert %q", res.AgentSignature, res.AgentSigningCert)
 	}
-	if res.Guest == nil || res.Guest.FullDiskAccess != "allowed" {
-		t.Fatalf("Full Disk Access not recorded: %+v", res.Guest)
+	if res.Guest == nil || res.Guest.FullDiskAccess != "allowed" || res.AgentSigningCertSHA256 != shaHex(ms.cert) {
+		t.Fatalf("Full Disk Access not recorded: %+v, certificate %q", res.Guest, res.AgentSigningCertSHA256)
+	}
+	// Signed on this Mac before too, but by another certificate (a new identity): the requirement changed,
+	// so the old agent's answer says nothing of the new build.
+	if res, err := stage.Run(context.Background(), macvm.Stage2Input{AgentSignature: macvm.AgentSignedThisMac, AgentSigningCertSHA256: shaHex([]byte("another cert"))}); err != nil || res.Guest == nil || res.Guest.FullDiskAccess != "" {
+		t.Fatalf("another certificate before: Full Disk Access %+v carried across (%v)", res.Guest, err)
 	}
 	// After an agent signed ad hoc (or none recorded), the old agent's answer says nothing of the new build.
 	for _, before := range []string{macvm.AgentSignedAdHoc, ""} {

@@ -40,6 +40,10 @@ func TestStatusSaysTheAgentIsAdHoc(t *testing.T) {
 	if strings.Contains(got, lost) || !strings.Contains(got, "guest agent: signed on this Mac; the base does not trust its certificate yet: run macos-vm edit-base and trust it\n") {
 		t.Fatalf("untrusted certificate status:\n%s", got)
 	}
+	// A tools update that could not carry the reading across says so, never allowed.
+	if got := status(`{"agent_signature":"this_mac","agent_signing_cert":"trusted"}`); !strings.Contains(got, "Full Disk Access: unknown; recheck it in macos-vm edit-base\n") {
+		t.Fatalf("unread Full Disk Access status:\n%s", got)
+	}
 	if got := status(`{}`); strings.Contains(got, "guest agent:") || strings.Contains(got, "Full Disk Access:") {
 		t.Fatalf("a record from before the signature says something:\n%s", got)
 	}
