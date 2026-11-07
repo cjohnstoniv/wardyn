@@ -578,8 +578,9 @@ That has two consequences:
 - A sandbox cannot create itself a second credential whatever credential its run carries.
 - **A request beyond what the run holds follows its `first_use_approval`.**
   - `always_deny` (the default): refused, `403`.
-  - `deny_with_review`: this attempt is refused (`403`) and a request is raised.
-  - `wait_for_review`: held (`423`) until a person answers.
+  - `deny_with_review`: this attempt is refused (`403`), a request is raised, and a retry passes once a person approves.
+  - `wait_for_review`: held (`423` `capability_pending`) until a person answers.
+  - Above the row's ceiling, in any mode: refused, `403` `capability_above_ceiling`.
 - A person (or an admin) sees a raised request in the Wardyn UI and answers
   - **allow once** — this one request only —
   - or **allow for this run** — the capability joins what the rest of the run may do without asking again.
@@ -645,43 +646,10 @@ needs_setup:
 
 ## Request flow
 
-```mermaid
-sequenceDiagram
-  participant Person
-  participant Wardyn as wardynd
-  participant Entra as Entra ID
-  participant Sandbox
-  participant Proxy as wardyn-proxy
-  participant ADO as Azure DevOps
-
-  Person->>Wardyn: sign in
-  Wardyn->>Entra: browser redirect
-  Entra-->>Wardyn: per-user grant, captured
-  Note over Wardyn,Sandbox: run dispatches as that person<br/>(minted_pat: Wardyn creates the run's PAT here)
-  Sandbox->>Proxy: Azure DevOps request (no token)
-  Proxy->>Wardyn: resolve capability C for this grant
-  alt C already held by the run
-    Wardyn-->>Proxy: 200, the run's credential
-    Proxy->>ADO: forward, credential attached
-    ADO-->>Proxy: response
-    Proxy-->>Sandbox: response
-  else C inside the ceiling, not held, first_use_approval is always_deny or deny_with_review
-    Wardyn-->>Proxy: 403 (deny_with_review also raises a request)
-    Proxy-->>Sandbox: refused
-  else C inside the ceiling, not held, first_use_approval is wait_for_review
-    Wardyn-->>Proxy: 423 capability_pending
-    Note over Proxy: request held
-    Person->>Wardyn: allow once / allow for this run
-    Proxy->>Wardyn: resolve again with the approval
-    Wardyn-->>Proxy: 200, the run's credential
-    Proxy->>ADO: forward, credential attached
-    ADO-->>Proxy: response
-    Proxy-->>Sandbox: response
-  else C above the ceiling
-    Wardyn-->>Proxy: 403 capability_above_ceiling
-    Proxy-->>Sandbox: refused
-  end
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/ado-request-flow-dark.svg">
+  <img src="img/ado-request-flow.svg" alt="An Azure DevOps request from the sandbox: forwarded with the credential when the run holds the capability, held under wait_for_review, refused under deny_with_review or always_deny, and refused above the ceiling.">
+</picture>
 
 ## Two layers of enforcement
 
