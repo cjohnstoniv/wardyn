@@ -167,6 +167,7 @@ type SignedAgent struct {
 type HostAgentSigner struct {
 	Dir  string
 	Exec func(ctx context.Context, argv []string) ([]byte, error)
+	Log  *slog.Logger
 }
 
 // SignAgent copies the agent at path into a new temp directory and signs the copy there. The identity
