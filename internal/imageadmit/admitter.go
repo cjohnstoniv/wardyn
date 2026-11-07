@@ -229,3 +229,43 @@ func unavailableDetail(ref Ref, err error) string {
 	}
 	return ref.Registry + " could not be read"
 }
+
+// LogCause names why a check could not be made with a fixed word, for wardynd's log. It never returns text
+// taken from the error, so nothing a registry or the auth file path put into the error reaches the log.
+func LogCause(err error) string {
+	var u *Unavailable
+	if errors.As(err, &u) {
+		switch u.Cause {
+		case CauseUnauthorized:
+			return "unauthorized"
+		case CauseForbidden:
+			return "forbidden"
+		case CauseUnreachable:
+			return "unreachable"
+		case CauseTLS:
+			return "tls"
+		case CauseTimeout:
+			return "timeout"
+		case CauseServer:
+			return "server"
+		case CauseRefused:
+			return "refused"
+		case CauseAuthFile:
+			return "auth_file"
+		}
+		return "unavailable"
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, ErrNotFound):
+		return "not_found"
+	case errors.Is(err, ErrDigestMismatch):
+		return "digest_mismatch"
+	case errors.Is(err, ErrTooLarge):
+		return "too_large"
+	}
+	return "other"
+}
