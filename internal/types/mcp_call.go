@@ -30,6 +30,21 @@ const MaxMCPCallBytes = 32 << 10
 // maxCanonicalDepth caps how deeply arrays and objects may nest.
 const maxCanonicalDepth = 64
 
+// maxJSONBDepth is encoding/json's own nesting limit, so any value json.Marshal produced
+// canonicalizes under JSONB's rules.
+const maxJSONBDepth = 10000
+
+// canonMode is one set of canonicalization rules.
+type canonMode struct {
+	lastKeyWins bool // a repeated key keeps its last value, as JSONB does, instead of being refused
+	maxDepth    int
+}
+
+var (
+	canonStrict = canonMode{maxDepth: maxCanonicalDepth}
+	canonJSONB  = canonMode{lastKeyWins: true, maxDepth: maxJSONBDepth}
+)
+
 var (
 	// ErrCanonicalRepeatedKey means an object repeats a key. Two parsers can read the
 	// two values differently, so such a call cannot be shown exactly and is refused.
@@ -45,10 +60,20 @@ var (
 // encoding/json. It refuses a repeated key at any depth, nesting over 64 levels,
 // trailing data and anything that is not exactly one JSON value.
 func CanonicalJSON(raw []byte) ([]byte, error) {
+	return canonical(raw, canonStrict)
+}
+
+// CanonicalJSONB is the canonical form under JSONB's rules: a repeated key keeps its last value;
+// used for evidence digests that must be recomputable from a stored row. It nests to 10000 levels.
+func CanonicalJSONB(raw []byte) ([]byte, error) {
+	return canonical(raw, canonJSONB)
+}
+
+func canonical(raw []byte, m canonMode) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var out bytes.Buffer
-	if err := canonValue(dec, &out, 0); err != nil {
+	if err := canonValue(dec, &out, 0, m); err != nil {
 		return nil, err
 	}
 	if _, err := dec.Token(); err != io.EOF {
@@ -57,20 +82,23 @@ func CanonicalJSON(raw []byte) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-func canonValue(dec *json.Decoder, out *bytes.Buffer, depth int) error {
+func canonValue(dec *json.Decoder, out *bytes.Buffer, depth int, m canonMode) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return fmt.Errorf("read JSON: %w", err)
 	}
 	switch t := tok.(type) {
 	case json.Delim:
-		if depth >= maxCanonicalDepth {
-			return ErrCanonicalDepth
+		if depth >= m.maxDepth {
+			if m.maxDepth == maxCanonicalDepth {
+				return ErrCanonicalDepth
+			}
+			return fmt.Errorf("JSON nests deeper than %d levels", m.maxDepth)
 		}
 		if t == '[' {
-			return canonArray(dec, out, depth+1)
+			return canonArray(dec, out, depth+1, m)
 		}
-		return canonObject(dec, out, depth+1)
+		return canonObject(dec, out, depth+1, m)
 	case json.Number:
 		out.WriteString(CanonicalNumber(string(t)))
 	default: // string, bool, nil
@@ -83,13 +111,13 @@ func canonValue(dec *json.Decoder, out *bytes.Buffer, depth int) error {
 	return nil
 }
 
-func canonArray(dec *json.Decoder, out *bytes.Buffer, depth int) error {
+func canonArray(dec *json.Decoder, out *bytes.Buffer, depth int, m canonMode) error {
 	out.WriteByte('[')
 	for first := true; dec.More(); first = false {
 		if !first {
 			out.WriteByte(',')
 		}
-		if err := canonValue(dec, out, depth); err != nil {
+		if err := canonValue(dec, out, depth, m); err != nil {
 			return err
 		}
 	}
@@ -100,7 +128,7 @@ func canonArray(dec *json.Decoder, out *bytes.Buffer, depth int) error {
 	return nil
 }
 
-func canonObject(dec *json.Decoder, out *bytes.Buffer, depth int) error {
+func canonObject(dec *json.Decoder, out *bytes.Buffer, depth int, m canonMode) error {
 	members := map[string][]byte{}
 	for dec.More() {
 		kt, err := dec.Token()
@@ -108,11 +136,11 @@ func canonObject(dec *json.Decoder, out *bytes.Buffer, depth int) error {
 			return fmt.Errorf("read JSON: %w", err)
 		}
 		key, _ := kt.(string)
-		if _, dup := members[key]; dup {
+		if _, dup := members[key]; dup && !m.lastKeyWins {
 			return ErrCanonicalRepeatedKey
 		}
 		var v bytes.Buffer
-		if err := canonValue(dec, &v, depth); err != nil {
+		if err := canonValue(dec, &v, depth, m); err != nil {
 			return err
 		}
 		members[key] = v.Bytes()

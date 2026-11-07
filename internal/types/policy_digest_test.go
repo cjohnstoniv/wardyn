@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -161,5 +162,23 @@ func TestPolicyDigest_IgnoresScopeSpelling(t *testing.T) {
 	}
 	if withScope(`{"host":"other.example.com","secret_name":"s","n":100,"nested":{"a":1,"b":[true,null,"x"]}}`).Digest() == want {
 		t.Error("a scope naming another host has the same digest")
+	}
+}
+
+// TestPolicyDigest_ScopeNumbersAndRepeatedKeys: a scope number's spelling does not change the digest,
+// its value does, and a repeated scope key digests as its last value, as JSONB stores it.
+func TestPolicyDigest_ScopeNumbersAndRepeatedKeys(t *testing.T) {
+	withScope := func(scope string) RunPolicySpec {
+		return RunPolicySpec{AllowedDomains: []string{"api.example.com"},
+			EligibleGrants: []GrantSpec{{Kind: GrantGitPAT, Scope: json.RawMessage(scope), TTLSeconds: 60}}}
+	}
+	if a, b := withScope(`{"host":"h","n":1e1001}`).Digest(), withScope(`{"host":"h","n":1`+strings.Repeat("0", 1001)+`}`).Digest(); a != b {
+		t.Errorf("1e1001 and its plain integer: digests %s != %s", a, b)
+	}
+	if withScope(`{"host":"h","n":1e-41}`).Digest() == withScope(`{"host":"h","n":0}`).Digest() {
+		t.Error("1e-41 and 0 have the same digest")
+	}
+	if a, b := withScope(`{"host":"a","host":"b"}`).Digest(), withScope(`{"host":"b"}`).Digest(); a != b {
+		t.Errorf("a repeated key: digest %s != %s of its last value", a, b)
 	}
 }
