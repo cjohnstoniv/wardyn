@@ -47,6 +47,8 @@ export const PROVIDER_EDITOR = {
   ROUTE_THROUGH: "Route through a gateway (optional)",
   ROUTE_THROUGH_HINT: (host: string) =>
     `Send requests to your gateway instead of ${host}. Each person's key goes with them, and they are told where it goes.`,
+  // A sign-in row has no key to send: the person's AWS sign-in stays with Wardyn.
+  ROUTE_THROUGH_HINT_SSO: (host: string) => `Send requests to your gateway instead of ${host}.`,
   BASE_URL: "Base URL",
   BASE_URL_HINT: "https only. Wardyn sends this provider's requests here.",
   AUTH_HEADER: "Auth header",
@@ -125,6 +127,9 @@ export const PROVIDER_EDITOR = {
     SWITCH: "Send the person and run to this gateway",
     DISCLOSURE:
       "When on, each model call to this gateway carries a signed token naming the person, the run and the runner.",
+    // The Bedrock sign-in row's own sentence: its token rides with an AWS signature the gateway could resend.
+    DISCLOSURE_BEDROCK_SSO:
+      "When on, each Bedrock call carries a token naming the person, run and runner, plus an AWS signature. The gateway can resend the signed request while AWS still accepts it, but cannot change it.",
     CLAIMS_LINK: "See everything the token says",
     CLAIMS_URL: "https://github.com/cjohnstoniv/wardyn/blob/main/docs/operations/ai-gateway.md#the-claims-a-gateway-receives",
     CHIP: "Experimental until 0.11",
@@ -158,9 +163,11 @@ export const PROVIDER_EDITOR = {
       "After you save this, existing runs stop starting new gateway calls within 10 minutes. Create new runs to use the change.",
     ADDRESS_CHANGED:
       "You changed where this provider sends requests. Enter the audience again for the new address. After saving, existing runs cannot refresh their gateway tokens. Create new runs to use the new address.",
+    SIGNER_VAR: "WARDYN_AWS_SIGV4_AT_PROXY",
     NOT_AVAILABLE: {
       anthropic_subscription: "Not available for Claude subscriptions yet.",
-      bedrock_sso: "Not available when people sign in with SSO. Use a bearer key row, or add the gateway as your own endpoint.",
+      // The editor shows the variable name as code (SIGNER_VAR).
+      bedrock_sso: "Needs Wardyn to sign AWS requests at its proxy. Ask your operator to turn on WARDYN_AWS_SIGV4_AT_PROXY.",
       local_model: "Not available for a local model server, which is not a gateway.",
     },
   },

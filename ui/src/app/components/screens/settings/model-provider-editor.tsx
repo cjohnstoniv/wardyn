@@ -286,6 +286,7 @@ export function ModelProviderEditor({
               people={n}
               gatewayIssuer={list.gatewayIssuer}
               gatewayJwksPath={list.gatewayJwksPath}
+              ssoGateway={list.gatewayIdentityBedrockSso === true}
             />
             {/* After Use with, above the footer (#923 editors.html section 2). An
                 existing provider's list writes at once, never through Save. */}
@@ -428,6 +429,7 @@ function ProviderFields({
   people,
   gatewayIssuer,
   gatewayJwksPath,
+  ssoGateway,
 }: {
   draft: ProviderDraft;
   setDraft: React.Dispatch<React.SetStateAction<ProviderDraft | null>>;
@@ -441,6 +443,8 @@ function ProviderFields({
   people: number;
   gatewayIssuer?: string;
   gatewayJwksPath?: string;
+  // The install signs AWS requests at its proxy, so a sign-in row may send run identity.
+  ssoGateway: boolean;
 }) {
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
   // A new address needs its audience entered again (the server refuses a kept one), so an edit that
@@ -456,11 +460,12 @@ function ProviderFields({
   const laptopBad = laptopBaseUrlRefused(draft);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
-  const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key" || draft.kind === "bedrock_bearer";
+  const routeThrough =
+    draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key" || draft.kind === "bedrock_bearer" || (sso && ssoGateway);
   const host = directHost(draft);
   // A key kind's gateway address cleared while identity is still on: the server refuses it, so say so first.
   const addressCleared = routeThrough && draft.gatewayOn && !draftGatewayAddress(draft).trim();
-  const [before, after] = PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host).split(host);
+  const [before, after] = (sso ? PROVIDER_EDITOR.ROUTE_THROUGH_HINT_SSO(host) : PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host)).split(host);
   const rows = Object.keys(draft.harnesses).map((id) => harnesses.find((h) => h.id === id) ?? { id, display: id });
   // E3's "How people sign in" toggle — the ONE field that reaches bedrock_bearer
   // (never a kind-step option of its own). A segmented radio group
@@ -699,6 +704,7 @@ function ProviderFields({
         set={set}
         issuer={gatewayIssuer}
         jwksPath={gatewayJwksPath}
+        ssoGateway={ssoGateway}
         addressCleared={addressCleared}
         invalid={badField === "gateway_audience"}
       />
@@ -721,6 +727,20 @@ function ProviderFields({
   );
 }
 
+// The reason with the setting's name shown as code; the sentence reads the same.
+function withSignerVar(reason: string, name: string) {
+  const [before, after] = reason.split(name);
+  return after === undefined ? (
+    reason
+  ) : (
+    <>
+      {before}
+      <code className="font-mono">{name}</code>
+      {after}
+    </>
+  );
+}
+
 // The kinds that may send run identity to a gateway (gatewayKind) each need an address, or the token would go to the vendor.
 const sameAddress = (a: string, b: string) => a.trim().replace(/\/$/, "") === b.trim().replace(/\/$/, "");
 // The issuer an install gets when it never names its own trust domain.
@@ -733,6 +753,7 @@ function GatewayIdentity({
   set,
   issuer,
   jwksPath,
+  ssoGateway,
   addressCleared,
   invalid,
 }: {
@@ -740,6 +761,7 @@ function GatewayIdentity({
   set: (patch: Partial<ProviderDraft>) => void;
   issuer?: string;
   jwksPath?: string;
+  ssoGateway: boolean;
   addressCleared: boolean;
   invalid: boolean;
 }) {
@@ -748,7 +770,9 @@ function GatewayIdentity({
   const root = React.useRef<HTMLDivElement>(null);
   const noteId = React.useId();
   const reasonId = React.useId();
-  const refusedKind = !gatewayKind(draft.kind);
+  const sso = draft.kind === "bedrock_sso";
+  // A sign-in row is refused only where the install cannot sign AWS requests at its proxy.
+  const refusedKind = !gatewayKind(draft.kind) || (sso && !ssoGateway);
   const needsAddress = !refusedKind && !draft.gatewayOn && !draftGatewayAddress(draft).trim() && draft.kind !== "custom_endpoint";
   const reason = refusedKind
     ? g.NOT_AVAILABLE[draft.kind as keyof typeof g.NOT_AVAILABLE]
@@ -768,12 +792,12 @@ function GatewayIdentity({
   return (
     <div ref={root} className="space-y-2">
       <div className="flex items-center gap-2.5">
-        <Switch checked={draft.gatewayOn && !refusedKind} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
+        <Switch checked={draft.gatewayOn && gatewayKind(draft.kind)} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
         <span className="text-body">{g.SWITCH}</span>
       </div>
       {reason ? (
         <p id={reasonId} className="text-xs leading-snug text-muted-foreground">
-          {reason}
+          {sso && refusedKind ? withSignerVar(reason ?? "", g.SIGNER_VAR) : reason}
         </p>
       ) : (
         <>
@@ -784,7 +808,7 @@ function GatewayIdentity({
             </p>
           )}
           <p id={noteId} className="text-body">
-            {g.DISCLOSURE}
+            {sso ? g.DISCLOSURE_BEDROCK_SSO : g.DISCLOSURE}
           </p>
           <a href={g.CLAIMS_URL} target="_blank" rel="noreferrer" className="block text-xs text-info underline-offset-2 hover:underline">
             {g.CLAIMS_LINK}
