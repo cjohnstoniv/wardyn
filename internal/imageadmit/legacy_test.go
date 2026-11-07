@@ -292,7 +292,11 @@ func (f *fakeLegacy) LegacyTag(_ context.Context, _ imageadmit.Ref, subject, suf
 	return nil, imageadmit.ErrNotFound
 }
 
+// Blob refuses a descriptor over the bound without reading, as RegistryClient.Blob does.
 func (f *fakeLegacy) Blob(_ context.Context, _ imageadmit.Ref, d imageadmit.Descriptor) ([]byte, error) {
+	if d.Size > imageadmit.MaxBlobBytes {
+		return nil, imageadmit.ErrTooLarge
+	}
 	f.blobReads++
 	return f.blobs[d.Digest], nil
 }
@@ -363,4 +367,26 @@ func TestReadLegacyReturnsRegistryErrors(t *testing.T) {
 	if !errors.As(err, &u) || u.Cause != imageadmit.CauseForbidden {
 		t.Fatalf("err = %v, want the registry's 403", err)
 	}
+}
+
+// A layer over the blob bound (the release workflow's SBOM attestation is a few MB) is not read and does not
+// stop the check: the other tag's signature still admits, and the layer explains itself when nothing else does.
+func TestReadLegacySkipsOversizeLayers(t *testing.T) {
+	s := releasesigtest.New(t)
+	f := newFakeLegacy()
+	f.serve(".sig", s.LegacySignature(sigPayload(), ciOpts()))
+	f.tags[".att"] = &imageadmit.Manifest{Layers: []imageadmit.Descriptor{{MediaType: imageadmit.LegacyAttestationMediaType,
+		Digest: "sha256:" + otherHex, Size: imageadmit.MaxBlobBytes + 1}}}
+	got, err := imageadmit.ReadLegacy(context.Background(), f, imageadmit.Ref{Registry: "registry.corp.example", Repo: "team/app"}, digest)
+	if err != nil || len(got) != 2 || f.blobReads != 1 {
+		t.Fatalf("got %d layers and %d blob reads, err %v; want 2 layers and 1 read", len(got), f.blobReads, err)
+	}
+	req, refused := compile(t, s, corpCI()).Require(ref, true, nil)
+	if refused != nil {
+		t.Fatalf("Require: %+v", *refused)
+	}
+	wantReason(t, imageadmit.CheckCandidates(req, digest, imageadmit.Candidates{Legacy: got}), "")
+	v := imageadmit.CheckCandidates(req, digest, imageadmit.Candidates{Legacy: got[1:]})
+	wantReason(t, v, imageadmit.SignatureMissing)
+	mustContain(t, v.Detail, "larger than")
 }
