@@ -391,7 +391,12 @@ func validateUISandboxConfig(uiListen, listen, internalListen, sshListen, origin
 // run serves can reach another run of the same person; with SSO there is more than one person on the
 // deployment. A deployment with no SSO has one operator and boots as before.
 func validateUISandboxSharedOrigin(uiListen, oidcIssuer, originTemplate string, allowShared bool) error {
-	if uiListen == "" || strings.TrimSpace(oidcIssuer) == "" || originTemplate != "" || allowShared {
+	if uiListen == "" || strings.TrimSpace(oidcIssuer) == "" || originTemplate != "" {
+		return nil
+	}
+	if allowShared {
+		slog.Warn("wardynd: WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN is set: every run's apps are served from one origin, " +
+			"so a page one run serves can reach another run's app; set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE to separate them")
 		return nil
 	}
 	return fmt.Errorf("refusing to start: the UI-sandbox gateway is on with SSO configured but WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE is unset — " +

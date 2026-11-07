@@ -3077,7 +3077,7 @@ pins account/role and on one that does not.
 - The shipped env vars in the table below let a deployment or a run start after a gate this document otherwise describes as unconditional.
 - They exist because a fail-closed gate with no escape hatch is a gate operators disable by not upgrading.
 - But a deployment that sets one is **not** the deployment §4 and §7 describe, so each is listed here with what it costs.
-- Each is read once at construction and logs a warning when it is taken. The exception is `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC` on a loopback bind, which logs only local mode's info line.
+- Each is read once at construction and logs a warning when it is taken. `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC` on a loopback bind logs only local mode's info line. `WARDYN_LISTEN_ALLOW_PLAINTEXT` logs the plain-HTTP warning, which does not name it.
 - The two Kubernetes overrides surface as the `k8s_egress_containment` setup-checklist row, and `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` as the `sso_rbac` row. The others have no row.
 - `WARDYN_ALLOW_UNENFORCEABLE_CAPS` warns per run, and only when a limit is actually discarded; `WARDYN_ALLOW_TEST_ENDPOINTS` warns at boot on either relaxation it is paired with.
 

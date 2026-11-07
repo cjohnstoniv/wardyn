@@ -91,7 +91,9 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 		scope := ""
 		row, isResident := residentGrantRow(rows, g)
 		if skip == "" && isResident {
-			if v, rerr := s.readResidentValue(ctx, run, row, secretName); rerr != nil {
+			if v, rerr := s.readResidentValue(ctx, run, row, secretName); errors.Is(rerr, errSecretTrimmedTooShort) {
+				skip = rerr.Error()
+			} else if rerr != nil {
 				skip = "secret could not be resolved"
 			} else {
 				delivered[file] = true

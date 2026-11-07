@@ -217,7 +217,9 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 		row, isResident := residentGrantRow(rows, g)
 		if skip == "" && isResident {
 			v, rerr := s.readResidentValue(ctx, run, row, secretName)
-			if rerr != nil {
+			if errors.Is(rerr, errSecretTrimmedTooShort) {
+				skip = rerr.Error()
+			} else if rerr != nil {
 				skip = "secret could not be resolved"
 			} else {
 				sandboxEnv[name] = placement.ResidentPlaceholder(row.ID)

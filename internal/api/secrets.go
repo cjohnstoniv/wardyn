@@ -294,7 +294,7 @@ func (s *Server) putSecretFor(w http.ResponseWriter, r *http.Request, name, owne
 	// would break GitHub App setup via the wizard/CLI.
 	if name != secretGitHubAppID && (len(body.Value) < secretmask.MinLen || secretmask.TrimmedTooShort([]byte(body.Value))) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSecretValueTooShort,
-			fmt.Sprintf("secret too short: must be at least %d bytes to be masked and scanned", secretmask.MinLen))
+			fmt.Sprintf("secret too short: must be at least %d bytes, not counting a trailing line break, to be masked and scanned", secretmask.MinLen))
 		return
 	}
 	if !s.admitSecretCount(w, r, owner, name) {
