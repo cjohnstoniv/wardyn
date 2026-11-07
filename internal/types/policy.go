@@ -360,13 +360,19 @@ type ToolRule struct {
 }
 
 // Digest is the lowercase hex SHA-256 of the spec's JSON. It names a run's effective policy as the
-// run.policy.resolve row records it: reading that row's data back into a RunPolicySpec drops the keys
+// run.policy.resolve row records it, in canonical JSON (CanonicalJSON): reading that row's data back into a RunPolicySpec drops the keys
 // that are not policy, so the digest can be recomputed from the stored row. It is evidence, not
 // enforcement, and comparable within one Wardyn version: a release that adds a field without omitempty
 // changes the digest of the same policy.
 func (s RunPolicySpec) Digest() string {
 	// A RunPolicySpec holds no channel, func or non-finite float, so Marshal cannot fail.
 	b, _ := json.Marshal(s)
+	// Canonical, because a grant scope is a json.RawMessage that keeps its writer's member order and
+	// spelling, while the audit table's JSONB rewrites both: the digest of the stored row must be the
+	// digest of the spec.
+	if c, err := CanonicalJSON(b); err == nil {
+		b = c
+	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
