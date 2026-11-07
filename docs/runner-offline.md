@@ -1,19 +1,20 @@
 # Runner offline enforcement
 
-A local runner retains agents and their files after losing its organisation connection. Its authenticated lease uses the organisation clock and local elapsed time. At the token lapse or run end, the runner stops the proxy and retries failed containment. Reconnecting does not extend an existing deadline. Revocation is latched locally and refuses further work.
+A local runner retains agents and their files after losing its organisation connection. The one exception is a Docker-hosted Linux VM whose audit spool fills: the runner ends it ([Linux VM sandboxes](operations/linux-vm-sandboxes.md#when-the-organisation-is-unreachable)). Its authenticated lease uses the organisation clock and local elapsed time. At the token lapse or run end, the runner stops the proxy and retries failed containment. Reconnecting does not extend an existing deadline. Revocation is latched locally and refuses further work.
 
 | Event | Runner | Organisation |
 |---|---|---|
 | Link lost | Keeps its agents and files; the lease runs on the organisation clock and local elapsed time | A connection drop alone has no teardown effect |
 | Token lapses or the run ends offline | Stops the proxy and retries failed containment on every pass of its 1-second loop | Records late containment when the stop-proxy action's first exact result arrives |
-| Spool full | Holds a new request up to 5 seconds, then refuses it with a retryable 503 | Reports the refusal count first on replay |
+| Spool full, container run | Holds a new request up to 5 seconds, then refuses it with a retryable 503 | Reports the refusal count first on replay |
+| Spool full, Docker-hosted Linux VM | Asks the guest to power down, keeps the stopped VM and removes its proxy; a Kubernetes VM is not covered | Receives the spooled decisions on reconnect |
 | Reconnect | Replays its decision spool; a deadline is not extended | Verifies the runner's claim, owner, revocation and run binding, then commits audit rows and receipts together |
 | Exit receipt refused 8 times in a row | Nothing | Parks the receipt and audits `runner.exit.park`; see [A parked exit receipt](#a-parked-exit-receipt) |
 | Runner revoked | Latches the revocation and refuses further work | Settles the runner's open and deferred actions |
 
 Runner lifecycle state and decision spools live under the runner state directory with private permissions. Only the proxy receives its run's spool mount; the agent does not. A durable creation intent records the deterministic sandbox reference before provisioning so a failed create or restart can still contain a partially created proxy.
 
-Each spool is bounded by 50,000 records and 32 MiB. Capacity is reserved before forwarding. A full spool holds a new request for up to 5 seconds, then refuses it with a retryable 503 and counts it; a synthetic `egress.deny` with `rule_source: builtin:spool-full` reports the refusal count first on replay. At most 32 requests hold a reservation at once; the next one waits for room the same way. A request is refused only while the spool is full, not until that count is reported. A request whose reservation timed out behind others or whose client cancelled gets a 503 and is not counted as a dropped decision. Records and acknowledgements survive process restarts. Storage corruption refuses admission instead of resetting history.
+Each spool is bounded by 50,000 records and 32 MiB. Capacity is reserved before forwarding. For a container run, a full spool holds a new request for up to 5 seconds, then refuses it with a retryable 503 and counts it; a synthetic `egress.deny` with `rule_source: builtin:spool-full` reports the refusal count first on replay. At most 32 requests hold a reservation at once; the next one waits for room the same way. A request is refused only while the spool is full, not until that count is reported. A request whose reservation timed out behind others or whose client cancelled gets a 503 and is not counted as a dropped decision. Records and acknowledgements survive process restarts. Storage corruption refuses admission instead of resetting history.
 
 Replay uses the runner's proof-of-possession stream, including after a run token expires. The organisation verifies the runner's current claim, owner, revocation state and run binding. It commits audit rows and replay receipts together, applying the same masking and sealing rules as other audit ingestion. A lost acknowledgement can replay safely. Scan summaries retain their separate `llm.scan.*` events.
 
