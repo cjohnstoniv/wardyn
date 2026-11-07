@@ -1178,6 +1178,7 @@ func TestVMVerbsRefusedWhenVMsWentOff(t *testing.T) {
 	r := newVMRig(t)
 	ctx := context.Background()
 	spec := vmSpec()
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}} // a folder share for EndVM to remove
 	sb, err := r.d.CreateSandbox(ctx, spec)
 	if err != nil {
 		t.Fatal(err)
@@ -1209,6 +1210,9 @@ func TestVMVerbsRefusedWhenVMsWentOff(t *testing.T) {
 		t.Fatalf("a second lookup = %v: a VM must never be remembered as a container", err)
 	}
 
+	if c := r.container(t, vmfsName(spec.RunID, 0)); c.removed {
+		t.Fatal("the VM's file share was gone before EndVM")
+	}
 	if isVM, err := d2.EndVM(ctx, spec.RunID); !isVM || err != nil {
 		t.Fatalf("EndVM with VM sandboxes off = %v, %v; want true, nil", isVM, err)
 	}
