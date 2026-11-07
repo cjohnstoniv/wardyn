@@ -4,6 +4,7 @@
 package approval
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -12,7 +13,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const callKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+// callKey stands in for a call's sha256 hex digest.
+var callKey = strings.Repeat("0123456789abcdef", 4)
 
 func mcpCallRow(t *testing.T, extra map[string]any, requested time.Time) types.ApprovalRequest {
 	t.Helper()
