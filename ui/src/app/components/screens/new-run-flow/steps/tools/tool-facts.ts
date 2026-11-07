@@ -9,6 +9,7 @@
 // the same twin of the server's policy check as the Go side (tool-effect.ts).
 
 import reasons from "../../../../../lib/access-reasons.golden.json";
+import { canApproveEach } from "../../../../../lib/types/policy";
 import { effectiveToolEffect, type ToolEffect } from "../../../../../lib/tool-effect";
 import type { AccessFacts, EffectOption, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 
@@ -90,7 +91,7 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
     // The server grades policy_stricter_tool against the policy's "*"; a named tool is graded against its own rule here.
     const harnessRefusal = !o.available && o.reason !== "policy_stricter_tool" ? o.reason : undefined;
     // Approve each call names one MCP tool: for any other name the server's own sentence says so.
-    const notMCP = effect === "approve_each" && !tool.startsWith("mcp__");
+    const notMCP = effect === "approve_each" && !canApproveEach(tool);
     const code = builtinOnly ? "harness_no_block_builtin" : notMCP ? "approve_each_default" : harnessRefusal ?? (RANK[effect] < RANK[policy] ? "policy_stricter_tool" : undefined);
     return { effect, available: !code, reason: reasonText(code, { harness: harnessName, tool, policy, remote }) };
   });

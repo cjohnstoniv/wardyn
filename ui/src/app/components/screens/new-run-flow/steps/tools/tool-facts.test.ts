@@ -119,6 +119,10 @@ describe("Approve each call", () => {
     expect(state(ruleChoices(fact({ available: true }), "Claude Code", "mcp__jira__delete_issue"))).toMatchObject({ available: true });
   });
 
+  it.each(["mcp__jira", "mcp__jira__", "mcp__jira__*"])("is greyed for %s, which is not one exact MCP tool", (tool) => {
+    expect(state(ruleChoices(fact({ available: true }), "Claude Code", tool))).toMatchObject({ available: false, reason: "Approve each call names one MCP tool. Add it as a rule for that tool." });
+  });
+
   it("is greyed for any other tool, with the server's own sentence", () => {
     const c = state(ruleChoices(fact({ available: true }), "Claude Code", "WebFetch"));
     expect(c).toMatchObject({ available: false, reason: "Approve each call names one MCP tool. Add it as a rule for that tool." });
