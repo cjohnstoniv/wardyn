@@ -749,7 +749,7 @@ k8s:
 # TracingPolicy: Tetragon must already export to a file on the node. Needs k8s.enabled=true and a
 # k8s.runsNamespace (or allowRunsInReleaseNamespace), or the chart refuses to render.
 #
-# The token reaches the DaemonSet through one Secret, <fullname>-groundtruth, that wardynd patches
+# The token reaches the DaemonSet through one Secret, <release>-<namespace>-groundtruth, that wardynd patches
 # (token and control-plane-ca.pem) and the DaemonSet mounts. The wardynd Role gains `patch` on that
 # one Secret and nothing else; there is no new ClusterRole.
 groundtruth:

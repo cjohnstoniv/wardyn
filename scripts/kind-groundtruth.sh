@@ -54,8 +54,9 @@ HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
 BASE_URL="http://127.0.0.1:${HTTP_PORT}"
 EXPORT_DIR="/var/lib/wardyn-gt-job"
 EXPORT_FILE="tetragon.log"
-SENSOR_DS="${RELEASE}-groundtruth"
-SECRET="${RELEASE}-groundtruth"
+# The sensor objects are named from the release name and namespace; read the name from the cluster.
+SENSOR_DS=""
+SECRET=""
 CURL_MAX_TIME=15
 EVIDENCE_DIR="${WARDYN_KIND_GROUNDTRUTH_EVIDENCE:-${ROOT}/local/evidence/kind-groundtruth}"
 mkdir -p "${EVIDENCE_DIR}"
@@ -95,6 +96,9 @@ kc -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=240s || di
 # The sensor exits at start until wardynd has patched the CA into the Secret and the kubelet has synced it,
 # so a few restarts at first are expected.
 step "waiting for the sensor DaemonSet and the Secret's token"
+SENSOR_DS="$(kc -n "${NAMESPACE}" get daemonset -l app.kubernetes.io/component=groundtruth -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+[[ -n "${SENSOR_DS}" ]] || die "the upgrade created no sensor DaemonSet in ${NAMESPACE}"
+SECRET="${SENSOR_DS}"
 kc -n "${NAMESPACE}" rollout status "daemonset/${SENSOR_DS}" --timeout=300s \
   || { kc -n "${NAMESPACE}" describe "daemonset/${SENSOR_DS}" >&2; kc -n "${NAMESPACE}" logs "daemonset/${SENSOR_DS}" --tail=50 >&2; die "the sensor DaemonSet did not become ready"; }
 secret_token() { kc -n "${NAMESPACE}" get secret "${SECRET}" -o jsonpath='{.data.token}' 2>/dev/null; }

@@ -104,8 +104,7 @@ spec:
               kubernetes.io/metadata.name: {{ include "wardyn.groundtruthNamespace" . }}
           podSelector:
             matchLabels:
-              app.kubernetes.io/component: groundtruth
-              app.kubernetes.io/instance: {{ .Release.Name }}
+              {{- include "wardyn.groundtruthLabels" . | nindent 14 }}
         {{- end }}
       ports:
         - protocol: TCP

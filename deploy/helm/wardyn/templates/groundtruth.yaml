@@ -45,12 +45,12 @@ receive console traffic.
 {{- end -}}
 {{- $ns := include "wardyn.groundtruthNamespace" . -}}
 {{- $secret := include "wardyn.groundtruthSecret" . -}}
-{{- $name := printf "%s-groundtruth" (include "wardyn.fullname" .) -}}
+{{- $name := $secret -}}
 {{- $digest := .Values.image.digest | default "" -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
 {{- $tokenDir := "/var/run/wardyn-groundtruth" -}}
 {{- $exportDir := "/tetragon-export" -}}
-{{- $labels := dict "app.kubernetes.io/name" (printf "%s-groundtruth" (include "wardyn.name" .)) "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "groundtruth" -}}
+{{- $labels := include "wardyn.groundtruthLabels" . | fromYaml -}}
 apiVersion: v1
 kind: Secret
 metadata:
