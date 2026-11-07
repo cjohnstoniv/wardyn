@@ -11,7 +11,7 @@ import { Plus, Trash2, X } from "lucide-react";
 import { type PersonalWallsSpec, type WithheldGrant } from "../../../lib/api/walls";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../../lib/ado-capabilities";
 import { adoCapName, adoGroupName } from "../../../lib/ado-access-copy";
-import { CC_ORDER, toolRulesProblem, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
+import { APPROVE_EACH_REASON, CC_ORDER, canApproveEach, toolRulesProblem, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
 import { idleDisplay, isRead, type FormSection } from "../../../lib/wall-preset-words";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -397,11 +397,12 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                   <select
                     aria-label={T.TOOLS_EFFECT_N(i + 1)}
                     value={r.effect}
+                    aria-describedby={canApproveEach(r.tool) ? undefined : `${uid}-ae-${r.id}`}
                     onChange={(e) => patch(r.id, { effect: e.target.value as WallToolEffect })}
                     className={cn("h-8 w-full rounded-md border border-input bg-input-background px-2 font-mono text-sm font-medium", EFFECT_TONE[r.effect])}
                   >
                     {(["hold", "approve_each", "deny"] as const).map((e) => (
-                      <option key={e} value={e} className="text-foreground">
+                      <option key={e} value={e} disabled={e === "approve_each" && !canApproveEach(r.tool)} className="text-foreground">
                         {e}
                       </option>
                     ))}
@@ -411,6 +412,11 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                   </Button>
                 </div>
                 {blank && <SectionError id={`${uid}-blank-${r.id}`} text={T.TOOLS_BLANK} />}
+                {!canApproveEach(r.tool) && (
+                  <p id={`${uid}-ae-${r.id}`} className="mt-1 text-xs text-muted-foreground">
+                    <span className="font-mono text-foreground">approve_each</span> is greyed: {APPROVE_EACH_REASON}
+                  </p>
+                )}
               </div>
             );
           })}

@@ -37,4 +37,26 @@ describe("ToolRulesSection and approve_each", () => {
     render(<ToolRulesSection spec={spec([{ tool: "Bash", effect: "approve_each" }])} onSpecChange={() => {}} />);
     expect(screen.getByRole("alert")).toHaveTextContent("cannot be approve_each");
   });
+
+  it.each([
+    ["Bash", true],
+    ["mcp__jira", true],
+    ["mcp__jira__", true],
+    ["mcp__jira__delete_issue", false],
+  ])("a rule for %s: approve_each greyed is %s, with the reason as text", (tool, greyed) => {
+    render(<ToolRulesSection spec={spec([{ tool, effect: "hold" }])} onSpecChange={() => {}} />);
+    const select = screen.getByRole("combobox", { name: "Effect 1" }) as HTMLSelectElement;
+    expect([...select.options].find((o) => o.value === "approve_each")?.disabled).toBe(greyed);
+    if (greyed) {
+      expect(document.getElementById(select.getAttribute("aria-describedby")!)).toHaveTextContent("Approve each call names one MCP tool. Add it as a rule for that tool.");
+    } else {
+      expect(select.getAttribute("aria-describedby")).toBeNull();
+    }
+  });
+
+  it("a loaded approve_each on a name that cannot take it stays selected, with its refusal, until corrected", () => {
+    render(<ToolRulesSection spec={spec([{ tool: "mcp__jira", effect: "approve_each" }])} onSpecChange={() => {}} />);
+    expect((screen.getByRole("combobox", { name: "Effect 1" }) as HTMLSelectElement).value).toBe("approve_each");
+    expect(screen.getByRole("alert")).toHaveTextContent("cannot be approve_each");
+  });
 });

@@ -407,6 +407,32 @@ describe("Your walls: every limit has a control", () => {
     expect(await sent()).toEqual({ tool_rules: [{ tool: "mcp__jira__delete_issue", effect: "approve_each" }, { tool: "WebFetch", effect: "hold" }] });
   });
 
+  it.each([
+    ["Bash", true],
+    ["*", true],
+    ["mcp__jira", true],
+    ["mcp__jira__delete_issue", false],
+  ])("tool rules: for %s approve_each greyed is %s, with the reason as text", async (tool, greyed) => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool, effect: "hold" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    const select = rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement;
+    expect([...select.options].find((o) => o.value === "approve_each")?.disabled).toBe(greyed);
+    if (greyed) {
+      expect(document.getElementById(select.getAttribute("aria-describedby")!)).toHaveTextContent("Approve each call names one MCP tool. Add it as a rule for that tool.");
+    }
+  });
+
+  it("tool rules: a loaded approve_each on a name that cannot take it stays selected, and the form says why", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "mcp__jira", effect: "approve_each" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect((rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement).value).toBe("approve_each");
+    expect(rules.getByText(/cannot be approve_each/)).toBeInTheDocument();
+  });
+
   it("tool rules: two rules for one tool are marked, say so, and keep Save off", async () => {
     getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "WebFetch", effect: "hold" }, { tool: "WebFetch", effect: "deny" }] } });
     render(<YourWallsCard />);

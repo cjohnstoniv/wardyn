@@ -140,6 +140,12 @@ export const TOOL_EFFECTS_ACCEPTED: readonly ToolEffect[] = ["allow", "hold", "a
 const APPROVE_EACH_TOOL_RE = /^mcp__.+__.+$/;
 const EXACT_TOOL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
+/** Whether approve_each may name this tool: one exact mcp__<server>__<tool> name, as the server accepts. */
+export const canApproveEach = (tool: string): boolean => EXACT_TOOL_NAME_RE.test(tool) && APPROVE_EACH_TOOL_RE.test(tool);
+
+/** Why an editor greys approve_each for any other name or for the default; the server's sentence, word for word. */
+export const APPROVE_EACH_REASON = "Approve each call names one MCP tool. Add it as a rule for that tool.";
+
 // The literal default rule. Policy.ToolEffectFor tries the exact tool name
 // first, then this — so it is the effect for every tool no rule names.
 export const TOOL_RULE_DEFAULT = "*";
@@ -209,7 +215,7 @@ export function toolRulesProblem(rules: readonly ToolRule[] | unknown): string |
     if (!(TOOL_EFFECTS_ACCEPTED as readonly unknown[]).includes(r.effect)) {
       return `“${String(r.effect)}” is not an effect (want allow, hold, approve_each or deny).`;
     }
-    if (r.effect === "approve_each" && !(EXACT_TOOL_NAME_RE.test(name) && APPROVE_EACH_TOOL_RE.test(name))) {
+    if (r.effect === "approve_each" && !canApproveEach(name)) {
       return `“${name}” cannot be approve_each: it applies to one MCP tool's exact name, mcp__<server>__<tool>.`;
     }
   }

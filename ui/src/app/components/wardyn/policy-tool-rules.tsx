@@ -5,7 +5,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import type { RunPolicySpec, ToolEffect, ToolRule } from "../../lib/types";
-import { TOOL_EFFECTS, TOOL_RULE_DEFAULT, toolRulesProblem } from "../../lib/types";
+import { APPROVE_EACH_REASON, TOOL_EFFECTS, TOOL_RULE_DEFAULT, canApproveEach, toolRulesProblem } from "../../lib/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { cn } from "../ui/utils";
@@ -162,7 +162,8 @@ export function ToolRulesSection({
       </div>
 
       {named.map((rule, i) => (
-        <div key={i} className={cn(RULE_GRID, "border-b border-border py-2")}>
+        <div key={i} className="border-b border-border py-2">
+        <div className={RULE_GRID}>
           {/* No maxLength: the cap is 64 bytes (Go's len) and the attribute
               counts UTF-16 units, so it cannot express this one — it would
               silently swallow the 65th keystroke of a legal ASCII name while
@@ -180,6 +181,8 @@ export function ToolRulesSection({
             value={rule.effect}
             label={`Effect ${i + 1}`}
             onChange={(effect) => patchNamed(i, { effect })}
+            disabledEffects={canApproveEach(rule.tool) ? undefined : ["approve_each"]}
+            describedBy={canApproveEach(rule.tool) ? undefined : `tool-rule-${i}-note`}
           />
           <Button
             type="button"
@@ -196,6 +199,12 @@ export function ToolRulesSection({
           >
             <Trash2 className="size-4" />
           </Button>
+        </div>
+        {!canApproveEach(rule.tool) && (
+          <p id={`tool-rule-${i}-note`} className="mt-1 text-xs leading-snug text-muted-foreground">
+            <span className="font-mono text-foreground">approve_each</span> is greyed: {APPROVE_EACH_REASON}
+          </p>
+        )}
         </div>
       ))}
 
@@ -218,8 +227,8 @@ export function ToolRulesSection({
       <p id="tool-rules-default-note" className="text-xs leading-snug text-muted-foreground">
         The effect for any tool no rule names. It cannot be removed — leave it on{" "}
         <span className="font-mono text-foreground">hold</span> to keep today&apos;s behaviour for
-        everything unlisted. <span className="font-mono text-foreground">approve_each</span> is greyed here:
-        Approve each call names one MCP tool. Add it as a rule for that tool.
+        everything unlisted. <span className="font-mono text-foreground">approve_each</span> is greyed here:{" "}
+        {APPROVE_EACH_REASON}
       </p>
 
       <Button
