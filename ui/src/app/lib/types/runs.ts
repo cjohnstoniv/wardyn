@@ -16,6 +16,7 @@ import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
 import type { RunService, RunServiceStatus } from "./run-service";
+import type { ImageAdmissionVerdict } from "./image-admission";
 import type { RunnerPoolSelection } from "./runner-pools";
 import type { RunMachine } from "./kept-machine";
 
@@ -100,25 +101,7 @@ export interface RunQueue {
   limit_sentence?: string;
 }
 
-// One run's image admission verdict (Go: types.ImageAdmissionVerdict, image_admission_verdict.go).
-export interface ImageAdmissionVerdict {
-  // enforce when the image could be refused, audit when it was only reported.
-  mode: "enforce" | "audit" | (string & {});
-  // would_refuse is audit only; not_applicable is a macOS VM, which never runs the image.
-  verdict: "admitted" | "would_refuse" | "not_applicable" | (string & {});
-  // The refusal reason audit reported (would_refuse only).
-  reason?: string;
-  digest?: string;
-  // The member's ref pinned to digest, set only when the image was enforced and admitted.
-  pinned_ref?: string;
-  signer?: string;
-  identity?: string;
-  issuer?: string;
-  key_id?: string;
-  attestations?: string[];
-  // Why the site's own signers would refuse the image under audit, when the profile's enforced signers admitted it.
-  site_audit?: string;
-}
+export type { ImageAdmissionVerdict } from "./image-admission";
 
 export interface AgentRun {
   id: string;
