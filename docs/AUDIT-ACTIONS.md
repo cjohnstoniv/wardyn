@@ -67,6 +67,13 @@ CI enforces doc↔emit parity in both directions:
 - A recording's chain check (`GET /api/v1/runs/{id}/recording-chain`) walks the one chain, so its `broken_seq` and `reason` can name another run's row to a member. This is by design.
 - The sweep emits no audit action of its own — writing an integrity finding into the log the finding is *about* would record it in the one place already under suspicion.
 
+**Policy stamp.** Every audit row of a run written after its policy is resolved carries `data.policy_digest` (SHA-256 of the run's effective policy, as `run.policy.resolve` records it) and `data.policy_generation` (1 for dispatch's policy, 2 after the first revive, and so on).
+
+- A row the run's proxy sends is stamped with the policy of the run token it presented. Once a run has had more than one policy, a proxy row no token ties to one carries `policy_digest` `unknown`.
+- Rows the runner spools while it is offline are not stamped: they carry no `policy_digest`. So do rows with no run and rows written before the policy was recorded.
+- The digest is evidence only and enforces nothing. If a policy cannot be written in canonical form (a grant scope with a repeated key, or nesting over 64 levels), the digest is taken over the plain JSON bytes instead.
+- `wardyn audit verify` links a stamped row to a `run.policy.resolve` or `run.policy.generation` row in the same receipt by equal digest. A row whose policy row is host-masked reads `masked`, never `mismatch`.
+
 **Runner stream metadata.** Web terminal, SSH shell/exec/sftp/forward/sync, UI gateway,
 files, resources and output snapshot rows add `data.relay: "runner:<id>"` when their
 sandbox stream uses that runner. The tag comes from the authorized run's substrate

@@ -586,7 +586,7 @@ is not the deployment described above.**
 | Org-held credential reaching a developer-rooted runner host | **[0.9]** Local placement is derived from a classified dispatch plan, and an org-held class is refused unless an admin chose `via_org` or, since 0.9.3, `runner_resident` for the runner's trust class: [B12](#b12--runner-host-vs-the-organisation), residuals #72, #75, #76, #90. | B12, ID |
 | A run on an organisation runner reaching runnerd, the API server or in-cluster services | **[0.9.3]** Agent egress only to its proxy, runnerd ingress only from proxy pods, a proxy hard deny on in-cluster names and addresses (extend it with `egress.hardDenyCIDRs`, empty by default), and boot only on an enforced NetworkPolicy canary: [B13](#b13--organisation-runner-vs-its-kubernetes-cluster), residual #89. | B13, L0 |
 | Audit tampering by in-sandbox actor | Append-only log, ground-truth stream and tamper-evident PTY casts: [detail](#audit-tampering-by-in-sandbox-actor). | AU |
-| Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: [§4.5](#45-the-audit-hash-chain--what-it-is-and-is-not) | AU |
+| Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean unless a signed checkpoint, kept off-box, covers it ([0.10 signed checkpoints](#45-the-audit-hash-chain--what-it-is-and-is-not)). Detail: [§4.5](#45-the-audit-hash-chain--what-it-is-and-is-not) | AU |
 | Stored credential moved or forged by a DATABASE writer | **[v0.7.12 shipped]** Envelope v1 binds every secret to its owner and name: [detail](#stored-credential-moved-or-forged-by-a-database-writer). | Swapping a credential between people or names (F1); forging a credential from the public recipient (F2). NOT a restored old row — residual 48 |
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run L0 network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, [`internal/runner/k8s/sandbox.go`](../internal/runner/k8s/sandbox.go)). | B1, L0 (L1), ID |
@@ -1208,8 +1208,11 @@ ADMIN pre-authorized** —
     - The database function reads the name `wardynd` as the sweeper's unattested drop, so the API refuses that name (`audit_retention_actor_reserved`). That API door is the only guard for a caller other than the sweeper's own role.
   - Pre-migration rows keep NULL hashes and sit outside the chain (no backfill — hashes computed
     after the fact by the process that could have altered the rows prove nothing).
-  - Signed receipts under a key no database role can reach are the next rung and are
-    **NOT built**.
+  - Signed checkpoints are the next rung, and they ship.
+    - Every minute wardynd signs the newest rows' hashes with a key no database role can reach (`wardyn-audit-receipt-key`), and each checkpoint goes to the audit sinks.
+    - `wardyn audit receipt` and `wardyn audit verify` give and check, offline, a receipt that an event is in the log unaltered.
+    - A database owner who rewrites a checkpointed row fails the signed digest. One who rewrites a row before its checkpoint is signed is signed as rewritten, so the off-box copy is still the control.
+    - A thief of the key forges checkpoints. `-rotate-audit-receipt-key -retire-previous` makes receipts under the stolen key fail `key_retired`. Rows between a late forged checkpoint from a retired key and the new genesis are not covered by a receipt.
 - **A break is evidence to investigate, not proof on its own — and a false one is
   reachable with no tampering at all.**
   - The insert trigger allocates `seq` and the chain link under one advisory lock, but its head
@@ -2441,7 +2444,8 @@ These risks are **not closed by v1 Wardyn**.
       - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an OIDC issuer is configured;
       - the SSH gateway host key (`wardyn-ssh-host-key`), only when `WARDYN_SSH_LISTEN` is set;
       - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when `WARDYN_UI_SANDBOX_LISTEN` is set;
-      - the AI gateway identity key (`wardyn-gateway-identity-key`), only after the first save that turns identity on.
+      - the AI gateway identity key (`wardyn-gateway-identity-key`), only after the first save that turns identity on;
+      - the audit checkpoint signing key (`wardyn-audit-receipt-key`), unless `WARDYN_AUDIT_CHECKPOINT_INTERVAL` is `0`. An attacker who holds it can forge checkpoints; those already sent to your sinks stay as signed.
     - An attacker who holds the age key and a read of that table (the DSN, a backup or a replica) therefore holds all of it at once.
     - That means every stored credential in cleartext and run-identity tokens the broker accepts.
     - Wherever those features are on, it also means a console session forged for any human (admin included), forged UI relay cookies, the SSH gateway's identity and gateway tokens naming anyone.

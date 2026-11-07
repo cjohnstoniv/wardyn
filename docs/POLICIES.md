@@ -20,6 +20,13 @@
   - Its grant carries `shared: true`, which no authored policy may set, so validation refuses the document.
   - It is a record of the run, not a policy to reuse: select the component on the new run instead ([Custom components](#custom-components)).
 
+## Which policy an action ran under
+
+- A run's audit rows carry `policy_digest`, the SHA-256 of the run's effective policy as `run.policy.resolve` recorded it, and `policy_generation`. A revive records the run's new policy as `run.policy.generation`.
+- The digest is evidence only and enforces nothing.
+- A policy with no canonical form (a grant scope with a repeated key, or nesting over 64 levels) is digested over its plain JSON bytes, so its stored digest can differ.
+- A receipt links a row to a policy row with matching policy content (equal digest). That is a match, not proof the proxy enforced that policy: see [OPERATIONS.md](OPERATIONS.md#signed-checkpoints-and-receipts).
+
 ## Authoring surfaces
 
 - The console has three places a policy gets written, and all three resolve to this same JSON through this same validator — there is no separate UI schema.
