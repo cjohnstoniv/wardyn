@@ -529,6 +529,14 @@ defaultPolicy: ""
 # pointing at a path your own volume mounts). See README "Corporate CA trust".
 trustedCA: ""
 
+# Image signature checks (site setting images.admission, docs/operations/image-signature-checks.md).
+# registryAuthSecret names an existing kubernetes.io/dockerconfigjson Secret (often the one
+# k8s.imagePullSecret names) that wardynd reads, mounted read-only, to log in to the registries it
+# checks. Empty (default) => no mount, no WARDYN_REGISTRY_AUTH_FILE, anonymous reads. Wardyn does not
+# create the Secret and never calls the Secrets API. env.WARDYN_REGISTRY_AUTH_FILE, if set, wins.
+imageAdmission:
+  registryAuthSecret: ""
+
 # Optional site-config seed (WARDYN_SITE_CONFIG_SEED_FILE): the network
 # settings wardynd writes at boot into a site config that does not have them,
 # so a wiped or rebuilt database comes back with its upstream proxy and
