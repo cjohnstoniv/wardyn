@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"errors"
 	"io"
 	"mime"
@@ -25,12 +26,36 @@ import (
 // ruleSourceLLMUsage marks the row carrying one metered model call's token counts.
 const ruleSourceLLMUsage = "llm:usage"
 
-// usageFieldBytes and usagePathBytes cut a usage row's strings, so the row stays a few KiB however
-// long the request target: on a runner it rides the sink's credit after the call's allow row.
+// usageFieldBytes and usagePathBytes cut a usage row's strings, so the row has a fixed size bound
+// however long the request target, and spoolUsageRecordBytes is that bound
+// (TestUsageRecordFitsItsReservation).
 const (
-	usageFieldBytes = 256
-	usagePathBytes  = 512
+	usageFieldBytes       = 256
+	usagePathBytes        = 512
+	spoolUsageRecordBytes = 12 << 10
 )
+
+// usageTicketKey holds a metered request's second spool reservation, for its usage row.
+type usageTicketKey struct{}
+
+// reserveUsageRow reserves a metered request's usage row before the request is forwarded, beside the
+// reservation its allow row spends: the allow row is sent before the answer, so without its own
+// reservation the usage row could find the sink's last credit spent. No room refuses the request, as
+// a request the sink has no room for is refused, so a forwarded call never loses its usage row.
+func (p *Proxy) reserveUsageRow(ctx context.Context, r *http.Request) (uuid.UUID, error) {
+	if _, _, metered := p.usageShape(r); !metered {
+		return uuid.Nil, nil
+	}
+	return p.sink.reserve(ctx, spoolUsageRecordBytes)
+}
+
+// releaseUsageRow gives back a usage reservation its row did not spend (an answer that was not
+// metered, or a request that ended before one).
+func (p *Proxy) releaseUsageRow(id uuid.UUID) {
+	if id != uuid.Nil {
+		p.sink.release(id)
+	}
+}
 
 // maxDecodedUsageBytes bounds how much a compressed answer is inflated for the meter. Past it the
 // meter stops reading (the answer still relays whole) and the call is uncounted, body_oversize.
@@ -88,6 +113,7 @@ func (p *Proxy) meterUsage(r *http.Request, host string, port int, resp *http.Re
 	m := &usageMeter{body: resp.Body, parser: parser, feed: parser}
 	m.emit = func(u modelusage.Usage) {
 		dl := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceLLMUsage)
+		dl.Request.AuditReservation, _ = r.Context().Value(usageTicketKey{}).(uuid.UUID)
 		dl.Request.Host = cutUsageField(dl.Request.Host, usageFieldBytes)
 		dl.Request.Path = cutUsageField(dl.Request.Path, usagePathBytes)
 		dl.GatewayCallID = gatewayCallID

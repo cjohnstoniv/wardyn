@@ -750,3 +750,21 @@ func TestUsageMeter_RemoteFinalCreditLosesNoUsageRow(t *testing.T) {
 		}
 	}
 }
+
+// The largest usage row fits the reservation admission makes for it, as the local spool charges a row
+// (its JSON plus 1 KiB) and as the remote sink frames it (a record body).
+func TestUsageRecordFitsItsReservation(t *testing.T) {
+	p := newProxy(Options{RunID: uuid.New()})
+	long := strings.Repeat("\x01", 4096)
+	r := httptest.NewRequest(http.MethodPost, "https://x/model/"+strings.Repeat("a", 4096)+"/invoke", nil)
+	dl := decisionLog(p.reqOf(r, long, 443), egress.Allow, ruleSourceLLMUsage)
+	dl.Request.Host, dl.Request.Path, dl.GatewayCallID = cutUsageField(long, usageFieldBytes), cutUsageField(long, usagePathBytes), uuid.NewString()
+	most := int64(1<<63 - 1)
+	dl.Usage = &egress.ModelUsage{CallID: uuid.New(), Vendor: "anthropic", Host: dl.Request.Host, Model: cutUsageField(long, usageFieldBytes),
+		Input: most, Output: most, CacheRead: most, CacheWrite: most, Reasoning: most, State: "uncounted", Reason: "stream_without_usage"}
+	b, _ := json.Marshal(dl)
+	body, _ := json.Marshal(RecordBody{Admitted: true, Epoch: uuid.New(), Activity: true, Decision: dl})
+	if local, remote := int64(len(maskDecisionBytes(b)))+1024, int64(len(body)); local > spoolUsageRecordBytes || remote > spoolUsageRecordBytes {
+		t.Fatalf("a usage row takes %d (spool) / %d (sink) bytes, over its reservation %d", local, remote, spoolUsageRecordBytes)
+	}
+}
