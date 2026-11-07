@@ -408,16 +408,21 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
-	s.recordUnitWriteSuccess(r, id, saved, effective, unitAdmin, putCreates, mode == govBypass)
+	data := s.unitWriteSuccessData(r, id, saved, effective, unitAdmin, putCreates)
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
+	}
 	warns := s.unitWriteWarnings(r.Context(), saved, effective)
 	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
 }
 
-// recordUnitWriteSuccess records a stored write: the PUT-created log line, the governance.unit.write success
-// row (with the unit admin's scope when one wrote it) and, for a bypass, the bypass row, in that order.
-func (s *Server) recordUnitWriteSuccess(r *http.Request, id uuid.UUID, saved types.GovernanceUnit, effective *ResolvedUnit,
-	unitAdmin, putCreates, bypass bool,
-) {
+// unitWriteSuccessData is a stored write's governance.unit.write row data, with the unit admin's scope when one
+// wrote it. A PUT that created the profile is logged here, before the row is recorded.
+func (s *Server) unitWriteSuccessData(r *http.Request, id uuid.UUID, saved types.GovernanceUnit, effective *ResolvedUnit,
+	unitAdmin, putCreates bool,
+) map[string]any {
 	data := unitWriteAuditData(saved, effective)
 	if unitAdmin {
 		data = unitScopeAudit(data, r, s.auditUnitScope(r.Context(), saved.ID, false))
@@ -428,11 +433,7 @@ func (s *Server) recordUnitWriteSuccess(r *http.Request, id uuid.UUID, saved typ
 		slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY would refuse it",
 			"unit_id", id.String())
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
-	if bypass {
-		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
-	}
+	return data
 }
 
 // unitWriteWarnings are the saved write's answer warnings: the omissions of an uncomposed profile, the
