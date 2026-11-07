@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // AuditCheckpointMaxRows caps the rows one signed checkpoint covers, so a receipt's hash list stays bounded
@@ -47,7 +48,8 @@ func (e *AuditCheckpointBreak) Error() string {
 	return fmt.Sprintf("store: the audit chain is broken at seq %d: %s", e.Seq, e.Reason)
 }
 
-// ErrAuditCheckpointExists is InsertAuditCheckpoint's answer when a checkpoint already holds seq_lo or seq_hi.
+// ErrAuditCheckpointExists is InsertAuditCheckpoint's answer when a stored checkpoint already covers any seq in
+// the new range.
 var ErrAuditCheckpointExists = errors.New("store: an audit checkpoint already covers that range")
 
 // AuditCheckpointer is the optional store capability behind signed audit checkpoints and receipts. A test fake
@@ -146,10 +148,10 @@ func scanAuditCheckpoint(r pgx.Row) (AuditCheckpoint, error) {
 	return c, err
 }
 
-// InsertAuditCheckpoint stores one signed checkpoint. When a checkpoint already holds its seq_lo or seq_hi, it
-// writes nothing and returns that stored row with ErrAuditCheckpointExists: the caller checks the stored row's
-// signature, because a row a database actor inserted carries no valid one. The conflict needs no UPDATE
-// grant, which the app role does not hold.
+// InsertAuditCheckpoint stores one signed checkpoint. When a stored checkpoint's range overlaps its range (the
+// table's exclusion constraint), it writes nothing and returns the first such stored row with
+// ErrAuditCheckpointExists: the caller checks the stored row's signature, because a row a database actor
+// inserted carries no valid one. The conflict needs no UPDATE grant, which the app role does not hold.
 func (s PG) InsertAuditCheckpoint(ctx context.Context, cp AuditCheckpoint) (AuditCheckpoint, error) {
 	var seqLo int64
 	err := s.Pool.QueryRow(ctx, `
@@ -160,11 +162,14 @@ func (s PG) InsertAuditCheckpoint(ctx context.Context, cp AuditCheckpoint) (Audi
 	if err == nil {
 		return AuditCheckpoint{}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	// DO NOTHING answers a unique or exclusion conflict with no row; an exclusion violation (23P01) raised
+	// anyway takes the same path.
+	var pgErr *pgconn.PgError
+	if !errors.Is(err, pgx.ErrNoRows) && !(errors.As(err, &pgErr) && pgErr.Code == "23P01") {
 		return AuditCheckpoint{}, fmt.Errorf("store: insert audit checkpoint: %w", err)
 	}
 	existing, err := scanAuditCheckpoint(s.Pool.QueryRow(ctx, `SELECT `+auditCheckpointCols+` FROM audit_checkpoints
-		WHERE seq_lo = $1 OR seq_hi = $2 ORDER BY seq_lo LIMIT 1`, cp.SeqLo, cp.SeqHi))
+		WHERE int8range(seq_lo, seq_hi, '[]') && int8range($1, $2, '[]') ORDER BY seq_lo LIMIT 1`, cp.SeqLo, cp.SeqHi))
 	if err != nil {
 		return AuditCheckpoint{}, fmt.Errorf("store: read the conflicting audit checkpoint: %w", err)
 	}
