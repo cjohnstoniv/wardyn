@@ -698,3 +698,55 @@ func TestUsageMeter_ProxyMadeSpoolGetsNoUsageRow(t *testing.T) {
 		}
 	}
 }
+
+// remoteUsageRows counts the usage rows a remote sink has queued for wardyn-runnerd.
+func remoteUsageRows(t *testing.T, rs *remoteSink) int {
+	t.Helper()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	n := 0
+	for _, rec := range rs.buf {
+		var b RecordBody
+		if err := json.Unmarshal(rec.body, &b); err != nil {
+			t.Fatal(err)
+		}
+		if b.Decision.RuleSource == ruleSourceLLMUsage {
+			n++
+		}
+	}
+	return n
+}
+
+// Behind a runner that takes usage rows, a metered call needs credit for two rows: its allow row,
+// sent before the answer, and its usage row, sent after. With credit for both, both are queued. With
+// the grant's last record and no later grant, the call is refused before it reaches the provider, as
+// any request the sink has no credit for: never forwarded with its usage row then dropped.
+func TestUsageMeter_RemoteFinalCreditLosesNoUsageRow(t *testing.T) {
+	for _, units := range []int64{2, 1} {
+		rs, f := startedSink(t)
+		up := newUsageUpstream(t, true)
+		p := newProxy(Options{RunID: rs.runID, MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
+			Dial: redirectDial(upstreamAddr(up.srv)), TLSClientConfig: testInsecureTLSConfig, Sink: &decisionSink{remote: rs},
+			Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
+		c := <-f.sessions
+		if h := readFrame(t, c); h.T != FrameHello {
+			t.Fatalf("hello = %+v", h)
+		}
+		writeFrame(t, c, SinkFrame{T: FrameAccept, Gen: 1, Usage: true})
+		writeFrame(t, c, SinkFrame{T: FrameGrant, Gen: 1, Through: units, Bytes: 1 << 20})
+		rs.mu.Lock()
+		for rs.gen != 1 || rs.through != units {
+			rs.cond.Wait()
+		}
+		rs.mu.Unlock()
+		rec := httptest.NewRecorder()
+		p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-x"}`)), anthropicHost, 443)
+		reached, usage := len(up.acceptEncodings()), remoteUsageRows(t, rs)
+		switch {
+		case units == 2 && (rec.Code != http.StatusOK || reached != 1 || usage != 1):
+			t.Fatalf("credit for two rows: status %d, upstream reached %d, usage rows %d; want 200, 1, 1", rec.Code, reached, usage)
+		case units == 1 && (rec.Code != http.StatusServiceUnavailable || reached != 0 || usage != 0):
+			t.Fatalf("credit for one row: status %d, upstream reached %d, usage rows %d; want refused before forwarding (503, 0, 0)", rec.Code, reached, usage)
+		}
+	}
+}
