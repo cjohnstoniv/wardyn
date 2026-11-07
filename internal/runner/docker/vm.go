@@ -871,7 +871,9 @@ func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
 	ref := agentContainerName(runID)
 	v, err := d.vmLookup(ctx, ref)
 	if errors.Is(err, errVMUnreachable) {
-		return true, d.EndSandbox(ctx, ref)
+		// EndSandbox finds no VM to tear down here (vmFor is nil with VM sandboxes off), so the
+		// sidecars go by name.
+		return true, errors.Join(d.EndSandbox(ctx, ref), d.removeVMSidecars(ctx, runID))
 	}
 	if err != nil || v == nil {
 		return false, err // an engine that cannot say is an error the caller retries, never "not a VM"

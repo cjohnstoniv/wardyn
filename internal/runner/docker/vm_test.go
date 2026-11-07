@@ -1218,6 +1218,9 @@ func TestVMVerbsRefusedWhenVMsWentOff(t *testing.T) {
 	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
 		t.Fatal("EndVM left the VM's proxy")
 	}
+	if c := r.container(t, vmfsName(spec.RunID, 0)); !c.removed {
+		t.Fatal("EndVM with VM sandboxes off left the VM's file share")
+	}
 	if err := d2.StopSandbox(ctx, sb.Ref); err != nil {
 		t.Fatalf("stop with VM sandboxes off = %v", err)
 	}
