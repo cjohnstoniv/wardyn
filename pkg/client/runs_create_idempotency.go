@@ -145,6 +145,10 @@ func (c *Client) createRunOnce(ctx context.Context, body []byte, key string) (Cr
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set(IdempotencyKeyHeader, key)
+	// The key would make net/http call this POST replayable, and on a reused connection that resets before the
+	// headers the transport would send it again by itself, even with Retry off or against a server that
+	// ignores the key. Without GetBody it cannot: every repeat is made by the loop in CreateRunWith.
+	req.GetBody = nil
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return out, nil, &transportError{err: err}
