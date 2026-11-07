@@ -282,21 +282,23 @@ func agentSigningCertPath() string {
 // trustAgentCert puts the signing certificate in the base, trusts it as a root for code signing only, and
 // says whether the guest trusts it (ItemTrusted or ItemNotTrusted). macOS 26 refuses that trust from root
 // without a person, and a guest agent from before this build refuses the command; either way the
-// certificate reads not trusted and edit-base lists the command that trusts it. Only a failed push is an
-// error.
-func trustAgentCert(ctx context.Context, g ToolsGuest, der []byte, log *slog.Logger) (string, error) {
+// certificate reads not trusted and edit-base lists the command that trusts it. Like the signing, it never
+// fails the update: a step the guest refuses is logged and the certificate reads not trusted.
+func trustAgentCert(ctx context.Context, g ToolsGuest, der []byte, log *slog.Logger) string {
 	cer := agentSigningCertPath()
-	if err := runItem(ctx, g, "/bin/mkdir", "-p", "-m", "0700", filepath.Dir(cer)); err != nil {
-		return "", fmt.Errorf("macvm: the agent signing certificate's directory: %w", err)
+	err := runItem(ctx, g, "/bin/mkdir", "-p", "-m", "0700", filepath.Dir(cer))
+	if err == nil {
+		err = g.Push(ctx, cer, 0o644, strings.NewReader(string(der)), int64(len(der)))
 	}
-	if err := g.Push(ctx, cer, 0o644, strings.NewReader(string(der)), int64(len(der))); err != nil {
-		return "", fmt.Errorf("macvm: pushing the agent signing certificate: %w", err)
+	if err != nil {
+		log.Warn("macvm: the agent signing certificate was not put in the base", "err", err.Error())
+		return ItemNotTrusted
 	}
 	out, exit, err := g.Run(ctx, []string{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", guestagent.MacSystemKeychain, cer})
 	if err != nil || exit != 0 {
 		log.Warn("macvm: the base did not trust the agent signing certificate; edit-base lists the command that does", "exit", exit, "err", fmt.Sprint(err), "out", outputTail(out))
 	}
-	return verifyAgentCert(ctx, g), nil
+	return verifyAgentCert(ctx, g)
 }
 
 // verifyAgentCert is whether the guest trusts the agent's signing certificate for code signing.

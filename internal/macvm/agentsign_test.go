@@ -277,7 +277,8 @@ func (m *markSigner) SignAgent(_ context.Context, path string) (macvm.SignedAgen
 type signGuest struct {
 	*guest
 	fda       string
-	certTrust int // verify-cert's exit for the signing certificate
+	certTrust int  // verify-cert's exit for the signing certificate
+	noCert    bool // the guest refuses the certificate's push, as an older agent may
 }
 
 func (g *signGuest) Posture(context.Context) (guestagent.ToolsPosture, error) {
@@ -285,6 +286,9 @@ func (g *signGuest) Posture(context.Context) (guestagent.ToolsPosture, error) {
 }
 
 func (g *signGuest) Push(_ context.Context, dest string, _ fs.FileMode, r io.Reader, _ int64) error {
+	if g.noCert && dest == signCert() {
+		return errors.New("403 a push to " + dest)
+	}
 	b, err := io.ReadAll(r)
 	g.mu.Lock()
 	g.files[dest] = b
@@ -392,6 +396,11 @@ func TestAgentSigningCertTrustFallsBackToEditBase(t *testing.T) {
 	res := runStage(t, stage)
 	if res.AgentSignature != macvm.AgentSignedThisMac || res.AgentSigningCert != macvm.ItemNotTrusted || string(g.files[guestagent.MacAgentBinaryPath]) != "signed:new agent" {
 		t.Fatalf("signature %q cert %q agent %q", res.AgentSignature, res.AgentSigningCert, g.files[guestagent.MacAgentBinaryPath])
+	}
+	// A guest that refuses the certificate itself: the update still ends, the certificate not trusted.
+	g.noCert, g.certTrust = true, 0
+	if res := runStage(t, stage); res.AgentSigningCert != macvm.ItemNotTrusted || string(g.files[guestagent.MacAgentRunPath]) != "signed:new agent" {
+		t.Fatalf("refused certificate push: cert %q", res.AgentSigningCert)
 	}
 	base := t.TempDir()
 	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), []byte(`{"agent_signature":"this_mac","agent_signing_cert":"not_trusted"}`), 0o600); err != nil {

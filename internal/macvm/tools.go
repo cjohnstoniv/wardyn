@@ -428,11 +428,7 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		}
 		res.AgentRun, res.AgentSignature = true, AgentSignedAdHoc
 		if signed != nil {
-			res.AgentSignature = AgentSignedThisMac
-			var err error
-			if res.AgentSigningCert, err = trustAgentCert(ctx, g, signed.Cert, o.Log); err != nil {
-				return res, err
-			}
+			res.AgentSignature, res.AgentSigningCert = AgentSignedThisMac, trustAgentCert(ctx, g, signed.Cert, o.Log)
 		}
 	}
 	var cltErr error
