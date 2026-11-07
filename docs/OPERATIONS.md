@@ -11,6 +11,7 @@ The sections are written against the Compose stack ([`deploy/compose/`](../deplo
 <summary>Table of contents</summary>
 
 - [State stores](#state-stores)
+- [The audit log: integrity, retention, erasure and leavers](#the-audit-log-integrity-retention-erasure-and-leavers)
 - [Monitoring](operations/monitoring.md#monitoring)
 - [Approval notifications](#approval-notifications)
 - [Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what)
@@ -31,6 +32,7 @@ The sections are written against the Compose stack ([`deploy/compose/`](../deplo
 - [Renamed in 0.8](#renamed-in-08)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
+- [Member drives, team drives and user drives on Kubernetes](#member-drives-team-drives-and-user-drives-on-kubernetes)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
 - Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
@@ -554,6 +556,8 @@ commands are the ones in "Back them up" and "Restore them", and in
 - Only `wardynd -recovery-rehearse` rehearses a restore, and only for the set you run it on, so none of the above is validated end to end until you do ([Recovery set and restore rehearsal](operations/recovery-rehearsal.md)).
 - Loading a dump into a scratch database proves the SQL loads, and nothing more: a row count does not show that the
   key works, and it does not show that the drive bytes are intact.
+
+## The audit log: integrity, retention, erasure and leavers
 
 ### The audit log can't quietly rot
 
@@ -2127,12 +2131,9 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 
 ## Network: upstream proxy and egress redirects
 
-- One more piece of operator-wide config lives in Postgres alongside everything in [**State stores**](#state-stores) above: `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) — the corporate upstream proxy and the list of outbound redirects every run's egress inherits.
-- Unconfigured is a valid, common state.
-- Because it lives in Postgres, `make reset` / `make reset-all` take it with the volume.
-- `wardyn site-config get > corp-baseline.json` before a reset and `wardyn site-config set corp-baseline.json` after is the round-trip — the document carries secret **names**, never values, so it is safe to keep beside the repo.
-- Because values never round-trip, `set` re-attaches the *names* unconditionally even when a named secret was never restored into the fresh store.
-- `set` prints a warning naming every such dangling ref, and the setup checklist's "Site config" row grades `warn` (never the plain `info` of a fully-live config) while one remains.
+- `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) is the operator-wide network config, kept in Postgres beside [State stores](#state-stores): the corporate upstream proxy and the outbound redirects every run's egress inherits. Unconfigured is a valid, common state.
+- It lives in the database, so `make reset` and `make reset-all` take it with the volume. To keep it, run `wardyn site-config get > corp-baseline.json` before and `wardyn site-config set corp-baseline.json` after. The document carries secret **names**, never values, so it is safe to keep beside the repo.
+- Values never round-trip, so `set` re-attaches the names even when a named secret was never restored. It prints a warning for each dangling ref, and the setup checklist's "Site config" row grades `warn` while one remains.
 
 **Restoring the network settings at boot (`WARDYN_SITE_CONFIG_SEED_FILE`).**
 
@@ -2160,29 +2161,18 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 - The file restores the **reference, not the secret**.
 - With the default Postgres secret store a wiped database loses the proxy credential too, so after a rebuild re-create that secret (or keep it in an external secret store).
 - Until then the `site_config` row of `/setup/status` warns that a referenced secret is not set.
-- A captured document carries `onboarding_completed_at` whenever the install it came from had finished the Getting Started funnel, and `set` forwards it verbatim — deliberately.
-- No client strips it, so the same file works through `curl` and as the MDM-delivered `/etc/wardyn/site-config.json`.
-- The server owns that mark, so it is ignored on the write and the STORED one (none on a fresh install; this install's own once its operator has finished the funnel) is carried forward.
-- Applying a captured baseline restores corporate network config, never the funnel's completion state.
-- `PUT` never refuses a body over this field — it cannot be set, cleared or moved through that endpoint whatever it says, so a refusal would only have broken the recovery flows ([`internal/api/site_config.go`](../internal/api/site_config.go), `handlePutSiteConfig`).
-- When the file's copy is dropped — a captured baseline applied after re-onboarding, or the MDM file re-applied to a laptop that has since finished its own funnel — two things happen.
-  - The response says so (`onboarding_completed_at_ignored`).
-  - `set` prints it as a warning.
+- A captured document carries `onboarding_completed_at` when the install it came from finished the Getting Started funnel, and `set` forwards it verbatim, so the same file works through `curl` and as the MDM-delivered `/etc/wardyn/site-config.json`.
+- The server owns that mark. The write ignores the file's copy and carries the stored one forward, so a baseline restores corporate network config and never the funnel's completion state. `PUT` never refuses a body over this field ([`internal/api/site_config.go`](../internal/api/site_config.go), `handlePutSiteConfig`), because a refusal would only have broken the recovery flows.
+- When the file's copy is dropped (a baseline applied after re-onboarding, or the MDM file re-applied to a laptop that has since finished its own funnel), the response says so (`onboarding_completed_at_ignored`) and `set` prints a warning.
 
 > [!IMPORTANT]
 > **A SiteConfig write reaches only runs dispatched after it lands.**
 
-- The fields below that shape a run's own egress — `internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects — are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup.
-- A run already running keeps the config it started with for the rest of its life, however many times you fix the SiteConfig underneath it.
-- `PUT /site-config`'s response says so (`applies_from: "next_dispatch"`), **and since 0.7.2 the console repeats it on save** — BOTH halves of the Network step.
-- The upstream-proxy saves (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress-redirect saves (`setRedirects` in `corp-network-egress.tsx`, the one chokepoint every add, edit and remove passes through) carry it as the toast's description.
-- So the operator who just changed a field reads the lifetime at the moment they change it rather than in this document afterwards.
-- Both matter for the same reason: the redirects are one of the compiled-at-dispatch fields listed above, so a save that said nothing about its lifetime was the one most likely to be acted on twice.
-- Every OTHER console write of site config still repeats nothing — the toast is not a general rule you can rely on elsewhere.
-- A change made through `PUT /site-config` or `wardyn site-config set` has the response field and nothing else.
-- Live sidecar reload is deliberately out of scope: a running sandbox's egress posture must not change under it with no audit row to show why.
-- A run already refused on a field you just corrected stays refused.
-- Kill it and start a new one — a killed run cannot resume, and the new run reads the corrected config from the start.
+- The fields that shape a run's egress (`internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects) are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup. A running run keeps the config it started with, however often you fix the SiteConfig underneath it.
+- `PUT /site-config` says so in its response (`applies_from: "next_dispatch"`).
+- The console repeats it in the toast on saving the upstream proxy (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress redirects (`setRedirects` in `corp-network-egress.tsx`). No other console write of site config does, and `PUT /site-config` or `wardyn site-config set` has the response field and nothing else.
+- Live sidecar reload is out of scope: a running sandbox's egress posture must not change under it with no audit row to show why.
+- A run already refused on a field you just corrected stays refused. Kill it and start a new one; a killed run cannot resume.
 
 ### Upstream proxy: plain URL vs. secret
 
@@ -3031,49 +3021,44 @@ Or leave `daemon.json` alone and give Wardyn its own range:
 
 ### The start deadlines
 
-The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
+The pane waits; the runner does not. These are the bounds you size:
 
-- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox start, counted from the moment the proxy pod is created and spent across BOTH pods.
-  - That is the proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
+| Setting | Default | Bounds |
+|---|---|---|
+| `WARDYN_SANDBOX_START_TIMEOUT` | 3 minutes | The whole sandbox start, across both pods |
+| `WARDYN_SANDBOX_CAPACITY_WAIT` | 15 minutes | A pod the scheduler cannot place for lack of room |
+| Boot egress canary (`canaryWaitTimeout`, [`internal/runner/k8s/canary.go`](../internal/runner/k8s/canary.go)) | 3 minutes a phase, fixed | The canary; neither setting moves it |
+
+- **The start timeout** is one absolute deadline, counted from the moment the proxy pod is created.
+  - It covers the proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
   - It is not restarted when the agent pod is created, and a change in the reason a pod is stuck never resets it.
-  - A first pull of the `aws-sso` image was measured at **131 seconds** on a reporting estate, which is most of the default; raise it for a slower registry.
-  - Before 0.8.6 this was a fixed 3 minutes for the agent plus a separate fixed 90 seconds for the proxy's IP.
-- `WARDYN_SANDBOX_CAPACITY_WAIT` (default **15 minutes**) is how long a pod the scheduler cannot place for lack of room (`Unschedulable`, for example `Insufficient cpu`) may wait.
+  - A first pull of the `aws-sso` image was measured at 131 seconds on one estate; raise the timeout for a slower registry.
+- **The capacity wait** covers `Unschedulable` pods (for example `Insufficient cpu`).
   - The run stays `STARTING` with "Waiting for a machine with room for this sandbox." and the poll backs off to every few seconds.
-  - That time is counted apart: it spends the capacity wait, not the start timeout, so a run that waited ten minutes for room still has its full start budget to pull an image.
-  - The longest a run can sit in `STARTING` is therefore the two added together (18 minutes by default).
-  - `0` turns the wait off: an unplaceable run fails at the start timeout, which is what 0.8.5 did (at 90 seconds for the proxy).
-- Terminal states never wait: `ImagePullBackOff`, `CrashLoopBackOff`, a failed init and the like fail the run at once, inside a capacity wait as anywhere else.
-- The **boot egress canary** keeps its own fixed budget (`canaryWaitTimeout`, 3 minutes a phase, [`internal/runner/k8s/canary.go`](../internal/runner/k8s/canary.go)) and neither setting moves it: both phases must fit inside the chart's 450 second startup probe.
-- While a run waits, wardynd holds the run's watcher lease with a heartbeat for as long as the sandbox create blocks.
-- So another replica's sweep does not adopt a run that is still being set up.
-- `GET /api/v1/setup/status` reports both values (`runner.sandbox_start`, Kubernetes only) and the checklist shows them as the `sandbox_start` row.
-  - The console's "taking longer than expected" bound for a starting run is the two added together plus 90 seconds, read from there.
-
-> [!IMPORTANT]
-> **Upgrading:** a run that cannot be placed now waits up to 15 minutes where 0.8.5 failed it at 90 seconds.
-> Set `WARDYN_SANDBOX_CAPACITY_WAIT` to `0` to keep failing fast.
-
+  - That time is counted apart from the start timeout, so a run that waited ten minutes for room still has its full start budget to pull an image.
+  - The longest a run can sit in `STARTING` is the two added together: 18 minutes by default.
+  - `0` turns the wait off: an unplaceable run fails at the start timeout.
+- **Terminal states never wait.** `ImagePullBackOff`, `CrashLoopBackOff`, a failed init and the like fail the run at once, inside a capacity wait as anywhere else.
+- **The canary's two phases** must fit inside the chart's 450 second startup probe.
+- While the sandbox create blocks, wardynd holds the run's watcher lease with a heartbeat, so another replica's sweep does not adopt a run that is still being set up.
+- `GET /api/v1/setup/status` reports both values (`runner.sandbox_start`, Kubernetes only) and the checklist shows them as the `sandbox_start` row. The console's "taking longer than expected" bound for a starting run is the two added together plus 90 seconds, read from there.
 - A pull slower than the start timeout fails the run: it carries a `failure_hint` naming the deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
-- **A first pull after an upgrade does not fail a run.**
-  - Every image tag changes at a version bump, so the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault.
-  - The Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does not have the image.
-  - Since 0.8 (#807) Kubernetes does too, while the kubelet's `Pulling` Event is the latest thing it has said about the agent container (below).
-  - Without that Event, or with the Events read refused, all Wardyn has is `ContainerCreating`, which the kubelet reports for a pull and for everything else it does before a container runs.
-  - So the console says a first start *can* take a couple of minutes while the image downloads.
-- **The one chart change, and why.**
-  - Every other reason comes from `pods: get`, which the chart already grants.
-  - `Pulling` does not: on Kubernetes it lives only in the pod's Events.
-  - 0.8 (#807) grants `events: list` in the namespaced k8s-runner Role: `list` only (no `get`, no `watch`), never in the ClusterRole, and `make helm-lint` fails a render that widens either.
-  - The runner lists at most once a second, only while the agent container is `ContainerCreating`, field-selected on the pod's kind, name and UID.
-  - Under `k8s.allowRunsInReleaseNamespace=true` that verb reads every co-tenant workload's Events in that namespace: a `fieldSelector` is a client convenience, not something RBAC can enforce.
-  - That is accepted as part of the same namespace blast radius the render-time fail in [`deploy/helm/wardyn/templates/rbac.yaml`](../deploy/helm/wardyn/templates/rbac.yaml) already names for that setting (exec into and delete any pod there, create or delete any Secret there).
-  - Nothing an Event says is surfaced: the image ref comes from the pod spec, and the Event only chooses between two sentences Wardyn wrote.
-  - If you write the Role yourself (`k8s.rbac.create=false`), add `events: list` on upgrade.
-  - Without it the read fails closed: it is switched off for the rest of that start, the create goes on, and a pull reads as `agent: ContainerCreating`, as before.
-- **The fix for a slow registry is to pre-pull, not to wait longer.**
-  - Get the agent and `aws-sso` images onto every node at upgrade time — a DaemonSet that pulls the new tags, or the node cache of whatever registry mirror the cluster uses.
-  - Then the first sign-in after an upgrade is a warm start.
+
+**A first pull after an upgrade is not a fault.**
+
+- Every image tag changes at a version bump, so the first start on each node after an upgrade re-pulls. That is a two-minute wait.
+- The Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does not have the image.
+- Kubernetes does too while the kubelet's `Pulling` Event is the latest thing it has said about the agent container.
+- Without that Event, or with the Events read refused, all Wardyn has is `ContainerCreating`, which the kubelet reports for a pull and for everything else it does before a container runs. The console then says a first start can take a couple of minutes while the image downloads.
+- To avoid the wait, get the agent and `aws-sso` images onto every node at upgrade time: a DaemonSet that pulls the new tags, or the node cache of the cluster's registry mirror.
+
+**The chart change that reads the `Pulling` Event.**
+
+- Every other reason comes from `pods: get`, which the chart already grants. `Pulling` lives only in the pod's Events, so the namespaced k8s-runner Role grants `events: list`: `list` only (no `get`, no `watch`), never in the ClusterRole. `make helm-lint` fails a render that widens either.
+- The runner lists at most once a second, only while the agent container is `ContainerCreating`, field-selected on the pod's kind, name and UID.
+- Under `k8s.allowRunsInReleaseNamespace=true` that verb reads every co-tenant workload's Events in that namespace, because a `fieldSelector` is a client convenience that RBAC cannot enforce. That sits inside the namespace blast radius the render-time fail in [`deploy/helm/wardyn/templates/rbac.yaml`](../deploy/helm/wardyn/templates/rbac.yaml) already names for that setting (exec into and delete any pod there, create or delete any Secret there).
+- Nothing an Event says is surfaced: the image ref comes from the pod spec, and the Event only chooses between two sentences Wardyn wrote.
+- If you write the Role yourself (`k8s.rbac.create=false`), add `events: list`. Without it the read fails closed: it is switched off for the rest of that start, the create goes on, and a pull reads as `agent: ContainerCreating`.
 
 ### Telling an estate-side failure from a Wardyn one
 
@@ -4656,6 +4641,15 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
   [docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the chart section
   linked above.
 
+### Pre-wrapped images
+
+- A Kubernetes control plane has no image builder, so an image it runs must already carry Wardyn's runner tools.
+- Build one `FROM` agent-base, pin it by digest and add it under Images; the control plane checks it on the cluster
+  before offering it. The recipe and what the check proves are in
+  [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
+
+## Member drives, team drives and user drives on Kubernetes
+
 ### Member drives
 
 - A **member drive** is a drive a person creates for themselves from New Run, with `POST /api/v1/me/drives`.
@@ -5235,13 +5229,6 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 - `disk_mib` uses the same vocabulary: `filesystem` on Docker when the storage driver can enforce a per-container quota, `eviction` on Kubernetes, and `none` on Docker when the driver cannot enforce a quota at all. That `none` covers two outcomes:
   - a driver that takes no size option (`vfs`, `fuse-overlayfs`) runs the request uncapped, with a warning;
   - overlay2 over a non-xfs backing filesystem is handed the option anyway and the daemon refuses the create, so that run fails closed.
-
-### Pre-wrapped images
-
-- A Kubernetes control plane has no image builder, so an image it runs must already carry Wardyn's runner tools.
-- Build one `FROM` agent-base, pin it by digest and add it under Images; the control plane checks it on the cluster
-  before offering it. The recipe and what the check proves are in
-  [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
 
 ## High availability
 
