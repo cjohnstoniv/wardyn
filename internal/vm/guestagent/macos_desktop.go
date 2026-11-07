@@ -47,7 +47,8 @@ type Desktop struct {
 	Console ConsoleUser
 	// VNCSettings is the settings file SetPassword writes; "" is MacVNCSettingsPath.
 	VNCSettings string
-	// SessionEnvEvery and SessionEnvWait are StartSessionEnv's console poll; zero is 2 s and 10 min.
+	// SessionEnvEvery is StartSessionEnv's console poll, and SessionEnvWait bounds its whole GUI step, the set included;
+	// zero is 2 s and 10 min.
 	SessionEnvEvery, SessionEnvWait time.Duration
 
 	mu       sync.Mutex
@@ -98,6 +99,9 @@ func (d *Desktop) Track(c io.Closer) (release func(), ok bool) {
 
 // ErrNoConsoleUser is a guest with nobody logged in at the console (the login window).
 var ErrNoConsoleUser = errors.New("guestagent: nobody is logged in at the guest's console")
+
+// ErrConsoleChanged is SetSessionEnv's refusal when the console is no longer the account it was asked for.
+var ErrConsoleChanged = errors.New("guestagent: the console is no longer the agent account's")
 
 // MacVNCSettingsPath is where Screen Sharing keeps its legacy VNC password: VNCSettingsLine's text,
 // root-owned, mode 0600.
@@ -219,20 +223,24 @@ func parsePointer(s string) (Pointer, error) {
 	return Pointer{X: int(math.Round(v[0])), Y: int(math.Round(v[1]))}, nil
 }
 
-// SetSessionEnv sets env (KEY=VALUE) in the console user's GUI session, so apps started from it after
-// this see it, and says how it took: "asuser" (launchctl asuser, root's identity in the user's
+// SetSessionEnv sets env (KEY=VALUE) in uid's GUI session, so apps started from it after this see it, and says how it took: "asuser" (launchctl asuser, root's identity in the user's
 // namespace) or "user" (the same set as the user, sudo -u). It reads one variable back (WARDYN_RUN_ID
 // when there) after the first form, and redoes the set the second way when the session does not hold it.
-// A session that is not up yet (ErrNoConsoleUser) is an error the caller handles. Values appear on the
+// uid is the account the caller saw at the console: the console is read again first, and anyone else there
+// is ErrConsoleChanged, with nothing set, so a fast user switch never sends the settings to another
+// account's session. A session that is not up yet (ErrNoConsoleUser) is an error the caller handles too. Values appear on the
 // launchctl command lines: env is the run's non-secret half by contract, and never SecretEnv. That a
 // launched app reads the variables is unproven (MAC-PROOF P11).
-func (d *Desktop) SetSessionEnv(ctx context.Context, env []string) (via string, err error) {
+func (d *Desktop) SetSessionEnv(ctx context.Context, uid uint32, env []string) (via string, err error) {
 	if len(env) == 0 {
 		return "", nil
 	}
-	uid, err := d.Console.Console(ctx)
+	at, err := d.Console.Console(ctx)
 	if err != nil {
 		return "", err
+	}
+	if at != uid {
+		return "", ErrConsoleChanged
 	}
 	id := strconv.FormatUint(uint64(uid), 10)
 	for _, kv := range env {

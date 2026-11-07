@@ -202,6 +202,48 @@ func TestSessionEnvSkipsUnsafeKeysAndValues(t *testing.T) {
 	}
 }
 
+// Variables a shell or the loader reads at start would let the run choose what another program loads; none
+// reaches the shell file or the desktop session.
+func TestSessionEnvRefusesShellAndLoaderStartupVariables(t *testing.T) {
+	for _, k := range []string{"ZDOTDIR", "ENV", "BASH_ENV", "FPATH", "PS4", "PROMPT_COMMAND",
+		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"} {
+		if got := SessionEnv(map[string]string{k: "/tmp/x", "PLAIN": "ok"}, nil, nil); !slices.Equal(got, []string{"PLAIN=ok"}) {
+			t.Errorf("%s: SessionEnv = %q, want only PLAIN=ok", k, got)
+		}
+	}
+}
+
+// The zsh hook is read by every zsh on the clone; it sources the run's settings only for the agent account,
+// so root's and the admin's shells never load them.
+func TestZshHookSourcesTheSettingsOnlyForTheAgentAccount(t *testing.T) {
+	bash, err := exec.LookPath("bash") // bash, like zsh, has EUID
+	if err != nil {
+		t.Skip("no bash to read the hook with")
+	}
+	me := uint32(os.Geteuid())
+	for _, c := range []struct {
+		name string
+		uid  uint32
+		want string
+	}{
+		{"the agent account", me, "ok"},
+		{"another account", me + 1, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := sessionEnvPaths(t)
+			d := &Desktop{Run: newGUIFake(true), Console: fakeConsole{err: ErrNoConsoleUser}, SessionEnvEvery: time.Millisecond, SessionEnvWait: time.Millisecond}
+			<-d.StartSessionEnv(context.Background(), p, c.uid, map[string]string{"PLAIN": "ok"}, nil, nil)
+			got, err := exec.Command(bash, "-c", `. "$1"; printf %s "$PLAIN"`, "bash", p.Zshenv).Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("PLAIN through the hook as uid %d (agent account %d) = %q, want %q", me, c.uid, got, c.want)
+			}
+		})
+	}
+}
+
 func TestSessionEnvFileRoundTripsThroughAShell(t *testing.T) {
 	p := sessionEnvPaths(t)
 	env := []string{`Q=it's a "test"`, `CMD=$(id)`, "TICK=`id`", "SPACES=a  b   c", `BS=back\slash`, "PLAIN=ok"}
@@ -254,7 +296,7 @@ func TestSessionEnvFileRefusesANonRootDir(t *testing.T) {
 
 func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	p := sessionEnvPaths(t)
-	if err := EnsureZshHook(p); err != nil {
+	if err := EnsureZshHook(p, 502); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p.Zshenv)
@@ -267,7 +309,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	if !strings.Contains(string(b), p.Script) || strings.Count(string(b), "# Wardyn run settings") != 1 {
 		t.Errorf("hook = %q", b)
 	}
-	if err := EnsureZshHook(p); err != nil {
+	if err := EnsureZshHook(p, 502); err != nil {
 		t.Fatal(err)
 	}
 	if again, _ := os.ReadFile(p.Zshenv); string(again) != string(b) {
@@ -278,7 +320,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := EnsureZshHook(p); err != nil {
+		if err := EnsureZshHook(p, 502); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -295,7 +337,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	if err := os.Symlink(target, link.Zshenv); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnsureZshHook(link); err == nil {
+	if err := EnsureZshHook(link, 502); err == nil {
 		t.Error("followed a symlink")
 	}
 	if b, _ := os.ReadFile(target); string(b) != "keep" {
@@ -306,7 +348,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	if err := os.Mkdir(dir.Zshenv, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnsureZshHook(dir); err == nil {
+	if err := EnsureZshHook(dir, 502); err == nil {
 		t.Error("accepted a directory as the zsh file")
 	}
 }
@@ -383,10 +425,46 @@ func TestApplySessionEnvStaysPendingWhileTheSetterIsBlocked(t *testing.T) {
 	}
 }
 
+// A setter that never returns does not hold the status at pending past the wait: the step ends, and the
+// status says failed with a reason, so the host can say so and offer the retry.
+func TestApplySessionEnvFailsWhenTheSetterOutlastsTheWait(t *testing.T) {
+	p := sessionEnvPaths(t)
+	g := newGUIFake(true)
+	g.block, g.entered = make(chan struct{}), make(chan struct{})
+	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}, SessionEnvEvery: time.Millisecond, SessionEnvWait: 200 * time.Millisecond}
+	done := d.StartSessionEnv(context.Background(), p, 502, map[string]string{"WARDYN_RUN_ID": "r1"}, nil, nil)
+	t.Cleanup(func() { close(g.block); <-done })
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the settings step is still going with the setter blocked past the wait")
+	}
+	if st, err := ReadSessionEnvStatus(p); err != nil || st.State != SessionEnvFailed || st.Reason != SessionEnvSetenvFailed {
+		t.Errorf("status with the setter blocked past the wait = %+v, %v; want failed setenv_failed", st, err)
+	}
+}
+
+// The console can change hands between the wait and the set (a fast user switch). The settings go only to
+// the agent account the wait saw, never to whoever is at the console when the setter looks again.
+func TestApplySessionEnvNeverSetsInAnotherUsersSessionAfterASwitch(t *testing.T) {
+	g := newGUIFake(true)
+	c := &seqConsole{answers: []fakeConsole{{uid: 502}, {uid: 501}}}
+	d := &Desktop{Run: g, Console: c}
+	st := d.applySessionEnv(context.Background(), sessionEnvPaths(t), 502, []string{"WARDYN_RUN_ID=r1", "HTTPS_PROXY=http://p"}, time.Millisecond, 150*time.Millisecond)
+	for _, call := range strings.Split(strings.TrimSpace(g.argv()), "\n") {
+		if slices.Contains(strings.Split(call, "\x00"), "501") || slices.Contains(strings.Split(call, "\x00"), "#501") {
+			t.Errorf("a launchctl call reached uid 501's session: %q", strings.ReplaceAll(call, "\x00", " "))
+		}
+	}
+	if st.State == SessionEnvSet {
+		t.Errorf("status = %+v after the console switched to another user, want not set", st)
+	}
+}
+
 func TestSetSessionEnvRetriesAsTheUserWhenGetenvDisagrees(t *testing.T) {
 	g := newGUIFake(false) // the asuser form does not take
 	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}}
-	via, err := d.SetSessionEnv(context.Background(), []string{"HTTPS_PROXY=http://p", "WARDYN_RUN_ID=r1"})
+	via, err := d.SetSessionEnv(context.Background(), 502, []string{"HTTPS_PROXY=http://p", "WARDYN_RUN_ID=r1"})
 	if err != nil || via != "user" {
 		t.Fatalf("via %q, err %v; want the as-user form to take", via, err)
 	}
@@ -401,7 +479,7 @@ func TestSetSessionEnvRetriesAsTheUserWhenGetenvDisagrees(t *testing.T) {
 	// When neither form takes, the error names the step and holds no value.
 	never := &guiFake{vars: map[string]string{}}
 	nd := &Desktop{Run: neverTakes{never}, Console: fakeConsole{uid: 502}}
-	if _, err := nd.SetSessionEnv(context.Background(), []string{"WARDYN_RUN_ID=secretish-value"}); err == nil || strings.Contains(err.Error(), "secretish-value") {
+	if _, err := nd.SetSessionEnv(context.Background(), 502, []string{"WARDYN_RUN_ID=secretish-value"}); err == nil || strings.Contains(err.Error(), "secretish-value") {
 		t.Errorf("err = %v, want a failure that holds no value", err)
 	}
 }

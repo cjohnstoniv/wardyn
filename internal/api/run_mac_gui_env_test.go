@@ -112,16 +112,54 @@ func TestMacWindowAtStartWaitsForTheDesktopSettings(t *testing.T) {
 	}
 }
 
-func TestMacWindowAtStartOpensAfterTheWaitWhenSettingsStayPending(t *testing.T) {
-	r, _ := guiEnvRig(t, always("session_env=pending\n", 0))
-	macGUIEnvWait = 30 * time.Millisecond
+// guiEnvAtStart runs the at-start window to its end and returns the settings sentence the run's window state
+// would carry with no window open (macGUIEnvNote on an open view).
+func guiEnvAtStart(t *testing.T, r *macWindowRig) string {
+	t.Helper()
 	if err := r.h.srv.macWindowStorePending(context.Background(), r.h.run.ID, r.auth()); err != nil {
 		t.Fatal(err)
 	}
 	r.h.srv.macWindowAtStart(context.Background(), r.h.run.ID)
+	v := macWindowView{State: macWindowStateOpen}
+	r.h.srv.macGUIEnvNote(context.Background(), r.h.run, &v)
+	return v.Message
+}
+
+func TestMacWindowAtStartOpensAfterTheWaitWhenSettingsStayPendingAndSaysSo(t *testing.T) {
+	r, _ := guiEnvRig(t, always("session_env=pending\n", 0))
+	macGUIEnvWait = 30 * time.Millisecond
+	msg := guiEnvAtStart(t, r)
 	// The wait is bounded: the window is asked for once it ends, so a guest that never says is not a window that never opens.
 	if r.sub.openCount() != 1 {
 		t.Fatalf("opens = %d after the wait, want 1", r.sub.openCount())
+	}
+	// It opened without the settings confirmed, so it says so, as for failed: the retry, and no hold on a later open.
+	if !strings.Contains(msg, "agent-run --session-env-retry") {
+		t.Errorf("settings sentence after the wait ran out while pending = %q, want the retry", msg)
+	}
+	if rf := r.h.srv.macGUIEnvRefusal(context.Background(), r.h.run, false); rf != nil {
+		t.Errorf("an open after the wait ran out was refused: %+v", rf)
+	}
+}
+
+func TestMacWindowAtStartSaysSoWhenTheStatusIsLostAfterPending(t *testing.T) {
+	r, _ := guiEnvRig(t, func(n int) (string, int) {
+		if n == 1 {
+			return "session_env=pending\n", 0
+		}
+		return "", 1 // the read fails from here on
+	})
+	msg := guiEnvAtStart(t, r)
+	if r.sub.openCount() != 1 {
+		t.Fatalf("opens = %d after the read failed, want 1", r.sub.openCount())
+	}
+	if !strings.Contains(msg, "agent-run --session-env-retry") {
+		t.Errorf("settings sentence after pending then a failed read = %q, want the retry", msg)
+	}
+	// A guest that never said anything (an older one, with no status file) opens as before, with no sentence.
+	r2, _ := guiEnvRig(t, always("", 1))
+	if msg := guiEnvAtStart(t, r2); msg != "" || r2.sub.openCount() != 1 {
+		t.Errorf("older guest at start: opens = %d, sentence %q; want 1 and none", r2.sub.openCount(), msg)
 	}
 }
 

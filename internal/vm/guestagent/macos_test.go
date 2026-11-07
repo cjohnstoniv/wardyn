@@ -235,7 +235,7 @@ func TestParsePointer(t *testing.T) {
 func TestSetSessionEnvCommandLines(t *testing.T) {
 	g := newGUIFake(true)
 	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}}
-	via, err := d.SetSessionEnv(context.Background(), []string{"SSL_CERT_FILE=/x", "A=b=c"})
+	via, err := d.SetSessionEnv(context.Background(), 502, []string{"SSL_CERT_FILE=/x", "A=b=c"})
 	if err != nil || via != "asuser" {
 		t.Fatalf("via %q, err %v", via, err)
 	}
@@ -248,7 +248,7 @@ func TestSetSessionEnvCommandLines(t *testing.T) {
 		t.Errorf("calls = %v", g.calls)
 	}
 	none := &Desktop{Run: &fakeRunner{}, Console: fakeConsole{err: ErrNoConsoleUser}}
-	if _, err := none.SetSessionEnv(context.Background(), nil); err != nil {
+	if _, err := none.SetSessionEnv(context.Background(), 502, nil); err != nil {
 		t.Errorf("no variables still asked for a console user: %v", err)
 	}
 }
