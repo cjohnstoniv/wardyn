@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -60,6 +62,25 @@ type pinStore struct {
 	site       types.SiteConfig
 	wsMu       sync.Mutex
 	wsRecord   *types.ImageBuild
+	// admission is the verdict the launch recorded on the run (nil: none); admissionErr fails that write.
+	admission    *types.ImageAdmissionVerdict
+	admissionErr error
+}
+
+func (s *pinStore) SetRunImageAdmission(_ context.Context, _ uuid.UUID, v *types.ImageAdmissionVerdict) error {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	if s.admissionErr != nil {
+		return s.admissionErr
+	}
+	s.admission = v
+	return nil
+}
+
+func (s *pinStore) recorded() *types.ImageAdmissionVerdict {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	return s.admission
 }
 
 func (s *pinStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
@@ -332,4 +353,39 @@ func TestImageAdmissionScopeAllChecksTheConventionImage(t *testing.T) {
 			t.Errorf("asked %d Require / %d Admit, wrapped %q; want no launch check and the member's pin wrapped", r, n, b.wrapped())
 		}
 	})
+}
+
+// TestImageAdmissionScopeAllRecordsTheConventionVerdict: a convention image admitted at launch under enforce
+// and scope all has its verdict written to the run before dispatch: the image as configured, the verified
+// digest and the pin, so a revive can re-check that digest without resolving the tag. A run whose verdict
+// cannot be recorded is failed rather than dispatched with nothing on its row.
+func TestImageAdmissionScopeAllRecordsTheConventionVerdict(t *testing.T) {
+	sc := admissionSite(types.ImageAdmissionEnforce)
+	sc.Images.Admission.Scope = types.ImageAdmissionScopeAll
+	srv, st, _, run := pinFixture(t, nil)
+	st.site, srv.cfg.ImageAdmitter = sc, &fakeAdmitter{}
+	image, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil)
+	if failed {
+		t.Fatal("the admitted convention launch failed")
+	}
+	conventional, _, _ := strings.Cut(image, "@")
+	v := st.recorded()
+	raw, _ := json.Marshal(v)
+	for _, want := range []string{`"mode":"enforce"`, `"verdict":"admitted"`, `"digest":"` + admitDigest + `"`, `"pinned_ref":"` + image + `"`, `"ref":"`} {
+		if v == nil || !strings.Contains(string(raw), want) {
+			t.Fatalf("recorded verdict %s, want it to carry %s", raw, want)
+		}
+	}
+	if !strings.Contains(string(raw), `"ref":"`+conventional) {
+		t.Errorf("recorded verdict %s does not name the convention image as configured", raw)
+	}
+
+	srv, st, _, run = pinFixture(t, nil)
+	st.site, srv.cfg.ImageAdmitter, st.admissionErr = sc, &fakeAdmitter{}, errors.New("db down")
+	if _, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil); !failed {
+		t.Fatal("a convention image whose verdict could not be recorded was dispatched")
+	}
+	if got := st.state(run.ID); got != types.RunFailed {
+		t.Errorf("state = %s, want FAILED", got)
+	}
 }

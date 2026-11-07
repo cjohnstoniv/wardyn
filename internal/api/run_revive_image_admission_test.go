@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -327,5 +329,153 @@ func TestReviveImageAdmission_SiteUnreadableFailsClosed(t *testing.T) {
 	}
 	if len(f.rr.replaced) != 0 {
 		t.Error("a revive that could not read image admission replaced the proxy")
+	}
+}
+
+// convRef is an operator's convention image, covered by the fixture's signer; convPinned is it at admitDigest.
+const (
+	convRef    = "registry.example.com/team/agent:1"
+	convPinned = convRef + "@" + admitDigest
+)
+
+// conventionVerdict is the verdict a launch records for a convention image checked under scope all, read from
+// the JSON the run row holds: ref is the convention image as configured, pinned_ref set only when enforce
+// admitted it.
+func conventionVerdict(t *testing.T, mode, verdict, pinned string) *types.ImageAdmissionVerdict {
+	t.Helper()
+	raw := fmt.Sprintf(`{"mode":%q,"verdict":%q,"digest":%q,"pinned_ref":%q,"ref":%q,"signer":%q}`,
+		mode, verdict, admitDigest, pinned, convRef, admitSigner)
+	var v types.ImageAdmissionVerdict
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatal(err)
+	}
+	return &v
+}
+
+// scopeAllConventionFixture is a lost member run that started from the convention image (no member image) on a
+// deployment that now enforces admission with scope all, its create having recorded verdict.
+func scopeAllConventionFixture(t *testing.T, verdict *types.ImageAdmissionVerdict, a ImageAdmitter) *reviveFixture {
+	t.Helper()
+	f := reviveAdmissionFixture(t, types.ImageAdmissionEnforce, verdict, a)
+	f.st.site.Images.Admission.Scope = types.ImageAdmissionScopeAll
+	conv := ""
+	f.st.run.ImageInput, f.st.run.Image = &conv, convRef
+	return f
+}
+
+func wantConventionNotAdmitted(t *testing.T, f *reviveFixture, a *fakeAdmitter, code int, body string) {
+	t.Helper()
+	if code != http.StatusForbidden || !strings.Contains(body, reviveNotAdmitted) || !strings.Contains(body, convRef) ||
+		!strings.Contains(body, "Start a new run to use an allowed image") {
+		t.Fatalf("revive = %d %s; want 403 %s naming the convention image, with the revive sentence", code, body, reviveNotAdmitted)
+	}
+	if r, n := a.calls(); r != 0 || n != 0 {
+		t.Errorf("admitter asked %d Require / %d Admit; an unrecorded convention image must not be checked by its tag", r, n)
+	}
+	f.assertReviveRefused(t, reviveNotAdmitted)
+}
+
+// TestReviveImageAdmission_ScopeAllConventionImage: under enforce with scope all, a kept sandbox that started
+// from the convention image is re-checked at revive by the digest its launch recorded, under the signers as they
+// are now; a sandbox whose launch recorded no admitted digest (started while admission was off, in audit mode,
+// or under scope member) is refused without resolving the tag. Scope member keeps the convention image
+// unchecked, a profile's signers bind only a member's image, and operators stay exempt and marked.
+func TestReviveImageAdmission_ScopeAllConventionImage(t *testing.T) {
+	t.Run("admitted pin: re-checked at the recorded digest", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := scopeAllConventionFixture(t, conventionVerdict(t, types.ImageAdmissionEnforce, types.ImageAdmissionAdmitted, convPinned), a)
+		if code, body := f.reviveAs(t, true); code != http.StatusOK {
+			t.Fatalf("revive = %d %s, want 200", code, body)
+		}
+		if len(a.requires) != 1 || a.requires[0].ref != convRef || !a.requires[0].site || len(a.requires[0].profile) != 0 ||
+			!slices.Equal(a.admits, []string{convPinned}) {
+			t.Errorf("Require %+v / Admit %q, want the site's coverage of %q and the registry at %q", a.requires, a.admits, convRef, convPinned)
+		}
+	})
+	t.Run("signer removed since the launch: refused", func(t *testing.T) {
+		a := &fakeAdmitter{require: func(bool, []string) (*imageadmit.Verdict, error) {
+			return &imageadmit.Verdict{Reason: imageadmit.NoPolicy}, nil
+		}}
+		f := scopeAllConventionFixture(t, conventionVerdict(t, types.ImageAdmissionEnforce, types.ImageAdmissionAdmitted, convPinned), a)
+		code, body := f.reviveAs(t, true)
+		if code != http.StatusForbidden || !strings.Contains(body, reasonImageAdmissionNoPolicy) || !strings.Contains(body, "Start a new run to use an allowed image") {
+			t.Fatalf("revive = %d %s; want 403 %s with the revive sentence", code, body, reasonImageAdmissionNoPolicy)
+		}
+		f.assertReviveRefused(t, reasonImageAdmissionNoPolicy)
+	})
+	for _, tc := range []struct {
+		name    string
+		verdict func(t *testing.T) *types.ImageAdmissionVerdict
+	}{
+		{"started while admission was off, now enforce", func(*testing.T) *types.ImageAdmissionVerdict { return nil }},
+		{"started under audit (would refuse), now enforce", func(t *testing.T) *types.ImageAdmissionVerdict {
+			return conventionVerdict(t, types.ImageAdmissionAudit, types.ImageAdmissionWouldRefuse, "")
+		}},
+		{"started under audit (admitted, never pinned), now enforce", func(t *testing.T) *types.ImageAdmissionVerdict {
+			return conventionVerdict(t, types.ImageAdmissionAudit, types.ImageAdmissionAdmitted, "")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &fakeAdmitter{}
+			f := scopeAllConventionFixture(t, tc.verdict(t), a)
+			code, body := f.reviveAs(t, true)
+			wantConventionNotAdmitted(t, f, a, code, body)
+		})
+	}
+	t.Run("admin bulk restart takes the same path", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := scopeAllConventionFixture(t, nil, a)
+		res := f.restart(t)
+		if res.OK || res.Reason != reviveNotAdmitted {
+			t.Fatalf("restart result = %+v, want refused with %s", res, reviveNotAdmitted)
+		}
+		if r, n := a.calls(); r != 0 || n != 0 {
+			t.Errorf("restart asked %d Require / %d Admit, want none", r, n)
+		}
+	})
+	t.Run("admin bulk restart re-checks an admitted pin", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := scopeAllConventionFixture(t, conventionVerdict(t, types.ImageAdmissionEnforce, types.ImageAdmissionAdmitted, convPinned), a)
+		if res := f.restart(t); !res.OK {
+			t.Fatalf("restart result = %+v, want ok", res)
+		}
+		if !slices.Equal(a.admits, []string{convPinned}) {
+			t.Errorf("Admit refs = %q, want %q", a.admits, convPinned)
+		}
+	})
+	t.Run("operator-owned run: exempt and marked", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := scopeAllConventionFixture(t, nil, a)
+		f.st.run.OperatorOwned = true
+		if code, body := f.reviveAs(t, false); code != http.StatusOK || !reviveMark(t, f) {
+			t.Fatalf("operator revive = %d %s (marked %v), want 200 marked", code, body, reviveMark(t, f))
+		}
+		if r, n := a.calls(); r != 0 || n != 0 {
+			t.Errorf("operator revive asked %d Require / %d Admit, want none", r, n)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		edit func(*reviveFixture)
+	}{
+		{"scope member: the convention image stays unchecked", func(f *reviveFixture) { f.st.site.Images.Admission.Scope = types.ImageAdmissionScopeMember }},
+		{"site off, profile signer: binds only a member's image", func(f *reviveFixture) {
+			f.st.site.Images.Admission.Mode = types.ImageAdmissionOff
+			f.rs.profiles[0].Limits.RequiredImageSigners = []string{admitSigner}
+		}},
+		{"audit, scope all: a revive refuses nothing", func(f *reviveFixture) { f.st.site.Images.Admission.Mode = types.ImageAdmissionAudit }},
+		{"macOS VM", func(f *reviveFixture) { f.st.run.MachineKind = types.MachineMacOSVM }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &fakeAdmitter{}
+			f := scopeAllConventionFixture(t, nil, a)
+			tc.edit(f)
+			if code, body := f.reviveAs(t, true); code != http.StatusOK {
+				t.Fatalf("revive = %d %s, want 200", code, body)
+			}
+			if r, n := a.calls(); r != 0 || n != 0 {
+				t.Errorf("asked %d Require / %d Admit, want none", r, n)
+			}
+		})
 	}
 }
