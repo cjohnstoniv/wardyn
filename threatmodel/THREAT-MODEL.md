@@ -85,10 +85,15 @@ coverage verdict pointing back into this document.
 
 ## 2. Assets (ranked by blast radius)
 
-1. **Long-lived root secrets** — GitHub App private key, cloud-provider
-   STS-federation trust, model-provider API keys, SPIRE upstream CA key,
-   OpenBao unseal/root. Held only by the token broker, OpenBao and SPIRE server.
-   Never in any sandbox.
+1. **Long-lived root secrets** — the GitHub App private key, model-provider API
+   keys, the run-identity signing key, the internal CA key and the other keys of
+   residual #49. Never in any sandbox.
+   - Stored sealed in Postgres under a key-encryption key (derived from
+     `WARDYN_AGE_KEY`, or a key service set by `WARDYN_KEK`), or in the
+     organisation's Vault, OpenBao or Azure Key Vault.
+   - In Postgres, whoever holds the key-encryption key and a copy of the database
+     holds them all.
+   - Cloud STS federation needs a SPIRE provider, which is not built.
 2. **The minting authority** — the broker's ability to issue scoped tokens.
    Compromising the minting decision path is worse than stealing one minted
    token.
@@ -233,7 +238,7 @@ coverage verdict pointing back into this document.
 
 | Boundary | Status | Description |
 |---|---|---|
-| **B1 — Sandbox vs. everything else** | 🟢 shipped | The hard boundary; the agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata) and L0 structural network confinement. Every higher-layer control assumes the agent is hostile here. |
+| **B1 — Sandbox vs. everything else** | 🟢 shipped | The hard boundary; the agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata), the VM boundary of B14 and B15, and L0 structural network confinement. Every higher-layer control assumes the agent is hostile here. |
 | **B2 — Sandbox vs. egress proxy** | 🟢 shipped | Sole network path out is the wardyn-proxy sidecar, default-deny. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility; the env-var-bypass class is defended structurally at L0 (gatewayless network → no route to bypass to), not by omitting the var. |
 | **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The per-tool-call decision plane ships and is in-sandbox and cooperative; tool-call egress interception is planned: [detail](#b3--sandbox-vs-mcptool-gateway). |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
@@ -255,6 +260,7 @@ coverage verdict pointing back into this document.
 | **B12 — Runner host vs. the organisation** | 🟡 partial **[0.9]** | A developer-administered laptop runs what the organisation schedules, enforces and audits: [detail](#b12--runner-host-vs-the-organisation). |
 | **B13 — Organisation runner vs. its Kubernetes cluster** | 🟡 partial **[0.9.3]** | An organisation's runner in a cluster: outbound-only, ServiceAccount and NetworkPolicy isolation, and the cluster's admins trusted: [detail](#b13--organisation-runner-vs-its-kubernetes-cluster). |
 | **B14 — macOS VM guest vs. the Mac that runs it** | 🟡 partial **[0.10]** | A macOS guest under Apple's hypervisor on a company-managed Mac: one NIC to the run's own proxy, a managed-Mac gate that is two assertions, and a ledger any local account can starve: [detail](#b14--macos-vm-guest-vs-the-mac-that-runs-it). |
+| **B15 — Linux VM guest vs. the runner host** | 🟡 partial **[0.10]** | A Linux guest under QEMU/KVM in the run's unprivileged agent container (Docker), or the run's pod under the `CC3` RuntimeClass (Kubernetes): [detail](#b15--linux-vm-guest-vs-the-runner-host). |
 
 On a single-operator machine the boundaries compose into a strict containment
 ladder — Wardyn never *adds* power beyond what the operating user already has:
@@ -509,6 +515,20 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | A person's drive ↔ the Mac's volume | A Mac OS Extended disk image under the runner login's folder, locked to one run at a time | #96 |
 | A kept machine ↔ the Mac's volume | A person's own disk under the runner login, with no secret Wardyn delivered: such secrets are refused, and the run's files are scrubbed at each stop and start. FileVault and file permissions guard the sign-ins on it. Its tools update runs on the prep network, which reaches only Apple's update hosts on port 443 | #96 |
 
+### B15 — Linux VM guest vs. the runner host
+
+- **[0.10, off by default]** A run with `machine_kind: linux_vm` is a Linux guest under QEMU/KVM, on a runner that sets `WARDYN_RUNNER_LINUX_VM=1` ([`docs/operations/linux-vm-sandboxes.md`](../docs/operations/linux-vm-sandboxes.md)). B12 holds for a person's own runner.
+- **Docker.** QEMU runs in an unprivileged container that is the run's agent container, with `/dev/kvm` and its group, as the runner's user and never root (`vmUser` in [`internal/runner/docker/vm_probe.go`](../internal/runner/docker/vm_probe.go)).
+- **Kubernetes.** The VM is the run's pod under the `CC3` RuntimeClass, so that class's runtime is the boundary. The runner checks the class exists, not that it boots a guest kernel. The pod's network, proxy and Secret are a container run's.
+- **Recorded class.** The runner treats the VM as the `CC3` family, but the run keeps the `confinement_class` it asked for. The machine is recorded in `vm_machine`.
+
+| Crossing | Guard | Limit |
+|---|---|---|
+| Guest ↔ network (Docker) | QEMU's only link is the network relay (`wardyn-vmnet`, in the proxy image), which hands connections to allowed hosts to the run's proxy | A connection to the proxy itself passes unchanged and is checked as a container's is |
+| Guest agent ↔ runner | One host session at a time on a virtio-serial port (`ServePort` in [`internal/vm/guestagent/port_linux.go`](../internal/vm/guestagent/port_linux.go)). A terminal or command fails when the runner cannot tell whether a run is a VM | After the guest agent restarts, it refuses new terminals and commands (`errRestarted`); the run must be restarted |
+| Shared folders ↔ the host | The folders a container on this runner would get, one unprivileged `virtiofsd` container each; no other host folder is shared | A guest write lands as the runner's user. A hard link planted inside a folder reads and writes through to its target |
+| Guest memory ↔ the host's disk | The guest has no swap (`CheckNoSwap`), so its sign-in store stays in guest memory | QEMU does not lock guest memory, so the host may page it, sign-ins included, to its swap or hibernation file |
+
 ---
 
 ## 4. In-Scope Defenses
@@ -565,7 +585,7 @@ is not the deployment described above.**
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
 | Prompt-injected agent reads resident secrets | Credentials stay out of the sandbox wherever Wardyn can broker them, with a named, bounded exception list — **[§5.1a](#51a-llm-egress-content-inspection--the-honest-claims-contract) is the complete set**. | B1, B2, B4 |
-| | Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with two named unmasked paths and a registry shared through Postgres that fails closed — [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) | |
+| | Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with named unmasked paths (screen recordings, the `-out-dir` fallback, SSH exec/SFTP/direct-tcpip) and a registry shared through Postgres that fails closed — [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) | |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the compatibility-only `HTTP_PROXY`/`HTTPS_PROXY` reaches no route. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Closed twice over, independently: **L0 [shipped]** gatewaylessness (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions). | L0, L2 (L1 adds depth) |
 | | L1 🟢 **[shipped on Kubernetes]**, 🟡 **[Docker planned]**, adds depth; the metadata block does not wait on it | |
@@ -766,11 +786,16 @@ is not the deployment described above.**
 
 ### Unauthenticated / cross-run access to a relayed UI app
 
-- **[v0.6 shipped]** EXACTLY ONE authentication mechanism, never falling through to the console
-  session cookie or admin bearer:
-  - a single-use, 30s, owner-or-admin attach ticket (the SAME `POST /runs/{id}/attach/ticket` the
-    browser terminal mints) redeemed at `/__wardyn/enter`,
-  - which RE-CHECKS against fresh state what the ticket cannot prove:
+- **[v0.6; inbound rc.8]** Three ways in, never falling through to the console session cookie or
+  admin bearer:
+  - for a declared app, a single-use, 30s, owner-or-admin attach ticket (the SAME
+    `POST /runs/{id}/attach/ticket` the browser terminal mints) redeemed at `/__wardyn/enter`;
+  - for an `inbound` app, a single-use ticket for the run's owner or a named caller
+    (`handleAppTicket` in [`internal/api/inbound_ticket.go`](../internal/api/inbound_ticket.go));
+  - or that caller's inbound token as `Authorization: Bearer wdn_…`, the only bearer the gateway
+    takes, stripped before the sandbox ([`internal/api/uigateway_inbound.go`](../internal/api/uigateway_inbound.go)).
+  - No role reaches an inbound app (residual #98).
+  - The attach ticket RE-CHECKS against fresh state what it cannot prove:
     - owner-or-admin for THIS run,
     - run still `RUNNING` with a sandbox,
     - app declared in the run's EFFECTIVE policy (from the `run.policy.resolve` envelope, never
@@ -857,6 +882,7 @@ is not the deployment described above.**
 
 **Recording and masking boundaries.**
 
+- **Screen recordings are never masked.** At recording level `screen_actions` a relayed desktop (noVNC, Linux VM or macOS VM) is kept as the frames it drew (`recordDesktopConn` and `recordVMDisplay` in [`internal/api/uigateway_record.go`](../internal/api/uigateway_record.go)). A secret the screen shows is in the recording.
 - The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values).
   - Do not use it where recordings are viewer-exposed.
   - Its `.cast` and `.log` delivery now goes through `FSStore.SaveRecordingFile`, sharing the durable erasure fence with API and attach writers.
@@ -1308,7 +1334,8 @@ ADMIN pre-authorized** —
     `WARDYN_USER_WORKSPACE_ROOTS` takes one level down.
   - The root must exist on this host (fail-closed on any resolve error, no lexical fallback),
     - must pass the same host bind-mount deny-list every authored source does,
-    - and must neither BE nor TRAVERSE a credential dotfile path — the `deniedUserSegment` list of
+    - and must neither BE nor TRAVERSE a credential dotfile path — `DeniedUserSegment` in
+      [`internal/runner/member_mount.go`](../internal/runner/member_mount.go), the list of
       [§4.4](#44-member-authored-host-mounts-v06--the-gate), applied to a drive's resolved root.
 - **And the per-person isolation this ceiling buys is only as good as the OTHER
   ceiling's disjointness.**
@@ -2008,7 +2035,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Wardyn holds no `delete` verb to repair a collision, so it costs one of the two people a refused run; the remedy is distinct home names.
 
 35. **The credential-dotfile deny-list now matches a DRIVE's real path too, and that is the whole of what it covers.**
-    - The list §4.4 applies to member mount sources (`.ssh`, `.aws`, `.claude`, `.kube`, `.config/gh`, …) runs on a drive's resolved `host_root` as well (`deniedUserSegment` inside `UserDriveHostRootCheck`).
+    - The list §4.4 applies to member mount sources (`.ssh`, `.aws`, `.claude`, `.kube`, `.config/gh`, …) runs on a drive's resolved `host_root` as well (`DeniedUserSegment` inside `UserDriveHostRootCheck`).
     - So a share whose mount point is or traverses a credential directory — or a symlink that lands in one — is refused at authoring and again at bind time.
     - And the claim residual #25 makes about member mounts is now true of drives.
     - It closes nothing beyond that: a drive inherits residual #25's TOCTOU **identically**.
@@ -2631,9 +2658,11 @@ hiding them would repeat the failure mode we are designed to avoid.
       - The `secret.read` row for a shared read names the grant, not the secret.
       - The security tier (`admin`, `security_admin`) reads rows as recorded: `run.policy.resolve` and `credential.mint` keep the grant scope as dispatched, so the audit sinks and the partition export carry the name.
       - Not covered, by decision: operator secret names that reach a run's owner on rows unrelated to components (`run.artifact.redirect`, and `credential.mint` or `secret.read` for an integration's or a stored policy's grant), and `workspace_mounts[].source` on `run.policy.resolve`.
-    - (m) **A policy's `github_capabilities` narrows no GitHub token.**
-      - It is accepted and shown by explain, and no lane reads it.
-      - Since 0.9 the request classifier (`ghscope.Classify`, [`internal/ghscope/capability.go`](../internal/ghscope/capability.go)) gates one lane, the GitHub CLI door of item (o). The git broker's lanes do not call it.
+    - (m) **A policy's `github_capabilities` bounds git pushes, the App token and the GitHub CLI door [0.10].**
+      - A list without `code_write`, in the run's policy, the person's walls or the run's wall preset, makes the git broker refuse pushes to github.com as `brokered:git:push-capability` (`gitPushWithheldBy` in [`internal/api/runs_git_push_withheld.go`](../internal/api/runs_git_push_withheld.go)).
+      - The same list lowers each `github_token` grant to read contents (`readOnlyGitHubGrants`), so a token minted from it cannot push.
+      - A member's list is clamped to their governance profile's list (`clampGitHubCapabilities` in [`internal/composer/clamp.go`](../internal/composer/clamp.go)); a list sharing nothing with it is refused.
+      - The request classifier (`ghscope.Classify`, [`internal/ghscope/capability.go`](../internal/ghscope/capability.go)) applies the list to the GitHub CLI door of item (o). The git broker does not call it.
       - There is no per-person GitHub lane. The App lane's bounds are those of the `github_token` grant (§5.1a).
       - Branch confinement and push content rules see `git push` through the broker; they do not inspect a REST call to the forge.
     - (n) **A self-defined component is refused on a runner by default [0.9].**
@@ -3045,20 +3074,25 @@ pins account/role and on one that does not.
 
 ### Operator overrides that boot past a fail-closed gate
 
-- Five shipped env vars let a deployment start after a gate this document otherwise describes as unconditional.
+- The shipped env vars in the table below let a deployment or a run start after a gate this document otherwise describes as unconditional.
 - They exist because a fail-closed gate with no escape hatch is a gate operators disable by not upgrading.
 - But a deployment that sets one is **not** the deployment §4 and §7 describe, so each is listed here with what it costs.
-- All five are read once at construction and every one logs an unmissable warning when it is taken.
-- Only the two Kubernetes overrides also surface as a setup-checklist row: `WARDYN_ALLOW_UNENFORCEABLE_CAPS` warns per run, and only when a limit is actually discarded; `WARDYN_ALLOW_TEST_ENDPOINTS` warns at boot on either relaxation it is paired with.
-- Neither has a row.
+- Each is read once at construction and logs a warning when it is taken. The exception is `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC` on a loopback bind, which logs only local mode's info line.
+- The two Kubernetes overrides surface as the `k8s_egress_containment` setup-checklist row, and `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` as the `sso_rbac` row. The others have no row.
+- `WARDYN_ALLOW_UNENFORCEABLE_CAPS` warns per run, and only when a limit is actually discarded; `WARDYN_ALLOW_TEST_ENDPOINTS` warns at boot on either relaxation it is paired with.
 
 | Override | Gate it passes | What the deployment loses |
 |---|---|---|
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` | The boot-time egress canary PROVED this cluster's CNI does not enforce `NetworkPolicy`, which normally refuses substrate construction | L1 entirely; L2 still stands ([below](#wardyn_k8s_allow_unenforced_netpol1)) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1` | Canary phase A failed in exactly the shape a platform-applied ambient default-deny produces | PROOF, not enforcement ([below](#wardyn_k8s_ack_ambient_default_deny1)) |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` | The Docker daemon's create response reported it DISCARDED a requested CPU / memory / pids limit (`verifyCapsEnforced`), which normally refuses the run BEFORE `ContainerStart` | The per-run resource ceiling on that host ([below](#wardyn_allow_unenforceable_caps1)) |
-| `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` | A Docker Engine older than 28.0.0, which cannot create a run network with no address on the Docker host, and a run network created before that change, which normally refuse the run | L0 against the Docker host itself: the agent can reach services the host serves on its address on the run network ([run networks](../docs/OPERATIONS.md#docker-host-run-networks)) |
+| `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` | A Docker Engine older than 28.0.0, which cannot create a run network with no address on the Docker host, and a run network created before that change, which normally refuse the run | L0 against the Docker host itself: the agent can reach services the host serves on its address on the run network ([run networks](../docs/OPERATIONS.md#docker-host-run-networks), [below](#wardyn_allow_host_reachable_run_network1)) |
 | `WARDYN_ALLOW_TEST_ENDPOINTS=true` | The outright refusal of `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` ([`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)) and the `http://` refusal on a model provider's `bedrock.base_url` (`validateModelProviders`, [`internal/api/model_providers.go`](../internal/api/model_providers.go)) | An impersonable IAM Identity Center and cleartext model-plane traffic ([below](#wardyn_allow_test_endpointstrue)) |
+| `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` | OIDC with an empty operator list and no role map (`validateOperatorPosture` in [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)) | Who is an admin: every signed-in person is admin-equivalent ([ENV](../docs/ENV.md#wardyn_allow_oidc_no_operator_list)) |
+| `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true` | `-local-mode` set beside a configured OIDC issuer (`resolveLocalMode` in [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)) | SSO and RBAC: local mode bypasses public-API auth, so every caller it admits acts as the local operator ([ENV](../docs/ENV.md#wardyn_allow_local_mode_with_oidc)) |
+| `WARDYN_LISTEN_ALLOW_PLAINTEXT=true` | Plain HTTP with no TLS on a specific non-loopback `-listen` or `-ui-sandbox-listen`, and a non-https `WARDYN_ORG_URL` (`refusePlaintextListen` in [`cmd/wardynd/main.go`](../cmd/wardynd/main.go)) | TLS: bearer tokens, session cookies and the device credential cross the network in cleartext ([ENV](../docs/ENV.md#wardyn_listen_allow_plaintext)) |
+| `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` | The UI-sandbox gateway with SSO configured and no `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` (`validateUISandboxSharedOrigin` in [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)) | Per-run origins: every run's apps share one origin, so a page one run serves can reach another run's app ([ENV](../docs/ENV.md#wardyn_allow_ui_sandbox_shared_origin)) |
+| `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` | A database a newer wardynd migrated, which normally refuses boot (`connectAndMigrate` in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)) | The downgrade refusal: an older wardynd runs on a schema it does not know ([ENV](../docs/ENV.md#wardyn_allow_unknown_migrations)) |
 
 - `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` is narrower than "boot past the canary".
 - It acknowledges exactly ONE phase-A shape — a canary pod that reached Running and exited exactly 1, which is what an ambient default-deny looks like from inside — and nothing else.
@@ -3083,6 +3117,12 @@ pins account/role and on one that does not.
 - The sandbox is created and started anyway, with a `slog.Warn` naming the discarded limit — so an untrusted workload can run effectively uncapped, and a fork bomb or memory hog is a host-level event.
 - Intended for a host the operator already trusts; the real fix is delegating the cgroup v2 controllers to the runtime user.
 - It does not apply to environment builds, which never honour it and always refuse a discarded cap.
+
+#### `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`
+
+- L0 against the Docker host itself. On a Docker Engine older than `28.0.0`, or on a run network made before that change, the network has an address on the Docker host. The agent can reach what the host serves there.
+- It warns at boot and again for each such run network (`AllowHostReachableRunNetworkFromEnv` in [`internal/runner/docker/run_network_shape.go`](../internal/runner/docker/run_network_shape.go)).
+- The fix is Docker Engine 28 or later; a run started before the upgrade keeps its old network until it stops.
 
 #### `WARDYN_ALLOW_TEST_ENDPOINTS=true`
 
@@ -3151,6 +3191,7 @@ exactly these terms.
 | **Derived AWS role credentials** (every `bedrock_sso` run) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | SigV4 signs in-process, so these stay resident today **regardless** of how the SSO session reached the sandbox; with `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) the proxy re-signs SigV4 after TLS interception and they stay out of the sandbox of a lane it re-signs, while a lane with one host it cannot re-sign (a private endpoint, a dual-stack host, a port other than 443, GovCloud IAM) keeps them resident — Phase B would end the SSO token's residency, not theirs — and in 0.7.6 it did. On a lane the proxy re-signs, the proxy holds them and mask-registers their secret key and session token; on an old-path lane they are still resident, still outside Wardyn's sight and still unmaskable, which is why `kindResidency` keeps answering `residencySandbox` for this lane. Phase B did not change the residency classification, and a reader who "fixes" `credential_residency.go` because the SSO token left the sandbox is reading the wrong row. | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. On an old-path lane Wardyn never sees these values, so they are **not** mask-registered and cannot be masked; on a re-signed lane the proxy obtains them and mask-registers their secret key and session token. |
 | **AWS CLI component role credentials** (0.9, a run with an AWS CLI component) | The short-lived role credentials the in-sandbox `aws` gets from the person's own sign-in, for the one account and permission set the component pins, cached under `~/.aws/cli/cache`, which since 0.10.0 is a link onto the sandbox's `/tmp` memory file system and ends with the sandbox (`link_aws_cli_cache_to_tmpfs` in [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)); a Docker sandbox kept after its run ends, on a run Wardyn staged an AWS profile for, has `~/.aws/sso/cache` and that cache deleted just before it stops (`wipeAWSCaches` in [`internal/runner/docker/aws_cache_wipe.go`](../internal/runner/docker/aws_cache_wipe.go)), and every other end removes the container or pod | AWS issues them to the client, which signs in-process | Bounded only by the permission set's session duration and its policies, both set outside Wardyn; `GetRoleCredentials` takes no duration, so the administrator's lever is a `PT1H` session duration, the shortest AWS allows. They stay valid at AWS after the run ends and are not mask-registered. Wardyn cannot revoke one STS session; the administrator's lever is revoking the role's active sessions. |
 | **Desktop sign-in logins** (0.10, `WARDYN_DESKTOP_SIGNINS=on` only, a run that declares the `novnc` desktop, the in-process Docker runner only) | The cookies of each website the run's creator signs in to in their own browser inside the run's desktop; and, for each site they **share**, that site's cookies in the agent's browser | The login is made by the person in the sandbox's desktop, through a site Wardyn has no credential for, so there is nothing for the proxy to hold | The person's browser runs as uid 1001, its profile and every socket in a 0700 tmpfs only that uid can open; the agent is stopped (pid 1 from outside, every other agent process proven stopped) for the whole sign-in, at most 30 minutes; a share copies one registrable domain's cookies, re-filtered by wardynd, at most 512 KiB. **This is a uid boundary inside one sandbox, not a sandbox boundary**; the bounds and residuals below say what it does not stop |
+| **VM desktop sign-ins** (0.10, a Linux or macOS VM desktop, on unless the agent's "Sign-ins in a desktop" is Not allowed) | The website and app sessions the person opens in the VM's desktop | The person makes them inside the guest, through sites Wardyn has no credential for, so there is nothing for the proxy to hold | Linux: the `agent` user's `0700` tmpfs (`MountSignInStore` in [`internal/vm/guestagent/signin_linux.go`](../internal/vm/guestagent/signin_linux.go)), gone at shutdown, which the host may page to swap. macOS: the run's disk. **No boundary separates them from the agent** ([Linux VM sign-ins](../docs/operations/linux-vm-sandboxes.md#sign-ins-in-the-desktop), residual #96) |
 | Container-**login** runs (`harness login`) | **Launched by the person capturing their OWN credential through a model provider's sign-in door; the sandbox is seeded with the ADMIN'S access-portal URL from the provider record and ignores any the caller supplies, so a capture can never be bound to a foreign IdP/account.** The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). **0.7.5 — and the sign-in the image now runs itself is not recorded either, deliberately.** The claude-code image's boot pane wraps its seed in `wardyn-rec` (`boot_seed_rec_wrap`, [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)); the aws-sso image's sign-in pane does NOT. It handles the credential this run exists to obtain — the device code, the portal's reply, and the helper's upload — and the recorder is exactly what must not see them, for the same reason the run's recorder is dropped at dispatch: the value arrives after the run's mask snapshot is taken, so masking could not have covered it. The consequence, stated rather than implied: **there is no cast of what happened inside a sign-in sandbox**, including whatever a human typed at the pane's trailing shell after the sign-in finished. That shell has the same bounds as any other attach into this box — the AWS CLI, no repo, no mounts, default-deny egress pinned to the SSO endpoints, and a 30-minute idle cap — and the audit trail still carries the capture (`harness.credential.capture` / `.refused`) and the launch (`harness.login.start`). What is not carried is the keystrokes. **0.10.0:** once the capture is stored, `wardyn-aws-sso` deletes `~/.aws/sso/cache` and `~/.aws/cli/cache` and the pane's history is cleared, and the control plane stops the sign-in sandbox after a 5-second grace (`signInCaptureKillGrace` in [`internal/api/ssotoken.go`](../internal/api/ssotoken.go)); a Claude paste capture stops its sandbox the same way, so the credential no longer sits in the box until the idle cap. |
 
 **On a runner (client mode, 0.9) the laptop is a second place a value lands.**
@@ -4035,7 +4076,7 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 - the token is never written to `localStorage` unless you opt in;
 - the console is served same-origin;
 - the input uses `type="password"`/`autoComplete="off"`;
-- every response (API, `/healthz`, SPA) carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()` and a `Content-Security-Policy`, plus `Strict-Transport-Security: max-age=31536000` when wardynd serves TLS itself or `WARDYN_TLS_TERMINATED` is on — quoted here in full, because a summarised CSP is how the gaps below went uncounted (`securityHeaders`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)):
+- every response (API, `/healthz`, SPA) carries `X-Frame-Options: DENY` (one route excepted, below), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()` and a `Content-Security-Policy`, plus `Strict-Transport-Security: max-age=31536000` when wardynd serves TLS itself or `WARDYN_TLS_TERMINATED` is on — quoted here in full, because a summarised CSP is how the gaps below went uncounted (`securityHeaders`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)):
 
 ```
 default-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none';
@@ -4048,6 +4089,11 @@ font-src 'self' data:
 
 `frame-ancestors 'none'` plus `X-Frame-Options` is why a hostile page cannot frame
 the console to clickjack an approve.
+
+One route is the exception: `GET /auth/frontchannel-logout` may be framed by the identity provider's
+origin and no other, because the provider's sign-out page loads it in a frame. It drops
+`X-Frame-Options` and names that origin in `frame-ancestors` (`allowFramingBy` in [`internal/api/security_headers.go`](../internal/api/security_headers.go)). Its only effect is to end the browser
+sessions of the person whose `sid` it names.
 
 **Mitigations that do NOT yet exist (honest gaps).** Five, not two — every
 directive above that is looser than `'self'` is a gap this section has to price,
@@ -4365,7 +4411,7 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 
 - ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the
   brokered-upload/audit/proxy-log paths 🟢 **[shipped]**
-- (the optional `-out-dir` recording fallback is unmasked, and wardynd's registry is shared through
+- (screen recordings and the optional `-out-dir` recording fallback are unmasked, and wardynd's registry is shared through
   Postgres and fails closed — both in [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) —
   - and there is a named, bounded set of resident-secret exceptions:
     [§5.1a](#51a-llm-egress-content-inspection--the-honest-claims-contract) is the complete list)
