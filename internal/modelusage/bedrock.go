@@ -20,10 +20,10 @@ const (
 
 // converseUsage is the Converse and ConverseStream usage object. inputTokens excludes cache tokens.
 type converseUsage struct {
-	InputTokens           int64 `json:"inputTokens"`
-	OutputTokens          int64 `json:"outputTokens"`
-	CacheReadInputTokens  int64 `json:"cacheReadInputTokens"`
-	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
+	InputTokens           *int64 `json:"inputTokens"`
+	OutputTokens          *int64 `json:"outputTokens"`
+	CacheReadInputTokens  int64  `json:"cacheReadInputTokens"`
+	CacheWriteInputTokens int64  `json:"cacheWriteInputTokens"`
 }
 
 func (p *parser) converseBody(b []byte) {
@@ -34,11 +34,11 @@ func (p *parser) converseBody(b []byte) {
 		return
 	}
 	p.mergeConverse(m.Usage)
-	p.final = true
+	p.terminal()
 }
 
 func (p *parser) mergeConverse(u *converseUsage) {
-	p.merge(u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheWriteInputTokens, 0)
+	p.figures(u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheWriteInputTokens, 0)
 }
 
 // converseFrame reads event frames; only the metadata event carries usage. The payload is the event's own
@@ -62,7 +62,7 @@ func (p *parser) converseFrame(f frame) {
 	}
 	if u != nil {
 		p.mergeConverse(u)
-		p.final = true
+		p.terminal()
 	}
 }
 
@@ -71,8 +71,8 @@ func (p *parser) converseFrame(f frame) {
 // reference or the model parameter pages (the Titan pages document inputTextTokenCount instead); a
 // wrong name only leaves the call uncounted.
 type invocationMetrics struct {
-	InputTokenCount  int64 `json:"inputTokenCount"`
-	OutputTokenCount int64 `json:"outputTokenCount"`
+	InputTokenCount  *int64 `json:"inputTokenCount"`
+	OutputTokenCount *int64 `json:"outputTokenCount"`
 }
 
 // invokeNative holds what a native model body can say about usage: the Anthropic usage object and the
@@ -86,12 +86,13 @@ type invokeNative struct {
 }
 
 func (p *parser) mergeMetrics(m *invocationMetrics) {
-	p.merge(m.InputTokenCount, m.OutputTokenCount, 0, 0, 0)
-	p.final = true
+	p.figures(m.InputTokenCount, m.OutputTokenCount, 0, 0, 0)
+	p.terminal()
 }
 
 // invokeBody: headers first, then the native body. Per field the larger figure wins, so a header and the
-// body agreeing is not double counting.
+// body agreeing is not double counting. The figures may arrive split between headers and body; the call is
+// counted only when both the input and the output have.
 func (p *parser) invokeBody(b []byte) {
 	if h := p.o.Header; h != nil {
 		in, inSet, inOK := headerCount(h.Get(headerInputTokens))
@@ -102,14 +103,15 @@ func (p *parser) invokeBody(b []byte) {
 			return
 		}
 		if inSet || outSet {
-			p.merge(in, out, 0, 0, 0)
-			p.final = true
+			p.figures(setOnly(in, inSet), setOnly(out, outSet), 0, 0, 0)
 		}
 	}
 	var n invokeNative
 	if json.Unmarshal(b, &n) != nil {
-		// Headers are enough for a counted call; a body that is not JSON only matters without them.
-		if !p.final {
+		// Headers can be enough for a counted call; a body that is not JSON only matters without them.
+		if p.seen {
+			p.terminal()
+		} else {
 			p.fail(ReasonParseError)
 		}
 		return
@@ -117,11 +119,21 @@ func (p *parser) invokeBody(b []byte) {
 	p.model(n.Model)
 	if n.Usage != nil {
 		p.mergeAnthropic(n.Usage)
-		p.final = true
 	}
 	if n.Metrics != nil {
-		p.mergeMetrics(n.Metrics)
+		p.figures(n.Metrics.InputTokenCount, n.Metrics.OutputTokenCount, 0, 0, 0)
 	}
+	if p.seen {
+		p.terminal()
+	}
+}
+
+// setOnly points at n when it was set, else nil.
+func setOnly(n int64, set bool) *int64 {
+	if !set {
+		return nil
+	}
+	return &n
 }
 
 // headerCount reads one token-count header: set is false for an absent (empty) header, ok is false for

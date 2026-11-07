@@ -6,10 +6,10 @@ package modelusage
 // anthropicUsage is the Messages API usage object. In a stream, message_start carries the input and cache
 // counts and message_delta carries the cumulative output; a delta may repeat the input figures too.
 type anthropicUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	InputTokens              *int64 `json:"input_tokens"`
+	OutputTokens             *int64 `json:"output_tokens"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
 }
 
 type anthropicMessage struct {
@@ -18,7 +18,7 @@ type anthropicMessage struct {
 }
 
 func (p *parser) mergeAnthropic(u *anthropicUsage) {
-	p.merge(u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens, 0)
+	p.figures(u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens, 0)
 }
 
 func (p *parser) anthropicBody(b []byte) {
@@ -31,7 +31,7 @@ func (p *parser) anthropicBody(b []byte) {
 	}
 	p.model(m.Model)
 	p.mergeAnthropic(m.Usage)
-	p.final = true
+	p.terminal()
 }
 
 func (p *parser) anthropicLine(l []byte) {
@@ -62,7 +62,7 @@ func (p *parser) anthropicEvent(typ string, msg *anthropicMessage, usage *anthro
 	case "message_delta":
 		if usage != nil {
 			p.mergeAnthropic(usage)
-			p.final = true
+			p.terminal()
 		}
 	}
 }
