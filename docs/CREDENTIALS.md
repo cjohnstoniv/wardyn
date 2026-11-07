@@ -17,8 +17,13 @@ A credential therefore reaches a destination in one of four shapes:
 
 - **Added at the proxy.** The value stays in the control plane's secret store and the proxy's memory.
 - **Minted for the run.** The control plane creates a short-lived credential for this run, and the proxy adds it.
-- **Delivered inside.** The value is written into the sandbox as a variable or a file, or handed to the Git credential helper (`git_pat` with the token broker off).
-- **Made inside.** The workload derives the credential itself from something else. With `WARDYN_AWS_SIGV4_AT_PROXY=on` the proxy re-signs the AWS lanes it can, so the role credentials stay out.
+- **Delivered inside.** The value is written into the sandbox as a variable or a file (`env_secret`, `file_secret`), or handed to the Git credential helper (`git_pat` with the token broker off). The workload can read it, and the proxy checks the host and adds nothing.
+- **Made inside.** The workload derives the credential itself from something else, such as AWS role credentials from a `bedrock_sso` sign-in, and signs the request itself. The workload can read them, and the proxy checks the host and adds nothing. With `WARDYN_AWS_SIGV4_AT_PROXY=on` the proxy re-signs the AWS lanes it can, so the role credentials stay out.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/credential-shapes-dark.svg">
+  <img src="img/credential-shapes.svg" alt="Four shapes a credential takes: added at the proxy and minted for the run keep the value in the run's egress proxy, while delivered inside and made inside put it in the sandbox, where the workload can read it.">
+</picture>
 
 ## Why the proxy can add some credentials and not others
 
