@@ -22,6 +22,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A Linux VM run's terminal, commands and agent start now always run inside the VM. If the runner can't tell whether a run is a VM, the request fails and can be retried; if Linux VM sandboxes were turned off (or failed their start-up check) after the VM started, the request is refused, and the run can still be stopped or ended, including when its audit log fills up.
+- In focus mode, switching the side panel to another widget after one failed to display now shows the new widget instead of the previous error.
 - A window open on your Mac through `wardyn window` now counts as activity, so idle auto-stop no longer stops a macOS VM run while someone works in its window.
 - Revoking a personal API token, or ending a CLI session, now closes a `wardyn window` that it opened. An at-start window asked for with an API token or a CLI sign-in before the upgrade does not open; open it again with `wardyn window`.
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
