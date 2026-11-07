@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - If your walls or a wall preset set `*` to hold or deny, tools the run's policy allows by name are now held or denied too. To keep such a tool open, remove the `*` rule and name the tools you want held or denied instead.
+- A `WARDYN_ADMIN_TOKEN` shorter than 32 bytes now stops wardynd starting unless it listens on loopback only (the compose stack's `demo-admin-token` is unchanged). Set a longer one, for example `openssl rand -hex 32`.
 
 ### Added
 
@@ -27,6 +28,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
 - A terminal opened on a service identity's run now closes at its next check once the person is no longer that identity's sponsor, as a new terminal would be refused.
 - An admin reading another person's terminal text through a run's output now leaves a `run.output.read` row in that run's audit, as replaying its recording does.
+- Repeated wrong admin tokens from one address are now answered `429` with `Retry-After`, the right token included, until an attempt refills (10 attempts, then one every 10 seconds). A request that presents the right token is never counted.
 
 ## [0.10.0-rc.13] — 2026-11-04
 

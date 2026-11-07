@@ -924,6 +924,8 @@ type Server struct {
 	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
 	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
 	branchLimiter, memberDriveLimiter principalLimiter
+	// adminTokenPeerLimiter bounds failed admin bearer guesses per client address (adminAuth, http.go).
+	adminTokenPeerLimiter principalLimiter
 	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout, and
 	// frontchannelLimiter the requests that cut nothing on GET /auth/frontchannel-logout (signin_denied.go).
 	backchannelLimiter, frontchannelLimiter principalLimiter

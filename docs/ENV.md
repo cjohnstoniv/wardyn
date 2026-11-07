@@ -87,7 +87,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | Variable | Type | Default | Notes |
 |---|---|---|---|
 | `WARDYN_LISTEN` | string | `:8080` | HTTP listen address (flag `-listen`) |
-| `WARDYN_ADMIN_TOKEN` 🔒 | string | **binary: empty**; compose: `demo-admin-token` | admin bearer gating the public API (flag `-admin-token`). An empty token with no OIDC issuer on a loopback bind turns the gate off. [Details](#wardyn_admin_token) |
+| `WARDYN_ADMIN_TOKEN` 🔒 | string | **binary: empty**; compose: `demo-admin-token` | admin bearer gating the public API (flag `-admin-token`), at least 32 bytes unless the bind is loopback-only. An empty token with no OIDC issuer on a loopback bind turns the gate off. [Details](#wardyn_admin_token) |
 | `WARDYN_PG_DSN` 🔒 | string | (unset, required) | Postgres DSN (flag `-dsn`). Operators who set it should size it **at least 4**; the section gives the lock and listener connections to budget per replica. [Details](#wardyn_pg_dsn) |
 | `WARDYN_PG_MIGRATE_DSN` 🔒 | string | (unset) | optional owner/migrator DSN; splits migrate vs runtime pool (flag `-migrate-dsn`). A migrator that owns nothing cannot run an upgrade's migrations, and wardynd fails closed rather than half-migrating. [Details](#wardyn_pg_migrate_dsn) |
 | `WARDYN_REHEARSE_PG_DSN` 🔒 | string | (unset) | the scratch database `wardynd -recovery-rehearse` reads; an environment variable only, so a password never shows in the process list. The rehearsal refuses the live database and the one the set was taken from. [Recovery set and restore rehearsal](operations/recovery-rehearsal.md) |
@@ -375,6 +375,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Nominally authenticated: that token is published here, so wardynd warns at boot when it is in use and refuses to start outright if the listen address binds a specific non-loopback interface.
 - Note the recommended `make setup` containerized path additionally writes `WARDYN_LOCAL_MODE=true` into the compose env, so the flagship install runs the no-auth loopback local mode; the bare compose file's own default is the token.
 - There is no `WARDYN_TOKEN` fallback here; that variable is read by the CLI and `wardyn-runnerd setup --claim` only.
+- A token under 32 bytes (`openssl rand -hex 32` makes one) **refuses boot** unless the listen address is loopback-only; the compose stack's `demo-admin-token` keeps the handling above.
+- A wrong guess spends one of a client address's 10 attempts, which refill at one every 10 seconds. Past them every request from that address is answered `429` (`admin_token_rate_limited`, `Retry-After: 10`), the right token included, until one refills; a request that presents the right token spends nothing.
 
 ### `WARDYN_PG_DSN`
 

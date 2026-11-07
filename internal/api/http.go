@@ -642,11 +642,21 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonMissingBearerToken, "missing bearer token")
 			return
 		}
+		// A guess spends a token of the peer's bucket before it is compared, and a match gives it back, so
+		// only failures count and a peer that is out of them is refused without being compared at all.
+		peer, now := peerKey(r.RemoteAddr), s.cfg.Now()
+		if !s.adminTokenPeerLimiter.allow(peer, now) {
+			s.auditAuthFailed(r, "admin_token_rate_limited")
+			w.Header().Set("Retry-After", "10")
+			writeErrorReason(w, http.StatusTooManyRequests, reasonAdminTokenRateLimited, "too many failed admin token attempts from this address; retry later")
+			return
+		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.AdminToken)) != 1 {
 			s.auditAuthFailed(r, "invalid_admin_token")
 			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
 			return
 		}
+		s.adminTokenPeerLimiter.refund(peer, now)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -654,7 +664,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 // auditAuthFailed emits auth.fail (actor system) for an authentication
 // failure on the public API. reason is the adminAuth-local bounded enum
 // ("admin_token_not_configured", "missing_bearer_token",
-// "invalid_admin_token"); it is overridden by a more specific
+// "invalid_admin_token", "admin_token_rate_limited"); it is overridden by a more specific
 // oidc.SessionRejectedFromContext reason ("invalid_session"/"expired_session"/
 // "revoked_session"/"session_revocation_unavailable")
 // when a session cookie was ALSO presented and rejected on this same

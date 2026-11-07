@@ -781,6 +781,23 @@ func exitOnBadSecretFiles(f *bootFlags) {
 // It is published, therefore not a secret — the analogue of knownPublicAgeKeys.
 const demoAdminToken = "demo-admin-token"
 
+// minAdminTokenLen is the shortest WARDYN_ADMIN_TOKEN boot accepts on a bind that is not loopback: the
+// bearer is the super-admin credential and every peer that can reach the port may guess at it.
+const minAdminTokenLen = 32
+
+// adminTokenStrengthRefusal refuses a WARDYN_ADMIN_TOKEN shorter than minAdminTokenLen when the listen
+// address is not loopback-only. The published demo token keeps its own handling (resolveLocalMode: refused
+// on a specific routable bind, a warning otherwise), and a loopback bind is reachable from this computer only.
+func adminTokenStrengthRefusal(token, listen string) error {
+	token = strings.TrimSpace(token)
+	if token == "" || token == demoAdminToken || len(token) >= minAdminTokenLen || listenIsLoopback(listen) {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: WARDYN_ADMIN_TOKEN is %d bytes but the listen address %q is not loopback-only — "+
+		"the admin token is the super-admin credential and is reachable by anything that can connect, so it must be at least %d bytes; "+
+		"set a longer secret (e.g. `openssl rand -hex 32`) or bind loopback", len(token), listen, minAdminTokenLen)
+}
+
 // localModeState is the resolved LOCAL HOST MODE posture: whether the no-auth
 // bypass is in effect, the operator principal to stamp, and whether the bind is
 // loopback (also feeds /setup/status readiness).
@@ -863,6 +880,9 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 		slog.Warn("wardynd: WARDYN_ADMIN_TOKEN is the demo token published in this repo — anyone who read the docs has full admin. Fine for the loopback-published demo stack; set a secret token before exposing this port.",
 			slog.String("listen", *f.listen),
 		)
+	}
+	if err := adminTokenStrengthRefusal(*f.adminToken, *f.listen); err != nil {
+		return lm, err
 	}
 	if !lm.enabled {
 		return lm, nil
