@@ -415,8 +415,15 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 	if g, ok := awsSigV4ActionGuards[plan.service]; ok {
 		guard, guarded = g, true
 	}
+	// A gateway call goes out only with its body signed, so the gateway cannot change it: no
+	// unsigned payload mode, and its body is always read to check the hash it declares.
+	if route != nil && (plan.payload == "UNSIGNED-PAYLOAD" || strings.HasPrefix(plan.payload, "STREAMING-")) {
+		p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Payload,
+			"it declares an unsigned payload, and Wardyn sends a call to a gateway only with its body signed, so the gateway cannot change it")
+		return
+	}
 	var body []byte
-	if (plan.payload == "" || guarded) && r.Body != nil && r.Body != http.NoBody {
+	if (plan.payload == "" || guarded || route != nil) && r.Body != nil && r.Body != http.NoBody {
 		// Charged to the engine's retained-bytes budget for as long as the request holds it.
 		buf, release, err := p.scan.readBody(r.Context(), r.Body, r.ContentLength, awsSigV4MaxHashedBody)
 		defer release()
@@ -426,6 +433,10 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 			return
 		case err != nil:
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Payload, "Wardyn could not read its body to sign it")
+			return
+		case len(buf) > awsSigV4MaxHashedBody && route != nil:
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4BodyTooLarge, fmt.Sprintf(
+				"its body is over %d MiB, and Wardyn holds all of a gateway call's body to check the hash it signs", awsSigV4MaxHashedBody>>20))
 			return
 		case len(buf) > awsSigV4MaxHashedBody:
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4BodyTooLarge, fmt.Sprintf(
@@ -443,6 +454,14 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 			return
 		}
 		payload = "" // signed over the body it was judged on
+	}
+	if route != nil {
+		sum := sha256.Sum256(body)
+		if h := hex.EncodeToString(sum[:]); payload != "" && payload != h {
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Payload,
+				"its x-amz-content-sha256 header is not the hash of its body, and Wardyn signs a gateway call only over its own body")
+			return
+		}
 	}
 	if payload == "" {
 		sum := sha256.Sum256(body)
