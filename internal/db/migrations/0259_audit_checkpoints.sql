@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS %1$I.audit_checkpoints (
     kid        TEXT NOT NULL,
     statement  TEXT NOT NULL,
     signature  BYTEA NOT NULL CHECK (octet_length(signature) = 64),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- No two checkpoints share a seq: a range inside or across a stored one conflicts, not only one sharing
+    -- its seq_lo or seq_hi. Range types carry their own GiST operator class, so no extension is needed.
+    EXCLUDE USING gist (int8range(seq_lo, seq_hi, '[]') WITH &&)
 )$t$, ns);
 
     EXECUTE format('DROP TRIGGER IF EXISTS audit_checkpoints_no_update ON %I.audit_checkpoints', ns);

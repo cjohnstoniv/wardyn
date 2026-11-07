@@ -211,6 +211,36 @@ func TestAuditCheckpoints_InsertReadAndConflict(t *testing.T) {
 	}
 }
 
+// TestAuditCheckpoints_OverlapIsAConflict: a range strictly inside, or straddling, a stored checkpoint shares
+// neither its seq_lo nor its seq_hi, and is still refused as a conflict that returns the stored row.
+func TestAuditCheckpoints_OverlapIsAConflict(t *testing.T) {
+	pool := chainProbeDB(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	sig := func(b byte) []byte { s := make([]byte, 64); s[0] = b; return s }
+
+	stored := store.AuditCheckpoint{SeqLo: 100, SeqHi: 200, Kid: "k1", Statement: `{"a":1}`, Signature: sig(1)}
+	if _, err := pg.InsertAuditCheckpoint(ctx, stored); err != nil {
+		t.Fatalf("insert 100-200: %v", err)
+	}
+	for _, r := range [][2]int64{{120, 150}, {150, 250}, {50, 100}, {200, 300}} {
+		foreign := store.AuditCheckpoint{SeqLo: r[0], SeqHi: r[1], Kid: "k9", Statement: `{"x":1}`, Signature: sig(9)}
+		existing, err := pg.InsertAuditCheckpoint(ctx, foreign)
+		if !errors.Is(err, store.ErrAuditCheckpointExists) || existing.Statement != stored.Statement {
+			t.Fatalf("insert %d-%d over 100-200: existing %+v, err %v; want ErrAuditCheckpointExists with the stored row",
+				r[0], r[1], existing, err)
+		}
+	}
+	all, err := pg.AuditCheckpoints(ctx, 0, 10)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("after overlapping inserts: %+v, %v; want only the stored checkpoint", all, err)
+	}
+	if _, err := pg.InsertAuditCheckpoint(ctx, store.AuditCheckpoint{SeqLo: 201, SeqHi: 300, Kid: "k1",
+		Statement: `{"a":2}`, Signature: sig(2)}); err != nil {
+		t.Fatalf("an adjacent range 201-300: %v", err)
+	}
+}
+
 // TestAuditCheckpointRowHashes: a checkpoint's hash list is the seq and stored row_hash of every row in its
 // range, in seq order.
 func TestAuditCheckpointRowHashes(t *testing.T) {
