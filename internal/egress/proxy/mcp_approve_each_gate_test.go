@@ -242,3 +242,36 @@ func TestGateApproveEachAmbiguousNameLeavesItToBroker(t *testing.T) {
 		t.Fatalf("decision %+v, want the gate's pass-on row", d)
 	}
 }
+
+// TestGateApproveEachDelayedRaiseCannotRespend: two gate calls raise the same call and the control
+// plane folds them into one approval A. The first one's answer is held while a person approves A,
+// the broker sends the call on A and leaves. When the held answer arrives, A is long spent: the
+// next identical call needs a fresh approval, and nothing more is sent until a person gives it.
+func TestGateApproveEachDelayedRaiseCannotRespend(t *testing.T) {
+	f, cp := newEachFixture(t)
+	args := `{"id":"ENG-1"}`
+	cp.holdRaise, cp.raiseHeld = make(chan struct{}), make(chan struct{})
+	release, held := cp.holdRaise, cp.raiseHeld
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- gatePost(t, f, "mcp__linear__delete_issue", args) }()
+	<-held
+	if rec := gatePost(t, f, "mcp__linear__delete_issue", args); rec.Code != http.StatusCreated || cp.count() != 1 {
+		t.Fatalf("second gate call: answer %d %q, rows %d; want it folded into the one row", rec.Code, rec.Body.String(), cp.count())
+	}
+	cp.decide(0, types.ApprovalApproved)
+	if rec := f.post(t, mcpToken("claude-code"), "linear", eachCall(1, "delete_issue", args)); rec.Code != http.StatusOK || f.up.hitCount() != 1 {
+		t.Fatalf("answer %d %q, upstream hits %d; want the call sent once on A", rec.Code, rec.Body.String(), f.up.hitCount())
+	}
+	close(release)
+	if rec := <-done; rec.Code == http.StatusInternalServerError {
+		t.Fatalf("held gate call: answer %d %q", rec.Code, rec.Body.String())
+	}
+	wantText(t, f.post(t, mcpToken("claude-code"), "linear", eachCall(2, "delete_issue", args)), "waiting for a person")
+	if cp.count() != 2 || f.up.hitCount() != 1 {
+		t.Fatalf("rows %d, upstream hits %d; want a fresh approval asked for and still one send", cp.count(), f.up.hitCount())
+	}
+	cp.decide(1, types.ApprovalApproved)
+	if rec := f.post(t, mcpToken("claude-code"), "linear", eachCall(3, "delete_issue", args)); rec.Code != http.StatusOK || f.up.hitCount() != 2 {
+		t.Fatalf("answer %d %q, upstream hits %d; want the second send on the second approval", rec.Code, rec.Body.String(), f.up.hitCount())
+	}
+}
