@@ -78,13 +78,13 @@ func TestRequirementsBlobGolden(t *testing.T) {
 
 // signed is a signed copy's parts as the tests read them.
 type signed struct {
-	out              []byte
-	dataoff, datasz  uint32
-	cd, reqs, cms    []byte
-	linkedit         *macho.Segment
-	slotTypes        []uint32
-	superblobLen     uint32
-	textSize, oldEnd int
+	out             []byte
+	dataoff, datasz uint32
+	cd, reqs, cms   []byte
+	linkedit        *macho.Segment
+	slotTypes       []uint32
+	superblobLen    uint32
+	textSize        int
 }
 
 func readSigned(t *testing.T, out []byte) signed {
