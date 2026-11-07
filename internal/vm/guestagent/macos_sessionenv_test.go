@@ -402,6 +402,23 @@ func TestApplySessionEnvFailsWhenTheSetterOutlastsTheWait(t *testing.T) {
 	}
 }
 
+// The console can change hands between the wait and the set (a fast user switch). The settings go only to
+// the agent account the wait saw, never to whoever is at the console when the setter looks again.
+func TestApplySessionEnvNeverSetsInAnotherUsersSessionAfterASwitch(t *testing.T) {
+	g := newGUIFake(true)
+	c := &seqConsole{answers: []fakeConsole{{uid: 502}, {uid: 501}}}
+	d := &Desktop{Run: g, Console: c}
+	st := d.applySessionEnv(context.Background(), sessionEnvPaths(t), 502, []string{"WARDYN_RUN_ID=r1", "HTTPS_PROXY=http://p"}, time.Millisecond, 150*time.Millisecond)
+	for _, call := range strings.Split(strings.TrimSpace(g.argv()), "\n") {
+		if slices.Contains(strings.Split(call, "\x00"), "501") || slices.Contains(strings.Split(call, "\x00"), "#501") {
+			t.Errorf("a launchctl call reached uid 501's session: %q", strings.ReplaceAll(call, "\x00", " "))
+		}
+	}
+	if st.State == SessionEnvSet {
+		t.Errorf("status = %+v after the console switched to another user, want not set", st)
+	}
+}
+
 func TestSetSessionEnvRetriesAsTheUserWhenGetenvDisagrees(t *testing.T) {
 	g := newGUIFake(false) // the asuser form does not take
 	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}}
