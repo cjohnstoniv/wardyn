@@ -22,7 +22,7 @@ A credential therefore reaches a destination in one of four shapes:
 
 For the two inside shapes the workload can read the value, and the proxy checks the host and adds nothing.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="img/credential-shapes-dark.svg"><img src="img/credential-shapes.svg" alt="Four credential shapes: added at the proxy and minted stay in the proxy; delivered and made inside sit where the workload can read them."></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="img/credential-shapes-dark.svg"><img src="img/credential-shapes.svg" alt="Four credential shapes: added at the proxy, minted and added at the proxy, delivered, made inside; the workload can read the last two."></picture>
 
 ## Why the proxy can add some credentials and not others
 
