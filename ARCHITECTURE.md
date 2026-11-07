@@ -30,14 +30,10 @@
 
 The layers of the code, and the interface each extension implements, are mapped in [docs/EXTENDING.md](docs/EXTENDING.md).
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/run-placement-dark.svg">
-  <img src="docs/img/run-placement.svg" alt="Where a run executes: wardynd's own driver, a laptop runner, an organisation runner in Kubernetes and a Mac, each runner dialling out to wardynd and each sandbox leaving only through its own wardyn-proxy.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/img/run-placement-dark.svg"><img src="docs/img/run-placement.svg" alt="Where a run executes: wardynd's own driver, a laptop runner, an organisation runner or a Mac; each sandbox leaves only through its own proxy."></picture>
 
 - The trusted control plane places each run in an untrusted sandbox whose only path out is its own `wardyn-proxy`.
 - `wardynd`'s own driver places runs on Docker on its host, or on Kubernetes (alpha). A registered runner dials out to `wardynd` and places runs on a laptop's Docker, in a Kubernetes cluster or on a Mac ([runner substrates](#wardyn-runnerd-runner-substrates)).
-- A laptop runner can run a Linux VM sandbox: QEMU in the run's agent container. An organisation runner runs one as the run's pod under the `CC3` RuntimeClass. A runner on a Mac runs macOS VM sandboxes, one `wardyn-macvm` helper per VM.
 - Decision logs flow back into the append-only audit log — drawn in [The three audit streams](threatmodel/THREAT-MODEL.md#the-three-audit-streams-mechanically).
 - Masked session recordings are optional and kept in their own store, with their own retention.
 - The console itself (`wardynd`'s embedded UI) is served under a single CSP (`securityHeaders`, [`internal/api/security_headers.go`](internal/api/security_headers.go)).
@@ -65,7 +61,7 @@ The layers of the code, and the interface each extension implements, are mapped 
 | Docker laptop runner (0.9) | A person, who claims it with their own session | The laptop's Docker, with the same sandbox, proxy sidecar and run network as a Docker run | `wardyn-runnerd setup` ([`deploy/runner/install.sh`](deploy/runner/install.sh)) |
 | Kubernetes organisation runner (0.9.3) | The organisation; a security operator claims it | A dedicated runs namespace, or several each dedicated to it, through the `internal/runner/k8s` driver, beside runnerd's own namespace | The `deploy/helm/wardyn-runnerd` chart |
 | Linux VM runner (0.10) | The operator of a Linux runner host | A Linux guest under QEMU/KVM, in the run's container on Docker or its pod under the `CC3` RuntimeClass on Kubernetes | `WARDYN_RUNNER_LINUX_VM=1` ([Linux VM sandboxes](docs/operations/linux-vm-sandboxes.md)) |
-| macOS VM runner (0.10) | Whoever runs a company-managed Mac | A macOS guest under Apple's Virtualization framework, cloned from a base image the Mac prepares | `WARDYN_RUNNER_MACOS_VM=1` on the Mac, `WARDYN_MACOS_VMS=1` in the organisation ([macOS VM sandboxes](docs/operations/macos-vms.md)) |
+| macOS VM runner (0.10) | Whoever runs a company-managed Mac | A macOS guest under Apple's Virtualization framework, run by one `wardyn-macvm` helper per VM and cloned from a base image the Mac prepares | `WARDYN_RUNNER_MACOS_VM=1` on the Mac, `WARDYN_MACOS_VMS=1` in the organisation ([macOS VM sandboxes](docs/operations/macos-vms.md)) |
 
 - **Machine kind.** A run's machine is a container (the default), a Linux VM (`linux_vm`) or a macOS VM (`macos_vm`), per [`internal/types/machine.go`](internal/types/machine.go). A runner offers a VM kind only when its operator turns it on and its start-up checks pass.
 - **Laptop runner.** The developer is root on the host, so every control binds the agent, not the developer. The proxy reaches the organisation through runnerd's relay, with TLS ending at wardynd.
@@ -167,16 +163,13 @@ The layers of the code, and the interface each extension implements, are mapped 
   - so a kill can
     never resurrect a finished run):
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/run-states-dark.svg">
-  <img src="docs/img/run-states.svg" alt="Run states: PENDING, or QUEUED at a pool's cap, then STARTING and RUNNING, ending COMPLETED, FAILED, STOPPED or KILLED, with a kept run staying RUNNING until its files' grace ends.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/img/run-states-dark.svg"><img src="docs/img/run-states.svg" alt="Run states: PENDING or QUEUED, then STARTING and RUNNING, ending COMPLETED, FAILED, STOPPED or KILLED; a kept run stays RUNNING until its files' grace ends."></picture>
 
-- A run is created `PENDING`, or `QUEUED` when its runner pool is at its cap. `QUEUED` waits for a slot and holds nothing. A freed slot moves it to `PENDING`; an ended wait ends it `FAILED`.
+- A run is created `PENDING`, or `QUEUED` when its runner pool is at its cap, where it holds nothing. A freed slot moves it to `PENDING`; an ended wait ends it `FAILED`.
 - Dispatch moves `PENDING` to `STARTING`, and the sandbox coming up moves it to `RUNNING`. A build error before dispatch, a launch error, an agent error or a gone sandbox ends it `FAILED`; an agent exit 0 ends it `COMPLETED`.
-- A kill switch ends any live state `KILLED`. A running run is also `KILLED` at its lifetime end: a background run at its end, or any run at its maximum lifetime.
-- A run whose end passed, or whose agent container exited under it or lost the control plane past its token's life, is kept: it stays `RUNNING` with no network until its files' grace ends, then it is `STOPPED` ([Run lifetime](docs/operations/run-lifetime.md)).
-- An idle stop, `WARDYN_RUN_MAX_AGE` and a computer folder a person brings back to their own computer also end a run `STOPPED`.
+- A kill switch ends any live state `KILLED`. So does a running run's lifetime end: a background run's end, or any run's maximum lifetime.
+- A run whose end passed, or whose agent container exited or lost the control plane past its token's life, is kept. It stays `RUNNING` with no network until its files' grace ends, then `STOPPED` ([Run lifetime](docs/operations/run-lifetime.md)).
+- An idle stop, `WARDYN_RUN_MAX_AGE` and a computer folder brought back to its own computer also end a run `STOPPED`.
 - `COMPLETED`, `FAILED`, `STOPPED`, and `KILLED` are terminal.
 - `WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved
   forward-compatibility values; no transition produces them today.
@@ -386,10 +379,7 @@ The layers of the code, and the interface each extension implements, are mapped 
 
 ### Invariant 2, mechanically
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/credential-mint-dark.svg">
-  <img src="docs/img/credential-mint.svg" alt="Minting a credential an approval covers: the approval is recorded first, then the broker snapshots the approved grant, mints, and returns the credential only from the transaction that re-reads the approval unchanged and writes minted_jti.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/img/credential-mint-dark.svg"><img src="docs/img/credential-mint.svg" alt="Minting a credential an approval covers: approve, snapshot, mint, then return it only from the transaction that re-reads the approval unchanged and writes minted_jti."></picture>
 
 - This describes a grant with `requires_approval: true`.
 - Approval records the human decision only; the credential is minted **later**,

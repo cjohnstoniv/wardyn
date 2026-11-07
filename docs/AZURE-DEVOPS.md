@@ -646,10 +646,7 @@ needs_setup:
 
 ## Request flow
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="img/ado-request-flow-dark.svg">
-  <img src="img/ado-request-flow.svg" alt="An Azure DevOps request from the sandbox: forwarded with the credential when the run holds the capability, held under wait_for_review, refused under deny_with_review or always_deny, and refused above the ceiling.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="img/ado-request-flow-dark.svg"><img src="img/ado-request-flow.svg" alt="An Azure DevOps request: forwarded with the credential when the run holds the capability, held under wait_for_review, refused under deny_with_review, always_deny and above the ceiling."></picture>
 
 ## Two layers of enforcement
 

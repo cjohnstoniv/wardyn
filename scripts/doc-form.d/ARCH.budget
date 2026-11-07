@@ -11,7 +11,7 @@
 # 0.9.4 L8: ARCHITECTURE.md 5876 adds 6 over 5870: ssh_key delivery claims bounded.
 # 0.9.4 W4-DOCS-1: ARCHITECTURE.md 5936 adds 60 over 5876, measured: #2231 #2232 #2233 #2235: CSP summary, invariant 3 scope, QUEUED state, CLI pointer.
 # ARCHITECTURE.md 5956 adds 20 over 5936, measured (rc.8 E5): the pointer to docs/EXTENDING.md and the organisation runner's several runs namespaces.
-ARCHITECTURE.md=5925 share=35 # -30 from the old budget, -1 from the measured 5927 (front-door docs): the authorization-kernel change log, the layered-egress copy and the CSP and RBAC wording are cut or linked; that offsets the added VM binaries, substrates and machine-kind bullet; measured.
+ARCHITECTURE.md=6151 share=35 # 6151 measured (+226 over 5925, measured: the overview, run-states and mint fences became figures, so the facts each shows are now stated in text (placement, five run-state bullets, the mint's one-hour bound and revoke) and the three figures add 88 words of markup and alt text); earlier: -30 from the old budget, -1 from the measured 5927 (front-door docs): the authorization-kernel change log, the layered-egress copy and the CSP and RBAC wording are cut or linked; that offsets the added VM binaries, substrates and machine-kind bullet; measured.
 # 0.9.4 L8: SECURITY.md 1326 adds 327 over 999: the 'Which credentials enter the sandbox' section and the qualified invariants.
 # 0.10.0 VM-B: SECURITY.md 1381 adds 55: the bare-host every-port scope and the port rule (#3193).
 # 0.10.0 docs: SECURITY.md 1340 = 1381 - 41, measured: the email-placeholder note, the advisory-lag anecdote and the component list shortened, one credential kind and the machine kind added.

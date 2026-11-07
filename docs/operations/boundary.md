@@ -28,10 +28,7 @@ A knob the boundary does not name is left as the layers below set it. `contact` 
 
 ## How it narrows
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../img/nested-limits-dark.svg">
-  <img src="../img/nested-limits.svg" alt="Nested limits from the organisation's boundary inward: the Wardyn boundary, the deployment default and unit profiles, restrictions, the run's policy, your walls and the wall preset, each only narrowing the run inside.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="../img/nested-limits-dark.svg"><img src="../img/nested-limits.svg" alt="Nested limits, outermost first: the Wardyn boundary, deployment and unit profiles, restrictions, the run's policy, your walls and the wall preset, each only narrowing."></picture>
 
 - The boundary meets the result of the profile chain, the deployment default, a stored policy, an inline policy, an operator's own run and a Record Mode session. It only ever narrows.
 - A Record Mode session learns inside the boundary: its allow-all becomes the boundary's allowlist, the boundary's denies are added and its floor is raised. It is never a break-glass run.

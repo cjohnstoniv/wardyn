@@ -244,10 +244,7 @@ This document states what Wardyn defends, what it does not, and for each load-be
 
 A sandbox can at most reach what the operating user can, and Wardyn never adds power beyond it. Each limit layer then only narrows: the Wardyn boundary, the deployment and unit ceilings, restrictions, the run's policy, the person's walls and the run's wall preset.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../docs/img/nested-limits-dark.svg">
-  <img src="../docs/img/nested-limits.svg" alt="Nested limits from the organisation's boundary inward: the Wardyn boundary, the deployment default and unit profiles, restrictions, the run's policy, your walls and the wall preset, each only narrowing the run inside.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="../docs/img/nested-limits-dark.svg"><img src="../docs/img/nested-limits.svg" alt="Nested limits, outermost first: the Wardyn boundary, deployment and unit profiles, restrictions, the run's policy, your walls and the wall preset, each only narrowing."></picture>
 
 A run gets what every layer allows. The run's policy record names the layer that decided each value; the layer names and their order are in [how it narrows](../docs/operations/boundary.md#how-it-narrows).
 
@@ -454,10 +451,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 
 ### B14 — macOS VM guest vs. the Mac that runs it
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../docs/img/macos-vm-run-dark.svg">
-  <img src="../docs/img/macos-vm-run.svg" alt="A macOS VM run on a Mac: under the runner's login, wardyn-runnerd, the wardyn-macvm helper holding the guest, the run's socket folder, and Docker with the run's relay and proxy, the guest's one NIC being its only way out.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="../docs/img/macos-vm-run-dark.svg"><img src="../docs/img/macos-vm-run.svg" alt="A macOS VM run: the runner, one helper per VM, the run's socket folder, and Docker's relay and proxy as the guest's only way out."></picture>
 
 - **[0.10, off by default]** A run with `machine_kind: macos_vm` is a macOS guest under Apple's Virtualization framework on a company-managed Mac ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md)). B12 holds for it: the Mac's person is root there, and no control binds them.
 - **The boundary is Apple's hypervisor.** The guest's only NIC is wired to the run's own relay and proxy in Docker, with no NAT device. Egress, recording, the clipboard rules and audit are enforced outside the guest.
@@ -919,12 +913,9 @@ is not the deployment described above.**
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../docs/img/egress-checks-dark.svg">
-  <img src="../docs/img/egress-checks.svg" alt="The egress proxy's checks in order: a literal IP address, a host reached only by a brokered route, host, port and method, a repeated private address, an unlisted host's first-use mode and the address after DNS, each with the rule_source of its refusal, then allow and the credential.">
-</picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="../docs/img/egress-checks-dark.svg"><img src="../docs/img/egress-checks.svg" alt="The egress proxy's seven checks in order, each with the rule_source of its refusal, then allow and the credential."></picture>
 
-The proxy runs these checks in order (`evaluate`, [`internal/egress/proxy/proxy.go`](../internal/egress/proxy/proxy.go)); the first refusal ends the request.
+`evaluate` runs these checks in order; the first refusal ends the request.
 
 | Step | Check | Refused as |
 |---|---|---|

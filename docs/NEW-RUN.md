@@ -94,7 +94,7 @@ The step shows the main drive, one list of items, a starting folder and a mount 
 
 - **Main drive** is the sandbox's own disk, and every run has one. **Size** is in GiB and required. The pool's default fills it, and a size above the cap is clamped with a note naming who set the cap. With no size the step's summary reads "Set a size for the main drive."
 - A chip says whether the runner holds the size: **Enforced**, **Enforced by stopping the run** or **Not enforced on this runner**.
-- **What happens to it** says whether the drive is deleted when the run ends or kept so you can resume. **Reuse it across runs** keeps the work folder as one of your drives. It is shown once your admin turns on `keep_main_drive` ([Member drives](OPERATIONS.md#member-drives)), and is disabled with the reason when something blocks it, such as your drive limit.
+- **What happens to it** says whether the drive is deleted when the run ends or kept so you can resume. **Reuse it across runs** keeps the work folder as one of your drives. It is shown when your admin turns on `keep_main_drive` ([Member drives](OPERATIONS.md#member-drives)), and disabled with a reason when something blocks it.
 
 Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Mount path**.
 
