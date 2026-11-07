@@ -389,3 +389,21 @@ func TestGatewayBedrockSSORefusedOnAPersonsRunner(t *testing.T) {
 		t.Fatal("a gateway lane on a person's runner was placed there")
 	}
 }
+
+// An ordinary run on a person's own runner, with no Bedrock lane and no run identity, is classified
+// and admitted: every field the gateway lane added to the dispatch metadata is classified.
+func TestGatewayIdentityOffLocalRunAdmitted(t *testing.T) {
+	if got := localDispatchUnclassified(); len(got) != 0 {
+		t.Fatalf("unclassified dispatch metadata: %v", got)
+	}
+	f := newComponentFixture(t)
+	f.srv.cfg.Store = localPlanTestStore{f.st}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal}
+	p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, runner.SandboxSpec{RunID: run.ID}, nil, llmTransport{})
+	if err != nil {
+		t.Fatalf("an ordinary run on a person's runner: %v", err)
+	}
+	if _, ref := placement.LocalEligibility(p); ref != nil {
+		t.Fatalf("an ordinary run on a person's runner was refused: %v", ref)
+	}
+}
