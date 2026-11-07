@@ -389,8 +389,11 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	var body internalApprovalRequest
 	err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body)
-	if err == nil && s.refuseBadMCPCallScope(w, r, body.Kind, body.RequestedScope) { // one MCP call: its key is recomputed
-		return
+	if err == nil {
+		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
+		if body.RequestedScope, refused = s.refuseBadMCPCallScope(w, r, body.Kind, body.RequestedScope); refused {
+			return
+		}
 	}
 	if err != nil || len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
 		writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
