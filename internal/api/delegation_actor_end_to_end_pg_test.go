@@ -16,6 +16,7 @@ import (
 func TestDelegatedRunKeepsTheActor(t *testing.T) {
 	e := newDelegationPG(t)
 	portal, cred := e.registerPortal(t, delegGroup)
+	e.storePersonSecret(t)
 	strict := e.storePolicy(t, "strict", "x", true)
 	want := types.DelegationActor{Sub: delegAgent, Iss: e.iss}
 	tok := accessTokenOf(t, e.exchangeWithActor(t, portal, cred,
@@ -44,6 +45,7 @@ func TestDelegatedRunKeepsTheActor(t *testing.T) {
 func TestDelegatedRunWithoutActorHasNoCreatedViaActor(t *testing.T) {
 	e := newDelegationPG(t)
 	portal, cred := e.registerPortal(t, delegGroup)
+	e.storePersonSecret(t)
 	strict := e.storePolicy(t, "strict", "x", true)
 	tok := e.delegate(t, portal, cred, delegPerson, delegPersonEmail, delegGroup)
 	created := mustCreate(t, do(t, e.h.srv, http.MethodPost, "/api/v1/runs", tok, `{"agent":"claude-code","task":"t","policy_id":"`+strict+`"}`))
