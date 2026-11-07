@@ -248,6 +248,7 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 **7. What stays single-human.**
 
 - Workspace approved and denied egress lists, record-egress promotion, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and delete, and the SCIM purge's deletion of a person's own assignments and grants.
+- Organisation-scope wall presets are also written by one admin, directly and with no hold. A preset only narrows, so this widens nothing.
 
 **8. Credential delivery rows a release cannot build.**
 

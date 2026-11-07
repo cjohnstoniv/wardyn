@@ -112,8 +112,8 @@ derives its role.
 | `push_rules.hold_seconds` | 120 | smaller |
 | `push_rules.max_file_size_mib` | off | smaller positive (off is unbounded) |
 | `push_rules.deny_new_executables` | false | OR |
-| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable; a base on the provider default keeps it |
-| `github_capabilities` | the provider row's default | as `azure_devops_capabilities` |
+| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable; a base on the provider default keeps it. The list is standing access above the provider row's default, not a wall below it: a member who names nothing keeps the row's default whole, and a member's pick stays if it is in the default or in the list. To hold a unit read-only, use `eligible_grants` or a second provider row |
+| `github_capabilities` | the provider row's default | as `azure_devops_capabilities`, including that the list is not a wall below the row's default |
 
 | `GovernanceLimits` field | Unset means | Meet |
 |---|---|---|
