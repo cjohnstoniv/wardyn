@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,16 +46,15 @@ type ScreenText struct {
 // editScreen is the edit window's text. Its lines run in the order a person needs them: the code, the
 // setup questions, who they are and where Terminal is, Full Disk Access, the certificates, then the two
 // checks the recheck makes.
-var editScreen = ScreenText{
+var editScreen = WindowText{
 	Title: "Wardyn: edit this macOS VM base",
-	Steps: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+	Strip: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
 		"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
 		"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
 		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
 		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
-	Closable: true,
 }
 
 // screenTexter is a FirstBooter whose Boot's window can show other text than setup by hand's.
@@ -129,12 +129,12 @@ type EditOptions struct {
 	// Guest boots the staging copy for the guest agent's tools session: once to set the one-time code,
 	// once for the recheck.
 	Guest ToolsBoot
-	// FirstBoot and PrepNet boot the staging copy plain, in a window on this Mac, on the no-egress prep
-	// network, for the person's session.
-	FirstBoot FirstBooter
-	PrepNet   func() (PrepNetwork, error)
-	// Leaked records a framework slot a refused window boot left (RunOptions.Leaked).
-	Leaked func() error
+	// WindowBoot and PrepNet boot the staging copy for the person's session: a tools boot like Guest's, on
+	// the no-egress prep network, which Screen draws in a window on this Mac. Screen nil is the Mac's edit
+	// window (nativeEditScreen); a build without one refuses the edit.
+	WindowBoot WindowBoot
+	PrepNet    func() (PrepNetwork, error)
+	Screen     WindowScreen
 	// Items is the install list (macos_vm_base_file), whose files stage again each profile still waiting
 	// for the person's approval (restageProfiles).
 	Items BaseList
@@ -159,11 +159,18 @@ type EditOptions struct {
 // with the copy's AdminPasswordFile; any failure discards it, so runs keep the old base. The code is in no
 // log and its file goes when the window closes, or when the edit ends.
 func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
-	if o.Engine == nil || o.Guest == nil || o.FirstBoot == nil || o.PrepNet == nil || o.Layout.Root == "" {
+	if o.Engine == nil || o.Guest == nil || o.WindowBoot == nil || o.PrepNet == nil || o.Layout.Root == "" {
 		return Manifest{}, errors.New("macvm: an edit needs an engine, its boots, a prep network and a root")
 	}
 	o.setDefaults()
-	if err := o.FirstBoot.ScreenReady(); geteuid() == 0 || errors.Is(err, ErrNoDesktopSession) {
+	scr := o.Screen
+	if scr == nil {
+		scr = nativeEditScreen
+	}
+	if scr == nil {
+		return Manifest{}, errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
+	}
+	if err := scr.Ready(); geteuid() == 0 || errors.Is(err, ErrNoDesktopSession) {
 		return Manifest{}, ErrEditNoDesktop
 	} else if err != nil {
 		return Manifest{}, err
@@ -233,7 +240,7 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		fmt.Fprintf(o.Out, editProfileLine+"\n", p)
 	}
 	o.printUntrusted(base)
-	if err := o.window(ctx, spec); err != nil {
+	if err := o.window(ctx, spec, scr); err != nil {
 		return m, err
 	}
 	removeCode()
@@ -329,61 +336,71 @@ func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, stag
 	return offered, writeSetupCode(path, SetupCodeRecord{Account: provisionUser, Code: string(code)})
 }
 
-// window boots spec plain in a window on this Mac, with the edit's text, and waits until the guest shuts
-// down. The window's close button asks the guest to.
-func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
-	texter, ok := o.FirstBoot.(screenTexter)
-	if !ok {
-		return errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
-	}
-	text := editScreen
-	text.CodeFile = o.Layout.SetupCode()
-	booter := texter.WithScreen(text)
+// window boots spec for the person's session on a window boot (a tools boot like the headless ones) on the
+// no-egress prep network, and draws its VM in scr's window with the edit's text and the Show code control,
+// until the guest shuts down. The window's close button asks the guest to (WindowText.AskStop), and the
+// window stays up until it has. Once the VM has stopped, the boot's stop answers whether that was the
+// guest's own shutdown: a stop through the boot's ctl.sock (ErrStage2Stopped) is the edit's error, so the
+// copy is never rechecked or swapped in.
+func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowScreen) error {
 	nw, err := o.PrepNet()
 	if err != nil {
 		return err
 	}
 	defer nw.Close()
-	guest, host, err := NewNetPair()
+	nic, host, err := NewNetPair()
 	if err != nil {
 		return err
 	}
-	defer guest.Close()
+	defer nic.Close()
 	defer host.Close()
 	go func() { _ = nw.Serve(host) }()
-	var fb FirstBoot
-	// The headless boot, just stopped, may hold the aux storage a moment longer.
-	err = retryAuxLocked(ctx, o.Log, func() error {
-		var err error
-		fb, err = booter.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
-			uint(spec.CPUs), spec.MemoryBytes, guest, "", "")
-		return err
-	})
+	g, stop, err := o.WindowBoot(ctx, spec, nic)
 	if err != nil {
-		reportVMLimit(err, o.Leaked, o.Log)
 		return fmt.Errorf("macvm: the edit window's boot: %w", err)
 	}
 	stopped := false
+	stopBoot := func() error {
+		stopped = true
+		sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
+		defer cancel()
+		return stop(sctx)
+	}
 	defer func() {
 		if !stopped {
-			sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
-			defer cancel()
-			_ = fb.Stop(sctx)
+			if err := stopBoot(); err != nil {
+				o.Log.Warn("macvm: the edit window's VM did not shut down cleanly", "err", err.Error())
+			}
 		}
 	}()
-	if fb.Screen == nil {
-		return errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
+	wg, ok := g.(WindowGuest)
+	if !ok {
+		return errors.New("macvm: the edit window's boot gives no VM to draw")
 	}
-	closeWindow, err := fb.Screen()
+	ptr, err := wg.ViewHandle()
+	if err != nil || ptr == nil {
+		return fmt.Errorf("macvm: the edit window: the VM's pointer is unreadable: %v", err)
+	}
+	text := editScreen
+	text.CodeFile = o.Layout.SetupCode()
+	text.AskStop = func() {
+		if err := wg.RequestStop(); err != nil {
+			o.Log.Warn("macvm: the edit window's close did not reach the guest", "err", err.Error())
+		}
+	}
+	w, err := scr.Open(ptr, text)
+	runtime.KeepAlive(wg)
 	if err != nil {
 		return fmt.Errorf("macvm: the edit window: %w", err)
 	}
-	defer closeWindow()
+	defer w.Close()
 	select {
-	case err := <-fb.Done:
-		stopped = true
-		if err != nil {
-			return fmt.Errorf("macvm: the edit window's guest stopped: %w", err)
+	case <-wg.Done():
+		if err := stopBoot(); err != nil {
+			return fmt.Errorf("macvm: the edit window's boot: %w", err)
+		}
+		if st := wg.State(); st == StateError {
+			return errors.New("macvm: the edit window's guest stopped with an error")
 		}
 		return nil
 	case <-ctx.Done():
