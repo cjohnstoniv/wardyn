@@ -59,6 +59,9 @@ func driveBedrock(t *testing.T, faults ...string) ([]bedrockExchange, []egress.D
 		if err := json.Unmarshal(sc.Bytes(), &dl); err != nil {
 			t.Fatalf("decision line %q: %v", sc.Text(), err)
 		}
+		if dl.RuleSource == ruleSourceLLMUsage { // a 2xx answer's token counts, not a decision
+			continue
+		}
 		rows = append(rows, dl)
 	}
 	if len(rows) != len(faults) {
