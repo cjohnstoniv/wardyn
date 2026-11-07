@@ -417,6 +417,9 @@ func groundtruthRunsNamespaces() []string {
 	return []string{"default"}
 }
 
+// groundtruthNodeMax is a DNS name's length limit: a longer node name is no node's, and keys no row.
+const groundtruthNodeMax = 253
+
 // upsertGroundtruthSensor writes a heartbeat's node row: its data.node (""
 // for the Compose sensor), the server-forced time, and the beat's counts. A
 // store without per-node rows writes nothing.
@@ -430,6 +433,9 @@ func (s *Server) upsertGroundtruthSensor(ctx context.Context, ev types.AuditEven
 		groundtruthBeat
 	}
 	_ = json.Unmarshal(ev.Data, &hb)
+	if len(hb.Node) > groundtruthNodeMax {
+		return errors.New("sensor node name is over the 253-byte limit")
+	}
 	return gs.UpsertGroundtruthSensor(ctx, store.GroundtruthSensor{Node: hb.Node, LastBeat: ev.Time,
 		ObservedTotal: hb.ObservedTotal, DroppedTotal: hb.DroppedTotal, DroppedUnmapped: hb.DroppedUnmapped,
 		ObservedByKind: hb.ObservedByKind})

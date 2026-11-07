@@ -55,12 +55,15 @@ func TestSCTRequiredUnderPublicGoodShapedRoot(t *testing.T) {
 	mustContain(t, v.Detail, "certificate timestamp")
 }
 
+// The detail must name the log: a bundle with no log entry also has no timestamp, so the verdict alone
+// cannot tell a dropped log requirement from the timestamp one.
 func TestTransparencyLogRequired(t *testing.T) {
 	s := releasesigtest.New(t)
 	o := ciOpts()
 	o.NoTlog = true
 	v := check(t, compile(t, s, corpCI()), nil, s.SignDSSE(statement(t, imageadmit.PredicateCosignSign, imageHex), o))
 	wantReason(t, v, imageadmit.SignatureMissing)
+	mustContain(t, v.Detail, "transparency log")
 }
 
 func TestSubjectDigestMustBeTheImage(t *testing.T) {

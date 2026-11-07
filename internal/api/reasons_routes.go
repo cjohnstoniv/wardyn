@@ -142,8 +142,7 @@ const (
 	// Review's mirror of the dispatch refusal: a member's azure_devops_capabilities
 	// that leaves nothing standing (POST /runs/preflight).
 	reasonADOCapabilitiesNonePermitted = "ado_capabilities_none_permitted"
-	// The bounded list still reaches past the provider row's capability_ceiling
-	// (dispatch's capability_ceiling refusal for a policy's list).
+	// The bounded list reaches past the provider row's capability_ceiling.
 	reasonADOCapabilitiesAboveCeiling = "ado_capabilities_above_ceiling"
 )
 

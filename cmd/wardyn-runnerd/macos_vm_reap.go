@@ -57,7 +57,12 @@ func (m *macOSVMs) reapOrphanHelpers(ctx context.Context) {
 	}
 	self := slices.IndexFunc(procs, func(p admission.Proc) bool { return p.PID == os.Getpid() })
 	counted, err := m.ledger.Counted()
-	if self < 0 || err != nil {
+	if err != nil {
+		slog.Warn("macOS VM: no helpers a previous runner left were looked for: the ledger could not be read", "error", err.Error())
+		return
+	}
+	if self < 0 {
+		slog.Warn("macOS VM: no helpers a previous runner left were looked for: this process is not in the process table")
 		return
 	}
 	var ended []orphanHelper

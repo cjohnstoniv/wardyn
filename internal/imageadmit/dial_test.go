@@ -306,3 +306,25 @@ func TestRedirectToProxyAddressDirectIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A direct dial asks the resolver once, and connects to the address it checked.
+func TestDirectDialResolvesTheNameOnce(t *testing.T) {
+	reg := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveManifest(w, imageBody, ociManifestType, "")
+	}))
+	defer reg.Close()
+	g := testGuard()
+	var lookups atomic.Int32
+	inner := g.lookup
+	g.lookup = func(ctx context.Context, h string) ([]net.IP, error) {
+		lookups.Add(1)
+		return inner(ctx, h)
+	}
+	c := newTestClient(t, nil, g, nil, reg)
+	if _, err := c.Manifest(context.Background(), mustRef(t, host(reg)+"/team/app:1.0")); err != nil {
+		t.Fatal(err)
+	}
+	if n := lookups.Load(); n != 1 {
+		t.Errorf("lookups = %d, want 1", n)
+	}
+}

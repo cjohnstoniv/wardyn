@@ -227,7 +227,12 @@ func (c *RegistryClient) checkRedirect(req *http.Request, via []*http.Request) e
 		return nil
 	}
 	if c.auth != nil {
-		if a, ok, err := c.auth.Lookup(normalizeHost(req.URL.Host)); err == nil && ok && a.Username != "" {
+		a, ok, err := c.auth.Lookup(normalizeHost(req.URL.Host))
+		if err != nil {
+			// Not an anonymous request: the destination may expect the credential that could not be read.
+			return fmt.Errorf("reading the credential for %s: %w", req.URL.Host, err)
+		}
+		if ok && a.Username != "" {
 			req.SetBasicAuth(a.Username, a.Password)
 		}
 	}
@@ -519,6 +524,8 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 	if realm.Scheme != "https" {
 		return "", &Unavailable{Cause: CauseRefused, Host: realm.Host, Registry: ref.Registry, Err: fmt.Errorf("%w: the token realm is %s, not https", ErrRefusedTarget, realm.Scheme)}
 	}
+	// The token is cached under the scope fetch computed, whatever spelling the challenge asks for.
+	cacheScope := scope
 	if s := params["scope"]; s != "" {
 		scope = s
 	}
@@ -582,7 +589,7 @@ func (c *RegistryClient) authorize(ctx context.Context, ref Ref, challenges []st
 	header := "Bearer " + tok.Token
 	ttl := time.Duration(min(max(tok.ExpiresIn, 30), 300)) * time.Second
 	c.mu.Lock()
-	c.tokens[ref.Registry+"|"+scope] = cachedToken{header: header, expires: time.Now().Add(ttl)}
+	c.tokens[ref.Registry+"|"+cacheScope] = cachedToken{header: header, expires: time.Now().Add(ttl)}
 	c.mu.Unlock()
 	return header, nil
 }
