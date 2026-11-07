@@ -239,8 +239,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // container and a VM alike. It returns the network's id, the proxy's IP on it, and the undo that
 // removes both; on an error it has already undone them.
 func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP string, undo func(), err error) {
-	// (1) Per-run internal network. Internal=true => Docker provisions no gateway, so the network
-	// cannot route off-host: this is what upholds L0 even though the agent is *connected* to it.
+	// (1) Per-run internal network. Internal=true takes away its route off the host, and the isolated
+	// gateway mode leaves no address on the host's side (run_network_shape.go): together these uphold
+	// L0 even though the agent is *connected* to it.
 	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels))
 	if err != nil {
 		return "", "", nil, err
