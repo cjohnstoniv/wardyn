@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -38,5 +39,17 @@ func TestLogCause_FixedWordsOnly(t *testing.T) {
 		if got != c.want || strings.Contains(got, secret) {
 			t.Errorf("LogCause(%v) = %q, want %q", c.err, got, c.want)
 		}
+	}
+}
+
+// TestParseManifest_AnnouncedDigestNotEchoed: a Docker-Content-Digest that does not match is refused
+// without repeating its value, which a registry sent a Basic credential could set to that credential.
+func TestParseManifest_AnnouncedDigestNotEchoed(t *testing.T) {
+	const echoed = "sha256:hunter2-registry-password"
+	hdr := http.Header{}
+	hdr.Set("Docker-Content-Digest", echoed)
+	_, err := parseManifest([]byte(`{}`), hdr, "")
+	if !errors.Is(err, ErrDigestMismatch) || strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("err = %v, want a digest mismatch that does not repeat the announced value", err)
 	}
 }
