@@ -58,6 +58,19 @@ func beginUpdate(ctx context.Context, base string, log *slog.Logger) (staging st
 	}, nil
 }
 
+// beginUpdateOnce is beginUpdate with one try at the lock: held by another update or a prepare, it returns
+// ErrToolsUpdateBusy at once. A helper that waited here would sit with no host ledger entry, taking a VM
+// slot's place for as long as the holder runs. A caller whose own ctx ended gets that error, not the busy one.
+func beginUpdateOnce(ctx context.Context, base string, log *slog.Logger) (staging string, done func(), err error) {
+	try, cancel := context.WithCancel(ctx)
+	cancel()
+	staging, done, err = beginUpdate(try, base, log)
+	if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+		return "", nil, ErrToolsUpdateBusy
+	}
+	return staging, done, err
+}
+
 // swapBase exchanges the updated base nb with base while holding base's lock
 // exclusively; nb then holds the old generation.
 func swapBase(ctx context.Context, nb, base string) error {

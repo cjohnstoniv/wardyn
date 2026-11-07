@@ -28,7 +28,7 @@ func TestUpdateToolsRefusesWhileAnotherHoldsTheUpdateLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	o := updateOpts(f, tf, newGuest(), "0.10.1")
+	o := updateOpts(f, tf, newGuest(), "0.10.0")
 	o.Force = true
 	admitted := false
 	o.Admit = func(context.Context) (func(), error) { admitted = true; return func() {}, nil }
