@@ -25,7 +25,22 @@ type argvHost struct {
 	*macHost
 	mu   sync.Mutex
 	argv map[int][]string
+	// fail is how many of the next process-table reads fail.
+	fail int
 }
+
+func (h *argvHost) Processes() ([]admission.Proc, error) {
+	h.mu.Lock()
+	if h.fail > 0 {
+		h.fail--
+		h.mu.Unlock()
+		return nil, errors.New("process table unreadable")
+	}
+	h.mu.Unlock()
+	return h.macHost.Processes()
+}
+
+func (h *argvHost) failReads(n int) { h.mu.Lock(); h.fail = n; h.mu.Unlock() }
 
 func (h *argvHost) Args(pid int) ([]string, error) {
 	h.mu.Lock()
@@ -45,6 +60,7 @@ type reapRig struct {
 	procs []admission.Proc
 	mu    sync.Mutex
 	sent  []string // "TERM 40", "KILL 40"
+	at    []time.Time
 	// onTerm, when set, is what a helper does on SIGTERM; nil: it exits.
 	onTerm func(pid int)
 }
@@ -69,6 +85,7 @@ func newReapRig(t *testing.T) *reapRig {
 		rr.mu.Lock()
 		name := map[syscall.Signal]string{syscall.SIGTERM: "TERM", syscall.SIGKILL: "KILL"}[sig]
 		rr.sent = append(rr.sent, name+" "+strconv.Itoa(pid))
+		rr.at = append(rr.at, time.Now())
 		onTerm := rr.onTerm
 		rr.mu.Unlock()
 		if sig == syscall.SIGTERM && onTerm != nil {
@@ -262,5 +279,51 @@ func TestReapFreesTheSlotsItsHelpersHeld(t *testing.T) {
 	}
 	if o, _ := rr.m.ledger.Offer(8*gib, perRunDisk); o.Max != admission.LicenceCap {
 		t.Fatalf("after the reap: max %d, want %d", o.Max, admission.LicenceCap)
+	}
+}
+
+// A process-table read that fails during the grace never stands in for a live check: the helper exits,
+// its pid goes to another process of this login (same name and argv, a later start), and SIGKILL must not
+// reach that process although the ledger read after it succeeds.
+func TestReapNeverKillsAReusedPidAfterAFailedRead(t *testing.T) {
+	rr := newReapRig(t)
+	e := rr.entry(t, admission.KindToolsUpdate)
+	rr.helper(40, 50, jobArgv(macvm.UpdateToolsCommand, "runner-a", e.ID))
+	rr.onTerm = func(pid int) {
+		rr.drop(pid)
+		rr.helper(pid, 60, jobArgv(macvm.UpdateToolsCommand, "runner-a", e.ID))
+		rr.host.failReads(1)
+	}
+	rr.m.reapOrphanHelpers(context.Background())
+	if got := rr.signals(); !slices.Equal(got, []string{"TERM 40"}) {
+		t.Fatalf("signals %q, want only the SIGTERM to the old helper", got)
+	}
+}
+
+// A failed read mid-grace does not end the grace early; a helper still there at its end, read again and
+// still unclaimed, gets SIGKILL then. When the process table cannot be read at all, nothing is killed.
+func TestReapFailedReadDoesNotEscalateEarly(t *testing.T) {
+	rr := newReapRig(t)
+	e := rr.entry(t, admission.KindToolsUpdate)
+	rr.helper(40, 50, jobArgv(macvm.UpdateToolsCommand, "runner-a", e.ID))
+	rr.onTerm = func(int) { rr.host.failReads(1) } // ignores SIGTERM
+	rr.m.reapOrphanHelpers(context.Background())
+	if got := rr.signals(); !slices.Equal(got, []string{"TERM 40", "KILL 40"}) {
+		t.Fatalf("signals %q", got)
+	}
+	rr.mu.Lock()
+	waited := rr.at[1].Sub(rr.at[0])
+	rr.mu.Unlock()
+	if waited < reapGrace {
+		t.Fatalf("SIGKILL %v after SIGTERM, before the %v grace ended", waited, reapGrace)
+	}
+
+	rr = newReapRig(t)
+	e = rr.entry(t, admission.KindToolsUpdate)
+	rr.helper(40, 50, jobArgv(macvm.UpdateToolsCommand, "runner-a", e.ID))
+	rr.onTerm = func(int) { rr.host.failReads(1 << 20) }
+	rr.m.reapOrphanHelpers(context.Background())
+	if got := rr.signals(); !slices.Equal(got, []string{"TERM 40"}) {
+		t.Fatalf("with the process table unreadable: signals %q, want no SIGKILL", got)
 	}
 }
