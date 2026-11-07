@@ -51,7 +51,7 @@ var auditHostViews = map[string]auditHostView{
 	"site_config.redirect.test": {allow: []string{"elapsed_ms", "from_host", "state"}},
 	// The host path behind each workspace mount of a recorded policy spec.
 	"run.policy.resolve":    {mounts: [][]string{{}}},
-	"run.policy.generation": {mounts: [][]string{{}}},
+	"run.policy.generation": {mounts: [][]string{{"policy"}}},
 	"policy.create":         {mounts: [][]string{{"after"}}},
 	"policy.update":         {mounts: [][]string{{"before", "spec"}, {"after", "spec"}}},
 	"policy.delete":         {mounts: [][]string{{"before"}}},

@@ -11,23 +11,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// policyGenerationDatum is run.policy.generation's data: the policy a revive gave the run's new proxy,
-// as auditablePolicy writes it, plus its generation number. Reading the row's data back into a
-// types.RunPolicySpec drops the number, so the digest can be recomputed from the row, as from
-// run.policy.resolve.
-type policyGenerationDatum struct {
-	types.RunPolicySpec
-	Generation int `json:"generation"`
-}
-
 // advanceRunPolicyGeneration starts the run's next policy generation for a revive whose new proxy will
 // enforce policy (the organisation's form, as the run's stored config keeps it), on the fresh token.
 // The outgoing proxy's tokens (retiring, the config's, and the last renewal's two) stay on the
 // generation it enforced, so a decision it sent before the revive and that lands after is still
-// stamped with that generation. The new policy is recorded as run.policy.generation, which is stamped
-// with its own generation. It runs before the new proxy starts, so that proxy's first row is stamped
-// too. The generation is evidence: a store without it, or a failed write, logs, records nothing and
-// returns 0, and the revive goes on.
+// stamped with that generation. The new policy is recorded as run.policy.generation: data.policy as
+// auditablePolicy writes it, so its digest can be recomputed from the row, beside data.generation, and
+// the row is stamped with its own generation. It runs before the new proxy starts, so that proxy's
+// first row is stamped too. The generation is evidence: a store without it, or a failed write, logs,
+// records nothing and returns 0, and the revive goes on.
 func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, retiring string, renewed renewedTokens, fresh string) int {
 	st, ok := s.cfg.Store.(store.RunPolicyGenerations)
 	if !ok {
@@ -46,7 +38,7 @@ func (s *Server) advanceRunPolicyGeneration(ctx context.Context, run types.Agent
 		return 0
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.generation",
-		run.ID.String(), "success", mustJSON(policyGenerationDatum{RunPolicySpec: spec, Generation: gen})))
+		run.ID.String(), "success", mustJSON(map[string]any{"generation": gen, "policy": spec})))
 	return gen
 }
 

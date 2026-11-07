@@ -128,18 +128,14 @@ func TestRevive_TightenThenActionStampsTheNewGeneration(t *testing.T) {
 		t.Fatalf("run.policy.generation rows = %d, want 1", len(gens))
 	}
 	var rec struct {
-		types.RunPolicySpec
-		Generation int `json:"generation"`
+		Generation int                 `json:"generation"`
+		Policy     types.RunPolicySpec `json:"policy"`
 	}
 	if err := json.Unmarshal(gens[0].Data, &rec); err != nil {
 		t.Fatal(err)
 	}
-	var spec types.RunPolicySpec
-	if err := json.Unmarshal(gens[0].Data, &spec); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Generation != 2 || spec.Digest() != d2 {
-		t.Errorf("run.policy.generation: generation %d, recomputed digest %q; want 2 and %q", rec.Generation, spec.Digest(), d2)
+	if rec.Generation != 2 || rec.Policy.Digest() != d2 {
+		t.Errorf("run.policy.generation: generation %d, recomputed digest %q; want 2 and %q", rec.Generation, rec.Policy.Digest(), d2)
 	}
 	if d, g := generationStampOf(t, f, "run.policy.generation", ""); d != d2 || g != 2 {
 		t.Errorf("the generation row is stamped %q/%d, want its own generation %q/2", d, g, d2)
