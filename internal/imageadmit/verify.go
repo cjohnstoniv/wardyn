@@ -116,7 +116,7 @@ func parse(bundles [][]byte) []candidate {
 		}
 		var b bundle.Bundle
 		if err := b.UnmarshalJSON(raw); err != nil {
-			out[i].err = fmt.Errorf("a bundle is not readable: %v", err)
+			out[i].err = errors.New("a bundle is not readable") // the parser's text quotes the bundle's fields
 			continue
 		}
 		out[i].b = &b
@@ -181,7 +181,7 @@ func (s *Signer) evaluate(d []byte, cands []candidate) outcome {
 		}
 		res, err := s.verifier.Verify(c.b, verify.NewPolicy(artifact, who))
 		if err != nil {
-			o.note(err)
+			o.note(verifyFailure(err))
 			continue
 		}
 		predicate := res.Statement.GetPredicateType()
@@ -211,6 +211,28 @@ func (s *Signer) evaluate(d []byte, cands []candidate) outcome {
 		}
 	}
 	return o
+}
+
+// verifyFailure names the check a bundle failed in fixed words. sigstore-go's text carries what the bundle
+// holds (a payload type, a certificate's names, a log entry's fields), which a registry sent a Basic credential
+// could set to that credential, so only the verifier's own leading words pick the phrase.
+func verifyFailure(err error) error {
+	msg := err.Error()
+	for _, f := range []struct{ prefix, phrase string }{
+		{"failed to verify log inclusion: not enough verified log entries", "not enough verified log entries from a transparency log the trust root names"},
+		{"failed to verify log inclusion", "a signature's transparency log entry did not verify"},
+		{"failed to verify timestamps: threshold not met for verified log entry", "not enough verified transparency log timestamps"},
+		{"failed to verify timestamps", "unable to verify signed timestamps or any other time for the signature"},
+		{"failed to verify leaf certificate", "a signature's leaf certificate does not chain to the trust root"},
+		{"failed to verify signed certificate timestamp", "a signature's certificate has no valid signed certificate timestamp"},
+		{"SCTs required", "a signature has no signed certificate timestamp, which the trust root requires"},
+		{"failed to verify signature", "a signature does not verify"},
+	} {
+		if strings.HasPrefix(msg, f.prefix) {
+			return errors.New(f.phrase)
+		}
+	}
+	return errors.New("a signature did not verify under the signer's trust root or key")
 }
 
 // refusal is the verdict when no outcome passed: a missing attestation first (the image is signed), then a
