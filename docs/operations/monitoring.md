@@ -96,6 +96,22 @@ Alert on:
 - `time() - wardyn_sweep_last_tick_seconds{result="success"}` exceeding the sweep's interval from the table, with margin for one missed tick.
 - The console row warns at three intervals. A sweep with no `success` sample has not finished a tick yet, so alert on `absent` only after its first three intervals.
 
+## Per-node sensor health
+
+With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each node's sensor sends a `kernel.sensor.ping` that names its node. `/healthz` `ebpf_groundtruth` then reports the nodes together.
+
+| Nodes heard from | `/healthz` reports |
+|---|---|
+| None, ever | `unavailable` |
+| One | The same answer as before per-node health existed |
+| Two or more | The worst state of the live nodes (`degraded`, then `idle`, then `partial`, then `healthy`), counts summed, and a reason such as "1 of 2 node sensors degraded" |
+
+- `sensors[]` lists each node with its state and last heartbeat. Only a signed-in caller sees it, because node names describe your cluster. An anonymous caller gets the worst state and a count.
+- A node silent for 24 hours to 7 days shows as `gone`. After 7 days it is not read.
+- If the node list cannot be read, `/healthz` reports `degraded` with "Node sensor health could not be read", to anonymous callers too.
+- A failed write of a node's row is logged and does not fail the heartbeat.
+- With more than one node, a run's recent kernel events are read from the node that run's newest event came from.
+
 ## Why two counters exist beside `wardyn_store_up`
 
 `wardyn_store_up` reads as reachability, not as whether the work succeeds. It scrapes `1` throughout an outage that is 500ing every token-authenticated request.
