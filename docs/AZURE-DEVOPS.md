@@ -247,6 +247,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - Anything else the list names is not standing access: under `deny_with_review` the run asks for it mid-run and a person decides, and under `always_deny` it is refused.
 - A narrower list is always honoured, so a member who picks `["code_read"]` gets exactly `code_read`.
 - A list that leaves nothing they may hold refuses the launch with reason `ado_capabilities_none_permitted`; it never falls back to the default profile.
+- A list that still reaches past the row's ceiling is refused at Review and in the policy preview with `ado_capabilities_above_ceiling`, as launch would.
 - An admin's own run keeps its policy's list, bounded by the ceiling alone.
 
 ## What a member sees
