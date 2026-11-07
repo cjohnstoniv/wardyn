@@ -11,7 +11,7 @@
 # README.md 2354 = ours 2339 + theirs 2344 - base 2329 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # 0.10 SI-POLICY: docs/README.md 843 adds 16 over 827: the approval-rules task row, measured.
 # docs/README.md 862 = ours 846 + theirs 843 - base 827 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-README.md=1993 share=35 # -442 (front-door docs): the duplicate overview, 17 unlinked video rows and the second install recipe are cut; first-run steps get their own section; measured.
+README.md=1994 share=35 # 1994 measured (+1 over 1993, measured: the barrier guide link in the confinement row); earlier: -442 (front-door docs): the duplicate overview, 17 unlinked video rows and the second install recipe are cut; first-run steps get their own section; measured.
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
@@ -24,7 +24,7 @@ README.md=1993 share=35 # -442 (front-door docs): the duplicate overview, 17 unl
 # docs/README.md 793 adds 26 over 767 (0.9.3 K7): the organisation-runner-in-a-cluster row, measured.
 # docs/README.md 810 measured at the 0.9.3 forward-port: both index rows above.
 # docs/README.md 846 = ours 829 + theirs 827 - base 810 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
-docs/README.md=987 share=35 # -30 (front-door docs): the index is grouped by reader and gains the VM pages, monitoring, key rotation, model provider and recording-read rows; row wording is shortened; measured.
+docs/README.md=994 share=35 # 994 measured (+7 over 987, measured: the barrier guide row); earlier: -30 (front-door docs): the index is grouped by reader and gains the VM pages, monitoring, key rotation, model provider and recording-read rows; row wording is shortened; measured.
 # docs/README.md 824 adds 14 over 810, measured (0.10 LAY-A): the org walls task row.
 # docs/README.md 827 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.

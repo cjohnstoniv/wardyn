@@ -46,7 +46,7 @@
 | `first_use_hold_seconds` | `int` | `0` (→ `30`) | Only `wait_for_review`: how long a connection is held awaiting a decision before it fails closed. `0`/absent keeps the built-in **30s**. |
 | `max_holds` | `int` | `0` (→ `16`) | Only `wait_for_review`: cap on concurrent held connections; the next held connection over the cap fails fast. `0`/absent keeps the built-in **16**. |
 | `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction, enforced on the forward, `CONNECT`, TLS-intercepted and brokered model lanes; a refused request is `403` with `rule_source` `policy:method`. See [`allowed_methods`](#allowed_methods). |
-| `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. |
+| `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. [Which barrier for which agent](CONFINEMENT.md). |
 | `eligible_grants` | `[]GrantSpec` | `[]` | The ceiling of credential scopes this run may request. Eligibility is not issuance — the broker still mints. |
 | `auto_stop_after_sec` | `int` | `0` | Idle auto-stop in seconds: `> 0` stops an idle run after that time plus 30s slack, `0` or negative never reaps it, and a pending request keeps a run alive; details in [`auto_stop_after_sec`](#auto_stop_after_sec). |
 | `workspace_mounts` | `[]WorkspaceMount` | `[]` | Operator-authored host bind mounts. Never agent-chosen. |

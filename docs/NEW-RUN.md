@@ -72,7 +72,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
   - **Resume {name}**, with **Start fresh**, picks a machine you kept ([Keeping the machine](operations/macos-vms.md#keeping-the-machine)).
 - **Pool** is required. A pool that cannot take this run stays listed with its reason, such as **No online runners** or **Background only**.
 - The pool panel shows **Total pool capacity**, **Your allowance**, **Waiting**, **Run types** and **Per-run limits**; the strictest limit applies.
-- **Barrier** is **Fence**, **Wall** or **Vault**, weakest to strongest. A barrier that cannot be offered is disabled with its reason. An untouched barrier lets the server choose.
+- **Barrier** is **Fence**, **Wall** or **Vault**, weakest to strongest. A barrier that cannot be offered is disabled with its reason. An untouched barrier lets the server choose. [Which barrier for which agent](CONFINEMENT.md).
 
 ### Step 3: Harnesses
 

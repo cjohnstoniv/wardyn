@@ -57,7 +57,7 @@
 
 ## demo.json
 
-- The zero-dependency floor policy (`min_confinement_class: "CC1"` — runs anywhere Docker runs, no gVisor needed): `proxy.golang.org` egress only, `first_use_approval: "deny_with_review"`, one approval-gated read-only `github_token` grant.
+- The zero-dependency floor policy (`min_confinement_class: "CC1"` — runs anywhere Docker runs, no gVisor needed): `proxy.golang.org` egress only, `first_use_approval: "deny_with_review"`, one approval-gated read-only `github_token` grant. See [CONFINEMENT.md](../../docs/CONFINEMENT.md).
 - `github.com` is deliberately **not** allowlisted — a `github_token` grant that names its repositories routes git through the repo-scoped git-broker instead, so the sandbox never dials GitHub directly.
 - The shipped grant has `"repos": []`: list the repository in its `scope.repos` first, or the broker mints nothing and the clone fails.
 - The compose launcher auto-picks it when gVisor/`runsc` is absent (see the [`deploy/compose/.env.example`](../../deploy/compose/.env.example) header for the pick order).
