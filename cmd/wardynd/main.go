@@ -374,6 +374,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	gtWrite, gtK8sSensor, err := groundtruthTokenDelivery(feats.hop)
+	if err != nil {
+		return err
+	}
 	warnPublicAPIDisabled(*f.adminToken, lm.enabled, feats.authn != nil)
 	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
 	f.cliSignIn.warnWithoutSSO(feats.authn != nil)
@@ -583,6 +587,8 @@ func run() error {
 		HostCapacityConfig: api.HostCapacityConfig{HostCapacity: hostcapacity.New(f.hostCapacity.limits(), hostcapacity.ReadProc)},
 		AuditReceiptConfig: api.AuditReceiptConfig{AuditReceiptKeys: receiptKeys, AuditCheckpointStatus: checkpointStatus},
 		MaxConcurrentRuns:  *f.hostCapacity.maxConcurrentRuns,
+		// Set with WARDYN_GROUNDTRUTH_TOKEN_SECRET: dispatch records the CC2/CC3 sensor gap.
+		GroundtruthSensorConfig: api.GroundtruthSensorConfig{GroundtruthK8sSensor: gtK8sSensor},
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -620,7 +626,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, gtWrite)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
