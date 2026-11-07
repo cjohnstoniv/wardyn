@@ -77,10 +77,6 @@ regexes = [
     # characters a generated one-time desktop password is drawn from (no
     # look-alikes), a source constant, never a password itself.
     '''desktopPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"''',
-    # The MCP call-key tests (internal/approval/mcp_call_test.go and the proxy's
-    # approve-each tests): four 0-9a-f cycles standing in for a call's sha256 hex
-    # digest. A digest, never a credential, and the value recurs across commits.
-    '''0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
