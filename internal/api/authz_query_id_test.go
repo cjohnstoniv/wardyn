@@ -313,6 +313,18 @@ func queryParamReads(t *testing.T) map[string]map[string]bool {
 		inner, ok := sel.X.(*ast.SelectorExpr)
 		return ok && inner.Sel.Name == "URL"
 	}
+	isParseQueryCall := func(e ast.Expr) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "ParseQuery" {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "url"
+	}
 	out := map[string]map[string]bool{}
 	for _, f := range files {
 		for _, d := range f.Decls {
@@ -334,6 +346,12 @@ func queryParamReads(t *testing.T) map[string]map[string]bool {
 						if id, ok := as.Lhs[i].(*ast.Ident); ok && isQueryCall(rhs) {
 							vals[id.Name] = true
 						}
+					}
+				}
+				// q, err := url.ParseQuery(r.URL.RawQuery): a strict parse that refuses what URL.Query drops.
+				if as, ok := n.(*ast.AssignStmt); ok && len(as.Rhs) == 1 && len(as.Lhs) == 2 && isParseQueryCall(as.Rhs[0]) {
+					if id, ok := as.Lhs[0].(*ast.Ident); ok {
+						vals[id.Name] = true
 					}
 				}
 				return true
