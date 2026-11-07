@@ -64,7 +64,7 @@
 # docs/operations/api-tokens.md 6034 = ours 5948 + theirs 6034 - base 5948 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
 # docs/operations/denials.md 5525 = ours 5520 + theirs 5497 - base 5492 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
 # IDP-FRONT: who-gets-in.md 1952 adds 14 over 1938 (the front-channel logout row), measured.
-docs/operations/who-gets-in.md=1952 share=35
+docs/operations/who-gets-in.md=2044 share=35 # +92, measured: the Admin runs subsection
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/admin-only-writes.md 3299 adds 117 over 3182 (0.9 F-1508-M3): the invitation, service-identity and token-move tier rows.
@@ -107,7 +107,7 @@ docs/operations/admin-only-writes.md=3910 share=35 # release tags and the docume
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
 # docs/operations/three-roles.md 4826 adds 38 over 4788, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/three-roles.md=5114 share=35 # -3 net, measured: a role table added; ids, version narration and repeated bullets removed
+docs/operations/three-roles.md=5134 share=35 # +20, measured: the admin-runs cross-reference; earlier: -3 net, measured: a role table added; ids, version narration and repeated bullets removed
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1380 share=35 # -2, measured: the two-door grid first; version narration removed

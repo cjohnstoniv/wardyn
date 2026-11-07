@@ -247,6 +247,7 @@ env:
   WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=user"
   WARDYN_OIDC_DEFAULT_ROLE: "user"          # unmatched users land here instead of being denied
   WARDYN_OIDC_OPERATOR_EMAILS: "platform@corp.example"  # legacy admin safety net, still honored
+  WARDYN_GOVERN_ADMIN_RUNS: "true"          # recommended with SSO; see docs/operations/member-mode.md
 
 extraEnv:
   - name: WARDYN_OIDC_CLIENT_SECRET       # 🔒 secret-bearing var — extraEnv, never a literal `env` value
@@ -262,6 +263,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   -f rbac-values.yaml   # the snippet above
 ```
 
+- Where admins sign in with SSO, set `env.WARDYN_GOVERN_ADMIN_RUNS` so their runs are governed like a member's. It refuses Record Mode unless `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT=recording`, and it governs admin-role personal tokens, so check CI first ([Constrained-admin mode](../../../docs/operations/member-mode.md#constrained-admin-mode)).
 - Keep `auth.adminToken` configured even with OIDC set up:
   - the admin token always authenticates as admin (one shared credential, no per-human identity to demote), which is the recovery path if a role-map typo ever locks every human out.
 - Set `env.WARDYN_OIDC_ROLE_MAP` on its own (no `extraEnv`/Entra changes) against an EXISTING OIDC-only install to turn on RBAC for the first time;

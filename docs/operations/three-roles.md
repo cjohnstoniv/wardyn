@@ -19,6 +19,7 @@ derives its role.
   - the default role, the deployment ceiling (`WARDYN_DEFAULT_POLICY`), trust roots, integrations, base images,
   - and the People page (who gets in, and who else is an admin).
 - The admin bearer token is the break-glass and remains exempt from every console lockout guard.
+- Where admins sign in with SSO, we recommend `WARDYN_GOVERN_ADMIN_RUNS`, so their own runs are governed like a member's ([Admin runs](who-gets-in.md#admin-runs)).
 
 ## Security admin (`security_admin`)
 
