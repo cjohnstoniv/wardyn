@@ -106,7 +106,11 @@ func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmod
 	if s.cfg.Store == nil {
 		return recordmode.KernelWindow{}
 	}
-	if rows, live := s.groundtruthNodeSensors(ctx); live >= 2 {
+	rows, live, err := s.groundtruthNodeSensors(ctx)
+	if err != nil {
+		return recordmode.KernelWindow{} // which node's beat applies is unknown: fail silent
+	}
+	if live >= 2 {
 		return s.kernelWindowOnNode(ctx, run, rows)
 	}
 	status := s.ebpfGroundtruthStatus(ctx)

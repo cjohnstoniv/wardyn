@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -303,7 +304,8 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	// A sensor on each Kubernetes node: judge every node, so one live node
 	// cannot mask a dead one. With one node (or the Compose sensor) the
 	// latest beat below is that node's, and the output is unchanged.
-	if rows, live := s.groundtruthNodeSensors(ctx); live >= 2 {
+	rows, live, nodeErr := s.groundtruthNodeSensors(ctx)
+	if live >= 2 {
 		return s.ebpfGroundtruthNodesStatus(rows)
 	}
 	ev, err := s.cfg.Store.LatestAuditEventByAction(ctx, groundtruth.ActionSensorHeartbeat)
@@ -331,6 +333,14 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 	}
 	if len(missing) > 0 {
 		out["missing_kinds"] = missing
+	}
+	if nodeErr != nil {
+		// The per-node read failed, so whether another node is dead is
+		// unknown: the newest beat anywhere must not read healthy for all
+		// of them. A sensor exists (it has beaten), so this is degraded.
+		out["state"] = "degraded"
+		out["reason"] = groundtruthNodeReadFailed
+		delete(out, "missing_kinds")
 	}
 	return out
 }
@@ -394,17 +404,24 @@ const groundtruthSensorListed = 7 * 24 * time.Hour
 
 // groundtruthNodeSensors returns the per-node sensor rows heard from in the
 // last groundtruthSensorListed, and how many of them beat within
-// groundtruthSensorGone. A store without per-node rows, or a failed read,
-// returns none, which leaves the latest-beat reading in charge.
-func (s *Server) groundtruthNodeSensors(ctx context.Context) ([]store.GroundtruthSensor, int) {
+// groundtruthSensorGone. A store without per-node rows returns none, which
+// leaves the latest-beat reading in charge. A failed read returns its error
+// (logged here): callers must not read it as "one node".
+//
+// groundtruthNodeReadFailed is the reason /healthz gives for it, anonymous
+// view included: it names no node and no error text.
+const groundtruthNodeReadFailed = "node sensor health could not be read"
+
+func (s *Server) groundtruthNodeSensors(ctx context.Context) ([]store.GroundtruthSensor, int, error) {
 	gs, ok := s.cfg.Store.(store.GroundtruthSensorStore)
 	if !ok {
-		return nil, 0
+		return nil, 0, nil
 	}
 	now := s.cfg.Now()
 	rows, err := gs.ListGroundtruthSensors(ctx, now.Add(-groundtruthSensorListed))
 	if err != nil {
-		return nil, 0
+		slog.WarnContext(ctx, "api: read ground-truth node sensors", slog.Any("err", err))
+		return nil, 0, err
 	}
 	live := 0
 	for _, g := range rows {
@@ -412,7 +429,7 @@ func (s *Server) groundtruthNodeSensors(ctx context.Context) ([]store.Groundtrut
 			live++
 		}
 	}
-	return rows, live
+	return rows, live, nil
 }
 
 // groundtruthNodeSensor is one node in ebpf_groundtruth.sensors.
