@@ -40,7 +40,6 @@ var (
 const (
 	macWindowSettingsPendingMsg = "This run's desktop settings are still being applied; the window opens when they are."
 	macGUIEnvReadWait           = 10 * time.Second
-	macGUIEnvRetryCommand       = "agent-run --session-env-retry"
 )
 
 // macGUIEnvArgv reads the guest's status file.
@@ -158,7 +157,7 @@ func (s *Server) macGUIEnvNote(ctx context.Context, run types.AgentRun, v *macWi
 	}
 	if st, ok := s.macGUIEnvStatus(ctx, run); ok && st.State == guestagent.SessionEnvFailed {
 		v.Message = "This run's settings could not be applied to the window's desktop (" + macGUIEnvReason(st.Reason) +
-			"), so apps opened there may not use the run's proxy. To retry, run " + macGUIEnvRetryCommand + " in the window's Terminal."
+			"), so apps opened there may not use the run's proxy. To retry, run agent-run --session-env-retry in the window's Terminal."
 	}
 }
 
