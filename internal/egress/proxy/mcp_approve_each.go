@@ -83,79 +83,115 @@ func (b *mcpBroker) window(harness string) int {
 // mcpCalls is the per-proxy approve_each state. The zero value is ready to use.
 type mcpCalls struct {
 	mu     sync.Mutex
-	byKey  map[string]*mcpCallEntry
+	byKey  map[string]*mcpCallKey
 	active int
 }
 
-// mcpCallEntry is one call's approval and what it came to. spent marks an approval already used
-// to send its call: nothing that approval comes to later sends it again.
-type mcpCallEntry struct {
-	id    uuid.UUID
-	state approvalState // apPending, apApproved or apDenied
-	spent bool
+// mcpCallKey is one call key's state: its current approval, if any, and the approvals already
+// spent on it. A spent approval is never spent again: its id stays in spent while any call of
+// the key is still waiting, since that call may yet read a delayed answer naming it. Once no call
+// of the key waits, no answer can arrive, so the set is dropped.
+type mcpCallKey struct {
+	id    uuid.UUID     // the current approval; uuid.Nil when there is none
+	state approvalState // what id came to: apPending, apApproved or apDenied
+	live  int           // calls of this key holding a waiting slot
+	spent map[uuid.UUID]bool
 }
 
 // admit files key and takes a waiting slot. An approved or declined call comes back with its
 // state and takes none; one that cannot wait comes back with why. A pending call comes back with
-// the approval to rejoin; a new or spent one with none.
+// the approval to rejoin; one with no current approval with none.
 func (c *mcpCalls) admit(key string) (uuid.UUID, approvalState, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e := c.byKey[key]
-	live := e != nil && !e.spent
+	k := c.byKey[key]
 	switch {
-	case live && e.state != apPending:
-		return e.id, e.state, ""
-	case e == nil && len(c.byKey) >= maxMCPCallKeys:
+	case k != nil && k.id != uuid.Nil && k.state != apPending:
+		return k.id, k.state, ""
+	case k == nil && len(c.byKey) >= maxMCPCallKeys:
 		return uuid.Nil, apNone, mcpCallKeysText
 	case c.active >= maxMCPCallsWaiting:
 		return uuid.Nil, apNone, mcpCallBusyText
 	}
-	c.active++
-	if live {
-		return e.id, apPending, ""
+	if k == nil {
+		if c.byKey == nil {
+			c.byKey = map[string]*mcpCallKey{}
+		}
+		k = &mcpCallKey{}
+		c.byKey[key] = k
 	}
-	return uuid.Nil, apPending, ""
+	c.active++
+	k.live++
+	return k.id, apPending, ""
 }
 
-func (c *mcpCalls) leave() {
+// leave gives back key's waiting slot.
+func (c *mcpCalls) leave(key string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.active--
-	c.mu.Unlock()
+	if k := c.byKey[key]; k != nil {
+		k.live--
+		c.tidy(key, k)
+	}
 }
 
-// claim spends id's approval of key: true for exactly one caller, while the approval is live.
+// tidy drops the spent set once no call of key waits, and the key once nothing is left of it.
+func (c *mcpCalls) tidy(key string, k *mcpCallKey) {
+	if k.live > 0 {
+		return
+	}
+	k.spent = nil
+	if k.id == uuid.Nil {
+		delete(c.byKey, key)
+	}
+}
+
+// claim spends approval id on key: true for exactly one caller, which then sends the call. The
+// caller has read that id is approved; a spent id is refused for as long as an answer naming it
+// could still arrive.
 func (c *mcpCalls) claim(key string, id uuid.UUID) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e := c.byKey[key]
-	if e == nil || e.spent || e.id != id || e.state != apApproved {
+	k := c.byKey[key]
+	if k == nil || k.spent[id] {
 		return false
 	}
-	e.spent = true
+	if k.spent == nil {
+		k.spent = map[uuid.UUID]bool{}
+	}
+	k.spent[id] = true
+	if k.id == id {
+		k.id, k.state = uuid.Nil, apNone
+	}
+	c.tidy(key, k)
 	return true
 }
 
-// record stores what id came to. A spent approval stays spent, a key filed under another live
-// approval keeps it, and apNone forgets the key.
-func (c *mcpCalls) record(key string, id uuid.UUID, state approvalState) {
+// install makes a newly raised approval key's current one, when the key has none and the id was
+// never spent (a raise answered late with a row that was since used installs nothing).
+func (c *mcpCalls) install(key string, id uuid.UUID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.byKey == nil {
-		c.byKey = map[string]*mcpCallEntry{}
+	if k := c.byKey[key]; k != nil && k.id == uuid.Nil && !k.spent[id] {
+		k.id, k.state = id, apPending
 	}
-	e := c.byKey[key]
-	switch {
-	case e == nil || e.spent && e.id != id:
-		if state != apNone {
-			c.byKey[key] = &mcpCallEntry{id: id, state: state}
-		}
-	case e.spent, e.id != id:
-	case state == apNone:
-		delete(c.byKey, key)
-	default:
-		e.state = state
+}
+
+// update stores what key's current approval came to, and only that one: an answer about any
+// other id changes nothing. apNone (closed undecided) clears it, so the next call asks again.
+func (c *mcpCalls) update(key string, id uuid.UUID, state approvalState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := c.byKey[key]
+	if k == nil || k.id != id || id == uuid.Nil {
+		return
 	}
+	if state == apNone {
+		k.id = uuid.Nil
+	}
+	k.state = state
+	c.tidy(key, k)
 }
 
 // approveEachCall is one approve_each call read for asking and sending.
@@ -317,7 +353,7 @@ func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 		}
 		break
 	}
-	defer calls.leave()
+	defer calls.leave(key)
 	if x.p.approval == nil {
 		x.record(egress.Deny, ruleSourceMCPApprovalRefused, uuid.Nil, "this proxy has no way to ask")
 		writeToolError(w, c.id, mcpCallNoAskText)
@@ -341,7 +377,7 @@ func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 		if ar, ok := x.p.approval.fetch(ctx, id); ok {
 			switch ar.State {
 			case types.ApprovalApproved:
-				calls.record(key, id, apApproved)
+				calls.update(key, id, apApproved)
 				if calls.claim(key, id) {
 					x.forwardApproved(w, c, id)
 					return
@@ -351,12 +387,12 @@ func (x *mcpExchange) awaitCall(w http.ResponseWriter, c approveEachCall) {
 					return
 				}
 			case types.ApprovalDenied:
-				calls.record(key, id, apDenied)
+				calls.update(key, id, apDenied)
 				x.record(egress.Deny, ruleSourceMCPApprovalDenied, id, "declined by a person")
 				writeToolError(w, c.id, mcpCallDeclinedText)
 				return
 			case types.ApprovalExpired, types.ApprovalCancelled:
-				calls.record(key, id, apNone)
+				calls.update(key, id, apNone)
 				x.record(egress.Deny, ruleSourceMCPApprovalClosed, id, "closed without a decision")
 				writeToolError(w, c.id, mcpCallClosedText)
 				return
@@ -390,7 +426,7 @@ func (x *mcpExchange) ask(ctx context.Context, w http.ResponseWriter, c approveE
 		writeToolError(w, c.id, mcpCallNoAskText)
 		return uuid.Nil
 	}
-	x.p.mcp.calls.record(c.scope.CallSHA256, id, apPending)
+	x.p.mcp.calls.install(c.scope.CallSHA256, id)
 	return id
 }
 
