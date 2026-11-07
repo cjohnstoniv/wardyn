@@ -475,7 +475,7 @@ the same test checks every row of those tables.
 | `rule_source` | Meaning | Defined at |
 |---|---|---|
 | `brokered:mint` | A brokered `POST /wardyn/v1/credentials/mint` request | [`internal/egress/proxy/local_routes.go#ruleSourceMint`](../internal/egress/proxy/local_routes.go) |
-| `brokered:approvals` | A brokered tool-call approval create/poll (`/wardyn/v1/approvals`) | [`internal/egress/proxy/local_routes.go#ruleSourceApprovals`](../internal/egress/proxy/local_routes.go) |
+| `brokered:approvals` | A brokered tool-call approval create/poll (`/wardyn/v1/approvals`). Also the allow row of an `approve_each` tool call whose approval the route raised itself; `approval_id` names it | [`internal/egress/proxy/local_routes.go#ruleSourceApprovals`](../internal/egress/proxy/local_routes.go) |
 | `brokered:recording` | A brokered recording upload (`/wardyn/v1/recordings/`) | [`internal/egress/proxy/local_routes.go#ruleSourceRecordings`](../internal/egress/proxy/local_routes.go) |
 | `brokered:scan-result` | A brokered scan-result upload (`/wardyn/v1/scan-results/`) | [`internal/egress/proxy/local_routes.go#ruleSourceScanResults`](../internal/egress/proxy/local_routes.go) |
 | `policy:tool-allow` | A tool call the run's own `tool_rules` waved through with no human asked; `matched_rule` names the key that answered (the tool or `*`, `<harness>:`-prefixed under per-harness rules) | [`internal/egress/proxy/local_routes.go#ruleSourceToolAllow`](../internal/egress/proxy/local_routes.go) |
