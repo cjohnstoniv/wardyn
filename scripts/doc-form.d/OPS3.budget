@@ -107,12 +107,12 @@ docs/operations/admin-only-writes.md=4000 share=35 # +67 (rc.12, measured 4000: 
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
 # docs/operations/three-roles.md 4826 adds 38 over 4788, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/three-roles.md=5117 share=35 # 5117 measured (+5: the github_capabilities row states its own meaning); 5112 measured (+60 measured: erasure residuals, kept-machine erasure, capability and wall-preset notes); +138 (rc.12, measured 5052: the allowed_models limit row and its notes); +87 (rc.11, measured 4914: the background watch exception and its re-check row)
+docs/operations/three-roles.md=5114 share=35 # -3 net, measured: a role table added; ids, version narration and repeated bullets removed
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
-docs/operations/provider-policy.md=1382 share=35
+docs/operations/provider-policy.md=1380 share=35 # -2, measured: the two-door grid first; version narration removed
 # 0.9.4 W4-DOCS-1: docs/operations/ownership-and-offboarding.md 2383 adds 13 over 2370, measured: #2376: the Azure DevOps owner exception.
-docs/operations/ownership-and-offboarding.md=2428 share=35 # +14 (rc.10), measured: the inbound-token 30-second exception.
+docs/operations/ownership-and-offboarding.md=2424 share=35 # -4 net, measured: step 7a (the rest of what a leaver owns, and SCIM) added; version ids and repeated bullets removed
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
@@ -129,14 +129,14 @@ docs/operations/governance-writes.md=3691 share=35 # 3691 measured (+22 measured
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 # docs/operations/member-runs.md=1054 share=35
 # 0.10.0-rc.6: member-runs 1086 adds 32 over 1054, measured: a no-policy member run's default is the ceiling.
-docs/operations/member-runs.md=1086 share=35
+docs/operations/member-runs.md=1079 share=35 # -7, measured: the onboarding-note citation removed
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
 # docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.
 # docs/operations/user-drives.md 4877 adds 54 over 4823, measured: a person's reclaim refuses a team drive; a leaver's team-drive writes are kept (0.10 FEAT-2TEAM).
 # docs/operations/user-drives.md 4938 adds 7 over 4931, measured: a bound folder may be the drive root itself.
 # docs/operations/user-drives.md 4984 adds 46 over 4938, measured: a drive bound to a person's runner also serves Linux VM runs there.
-docs/operations/user-drives.md=4984 share=35
+docs/operations/user-drives.md=4984 share=35 # unchanged, measured: the mac_disk pointer is added and the migration and release narration removed
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
