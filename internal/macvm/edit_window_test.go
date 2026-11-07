@@ -14,6 +14,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
 
+// editCtx bounds an edit whose window never closes: it fails the test instead of hanging it.
+func editCtx(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 // The edit's window boots the staging copy on a tools boot (the window boot: the guest agent's control and
 // tools sessions, as the edit's headless boots have), on a NIC the no-egress prep network serves, and never
 // on a first boot's provisioner.
@@ -23,7 +30,7 @@ func TestEditWindowBootsOnAToolsBoot(t *testing.T) {
 	nets := 0
 	prep := e.opts.PrepNet
 	e.opts.PrepNet = func() (macvm.PrepNetwork, error) { nets++; return prep() }
-	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+	if _, err := macvm.EditBase(editCtx(t), e.opts); err != nil {
 		t.Fatal(err)
 	}
 	if len(e.windows) != 1 || e.boots != 2 {
@@ -45,7 +52,7 @@ func TestEditWindowBootsOnAToolsBoot(t *testing.T) {
 // and the edit waiting, and the copy is never swapped in.
 func TestEditWindowCloseAsksTheGuestToShutDown(t *testing.T) {
 	e := newEdit(t)
-	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+	if _, err := macvm.EditBase(editCtx(t), e.opts); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.windows[0].stopsAsked(); n != 1 {
@@ -85,7 +92,7 @@ func TestEditWindowCloseAsksTheGuestToShutDown(t *testing.T) {
 // control, which reads the one-time code from the setup-code file: the file names the code the guest took.
 func TestEditWindowGetsTheCodeControl(t *testing.T) {
 	e := newEdit(t)
-	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+	if _, err := macvm.EditBase(editCtx(t), e.opts); err != nil {
 		t.Fatal(err)
 	}
 	if e.scr.opens() != 1 {

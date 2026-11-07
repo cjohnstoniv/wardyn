@@ -13,7 +13,7 @@ package macvm
 int wardynScreenSession(void);
 void wardynScreenRun(void);
 void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps, const char *codeFile);
-void wardynScreenShowWindow(void *vm, const char *title, const char *steps);
+void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop);
 int wardynScreenConsoleKeys(int *onConsole, int *locked);
 long wardynScreenLockNotices(void);
 int wardynScreenLockNoticed(void);
@@ -35,6 +35,7 @@ import (
 func init() {
 	serveScreens = serveScreensDarwin
 	nativeWindowScreen = macWindowScreen{}
+	nativeEditScreen = macEditScreen{}
 }
 
 var (
@@ -169,7 +170,7 @@ func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) 
 	title, steps := C.CString(text.Title), C.CString(text.Strip)
 	defer C.free(unsafe.Pointer(title))
 	defer C.free(unsafe.Pointer(steps))
-	C.wardynScreenShowWindow(vm, title, steps)
+	C.wardynScreenShowWindow(vm, title, steps, nil, 0)
 	screenStartOnce.Do(func() { close(screenStart) })
 	w := &macWindow{closed: make(chan struct{}), locked: make(chan struct{})}
 	for deadline := time.Now().Add(screenWait); C.wardynScreenUp() == 0; time.Sleep(50 * time.Millisecond) {
@@ -196,6 +197,7 @@ func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) 
 type macWindow struct {
 	closed, locked chan struct{}
 	once           sync.Once
+	text           *WindowText // the edit window's callbacks (windowText), nil for a run window
 }
 
 func (w *macWindow) Closed() <-chan struct{} { return w.closed }
@@ -205,9 +207,78 @@ func (w *macWindow) Locked() <-chan struct{} { return w.locked }
 // next window finds the slot empty.
 func (w *macWindow) Close() {
 	w.once.Do(func() {
+		if w.text != nil {
+			windowText.CompareAndSwap(w.text, nil)
+		}
 		C.wardynScreenClose()
 		for deadline := time.Now().Add(screenWait); C.wardynScreenUp() != 0 && time.Now().Before(deadline); {
 			time.Sleep(10 * time.Millisecond)
 		}
 	})
+}
+
+// windowText is the open edit window's text, whose callbacks its controls call (wardynWindowAction).
+var windowText atomic.Pointer[WindowText]
+
+// windowActionAskStop is the number the edit window's close button passes to wardynWindowAction
+// (WARDYN_WINDOW_ASK_STOP in screen_darwin.m). The strip's buttons add theirs beside it.
+const windowActionAskStop = 0
+
+// wardynWindowAction runs the callback of the open edit window's control n. The window calls it off the
+// main thread, so a callback may wait on the guest.
+//
+//export wardynWindowAction
+func wardynWindowAction(n C.int) {
+	t := windowText.Load()
+	if t == nil {
+		return
+	}
+	switch int(n) {
+	case windowActionAskStop:
+		if t.AskStop != nil {
+			t.AskStop()
+		}
+	}
+}
+
+// macEditScreen is the edit window: the run window's, with the edit's strip and Show code control and a close
+// button that calls text.AskStop. It checks only what setup's window checks (screenReady): the person started
+// edit-base at this Mac, so neither the console check nor a screen lock ends it, and it stays up until the
+// guest has shut down and Close runs.
+type macEditScreen struct{}
+
+func (macEditScreen) Ready() error { return screenReady() }
+
+func (macEditScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) {
+	if err := screenReady(); err != nil {
+		return nil, err
+	}
+	if C.wardynScreenUp() != 0 {
+		return nil, errors.New("macvm: a window is already open in this process")
+	}
+	title, steps := C.CString(text.Title), C.CString(text.Strip)
+	defer C.free(unsafe.Pointer(title))
+	defer C.free(unsafe.Pointer(steps))
+	var codeFile *C.char // NULL: no Show code control
+	if text.CodeFile != "" {
+		codeFile = C.CString(text.CodeFile)
+		defer C.free(unsafe.Pointer(codeFile))
+	}
+	w := &macWindow{closed: make(chan struct{}), locked: make(chan struct{}), text: &text}
+	windowText.Store(w.text)
+	C.wardynScreenShowWindow(vm, title, steps, codeFile, 1)
+	screenStartOnce.Do(func() { close(screenStart) })
+	for deadline := time.Now().Add(screenWait); C.wardynScreenUp() == 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			w.Close()
+			return nil, fmt.Errorf("macvm: the edit window did not open within %v", screenWait)
+		}
+	}
+	if C.wardynScreenUp() < 0 {
+		w.Close()
+		return nil, errors.New("macvm: the edit window could not be made")
+	}
+	// No lock count: a lock leaves the edit window up, so Locked never closes.
+	watchWindow(func() int { return int(C.wardynScreenUp()) }, func() int64 { return 0 }, 0, 50*time.Millisecond, w.closed, w.locked)
+	return w, nil
 }

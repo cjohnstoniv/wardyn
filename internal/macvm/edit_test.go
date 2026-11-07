@@ -20,7 +20,6 @@ import (
 	"unsafe"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
-	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 

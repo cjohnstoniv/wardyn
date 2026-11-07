@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 )
 
 // Setup by hand's window keeps its text byte for byte: screen_darwin.m (cgo, built only on a Mac) holds
@@ -119,7 +120,18 @@ func TestScreenShowHasOneCaller(t *testing.T) {
 	}
 }
 
-// Prepare's setup by hand and the edit both hand the window the code file's path.
+// textFirstBoot is the fake first boot, keeping the window text it is given.
+type textFirstBoot struct {
+	*macvmtest.FirstBoot
+	text *macvm.ScreenText
+}
+
+func (b textFirstBoot) WithScreen(text macvm.ScreenText) macvm.FirstBooter {
+	*b.text = text
+	return b.FirstBoot
+}
+
+// Prepare's setup by hand hands the window the code file's path, as the edit does its own window.
 func TestSetupByHandWindowGetsTheCodeFilePath(t *testing.T) {
 	f, _, _ := handPrep(t)
 	var text macvm.ScreenText
