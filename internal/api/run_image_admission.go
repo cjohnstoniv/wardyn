@@ -72,10 +72,7 @@ var errImageAdmissionSiteUnreadable = errors.New("read the site config for image
 // stepImageAdmission holds a governed member's image to image admission (images.admission and the
 // profile's required_image_signers), at create and Review. The preview makes no registry read.
 func (s *Server) stepImageAdmission(f *runFold, rec *foldRecorder) bool {
-	v, warning, refusal := s.imageAdmission(f.r.Context(), *f.req, f.carriedImage, f.ceiling.Limits.RequiredImageSigners)
-	if refusal != nil && f.mode == foldCreate && refusal.body.Reason != "" {
-		s.auditImageAdmissionDenied(f.r, createDigestInput(*f.req, f.carriedImage), v, refusal.body.Reason)
-	}
+	v, warning, refusal := s.imageAdmission(f.r, *f.req, f.carriedImage, f.ceiling.Limits.RequiredImageSigners, f.mode == foldCreate)
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
@@ -100,7 +97,17 @@ func (s *Server) auditImageAdmissionDenied(r *http.Request, ref string, v *types
 		mustJSON(map[string]any{"subject": principal, "reason": reason, "image": ref, "image_admission": v})))
 }
 
-// imageAdmission decides the member's image: the verdict the run row and the run.create row keep (nil when
+// imageAdmission is decideImageAdmission for the request r, and at create (not preflight, a dry run) a
+// refusal also writes its run.create denied row.
+func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried string, profile []string, create bool) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+	v, warning, refusal := s.decideImageAdmission(r.Context(), req, carried, profile)
+	if create && refusal != nil && refusal.body.Reason != "" {
+		s.auditImageAdmissionDenied(r, createDigestInput(req, carried), v, refusal.body.Reason)
+	}
+	return v, warning, refusal
+}
+
+// decideImageAdmission decides the member's image: the verdict the run row and the run.create row keep (nil when
 // no check applies), audit mode's warning ("" for none), or the refusal. With a refusal from the check, the
 // verdict is the refused one, for the denied audit row only.
 //
@@ -114,7 +121,7 @@ func (s *Server) auditImageAdmissionDenied(r *http.Request, ref string, v *types
 // (createDigestInput): the member's image, an attached workspace's base image, or a policy-carried one; the
 // convention image is not a member's choice. Operators and the break-glass admin are not checked, as with
 // the digest rule.
-func (s *Server) imageAdmission(ctx context.Context, req createRunRequest, carried string, profile []string) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+func (s *Server) decideImageAdmission(ctx context.Context, req createRunRequest, carried string, profile []string) (*types.ImageAdmissionVerdict, string, *runRefusal) {
 	ref := createDigestInput(req, carried)
 	if ref == "" || s.runUngoverned(ctx) {
 		return nil, "", nil
