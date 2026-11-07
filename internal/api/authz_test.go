@@ -306,6 +306,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/workloads/{name}/history":  {class: classMember},
 	"DELETE /api/v1/workloads/{name}":       {class: classMember},
 	"POST /api/v1/workloads/{name}/restart": {class: classMember},
+	"POST /api/v1/workloads/{name}/preview": {class: classMember},
 	"POST /api/v1/workload-bindings":        {class: classSecurity},
 	"GET /api/v1/workload-bindings":         {class: classSecurity},
 	"DELETE /api/v1/workload-bindings/{id}": {class: classSecurity},

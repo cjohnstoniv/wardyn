@@ -1074,3 +1074,67 @@ func TestPG_Workload_ListBoundK8sWorkloadsReadsOneNamespaceOnOnePool(t *testing.
 		t.Fatalf("bound workloads of an unrecorded namespace = %+v (%v), want none", got, err)
 	}
 }
+
+// PlanWorkloadPut answers, without writing, what PutWorkload would: the same write or the same error for
+// every state a row can be in. A new API-source branch in PutWorkload needs its row here.
+func TestPG_Workload_PlanWorkloadPutMatchesPut(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runner, gen := uuid.New(), int64(1)
+
+	if _, err := pool.Exec(ctx, `INSERT INTO workloads (owner, name, source, intent, digest, created_by)
+		SELECT 'plan-cap', 'w' || g, 'api', '{}', 'x', 'plan-cap' FROM generate_series(1, $1::int) g`, store.MaxWorkloadsPerOwner); err != nil {
+		t.Fatal(err)
+	}
+	k8s := workloadPut("plan-k8s", "svc", "d1")
+	k8s.Source, k8s.SourcePoolID, k8s.SourceNamespace, k8s.SourceRunnerID, k8s.K8sGeneration = store.WorkloadSourceK8s, &poolA.ID, "team-a", &runner, &gen
+	mustPutWorkload(t, st, k8s)
+	mustPutWorkload(t, st, workloadPut("plan-same", "web", "d1"))
+	mustPutWorkload(t, st, workloadPut("plan-new", "web", "d1"))
+	mustPutWorkload(t, st, workloadPut("plan-desc", "web", "d1"))
+
+	newDigest := workloadPut("plan-new", "web", "d2")
+	descOnly := workloadPut("plan-desc", "web", "d1")
+	descOnly.Description = "only the description moved"
+	cases := []struct {
+		name    string
+		in      store.WorkloadPut
+		write   store.WorkloadWrite
+		err     error
+		wantRow bool
+	}{
+		{"no row", workloadPut("plan-none", "web", "d1"), store.WorkloadCreated, nil, false},
+		{"cap full", workloadPut("plan-cap", "extra", "d1"), "", store.ErrWorkloadCapReached, false},
+		{"custom resource row", workloadPut("plan-k8s", "svc", "d9"), "", store.ErrWorkloadSourceConflict, true},
+		{"same digest", workloadPut("plan-same", "web", "d1"), store.WorkloadUnchanged, nil, true},
+		{"new digest", newDigest, store.WorkloadUpdated, nil, true},
+		{"description only", descOnly, store.WorkloadUnchanged, nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before, beforeErr := st.GetWorkload(ctx, c.in.Owner, c.in.Name)
+			cur, planned, planErr := st.PlanWorkloadPut(ctx, c.in)
+			after, afterErr := st.GetWorkload(ctx, c.in.Owner, c.in.Name)
+			if !errors.Is(afterErr, beforeErr) || after.Workload.Generation != before.Workload.Generation ||
+				after.Workload.Description != before.Workload.Description || !after.Workload.UpdatedAt.Equal(before.Workload.UpdatedAt) {
+				t.Fatalf("the plan changed the row: before %+v (%v), after %+v (%v)", before.Workload, beforeErr, after.Workload, afterErr)
+			}
+			if (cur != nil) != c.wantRow || cur != nil && cur.ID != before.Workload.ID {
+				t.Fatalf("plan row = %+v, want the stored row = %v", cur, c.wantRow)
+			}
+			_, put, putErr := st.PutWorkload(ctx, c.in)
+			if planned != put || !errors.Is(planErr, putErr) || !errors.Is(putErr, planErr) {
+				t.Fatalf("plan = %q, %v; put = %q, %v; want the same", planned, planErr, put, putErr)
+			}
+			if put != c.write || !errors.Is(putErr, c.err) {
+				t.Fatalf("put = %q, %v; want %q, %v", put, putErr, c.write, c.err)
+			}
+		})
+	}
+
+	if _, _, err := st.PlanWorkloadPut(ctx, k8s); err == nil {
+		t.Fatal("plan of a custom resource's write = nil error, want a refusal: the plan is the API source's alone")
+	}
+}
