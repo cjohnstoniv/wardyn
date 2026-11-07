@@ -178,21 +178,32 @@ const warnDiskPolicyCut = "Disk size reduced to the size this run's policy sets"
 // carries: the size is shown but the guest's disk is not capped to it.
 const warnLinuxVMDiskNotCapped = "A Linux VM run does not cap its disk; the disk size is not enforced"
 
+// warnLinuxVMPidsNotCapped is the line a Linux VM run carries when it got a process limit nobody
+// wrote (a default or the ceiling's fill): the number is shown but the guest has no per-run process limit.
+const warnLinuxVMPidsNotCapped = "A Linux VM run does not cap its processes; the process limit is not enforced"
+
 // linuxVMLimitRefusal refuses what a Linux VM run cannot enforce: a main-drive size the run's policy
-// writes (md is not soft) and a process limit the policy writes. Each is refused rather
-// than dropped; nil when the run asks for neither.
+// writes (md is not soft) and a process limit somebody wrote. Each is refused rather than dropped;
+// nil when the run asks for neither.
 func linuxVMLimitRefusal(f *runFold, md mainDrive) *runRefusal {
 	if !md.Soft && md.MiB > 0 {
 		return runError(http.StatusUnprocessableEntity, reasonMainDriveUnenforceable,
 			"A Linux VM run can't enforce a disk limit yet; remove disk_mib or use a container run.")
 	}
-	pids := 0
-	if f.spec.Resources != nil {
-		pids = f.spec.Resources.PidsLimit
-	}
-	if pids > 0 {
+	if pidsLimitWritten(f) {
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"A Linux VM run can't enforce a process limit yet; remove pids_limit or use a container run.")
 	}
 	return nil
+}
+
+// pidsLimitWritten reports whether a process limit was written by someone, not filled in: the run's
+// source policy asked for one (the Requested side of the applied amount, as the cut is judged), or the
+// caller's governance profile authors one. The clamp fills an unset limit from the deployment's
+// default, and the composed spec cannot tell that from an authored one.
+func pidsLimitWritten(f *runFold) bool {
+	if a := f.place.applied.PidsLimit; a != nil && a.Requested > 0 {
+		return true
+	}
+	return f.ceiling.Unit != nil && f.ceiling.Unit.AuthoredResources.PidsLimit > 0
 }

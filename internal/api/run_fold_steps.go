@@ -925,6 +925,9 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 		if md.MiB > 0 && !slices.Contains(f.policyWarns, warnLinuxVMDiskNotCapped) {
 			f.policyWarns = append(f.policyWarns, warnLinuxVMDiskNotCapped)
 		}
+		if f.spec.Resources != nil && f.spec.Resources.PidsLimit > 0 && !slices.Contains(f.policyWarns, warnLinuxVMPidsNotCapped) {
+			f.policyWarns = append(f.policyWarns, warnLinuxVMPidsNotCapped)
+		}
 	}
 	if !md.Soft && md.MiB > 0 && types.MachineKind(f.req.MachineKind) != types.MachineLinuxVM && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
 		msg := mainDriveUnenforceableMsg()
