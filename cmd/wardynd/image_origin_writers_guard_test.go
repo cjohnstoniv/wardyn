@@ -10,7 +10,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -117,4 +119,62 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 	if len(literalOrigins) > 0 {
 		t.Errorf(`a "wardyn" string literal is used as an image origin at %v: only newStepRun writes it, through types.ImageOriginWardyn`, literalOrigins)
 	}
+	for _, site := range sqlWritingWardynOrigin(t, root) {
+		t.Errorf("%s: an SQL statement naming image_admission carries a wardyn literal; only newStepRun writes that origin, as a bound value", site)
+	}
+}
+
+// sqlComments matches SQL line and block comments, which prose about Wardyn fills.
+var sqlComments = regexp.MustCompile(`(?s)--[^\n]*|/\*.*?\*/`)
+
+// sqlWritingWardynOrigin is the store side the AST walk above skips: every Go string literal under internal/store
+// and every migration statement that names image_admission, holding "wardyn" in any case (the store writes the
+// column only from a bound verdict, so a literal there is a second writer).
+func sqlWritingWardynOrigin(t *testing.T, root string) []string {
+	t.Helper()
+	var sites []string
+	check := func(where, stmt string) {
+		low := strings.ToLower(stmt)
+		if strings.Contains(low, "image_admission") && strings.Contains(low, "wardyn") {
+			sites = append(sites, where)
+		}
+	}
+	err := filepath.WalkDir(filepath.Join(root, "internal", "store"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if perr != nil {
+			t.Errorf("parse %s: %v", path, perr)
+			return nil
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if v, uerr := strconv.Unquote(lit.Value); uerr == nil {
+					rel, _ := filepath.Rel(root, fset.Position(lit.Pos()).Filename)
+					check(filepath.ToSlash(rel)+":"+strconv.Itoa(fset.Position(lit.Pos()).Line), v)
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/store: %v", err)
+	}
+	migrations, err := filepath.Glob(filepath.Join(root, "internal", "db", "migrations", "*.sql"))
+	if err != nil || len(migrations) == 0 {
+		t.Fatalf("no migrations under internal/db/migrations (%v)", err)
+	}
+	for _, path := range migrations {
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			t.Fatalf("read %s: %v", path, rerr)
+		}
+		for i, stmt := range strings.Split(sqlComments.ReplaceAllString(string(b), ""), ";") {
+			check(filepath.Base(path)+" statement "+strconv.Itoa(i+1), stmt)
+		}
+	}
+	return sites
 }
