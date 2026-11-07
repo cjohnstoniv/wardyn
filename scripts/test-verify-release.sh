@@ -69,7 +69,7 @@ cat > "${bin}/gh" <<'STUB'
 echo "gh $*" >> "${LOG}"
 case "$1 $2" in
   "release view")
-    echo "prerelease=false draft=false assets=0 title=${RELEASE_TITLE-Wardyn v${VER}}"
+    echo "prerelease=false draft=false assets=0 title=\"$(t=${RELEASE_TITLE-Wardyn v${VER}}; printf '%s' "${t//$'\n'/\\n}")\""
     while read -r i; do echo "sbom-$i.cdx.json"; done < "${DIR}/images.txt"
     # The package exists from 0.9.3 (and a test can leave it out).
     # The licence tarball exists from 0.9.4.
@@ -186,6 +186,10 @@ RELEASE_TITLE='v0.10.0-rc.14' run 0.10.0-rc.14 v0.10.0-rc.14 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: "v0.10.0-rc.14" (want "Wardyn v0.10.0-rc.14")$' >/dev/null || fail "V=0.10.0-rc.14 with a wrong title was accepted: rc=${rc} $(printf '%s' "${out}" | grep -i title)"
 RELEASE_TITLE='' run 0.10.0 v0.10.0 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: "" (want "Wardyn v0.10.0")$' >/dev/null || fail "V=0.10.0 with an empty title was accepted: rc=${rc}"
+# A title with a line break must not pass, nor stand in for an asset that is missing.
+NO_PKG=1 RELEASE_TITLE="Wardyn v0.10.0"$'\n'"wardyn-runnerd.pkg" run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: ' >/dev/null && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-runnerd.pkg' >/dev/null \
+  || fail "V=0.10.0 with a two-line title naming a missing asset was accepted: rc=${rc} $(printf '%s' "${out}" | grep -iE 'title|missing')"
 RELEASE_TITLE='0.9.5' run 0.9.5 v0.9.5 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.5 (cut before titles were held) exited ${rc} over its title: $(printf '%s' "${out}" | tail -3)"
 pass "the release title is required from 0.10.0 on, and not before"
