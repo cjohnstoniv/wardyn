@@ -35,7 +35,7 @@ export interface PolicyRow {
 }
 
 /** The tool default's effect in the canon's words: Hold and Run automatically as Review has them, Block it as the tool rules do. */
-const EFFECT_VALUE: Record<string, string> = { allow: NR_REVIEW.POLICY_AUTOMATIC, hold: NR_REVIEW.POLICY_HOLD, deny: NR_TOOLS.EFFECT_DENY };
+const EFFECT_VALUE: Record<string, string> = { allow: NR_REVIEW.POLICY_AUTOMATIC, hold: NR_REVIEW.POLICY_HOLD, approve_each: NR_TOOLS.EFFECT_APPROVE_EACH, deny: NR_TOOLS.EFFECT_DENY };
 
 /** The server's source id for an interactive Claude Code default whose settings accept file edits unasked (run_access_facts.go). */
 const ACCEPT_EDITS_SOURCE = "accept_edits";

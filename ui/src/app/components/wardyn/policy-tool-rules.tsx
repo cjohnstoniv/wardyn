@@ -83,14 +83,20 @@ function EffectSelect({
   value,
   label,
   onChange,
+  disabledEffects,
+  describedBy,
 }: {
   value: ToolEffect;
   label: string;
   onChange: (e: ToolEffect) => void;
+  /** Offered but greyed, with its reason as text the caller points describedBy at. */
+  disabledEffects?: readonly ToolEffect[];
+  describedBy?: string;
 }) {
   return (
     <select
       aria-label={label}
+      aria-describedby={describedBy}
       value={value}
       onChange={(e) => onChange(e.target.value as ToolEffect)}
       className={cn(
@@ -100,7 +106,7 @@ function EffectSelect({
       )}
     >
       {TOOL_EFFECTS.map((e) => (
-        <option key={e} value={e} className="text-foreground">
+        <option key={e} value={e} disabled={disabledEffects?.includes(e)} className="text-foreground">
           {e}
         </option>
       ))}
@@ -144,7 +150,7 @@ export function ToolRulesSection({
         </Chip>
       </div>
       <p className="mb-3 text-xs leading-snug text-muted-foreground">
-        Consulted only for a run whose tool approvals are held. A rule narrows what a human is
+        Consulted only for a run whose tool approvals are held, except approve_each, which the proxy enforces on any run. A rule narrows what a human is
         asked about — it never widens what the agent may do. Evaluated outside the sandbox, so the
         agent cannot rewrite the rules that govern it.
       </p>
@@ -200,13 +206,20 @@ export function ToolRulesSection({
         <div className="flex h-8 items-center rounded-md border border-dashed border-input bg-muted px-3 font-mono text-body text-muted-foreground">
           {TOOL_RULE_DEFAULT}
         </div>
-        <EffectSelect value={defaultEffect} label="Default effect" onChange={(e) => write(named, e)} />
+        <EffectSelect
+          value={defaultEffect}
+          label="Default effect"
+          onChange={(e) => write(named, e)}
+          disabledEffects={["approve_each"]}
+          describedBy="tool-rules-default-note"
+        />
         <span />
       </div>
-      <p className="text-xs leading-snug text-muted-foreground">
+      <p id="tool-rules-default-note" className="text-xs leading-snug text-muted-foreground">
         The effect for any tool no rule names. It cannot be removed — leave it on{" "}
         <span className="font-mono text-foreground">hold</span> to keep today&apos;s behaviour for
-        everything unlisted.
+        everything unlisted. <span className="font-mono text-foreground">approve_each</span> is greyed here:
+        Approve each call names one MCP tool. Add it as a rule for that tool.
       </p>
 
       <Button

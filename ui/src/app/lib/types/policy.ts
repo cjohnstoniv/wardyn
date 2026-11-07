@@ -132,9 +132,8 @@ export interface LLMInspectionSpec {
 export type ToolEffect = "allow" | "hold" | "approve_each" | "deny";
 
 // Display order for the effect picker: least to most restrictive. approve_each
-// (every call of one MCP tool waits for a person) is not in it: the picker has no
-// control for it yet, and TOOL_EFFECTS_ACCEPTED is what a rule may carry.
-export const TOOL_EFFECTS: readonly ToolEffect[] = ["allow", "hold", "deny"];
+// (every call of one MCP tool waits for a person) sits between hold and deny.
+export const TOOL_EFFECTS: readonly ToolEffect[] = ["allow", "hold", "approve_each", "deny"];
 export const TOOL_EFFECTS_ACCEPTED: readonly ToolEffect[] = ["allow", "hold", "approve_each", "deny"];
 
 // Mirrors types.ValidToolRule: approve_each names one MCP tool's exact name.
