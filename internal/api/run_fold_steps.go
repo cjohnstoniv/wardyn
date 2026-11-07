@@ -610,8 +610,10 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 	var lane adoEntraRun
 	lane, f.adoDecline = resolveADOEntraLane(f.scmSite, f.spec.WorkspaceRepos, f.req.Repo, adoLaneOwnerOf(f.r))
 	narrowed, dropped, past, none := adoStandingAtDoor(f.spec, lane, f.ceiling)
-	if f.mode != foldCreate && refuseADOStandingAtDoor(f.w, f.spec.AzureDevOpsCapabilities, past, none) {
-		return false
+	if f.mode != foldCreate {
+		if refuseADOStandingAtDoor(f.w, f.spec.AzureDevOpsCapabilities, past, none) {
+			return false
+		}
 	}
 	f.adoNarrowed = narrowed
 	recordADONarrowing(rec, dropped)

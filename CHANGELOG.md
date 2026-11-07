@@ -23,7 +23,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Image admission is off by default: no image check runs until a security operator sets site setting `images.admission.mode` to `audit` or `enforce`. A governance profile that lists `required_image_signers` holds its members to those signers even while the site mode is off.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
-  Without it a `POST /api/v1/runs` that sends an `Idempotency-Key` fails. An upgrade from before 0.10.0-rc.12 also
+  Without it a `POST /api/v1/runs` that sends an `Idempotency-Key` fails. Grant it `SELECT, INSERT` on
+  `audit_checkpoints` too; the migration already does for a role that can call `audit_append`. An upgrade from before 0.10.0-rc.12 also
   needs every grant the 0.10.0-rc.12 notes list: `SELECT, INSERT, UPDATE, DELETE` on `wall_presets`, `kept_machines`,
   `workloads`, `workload_bindings`, `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`,
   `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`,
