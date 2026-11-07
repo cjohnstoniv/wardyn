@@ -1,4 +1,4 @@
-# Session continuity — frozen strings (#1995, mock M12)
+# Session continuity — frozen strings (#1995)
 
 The console module is `ui/src/app/lib/session-continuity-copy.ts`;
 `session-continuity-copy.test.ts` parses the table below and compares every row with it byte for
