@@ -458,6 +458,8 @@ A service identity is automation that runs under its own name. It is not a perso
 grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 subject_token=<the person's token>
 subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_token, …:jwt)
+actor_token=<the acting agent's token>                              (optional)
+actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required with actor_token; or …:id_token, …:jwt)
 ```
 
 - The subject token must verify against Wardyn's issuer and key set, be unexpired, carry an `iat`, and be either:
@@ -468,12 +470,18 @@ subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_to
 - The person is then admitted exactly as a sign-in would admit them — reserved subjects, the email-domain gate, role and user-type derivation from the token's own claims.
 - On success the answer is `{"access_token":"wdg_…","token_type":"Bearer","expires_in":600,…}`: ten minutes, no refresh token.
 - A portal that needs longer exchanges the person's live token again.
-- `actor_token` is refused (the authenticated portal is the actor), and a delegated token cannot itself be exchanged.
+- A delegated token cannot itself be exchanged.
+- **Naming the acting agent** (`actor_token`, on by default with no setting: it is recorded, never authorised, so it grants nothing).
+  - The actor token must verify against Wardyn's issuer and key set, be unexpired, and carry an `iat` and a `sub`.
+  - Its `aud` must hold the portal's client id and must not hold Wardyn's: a person's own Wardyn token can never name an agent.
+  - It must not name the person (the same `sub`, or on Entra ID the same `tid` and `oid`).
+  - When the person's token carries `may_act`, the agent's `sub` (and `iss`, if named) must match it.
+  - A portal holding tokens for several people could name one person's token as another's agent. The identity provider bounds this; issue `may_act` where it supports it.
 
 | Answer | Why |
 |---|---|
 | `401 invalid_client` | no, wrong or revoked portal credential (`auth.fail`, actor `wardyn/delegation`) |
-| `400 invalid_grant` | the subject token did not verify, was not issued to or for the portal, or its person was refused as a sign-in would be, or their sessions were revoked after it was issued |
+| `400 invalid_grant` | the subject token did not verify, was not issued to or for the portal, or its person was refused as a sign-in would be, or their sessions were revoked after it was issued; or the actor token was refused |
 | `403 access_denied` | the person is not in the portal's group |
 
 - **What a delegated token can do.**
@@ -485,6 +493,7 @@ subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_to
 - **What is recorded.**
   - Each exchange writes `delegation.exchange` (actor `delegate:<id>`, target the person).
   - Every row a delegated request writes — the API's, the identity provider's, the attach and UI-gateway rows of a ticket it minted — has the person as actor and `data.via = {"delegate":"<portal id>","grant":"<token id>"}`.
+  - When the exchange named an agent, `data.via.actor = {"sub":"…","iss":"…"}` on the rows the delegated request writes, and on the exchange's success row as `actor`.
   - A run it launches carries `created_via` (the portal id) on the run row and in the API.
 - **Revocation.**
   - Revoking the portal ends every delegated token it holds on their next request.
