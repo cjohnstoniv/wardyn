@@ -44,6 +44,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// proxyImageSleep is the wait between proxy image tries at start: sleepCtx, a variable only so a test can
+// end the wait.
+var proxyImageSleep = sleepCtx
+
 func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity, stateDir string, opts serveOptions) (runnerRuntime, error) {
 	switch opts.substrate {
 	case "k8s":
