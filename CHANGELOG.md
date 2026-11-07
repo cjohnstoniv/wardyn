@@ -25,6 +25,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Revoking a personal API token, or ending a CLI session, now closes a `wardyn window` that it opened. An at-start window asked for with an API token or a CLI sign-in before the upgrade does not open; open it again with `wardyn window`.
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
 - The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
+- A Linux VM run no longer silently drops a limit it cannot enforce: a policy disk size or process limit is refused with a plain sentence, and a requested disk size is shown as not enforced.
+- Ending a Linux VM run now wipes the AWS sign-in caches inside the guest before it is kept, and reports it when it cannot.
+- Starting a desktop sign-in on a Linux VM run is now refused instead of freezing the VM, a Linux VM's output recovery is refused with a reason, and a VM run's folder-share cleanup is retried until it finishes.
 
 ## [0.10.0-rc.13] — 2026-11-04
 

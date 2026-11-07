@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,5 +172,50 @@ func TestPreviewKeepsThePolicyCutWarning(t *testing.T) {
 	got := previewSafeWarnings([]string{warnDiskPolicyCut, "not on the list"})
 	if len(got) != 1 || got[0] != warnDiskPolicyCut {
 		t.Errorf("previewSafeWarnings = %v, want only %q", got, warnDiskPolicyCut)
+	}
+}
+
+// TestLinuxVMRunRefusesALimitItCannotEnforce: a Linux VM's disk and process count are not the
+// container's, so a size or limit the run's policy writes is refused even on a runner that caps
+// containers, and a requested (soft) size is disclosed instead of refused.
+func TestLinuxVMRunRefusesALimitItCannotEnforce(t *testing.T) {
+	unlimited := types.EffectiveLimit{Cap: types.LimitAmount{Unlimited: true}, Default: types.LimitAmount{Unlimited: true}}
+	for name, tc := range map[string]struct {
+		kind    string
+		res     types.ResourceLimits
+		request int
+		want    string // the refusal's reason; "" admits
+		warn    bool
+	}{
+		"a policy disk size":   {kind: "linux_vm", res: types.ResourceLimits{DiskMiB: 4096}, want: reasonMainDriveUnenforceable},
+		"a policy pids limit":  {kind: "linux_vm", res: types.ResourceLimits{PidsLimit: 256}, want: reasonRequestFieldUnavailable},
+		"a requested size":     {kind: "linux_vm", request: 2048, warn: true},
+		"nothing":              {kind: "linux_vm"},
+		"a container disk":     {kind: "container", res: types.ResourceLimits{DiskMiB: 4096}},
+		"a container pids cap": {kind: "container", res: types.ResourceLimits{PidsLimit: 256}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := &Server{cfg: Config{Runner: &fakeRunner{capsDisk: types.StorageEnforcementFilesystem}}}
+			rec := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil)
+			req := &createRunRequest{MachineKind: tc.kind}
+			if tc.request > 0 {
+				req.Resources = &client.RunResources{DiskMiB: tc.request}
+			}
+			f := &runFold{mode: foldPreflight, w: rec, r: r, req: req,
+				spec:  types.RunPolicySpec{Resources: &tc.res},
+				place: runPlacement{limits: types.EffectiveRunLimits{DiskMiB: unlimited}}}
+			ok := srv.stepMainDrive(f, &foldRecorder{})
+			if tc.want == "" {
+				if !ok || rec.Code != http.StatusOK {
+					t.Fatalf("stepMainDrive = %v, %d %s, want admitted", ok, rec.Code, rec.Body)
+				}
+			} else if ok || rec.Code != http.StatusUnprocessableEntity || errorReasonOf(rec.Body.String()) != tc.want {
+				t.Fatalf("stepMainDrive = %v, %d %s, want 422 %s", ok, rec.Code, rec.Body, tc.want)
+			}
+			if got := slices.Contains(f.policyWarns, warnLinuxVMDiskNotCapped); got != tc.warn {
+				t.Errorf("disclosure = %v, want %v (warns %v)", got, tc.warn, f.policyWarns)
+			}
+		})
 	}
 }

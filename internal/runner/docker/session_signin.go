@@ -24,13 +24,23 @@ func (d *Driver) ExecStreamAs(ctx context.Context, ref, user string, spec runner
 	if user == "" {
 		return nil, errors.New("docker: exec stream as: no user")
 	}
+	if d.vmFor(ctx, ref) != nil {
+		// A VM's exec runs as the guest agent's user, never as user: refuse rather than run the person's stack as the agent.
+		return nil, runner.ErrSigninUnsupported
+	}
 	return d.execStream(ctx, ref, user, spec)
 }
 
 // SignalMain sends signal to the container's main process from outside its
 // pid namespace, which is the only place a stop or continue of pid 1 is
 // delivered from.
+//
+// A VM ref is refused (runner.ErrSigninUnsupported): its main process is the hypervisor, and a stop
+// would freeze the whole guest.
 func (d *Driver) SignalMain(ctx context.Context, ref, signal string) error {
+	if d.vmFor(ctx, ref) != nil {
+		return runner.ErrSigninUnsupported
+	}
 	if _, err := d.cli.ContainerKill(ctx, ref, client.ContainerKillOptions{Signal: signal}); err != nil {
 		return fmt.Errorf("docker: signal %s: %w", signal, err)
 	}

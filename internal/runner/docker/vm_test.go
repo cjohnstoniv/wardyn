@@ -424,9 +424,10 @@ func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 		"a bound drive, no virtiofs": {mut: func(s *runner.SandboxSpec) {
 			s.Drives = []types.DriveMount{{ObjectName: "/srv/share/alice", Backend: types.DriveBackendHostPath}}
 		}, want: "cannot share a folder"},
-		"record":      {rec: true, want: "not recorded"},
-		"agent start": {mut: agentStart, want: "not the agent CLI"},
-		"tiny":        {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
+		"record":             {rec: true, want: "not recorded"},
+		"agent start":        {mut: agentStart, want: "not the agent CLI"},
+		"tiny":               {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
+		"a policy disk size": {mut: func(s *runner.SandboxSpec) { s.Resources.DiskMiB = 2048 }, want: "can't enforce a disk limit yet"},
 		"folder, no virtiofs": {mut: func(s *runner.SandboxSpec) {
 			s.Mounts = []runner.Mount{{Source: "/home/me/project", Target: "/home/agent/work", MemberAuthored: true}}
 		}, want: "cannot share a folder"},
@@ -500,6 +501,21 @@ func TestVMRefFoundAgainAndUnsupportedVerbsRefused(t *testing.T) {
 		if !errors.Is(err, errVMUnsupported) {
 			t.Errorf("%s on a VM = %v", name, err)
 		}
+	}
+	// Output recovery is a refusal with a reason, not a failed read.
+	if err := d2.RecoverOutput(ctx, sb.Ref, &bytes.Buffer{}); !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		t.Errorf("recover_output on a VM = %v, want runner.ErrOutputUnrecoverable", err)
+	}
+	// The container desktop sign-in verbs never reach a VM: SIGSTOP would stop QEMU, and an exec as
+	// the person would run as the guest agent's user.
+	if err := d2.SignalMain(ctx, sb.Ref, "SIGSTOP"); !errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("SignalMain on a VM = %v, want runner.ErrSigninUnsupported", err)
+	}
+	if _, err := d2.ExecStreamAs(ctx, sb.Ref, runner.SigninPersonUser, runner.ExecSpec{Argv: []string{"true"}}); !errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("ExecStreamAs on a VM = %v, want runner.ErrSigninUnsupported", err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running || c.state.Paused {
+		t.Errorf("the QEMU container after the refused sign-in verbs = %+v, want running", c.state)
 	}
 	// A container ref on the same driver is untouched by the VM path.
 	if d2.vmFor(ctx, proxyContainerName(spec.RunID)) != nil {
@@ -1136,5 +1152,91 @@ func TestVMGuestFilesResolveAnUnsetMode(t *testing.T) {
 	}
 	if got[1].Mode != 0o600 || !got[1].AgentOwned {
 		t.Errorf("a set mode or owner was changed: %+v", got[1])
+	}
+}
+
+// A requested or default (soft) disk size is advisory for a VM: the run starts.
+func TestVMSoftDiskSizeStillCreates(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Resources.DiskMiB, spec.Resources.DiskMiBSoft = 2048, true
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("a soft disk size refused a VM run: %v", err)
+	}
+}
+
+// A kept end of a VM wipes the AWS credential caches in the guest before powering down, for a run
+// staged an AWS profile; a failed wipe is answered; a run with no profile runs no wipe.
+func TestVMEndWipesAWSCachesInTheGuest(t *testing.T) {
+	for name, tc := range map[string]struct {
+		profile bool
+		script  string
+		wiped   bool
+		failed  bool
+	}{
+		"staged profile":    {profile: true, script: `echo wiped > "$MARK"`, wiped: true},
+		"the wipe fails":    {profile: true, script: `exit 3`, failed: true},
+		"no staged profile": {script: `echo wiped > "$MARK"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mark := filepath.Join(t.TempDir(), "mark")
+			old := awsCacheWipeArgv
+			awsCacheWipeArgv = []string{"sh", "-c", "MARK=" + mark + "; " + tc.script}
+			t.Cleanup(func() { awsCacheWipeArgv = old })
+			r := newVMRig(t)
+			spec := vmSpec()
+			if tc.profile {
+				spec.Env = map[string]string{runner.AWSProfileRecordEnv: "cHJvZmlsZQ=="}
+			}
+			sb, err := r.d.CreateSandbox(context.Background(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = r.d.EndSandbox(context.Background(), sb.Ref)
+			if got := errors.Is(err, runner.ErrAWSCacheWipeFailed); got != tc.failed || (err != nil && !tc.failed) {
+				t.Fatalf("EndSandbox = %v, want ErrAWSCacheWipeFailed %v", err, tc.failed)
+			}
+			if _, serr := os.Stat(mark); (serr == nil) != tc.wiped {
+				t.Errorf("wipe ran = %v, want %v", serr == nil, tc.wiped)
+			}
+			r.mu.Lock()
+			powered := slices.Contains(r.qmp, "system_powerdown")
+			r.mu.Unlock()
+			if !powered {
+				t.Error("a wipe outcome stopped the end before the guest was powered down")
+			}
+		})
+	}
+}
+
+// A share cleanup that fails once is answered by the end and finished by its retry, with the QEMU
+// container (and so the kept disk) retained throughout.
+func TestVMEndRetriesAShareCleanup(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}, {Source: t.TempDir(), Target: "/workspace/ref", ReadOnly: true}}
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := vmfsName(spec.RunID, 1)
+	r.f.mu.Lock()
+	r.f.failRemove = map[string]int{second: 1}
+	r.f.mu.Unlock()
+	if err := r.d.EndSandbox(ctx, sb.Ref); err == nil || !strings.Contains(err.Error(), second) {
+		t.Fatalf("EndSandbox = %v, want the second share's failure", err)
+	}
+	if !r.container(t, vmfsName(spec.RunID, 0)).removed || r.container(t, second).removed {
+		t.Fatal("the first end did not remove share 0 and leave share 1")
+	}
+	if err := r.d.EndSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("the retry = %v, want it to converge", err)
+	}
+	if !r.container(t, second).removed {
+		t.Fatal("the retry left share 1")
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+		t.Fatalf("the QEMU container after the end = removed %v, %+v; want stopped and kept", c.removed, c.state)
 	}
 }

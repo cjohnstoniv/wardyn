@@ -389,11 +389,12 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 // Fails closed: a run id it cannot resolve is an error, never a success that left the proxy up.
 // The AWS credential caches are wiped first (wipeAWSCaches): the kept layer must not hold them.
 // A wipe that failed is answered, once the end itself has succeeded, as runner.ErrAWSCacheWipeFailed.
-func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
+func (d *Driver) EndSandbox(ctx context.Context, ref string) (endErr error) {
 	wipeErr := d.wipeAWSCaches(ctx, ref)
 	if v := d.vmFor(ctx, ref); v != nil {
 		d.vmPowerdown(ctx, v, ref)
-		defer d.warnVMSidecars(ctx, v.runID)
+		// A sidecar that would not go is answered, not only logged: the end is retried until it converges.
+		defer func() { endErr = errors.Join(endErr, d.removeVMSidecars(ctx, v.runID)) }()
 	}
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
