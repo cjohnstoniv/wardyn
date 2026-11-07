@@ -29,9 +29,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A governance profile's `github_capabilities` now limits its members' runs, and a run's GitHub CLI access is limited to the run's own GitHub capabilities. A run that relied on wider access is now refused or gets only the GitHub capabilities both lists name.
 - A file or variable secret that reaches the 8-byte minimum only with its trailing line break is no longer delivered to a run and can no longer be saved: output shows it without the break, which can't be masked. Store a longer value.
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
+- `POST /api/v1/runs` now honours `Idempotency-Key`. A client that already sends that header gets the first answer
+  replayed for 24 hours instead of a new run, and a value outside 1 to 255 visible ASCII characters is refused with
+  400 `idempotency_key_invalid`. A retry with a key is safe only once every control-plane replica runs 0.10.0 or
+  later; an older replica ignores the key.
 
 ### Added
 
+- `POST /api/v1/runs` honours an `Idempotency-Key` header for 24 hours. A retry with the same key and body gets the
+  first answer back with `Idempotent-Replayed: true` instead of a second run. A different body is refused (422
+  `idempotency_key_reused`), and a retry while the first is still being answered gets 409
+  `idempotency_key_in_flight`. `/healthz` reports `idempotent_run_create`. On by default; a request without the
+  header is unchanged.
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 
 ### Fixed

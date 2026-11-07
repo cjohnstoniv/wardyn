@@ -1285,7 +1285,7 @@ erases one person's retained records by explicit scope, in one audited act
   - `secret_owner_generations` keeps the subject id (below).
 - The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
-  erasure again once they expire to delete them.
+  erasure again once they expire to delete them. `run_create_keys_deleted` counts their `POST /runs` idempotency keys.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.

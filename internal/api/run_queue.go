@@ -300,6 +300,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	case errors.Is(err, store.ErrRunnerPoolStale):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
+	case errors.Is(err, store.ErrRunCreateKeySuperseded):
+		writeRunCreateKeyInFlight(w)
+		return
 	case err != nil:
 		writeServerError(w, r, "create run", err)
 		return
@@ -541,6 +544,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
+	stampIdempotencyKey(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
 		created.ID.String(), "success", mustJSON(withRunUserType(ctx, created.UserType, createData))))
 	s.auditRunComponents(ctx, created.ID, q.createdByType, created.CreatedBy, q.f.comps)

@@ -370,8 +370,18 @@ func TestCreateRunKeyStaleAttemptCannotInsert(t *testing.T) {
 	}
 	ids.mu.Lock()
 	defer ids.mu.Unlock()
-	if len(ids.revoked) != 1 {
-		t.Errorf("revoked identities = %v, want the stale attempt's one", ids.revoked)
+	uncommitted := 0
+	for _, rid := range ids.revoked {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE id = $1`, rid).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			uncommitted++
+		}
+	}
+	if uncommitted != 1 {
+		t.Errorf("revoked identities = %v, want the stale attempt's one, whose run was never committed", ids.revoked)
 	}
 }
 
@@ -518,7 +528,7 @@ func TestCreateRunKeyInvalid400(t *testing.T) {
 // keeps keys.
 func TestHealthz_IdempotentRunCreate(t *testing.T) {
 	srv, _ := pgHarness(t)
-	w := do(t, srv, http.MethodGet, "/healthz", "", "")
+	w := keyedPost(t, srv, http.MethodGet, "/healthz", "", func(*http.Request) {}, nil)
 	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("healthz body: %v", err)
