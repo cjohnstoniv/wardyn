@@ -94,7 +94,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn diff` and `wardyn apply --dry-run` ask the server what the apply would do, so they now show refusals the apply would meet and whether a run would start. `apply --dry-run` exits 1 when one would be refused, and `diff` exits 2 and names the reason when the launch would be refused. Against a server without the preview route they fall back to the old client-side comparison and say so on stderr.
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
 - `edit-base` no longer prints the setup-code file's path. It points at the window's Type code and Show code buttons. The guest agent now answers three edit-window requests in tools mode only (open an admin Terminal, trust the install list's certificates, open Full Disk Access), each run as the console user.
-- A runner whose proxy image cannot be pulled at start now waits and tries again (every 15 seconds at first, then every 5 minutes) instead of exiting and restarting; `wardyn-runnerd doctor` shows the next try in its status line, and the organisation is told why once the runner connects. A stop still exits cleanly.
+- A runner whose proxy image cannot be pulled at start now waits and tries again (after about 15 seconds at first, backing off to about every five minutes) instead of exiting and restarting; `wardyn-runnerd doctor` shows the next try in its status line, and the organisation is told why once the runner connects. A stop still exits cleanly.
 - An agent no longer sees a remote MCP server's tools that its run's tool rules block: Wardyn leaves them out of the server's tool list, page by page, and still refuses their calls.
 - `wardyn-runnerd doctor` on a Mac with a base now says which folder-share setting is missing: a `folder-shares` stage names the drive root or Full Disk Access to set, and is a skip, never a failure.
 
@@ -140,12 +140,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Erasing a person's run tasks now also clears the answers kept for their `POST /api/v1/runs` idempotency keys; a retry after the erasure gets a `201` rebuilt from the run, and each key stays bound.
 - Ending a Linux VM run whose VM the runner can no longer reach, because VM sandboxes were turned off, now also removes its sidecars.
 - The run page's layout preset buttons (Live, Finished) are now a labelled group and say which one is pressed.
-- Settings: a model provider's run identity row that is already on can be switched off where the install cannot sign.
+- Settings: an Amazon Bedrock SSO provider's run identity row that is already on can be switched off where the install cannot sign its AWS calls through the proxy.
 
 ### Security
 
 - A run's image check is made where the run is created and the run is pinned to the checked digest, so an image re-tagged after the check is not what runs.
-- Wardyn now builds with Go 1.27.3 and go-jose 4.1.7, which fix certificate-verification and token-parsing security issues.
+- Wardyn's container images now build with Go 1.27.3, and Wardyn uses go-jose 4.1.7, which fix certificate-verification and token-parsing security issues.
 
 ### Known issues
 
