@@ -25,7 +25,7 @@
 
 - `scope` is `member` (default: the image a member names) or `all` (also the convention image).
 - A governance profile that lists `required_image_signers` is held to those signers even while the site mode is `off` or `audit`. A profile can only tighten.
-- A run that was queued is checked again when it starts. A preview (Review) makes the same check and writes no audit row.
+- A run that was queued is checked again when it starts. `POST /runs/preflight` makes the same check and writes no audit row. The policy preview only reports "checked at launch" and reads no registry.
 - `enforce` with no signers and scope `member` is refused when you save it, because it would refuse every image. Use `audit` first.
 
 ## Turn it on: audit first
@@ -165,5 +165,5 @@ The full table is in the [SDK reference](../sdk.md). Each refusal also writes a 
 
 ## Audit
 
-- `run.create` carries `image_admission` (mode, verdict, digest, signer, identity or key id, attestations). The key is absent while the mode is `off`.
+- `run.create` carries `image_admission` (mode, verdict, digest, signer, identity or key id, attestations). The key is absent while the mode is `off` and no profile names `required_image_signers`.
 - `site_config.write` records the mode, scope, signer names and their before and after, as in [Audit actions](../AUDIT-ACTIONS.md).
