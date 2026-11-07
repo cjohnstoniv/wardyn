@@ -108,7 +108,7 @@ A model run is credentialed by the model provider it chose (`enforceRunModelProv
 
 ### The provider kinds
 
-- **API key** (`anthropic_api_key`, `openai_api_key`): each person stores their own key for the provider. The proxy injects `x-api-key` at startup; **never resident**.
+- **API key** (`anthropic_api_key`, `openai_api_key`): each person stores their own key for the provider. The proxy adds it to the outgoing request, as `x-api-key` for `anthropic_api_key` and as `Authorization: Bearer` for `openai_api_key`; **never resident**.
 - **Claude subscription** (`anthropic_subscription`): each person signs in to the provider from Getting started.
   - A short-lived sign-in sandbox runs `claude setup-token`. The captured token is stored age-encrypted in that person's own namespace and injected proxy-side as `Authorization: Bearer`.
   - The sandbox holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
@@ -121,7 +121,8 @@ A model run is credentialed by the model provider it chose (`enforceRunModelProv
 - **AWS Bedrock** is a provider of kind `bedrock_sso` (each person signs in with AWS; the region, model and base URL live on the provider record) or `bedrock_bearer`.
   - With `bedrock_bearer`, each person stores a Bedrock bearer token, proxy-injected as `Authorization: Bearer` into `bedrock-runtime.*`, **never resident**.
   - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
-  - A `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [threat model §5.1a](../../threatmodel/THREAT-MODEL.md#51a-llm-egress-content-inspection--the-honest-claims-contract)).
+  - By default a `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [threat model §5.1a](../../threatmodel/THREAT-MODEL.md#51a-llm-egress-content-inspection--the-honest-claims-contract)).
+  - With `WARDYN_AWS_SIGV4_AT_PROXY` on and every AWS host the run needs able to be re-signed, the proxy signs instead: the sandbox gets a placeholder `credential_process` profile and neither session nor role credentials are resident. Turning the switch on alone does not make every host eligible; a run with an ineligible host keeps the default ([Credentials](../CREDENTIALS.md#a-cloud-credential-made-inside)).
 
 ## Azure Foundry (`azure_foundry`)
 
