@@ -652,6 +652,16 @@ wardyn audit <id> --json       # a service token reads only its own runs' rows
 - `ci-run.sh` calls the same endpoint before launching.
 - A command that must stay up is a [service](SERVICES.md).
 
+**Retrying a launch.** `wardyn run` sends an `Idempotency-Key` and never retries a create itself. To make a job re-run safe, pass a key that is the same on every re-run of the job and differs between jobs:
+
+```sh
+wardyn run ... --idempotency-key "${GITHUB_RUN_ID}-${GITHUB_JOB}"         # GitHub Actions
+wardyn run ... --idempotency-key "${BUILD_BUILDID}-${SYSTEM_JOBNAME}"     # Azure Pipelines
+```
+
+- For 24 hours the same key and request get the first run back; `wardyn run` says so on stderr. A different request with the key gets `422` `idempotency_key_reused`.
+- Re-run only once every control-plane replica runs 0.10.0 or later. An older replica ignores the key and starts a second run.
+
 **Provisioning the CI principal, once, against this deployment:**
 
 ```sh
