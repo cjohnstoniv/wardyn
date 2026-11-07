@@ -51,7 +51,7 @@
 
 ## Model token usage
 
-- Each run's page and `GET /api/v1/runs/{id}/model-usage` show input, output, cache and reasoning tokens per model, counted from the provider's own answer and never estimated. They are readable by the run's owner and admins, for a finished run too.
+- Each run's page shows input, output and cache-read tokens per model; `GET /api/v1/runs/{id}/model-usage` adds cache-write and reasoning. All come from the provider, never estimated. They are readable by the run's owner and admins, for a finished run too.
 - Counts are the provider's. Anthropic and Bedrock input excludes cache tokens; OpenAI input includes cached tokens. Read each model's line by its `vendor`; the totals add the fields as reported.
 - It is on by default. `WARDYN_MODEL_USAGE=off` stops it ([ENV.md](../ENV.md)). A remote or hybrid laptop runner needs it set on the runner too; until then wardynd drops and does not count that runner's records.
 
