@@ -43,8 +43,11 @@ type Verdict struct {
 	FoundIssuer string `json:"found_issuer,omitempty"`
 	// Undefined: the governance profile names a signer the deployment does not define (no_policy only).
 	Undefined bool `json:"undefined,omitempty"`
-	// Detail is the first verification error, when no candidate verified (signature_missing only).
+	// Detail is the first verification error when no candidate verified (signature_missing), or why the
+	// registry could not be read (image_admission_unavailable).
 	Detail string `json:"detail,omitempty"`
+	// Cached: the verdict was kept from an earlier check of the same digest under the same requirements.
+	Cached bool `json:"cached,omitempty"`
 }
 
 // Admitted reports whether the image passed.
