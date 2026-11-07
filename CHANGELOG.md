@@ -46,6 +46,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- `wardyn diff` and `wardyn apply --dry-run` ask the server what the apply would do, so they now show refusals the apply would meet and whether a run would start. `apply --dry-run` exits 1 when one would be refused. Against a server without the preview route they fall back to the old client-side comparison and say so on stderr.
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
 - `edit-base` no longer prints the setup-code file's path. It points at the window's Type code and Show code buttons. The guest agent now answers three edit-window requests in tools mode only (open an admin Terminal, trust the install list's certificates, open Full Disk Access), each run as the console user.
 - A runner whose proxy image cannot be pulled at start now waits and tries again (every 15 seconds at first, then every 5 minutes) instead of exiting and restarting; `wardyn-runnerd doctor` shows the next try in its status line, and the organisation is told why once the runner connects. A stop still exits cleanly.
