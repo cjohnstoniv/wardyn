@@ -254,8 +254,8 @@ func TestImageAdmissionEnforceRefusesEachReason(t *testing.T) {
 				WantIssuer: "https://token.actions.githubusercontent.com"}, nil
 		}, http.StatusForbidden, string(imageadmit.SignatureInvalid), []string{admitTagRef, "https://ci.example/other@refs/heads/x", "https://ci.example/build@refs/heads/main", admitSigner}, 1},
 		{"signature invalid by key", nil, func(imageadmit.Requirements) (imageadmit.Verdict, error) {
-			return imageadmit.Verdict{Reason: imageadmit.SignatureInvalid, Digest: admitDigest, Signer: "vendor-key", Found: "key-a", Want: "key-b"}, nil
-		}, http.StatusForbidden, string(imageadmit.SignatureInvalid), []string{"signed with key key-a", "vendor-key requires key key-b"}, 1},
+			return imageadmit.Verdict{Reason: imageadmit.SignatureInvalid, Digest: admitDigest, Signer: "vendor-key", Want: "key-b"}, nil
+		}, http.StatusForbidden, string(imageadmit.SignatureInvalid), []string{"not with a key this organisation trusts", "vendor-key requires key key-b"}, 1},
 		{"attestation missing", nil, func(imageadmit.Requirements) (imageadmit.Verdict, error) {
 			return imageadmit.Verdict{Reason: imageadmit.AttestationMissing, Digest: admitDigest, Signer: admitSigner, Want: "https://slsa.dev/provenance/v1"}, nil
 		}, http.StatusForbidden, string(imageadmit.AttestationMissing), []string{admitTagRef, "https://slsa.dev/provenance/v1", admitSigner}, 1},

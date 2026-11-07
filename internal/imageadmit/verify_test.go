@@ -93,7 +93,7 @@ func TestKeyMismatchIsInvalid(t *testing.T) {
 	k1, k2 := s.NewKey(), s.NewKey()
 	v := check(t, compile(t, s, vendorKey(k1)), nil, k2.SignDSSE(statement(t, imageadmit.PredicateCosignSign, imageHex), releasesigtest.Options{}))
 	wantReason(t, v, imageadmit.SignatureInvalid)
-	if v.Found != k2.Hint() || v.Want != k1.Hint() {
+	if v.Found != "" || v.Want != k1.Hint() {
 		t.Fatalf("verdict = %+v", v)
 	}
 }
