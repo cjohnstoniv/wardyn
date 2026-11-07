@@ -29,13 +29,6 @@ func isMCPCallRow(ap types.ApprovalRequest) bool {
 		types.IsMCPCallScope(ap.RequestedScope)
 }
 
-// mcpCallTool is the display name of the tool an MCP call row asks about, "" when unreadable.
-func mcpCallTool(ap types.ApprovalRequest) string {
-	var sc types.MCPCallScope
-	_ = json.Unmarshal(ap.RequestedScope, &sc)
-	return sc.Tool
-}
-
 // mcpCallDecisionRule is decide's scope rule for an MCP call row: the approval is spent by one call,
 // so a bodyless decision or "once" stores "once" and any wider scope is refused. isMCP reports whether
 // the row is one; ok=false means the refusal is written.

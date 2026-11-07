@@ -256,7 +256,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	if sw == envCapabilitySecondHuman && isMCPCallRow(ap) {
 		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
 			" is set: a second human must decide this — you created this run, so someone else approves or denies this MCP call").
-			OnRun(ap.RunID).With("tool", mcpCallTool(ap)))
+			OnRun(ap.RunID)) // the approval id is the target; no tool detail, which the 403 body would read as a harness
 		return "", false
 	}
 	if sw == envCapabilitySecondHuman {
