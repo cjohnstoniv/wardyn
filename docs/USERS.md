@@ -20,8 +20,8 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - You may be asked to sign in sooner because an admin ended your session, your access changed, or your access was turned off. The sign-in screen says which.
 - When it lapses you sign in again. A terminal you had open closes: the server re-checks it every 30 seconds, and a lapse or a cut ends it. The page you were on, open editors in that tab and the run itself survive.
 - **Sign out** clears your cookie and ends every console session you have, in every browser. Your personal API tokens, SSH keys and runs keep working, except a console-launched run still waiting in a pool queue, which fails when it would start.
-- Signing out of Wardyn does not sign you out of your identity provider, nor the reverse, unless your admin turned on back- and front-channel logout ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). On a shared computer, sign out of your work account too.
-- A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or one of those logouts cuts it. Signing out or in in one tab updates the others in the same browser, not other browsers or devices.
+- Signing out of Wardyn does not sign you out of your identity provider. Signing out of the identity provider ends your Wardyn sessions only when your admin turned on back- or front-channel logout ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). On a shared computer, sign out of your work account too.
+- A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or one of those logouts cuts it. Signing out or in in one tab updates the others in the same browser at once; another browser or device finds its session ended at its next request.
 - A run's idle clock does not stop when your terminal closes. A lapse that closes your terminal leaves the run under its own idle and end limits, which [run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) explains. A run with idle stop off never stops for inactivity.
 
 ## What you can and cannot do
