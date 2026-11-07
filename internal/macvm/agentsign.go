@@ -4,6 +4,7 @@
 package macvm
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -167,7 +168,8 @@ type SignedAgent struct {
 type HostAgentSigner struct {
 	Dir  string
 	Exec func(ctx context.Context, argv []string) ([]byte, error)
-	Log  *slog.Logger
+	// Log gets a failed keychain cleanup (nil: slog's default).
+	Log *slog.Logger
 }
 
 // SignAgent copies the agent at path into a new temp directory and signs the copy there. The identity
@@ -214,14 +216,14 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 		"-in", filepath.Join(s.Dir, agentSigningCert), "-out", p12, "-passout", "pass:"+p12PW); err != nil {
 		return sa, err
 	}
-	if _, err := run("/usr/bin/security", "create-keychain", "-p", kcPW, kc); err != nil {
-		return sa, err
+	_, cerr := run("/usr/bin/security", "create-keychain", "-p", kcPW, kc)
+	// A create the update's cancel cut short may have made the keychain all the same.
+	if cerr == nil || ctx.Err() != nil {
+		defer s.deleteKeychain(ctx, exec, kc)
 	}
-	defer func() {
-		if _, derr := run("/usr/bin/security", "delete-keychain", kc); err == nil && derr != nil {
-			err = derr
-		}
-	}()
+	if cerr != nil {
+		return sa, cerr
+	}
 	for _, argv := range [][]string{
 		{"/usr/bin/security", "unlock-keychain", "-p", kcPW, kc},
 		{"/usr/bin/security", "import", p12, "-k", kc, "-P", p12PW, "-T", "/usr/bin/codesign"},
@@ -246,6 +248,17 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 		return sa, fmt.Errorf("macvm: signing the guest agent: its designated requirement reads %q, want %q", dr, want)
 	}
 	return SignedAgent{Path: cp, Cert: cert.Raw, Done: func() { _ = os.RemoveAll(tmp) }}, nil
+}
+
+// deleteKeychain deletes the signing's keychain, which also takes it off the login's search list. It runs
+// under its own bounded context, so a cancelled update still cleans up, and a failure is logged whatever
+// the signing's own outcome: the signed copy does not need the keychain.
+func (s *HostAgentSigner) deleteKeychain(ctx context.Context, exec func(context.Context, []string) ([]byte, error), kc string) {
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if out, err := exec(dctx, []string{"/usr/bin/security", "delete-keychain", kc}); err != nil {
+		cmp.Or(s.Log, slog.Default()).Warn("macvm: the guest agent signing keychain was not deleted", "keychain", kc, "err", err.Error(), "out", outputTail(string(out)))
+	}
 }
 
 // agentCertSHA1 is cert's SHA-1 as codesign --sign names an identity: upper-case hex.
