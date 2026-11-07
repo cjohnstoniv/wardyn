@@ -18,7 +18,7 @@
 |---|---|
 | [host-proxy detection is blind on the containerized control plane](host-proxy-detection-blind-on-compose.md) | Fixed in 0.4.1 |
 | [`make setup` requires a hand-set `WARDYN_UI_STAGE` behind a pnpm-less mirror](make-setup-requires-ui-stage-on-pnpm-less-mirror.md) | Fixed in 0.4.1 |
-| [corporate-network adoption: findings, local fixes, and open gaps](corp-network-onboarding-findings.md) | Most items fixed from 0.4.2 on (credential lapse in 0.7.6); the SSH key grant and the two confinement-runtime proposals are open |
+| [corporate-network adoption: findings, local fixes, and open gaps](corp-network-onboarding-findings.md) | Most items fixed from 0.4.2 on (credential lapse in 0.7.6); the `ssh_key` key stays in the run's proxy (0.10.0) |
 | [per-user AWS SSO behind a corporate proxy](aws-sso-mitm-upstream-proxy.md) | Follow-up after 0.8.6: a tunnel that died after its `200` now leaves an audit row (0.8.7) |
 
 Reference notes that came out of these reports:
