@@ -82,6 +82,8 @@ export const MODEL_USAGE = {
 
   loadError: "Couldn't load right now.",
   retry: "Retry",
+  // A finished run can still receive usage the runner held back; one button reads it again.
+  refresh: "Refresh",
   stale: "Couldn't refresh. Showing the last reading.",
   // The server has no model-usage route (a version it predates) or no store for it.
   unsupported: "This server doesn't report model usage.",

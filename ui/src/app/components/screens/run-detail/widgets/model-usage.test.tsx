@@ -209,6 +209,29 @@ describe("ModelUsageWidget polling and the end of the run", () => {
     expect(getModelUsageMock).toHaveBeenCalledTimes(2);
   });
 
+  it("a finished card with a reading offers Refresh, which shows usage that landed after the run ended and keeps the numbers while it reads", async () => {
+    let finish: (u: ModelUsage) => void = () => {};
+    getModelUsageMock
+      .mockResolvedValueOnce(usage([claude]))
+      .mockReturnValueOnce(new Promise<ModelUsage>((r) => { finish = r; }));
+    await mount(false);
+    expect(screen.getByText("1,200")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: MODEL_USAGE.refresh }));
+    await act(async () => {});
+    // Still on screen while the read is out.
+    expect(screen.getByText("1,200")).toBeInTheDocument();
+    await act(async () => { finish(usage([model({ ...claude, input_tokens: 1700, calls: 6 })])); });
+    expect(screen.getByText("1,700")).toBeInTheDocument();
+    expect(getModelUsageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a live card has no Refresh: the poll does it", async () => {
+    getModelUsageMock.mockResolvedValue(usage([claude]));
+    await mount(true);
+    expect(screen.queryByRole("button", { name: MODEL_USAGE.refresh })).toBeNull();
+    expect(screen.queryByRole("button", { name: MODEL_USAGE.retry })).toBeNull();
+  });
+
   it("another run starts from the skeleton, not the last run's numbers", async () => {
     getModelUsageMock.mockResolvedValueOnce(usage([claude])).mockReturnValue(new Promise(() => {}));
     const view = await mount(true, "r1");
@@ -228,6 +251,24 @@ describe("ModelUsageWidget failures", () => {
     expect(screen.getByText("1,200")).toBeInTheDocument();
     expect(screen.getByText(MODEL_USAGE.stale)).toBeInTheDocument();
     expect(screen.queryByText(MODEL_USAGE.live)).toBeNull();
+  });
+
+  it("live success, then the final read fails: Retry is offered, keeps the numbers, and brings the current reading", async () => {
+    getModelUsageMock
+      .mockResolvedValueOnce(usage([claude]))
+      .mockRejectedValueOnce(new HttpError(500, "boom"))
+      .mockResolvedValue(usage([model({ ...claude, input_tokens: 2000, calls: 5 })]));
+    const view = await mount(true);
+    view.rerender(<ModelUsageWidget runId="r1" live={false} />);
+    await act(async () => {});
+    expect(screen.getByText(MODEL_USAGE.stale)).toBeInTheDocument();
+    expect(screen.getByText("1,200")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: MODEL_USAGE.retry }));
+    await act(async () => {});
+    expect(screen.getByText("2,000")).toBeInTheDocument();
+    expect(screen.queryByText(MODEL_USAGE.stale)).toBeNull();
+    expect(screen.queryByRole("button", { name: MODEL_USAGE.retry })).toBeNull();
+    expect(screen.getByRole("button", { name: MODEL_USAGE.refresh })).toBeInTheDocument();
   });
 
   it("a read that works again clears the cue and brings the Live marker back", async () => {
