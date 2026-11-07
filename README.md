@@ -131,7 +131,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 | Egress + approvals | Only path out is the proxy; an unlisted host can hold mid-flight — once, run, until, always | [POLICIES.md](docs/POLICIES.md) |
 | Record Mode | Run once open, get the minimal policy, replay confined | [TRY-IT.md](docs/TRY-IT.md) |
 | Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | [OPERATIONS.md](docs/OPERATIONS.md) |
-| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md) |
+| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md), [CONFINEMENT.md](docs/CONFINEMENT.md) |
 | Model access | Each person's own key or Claude sign-in is injected proxy-side and the sandbox holds a placeholder; an AWS sign-in's session is injected too, but the short-lived role credentials it yields live in the sandbox | [TRY-IT.md](docs/TRY-IT.md) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | [CI.md](docs/CI.md) |
 | Audit + attach | Three audit streams. The audit log itself is append-only — a Postgres trigger refuses `UPDATE`, `DELETE` and `TRUNCATE` on it. PTY replay is a separate store (upserted per cast, retention-swept), each upload audited. Attach live from browser or SSH | [SSH.md](docs/SSH.md) |

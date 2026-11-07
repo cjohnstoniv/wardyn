@@ -68,6 +68,7 @@
 | If you want to… | Read |
 |---|---|
 | Author a run policy (every `RunPolicySpec` field) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
+| Choose a barrier for an agent | [CONFINEMENT.md](CONFINEMENT.md) |
 | See where a credential is while a run works, and each residual | [CREDENTIALS.md](CREDENTIALS.md) |
 | Connect a model provider, or route model traffic through an AI gateway | [operations/integrations.md](operations/integrations.md#model-access-comes-from-a-model-provider), [operations/ai-gateway.md](operations/ai-gateway.md) |
 | Sign people in to a custom model endpoint's identity service | [operations/endpoint-sign-in.md](operations/endpoint-sign-in.md) |
