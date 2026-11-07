@@ -4033,7 +4033,7 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 - the token is never written to `localStorage` unless you opt in;
 - the console is served same-origin;
 - the input uses `type="password"`/`autoComplete="off"`;
-- every response (API, `/healthz`, SPA) carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`, `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()` and a `Content-Security-Policy`, plus `Strict-Transport-Security: max-age=31536000` when wardynd serves TLS itself or `WARDYN_TLS_TERMINATED` is on — quoted here in full, because a summarised CSP is how the gaps below went uncounted (`securityHeaders`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)):
+- every response (API, `/healthz`, SPA) carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()` and a `Content-Security-Policy`, plus `Strict-Transport-Security: max-age=31536000` when wardynd serves TLS itself or `WARDYN_TLS_TERMINATED` is on — quoted here in full, because a summarised CSP is how the gaps below went uncounted (`securityHeaders`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)):
 
 ```
 default-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none';

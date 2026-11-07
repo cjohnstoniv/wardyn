@@ -116,8 +116,10 @@ func TestSecurityHeadersBrowserPolicies(t *testing.T) {
 	}
 	for _, secure := range []bool{false, true} {
 		h := serve(secure)
-		if got := h.Get("Cross-Origin-Opener-Policy"); got != "same-origin" {
-			t.Errorf("secure=%v: Cross-Origin-Opener-Policy = %q, want same-origin", secure, got)
+		// Not set: same-origin would sever window.opener for the provider sign-in popup and the
+		// session-lapse sign-in. Add it only with a two-origin browser test of both.
+		if got := h.Get("Cross-Origin-Opener-Policy"); got != "" {
+			t.Errorf("secure=%v: Cross-Origin-Opener-Policy = %q, want none", secure, got)
 		}
 		if got := h.Get("Permissions-Policy"); got != "camera=(), microphone=(), geolocation=(), payment=(), usb=()" {
 			t.Errorf("secure=%v: Permissions-Policy = %q", secure, got)
