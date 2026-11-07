@@ -24,17 +24,5 @@ Each fence still in the docs, and what replaces it. A row goes when its fence do
 
 | fence | plan |
 |---|---|
-| `README.md` § Architecture at a glance | Delete: it repeats the `ARCHITECTURE.md` overview |
-| `ARCHITECTURE.md` § Components, the overview | run-placement |
-| `ARCHITECTURE.md` § The four nouns, run states | run-states |
-| `ARCHITECTURE.md` § Invariant 2, mechanically | credential-mint |
-| `docs/AZURE-DEVOPS.md` § Request flow | ado-request-flow |
-| `threatmodel/THREAT-MODEL.md` § 3, the containment ladder | nested-limits |
-| `threatmodel/THREAT-MODEL.md` § 7, the confinement ladder | Delete |
 | `threatmodel/THREAT-MODEL.md` § The three audit streams, mechanically | Stays until it is corrected and drawn as an SVG |
 | `docs/operations/secrets-and-keys.md`, the opening | Stays until it is corrected and drawn as an SVG |
-| `docs/operations/monitoring.md`, the opening | Delete |
-| `docs/operations/run-lifetime.md`, the opening | Delete |
-| `docs/operations/kubernetes-known-gaps.md` § Gaps | Delete |
-| `docs/EXTENDING.md` § Layers | Delete |
-| `RELEASING.md` § How a release is prepared | Delete |

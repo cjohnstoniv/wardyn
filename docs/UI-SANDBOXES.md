@@ -770,9 +770,8 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - Exactly one of them
   has an answer today, and this section exists so the other one is not mistaken
   for one.
-- **Nothing in the table below is built, scheduled, or tested** —
-  [ROADMAP.md](../ROADMAP.md)'s v0.6 entry calls a general native lane
-  *exploratory*, and this is what that word means.
+- **Nothing in the table below is built, scheduled, or tested**, and
+  [ROADMAP.md](../ROADMAP.md) lists no native IDE or remote-desktop lane.
 - **What exists today: VS Code Remote-SSH**, over the SSH gateway, with one
   client setting ([SSH.md §5](SSH.md#5-vs-code-remote-ssh)).
 - That is the whole
