@@ -6,9 +6,9 @@
 // One run's image admission verdict (Go: types.ImageAdmissionVerdict, image_admission_verdict.go).
 export interface ImageAdmissionVerdict {
   // enforce when the image could be refused, audit when it was only reported.
-  mode: "enforce" | "audit" | (string & {});
+  mode?: "enforce" | "audit" | (string & {});
   // would_refuse is audit only; not_applicable is a macOS VM, which never runs the image.
-  verdict: "admitted" | "would_refuse" | "not_applicable" | (string & {});
+  verdict?: "admitted" | "would_refuse" | "not_applicable" | (string & {});
   // The refusal reason audit reported (would_refuse only).
   reason?: string;
   digest?: string;
@@ -23,4 +23,8 @@ export interface ImageAdmissionVerdict {
   cached?: boolean;
   // Why the site's own signers would refuse the image under audit, when the profile's enforced signers admitted it.
   site_audit?: string;
+  // The image the run's create named; a revive re-checks digest under its coverage.
+  ref?: string;
+  // Where the image came from when the member named none; alone (no mode or verdict) when admission decided nothing.
+  origin?: "convention" | "devcontainer" | "workspace" | (string & {});
 }

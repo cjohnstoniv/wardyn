@@ -38,6 +38,8 @@
 5. Set `mode` to `enforce`.
 
 - While `enforce` is on, a revive re-checks the digest the run's create pinned, never its tag. A run with no pinned digest is refused with `revive_image_not_admitted`: one created before `enforce` was on, or under `audit`, which never pins. Start a new run to use an allowed image.
+- A kept sandbox on an image Wardyn built for the run (a devcontainer or a generated workspace image) is not checked and revives under any mode.
+- Under `enforce` with scope all, a run that named no image and recorded no image origin is refused like one on the convention image. That is a run from an earlier release, or one whose origin record failed to write under `off` or `audit`.
 - The same holds for a member's image while the mode is `off`, when the owner's profile names `required_image_signers`.
 - With `scope: "all"`, a kept run on the convention image is re-checked at the digest its launch recorded. One whose launch recorded no admitted digest is refused the same way.
 - Under `enforce`, or for a profile's required signers, removing a signer binds kept sandboxes too: a revive is checked under the signers as they are now.
@@ -171,7 +173,7 @@ The full table is in the [SDK reference](../sdk.md).
 | `image_signature_invalid` | `403` | Signed, but by another identity or key |
 | `image_attestation_missing` | `403` | A required attestation is absent |
 | `image_admission_unavailable` | `503` | The registry or a trust root could not be read; the sentence names the cause |
-| `revive_image_not_admitted` | `403` | A revive while the image is held, of a run with no checked digest pinned |
+| `revive_image_not_admitted` | `403` | A revive while the image is held, of a run with no checked digest pinned. A run on an image Wardyn built for it is never refused; under scope all, one with no recorded image origin is |
 
 ## Audit
 
