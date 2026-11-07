@@ -229,10 +229,12 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	}
 	stages = append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)
 	subField := runnerFields[slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "substrate" })]
-	if st, ok := driveRootStage(s, s.resolved(subField, o.substrate).Value); ok {
+	substrate := s.resolved(subField, o.substrate).Value
+	if st, ok := driveRootStage(s, substrate); ok {
 		stages = append(stages, st)
 	}
-	stages = append(stages, macOSVMDoctorStages()...)
+	roots, rootsSource := driveRootsOf(s)
+	stages = append(stages, macOSVMDoctorStages(roots, rootsSource)...)
 	if fileErr != nil {
 		bad := doctor.FailStage("config", oneLine(fileErr.Error()), "", "fix that field, or remove the file and run `wardyn-runnerd setup` again")
 		stages = append([]doctor.Stage{bad}, stages...)
