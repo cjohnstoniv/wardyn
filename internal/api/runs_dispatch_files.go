@@ -9,7 +9,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"slices"
