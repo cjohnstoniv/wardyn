@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auditreceipt"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -39,6 +42,7 @@ func fakeHash(seq int64) string {
 type fakeRow struct {
 	seq        int64
 	prev, hash string
+	id         uuid.UUID
 }
 
 // fakeStore models audit_events (a chain the walk re-checks) and audit_checkpoints (overlap refused).
@@ -51,12 +55,25 @@ type fakeStore struct {
 
 func (s *fakeStore) appendRows(n int) {
 	for i := 0; i < n; i++ {
-		seq, prev := int64(1), ""
-		if l := len(s.rows); l > 0 {
-			seq, prev = s.rows[l-1].seq+1, s.rows[l-1].hash
-		}
-		s.rows = append(s.rows, fakeRow{seq: seq, prev: prev, hash: fakeHash(seq)})
+		s.appendEvent(uuid.New())
 	}
+}
+
+func (s *fakeStore) appendEvent(id uuid.UUID) {
+	seq, prev := int64(1), ""
+	if l := len(s.rows); l > 0 {
+		seq, prev = s.rows[l-1].seq+1, s.rows[l-1].hash
+	}
+	s.rows = append(s.rows, fakeRow{seq: seq, prev: prev, hash: fakeHash(seq), id: id})
+}
+
+func (s *fakeStore) EventSeq(_ context.Context, id uuid.UUID, afterSeq int64) (int64, bool, error) {
+	for _, r := range s.rows {
+		if r.id == id && r.seq > afterSeq {
+			return r.seq, true, nil
+		}
+	}
+	return 0, false, nil
 }
 
 func (s *fakeStore) ChainHead(context.Context) (int64, string, error) {
@@ -123,8 +140,23 @@ type appendingRecorder struct {
 
 func (r *appendingRecorder) Record(_ context.Context, ev types.AuditEvent) error {
 	r.events = append(r.events, ev)
-	r.st.appendRows(1)
+	r.st.appendEvent(ev.ID)
 	return nil
+}
+
+// spoolingRecorder keeps every row for a later write: none reaches the store's chain now.
+type spoolingRecorder struct{ events []types.AuditEvent }
+
+func (r *spoolingRecorder) Record(_ context.Context, ev types.AuditEvent) error {
+	r.events = append(r.events, ev)
+	return audit.ErrSpooled
+}
+
+// failingRecorder writes nothing.
+type failingRecorder struct{}
+
+func (failingRecorder) Record(context.Context, types.AuditEvent) error {
+	return errors.New("audit store down")
 }
 
 func newTestSigner(t *testing.T, st *fakeStore) (*Signer, *appendingRecorder) {
@@ -408,4 +440,48 @@ func TestStatus_KeyUnavailable(t *testing.T) {
 			t.Errorf("snapshot lacks a zero series for %q", r)
 		}
 	}
+}
+
+// A checkpoint whose own audit row was spooled has no row in the chain: the next lone real row is signed.
+func TestCheckpointLoop_SpooledOwnRowDoesNotHideARealRow(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	s, _ := newTestSigner(t, st)
+	rec := &spoolingRecorder{}
+	s.Record = rec
+	s.Tick(ctx)
+	st.appendRows(2)
+	s.Tick(ctx)
+	if st.inserts != 1 || len(rec.events) != 1 {
+		t.Fatalf("first checkpoint: inserts=%d rows=%d", st.inserts, len(rec.events))
+	}
+	st.appendRows(1) // a real event, alone in the range
+	s.Tick(ctx)
+	if st.inserts != 2 || st.cps[1].SeqLo != 3 || st.cps[1].SeqHi != 3 {
+		t.Fatalf("the lone real row after a spooled own row was not signed: %+v", st.cps)
+	}
+	checkSigned(t, s, st)
+}
+
+// The newest checkpoint is another replica's: this signer's own row is no longer the tail, and a lone later
+// real event is signed.
+func TestCheckpointLoop_OtherSignerAdvancedSignsLoneRow(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	a, _ := newTestSigner(t, st)
+	a.Tick(ctx)
+	st.appendRows(2)
+	a.Tick(ctx) // C1 over seq 1-2; its own row lands at seq 3
+	b, _ := newTestSigner(t, st)
+	b.Key, b.Record = a.Key, failingRecorder{}
+	b.Tick(ctx) // C2 over seq 3 (b has no own row to skip); its own row is lost
+	if st.inserts != 2 || st.cps[1].SeqLo != 3 {
+		t.Fatalf("replica b did not advance: %+v", st.cps)
+	}
+	st.appendRows(1) // seq 4, a real event alone after C2
+	a.Tick(ctx)
+	if st.inserts != 3 || st.cps[2].SeqLo != 4 || st.cps[2].SeqHi != 4 {
+		t.Fatalf("a lone real row after another replica's checkpoint was not signed: %+v", st.cps)
+	}
+	checkSigned(t, a, st)
 }
