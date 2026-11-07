@@ -119,15 +119,14 @@ func TestMacWindowAtStartOpensAfterTheWaitWhenSettingsStayPending(t *testing.T) 
 		t.Fatal(err)
 	}
 	r.h.srv.macWindowAtStart(context.Background(), r.h.run.ID)
-	// The guest gives up on its own wait and says failed; the host's wait is the same bound, never longer.
-	if r.sub.openCount() > 1 {
-		t.Fatalf("opens = %d", r.sub.openCount())
+	// The wait is bounded: the window is asked for once it ends, so a guest that never says is not a window that never opens.
+	if r.sub.openCount() != 1 {
+		t.Fatalf("opens = %d after the wait, want 1", r.sub.openCount())
 	}
 }
 
 func TestMacWindowOpensWithFailedSettingsAndSaysSoWithARetry(t *testing.T) {
 	r, _ := guiEnvRig(t, always("session_env=failed reason=setenv_failed\n", 0))
-	r.sub.onOpen = nil
 	w, rf := r.open(macWindowTriggerCLI)
 	if rf != nil || w == nil {
 		t.Fatalf("a failed setter held the window: %+v", rf)

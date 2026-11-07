@@ -485,3 +485,20 @@ func TestSessionEnvRetryReappliesTheFileAsTheUser(t *testing.T) {
 		t.Errorf("status after the retry = %+v, %v", got, err)
 	}
 }
+
+func TestAgentRunSessionEnvRetryPrintsTheOutcome(t *testing.T) {
+	p := sessionEnvPaths(t)
+	if err := SessionEnvFile(p, []string{"WARDYN_RUN_ID=r1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.Status, []byte("session_env=failed reason=not_signed_in\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setVar(t, &sessionEnvRetryPaths, p)
+	setVar[CmdRunner](t, &sessionEnvRetryRun, newGUIFake(false))
+	var out, errOut strings.Builder
+	a := &AgentRun{Env: map[string]string{}, Stdout: &out, Stderr: &errOut}
+	if code := a.Main([]string{"--session-env-retry"}); code != 0 || strings.TrimSpace(out.String()) != "session_env=set vars=1 via=retry" {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+}

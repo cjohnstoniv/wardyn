@@ -186,6 +186,7 @@ func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 		denied(macWindowNoGrant)
 		return
 	}
+	ctx = s.macGUIEnvAwait(ctx, run) // the guest's settings are in, or failed, before the window is asked for
 	if _, rf := s.openMacWindow(ctx, run, a, macWindowTriggerLaunch); rf != nil {
 		slog.InfoContext(ctx, "wardynd: a run's window was not opened at start", "run_id", runID, "reason", macWindowRefusalReason(rf))
 		s.macWindowStoreLastClose(ctx, a.Principal, runID, macWindowLastClose{Reason: macWindowEndedNotOpened, Message: macWindowRefusalSentence(rf)})
