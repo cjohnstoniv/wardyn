@@ -2073,6 +2073,7 @@ jobs:
   #   - cgo build, vet and tests of the helper, its library and the guest agent, darwin-native tests included
   #   - the darwin runnerd build
   #   - the helper signed ad hoc with its one entitlement, read back with codesign
+  #   - the guest agent signed by Wardyn's signer (checked by codesign) and by the codesign fallback (result only)
   #   - the packaged live suite command, once test/conformance/macvm exists
   # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
   # train/* and release/* pull requests. Not a required check and not in `gates`.
@@ -2177,6 +2178,56 @@ jobs:
           codesign --verify --strict "$agent"
           grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+      # What a tools update pushes: a fresh agent build (the linker's ad hoc signature) signed by Wardyn's own
+      # signer with a throwaway self-signed cert this Mac does not trust, then checked by this Mac's codesign.
+      # TestSignProof makes the identity, writes the signed copy and the requirement it must read back, and runs
+      # the whole host signer, which must pick Wardyn's signer. Not a required check: read it on the train head.
+      - name: Sign the guest agent with Wardyn's signer and check it with codesign
+        id: wardynsign
+        if: ${{ !cancelled() }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$WARDYN_SIGN_PROOF_AGENT" ./cmd/wardyn-guest-agent
+          go test -count=1 -v -run '^TestSignProof$' ./internal/macvm/ | tee "$RUNNER_TEMP/sign-proof.out"
+          grep -q -- '^--- PASS: TestSignProof ' "$RUNNER_TEMP/sign-proof.out"
+          signed="$WARDYN_SIGN_PROOF_DIR/wardyn/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed"
+          dr="$(codesign -d -r- "$signed" 2>&1 | sed -n 's/^designated => //p')"
+          echo "designated => $dr"
+          [ "$dr" = "$(cat "$WARDYN_SIGN_PROOF_DIR/requirement.txt")" ]
+          info="$(codesign -dvvv "$signed" 2>&1)"
+          echo "$info"
+          grep -q 'Hash type=sha256 size=32' <<<"$info"
+          grep -q 'flags=0x0(none)' <<<"$info"
+          if grep -Eq 'adhoc|linker-signed' <<<"$info"; then echo "::error::the signed agent reads ad hoc or linker-signed"; exit 1; fi
+          # It starts: macOS kills a binary whose signature it refuses before flag parsing. Not a gate (exit 2 is -h's).
+          rc=0
+          "$signed" -h >/dev/null 2>&1 || rc=$?
+          echo "signed agent -h exit status: $rc"
+          if [ "$rc" -ge 128 ]; then echo "::warning::the signed agent was killed at start (exit $rc)"; fi
+      # The codesign fallback for real: a temporary keychain on the search list and the requirement as -r= text.
+      # It settles whether codesign signs with a self-signed identity this Mac does not trust. Either answer is a
+      # result, so it does not fail the job; the log says which.
+      - name: Sign the guest agent with the codesign fallback (result only)
+        if: ${{ !cancelled() && steps.wardynsign.outcome == 'success' }}
+        env:
+          WARDYN_SIGN_PROOF_AGENT: ${{ runner.temp }}/wardyn-guest-agent-linker
+          WARDYN_SIGN_PROOF_DIR: ${{ runner.temp }}/sign-proof
+        run: |
+          set -uo pipefail
+          rc=0
+          go test -count=1 -v -run '^TestSignProofCodesignFallback$' ./internal/macvm/ || rc=$?
+          echo "codesign fallback exit status: $rc"
+          if [ "$rc" -ne 0 ]; then
+            echo "::notice::the codesign fallback did not sign with an untrusted self-signed identity on this Mac"
+            exit 0
+          fi
+          signed="$WARDYN_SIGN_PROOF_DIR/codesign/wardyn-guest-agent"
+          codesign --verify --strict -vvvv "$signed" || echo "::warning::codesign --verify --strict refused the fallback's copy"
+          codesign -d -r- "$signed" 2>&1 || true
       # The release package asserts the same floor on what it ships (release.yml, runner-pkg).
       - name: Every darwin binary loads on macOS 26 (minos 26.0 or lower)
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
