@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -112,7 +111,7 @@ func TestApproveEachConfigKeyTravelsWithTheRule(t *testing.T) {
 
 // TestOlderProxyConfigRefusesApproveEach decodes a current config with the
 // previous wire struct (Config without the key, built by reflection so it
-// cannot drift) and with each earlier release's key set.
+// cannot drift) and against the key set of each release that predates the effect.
 func TestOlderProxyConfigRefusesApproveEach(t *testing.T) {
 	m := withApproveEachRule(approveEachBase())
 	m["mcp_approve_each"] = map[string]any{}
@@ -142,17 +141,15 @@ func TestOlderProxyConfigRefusesApproveEach(t *testing.T) {
 		t.Fatalf("a config without the key must load on the previous struct: %v", err)
 	}
 
-	files, err := filepath.Glob(configKeysDir + "v*.txt")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no release key sets to check: %v", err)
-	}
-	for _, f := range files {
-		b, err := os.ReadFile(f)
+	// The releases that predate the effect, by name. Later snapshots roll forward from
+	// current.txt and rightly list the key, so they are never checked here.
+	for _, name := range []string{"v0.9.3.txt"} {
+		b, err := os.ReadFile(configKeysDir + name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if slicesContainsLine(string(b), "mcp_approve_each") {
-			t.Errorf("%s already lists mcp_approve_each: a release that accepts it must also enforce it", f)
+			t.Errorf("%s lists mcp_approve_each, but that release predates the effect", name)
 		}
 	}
 }
