@@ -141,6 +141,9 @@ type Signer struct {
 	// an idle install writes nothing. Any other lone row is signed.
 	own     *ownRow
 	latched bool
+	// retiredSeen is the seq_lo of the retired-key checkpoint already reported, so a tick that meets it again
+	// does not count it again.
+	retiredSeen *int64
 }
 
 type ownRow struct {
@@ -192,14 +195,26 @@ func (s *Signer) signOne(ctx context.Context) bool {
 	}
 	var afterSeq int64
 	var afterHash, prev string
+	chained := false
 	if found {
-		st, ok := s.ours(latest)
-		if !ok {
+		st, v := s.classify(latest)
+		switch v {
+		case verdictForeign:
 			s.latch(ctx, ReasonForeignRow, latest.SeqLo, "the latest stored checkpoint is not signed by this install's key")
 			return false
+		case verdictRetired:
+			// A retired key is treated as stolen, so its checkpoint is never chained to: a thief holding it and
+			// database write access could otherwise get the live signer to link to a forgery. A legitimate retire
+			// leaves the same row as the newest one, so this does not latch: it reports the row once and starts
+			// a new genesis at the chain head, which the next checkpoint (by the current key) writes.
+			s.noteRetired(ctx, latest)
+			found = false
+		default:
+			chained = true
+			afterSeq, afterHash, prev = st.SeqHi, st.HeadHash, auditreceipt.StatementHash(latest.Statement)
 		}
-		afterSeq, afterHash, prev = st.SeqHi, st.HeadHash, auditreceipt.StatementHash(latest.Statement)
-	} else {
+	}
+	if !chained {
 		if s.start == nil {
 			seq, hash, err := s.Store.ChainHead(ctx)
 			if err != nil {
@@ -225,7 +240,7 @@ func (s *Signer) signOne(ctx context.Context) bool {
 	if len(rows) == 0 {
 		return false
 	}
-	if len(rows) == 1 && found && s.isOwnRow(ctx, latest, rows[0]) {
+	if len(rows) == 1 && chained && s.isOwnRow(ctx, latest, rows[0]) {
 		return false
 	}
 
@@ -284,14 +299,45 @@ func (s *Signer) isOwnRow(ctx context.Context, latest Checkpoint, row Row) bool 
 	return found && seq == row.Seq
 }
 
-// ours parses a stored checkpoint and checks its signature against this install's keys. A row whose columns
+type verdict int
+
+const (
+	verdictOurs    verdict = iota // signed by the current key or a previous one that is not retired
+	verdictRetired                // validly signed by a retired key
+	verdictForeign                // anything else: not parseable, columns that differ from the statement, or no key of ours
+)
+
+// classify parses a stored checkpoint and checks its signature against this install's keys. A row whose columns
 // differ from its own statement is not ours either.
-func (s *Signer) ours(c Checkpoint) (auditreceipt.Statement, bool) {
+func (s *Signer) classify(c Checkpoint) (auditreceipt.Statement, verdict) {
 	st, err := auditreceipt.ParseStatement(c.Statement)
-	if err != nil || st.Kid != c.Kid || st.SeqLo != c.SeqLo || st.SeqHi != c.SeqHi {
-		return st, false
+	if err != nil || st.Kid != c.Kid || st.SeqLo != c.SeqLo || st.SeqHi != c.SeqHi || !s.Key.Verify(c.Kid, []byte(c.Statement), c.Signature) {
+		return st, verdictForeign
 	}
-	return st, s.Key.Verify(c.Kid, []byte(c.Statement), c.Signature)
+	if s.Key.Retired(c.Kid) {
+		return st, verdictRetired
+	}
+	return st, verdictOurs
+}
+
+// ours reports that a stored checkpoint is this install's and may be chained to.
+func (s *Signer) ours(c Checkpoint) (auditreceipt.Statement, bool) {
+	st, v := s.classify(c)
+	return st, v == verdictOurs
+}
+
+// noteRetired reports a newest checkpoint signed by a retired key as a foreign row, once per checkpoint, with
+// the metric and the ERROR line of any foreign row, without stopping the signer.
+func (s *Signer) noteRetired(ctx context.Context, c Checkpoint) {
+	if s.retiredSeen != nil && *s.retiredSeen == c.SeqLo {
+		return
+	}
+	lo := c.SeqLo
+	s.retiredSeen = &lo
+	s.start = nil // the genesis point is the chain head as of now, not the head read before any checkpoint existed
+	s.Status.fail(ReasonForeignRow)
+	slog.ErrorContext(ctx, "wardynd: audit checkpoint: the newest stored checkpoint is signed by a retired key and is not chained to; signing continues from a new genesis; run wardyn audit chain verify",
+		slog.String("reason", ReasonForeignRow), slog.Int64("broken_seq", c.SeqLo), slog.String("kid", c.Kid))
 }
 
 func (s *Signer) latch(ctx context.Context, reason string, seq int64, detail string) {
