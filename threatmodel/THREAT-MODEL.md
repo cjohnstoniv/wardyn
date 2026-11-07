@@ -524,7 +524,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | L2 wardyn-proxy 🟢 **[shipped]** | Allowlist, approval, injection and the unconditional loopback/multicast/metadata guard: [detail](#l2-wardyn-proxy). | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
 | L3 MCP gateway 🟡 **[partial]** | Per-tool-call approval and logging **[shipped]**: `tool_rules` resolved proxy-side (`decideByToolRules`) plus the in-sandbox `cmd/wardyn-toolgate` relay, every outcome on the decision log. Interception of tool-call EGRESS **[planned]** | The shipped half stops a gated tool call the operator's rules refuse, and records the rest. It does NOT stop tool-call egress: the relay is in-sandbox and cooperative (B3), so an agent that never calls it is not gated |
 
-- L0 residual (Docker): a run's network has no address on the Docker host only on Docker Engine 28.0.0 or later; a run started before that change, or under `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, keeps one, and its agent can reach services the Docker host serves there ([run networks](../docs/OPERATIONS.md#docker-host-run-networks)).
+- L0 residual (Docker): a run started before the Docker Engine 28.0.0 change, or under `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, can reach services on the Docker host ([run networks](../docs/OPERATIONS.md#docker-host-run-networks)).
 - Four egress layers stack outward: L0 structural confinement (Docker) and the L2 proxy carry
   enforcement on every path, L1 is shipped on Kubernetes (canary-proven NetworkPolicy; the Docker
   nftables form remains planned).
@@ -3050,7 +3050,7 @@ pins account/role and on one that does not.
 - But a deployment that sets one is **not** the deployment §4 and §7 describe, so each is listed here with what it costs.
 - All five are read once at construction and every one logs an unmissable warning when it is taken.
 - Only the two Kubernetes overrides also surface as a setup-checklist row: `WARDYN_ALLOW_UNENFORCEABLE_CAPS` warns per run, and only when a limit is actually discarded; `WARDYN_ALLOW_TEST_ENDPOINTS` warns at boot on either relaxation it is paired with.
-- Neither has a row, and nor does `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK`, which warns per run; `scripts/up.sh doctor` warns on an engine that needs it.
+- Neither has a row.
 
 | Override | Gate it passes | What the deployment loses |
 |---|---|---|

@@ -167,7 +167,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DOCKER_RUN_SUBNET_POOL` | IPv4 CIDR | (unset) | **`wardynd` and `wardyn-runnerd`, Docker substrate**: the range each run's network takes its own small subnet from, so runs stop using up the daemon's `default-address-pools`. Unset, the daemon picks each subnet. A full range refuses the run, naming this setting. [Details](OPERATIONS.md#docker-host-one-subnet-per-run) |
 | `WARDYN_DOCKER_RUN_SUBNET_SIZE` | int | `28` | **same**: the prefix length of each run's subnet in `WARDYN_DOCKER_RUN_SUBNET_POOL`, from the range's own length to `29`. Set without the pool, it refuses boot |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
-| `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK` | bool | off | **`wardynd` and `wardyn-runnerd`, Docker substrate**, escape hatch: start runs on a Docker Engine older than 28.0.0, and accept a run network kept from before the upgrade, though the agent can then reach services on the Docker host. Off by default, such a run is refused. [Details](#wardyn_allow_host_reachable_run_network) |
+| `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK` | bool | off | **`wardynd` and `wardyn-runnerd`, Docker substrate**: escape hatch. Starts runs that are otherwise refused, whose agent can reach services on the Docker host. [Details](#wardyn_allow_host_reachable_run_network) |
 | `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` | int | `0` (= `2000`) | milli-CPU limit for a sandbox whose policy sets none, read by every fallback site through `runner.EffectiveLimits()` (flag `-sandbox-default-cpu-millis`). The Helm chart sets `1000`. [Details](#wardyn_sandbox_default_cpu_millis) |
 | `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB` | int | `0` (= `4096`) | memory limit (MiB) for a sandbox whose policy sets none, same sites as `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` (flag `-sandbox-default-memory-mib`). The Helm chart sets `2048` (`runner.sandbox.defaultResources.memoryMiB`) |
 | `WARDYN_PROXY_CPU_MILLIS` | int | `0` (= `500`) | milli-CPU limit of each run's `wardyn-proxy` sidecar, the same on the Docker and Kubernetes substrates (flag `-proxy-cpu-millis`; chart `runner.sandbox.proxyResources.cpuMillis`) |
@@ -728,11 +728,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK`
 
-- Escape hatch for the Docker substrate, read by `wardynd` and `wardyn-runnerd` at boot; set only on a trusted host.
-- A run's network has no address on the Docker host, so its agent cannot reach the host's own services. That needs Docker Engine 28.0.0 or later.
-- Off by default: on an older engine every run is refused with a sentence naming the version. A run whose network was created before the upgrade is refused a restart or a proxy replacement.
-- Set, those runs start on a network that keeps an address on the Docker host, and each one logs a warning. Their agent can reach anything the Docker host serves on that address.
-- `scripts/up.sh doctor` warns when the engine is older than 28.0.0.
+- Off by default, a run is refused on a Docker Engine older than 28.0.0, and so is restarting or reviving a run whose network predates the upgrade.
+- Set, those runs start, each with a warning, and their agent can reach services on the Docker host. Set it only on a trusted host.
 - See [Docker host: run networks](OPERATIONS.md#docker-host-run-networks).
 
 ### `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS`

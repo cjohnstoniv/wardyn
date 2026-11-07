@@ -3007,12 +3007,10 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 
 ### Docker host: run networks
 
-- Docker sandboxes need Docker Engine 28.0.0 or later; on Docker Desktop, a release that ships that engine or later.
-- Each run's network is internal, created in the bridge driver's `isolated` gateway mode with IPv6 off, so the Docker host has no address on it. The run's agent reaches its proxy and nothing on the Docker host.
-- On an older engine every run is refused, naming the version. `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` on `wardynd` or `wardyn-runnerd` starts them anyway, on a network where the agent can reach services on the Docker host.
-- A run's network keeps the shape it was created with. Runs started before you upgrade keep theirs until they end, and one of them is refused a restart of its kept sandbox or a proxy replacement on revive; start a new run instead.
-- So after upgrading, let running Docker runs finish, or stop them, before you rely on this.
-- A Docker daemon that turns IPv6 on for every bridge network (`default-network-opts`) refuses runs whose network comes out with IPv6 on.
+- Docker sandboxes need Docker Engine 28.0.0 or later. Each run's network then has no address on the Docker host, so the agent reaches its proxy and nothing on the host.
+- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`.
+- A network keeps the shape it was created with. A run started before the upgrade is refused a restart or a revive; start a new run instead.
+- A daemon whose `default-network-opts` turn IPv6 on for bridge networks refuses runs.
 
 ### Docker host: one subnet per run
 
