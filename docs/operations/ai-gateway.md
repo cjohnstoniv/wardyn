@@ -167,7 +167,7 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 - A provider's `gateway_identity.token_lifetime_seconds` sets it, from 60 to 600 seconds. Unset means 600, so an install that sets nothing changes nothing. Any other value is refused when saved.
 - A shorter life limits how long a leaked token is good for, and so how long a killed run's token can still be spent.
 - The setting applies to tokens issued after a save. A running run keeps working, because the life is not part of the route the run started with.
-- `wardyn-proxy` asks for a new token at half the remaining life. If the mint fails, it keeps the held token until `exp`, so a run survives a wardynd outage of about half the lifetime. While wardynd is unreachable, the first call after half the life, and then the first in each retry interval, waits up to 15 seconds for that mint before the held token serves it.
+- `wardyn-proxy` asks for a new token at half the remaining life. If the mint fails, it keeps the held token until `exp`, so a run survives a wardynd outage of about half the lifetime.
 
 | Lifetime | Outage a run survives | A mint, per run and provider, every |
 |---|---|---|
