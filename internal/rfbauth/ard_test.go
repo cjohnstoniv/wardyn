@@ -181,3 +181,49 @@ func TestARDClientBoundsAStalledServer(t *testing.T) {
 		t.Fatal("Open against a silent server still waits after 5s; its deadline is 200ms")
 	}
 }
+
+// A view that closes during the sign-in cancels it at once, so the next view does not wait out the
+// 15 s bound behind it; the cut is the caller's, not Screen Sharing's answer, so it is not kept.
+func TestARDClientStopsWhenTheCallerCancels(t *testing.T) {
+	srv := &rfbauthtest.Server{User: "agent", Password: "pw"}
+	chose := make(chan struct{})
+	dials := 0
+	client := &rfbauth.ARDClient{Dial: func(ctx context.Context) (net.Conn, error) {
+		if dials++; dials > 1 {
+			return srv.Dial(ctx)
+		}
+		near, far := net.Pipe()
+		go func() { // answers up to the client's choice of type 30, then says nothing
+			defer far.Close()
+			_, _ = io.WriteString(far, "RFB 003.889\n")
+			_, _ = io.ReadFull(far, make([]byte, 12))
+			_, _ = far.Write([]byte{1, 30})
+			_, _ = io.ReadFull(far, make([]byte, 1))
+			close(chose)
+			_, _ = io.Copy(io.Discard, far)
+		}()
+		return near, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-chose; cancel() }()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.Open(ctx, "agent", []byte("pw"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		var d *rfbauth.DeclinedError
+		if !errors.Is(err, context.Canceled) || errors.As(err, &d) {
+			t.Fatalf("Open cancelled mid-exchange = %v, want the caller's cancellation and no decline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Open still waits 5s after its caller cancelled")
+	}
+	conn, _, err := client.Open(context.Background(), "agent", []byte("pw"))
+	if err != nil {
+		t.Fatalf("Open after a cancelled one = %v, want a sign-in", err)
+	}
+	_ = conn.Close()
+}
