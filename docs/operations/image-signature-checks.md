@@ -25,7 +25,7 @@
 
 - `scope` is `member` (default: the image a member names) or `all` (also the convention image).
 - A governance profile that lists `required_image_signers` is held to those signers even while the site mode is `off` or `audit`. A profile can only tighten.
-- A run that was queued is checked again when it starts. `POST /runs/preflight` makes the same check and writes no audit row. The policy preview only reports "checked at launch" and reads no registry.
+- A run that was queued is checked again when it starts. `POST /runs/preflight` makes the same check, and any audit row it writes carries `dry_run: true`. The policy preview only reports "checked at launch" and reads no registry.
 - `enforce` with no signers and scope `member` is refused when you save it, because it would refuse every image. Use `audit` first.
 
 ## Turn it on: audit first
