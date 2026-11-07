@@ -35,7 +35,7 @@ curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.13
 
 - Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
 - Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
-- Set the runner's limits before the first run: the server runs in a container and cannot measure the host's disk. Pass the flags `wardyn runner remote propose <id>` prints to `wardyn runner set <id>`, or use the console (Runners, the runner, **Set limits**). `make setup` does this for you.
+- Set the runner's limits before the first run: the server runs in a container and cannot measure host disk. Pass what `wardyn runner remote propose <id> --free-disk <GB>` prints to `wardyn runner set <id>`, or use the console (Runners, the runner, **Set limits**). `make setup` does this for you.
 - **Only the CLI**, for an organisation's console: `install-cli.sh` (Windows: `install-cli.ps1`), a release asset ([install paths](docs/runner-registration.md#install-the-cli)).
 - **A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 

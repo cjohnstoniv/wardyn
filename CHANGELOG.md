@@ -40,7 +40,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - After the VM's agent service restarts, a new terminal or command is refused with a reason instead of running without the run's proxy and credentials.
 - A Linux VM run no longer silently drops a limit it cannot enforce: a policy disk size or process limit is refused with a plain sentence, and a requested disk size is shown as not enforced.
 - Ending a Linux VM run now wipes the AWS sign-in caches inside the guest before it is kept, and reports it when it cannot.
-- Starting a desktop sign-in on a Linux VM run is now refused instead of freezing the VM, a Linux VM's output recovery is refused with a reason, and a VM run's folder-share cleanup is retried until it finishes.
+- Starting a sign-in in a browser of your own on a Linux VM run is now refused instead of freezing the VM (pausing the VM's agent to sign in still works), a Linux VM's output recovery is refused with a reason, and a VM run's folder-share cleanup is retried until it finishes.
 - A secret delivered to a run as a file or variable, with line breaks inside it (a private key, a kubeconfig), is now hidden in terminal output, live attach and recordings even when the terminal prints its lines with CR LF ends, or only some of its lines.
 - The audit row for a clipboard transfer through a desktop window no longer carries a SHA-256 of the text; it records the direction and size only.
 - A governance profile's GitHub capabilities now limit members' runs, as documented.
