@@ -82,12 +82,16 @@ func TestWaitForClient_OtherErrorsFailAtOnce(t *testing.T) {
 	}
 }
 
-// TestWaitForClient_GivesUpAfterTheBound: a Secret nothing ever fills is a crash, not a hang.
+// TestWaitForClient_GivesUpAfterTheBound: a Secret nothing ever fills is a crash, not a hang. It runs
+// with the production bound and records the pauses instead of sleeping them.
 func TestWaitForClient_GivesUpAfterTheBound(t *testing.T) {
+	if caWaitBound != 10*time.Minute {
+		t.Fatalf("caWaitBound = %s, want 10m", caWaitBound)
+	}
 	calls := 0
 	build := func() (*http.Client, error) { calls++; return nil, fmt.Errorf("%w: /ca is empty", errCANotReady) }
 	p := &capturePause{}
-	_, err := waitForClient(context.Background(), build, time.Minute, p.pause)
+	_, err := waitForClient(context.Background(), build, caWaitBound, p.pause)
 	if !errors.Is(err, errCANotReady) {
 		t.Fatalf("want errCANotReady after the bound, got %v", err)
 	}
@@ -95,8 +99,8 @@ func TestWaitForClient_GivesUpAfterTheBound(t *testing.T) {
 	for _, d := range p.got {
 		total += d
 	}
-	if total < time.Minute || total > time.Minute+caWaitMax || calls != len(p.got)+1 {
-		t.Fatalf("waited %s over %d pauses and %d calls, want about the bound", total, len(p.got), calls)
+	if total != 600*time.Second || calls != len(p.got)+1 {
+		t.Fatalf("paused %s over %d pauses and %d calls, want 600s", total, len(p.got), calls)
 	}
 }
 
