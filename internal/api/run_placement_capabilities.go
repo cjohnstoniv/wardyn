@@ -809,7 +809,9 @@ func macOSVMHolds(req createRunRequest, spec types.RunPolicySpec) bool {
 		return false
 	}
 	return req.ToolApprovals == "hold" || slices.ContainsFunc(req.Tools, hasPersonalToolRules) ||
-		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool { return r.Effect == types.ToolHold || r.Effect == types.ToolDeny })
+		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool {
+			return r.Effect == types.ToolHold || r.Effect == types.ToolApproveEach || r.Effect == types.ToolDeny
+		})
 }
 
 // macOSVMAskOf is the macOS VM ask of a run: its harness ids (the request's agent when it names no

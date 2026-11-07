@@ -15,13 +15,14 @@ import { Chip, SectionLabel } from "./primitives";
 
 // The wire words stay mono and verbatim (allow/hold/deny); these are their past
 // tense, and only the rail's one-line summary uses them.
-export const EFFECT_PAST: Record<ToolEffect, string> = { allow: "allowed", hold: "held", deny: "denied" };
+export const EFFECT_PAST: Record<ToolEffect, string> = { allow: "allowed", hold: "held", approve_each: "approved per call", deny: "denied" };
 
 // The effect's semantic tint. Not decoration: an effect is a run/approval state
 // word, so it takes the state palette (CONSOLE-RULES §2) and never a metal.
 const EFFECT_TONE: Record<ToolEffect, string> = {
   allow: "text-success",
   hold: "text-warning",
+  approve_each: "text-warning",
   deny: "text-danger",
 };
 

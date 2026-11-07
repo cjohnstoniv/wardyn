@@ -375,8 +375,8 @@ func validateToolRules(rules []types.ToolRule) error {
 			return fmt.Errorf("tool_rules[%d]: duplicate rule for tool %q — two rules for one tool means one of them does nothing", i, name)
 		}
 		seen[name] = true
-		if !types.ValidToolEffect(r.Effect) {
-			return fmt.Errorf("tool_rules[%d]: invalid effect %q (want allow, hold or deny)", i, r.Effect)
+		if err := types.ValidToolRule(r); err != nil {
+			return fmt.Errorf("tool_rules[%d]: %v (effects: allow, hold, approve_each, deny)", i, err)
 		}
 	}
 	return nil
