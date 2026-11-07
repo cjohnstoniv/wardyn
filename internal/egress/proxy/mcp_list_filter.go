@@ -125,11 +125,13 @@ func (x *mcpExchange) filterToolLists(w http.ResponseWriter, resp *http.Response
 	resp.Header.Del("Content-Length")
 	f := &mcpListFilter{
 		hidden: func(tool string) bool { return x.p.mcpCallEffect(x.harness, x.server.key, tool) == types.ToolDeny },
-		filtered: func(hidden []string, total int) {
-			x.listRow(egress.Allow, ruleSourceMCPListFiltered, fmt.Sprintf("hid %d of %d tools", len(hidden), total), callID)
+		// Counts only, in the row and the log: a tool name is server text, and this
+		// runs before the relay masks held credentials, so a name could echo one.
+		filtered: func(hidden, total int) {
+			x.listRow(egress.Allow, ruleSourceMCPListFiltered, fmt.Sprintf("hid %d of %d tools", hidden, total), callID)
 			slog.InfoContext(x.r.Context(), "wardyn-proxy: MCP tool list filtered by the run's tool rules",
 				slog.String("run_id", x.p.runID.String()), slog.String("mcp_server", x.server.key),
-				slog.Int("hidden", len(hidden)), slog.Any("tools", sampleOf(hidden)))
+				slog.String("method", x.req.Method), slog.Int("hidden", hidden), slog.Int("total", total))
 		},
 		unreadable: func(cause string) { x.listRow(egress.Deny, ruleSourceMCPListUnreadable, cause, callID) },
 	}
@@ -166,7 +168,7 @@ func noBody(resp *http.Response) bool {
 // mcpListFilter rewrites the tool lists in one JSON document.
 type mcpListFilter struct {
 	hidden     func(tool string) bool
-	filtered   func(hidden []string, total int)
+	filtered   func(hidden, total int)
 	unreadable func(cause string)
 }
 
@@ -239,19 +241,15 @@ func (f *mcpListFilter) message(raw json.RawMessage) ([]byte, bool) {
 		return f.refuse(raw, "a tool list whose tools are not an array"), true
 	}
 	kept := make([][]byte, 0, len(entries))
-	var hidden []string
 	for _, e := range entries {
-		name, ok := toolEntryName(e)
-		if ok && !f.hidden(name) {
+		if name, ok := toolEntryName(e); ok && !f.hidden(name) {
 			kept = append(kept, e)
-			continue
 		}
-		hidden = append(hidden, name)
 	}
 	if len(kept) == len(entries) {
 		return nil, false
 	}
-	f.filtered(hidden, len(entries))
+	f.filtered(len(entries)-len(kept), len(entries))
 	return replaceKey(raw, "result", replaceKey(result, "tools", jsonArray(kept))), true
 }
 
