@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -328,5 +329,73 @@ func TestVerifyBundle_EventPosition(t *testing.T) {
 	b.Checkpoints[0].Events[0].Row.PrevHash = &p
 	if rep := VerifyBundle(b, keysOf(pub)); rep.OK() || !hasReason(rep, ReasonPrevHash) {
 		t.Fatalf("a prev_hash unlike the row before: failures %+v, want %s", rep.Failures, ReasonPrevHash)
+	}
+}
+
+// TestVerifyBundle_SeqBoundToSignedList: seq is not part of a row's hash, so the signed checkpoint must bind
+// each seq to its row. Relabelling a receipted event with another seq inside the signed range fails it.
+func TestVerifyBundle_SeqBoundToSignedList(t *testing.T) {
+	priv, pub := testKey(1)
+	for _, seq := range []int64{4, 5} {
+		b, _ := twoCheckpoints(priv)
+		b.Checkpoints[0].Events[0].Row.Seq = seq // the event is seq 3, at index 2 of checkpoint 1-5
+		rep := VerifyBundle(b, keysOf(pub))
+		if rep.OK() || rep.Complete() || rep.Events[0].OK {
+			t.Fatalf("seq 3 relabelled %d: failures %+v, events %+v; want the event failed and the receipt incomplete",
+				seq, rep.Failures, rep.Events)
+		}
+	}
+}
+
+// gapCheckpoint is one signed checkpoint over four rows whose seqs skip numbers (1, 2, 4, 7), every row an
+// event.
+func gapCheckpoint(priv ed25519.PrivateKey) (Bundle, []Row) {
+	rows := testChain(1, 4, "")
+	for i, seq := range []int64{1, 2, 4, 7} {
+		rows[i].Seq = seq // seq is not hashed: the chain stays valid
+	}
+	c := withEvents(testCheckpoint(priv, rows, ""), rows, 0, 1, 2, 3)
+	return Bundle{Format: ReceiptFormat, Checkpoints: []Checkpoint{c}}, rows
+}
+
+func TestVerifyBundle_SeqGaps(t *testing.T) {
+	priv, pub := testKey(1)
+	b, _ := gapCheckpoint(priv)
+	if rep := VerifyBundle(b, keysOf(pub)); !rep.OK() || !rep.Complete() || len(rep.Events) != 4 {
+		t.Fatalf("a checkpoint with seq gaps: failures %+v, want every event verified", rep.Failures)
+	}
+
+	// Two events' seqs swapped: 4 and 7 are both inside the signed range, but neither is its row's seq.
+	b, _ = gapCheckpoint(priv)
+	evs := b.Checkpoints[0].Events
+	evs[2].Row.Seq, evs[3].Row.Seq = evs[3].Row.Seq, evs[2].Row.Seq
+	if rep := VerifyBundle(b, keysOf(pub)); rep.OK() || rep.Complete() || rep.Events[2].OK || rep.Events[3].OK {
+		t.Fatalf("seqs 4 and 7 swapped: failures %+v, events %+v; want both events failed", rep.Failures, rep.Events)
+	}
+
+	// A seq the log skipped (3) is inside the range but names no row.
+	b, _ = gapCheckpoint(priv)
+	b.Checkpoints[0].Events[2].Row.Seq = 3
+	if rep := VerifyBundle(b, keysOf(pub)); rep.OK() || rep.Events[2].OK {
+		t.Fatalf("seq 4 relabelled as the skipped 3: failures %+v, want the event failed", rep.Failures)
+	}
+}
+
+// TestVerifyBundle_OlderFormatRefused: a receipt or statement in the layout before seqs were signed is refused
+// by name, not misread.
+func TestVerifyBundle_OlderFormatRefused(t *testing.T) {
+	priv, pub := testKey(1)
+	b, _ := twoCheckpoints(priv)
+	b.Format = "wardyn-audit-receipt/1"
+	if rep := VerifyBundle(b, keysOf(pub)); rep.OK() || !hasReason(rep, ReasonFormat) {
+		t.Fatalf("an older receipt: failures %+v, want %s", rep.Failures, ReasonFormat)
+	}
+
+	old := `{"format":"wardyn-audit-checkpoint/1","kid":"` + strings.Repeat("0f", 16) + `","seq_lo":1,"seq_hi":5,"rows":5,` +
+		`"head_hash":"` + strings.Repeat("1a", 32) + `","digest":"` + strings.Repeat("2b", 32) + `","prev":"",` +
+		`"signed_at":"2026-11-07T10:00:00Z"}`
+	_, err := ParseStatement(old)
+	if err == nil || !strings.Contains(err.Error(), `"wardyn-audit-checkpoint/1"`) || strings.Contains(err.Error(), "canonical") {
+		t.Fatalf("an older statement: err %v, want a refusal naming its format", err)
 	}
 }
