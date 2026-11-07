@@ -201,7 +201,7 @@ func (s *Server) checkImage(ctx context.Context, adm *types.SiteImageAdmission, 
 
 func admittedImage(mode string, v imageadmit.Verdict) *types.ImageAdmissionVerdict {
 	return &types.ImageAdmissionVerdict{Mode: mode, Verdict: types.ImageAdmissionAdmitted, Digest: v.Digest, Signer: v.Signer,
-		Identity: v.Identity, Issuer: v.Issuer, KeyID: v.KeyID, Attestations: v.Attestations}
+		Identity: v.Identity, Issuer: v.Issuer, KeyID: v.KeyID, Attestations: v.Attestations, Cached: v.Cached}
 }
 
 // imageAdmissionRefusal is a check's answer as a run refusal: nil when the image is admitted.
