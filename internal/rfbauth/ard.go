@@ -72,7 +72,7 @@ type ARDClient struct {
 }
 
 // Open dials Screen Sharing and signs in as user, as an RFB 3.8 client sending a shared ClientInit,
-// within 15 s. It returns the connection, past ServerInit and with no deadline, and the ServerInit.
+// within 15 s or until ctx ends. It returns the connection, past ServerInit, and the ServerInit.
 // Open keeps no copy of password; the caller clears it. Any error closes the connection. Opens run
 // one at a time, so sessions that start together still sign in only once before a decline.
 func (c *ARDClient) Open(ctx context.Context, user string, password []byte) (net.Conn, []byte, error) {
@@ -90,19 +90,22 @@ func (c *ARDClient) Open(ctx context.Context, user string, password []byte) (net
 	if err != nil {
 		return nil, nil, err
 	}
-	dl, _ := ctx.Deadline()
-	_ = conn.SetDeadline(dl)
+	// Closing on ctx, not a deadline, also cuts the sign-in when the caller cancels (a view that
+	// closed), so the next Open does not wait behind it.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	si, err := ardLogin(conn, user, password, rand.Reader)
+	var d *DeclinedError
+	declined := errors.As(err, &d)
+	if !stop() && !declined {
+		err = errors.Join(ctx.Err(), err) // the caller's cut, not Screen Sharing's answer
+	}
 	if err != nil {
 		_ = conn.Close()
-		var d *DeclinedError
-		if errors.As(err, &d) {
+		if declined {
 			c.declined = d
 		}
 		return nil, nil, err
 	}
-	// A failure here means the connection is already gone; the session's first read says so.
-	_ = conn.SetDeadline(time.Time{})
 	return conn, si, nil
 }
 
