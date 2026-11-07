@@ -4,6 +4,7 @@
 package auditsign
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -141,6 +142,20 @@ type Signer struct {
 	// an idle install writes nothing. Any other lone row is signed.
 	own     *ownRow
 	latched bool
+	// read is set by the first successful read of the newest checkpoint; first is what that read found (nil for
+	// none), kept in memory only, so a restart reads again.
+	//
+	// A retired key's checkpoint that is already the newest at that first read is a legitimate rotation: the old
+	// key signed it before this process took over, so the signer chains onto it like any other. One that appears
+	// after the first read is not: someone holding the retired key (treated as stolen) and database write access
+	// inserted it. It is never chained to: it counts a foreign row, logs it, and a new genesis starts at the chain
+	// head; the signer does not latch, since a latch would also stop a legitimate retire.
+	//
+	// Residual risk: a forgery inserted before this process's first read is chained to, the same exposure as
+	// before the retire. Closing it needs the retired key's last legitimate checkpoint pinned somewhere the
+	// database cannot write, which a verifier holding an earlier copy of the chain already has.
+	read  bool
+	first *Checkpoint
 	// retiredSeen is the seq_lo of the retired-key checkpoint already reported, so a tick that meets it again
 	// does not count it again.
 	retiredSeen *int64
@@ -193,20 +208,27 @@ func (s *Signer) signOne(ctx context.Context) bool {
 		slog.WarnContext(ctx, "wardynd: audit checkpoint: could not read the latest checkpoint; trying next tick", slog.Any("err", err))
 		return false
 	}
+	if !s.read {
+		s.read = true
+		if found {
+			c := latest
+			s.first = &c
+		}
+	}
 	var afterSeq int64
 	var afterHash, prev string
 	chained := false
 	if found {
 		st, v := s.classify(latest)
+		if v == verdictRetired && s.isFirstRead(latest) {
+			v = verdictOurs
+		}
 		switch v {
 		case verdictForeign:
 			s.latch(ctx, ReasonForeignRow, latest.SeqLo, "the latest stored checkpoint is not signed by this install's key")
 			return false
 		case verdictRetired:
-			// A retired key is treated as stolen, so its checkpoint is never chained to: a thief holding it and
-			// database write access could otherwise get the live signer to link to a forgery. A legitimate retire
-			// leaves the same row as the newest one, so this does not latch: it reports the row once and starts
-			// a new genesis at the chain head, which the next checkpoint (by the current key) writes.
+			// A retired key's checkpoint that was not there at the first read. See Signer.first.
 			s.noteRetired(ctx, latest)
 			found = false
 		default:
@@ -324,6 +346,11 @@ func (s *Signer) classify(c Checkpoint) (auditreceipt.Statement, verdict) {
 func (s *Signer) ours(c Checkpoint) (auditreceipt.Statement, bool) {
 	st, v := s.classify(c)
 	return st, v == verdictOurs
+}
+
+// isFirstRead reports that c is the checkpoint the first read found.
+func (s *Signer) isFirstRead(c Checkpoint) bool {
+	return s.first != nil && s.first.Kid == c.Kid && s.first.SeqHi == c.SeqHi && s.first.Statement == c.Statement && bytes.Equal(s.first.Signature, c.Signature)
 }
 
 // noteRetired reports a newest checkpoint signed by a retired key as a foreign row, once per checkpoint, with
