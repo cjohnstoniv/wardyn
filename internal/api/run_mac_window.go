@@ -56,6 +56,10 @@ const (
 	macWindowLockUnknownMsg    = "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed."
 )
 
+// macWindowRevocationUnavailableMsg is the refusal of a window whose grant names no token or CLI session, so
+// its credential cannot be checked.
+const macWindowRevocationUnavailableMsg = "Wardyn can't check the credential this window was asked for with. Open it again with `wardyn window`."
+
 // macWindowNotYourMacMsg is the refusal of a window on a run that is not on a Mac whose runner the caller
 // registered, naming the computer it is on.
 func macWindowNotYourMacMsg(runner string) string {
@@ -567,6 +571,9 @@ func (s *Server) openMacWindow(ctx context.Context, run types.AgentRun, a macWin
 	revoked, err := s.macWindowRevoked(ctx, a)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: could not check a window's credential", "run_id", run.ID, "err", err)
+		if errors.Is(err, errMacWindowNoBinding) {
+			return refuse(runError(http.StatusForbidden, uiDeniedReasonRevocationUnavailable, macWindowRevocationUnavailableMsg))
+		}
 		return refuse(runServerError("check the session", err))
 	}
 	if revoked {
