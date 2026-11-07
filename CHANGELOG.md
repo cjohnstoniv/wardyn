@@ -46,6 +46,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A terminal opened on a service identity's run now closes at its next check once the person is no longer that identity's sponsor, as a new terminal would be refused.
 - An admin reading another person's terminal text through a run's output now leaves a `run.output.read` row in that run's audit, as replaying its recording does.
 - Repeated wrong admin tokens from one address are now answered `429` with `Retry-After`, the right token included, until an attempt refills (10 attempts, then one every 10 seconds). A request that presents the right token is never counted.
+- Reviving a run now re-checks its runner pool's use policy and people policy, as starting one does: a run whose pool was deleted, or no longer admits the run's owner, is refused.
+- Moving a governance profile to a new parent is now held for approval when the move takes it out from under a lock.
+- Opening a `wardyn window` that was asked for with a credential Wardyn can no longer check is now refused with a plain sentence (403) instead of an error.
+- Settings: saving an unrelated change no longer reorders stored capabilities, and walls errors now point at their field.
+- The console now sends `form-action`, `Permissions-Policy` and, under TLS, `Strict-Transport-Security` headers.
+- The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
