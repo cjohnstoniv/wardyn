@@ -68,6 +68,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `idempotency_key_reused`), and a retry while the first is still being answered gets 409
   `idempotency_key_in_flight`. `/healthz` reports `idempotent_run_create`. On by default; a request without the
   header is unchanged.
+- The edit-base window has Open admin Terminal, Type code, Trust the list's CAs and Full Disk Access buttons, and
+  shows whether each certificate is trusted and whether the guest agent has Full Disk Access, as the guest reads them.
+  Its one-time code is now 10 lowercase letters on the same keys on QWERTY, QWERTZ and AZERTY keyboards, so Type code
+  types it on any of them; Show code stays for other layouts. Trust the list's CAs also trusts this Mac's guest agent
+  signing certificate, for code signing only, while the base does not trust it.
 
 ### Changed
 
