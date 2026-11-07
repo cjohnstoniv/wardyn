@@ -286,7 +286,7 @@ describe("RunCanvas — Expand", () => {
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    await waitFor(() => expect(parseFloat(document.querySelector<HTMLElement>(".react-grid-item[data-widget], [data-widget='identity']")!.closest<HTMLElement>(".react-grid-item")!.style.height)).toBeLessThan(700));
+    await waitFor(async () => expect(parseFloat((await tile()).style.height)).toBeLessThan(700));
   });
 });
 
