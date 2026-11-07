@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
-- A run with an allowed-models list, or with content inspection in `alert` or `block` mode, now treats a model call whose body carries `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` as a refusal (`block`, and always under the allowed-models list) or a logged alert (`alert`). Claude Code and the Codex CLI send none of these keys. A run with neither feature is unchanged, and so is a route set to `inspection: gateway`.
+- A run with an allowed-models list, or with content inspection in `alert` or `block` mode, now treats a model call whose body carries `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` as a refusal (`block`, and always under the allowed-models list) or a logged alert (`alert`). Claude Code and the Codex CLI send none of these keys. In `block` mode, a model call whose body is over the scan limit, has a `Content-Encoding`, or is not one JSON object is now refused where an oversize body used to pass with `on_scanner_error: pass`. A run with neither feature is unchanged, and so is a route set to `inspection: gateway`.
 
 ### Security
 

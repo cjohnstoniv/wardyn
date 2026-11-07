@@ -109,15 +109,16 @@ type chargedRestKey struct{}
 // and must be called when the request is done. A body it cannot read for the keys (oversize,
 // encoded, not one object, a key named twice) is refused in block mode and written as an
 // unparsable row in alert mode. It returns true when it answered.
-func (p *Proxy) rerouteKeysRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string, deferred *GatewayIdentityRoute) (func(), bool) {
+func (p *Proxy) rerouteKeysRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel, deferred *GatewayIdentityRoute) (func(), bool) {
 	mode := p.scanner.Mode()
 	if deferred != nil || (mode != contentscan.ModeAlert && mode != contentscan.ModeBlock) || !p.rerouteRoute(r, host, rest) {
 		return noopRelease, false
 	}
 	var (
-		found []string
-		ok    = true
-		done  = noopRelease
+		found    []string
+		ok       = true
+		done     = noopRelease
+		oversize bool
 	)
 	if ce := r.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
 		ok = false
@@ -151,7 +152,7 @@ func (p *Proxy) rerouteKeysRefused(w http.ResponseWriter, r *http.Request, host 
 				io.Closer
 			}{io.MultiReader(bytes.NewReader(body), unread), unread}
 			*r = *r.WithContext(context.WithValue(context.WithValue(r.Context(), chargedBodyKey{}, body), chargedRestKey{}, unread))
-			ok = false
+			ok, oversize = false, true
 		} else {
 			holdChargedBody(r, body)
 			found, ok = rerouteKeysIn(body)
@@ -167,6 +168,14 @@ func (p *Proxy) rerouteKeysRefused(w http.ResponseWriter, r *http.Request, host 
 	decision := egress.Allow
 	if mode == contentscan.ModeBlock {
 		decision = egress.Deny
+	}
+	if oversize && p.scanner.BlocksOnError() {
+		// A fail-closed run already refuses an oversize body, with this row and this answer
+		// (scanBufferedBodyWith); keep them.
+		done()
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "body_oversize", channel))
+		writeScanBlockedShaped(w, p.shapeOf(r, host), 0, nil, "body_oversize")
+		return noopRelease, true
 	}
 	if p.sink != nil {
 		log := decisionLog(p.reqOf(r, host, port), decision, ruleSourceRerouteKeys)

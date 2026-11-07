@@ -492,7 +492,7 @@ func (p *Proxy) inspectLLMOn(w http.ResponseWriter, r *http.Request, host string
 		return r.Body, nil, noRelease, false
 	}
 	// Before the classifier: a route it cannot read (the Responses routes) is checked too (reroute_keys.go).
-	releaseKeys, refused := p.rerouteKeysRefused(w, r, host, port, rest, deferred)
+	releaseKeys, refused := p.rerouteKeysRefused(w, r, host, port, rest, channel, deferred)
 	if refused {
 		return nil, nil, noRelease, true
 	}
