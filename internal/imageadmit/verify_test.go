@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/imageadmit"
@@ -230,5 +232,19 @@ func TestCheckRefusesANonSHA256Digest(t *testing.T) {
 	good := s.SignDSSE(statement(t, imageadmit.PredicateCosignSign, imageHex), ciOpts())
 	for _, d := range []string{imageHex, "sha512:" + imageHex, "sha256:" + imageHex[:10], "sha256:" + imageHex[:63] + "G"} {
 		wantReason(t, imageadmit.Check(req, d, [][]byte{good}), imageadmit.SignatureMissing)
+	}
+}
+
+// A key hint in a bundle is unsigned material: a registry can write anything there, a credential it was
+// sent included. A bundle naming another key is refused without repeating that hint as the key that signed.
+func TestKeyMismatchDoesNotRepeatAnUnverifiedHint(t *testing.T) {
+	s := releasesigtest.New(t)
+	k1, k2 := s.NewKey(), s.NewKey()
+	b := k2.SignDSSE(statement(t, imageadmit.PredicateCosignSign, imageHex), releasesigtest.Options{})
+	b = bytes.ReplaceAll(b, []byte(k2.Hint()), []byte("hunter2-registry-password"))
+	v := check(t, compile(t, s, vendorKey(k1)), nil, b)
+	wantReason(t, v, imageadmit.SignatureInvalid)
+	if v.Found != "" || strings.Contains(fmt.Sprintf("%+v", v), "hunter2") {
+		t.Fatalf("verdict = %+v, want no found key", v)
 	}
 }
