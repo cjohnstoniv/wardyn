@@ -52,6 +52,11 @@ done
 
 CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"
 CONTEXT="kind-${CLUSTER}"
+# Refuse a cluster kind does not list: a stale kubeconfig context can point at a real cluster, and this
+# script runs helm upgrade against whatever it finds.
+if ! kind get clusters 2>/dev/null | grep -qx -- "${CLUSTER}"; then
+  skip_lane "kind-groundtruth: kind has no cluster named ${CLUSTER} (kind get clusters); set WARDYN_QUICKSTART_CLUSTER to a kind cluster that exists (skipping)."
+fi
 NAMESPACE="wardyn"
 RELEASE="wardyn"
 RUNS_NAMESPACE="wardyn-runs"
