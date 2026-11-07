@@ -13,31 +13,34 @@
 - It does not check images that ungoverned operators (break-glass) pick. With [`WARDYN_GOVERN_ADMIN_RUNS`](../ENV.md) on, an admin who is not exempt is governed, and the image requirements that apply to them can refuse their run. While the mode is `audit` or `enforce`, an unchecked operator run's `run.create` row carries `image_admission_exempt: true`.
 - It does not check the proxy image. Runners take that from their own pin ([Verify](../VERIFY.md) covers it).
 - It does not check macOS VM runs, which never run the image. Their verdict is `not_applicable`.
-- With `scope: "all"` it also checks the image a run gets by convention. A failure there fails the run with the reason as its hint.
+- With `scope: "all"` it also checks the image a run gets by convention (its agent's, its harness set's or an architecture variant of either). That check is made at launch, not at create. Under `enforce` a refusal fails the run with the reason as its hint. Under `audit` the outcome is recorded on the run only.
 
 ## Modes
 
 | `mode` | Image check | A failing image | Registry down |
 |---|---|---|---|
 | `off` (default) | None. No registry is contacted and nothing is written to the run | Runs | Not read |
-| `audit` | Made, never pins | Runs. The create response carries a warning that starts "Image check (audit only):" and the `run.create` row records `would_refuse` | A warning |
+| `audit` | Made, never pins | Runs. For a member's image, the create response carries a warning that starts "Image check (audit only):" and the `run.create` row records `would_refuse`. For the convention image, only the run's `image_admission` records it | A warning |
 | `enforce` | Made, and the run uses the checked digest | `403` with a reason below | `503` `image_admission_unavailable` |
 
-- `scope` is `member` (default: the image a member names) or `all` (also the convention image).
+- `scope` is `member` (default: the image a member names) or `all` (also the convention image, checked when the run launches).
+- Workspace verify and record runs are not checked, even with `scope: "all"`. They run the workspace's built image, or else the agent image.
 - A governance profile that lists `required_image_signers` is held to those signers even while the site mode is `off` or `audit`. A profile can only tighten.
-- A run that was queued is checked again when it starts. `POST /runs/preflight` makes the same check, and any audit row it writes carries `dry_run: true`. The policy preview only reports "checked at launch" and reads no registry.
+- A run that was queued is checked again when it starts. `POST /runs/preflight` makes the same check of a member's image, and any audit row it writes carries `dry_run: true`. It cannot check the convention image, which is chosen at launch, once a runner is placed. The policy preview only reports "checked at launch" and reads no registry.
 - `enforce` with no signers and scope `member` is refused when you save it, because it would refuse every image. Use `audit` first.
 
 ## Turn it on: audit first
 
 1. Add a signer that covers one image prefix you use. See [Signers](#signers).
 2. Set `mode` to `audit` with `PUT /api/v1/site-config`. A body that omits `images` keeps the stored block.
-3. Create runs as members and read the warnings and the `image_admission` key on their `run.create` rows.
+3. Create runs as members and read the warnings and the `image_admission` key on their `run.create` rows. With `scope: "all"`, also read `image_admission` on each run (`GET /api/v1/runs/{id}`): the launch's check of the convention image is recorded only there, with `ref` naming the image, and `verdict` `would_refuse` with a `reason` when it would be refused.
 4. Fix the images and signers that would be refused.
 5. Set `mode` to `enforce`.
 
-- Turning `enforce` on refuses reviving runs created before it was on. Start a new run.
-- Removing a signer binds kept sandboxes too: a revive is checked under the signers as they are now.
+- While `enforce` is on, a revive re-checks the digest the run's create pinned, never its tag. A run with no pinned digest is refused with `revive_image_not_admitted`: one created before `enforce` was on, or under `audit`, which never pins. Start a new run to use an allowed image.
+- The same holds for a member's image while the mode is `off`, when the owner's profile names `required_image_signers`.
+- With `scope: "all"`, a kept run on the convention image is re-checked at the digest its launch recorded. One whose launch recorded no admitted digest is refused the same way.
+- Under `enforce`, or for a profile's required signers, removing a signer binds kept sandboxes too: a revive is checked under the signers as they are now.
 - A bad `images.admission` block is refused with `400` `site_config_invalid` and a message that starts "images.admission:".
 - The write compiles the block, so the API and the checker agree on an empty image list, the reserved names and absolute predicate URIs.
 
@@ -153,7 +156,12 @@
 
 ## Reasons
 
-The full table is in the [SDK reference](../sdk.md). Each refusal also writes a `run.create` `denied` row with the reason and the `image_admission` facts.
+The full table is in the [SDK reference](../sdk.md).
+
+- A refusal at create writes a `run.create` `denied` row with the reason and the `image_admission` facts.
+- A refusal at revive writes a `run.revive` `denied` row with the same facts.
+- A refusal of the convention image at launch fails the run and writes a `run.dispatch` `failure` row.
+- Under `audit`, the convention image's outcome is on the run (`image_admission`), not in an audit row.
 
 | Reason | Status | Meaning |
 |---|---|---|
@@ -162,6 +170,7 @@ The full table is in the [SDK reference](../sdk.md). Each refusal also writes a 
 | `image_signature_invalid` | `403` | Signed, but by another identity or key |
 | `image_attestation_missing` | `403` | A required attestation is absent |
 | `image_admission_unavailable` | `503` | The registry or a trust root could not be read; the sentence names the cause |
+| `revive_image_not_admitted` | `403` | A revive while the image is held, of a run with no checked digest pinned |
 
 ## Audit
 
