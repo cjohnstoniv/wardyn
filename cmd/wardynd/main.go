@@ -316,14 +316,7 @@ func run() error {
 	// otherwise github_token grants fail closed at mint with a clear error.
 	// The broker shares maskedRec so its credential.* events fan out to SIEM.
 	gh := buildGitHubMinter(secrets)
-	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg).WithTrustDomain(*f.trustDomain)
-	// D29: the credential.mint SUCCESS event is written in-tx (durable/atomic) and
-	// fanned to SIEM post-commit via this sink — so keep SIEM continuity without
-	// double-writing the primary store. Guarded: a typed-nil Fanout would be a
-	// non-nil interface that panics on Emit.
-	if fan != nil {
-		brk = brk.WithSIEM(fan)
-	}
+	brk := buildBroker(pool, secrets, maskedRec, idp, gh, maskReg, *f.trustDomain, fan)
 	// The rows the database writes itself (a key destroy here, the retention rows below) go to the
 	// same sinks after their commit.
 	siem := siemSink(fan)
@@ -351,12 +344,7 @@ func run() error {
 	// fail-closed confinement pins. The pg-backed RefStore makes the
 	// orchestrator's ref->substrate routing (and thus the kill switch) durable
 	// across control-plane restarts.
-	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
-	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
-	if err := applyRequestRatio(*f.sandboxRequestRatio); err != nil {
-		return err
-	}
-	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool), driveHostRoots)
+	run, runnerTarget, err := buildRunner(f, store.NewPG(pool), driveHostRoots)
 	if err != nil {
 		return err
 	}
@@ -898,6 +886,17 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 		slog.String("app_key_secret", secretGitHubAppKey),
 	)
 	return gh
+}
+
+// buildRunner sets the runner's default sandbox and proxy limits and its request ratio from the flags,
+// then builds the configured substrate (boot, from run).
+func buildRunner(f *bootFlags, pg store.PG, driveHostRoots []string) (runner.Runner, string, error) {
+	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
+	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
+	if err := applyRequestRatio(*f.sandboxRequestRatio); err != nil {
+		return nil, "", err
+	}
+	return buildRunnerFromFlags(f, pg, driveHostRoots)
 }
 
 // flagEnv/flagBool/flagDuration/flagIntEnv/splitCSV are shared with
