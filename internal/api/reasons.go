@@ -867,3 +867,10 @@ const (
 	reasonImageAttestationMissing   = "image_attestation_missing"   // the signer did not attest a type it requires
 	reasonImageAdmissionUnavailable = "image_admission_unavailable" // the image's registry or a trust root could not be read (503)
 )
+
+// A run's model token usage (run_model_usage.go).
+const (
+	reasonModelUsageUnsupported = "model_usage_unsupported"  // 501: this store keeps no model usage
+	reasonModelUsageReadFailed  = "model_usage_read_failed"  // 500: the run's usage rows could not be read
+	reasonModelUsageWriteFailed = "model_usage_write_failed" // 500: a usage record could not be stored; the proxy retries
+)
