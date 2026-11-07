@@ -576,11 +576,14 @@ That has two consequences:
   - and installing or removing extensions.
 - Widening the ceiling does not open them.
 - A sandbox cannot create itself a second credential whatever credential its run carries.
-- **A request beyond what the run currently holds is held, not silently allowed or silently refused.**
-- The person (or an admin) sees it in the Wardyn UI and answers
+- **A request beyond what the run holds follows its `first_use_approval`.**
+  - `always_deny` (the default): refused, `403`.
+  - `deny_with_review`: this attempt is refused (`403`) and a request is raised.
+  - `wait_for_review`: held (`423`) until a person answers.
+- A person (or an admin) sees a raised request in the Wardyn UI and answers
   - **allow once** — this one request only —
   - or **allow for this run** — the capability joins what the rest of the run may do without asking again.
-- Either way, an answer can never reach past the row's capability ceiling: that ceiling is the one thing nobody, including an admin approving in the moment, can grant past.
+- Either way, an answer cannot reach past the row's capability ceiling, not even an admin's approval in the moment.
 
 ### How pushes work
 
@@ -662,7 +665,10 @@ sequenceDiagram
     Proxy->>ADO: forward, credential attached
     ADO-->>Proxy: response
     Proxy-->>Sandbox: response
-  else C inside the ceiling, not held
+  else C inside the ceiling, not held, first_use_approval is always_deny or deny_with_review
+    Wardyn-->>Proxy: 403 (deny_with_review also raises a request)
+    Proxy-->>Sandbox: refused
+  else C inside the ceiling, not held, first_use_approval is wait_for_review
     Wardyn-->>Proxy: 423 capability_pending
     Note over Proxy: request held
     Person->>Wardyn: allow once / allow for this run
@@ -709,7 +715,7 @@ Two things bound what a run can do:
 > - Wardyn's classifier recognizes the Azure DevOps REST routes it has been taught.
 > - A request against a route it does not recognize is refused rather than guessed at — it does not fall back to whatever the token's scope would technically allow.
 > - That means a new Azure DevOps REST API, or a materially reshaped existing one, can require a Wardyn update before a run can use it.
-> - That is a deliberate trade: an unrecognized request being refused is a support ticket; an unrecognized request being classified wrong in the permissive direction is a policy bypass nobody saw coming.
+> - A refused unrecognized request costs a support ticket. One classified wrongly in the permissive direction is a bypass.
 
 ## Why not device-code sign-in
 
@@ -762,7 +768,7 @@ When a redemption is refused — the refresh token has been revoked or has expir
 ## What bounds a token-creating credential
 
 - In `minted_pat` mode the stored refresh token can create PATs, not only read.
-- That is a deliberately larger power than the `bearer` lane's stored token, so be exact about what limits it.
+- That is more power than the `bearer` lane's stored token, so be exact about what limits it.
 
 > [!WARNING]
 > **What a token that can create PATs can do.**
