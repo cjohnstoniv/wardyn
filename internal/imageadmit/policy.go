@@ -7,6 +7,7 @@
 package imageadmit
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -20,12 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/imageadmit/rootfile"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
@@ -85,7 +86,8 @@ type KeylessSpec struct {
 type Options struct {
 	Version        string                       // the running build; default version.String()
 	PublicGoodRoot *root.TrustedRoot            // default: the embedded public-good root
-	ReadFile       func(string) ([]byte, error) // reads a RootSpec.Path; default os.ReadFile
+	ReadFile       func(string) ([]byte, error) // reads a RootSpec.Path; default rootfile.Read in RootDir
+	RootDir        string                       // where the default ReadFile reads; default rootfile.Dir
 }
 
 // Policy is a compiled Config plus the built-in signer.
@@ -129,7 +131,10 @@ type trustRoot struct {
 // Compile checks cfg and builds the verifiers. Every refusal wraps ErrPolicy.
 func Compile(cfg Config, o Options) (*Policy, error) {
 	if o.ReadFile == nil {
-		o.ReadFile = os.ReadFile
+		// Confined like the site setting's check at write, so a root path stored before that check, or
+		// outside the directory, refuses the compile and is never read.
+		dir := cmp.Or(o.RootDir, rootfile.Dir)
+		o.ReadFile = func(path string) ([]byte, error) { return rootfile.Read(dir, path) }
 	}
 	if o.Version == "" {
 		o.Version = version.String()
@@ -166,7 +171,7 @@ func Compile(cfg Config, o Options) (*Policy, error) {
 		}
 		tr, err := root.NewTrustedRootFromJSON(b)
 		if err != nil {
-			return nil, fmt.Errorf("%w: trust root %q is not a Sigstore trusted root: %v", ErrPolicy, r.Name, err)
+			return nil, fmt.Errorf("%w: trust root %q is not a Sigstore trusted root", ErrPolicy, r.Name)
 		}
 		roots[r.Name] = trustRoot{material: tr, digest: sha256.Sum256(b)}
 	}
