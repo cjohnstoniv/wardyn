@@ -121,6 +121,8 @@ func (s *Server) gatewayReviveCut(ctx context.Context, cfg *proxy.Config) (*owne
 
 // refuseGatewayCut answers a cut run's mint. The denied row is written once per run and destination
 // on this replica: a proxy from before the cut asks again every 30 seconds for the run's life.
+// The cut check runs before the destination is validated, so target is what the caller sent, and a
+// malformed or empty id is recorded as sent.
 func (s *Server) refuseGatewayCut(w http.ResponseWriter, run types.AgentRun, kind, target string, ref *ownerRefusal, record func(string, map[string]any)) {
 	holder := target
 	if kind == "mcp_server" {
