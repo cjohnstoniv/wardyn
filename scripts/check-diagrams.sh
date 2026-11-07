@@ -184,7 +184,7 @@ done <<'PROSE'
 WAITING_FOR_CONFIRMATION	internal/types/types.go	ARCHITECTURE.md
 UpdateRunStateIf	internal/api/runs_lifecycle.go	ARCHITECTURE.md
 wait_for_review	internal/types/policy.go	ARCHITECTURE.md
-Internal: true	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
+Internal: true	internal/runner/docker/run_network_shape.go	threatmodel/THREAT-MODEL.md
 agent-run --idle	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
 wardyn-proxy:	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
 HTTP_PROXY	internal/api/runs_dispatch_mounts.go	threatmodel/THREAT-MODEL.md

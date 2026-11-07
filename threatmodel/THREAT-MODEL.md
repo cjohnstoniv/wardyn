@@ -4443,6 +4443,6 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
 - The orphan case where the run ROW is gone is separately covered at boot by
   `sweepOrphanedSandboxes` ([`internal/api/reconcile.go`](../internal/api/reconcile.go)).
 - **Verification note (2026-07-06).** The "egress enforced outside the sandbox" and "env-var proxy bypass defended" rows rest on topology, never an iptables `REDIRECT`/TPROXY rule, which gVisor's netstack could not run.
-  - The per-run Docker network is `Internal: true` and the agent joins only it (`CreateSandbox`, [`internal/runner/docker/driver_network.go`](../internal/runner/docker/driver_network.go)); `HTTP_PROXY`/`HTTPS_PROXY` are a convenience, not the boundary.
+  - The per-run Docker network is `Internal: true` and the agent joins only it (`runNetworkOptions` in [`internal/runner/docker/run_network_shape.go`](../internal/runner/docker/run_network_shape.go), used by `CreateSandbox`); `HTTP_PROXY`/`HTTPS_PROXY` are a convenience, not the boundary.
   - Under CC2, Docker's embedded resolver is unreachable from the sandbox, so `agentHost.ExtraHosts` gets `wardyn-proxy:<proxy IP>`, a static hosts-file entry, not a NAT rule.
   - `TestCreateSandbox_TopologyPreservesL0` and `TestCreateSandbox_TopologyPreservesL0UnderGVisor` ([`internal/runner/docker/driver_test.go`](../internal/runner/docker/driver_test.go)) pin both shapes.
