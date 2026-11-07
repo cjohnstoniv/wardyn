@@ -50,12 +50,13 @@ var auditHostViews = map[string]auditHostView{
 	// The redirect probe's target, an egress redirect's to half.
 	"site_config.redirect.test": {allow: []string{"elapsed_ms", "from_host", "state"}},
 	// The host path behind each workspace mount of a recorded policy spec.
-	"run.policy.resolve": {mounts: [][]string{{}}},
-	"policy.create":      {mounts: [][]string{{"after"}}},
-	"policy.update":      {mounts: [][]string{{"before", "spec"}, {"after", "spec"}}},
-	"policy.delete":      {mounts: [][]string{{"before"}}},
-	"preset.create":      {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
-	"preset.update":      {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
+	"run.policy.resolve":    {mounts: [][]string{{}}},
+	"run.policy.generation": {mounts: [][]string{{"policy"}}},
+	"policy.create":         {mounts: [][]string{{"after"}}},
+	"policy.update":         {mounts: [][]string{{"before", "spec"}, {"after", "spec"}}},
+	"policy.delete":         {mounts: [][]string{{"before"}}},
+	"preset.create":         {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
+	"preset.update":         {mounts: [][]string{{"request", "inline_policy"}, {"request", "policy_overlay"}}},
 }
 
 // withoutHostDetail is evs as a reader below the super-admin tier is served them (auditHostViews). Only the

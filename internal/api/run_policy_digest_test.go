@@ -36,10 +36,10 @@ func (s *digestStore) SetRunPolicyDigest(_ context.Context, id uuid.UUID, d stri
 	return nil
 }
 
-func (s *digestStore) lookup(_ context.Context, id uuid.UUID) (string, error) {
+func (s *digestStore) lookup(_ context.Context, id uuid.UUID) (types.RunPolicyState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.digest[id], nil
+	return types.RunPolicyState{Digest: s.digest[id]}, nil
 }
 
 // TestDispatch_ResolveRowCarriesItsOwnDigest: dispatch writes the digest of the policy it records
@@ -74,7 +74,7 @@ func TestDispatch_ResolveRowCarriesItsOwnDigest(t *testing.T) {
 	if stamped.PolicyDigest == "" || stamped.PolicyDigest != spec.Digest() {
 		t.Errorf("resolve row policy_digest = %q, digest recomputed from its data = %q; want them equal and non-empty", stamped.PolicyDigest, spec.Digest())
 	}
-	if got, _ := ds.lookup(context.Background(), run.ID); got != stamped.PolicyDigest {
+	if got, _ := ds.lookup(context.Background(), run.ID); got.Digest != stamped.PolicyDigest {
 		t.Errorf("stored digest = %q, want %q", got, stamped.PolicyDigest)
 	}
 }

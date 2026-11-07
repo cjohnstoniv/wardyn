@@ -218,9 +218,10 @@ type AgentRun struct {
 	// CorrelationID is the caller's own reference for the run (POST /runs correlation_id), stored once at create. It rides in the
 	// data of the run's audit rows as they reach the audit sinks, never in the stored row, and is never a metric label.
 	CorrelationID string `json:"correlation_id,omitempty"`
-	// PolicyDigest is the SHA-256 of the run's effective policy (RunPolicySpec.Digest), written once at dispatch, just before
-	// the run.policy.resolve row that records that policy. The run's later audit rows carry it as data.policy_digest. Empty for a
-	// run not yet dispatched, one dispatched before the field, or one whose write failed.
+	// PolicyDigest is the SHA-256 of the run's current effective policy (RunPolicySpec.Digest), written at dispatch, just before
+	// the run.policy.resolve row that records that policy, and moved by each revive to the policy its run.policy.generation row
+	// records. The run's later audit rows carry their own policy's digest as data.policy_digest. Empty for a run not yet
+	// dispatched, one dispatched before the field, or one whose write failed.
 	PolicyDigest string `json:"policy_digest,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`

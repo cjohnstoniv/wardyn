@@ -323,6 +323,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
 	// it is refused, so it can mint no token this list misses, and the new one renews at once.
 	renewed := s.retireRunTokenLineage(ctx, run.ID, freshJTI)
+	gen := s.advanceRunPolicyGeneration(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI) // before the new proxy's first row
 	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
@@ -336,6 +337,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 			s.restoreRunTokenLineage(ctx, run.ID, freshJTI, renewed)
+			s.abandonRunPolicyGeneration(ctx, run, gen)
 			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
 				loggedMsg(ctx, "the run's proxy was not replaced, and the run keeps its current proxy", err))
 		}
