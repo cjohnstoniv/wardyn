@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,19 +101,22 @@ func TestInboundToken_RefusedOnTheConsole(t *testing.T) {
 			t.Fatalf("%s's api token on GET /me: %d %s, want 200", tok.Principal, w.Code, w.Body.String())
 		}
 	}
-	for _, route := range []struct{ method, path, body string }{
+	// Each route is asked from its own address: a bearer the API does not take is an admin token guess, and
+	// one address has 10 of them.
+	for i, route := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/v1/me", ""},
 		{http.MethodGet, "/api/v1/runs", ""},
 		{http.MethodGet, "/api/v1/me/tokens", ""},
 		{http.MethodPost, "/api/v1/me/tokens", `{"name":"child"}`},
 		{http.MethodPost, "/api/v1/runs/preflight", `{}`},
 	} {
-		unknown := e.as(t, apiTokenPrefix+"not-a-token", route.method, route.path, route.body)
+		peer := fmt.Sprintf("198.51.100.%d:4000", i+1)
+		unknown := doFrom(t, e.h.srv, peer, route.method, route.path, apiTokenPrefix+"not-a-token", route.body)
 		if unknown.Code != http.StatusUnauthorized {
 			t.Fatalf("an unknown token on %s %s: %d, want 401", route.method, route.path, unknown.Code)
 		}
 		for _, tok := range []types.APIToken{personalIn, svcIn} {
-			w := e.as(t, tok.Token, route.method, route.path, route.body)
+			w := doFrom(t, e.h.srv, peer, route.method, route.path, tok.Token, route.body)
 			if w.Code != http.StatusUnauthorized || w.Body.String() != unknown.Body.String() {
 				t.Errorf("%s's inbound token on %s %s: %d %s, want the unknown token's 401 %s",
 					tok.Principal, route.method, route.path, w.Code, w.Body.String(), unknown.Body.String())

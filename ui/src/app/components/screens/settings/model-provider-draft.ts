@@ -96,9 +96,10 @@ export interface ProviderDraft {
 export const providerGatewayAddress = (p: ModelProvider) => (isBedrock(p.kind) ? (p.bedrock?.base_url ?? "") : (p.base_url ?? ""));
 // The same address as the draft has it now.
 export const draftGatewayAddress = (d: ProviderDraft) => (isBedrock(d.kind) ? d.bedrockBaseUrl : d.baseUrl);
-// The kinds that may send run identity to a gateway. A Bedrock sign-in row may not: SigV4 signs the Host.
+// The kinds that may send run identity to a gateway. A Bedrock sign-in row may only where the install signs
+// AWS requests at its proxy (the editor asks the server's answer): SigV4 signs the Host.
 export const gatewayKind = (kind: ModelProviderKind) =>
-  kind === "anthropic_api_key" || kind === "openai_api_key" || kind === "custom_endpoint" || kind === "bedrock_bearer";
+  kind === "anthropic_api_key" || kind === "openai_api_key" || kind === "custom_endpoint" || kind === "bedrock_bearer" || kind === "bedrock_sso";
 
 export const isEndpoint = (kind: ModelProviderKind) => kind === "custom_endpoint";
 export const isLocal = (kind: ModelProviderKind) => kind === "local_model";
@@ -300,7 +301,7 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
       ? {
           ...base?.bedrock,
           region: draft.region.trim() || undefined,
-          base_url: sso ? base?.bedrock?.base_url : draft.bedrockBaseUrl.trim() || undefined,
+          base_url: draft.bedrockBaseUrl.trim() || undefined,
           sso_start_url: sso ? draft.ssoStartUrl.trim() || undefined : undefined,
           sso_account_id: sso ? draft.ssoAccountId.trim() || undefined : undefined,
           sso_role_name: sso ? draft.ssoRoleName.trim() || undefined : undefined,

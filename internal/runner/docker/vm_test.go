@@ -424,9 +424,10 @@ func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 		"a bound drive, no virtiofs": {mut: func(s *runner.SandboxSpec) {
 			s.Drives = []types.DriveMount{{ObjectName: "/srv/share/alice", Backend: types.DriveBackendHostPath}}
 		}, want: "cannot share a folder"},
-		"record":      {rec: true, want: "not recorded"},
-		"agent start": {mut: agentStart, want: "not the agent CLI"},
-		"tiny":        {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
+		"record":             {rec: true, want: "not recorded"},
+		"agent start":        {mut: agentStart, want: "not the agent CLI"},
+		"tiny":               {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
+		"a policy disk size": {mut: func(s *runner.SandboxSpec) { s.Resources.DiskMiB = 2048 }, want: "can't enforce a disk limit yet"},
 		"folder, no virtiofs": {mut: func(s *runner.SandboxSpec) {
 			s.Mounts = []runner.Mount{{Source: "/home/me/project", Target: "/home/agent/work", MemberAuthored: true}}
 		}, want: "cannot share a folder"},
@@ -500,6 +501,21 @@ func TestVMRefFoundAgainAndUnsupportedVerbsRefused(t *testing.T) {
 		if !errors.Is(err, errVMUnsupported) {
 			t.Errorf("%s on a VM = %v", name, err)
 		}
+	}
+	// Output recovery is a refusal with a reason, not a failed read.
+	if err := d2.RecoverOutput(ctx, sb.Ref, &bytes.Buffer{}); !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		t.Errorf("recover_output on a VM = %v, want runner.ErrOutputUnrecoverable", err)
+	}
+	// The container desktop sign-in verbs never reach a VM: SIGSTOP would stop QEMU, and an exec as
+	// the person would run as the guest agent's user.
+	if err := d2.SignalMain(ctx, sb.Ref, "SIGSTOP"); !errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("SignalMain on a VM = %v, want runner.ErrSigninUnsupported", err)
+	}
+	if _, err := d2.ExecStreamAs(ctx, sb.Ref, runner.SigninPersonUser, runner.ExecSpec{Argv: []string{"true"}}); !errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("ExecStreamAs on a VM = %v, want runner.ErrSigninUnsupported", err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running || c.state.Paused {
+		t.Errorf("the QEMU container after the refused sign-in verbs = %+v, want running", c.state)
 	}
 	// A container ref on the same driver is untouched by the VM path.
 	if d2.vmFor(ctx, proxyContainerName(spec.RunID)) != nil {
@@ -1064,6 +1080,159 @@ func TestVMEndVMFailsClosedWhenTheEngineCannotInspect(t *testing.T) {
 	}
 }
 
+// vmExecCreates counts the docker execs the fake engine was asked to create.
+func (r *vmRig) vmExecCreates() int {
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	return len(r.f.execLog)
+}
+
+func (r *vmRig) failNextInspect() {
+	r.f.mu.Lock()
+	r.f.inspectFailures = 1
+	r.f.mu.Unlock()
+}
+
+// A restarted driver whose one inspect of a VM fails never takes the VM for a container: every
+// guest verb answers an error and creates no docker exec in the QEMU container, and once the engine
+// answers, the verbs reach the guest. A stop needs no answer.
+func TestVMVerbsFailClosedWhenTheLookupFails(t *testing.T) {
+	r := newVMRig(t)
+	ctx := context.Background()
+	spec := vmSpec()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2 := newTestDriver(r.f) // a restarted driver: it must inspect to find the VM
+	if err := d2.EnableVM(r.vc); err != nil {
+		t.Fatal(err)
+	}
+	before := r.vmExecCreates()
+	for name, verb := range map[string]func() error{
+		"attach": func() error { _, err := d2.Attach(ctx, sb.Ref, runner.AttachOptions{}); return err },
+		"exec":   func() error { _, err := d2.Exec(ctx, sb.Ref, []string{"true"}); return err },
+		"exec_stream": func() error {
+			_, err := d2.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"true"}})
+			return err
+		},
+		"start":             func() error { return d2.StartSandbox(ctx, sb.Ref) },
+		"can_replace_proxy": func() error { return d2.CanReplaceProxy(ctx, sb.Ref) },
+		"replace_proxy":     func() error { return d2.ReplaceProxy(ctx, sb.Ref, []byte("{}")) },
+	} {
+		r.failNextInspect()
+		if err := verb(); err == nil || errors.Is(err, errVMUnsupported) {
+			t.Errorf("%s with the engine failing = %v, want the engine's error", name, err)
+		}
+	}
+	if n := r.vmExecCreates(); n != before {
+		t.Fatalf("%d docker execs created in the QEMU container, want 0", n-before)
+	}
+
+	// The engine answers again: the same driver finds the VM and the verbs go to the guest agent.
+	if _, err := d2.Attach(ctx, sb.Ref, runner.AttachOptions{Observer: true}); !errors.Is(err, runner.ErrObserveUnsupported) {
+		t.Fatalf("watching attach after the engine answered = %v, want the VM's own refusal", err)
+	}
+	es, err := d2.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", "echo from-the-guest"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = es.Stdin.Close()
+	var so, se bytes.Buffer
+	done := make(chan struct{})
+	go func() { _, _ = se.ReadFrom(es.Stderr); close(done) }()
+	_, _ = so.ReadFrom(es.Stdout)
+	<-done
+	if code, err := es.Wait(); err != nil || code != 0 || so.String() != "from-the-guest\n" {
+		t.Fatalf("exec stream after the engine answered: %d %v %q", code, err, so.String())
+	}
+	if _, err := d2.Exec(ctx, sb.Ref, []string{"sh", "-c", "exit 4"}); err != nil {
+		t.Fatal(err)
+	}
+	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if code, err := d2.Wait(wctx, sb.Ref); err != nil || code != 4 {
+		t.Fatalf("Wait after the engine answered = %d, %v", code, err)
+	}
+	if n := r.vmExecCreates(); n != before {
+		t.Fatalf("%d docker execs created in the QEMU container, want 0", n-before)
+	}
+
+	d3 := newTestDriver(r.f) // restarted again: its stop meets a failed inspect
+	if err := d3.EnableVM(r.vc); err != nil {
+		t.Fatal(err)
+	}
+	r.failNextInspect()
+	if err := d3.StopSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("stop after a failed inspect = %v", err)
+	}
+	if c := r.container(t, sb.Ref); !c.removed {
+		t.Fatal("a stop that met a failed inspect left the VM")
+	}
+}
+
+// A runner restarted with Linux VM sandboxes off still knows a VM it made by its container: every
+// guest verb is refused with a plain sentence and creates no docker exec in the QEMU container, and
+// the VM can still be ended and stopped.
+func TestVMVerbsRefusedWhenVMsWentOff(t *testing.T) {
+	r := newVMRig(t)
+	ctx := context.Background()
+	spec := vmSpec()
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}} // a folder share for EndVM to remove
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2 := newTestDriver(r.f) // restarted with Linux VM sandboxes off: no EnableVM
+	before := r.vmExecCreates()
+	for name, verb := range map[string]func() error{
+		"attach": func() error { _, err := d2.Attach(ctx, sb.Ref, runner.AttachOptions{}); return err },
+		"exec":   func() error { _, err := d2.Exec(ctx, sb.Ref, []string{"true"}); return err },
+		"exec_stream": func() error {
+			_, err := d2.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"true"}})
+			return err
+		},
+		"start":             func() error { return d2.StartSandbox(ctx, sb.Ref) },
+		"can_replace_proxy": func() error { return d2.CanReplaceProxy(ctx, sb.Ref) },
+		"replace_proxy":     func() error { return d2.ReplaceProxy(ctx, sb.Ref, []byte("{}")) },
+	} {
+		if err := verb(); !errors.Is(err, errVMUnreachable) {
+			t.Errorf("%s on a VM with VM sandboxes off = %v, want refused", name, err)
+		}
+	}
+	if err := d2.RecoverOutput(ctx, sb.Ref, &bytes.Buffer{}); !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		t.Errorf("recover output on a VM with VM sandboxes off = %v, want unrecoverable", err)
+	}
+	if n := r.vmExecCreates(); n != before {
+		t.Fatalf("%d docker execs created in the QEMU container, want 0", n-before)
+	}
+	if _, err := d2.vmLookup(ctx, sb.Ref); !errors.Is(err, errVMUnreachable) {
+		t.Fatalf("a second lookup = %v: a VM must never be remembered as a container", err)
+	}
+
+	if c := r.container(t, vmfsName(spec.RunID, 0)); c.removed {
+		t.Fatal("the VM's file share was gone before EndVM")
+	}
+	if isVM, err := d2.EndVM(ctx, spec.RunID); !isVM || err != nil {
+		t.Fatalf("EndVM with VM sandboxes off = %v, %v; want true, nil", isVM, err)
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+		t.Fatalf("the VM after EndVM: removed %v, state %+v; want stopped and kept", c.removed, c.state)
+	}
+	if c := r.container(t, proxyContainerName(spec.RunID)); !c.removed {
+		t.Fatal("EndVM left the VM's proxy")
+	}
+	if c := r.container(t, vmfsName(spec.RunID, 0)); !c.removed {
+		t.Fatal("EndVM with VM sandboxes off left the VM's file share")
+	}
+	if err := d2.StopSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("stop with VM sandboxes off = %v", err)
+	}
+	if c := r.container(t, sb.Ref); !c.removed {
+		t.Fatal("a stop with VM sandboxes off left the VM")
+	}
+}
+
 // An end cut short (the runner stopping, a cancelled pass) can leave the guest asked to power down, the
 // proxy running and the producer unsettled. The next EndVM finishes it: the proxy is removed, the
 // producer settled, the stopped VM kept, and an end of a VM already ended answers nothing wrong.
@@ -1136,5 +1305,193 @@ func TestVMGuestFilesResolveAnUnsetMode(t *testing.T) {
 	}
 	if got[1].Mode != 0o600 || !got[1].AgentOwned {
 		t.Errorf("a set mode or owner was changed: %+v", got[1])
+	}
+}
+
+// A requested or default (soft) disk size is advisory for a VM: the run starts.
+func TestVMSoftDiskSizeStillCreates(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Resources.DiskMiB, spec.Resources.DiskMiBSoft = 2048, true
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("a soft disk size refused a VM run: %v", err)
+	}
+}
+
+// A kept end of a VM wipes the AWS credential caches in the guest before powering down, for a run
+// staged an AWS profile; a failed wipe is answered; a run with no profile runs no wipe.
+func TestVMEndWipesAWSCachesInTheGuest(t *testing.T) {
+	for name, tc := range map[string]struct {
+		profile bool
+		script  string
+		wiped   bool
+		failed  bool
+	}{
+		"staged profile":    {profile: true, script: `echo wiped > "$MARK"`, wiped: true},
+		"the wipe fails":    {profile: true, script: `exit 3`, failed: true},
+		"no staged profile": {script: `echo wiped > "$MARK"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mark := filepath.Join(t.TempDir(), "mark")
+			old := awsCacheWipeArgv
+			awsCacheWipeArgv = []string{"sh", "-c", "MARK=" + mark + "; " + tc.script}
+			t.Cleanup(func() { awsCacheWipeArgv = old })
+			r := newVMRig(t)
+			spec := vmSpec()
+			if tc.profile {
+				spec.Env = map[string]string{runner.AWSProfileRecordEnv: "cHJvZmlsZQ=="}
+			}
+			sb, err := r.d.CreateSandbox(context.Background(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = r.d.EndSandbox(context.Background(), sb.Ref)
+			if got := errors.Is(err, runner.ErrAWSCacheWipeFailed); got != tc.failed || (err != nil && !tc.failed) {
+				t.Fatalf("EndSandbox = %v, want ErrAWSCacheWipeFailed %v", err, tc.failed)
+			}
+			if _, serr := os.Stat(mark); (serr == nil) != tc.wiped {
+				t.Errorf("wipe ran = %v, want %v", serr == nil, tc.wiped)
+			}
+			r.mu.Lock()
+			powered := slices.Contains(r.qmp, "system_powerdown")
+			r.mu.Unlock()
+			if !powered {
+				t.Error("a wipe outcome stopped the end before the guest was powered down")
+			}
+		})
+	}
+}
+
+// A share cleanup that fails once is answered by the end and finished by its retry, with the QEMU
+// container (and so the kept disk) retained throughout.
+func TestVMEndRetriesAShareCleanup(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}, {Source: t.TempDir(), Target: "/workspace/ref", ReadOnly: true}}
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := vmfsName(spec.RunID, 1)
+	r.f.mu.Lock()
+	r.f.failRemove = map[string]int{second: 1}
+	r.f.mu.Unlock()
+	if err := r.d.EndSandbox(ctx, sb.Ref); err == nil || !strings.Contains(err.Error(), second) {
+		t.Fatalf("EndSandbox = %v, want the second share's failure", err)
+	}
+	if !r.container(t, vmfsName(spec.RunID, 0)).removed || r.container(t, second).removed {
+		t.Fatal("the first end did not remove share 0 and leave share 1")
+	}
+	if err := r.d.EndSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("the retry = %v, want it to converge", err)
+	}
+	if !r.container(t, second).removed {
+		t.Fatal("the retry left share 1")
+	}
+	if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+		t.Fatalf("the QEMU container after the end = removed %v, %+v; want stopped and kept", c.removed, c.state)
+	}
+}
+
+// A restarted driver that cannot classify a ref (the engine's inspect fails) never takes it for a
+// container: the sign-in verbs and the AWS wipe fail closed, run nothing in the QEMU container, and
+// a retry once the engine answers reaches the right place.
+func TestVMLookupFailureFailsTheSigninVerbsAndWipeClosed(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "mark")
+	old := awsCacheWipeArgv
+	awsCacheWipeArgv = []string{"sh", "-c", "echo wiped > " + mark}
+	t.Cleanup(func() { awsCacheWipeArgv = old })
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Env = map[string]string{runner.AWSProfileRecordEnv: "cHJvZmlsZQ=="}
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fail := func(n int) {
+		r.f.mu.Lock()
+		r.f.inspectFailures = n
+		r.f.mu.Unlock()
+	}
+	fresh := func() *Driver {
+		d := newTestDriver(r.f)
+		if err := d.EnableVM(r.vc); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	d := fresh()
+	fail(1)
+	if err := d.SignalMain(ctx, sb.Ref, "SIGSTOP"); err == nil || errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("SignalMain with the lookup failing = %v, want the lookup's error", err)
+	}
+	d = fresh()
+	fail(1)
+	if _, err := d.ExecStreamAs(ctx, sb.Ref, runner.SigninPersonUser, runner.ExecSpec{Argv: []string{"true"}}); err == nil || errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("ExecStreamAs with the lookup failing = %v, want the lookup's error", err)
+	}
+	if c := r.container(t, sb.Ref); !c.state.Running || c.state.Paused {
+		t.Errorf("the QEMU container after the failed lookups = %+v, want untouched", c.state)
+	}
+	d = fresh()
+	if err := d.SignalMain(ctx, sb.Ref, "SIGSTOP"); !errors.Is(err, runner.ErrSigninUnsupported) {
+		t.Errorf("SignalMain once the lookup answers = %v, want ErrSigninUnsupported", err)
+	}
+
+	d = fresh()
+	fail(2) // the wipe's own inspect, then the lookup's
+	if err := d.wipeAWSCaches(ctx, sb.Ref); !errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+		t.Errorf("wipe with the lookup failing = %v, want ErrAWSCacheWipeFailed", err)
+	}
+	r.f.mu.Lock()
+	execs := len(r.f.execLog)
+	r.f.mu.Unlock()
+	if _, serr := os.Stat(mark); serr == nil || execs != 0 {
+		t.Errorf("the failed lookup ran a wipe: guest wrote %v, %d container execs", serr == nil, execs)
+	}
+	if err := d.wipeAWSCaches(ctx, sb.Ref); err != nil {
+		t.Fatalf("wipe once the lookup answers = %v", err)
+	}
+	if _, serr := os.Stat(mark); serr != nil {
+		t.Errorf("the retry did not wipe in the guest: %v", serr)
+	}
+}
+
+// An end whose lookups fail still stops the QEMU container: the wipe reports failed (so the audit
+// row says so), and containment never waits on a lookup or a wipe.
+func TestVMEndStopsTheContainerWhenTheLookupFails(t *testing.T) {
+	for name, failures := range map[string]int{
+		"the wipe's lookup fails":                   2,
+		"the wipe's and the end's own lookups fail": 3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newVMRig(t)
+			spec := vmSpec()
+			spec.Env = map[string]string{runner.AWSProfileRecordEnv: "cHJvZmlsZQ=="}
+			ctx := context.Background()
+			sb, err := r.d.CreateSandbox(ctx, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := newTestDriver(r.f)
+			if err := d.EnableVM(r.vc); err != nil {
+				t.Fatal(err)
+			}
+			r.f.mu.Lock()
+			r.f.inspectFailures = failures
+			r.f.mu.Unlock()
+			if err := d.EndSandbox(ctx, sb.Ref); !errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+				t.Fatalf("EndSandbox = %v, want ErrAWSCacheWipeFailed", err)
+			}
+			if c := r.container(t, sb.Ref); c.removed || c.state.Running {
+				t.Fatalf("the QEMU container after the end = removed %v, %+v; want stopped and kept", c.removed, c.state)
+			}
+			if !r.container(t, proxyContainerName(spec.RunID)).removed {
+				t.Error("the end left the run's proxy")
+			}
+		})
 	}
 }

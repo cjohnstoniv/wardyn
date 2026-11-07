@@ -68,6 +68,7 @@ var leqRules = map[string]string{
 	"deny_placements":                       "every placement b denies is denied by a",
 	"allowed_macos_bases":                   "b allows any: any a; else a is a non-empty subset of b",
 	"allowed_models":                        "b has no limit: any a; else a is a non-empty subset of b",
+	"required_image_signers":                "a names every signer b names (a is a superset of b)",
 	"max_cpu_millis":                        "a is no looser bound than b",
 	"max_memory_mib":                        "a is no looser bound than b",
 	"max_ephemeral_disk_mib":                "a is no looser bound than b",

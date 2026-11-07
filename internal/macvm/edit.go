@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,7 +27,7 @@ import (
 // The lines `wardyn-runnerd macos-vm edit-base` prints, from the helper's edit-base (approved copy).
 const (
 	EditStartLine    = "This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks."
-	editCodeLine     = "Sign in as wardyn-admin with the one-time code: click Show code in the window, or read it in %s."
+	editCodeLine     = "Sign in as wardyn-admin with the one-time code: click Type code in the window, or Show code to read it."
 	editProfileLine  = "While signed in as wardyn-admin, open %s, then review and install the staged profile in System Settings."
 	EditCheckingLine = "The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test."
 	editReadyLine    = "The edited base is ready, and runs now use it. Desktop: %s."
@@ -45,16 +46,15 @@ type ScreenText struct {
 // editScreen is the edit window's text. Its lines run in the order a person needs them: the code, the
 // setup questions, who they are and where Terminal is, Full Disk Access, the certificates, then the two
 // checks the recheck makes.
-var editScreen = ScreenText{
+var editScreen = WindowText{
 	Title: "Wardyn: edit this macOS VM base",
-	Steps: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+	Strip: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
 		"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
 		"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
-		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". It lets every program a run starts in this VM read protected folders, in every run.\n" +
+		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
 		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
-	Closable: true,
 }
 
 // screenTexter is a FirstBooter whose Boot's window can show other text than setup by hand's.
@@ -129,12 +129,12 @@ type EditOptions struct {
 	// Guest boots the staging copy for the guest agent's tools session: once to set the one-time code,
 	// once for the recheck.
 	Guest ToolsBoot
-	// FirstBoot and PrepNet boot the staging copy plain, in a window on this Mac, on the no-egress prep
-	// network, for the person's session.
-	FirstBoot FirstBooter
-	PrepNet   func() (PrepNetwork, error)
-	// Leaked records a framework slot a refused window boot left (RunOptions.Leaked).
-	Leaked func() error
+	// WindowBoot and PrepNet boot the staging copy for the person's session: a tools boot like Guest's, on
+	// the no-egress prep network, which Screen draws in a window on this Mac. Screen nil is the Mac's edit
+	// window (nativeEditScreen); a build without one refuses the edit.
+	WindowBoot WindowBoot
+	PrepNet    func() (PrepNetwork, error)
+	Screen     WindowScreen
 	// Items is the install list (macos_vm_base_file), whose files stage again each profile still waiting
 	// for the person's approval (restageProfiles).
 	Items BaseList
@@ -159,13 +159,12 @@ type EditOptions struct {
 // with the copy's AdminPasswordFile; any failure discards it, so runs keep the old base. The code is in no
 // log and its file goes when the window closes, or when the edit ends.
 func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
-	if o.Engine == nil || o.Guest == nil || o.FirstBoot == nil || o.PrepNet == nil || o.Layout.Root == "" {
+	if o.Engine == nil || o.Guest == nil || o.WindowBoot == nil || o.PrepNet == nil || o.Layout.Root == "" {
 		return Manifest{}, errors.New("macvm: an edit needs an engine, its boots, a prep network and a root")
 	}
 	o.setDefaults()
-	if err := o.FirstBoot.ScreenReady(); geteuid() == 0 || errors.Is(err, ErrNoDesktopSession) {
-		return Manifest{}, ErrEditNoDesktop
-	} else if err != nil {
+	scr, err := o.editScreen()
+	if err != nil {
 		return Manifest{}, err
 	}
 	base := o.Layout.BaseDir(o.Slot)
@@ -228,12 +227,12 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
-	fmt.Fprintf(o.Out, editCodeLine+"\n", codeFile)
+	fmt.Fprintln(o.Out, editCodeLine)
 	for _, p := range offered {
 		fmt.Fprintf(o.Out, editProfileLine+"\n", p)
 	}
 	o.printUntrusted(base)
-	if err := o.window(ctx, spec); err != nil {
+	if err := o.window(ctx, spec, scr); err != nil {
 		return m, err
 	}
 	removeCode()
@@ -263,6 +262,25 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	o.writeRecord(base, m, read)
 	fmt.Fprintf(o.Out, editReadyLine+"\n", o.desktopWords(desktop))
 	return m, nil
+}
+
+// editScreen is the window the edit shows the guest in: o.Screen, else the Mac's own. It refuses when this
+// build cannot open one, when the process runs as root or no one is signed in at the Mac (ErrEditNoDesktop), and
+// when the window check fails otherwise.
+func (o *EditOptions) editScreen() (WindowScreen, error) {
+	scr := o.Screen
+	if scr == nil {
+		scr = nativeEditScreen
+	}
+	if scr == nil {
+		return nil, errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
+	}
+	if err := scr.Ready(); geteuid() == 0 || errors.Is(err, ErrNoDesktopSession) {
+		return nil, ErrEditNoDesktop
+	} else if err != nil {
+		return nil, err
+	}
+	return scr, nil
 }
 
 func (o *EditOptions) setDefaults() {
@@ -329,61 +347,71 @@ func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, stag
 	return offered, writeSetupCode(path, SetupCodeRecord{Account: provisionUser, Code: string(code)})
 }
 
-// window boots spec plain in a window on this Mac, with the edit's text, and waits until the guest shuts
-// down. The window's close button asks the guest to.
-func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
-	texter, ok := o.FirstBoot.(screenTexter)
-	if !ok {
-		return errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
-	}
-	text := editScreen
-	text.CodeFile = o.Layout.SetupCode()
-	booter := texter.WithScreen(text)
+// window boots spec for the person's session on a window boot (a tools boot like the headless ones) on the
+// no-egress prep network, and draws its VM in scr's window with the edit's text and the Show code control,
+// until the guest shuts down. The window's close button asks the guest to (WindowText.AskStop), and the
+// window stays up until it has. Once the VM has stopped, the boot's stop answers whether that was the
+// guest's own shutdown: a stop through the boot's ctl.sock (ErrStage2Stopped) is the edit's error, so the
+// copy is never rechecked or swapped in.
+func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowScreen) error {
 	nw, err := o.PrepNet()
 	if err != nil {
 		return err
 	}
 	defer nw.Close()
-	guest, host, err := NewNetPair()
+	nic, host, err := NewNetPair()
 	if err != nil {
 		return err
 	}
-	defer guest.Close()
+	defer nic.Close()
 	defer host.Close()
 	go func() { _ = nw.Serve(host) }()
-	var fb FirstBoot
-	// The headless boot, just stopped, may hold the aux storage a moment longer.
-	err = retryAuxLocked(ctx, o.Log, func() error {
-		var err error
-		fb, err = booter.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
-			uint(spec.CPUs), spec.MemoryBytes, guest, "", "")
-		return err
-	})
+	g, stop, err := o.WindowBoot(ctx, spec, nic)
 	if err != nil {
-		reportVMLimit(err, o.Leaked, o.Log)
 		return fmt.Errorf("macvm: the edit window's boot: %w", err)
 	}
 	stopped := false
+	stopBoot := func() error {
+		stopped = true
+		sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
+		defer cancel()
+		return stop(sctx)
+	}
 	defer func() {
 		if !stopped {
-			sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
-			defer cancel()
-			_ = fb.Stop(sctx)
+			if err := stopBoot(); err != nil {
+				o.Log.Warn("macvm: the edit window's VM did not shut down cleanly", "err", err.Error())
+			}
 		}
 	}()
-	if fb.Screen == nil {
-		return errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
+	wg, ok := g.(WindowGuest)
+	if !ok {
+		return errors.New("macvm: the edit window's boot gives no VM to draw")
 	}
-	closeWindow, err := fb.Screen()
+	ptr, err := wg.ViewHandle()
+	if err != nil || ptr == nil {
+		return fmt.Errorf("macvm: the edit window: the VM's pointer is unreadable: %v", err)
+	}
+	text := editScreen
+	text.CodeFile = o.Layout.SetupCode()
+	text.AskStop = func() {
+		if err := wg.RequestStop(); err != nil {
+			o.Log.Warn("macvm: the edit window's close did not reach the guest", "err", err.Error())
+		}
+	}
+	w, err := scr.Open(ptr, text)
+	runtime.KeepAlive(wg)
 	if err != nil {
 		return fmt.Errorf("macvm: the edit window: %w", err)
 	}
-	defer closeWindow()
+	defer w.Close()
 	select {
-	case err := <-fb.Done:
-		stopped = true
-		if err != nil {
-			return fmt.Errorf("macvm: the edit window's guest stopped: %w", err)
+	case <-wg.Done():
+		if err := stopBoot(); err != nil {
+			return fmt.Errorf("macvm: the edit window's boot: %w", err)
+		}
+		if st := wg.State(); st == StateError {
+			return errors.New("macvm: the edit window's guest stopped with an error")
 		}
 		return nil
 	case <-ctx.Done():
@@ -501,7 +529,8 @@ func (o *EditOptions) reportRead(staging, desktop, fda string) EditRecord {
 // SHA-256 and the command that trusts it once a person signed in as wardyn-admin runs it. Nothing runs it
 // for them. With no such item it prints nothing. The subject and hash come from the install list's file for
 // that item when the file is the one the base was built from; otherwise the base's recorded fingerprint
-// and no subject.
+// and no subject. Last, when the base reads this Mac's guest agent signing certificate as not trusted, the
+// same for it, trusted for code signing only.
 func (o *EditOptions) printUntrusted(base string) {
 	rec, err := ReadToolsRecord(base)
 	if err != nil {
@@ -553,6 +582,21 @@ func (o *EditOptions) printUntrusted(base string) {
 		fmt.Fprintf(o.Out, "%s\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p ssl -k %s %s/%s\n",
 			r.Name, subject, colons(sum), guestagent.MacSystemKeychain, guestagent.ItemDir(r.Name), guestagent.ItemCert)
 	}
+	if rec.AgentSignature != AgentSignedThisMac || rec.AgentSigningCert != ItemNotTrusted {
+		return
+	}
+	if !header {
+		fmt.Fprintln(o.Out)
+		fmt.Fprintln(o.Out, "Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
+	}
+	sum := "not available: this Mac's signing certificate does not read"
+	if cert, err := readAgentSigningCert(o.Layout.AgentSigningDir()); err == nil {
+		sum = colons(sum256(cert.Raw))
+	}
+	// Code signing only: the guest agent keeps Full Disk Access through tools updates once the base
+	// trusts the certificate it is signed with.
+	fmt.Fprintf(o.Out, "guest agent signing certificate (this Mac's, for code signing only)\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p codeSign -k %s %s\n",
+		strconv.Quote("CN="+agentSigningCN), sum, guestagent.MacSystemKeychain, agentSigningCertPath())
 }
 
 // macOSAccounts are macOS's own accounts below uid 500 that have no leading "_".

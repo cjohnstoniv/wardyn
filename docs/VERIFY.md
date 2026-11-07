@@ -21,6 +21,7 @@
 | `ghcr.io/cjohnstoniv/agent-aws-sso` | agent-base + AWS CLI v2, for the SSO login flow |
 | `ghcr.io/cjohnstoniv/agent-vscode` | agent-base + code-server, for the UI-sandbox relay |
 | `ghcr.io/cjohnstoniv/agent-novnc` | agent-base + a minimal X/noVNC desktop, for the UI-sandbox relay |
+| `ghcr.io/cjohnstoniv/agent-novnc-signin` | agent-novnc plus desktop sign-ins (`WARDYN_DESKTOP_SIGNINS=on`) |
 | `ghcr.io/cjohnstoniv/charts/wardyn` | the Helm chart, as an OCI artifact |
 
 > [!NOTE]
@@ -39,7 +40,7 @@
 # and a Wardyn release may be one, so it can skip the newest release or 404.
 WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
-: "${WARDYN_VERSION:?could not resolve a version — set it by hand, e.g. WARDYN_VERSION=0.6.6}"
+: "${WARDYN_VERSION:?could not resolve a version — set it by hand to the version you are checking}"
 ```
 
 - Or set it by hand to the release you actually pulled — `wardyn --version` prints it, and it is the `version` field of `GET /healthz`.
@@ -119,10 +120,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_
 
 ## 5. Verify the release assets
 
-- Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four `wardyn-<os>-<arch>` CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries, `wardyn-runner-units.tar.gz`, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed.
-- The CLI installers `install-cli.sh` and `install-cli.ps1` are release assets too, under the same `SHA256SUMS`.
-- The macOS runner package `wardyn-runnerd.pkg` (from 0.10.0 with the `wardyn` CLI) is a release asset too, covered by the same `SHA256SUMS`.
-- `wardyn-licenses.tar.gz` holds the licence texts for the binaries, under the same `SHA256SUMS`.
+- Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the six `wardyn-<os>-<arch>` CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries, `wardyn-runner-units.tar.gz`, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed.
+- `install-cli.sh`, `install-cli.ps1`, the macOS runner package `wardyn-runnerd.pkg` (from 0.10.0 with the `wardyn` CLI) and `wardyn-licenses.tar.gz` (the licence texts for the binaries) are release assets too, all under the same `SHA256SUMS`.
 - `gh release download` is a GitHub CLI command too, so it needs the same sign-in; the assets are also plain downloads at `https://github.com/cjohnstoniv/wardyn/releases/download/v${WARDYN_VERSION}/<asset>`.
 
 ```sh
@@ -177,6 +176,14 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
 > `curl … | sh` is a decision to trust this project's release origin for one command.
 > Steps 1-5 are how you check afterwards that it deserved it, and every artifact the installer fetched is still on disk to check *against*.
 
+## 7. If your scanner flags GO-2026-5932
+
+- It will, and it is a false positive that we have written down rather than suppressed.
+- `golang.org/x/crypto/openpgp` is unmaintained with no fix available, and the `golang.org/x/crypto` *module* is in our build — but the `openpgp` *subpackage* is not imported by Wardyn or by anything Wardyn calls.
+- `govulncheck`'s call-graph analysis reports zero affected symbols on every push.
+- Rather than ask you to take that on trust, it ships as a machine-readable [OpenVEX statement](../security/vex/wardyn.openvex.json) (`not_affected` / `vulnerable_code_not_present`) that most scanners can consume directly.
+- The full reasoning is in [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
+
 ## What install-cli checks
 
 `install-cli.sh` and `install-cli.ps1` install the `wardyn` CLI only ([the ranked install paths](runner-registration.md#install-the-cli)). They check two things, and they say which ran:
@@ -190,19 +197,11 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
 - A script piped from the same origin also names the identity it checks, so for a piped run that identity line is what you check by hand.
 - A mirror (`--artifact-base`, or the server's `WARDYN_CLI_ARTIFACT_BASE`) is trusted as the console is, because it serves the script. Its checksum file catches corruption only; cosign still checks the release signature.
 - `--ca-file` goes to curl, and to cosign through `SSL_CERT_FILE` for that child alone. The script keeps no copy.
-- Nothing in the installed CLI checks its own signature yet: that needs the release to publish a Sigstore bundle (see [step 5](#5-verify-the-release-assets)).
-
-## 7. If your scanner flags GO-2026-5932
-
-- It will, and it is a false positive that we have written down rather than suppressed.
-- `golang.org/x/crypto/openpgp` is unmaintained with no fix available, and the `golang.org/x/crypto` *module* is in our build — but the `openpgp` *subpackage* is not imported by Wardyn or by anything Wardyn calls.
-- `govulncheck`'s call-graph analysis reports zero affected symbols on every push.
-- Rather than ask you to take that on trust, it ships as a machine-readable [OpenVEX statement](../security/vex/wardyn.openvex.json) (`not_affected` / `vulnerable_code_not_present`) that most scanners can consume directly.
-- The full reasoning is in [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
+- The installed CLI does not check its own signature. `wardyn runner install` and `wardyn runner upgrade` verify the runner binary against `SHA256SUMS.sigstore.json` ([how](runner-registration.md#wardyn-runner-install-and-wardyn-runner-upgrade)).
 
 ## The continuous lane
 
-- Everything above is about **release** images — the nine `vX.Y.Z`-tagged images `release.yml` publishes.
+- Everything above is about **release** images — the ten `vX.Y.Z`-tagged images `release.yml` publishes.
 - A second lane publishes each push to `main` once CI passes on it: [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) builds `wardynd` alone and pushes `ghcr.io/cjohnstoniv/wardynd:latest` and `:sha-<short-sha>`.
 
 Those tags are **signed but not attested**, and their signature is under a different identity:

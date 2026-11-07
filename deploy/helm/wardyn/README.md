@@ -54,10 +54,10 @@ Wardyn is up.
 
 ## Prerequisites
 
-Platform requirements, in one breath: **Kubernetes 1.20+ (1.25+ with `k8s.enabled`), Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. In detail:
+**Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** CI runs the chart on Kubernetes 1.31 and the latest kind image; it sets no `kubeVersion`. Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. In detail:
 
-- **Kubernetes 1.20+** and **Helm 3**.
-  - With `k8s.enabled` the floor is **1.25+**: exec and attach add an ephemeral container (`UpdateEphemeralContainers`), which is GA from 1.25.
+- **Helm 3**. Other Kubernetes versions are untested.
+  - With `k8s.enabled`, exec and attach add an ephemeral container (`UpdateEphemeralContainers`), which is GA from 1.25.
 - **A CNI that enforces NetworkPolicy** (Calico, Cilium, ...).
   - The chart renders portable `networking.k8s.io/v1` policies — no specific CNI required — but enforcement is load-bearing:
     - with `k8s.enabled`, a boot-time egress canary verifies it and refuses to start the substrate on a non-enforcing CNI
@@ -156,18 +156,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 - The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json` (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on boot with `open examples/policies/default.json: no such file or directory`; on one of those, add `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`).
 - To use a different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under `/examples/policies/` (`demo.json`, ...).
 - To bake a cluster-specific policy into the chart instead — an alternative to picking among the image's bundled ones — see [Default policy](#default-policy).
-- The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops runs idle for an hour.
-- To keep the old behaviour, use a policy with `auto_stop_after_sec` set to `0`.
-- The shipped file is also the ceiling member runs are clamped to,
-  - so while it is in use a member's `auto_stop_after_sec` of `0`, a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions use (admins are not clamped).
-- On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run that makes no egress calls and has no attach is also stopped after an hour.
-- A run someone is attached to (a browser terminal, an SSH shell, an exec, sftp or `-L` channel) is not idle-stopped, as long as the attach's keepalive writes, made every 30 seconds, succeed;
-  - they are best effort and a failed one is dropped.
-- To lengthen the hour for members, raise `auto_stop_after_sec` in the default policy rather than setting it to `0`:
-  - a ceiling of `0` removes the cap and also turns idle stop off for every run that does not set its own.
-- Three more clocks are separate:
-  - idle pause (`pause_idle_after_sec` in a governance profile; the Kubernetes runner cannot freeze, so it never applies there), the lease (`ends_at`, none by default, set only by a profile's run limits) and `WARDYN_RUN_MAX_AGE` (off by default).
-- See [Run lifetime](../../../docs/operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run).
+- The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops idle runs after an hour, and member runs are clamped to that ceiling. See [Run lifetime](../../../docs/operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) for the clamp, the attach keepalive and the other clocks.
 
 > [!IMPORTANT]
 > **Upgrade note — `/readyz` is a 0.6-and-later endpoint.**
@@ -258,6 +247,7 @@ env:
   WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=user"
   WARDYN_OIDC_DEFAULT_ROLE: "user"          # unmatched users land here instead of being denied
   WARDYN_OIDC_OPERATOR_EMAILS: "platform@corp.example"  # legacy admin safety net, still honored
+  WARDYN_GOVERN_ADMIN_RUNS: "true"          # recommended with SSO; see docs/operations/member-mode.md
 
 extraEnv:
   - name: WARDYN_OIDC_CLIENT_SECRET       # 🔒 secret-bearing var — extraEnv, never a literal `env` value
@@ -273,6 +263,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   -f rbac-values.yaml   # the snippet above
 ```
 
+- Where admins sign in with SSO, set `env.WARDYN_GOVERN_ADMIN_RUNS` so their runs are governed like a member's. It refuses Record Mode unless `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT=recording`, and it governs admin-role personal tokens, so check CI first ([Constrained-admin mode](../../../docs/operations/member-mode.md#constrained-admin-mode)).
 - Keep `auth.adminToken` configured even with OIDC set up:
   - the admin token always authenticates as admin (one shared credential, no per-human identity to demote), which is the recovery path if a role-map typo ever locks every human out.
 - Set `env.WARDYN_OIDC_ROLE_MAP` on its own (no `extraEnv`/Entra changes) against an EXISTING OIDC-only install to turn on RBAC for the first time;
@@ -439,7 +430,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - The RuntimeClass is set on the agent pod only. The `wardyn-proxy` pod runs on the node's default runtime, outside the guest.
     - Agent limits (`runner.sandbox.defaultResources`, or the policy's resources) become the pod's CPU and memory limits, and its requests equal them unless `runner.sandbox.requestRatio` is set.
     - CC2 stays unadvertised on a cluster with no gVisor (`runsc*`) handler: leave `k8s.runtimeClasses.CC2` empty.
-    - A Linux VM sandbox (`k8s.linuxVM=true`) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
+    - A Linux VM sandbox (`k8s.linuxVM=true` in the `wardyn-runnerd` chart, not this one) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
     - Not proven: CI does not run Kata, because the conformance test skips where none is installed.
     - The unit tests use a fake clientset with class `kata` and handler `kata-qemu`, plus a `kata-vm-isolation` / `kata` row, so this pairing has never run on a real cluster.
     - Unknown: PVC drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
@@ -1065,6 +1056,7 @@ spec:
   - Empty by default; see [SSH on a 443-only estate](#ssh-on-a-443-only-estate) for an Istio example.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs` with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off` (no recording, no replay) when off.
   - **The chart default records nothing** until you set `env.WARDYN_RECORDING_STORE=pg` or turn on `persistence`; `wardyn setup status` shows it in the "Session recording" row.
+  - With the store off, the console's Recordings screen shows "Session recording is disabled on this deployment".
   - wardynd's own default directory writes to the read-only root FS and would crash-loop the pod (it did, on 0.7.0's empty-dir spelling).
   - The chart pins the store itself — not because `pg` is unsafe here (its casts are already readable from any replica), but because this chart is single-replica by policy (see `replicas` below),
     - so there is no HA reason to force the unbounded-by-default `pg` store on every install.
@@ -1098,5 +1090,16 @@ spec:
   - The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime upgrades.
   - Per-replica limits (connection caps, rate limiters, the `via_org` byte total of a local run) add up across replicas.
   - See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
+
+### Security and capacity settings
+
+| Value | Default | Effect |
+|---|---|---|
+| `auth.ssoOnly` | `false` | Makes SSO the only way into the console (`WARDYN_SSO_ONLY`). The chart refuses to render it beside `auth.adminToken`, `WARDYN_LOCAL_MODE` or `WARDYN_USER_DESKTOP`, and without `WARDYN_OIDC_ISSUER` |
+| `secretStore.backend` | `pg` | Where credentials are sealed: Postgres under the age key (`pg`), or Vault (`vaultkv`) or Azure Key Vault (`azurekv`). `secretStore.vault.*` or `secretStore.azure.*` holds the connection. See [Secrets and keys](../../../docs/operations/secrets-and-keys.md) |
+| `kek.provider` | `local` | The key service that wraps data keys: `local`, `transit`, `azurekv` or `awskms`. `kek.required` refuses writes without one, `kek.principalKeys` seals each person's credentials under their own key, and `kek.transit.*`, `kek.azurekv.*` and `kek.awskms.*` configure the service |
+| `maxConcurrentRuns` | `0` | Caps non-terminal runs across the deployment (`WARDYN_MAX_CONCURRENT_RUNS`); `0` is unlimited. A create past it is `422` |
+| `trustedProxies` | `""` | CIDR list of reverse proxies whose `X-Forwarded-For` names the client (`WARDYN_TRUSTED_PROXIES`); empty trusts none |
+| `goMemLimit` | `"400MiB"` | Go soft memory limit (`GOMEMLIMIT`); keep it near 80% of `resources.limits.memory` |
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

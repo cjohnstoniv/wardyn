@@ -182,7 +182,7 @@ func TestPG_GetDelegatedTokenByID(t *testing.T) {
 	if _, err := st.GetDelegatedTokenByID(ctx, uuid.New(), now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown grant: err=%v, want ErrNotFound", err)
 	}
-	if _, err := st.RevokeDelegate(ctx, d.ID, now); err != nil {
+	if _, _, err := st.RevokeDelegate(ctx, d.ID, now, false); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	if _, err := st.GetDelegatedTokenByID(ctx, grant.ID, now); !errors.Is(err, store.ErrNotFound) {
@@ -225,5 +225,43 @@ func TestPG_SweepExpiredEphemeral(t *testing.T) {
 	}
 	if count("attach_tickets") != 1 || count("delegated_tokens") != 1 {
 		t.Errorf("after the sweep: tickets %d tokens %d, want the live row of each", count("attach_tickets"), count("delegated_tokens"))
+	}
+}
+
+// TestSweepExpiredEphemeralTakesRunCreateKeys: the sweep deletes an Idempotency-Key past its 24 hours,
+// bound or not, and keeps a live one.
+func TestSweepExpiredEphemeralTakesRunCreateKeys(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	expired := store.RunCreateKey{RunCreateKeyID: store.RunCreateKeyID{Principal: "alice", KeySHA256: "old"}, RequestSHA256: "r"}
+	live := store.RunCreateKey{RunCreateKeyID: store.RunCreateKeyID{Principal: "alice", KeySHA256: "new"}, RequestSHA256: "r"}
+	for _, k := range []store.RunCreateKey{expired, live} {
+		if _, err := st.ClaimRunCreateKey(ctx, k, time.Minute); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run_create_keys SET expires_at = now() - interval '1 hour' WHERE key_sha256 = 'old'`); err != nil {
+		t.Fatal(err)
+	}
+	gone, err := st.SweepExpiredEphemeral(ctx, time.Now().UTC())
+	if err != nil || gone != 1 {
+		t.Fatalf("sweep = %d, %v; want the 1 expired key", gone, err)
+	}
+	var left []string
+	rows, err := pool.Query(ctx, `SELECT key_sha256 FROM run_create_keys`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, k)
+	}
+	if len(left) != 1 || left[0] != "new" {
+		t.Errorf("after the sweep the keys are %v, want [new]", left)
 	}
 }

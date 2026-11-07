@@ -202,7 +202,7 @@ func (s *Server) routes() chi.Router {
 			// author a policy pairing an operator secret with attacker egress and
 			// then simply select it. Profile authoring lives at /governance below.
 			securityOps := r.With(s.requireSecurityOperator)
-			r.Post("/runs", s.handleCreateRun)
+			r.Post("/runs", s.handleCreateRunRoute)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
 			// deterministic setup checklist — mints/persists/dispatches nothing. The
@@ -888,7 +888,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// — because the verdict counts every row in the deployment, and
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
-	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	s.mountAuditChainRoutes(securityOps)
 	// Fleet capacity (runs_capacity.go): configured reservations summed from the run rows.
 	// securityOps because it reconstructs nothing GET /runs?view=admin does not already show
 	// that tier; fleet volume stays off members. No exec and no runner call.

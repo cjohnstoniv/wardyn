@@ -10,7 +10,7 @@ an interactive first run still asks the operator.
 **A `credential` decision carries one scope: `run` — the per-run credential lease.**
 
 - Every other scope on a `credential` approval is a `400`, and so is any scope on a `tool_call`.
-- `run` exists because a `git_pat` installs a *standing* credential helper git invokes on every operation ([`docs/adoption/corp-network-onboarding-findings.md`](../adoption/corp-network-onboarding-findings.md) B2).
+- `run` exists because a `git_pat` installs a *standing* credential helper that git invokes on every operation.
 - Approving with `decision_scope=run` (`wardyn approval approve <id> --scope run`) makes that one decision re-mintable for the rest of the run.
 - Three things bound it:
   - **`git_pat` only** (`github_token` is brokered proxy-side, `ssh_key` stays at the proxy and is issued once per run (see [CREDENTIALS.md](../CREDENTIALS.md)), `api_key` never leaves the broker, so none has the standing-consumer problem, and `broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped decision);
@@ -21,8 +21,7 @@ an interactive first run still asks the operator.
 
 - The comparison is deliberately **raw**, never `ApprovalScope.Normalize()`d
   - an empty `decision_scope` normalizes to `run`, and every credential approval decided before this feature carries an empty one,
-  - so a normalized comparison would have turned every legacy approval into a standing lease on upgrade.
-- Nothing you approved before v0.6 leases anything.
+  - so a normalized comparison would have turned every legacy approval into a standing lease.
 
 **An `egress_domain` decision's *scope* adds a second, narrower gate — and one of the four scopes is gated on ROLE, not ownership.**
 
@@ -57,7 +56,7 @@ an interactive first run still asks the operator.
   - and writes `{"hasCompletedOnboarding": true}` into the sandbox's `~/.claude.json` before the CLI starts.
 - Without those, the first Claude Code run anybody launched met the CLI's theme picker and then first-use approvals for hosts nobody had asked for.
 - The shipped default policy ([`examples/policies/default.json`](../../examples/policies/default.json)) is deliberately unchanged: the fix is that the traffic no longer happens, not that those hosts are now allowed.
-- **This applies to the claude-code image only** — the `codex-cli` image still reaches for several hosts of its own at start (see the CHANGELOG's known gaps).
+- **This applies to the claude-code image only** — the `codex-cli` image has no equivalent, so its first run raises approvals for `api.github.com`, `github.com`, `raw.githubusercontent.com`, `chatgpt.com` and `ab.chatgpt.com` ([0.7 notes](../releases/0.7.md)).
 - **And only to an image actually carrying the three `ENV` lines**:
   - `agent-claude-code` (where they were measured) is not a published image — `agent-base` is what ships, and it now carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6` inherits them.
 - An image on another base, or an older tag pinned in `WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see [corp-image-authoring.md](../adoption/corp-image-authoring.md) for the rebuild recipe and the CHANGELOG's Known gaps for the full statement.

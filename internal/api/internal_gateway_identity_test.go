@@ -64,6 +64,12 @@ type gatewayStore struct {
 	blkErr  error
 	service types.ServiceIdentity
 	svcErr  error
+	// blockedWho, when set, is the one principal IdentityBlocked answers blocked for.
+	blockedWho string
+
+	// The portals a delegated run was launched through, and a read of one that fails.
+	*fakeDelegateStore
+	delErr error
 
 	// comps and runComps are the stored components and the run's snapshot of them (the MCP arm's reads).
 	comps    map[uuid.UUID]types.Component
@@ -114,10 +120,10 @@ func (s *gatewayStore) set(f func(*gatewayStore)) {
 	f(s)
 }
 
-func (s *gatewayStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
+func (s *gatewayStore) IdentityBlocked(_ context.Context, who string, _ int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.blocked, s.blkErr
+	return s.blocked || (s.blockedWho != "" && who == s.blockedWho), s.blkErr
 }
 
 func (s *gatewayStore) GetServiceIdentity(context.Context, string) (types.ServiceIdentity, error) {
@@ -193,7 +199,8 @@ func newGatewayFixture(t *testing.T) *gatewayFixture {
 		ModelProviderID: "corp-gw", RunnerPoolExecutor: "runner:pool-exec", RunnerTarget: "docker",
 		Placement: types.PlacementRemote, CreatedAt: time.Now().Add(-time.Minute),
 	}
-	f.st = &gatewayStore{site: testGatewaySite(testGatewayProvider()), run: f.run, sealed: map[uuid.UUID][]byte{}}
+	f.st = &gatewayStore{site: testGatewaySite(testGatewayProvider()), run: f.run, sealed: map[uuid.UUID][]byte{},
+		fakeDelegateStore: newFakeDelegateStore()}
 	cfg := baseTestConfig(f.h, f.st)
 	cfg.RunConfigKey = make([]byte, kek.DEKSize)
 	cfg.Now = func() time.Time { return f.now }
@@ -1058,8 +1065,8 @@ func testGatewayBedrockBearer() types.ModelProvider {
 }
 
 // A Bedrock key row may send identity once bedrock.base_url names a gateway, and is refused
-// without one, with the field the admin must fill; a Bedrock sign-in row is refused with the
-// way out, whatever it names.
+// without one, with the field the admin must fill; a Bedrock sign-in row with a gateway of its
+// own passes too (its own rules: TestGatewayIdentityBedrockSSOValidation).
 func TestGatewayIdentityBedrockKinds(t *testing.T) {
 	if err := validateProviderGatewayIdentity(testGatewayBedrockBearer()); err != nil {
 		t.Fatalf("a Bedrock key row with a gateway address refused: %v", err)
@@ -1078,10 +1085,8 @@ func TestGatewayIdentityBedrockKinds(t *testing.T) {
 	}
 	sso := testGatewayBedrockBearer()
 	sso.Kind = types.ModelProviderBedrockSSO
-	err = validateProviderGatewayIdentity(sso)
-	want := `model_providers: "corp-gw": gateway_identity is not available for bedrock_sso providers; use a bedrock_bearer row, or the gateway as a custom endpoint`
-	if err == nil || err.Error() != want {
-		t.Errorf("sign-in row: %v, want %q", err, want)
+	if err := validateProviderGatewayIdentity(sso); err != nil {
+		t.Errorf("sign-in row with a gateway address refused: %v", err)
 	}
 }
 
@@ -1133,12 +1138,12 @@ func TestGatewayDispatchBedrockBearerRoute(t *testing.T) {
 	srv := &Server{}
 	off := testGatewayBedrockBearer()
 	off.GatewayIdentity = nil
-	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, off) || d.gatewayRoutes != nil {
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, off, llmTransport{}) || d.gatewayRoutes != nil {
 		t.Fatalf("off: %+v", d.gatewayRoutes)
 	}
 	on := testGatewayBedrockBearer()
 	for range 2 {
-		if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, on) {
+		if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, on, llmTransport{}) {
 			t.Fatal("on: refused")
 		}
 	}
@@ -1147,11 +1152,11 @@ func TestGatewayDispatchBedrockBearerRoute(t *testing.T) {
 		t.Errorf("routes %+v", d.gatewayRoutes)
 	}
 	// A kind that cannot carry identity writes no route, even with the field stored.
-	sso := testGatewayBedrockBearer()
-	sso.Kind = types.ModelProviderBedrockSSO
+	sub := testGatewayBedrockBearer()
+	sub.Kind = types.ModelProviderAnthropicSubscription
 	var none providerDispatch
-	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &none, sso) || none.gatewayRoutes != nil {
-		t.Errorf("a sign-in row wrote a route: %+v", none.gatewayRoutes)
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &none, sub, llmTransport{}) || none.gatewayRoutes != nil {
+		t.Errorf("a subscription row wrote a route: %+v", none.gatewayRoutes)
 	}
 }
 

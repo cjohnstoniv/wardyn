@@ -55,7 +55,7 @@ func TestRotator_SeedsFileImmediately(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { runGroundtruthTokenRotator(ctx, m, path); close(done) }()
+	go func() { runGroundtruthTokenRotator(ctx, m, fileTokenWriter(path)); close(done) }()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -117,7 +117,7 @@ func TestRotatorLeader_StandbySkipsRotation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, path); close(done) }()
+	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, fileTokenWriter(path)); close(done) }()
 
 	// Give the standby loop a moment to attempt (and lose) the lock at least
 	// once before cancelling.
@@ -147,7 +147,7 @@ func TestRotatorLeader_AcquiresRunsThenReleasesOnce(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, path); close(done) }()
+	go func() { runGroundtruthTokenRotatorLeader(ctx, lock.try, m, fileTokenWriter(path)); close(done) }()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

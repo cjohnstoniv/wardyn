@@ -250,6 +250,9 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	if err := types.ValidAllowedModels(l.AllowedModels); err != nil {
 		return "limits.allowed_models: " + err.Error()
 	}
+	if err := types.ValidRequiredImageSigners(l.RequiredImageSigners); err != nil {
+		return "limits.required_image_signers: " + err.Error()
+	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
 			return "limits.autonomy_rubric." + err.Error()

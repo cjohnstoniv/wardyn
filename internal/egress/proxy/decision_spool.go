@@ -254,6 +254,12 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 	ctx, cancel := context.WithTimeout(r.Context(), spoolAdmitTimeout)
 	defer cancel()
 	id, err := p.sink.reserve(ctx, p.spoolReservationBytes(r))
+	usageID := uuid.Nil
+	if err == nil {
+		if usageID, err = p.reserveUsageRow(ctx, r); err != nil {
+			p.sink.release(id)
+		}
+	}
 	if err != nil {
 		plain, sentence := "egress audit spool unavailable", "the run's egress audit is unavailable, so it was not sent"
 		// Only a full spool or an admission that ran out of time can succeed on a retry; a sealed or
@@ -273,7 +279,8 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 		p.refuseUnaudited(w, r, mitmHost, http.StatusServiceUnavailable, reasonAuditUnavailable, plain, sentence)
 		return nil, nil
 	}
-	return r.WithContext(context.WithValue(r.Context(), spoolTicketKey{}, id)), func() { p.sink.release(id) }
+	ctx = context.WithValue(context.WithValue(r.Context(), spoolTicketKey{}, id), usageTicketKey{}, usageID)
+	return r.WithContext(ctx), func() { p.sink.release(id); p.releaseUsageRow(usageID) }
 }
 
 // ruleSourceAuditRecordTooLarge marks the deny written for a request whose target is too long to record.

@@ -72,6 +72,8 @@ var isOperatorCensus = map[string]int{
 	// ownership question for it.
 	// The second bounds a removal on stored policy content to the member's own grants.
 	"run_overrides_apply.go:applySecretOverrides": 2,
+	// An operator reading another person's terminal text through a run's output is audited, as a replay is.
+	"run_output.go:auditRunOutputRead": 1,
 	// Reading a recording is a privacy surface, not a launch.
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,
@@ -103,6 +105,7 @@ var isOperatorCensus = map[string]int{
 	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
 	"audit.go:auditRowsFor":                          1,
 	"audit_partition_export.go:exportAuditPartition": 1,
+	"audit_receipt.go:handleAuditReceipt":            1, // a receipt is projected like the partition export
 	// A mount's host path is the super admin's: the spec read tier withholds it below
 	// that tier, and a profile write or its approval sets one only as a super admin.
 	"policies.go:specReadTierFor":                  1,

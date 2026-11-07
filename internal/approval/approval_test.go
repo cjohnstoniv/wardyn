@@ -1294,3 +1294,42 @@ func TestRequestApproval_StoresOneSpellingPerNumber(t *testing.T) {
 		}
 	}
 }
+
+// TestDecideAuditCarriesCallFields: a decision on an MCP call row names the
+// tool, the server and the call hash at the top level of the audit row, so the
+// chain from the request to the forwarded call joins without parsing the scope.
+func TestDecideAuditCarriesCallFields(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	scope := json.RawMessage(`{"tool":"mcp__jira__delete_issue","mcp_server":"jira","arguments":{"id":1},"call_sha256":"abc123"}`)
+	ap, err := approval.RequestApproval(ctx, st, newReq(uuid.New(), types.ApprovalToolCall, scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice@example.com", Scope: types.ScopeOnce,
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(st.audit[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	for k, want := range map[string]string{"tool": "mcp__jira__delete_issue", "mcp_server": "jira", "call_sha256": "abc123", "decision_scope": "once"} {
+		if data[k] != want {
+			t.Errorf("approval.decide data[%q] = %v, want %q", k, data[k], want)
+		}
+	}
+	// A tool_call that is not an MCP call row gains none of the fields.
+	ap2, _ := approval.RequestApproval(ctx, st, newReq(uuid.New(), types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash","cmd":"ls"}`)))
+	if _, err := approval.Decide(ctx, st, ap2.ID, types.ActorHuman, types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "alice@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	var data2 map[string]any
+	_ = json.Unmarshal(st.audit[1].Data, &data2)
+	for _, k := range []string{"tool", "mcp_server", "call_sha256"} {
+		if _, has := data2[k]; has {
+			t.Errorf("a plain tool_call decision carries %q", k)
+		}
+	}
+}

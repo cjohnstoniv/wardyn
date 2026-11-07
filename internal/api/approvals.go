@@ -452,7 +452,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok {
 		return
 	}
-	if !isADO && !decisionScopeFitsKind(w, ap.Kind, scope) {
+	var isMCP bool // one MCP call is decided once (approvals_mcp_call.go)
+	if scope, isMCP, ok = mcpCallDecisionRule(w, ap, scope); !ok {
+		return
+	}
+	if !isADO && !isMCP && !decisionScopeFitsKind(w, ap.Kind, scope) {
 		return
 	}
 
@@ -646,8 +650,8 @@ const maxDecisionBody = 16 << 10
 // (operator path), and the scope-gated loads downstream pay for what they need.
 //
 // Member: may decide only an egress_domain approval raised by a run THEY own,
-// and the one tool_call named below (an Azure DevOps escalation on their own
-// run). Every other credential and tool_call
+// and the two tool_calls named below (an Azure DevOps escalation on their own
+// run, and one MCP call on their own run). Every other credential and tool_call
 // approval stays admin-only REGARDLESS of ownership: the shipped default policy
 // requires approval on github_token, so letting a member self-approve their OWN
 // run's credential request would self-mint a real token, and self-approving a
@@ -675,8 +679,10 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 	ap, err = s.cfg.Approvals.Get(r.Context(), id)
 	// The one tool_call a member may decide: an Azure DevOps escalation, known
 	// STRUCTURALLY by its grant_id (adoEscalationScope), never by its scope.
+	// One MCP call is the other, known by call_sha256 with no grant (isMCPCallRow).
 	_, isADO := adoEscalationScope(ap)
-	if err != nil || (ap.Kind != types.ApprovalEgressDomain && !isADO) {
+	isMCP := isMCPCallRow(ap)
+	if err != nil || (ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP) {
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return ap, run, false, false
 	}
@@ -692,7 +698,7 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 		}
 		return ap, run, false, false
 	}
-	if isADO { // ownership is the whole member rule; decide() holds the ceiling
+	if isADO || isMCP { // ownership is the whole member rule; decide() holds the ADO ceiling and the MCP once
 		return ap, run, true, true
 	}
 

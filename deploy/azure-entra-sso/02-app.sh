@@ -40,7 +40,7 @@ case "${ADO_TOKEN_MODE}" in
 esac
 HTTP_PORT="${HTTP_PORT:-8480}"
 REDIRECT_URI="http://localhost:${HTTP_PORT}/auth/callback"
-# The per-user Azure DevOps sign-in (docs/adoption/azure-devops-entra.md)
+# The per-user Azure DevOps sign-in (docs/AZURE-DEVOPS.md)
 # redirects to its own callback on the same app registration.
 ADO_REDIRECT_URI="http://localhost:${HTTP_PORT}/api/v1/scm/azure-devops/callback"
 

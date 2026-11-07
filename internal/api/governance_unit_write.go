@@ -318,6 +318,10 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
+	if msg := s.unitRequiredSignersRefusal(r.Context(), req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
+		return
+	}
 	write, unitAdmin := s.writeUnit, s.isUnitAdminCaller(r.Context())
 	if unitAdmin {
 		if !s.unitWritePrecheck(w, r, id, status, req) {
@@ -414,16 +418,32 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
 	}
+	warns := s.unitWriteWarnings(r.Context(), saved, effective)
+	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
+}
+
+// unitRequiredSignersRefusal is the write's required_image_signers check: each name must be a signer the site
+// defines, on the profile's own limits and then on its overlay. "" when both pass.
+func (s *Server) unitRequiredSignersRefusal(ctx context.Context, req governanceUnitRequest) string {
+	msg := s.requiredImageSignersRefusal(ctx, "limits.required_image_signers", req.Limits.RequiredImageSigners)
+	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
+		msg = s.requiredImageSignersRefusal(ctx, "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
+	}
+	return msg
+}
+
+// unitWriteWarnings are the saved write's answer warnings: the omissions of an uncomposed profile, the
+// resolution's admin warnings, the rubric posture advisory and the Azure DevOps ceiling warnings, in that order.
+func (s *Server) unitWriteWarnings(ctx context.Context, saved types.GovernanceUnit, effective *ResolvedUnit) []string {
 	var warns []string
 	if !saved.Composed() {
 		warns = governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy, saved.Limits)
 	}
 	warns = append(warns, effective.AdminWarnings...)
-	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
+	if posture := s.rubricPostureAdvisory(ctx, effective); posture != "" {
 		warns = append(warns, posture)
 	}
-	warns = append(warns, s.governanceADOCeilingWarnings(r.Context(), effective)...)
-	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
+	return append(warns, s.governanceADOCeilingWarnings(ctx, effective)...)
 }
 
 // unitPutCreatesAtID reports a PUT (status 200) naming an id no profile in all holds: it would create a

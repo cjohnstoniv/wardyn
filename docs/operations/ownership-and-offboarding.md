@@ -22,9 +22,9 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
   - see [Custom components](custom-components.md#custom-components) and [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md).
 - `GET /setup/status` redacts operator-diagnostic detail (checks, secret names, runner detail) for a member.
 
-**Workspace ownership (0.6, migration `0048`)** and **Secret ownership (0.7, migration `0050`)** are the second and third owned nouns after runs.
+Workspaces and secrets are the second and third owned nouns after runs.
 
-`workspaces.owned_by` / `secrets.owned_by` hold the creating MEMBER's principal; `""` — every pre-migration row, and everything an admin writes — means **operator-owned**, i.e. exactly today's behavior.
+`workspaces.owned_by` / `secrets.owned_by` hold the creating MEMBER's principal; `""` (every older row, and everything an admin writes) means **operator-owned**.
 
 - **Workspace CRUD/scan/build are owner-or-admin, not admin-only** (`getWorkspaceAuthorized`/`getWorkspaceReadable`, [`internal/api/helpers.go`](../../internal/api/helpers.go)).
   - Another member's owned workspace answers the **byte-identical 404** a missing id does.
@@ -44,9 +44,7 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
     - so the one call that names the object a person is about to lose stops being able to name it.
   - Paste the sign-in subject FIRST — on a `hash` drive the name keys on the first claim, and the API's `home_subject` says which claim it used (the console does not yet show it).
   - *Then* delete the allocation (`DELETE /drives/grants/{id}`, admin or `security_admin`, audited `drive.grant.delete`).
-  - It stops the mount at that person's next run and **deletes no data**
-    - which is why the audit row carries the drive's declared `reclaim` intent (`retain` or `delete`),
-    - so the log records what the operator was told to do about the directory this allocation was the last pointer to.
+  - It stops the mount at that person's next run and **deletes no data**, so the audit row carries the drive's declared `reclaim` intent (`retain` or `delete`).
   - What is left behind is one object per person: a Docker named volume, or a subdirectory of the share the operator mounted host-side, or a PersistentVolumeClaim.
   - A **managed** object (`docker_volume`, `k8s_pvc`) carries the drive row's **id** and the person's home name as labels, so a departed member's objects stay findable after the row is gone.
   - That is the recovery path if you skipped the preview.
@@ -61,14 +59,14 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
     - and wardynd deletes any left from before 0.8.2 at boot (`model_credential.retire` in [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
 - **`GET /secrets` returns `{names, mine}`.**
   - `mine` is always the queried namespace's own rows (reserved names filtered out).
-  - `names` keeps its pre-0.7 meaning for an admin — the operator namespace, or one member's own rows with `?owner=<principal>`
+  - `names` for an admin is the operator namespace, or one member's own rows with `?owner=<principal>`
     - and for a member narrows to the operator-owned names an eligible grant in the operator's ceiling actually pairs with a host, closing a name-enumeration gap.
 - **A run resolves its owner's row, falling back to the operator's** — never another member's, even when an inline policy names it by hand.
   - The upstream (corporate) proxy secret always stays resolved from the operator namespace:
     - under a configured upstream the sidecar hands the corp proxy a HOSTNAME rather than a pinned address for every host it proxies (all of them, minus `upstream_proxy_no_proxy`),
     - so a member-substitutable value there would put a member in control of which proxy resolves and dials every one of them.
 - **`?owner=<principal>` is admin-only** on `DELETE`/`GET /secrets`, refused with a constant 403 for anyone else.
-  - **A `PUT` refuses it for everyone (0.8, `403`, audited `secret.write` `denied`)**:
+  - **A `PUT` refuses it for everyone (`403`, audited `secret.write` `denied`)**:
     - a credential is set only by the person it belongs to,
     - so an admin can remove a person's credentials but never set one their runs would use under their name,
     - and pre-provisioning a member's key before they sign in is no longer possible.
@@ -79,7 +77,7 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
     - and a value that folds case-insensitively onto MORE THAN ONE known principal is refused `422` rather than resolved to whichever the directory happened to list first
     - guessing there would write a credential into the wrong human's namespace.
   - An email address that pairs to no known principal is refused 422 rather than silently creating a namespace its owner never reads, and a cross-namespace `DELETE` that removed nothing answers 404 rather than an idempotent 204.
-- **Offboarding a person's credentials is `DELETE /people/{principal}/credentials`** (admin or `security_admin`, 0.8); `GET /model-providers/credentials` first lists what each person holds per model provider, with when it was added and last used.
+- **Offboarding a person's credentials is `DELETE /people/{principal}/credentials`** (admin or `security_admin`); `GET /model-providers/credentials` first lists what each person holds per model provider, with when it was added and last used.
   - The erase deletes every credential in that person's namespace — keys, tokens and captured sign-ins — and answers `{"count": N}`; the principal resolves as `?owner=` does.
   - In store mode each value leaves Vault or Key Vault before its row,
     - and the answer adds `store`, `purged` and, when Key Vault kept soft-deleted copies, `recoverable_days`:
@@ -90,26 +88,23 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
     - so a success is final for everything Wardyn itself was writing.
   - That coordination lives in one process:
     - on a deployment with more than one replica a second one can still interleave,
-    - and the erase's own re-list reports only a write it can see (tombstones are tracked in #1511).
+    - and the erase's own re-list reports only a write it can see.
   - An Azure DevOps sign-in configuration that cannot be read refuses the erase (`503`, `credential_erase_signin_config_unreadable`, nothing erased).
   - A person who reconnects afterwards writes new credentials, which stay.
-  - The erase does not reach into a running run: one that already holds a credential in memory keeps it.
-  - A run already going keeps a static key (an `api_key` injection is fetched once and cached for the run) until it ends, so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
+  - The erase does not reach into a running run: one that already holds a credential in memory keeps it, and an `api_key` injection is fetched once and cached for the run. Stop their runs too (`POST /runs/{id}/kill`).
   - **Wardyn cannot revoke anything upstream**, with one exception: it first revokes the live Azure DevOps tokens it created for the person's runs (`ado_pat.revoke`, reason `offboarding`; one it cannot revoke expires by itself).
-  - Revoke the person's AWS, Anthropic and Azure DevOps sessions, any Azure DevOps token they pasted in themselves, and any gateway token, where they were issued, and disable them in the identity provider.
   - A refused erase (a blank principal `400`, or one naming nobody or several people `422`) is audited `credential.erase` `denied`.
   - **The erasure horizon, on the default (local Postgres) store, is your backup retention — not the API call.**
     - `DELETE /people/{principal}/credentials` removes the live row; it does not, and cannot, reach a `pg_dump` you already took, a replica, or Postgres WAL.
     - Until every backup made before the erase ages out of your retention window, the value is recoverable from it by whoever can read a backup,
-      - exactly as it was live
-      - (envelope v1 does not change this: the same key-encryption key that opened the row in Postgres opens the same bytes in a restored dump).
+      - exactly as it was live.
     - With `WARDYN_KEK=transit`, the backup is only as erased as the KEK:
       - rotating the Transit key past the old wrap (`wardynd -rewrap`, then raising `min_decryption_version` — "Key service: Vault Transit") is what actually forecloses an old backup,
       - the same way `-rotate-age-key` does for the local key.
     - In store mode (Vault, Azure Key Vault) the value itself never reaches your Postgres backup at all
       - the store's own deletion/retention is what governs it, as in "Removing a credential, and the erasure horizon" below for Key Vault, or your Vault KV engine's own versioning and delete-version policy.
 - **Offboarding a person, in full.**
-  - The erase removes stored credentials and nothing else.
+  - `DELETE /people/{principal}/credentials` removes stored credentials and nothing else.
   - In order:
     0. Find them and see what they hold: `GET /people?q=<email or subject>` (`wardyn people list --q`) lists each match with its live-session, token, SSH-key, credential and running-run counts, which the steps below act on.
     1. Disable the person in the identity provider, so no new sign-in succeeds.
@@ -121,8 +116,10 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
     5. Revoke their runners (`DELETE /runners/{id}`) and unused registration tokens (`GET /runners/tokens?owner=`, `DELETE /runners/tokens/{id}`).
     6. Re-sponsor (`PATCH /service-identities/{name}`) or retire (`DELETE`) each service identity they sponsor.
     7. Erase their credentials: `DELETE /people/{principal}/credentials`.
+    7a. Erase what else they own, by scope, with `wardyn person erase` (`POST /people/{principal}/erasure`): run tasks, outputs, recordings, components, run setups, runner pools, their own drives and kept macOS VM machines, audit personal fields and masking copies. A disk drive kept on a Mac (`mac_disk`) is deleted by asking that Mac; if the Mac is away it stays and the scope fails, naming it ([Erasing a person](../OPERATIONS.md#erasing-a-person), [Drives](macos-vms.md#drives)).
     8. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their user drives (the two-halves order above).
     9. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps sessions, a token they pasted in themselves and any gateway token.
+  - With Entra SCIM on, a suspend does steps 2 to 4 for you, and a purge also revokes their runners, erases their stored credentials and hands their workspaces to the operator ([Leavers and SCIM](../OPERATIONS.md#leavers-and-scim)). Service identities, user drives, the scopes of 7a and upstream revocation stay manual.
   - One copy outlives all of this in memory: wardynd keeps an Azure DevOps sign-in's refresh token in its process-wide masking set, so output quoting it is still masked.
   - It is never served or injected from there; it is let go a grace period after the credential is replaced, or when wardynd restarts.
   - A run's own masking copies go the same grace after the run ends.

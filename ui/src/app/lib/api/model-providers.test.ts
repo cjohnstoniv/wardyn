@@ -43,13 +43,15 @@ describe("modelProviders.getModelProviders() — connected_people", () => {
       kinds_available: ["anthropic_api_key"],
       gateway_identity_issuer: "spiffe://wardyn.local",
       gateway_jwks_path: "/.well-known/wardyn-experimental/gateway-jwks.json",
+      gateway_identity_bedrock_sso: true,
     }));
     const snap = await modelProviders.getModelProviders();
     expect(snap.providers).toEqual({ providers });
     // Shown to the admin, never part of the document PUT sends back.
     expect(snap.gatewayIssuer).toBe("spiffe://wardyn.local");
     expect(snap.gatewayJwksPath).toBe("/.well-known/wardyn-experimental/gateway-jwks.json");
-    expect(JSON.stringify(snap.providers)).not.toMatch(/issuer|jwks/);
+    expect(snap.gatewayIdentityBedrockSso).toBe(true);
+    expect(JSON.stringify(snap.providers)).not.toMatch(/issuer|jwks|bedrock_sso/);
   });
 
   it("reads a never-configured install ({}) as no counts", async () => {

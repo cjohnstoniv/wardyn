@@ -36,6 +36,8 @@ export interface ModelProvidersList extends ModelProvidersSnapshot {
   // base path. Display only, like `connected`: neither rides back on a PUT.
   gatewayIssuer?: string;
   gatewayJwksPath?: string;
+  // Whether a bedrock_sso provider can send run identity here. Absent (an older server) reads as no.
+  gatewayIdentityBedrockSso?: boolean;
 }
 
 export const modelProviders = {
@@ -50,6 +52,7 @@ export const modelProviders = {
       kinds_available: _kinds,
       gateway_identity_issuer,
       gateway_jwks_path,
+      gateway_identity_bedrock_sso,
       ...providers
     } = await asJson<ModelProvidersRead>(res);
     return {
@@ -57,6 +60,7 @@ export const modelProviders = {
       connected: connected_people ?? {},
       gatewayIssuer: gateway_identity_issuer,
       gatewayJwksPath: gateway_jwks_path,
+      gatewayIdentityBedrockSso: gateway_identity_bedrock_sso,
       etag: res.headers.get("ETag"),
     };
   },

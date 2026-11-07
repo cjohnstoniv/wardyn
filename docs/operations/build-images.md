@@ -8,8 +8,7 @@ needs for `anthropic_subscription`.
 
 ## Toolchain-fidelity environment
 
-- Dispatch used to set `GOTMPDIR`/`GOCACHE` and the Maven/Gradle JVM proxy sysprops (`MAVEN_OPTS`/`GRADLE_OPTS`) on every run, on every image.
-- It no longer does.
+- Dispatch sets the Go group (`GOTMPDIR`/`GOCACHE`) and the Maven/Gradle JVM proxy sysprops (`MAVEN_OPTS`/`GRADLE_OPTS`) only for the toolchains a run needs.
 
 | Case | What the run gets |
 | --- | --- |
@@ -93,8 +92,7 @@ the box on the compose stack. Four things ship pre-wired:
   pushed, so they never reach the delivered image.
 - **This only applies to Wardyn's OWN generated devcontainer.** When the
   workspace's primary source is a repo carrying its own devcontainer file,
-  and it's HTTPS-cloneable, `resolveWorkspaceImage`
-  ([`internal/api/workspace_run.go`](../../internal/api/workspace_run.go)) builds that devcontainer AS-IS via
+  and it's HTTPS-cloneable, [`internal/api/workspace_run_image.go#Server.resolveWorkspaceImage`](../../internal/api/workspace_run_image.go) builds that devcontainer AS-IS via
   `ImageBuilder.BuildDevcontainer` — cloned and built verbatim, never
   injected into. (An SSH source falls through to the generated path
   instead, since the image builder has no SSH-clone wiring.)
@@ -145,13 +143,13 @@ cd ~/.wardyn && docker compose up -d
   pulls fresh per launch, the pin is trusted and a missing image surfaces
   at the login run itself, naming it.
 
-- Until both checks hold, `PUT /model-providers` and `PUT /site-config` refuse a write that turns an `anthropic_subscription` provider on (E4).
+- Until both checks hold, `PUT /model-providers` and `PUT /site-config` refuse a write that turns an `anthropic_subscription` provider on.
 - The refusal reads: *"Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet."*
 - Turning a stored subscription back on counts as adding it.
 
 | State | Refused? |
 | --- | --- |
-| Adding or re-enabling `anthropic_subscription` without the image | Yes (E4) |
+| Adding or re-enabling `anthropic_subscription` without the image | Yes |
 | A provider that is off | No |
 | A provider already stored on, even if the image goes missing later (a prune, a daemon swap) | No — turning it off, editing other providers and re-applying the site config all keep working |
 
@@ -208,7 +206,7 @@ The emulation warning and the `runner_arch_images` row of `GET /api/v1/setup/sta
 
 - A New Run request's image comes from its harnesses: the agent base image for none, and a harness's own image for one. Otherwise it is the smallest image declared for the set, under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids with `+`.
 - A harness no image here carries is refused (`harness_not_installed`). On a published install Claude Code maps to the agent base image, so it is not installed.
-- Migration `0164_run_harnesses` records each run's harnesses. A split-role install grants the app role `SELECT, INSERT` on `run_harnesses`, and `UPDATE` too once `WARDYN_MULTI_AGENT_TASKS` is on (migration `0200`: person erasure blanks an agent's own task).
+- Migration `0164_run_harnesses` records each run's harnesses. A split-role install grants the app role `SELECT, INSERT` on `run_harnesses`, and `UPDATE` too once `WARDYN_MULTI_AGENT_TASKS` is on (migration `0203`: person erasure blanks an agent's own task).
 
 ### Offering two harnesses in one run
 

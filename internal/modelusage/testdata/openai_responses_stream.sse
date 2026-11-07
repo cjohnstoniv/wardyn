@@ -1,0 +1,13 @@
+: Source: https://developers.openai.com/api/reference/resources/responses/methods/create (streaming example, event response.completed)
+: Read 2026-11-07. Usage object copied from the documented example: input_tokens 37, output_tokens 11,
+: output_tokens_details.reasoning_tokens 0, input_tokens_details.cached_tokens 0. Model name and the
+: created event are illustrative.
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654","object":"response","status":"in_progress","model":"gpt-5-codex","usage":null}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hi"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654","object":"response","status":"completed","model":"gpt-5-codex","usage":{"input_tokens":37,"output_tokens":11,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":48,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}}
+

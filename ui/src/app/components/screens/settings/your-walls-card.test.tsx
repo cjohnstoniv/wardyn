@@ -13,7 +13,7 @@ import { setField } from "../../../../test/set-field";
 import { HttpError } from "../../../lib/api/core";
 import type { PersonalWalls } from "../../../lib/api/walls";
 import { GITHUB_CAPABILITIES, GITHUB_PUSH_NAME, YOUR_WALLS } from "../../wardyn/copy/personal-walls";
-import { toForm, WallsForm, type Form } from "./walls-form";
+import { toForm, toSpec, WallsForm, type Form } from "./walls-form";
 import { ADO_CAPABILITIES } from "../../../lib/ado-capabilities";
 
 const getMock = vi.fn<() => Promise<PersonalWalls>>();
@@ -545,5 +545,54 @@ describe("Your walls: every limit has a control", () => {
     expect(box(0)).not.toBeChecked();
     expect(drafts[1].github).toContain("pr");
     expect(drafts[0].github).toEqual(["code_read"]);
+  });
+  it("an unrelated save keeps a stored capability list's order; a changed selection takes the catalogue's order", () => {
+    const stored = { github_capabilities: ["pr", "code_read", "issues_read"], azure_devops_capabilities: ["pr", "code_read"] };
+    expect(GITHUB_CAPABILITIES.indexOf("code_read")).toBeLessThan(GITHUB_CAPABILITIES.indexOf("pr"));
+    expect(JSON.stringify(toSpec(toForm(stored)))).toBe(JSON.stringify(stored));
+    const edited = toSpec({ ...toForm(stored), github: ["pr", "code_read"], ado: ["pr"] });
+    expect(edited.github_capabilities).toEqual(["code_read", "pr"]);
+    expect(edited.azure_devops_capabilities).toEqual(["pr"]);
+    // Picking the same boxes again, in another order, is no change either.
+    expect(toSpec({ ...toForm(stored), github: ["issues_read", "pr", "code_read"] }).github_capabilities).toEqual(stored.github_capabilities);
+  });
+
+  it("each section error is tied to its input by aria-describedby, and two forms on one page share no id", () => {
+    const refused = { sites: "sites bad", never: "never bad", unlisted: "unlisted bad", barrier: "barrier bad", clipboard: "clipboard bad", credentials: "credentials bad", github: "github bad", ado: "ado bad", tools: "tools bad", pushes: "pushes bad", recording: "recording bad", idle: "idle bad" };
+    const bad = { ...toForm({ allowed_domains: [], tool_rules: [{ tool: "a", effect: "deny" }, { tool: "a", effect: "deny" }], push_rules: { deny_paths: [""] }, github_capabilities: [], auto_stop_after_sec: 5 }), idleOn: true, idleText: "x" };
+    render(
+      <>
+        <div data-testid="form-0"><WallsForm form={bad} onEdit={() => {}} errors={refused} /></div>
+        <div data-testid="form-1"><WallsForm form={bad} onEdit={() => {}} errors={refused} /></div>
+      </>,
+    );
+    const ids = [...document.querySelectorAll("[id]")].map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const described = (form: HTMLElement, name: string) => {
+      const el = within(form).getByLabelText(name, { selector: "[aria-describedby]" });
+      return (el.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent);
+    };
+    for (const at of [0, 1]) {
+      const form = screen.getByTestId(`form-${at}`);
+      const alerts = within(form).getAllByRole("alert");
+      // Every error showing is named by exactly one element of its own form.
+      for (const a of alerts) {
+        const users = [...form.querySelectorAll("[aria-describedby]")].filter((e) => e.getAttribute("aria-describedby")!.split(" ").includes(a.id));
+        expect(users.length, a.textContent ?? "").toBeGreaterThan(0);
+      }
+      expect(described(form, YOUR_WALLS.SITES)).toEqual(["sites bad"]);
+      expect(described(form, YOUR_WALLS.NEVER)).toEqual(["never bad"]);
+      expect(described(form, YOUR_WALLS.BARRIER)).toEqual(["barrier bad"]);
+      expect(described(form, YOUR_WALLS.RECORDING)).toEqual(["recording bad"]);
+      expect(described(form, YOUR_WALLS.IDLE_NUMBER)).toEqual([YOUR_WALLS.IDLE_PROBLEM]);
+      expect(described(form, YOUR_WALLS.TOOLS)).toEqual(["tools bad", expect.stringContaining("Two rules")]);
+      expect(described(form, YOUR_WALLS.TOOLS_TOOL_N(1))).toEqual([expect.stringContaining("Two rules")]);
+      expect(described(form, YOUR_WALLS.PATHS_PATH_N(1))).toEqual([YOUR_WALLS.PATHS_BLANK]);
+      expect(described(form, YOUR_WALLS.GITHUB_CAPS)).toEqual(["github bad", YOUR_WALLS.CAPS_EMPTY]);
+      expect(within(form).getByRole("radiogroup", { name: YOUR_WALLS.SITES })).toHaveAttribute("aria-invalid", "true");
+      const only = within(form).getByRole("textbox", { name: YOUR_WALLS.SITES_ONLY });
+      expect(only).toHaveAttribute("aria-invalid", "true");
+      expect(only.getAttribute("aria-describedby")?.split(" ").map((id) => form.querySelector(`[id="${id}"]`)?.textContent)).toEqual(["sites bad"]);
+    }
   });
 });

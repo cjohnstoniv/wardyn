@@ -17,7 +17,7 @@ import (
 // the trigger that starts a tools update when the list changes, and what the caps carry of it.
 
 // macOSVMItems is the install list's state: file is the setting (err: it could not be read, so neither a
-// prepare nor a tools update starts); asked is the list digest a tools update was last asked for.
+// prepare nor a tools update starts); asked is the read error last logged.
 type macOSVMItems struct {
 	file  string
 	err   error
@@ -44,39 +44,57 @@ func (m *macOSVMs) editItems() []string {
 }
 
 // checkItems is the install list trigger: a base built with another list than the one macos_vm_base_file
-// names now needs a tools update, asked for once per list digest. A base whose agent drifted is left to
-// checkAgent's update, which installs the list too. A list that cannot be read is logged once per error,
-// and the base keeps serving.
+// names now needs a tools update, asked for as agent drift is (askDrift, keyed by driftKey): only while
+// serving, again after a refused start at most once per driftRetry, and never again once one started for
+// that list. A base whose agent drifted is left to checkAgent's update, which installs the list too. A
+// list that cannot be read is logged once per error, and the base keeps serving.
 func (m *macOSVMs) checkItems(man macvm.Manifest) {
 	if m.items.err != nil || (man.AgentVersion != "" && man.AgentVersion != m.version) {
 		return
 	}
-	var l macvm.BaseList
-	var err error
-	if m.items.file != "" {
-		l, err = macvm.LoadBaseList(m.items.file)
-	}
+	l, err := m.loadItems()
 	if err == nil && !macvm.ItemsChanged(m.layout.BaseDir(0), l.Digest()) {
 		return
 	}
-	key := l.Digest()
 	if err != nil {
-		key = err.Error()
+		m.mu.Lock()
+		asked := m.items.asked == err.Error()
+		m.items.asked = err.Error()
+		m.mu.Unlock()
+		if !asked {
+			slog.Warn("macOS VM base: the install list cannot be read; the base keeps serving as it was built", "error", err.Error())
+		}
+		return
 	}
 	m.mu.Lock()
-	asked := m.items.asked == key
-	m.items.asked = key
+	m.items.asked = "" // a read error after this list is logged again
 	m.mu.Unlock()
-	switch {
-	case asked:
-	case err != nil:
-		slog.Warn("macOS VM base: the install list cannot be read; the base keeps serving as it was built", "error", err.Error())
-	default:
-		slog.Warn("macOS VM base: the install list changed; a tools update installs it")
-		if m.toolsUpdate != nil {
-			m.toolsUpdate(man)
-		}
+	if !m.askDrift(m.driftKey(man)) {
+		return
 	}
+	slog.Warn("macOS VM base: the install list changed; a tools update installs it")
+	if m.toolsUpdate != nil {
+		m.toolsUpdate(man)
+	}
+}
+
+// loadItems reads the install list macos_vm_base_file names: an empty list without the setting.
+func (m *macOSVMs) loadItems() (macvm.BaseList, error) {
+	if m.items.file == "" {
+		return macvm.BaseList{}, nil
+	}
+	return macvm.LoadBaseList(m.items.file)
+}
+
+// driftKey is the drift record's key (askDrift, driftStarted) for the tools update of the base whose
+// manifest is man: its guest agent's version when that is not this runner's (checkAgent), else the
+// install list's digest (checkItems).
+func (m *macOSVMs) driftKey(man macvm.Manifest) string {
+	if man.AgentVersion != "" && man.AgentVersion != m.version {
+		return man.AgentVersion
+	}
+	l, _ := m.loadItems()
+	return "items:" + l.Digest()
 }
 
 // baseCustomisation is the install list's items and the guest posture as the base in baseDir records

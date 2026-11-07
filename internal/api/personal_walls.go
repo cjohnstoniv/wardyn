@@ -720,9 +720,9 @@ func (s *Server) wallsADOCapabilities(ctx context.Context, run types.AgentRun, c
 		func(w types.PersonalWallsSpec) *[]adoscope.Capability { return w.AzureDevOpsCapabilities })
 }
 
-// wallsGitHubCLICapabilities narrows the GitHub CLI's capabilities, the attached rows' default, to the
-// run owner's walls. No GitHub lane reads a policy's github_capabilities, so the walls meet the
-// default on every run.
+// wallsGitHubCLICapabilities narrows the GitHub CLI's capabilities, the attached rows' default after
+// the run's own github_capabilities (persistGitHubCLIGrants), to the run owner's walls. The walls
+// meet them on every run.
 func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.AgentRun, caps []ghscope.Capability) ([]ghscope.Capability, *wallsCapabilityRefusal) {
 	return wallsCapabilityMeet(ctx, s, run, "github_capabilities", caps,
 		func(w types.PersonalWallsSpec) *[]ghscope.Capability { return w.GitHubCapabilities })

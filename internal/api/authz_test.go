@@ -306,6 +306,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/workloads/{name}/history":  {class: classMember},
 	"DELETE /api/v1/workloads/{name}":       {class: classMember},
 	"POST /api/v1/workloads/{name}/restart": {class: classMember},
+	"POST /api/v1/workloads/{name}/preview": {class: classMember},
 	"POST /api/v1/workload-bindings":        {class: classSecurity},
 	"GET /api/v1/workload-bindings":         {class: classSecurity},
 	"DELETE /api/v1/workload-bindings/{id}": {class: classSecurity},
@@ -563,7 +564,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// words). Gated at all, unlike the two paginated /audit reads below, because
 	// the verdict counts every row in the deployment: whole-fleet audit VOLUME
 	// is the same disclosure that keeps /metrics admin-gated.
-	"GET /api/v1/audit/chain/verify":    {class: classSecurity},
+	"GET /api/v1/audit/chain/verify": {class: classSecurity},
+	// The signed half of the same evidence: checkpoints, receipts and the keys that sign them. A receipt shows
+	// other rows' hashes, so it is the security tier's like the sweep and the partition export it is projected as.
+	"GET /api/v1/audit/receipt":         {class: classSecurity},
+	"GET /api/v1/audit/checkpoints":     {class: classSecurity},
+	"GET /api/v1/audit/receipt-keys":    {class: classSecurity},
 	"GET /api/v1/audit/retention":       {class: classSecurity},
 	"POST /api/v1/audit/retention/drop": {class: classSecurity},
 	// Fleet capacity: configured reservations across every owner's runs. The security tier

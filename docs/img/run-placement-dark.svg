@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 764" width="1240" height="764" role="img" aria-labelledby="title desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">Where a run executes</title>
+  <desc id="desc">One control plane places runs on four kinds of machine: wardynd's own driver, a laptop runner, an organisation runner in Kubernetes, and a Mac. Every sandbox leaves only through its own wardyn-proxy.</desc>
+  <style>
+    .bg { fill: #0d1117; stroke: #3d444d; }
+    .zone { fill: #161b22; stroke: #3d444d; stroke-width: 1.5; }
+    .card { fill: #0d1117; stroke: #9198a1; stroke-width: 1.5; }
+    .sand { fill: #0d2b28; stroke: #3cc6b6; stroke-width: 2; stroke-dasharray: 8 5; }
+    .ok { fill: #0d2b28; stroke: #3cc6b6; stroke-width: 2; }
+    .held { fill: #2e2410; stroke: #d29922; stroke-width: 2; }
+    .deny { fill: #0d1117; stroke: #ff7b72; stroke-width: 1.5; }
+    .outline { fill: none; stroke: #9198a1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .frame { fill: none; stroke: #9198a1; stroke-width: 1.5; }
+    .tab { fill: #161b22; stroke: #9198a1; stroke-width: 1.5; }
+    .halo { paint-order: stroke; stroke: #0d1117; stroke-width: 5px; stroke-linejoin: round; }
+    .dot { fill: #9198a1; }
+    .pill { fill: #3cc6b6; stroke: none; }
+    .pt { fill: #0d1117; }
+    .t { fill: #e6edf3; }
+    .m { fill: #9198a1; }
+    .a { fill: #3cc6b6; }
+    .r { fill: #ff7b72; }
+    .h { fill: #d29922; }
+    .ln { fill: none; stroke: #9198a1; stroke-width: 2; }
+    .lt { fill: none; stroke: #3cc6b6; stroke-width: 2.5; }
+    .lr { fill: none; stroke: #ff7b72; stroke-width: 2; }
+    .lh { fill: none; stroke: #d29922; stroke-width: 2; }
+    .life { fill: none; stroke: #3d444d; stroke-width: 1.5; stroke-dasharray: 4 4; }
+    .edge { fill: none; stroke: #9198a1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .dash { stroke-dasharray: 6 4; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+  </style>
+  <defs><marker id="h-ln" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9198a1"/></marker><marker id="h-lt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3cc6b6"/></marker><marker id="h-lr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#ff7b72"/></marker><marker id="h-lh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#d29922"/></marker></defs>
+  <rect class="bg" x="0.5" y="0.5" width="1239" height="763" rx="10"/>
+  <rect class="zone" x="20" y="20" width="1200" height="130" rx="10"/>
+  <text class="t" x="40" y="48" font-size="16" font-weight="600">Control plane (trusted)</text>
+  <rect class="card" x="450" y="62" width="300" height="72" rx="8"/>
+  <text class="t mono" x="600" y="92" font-size="17" text-anchor="middle" font-weight="600">wardynd</text>
+  <text class="m" x="600" y="116" font-size="14" text-anchor="middle">API, console, policy, broker, audit</text>
+  <rect class="card" x="830" y="62" width="200" height="72" rx="8"/>
+  <text class="t" x="930" y="104" font-size="16" text-anchor="middle" font-weight="600">Postgres</text>
+  <path class="ln" d="M752 98 L828 98" marker-end="url(#h-ln)"/>
+  <rect class="zone" x="20" y="230" width="280" height="400" rx="10"/>
+  <text class="t" x="36" y="260" font-size="16" font-weight="600">wardynd's own driver</text>
+  <text class="m" x="36" y="284" font-size="14">Docker on its host, or</text>
+  <text class="m" x="36" y="304" font-size="14">Kubernetes (alpha)</text>
+  <rect class="sand" x="36" y="326" width="248" height="288" rx="8"/>
+  <text class="t" x="48" y="352" font-size="14" font-weight="600">A container or a pod</text>
+  <rect class="card" x="52" y="372" width="216" height="52" rx="8"/>
+  <text class="t" x="160.0" y="404" font-size="15" text-anchor="middle">Workload</text>
+  <rect class="ok" x="52" y="478" width="216" height="52" rx="8"/>
+  <text class="t mono" x="160.0" y="510" font-size="15" text-anchor="middle">wardyn-proxy</text>
+  <path class="lt" d="M160.0 424 L160.0 476" marker-end="url(#h-lt)"/>
+  <text class="a" x="168.0" y="456" font-size="13">its only way out</text>
+  <path class="lt" d="M160.0 530 L160.0 668" marker-end="url(#h-lt)"/>
+  <path class="ln" d="M520 136 L520 190 L160.0 190 L160.0 228" marker-end="url(#h-ln)"/>
+  <text class="m" x="168.0" y="222" font-size="13">starts runs</text>
+  <rect class="zone" x="320" y="230" width="280" height="400" rx="10"/>
+  <text class="t" x="336" y="260" font-size="16" font-weight="600">A laptop runner</text>
+  <text class="m" x="336" y="284" font-size="14">wardyn-runnerd and the</text>
+  <text class="m" x="336" y="304" font-size="14">laptop's Docker</text>
+  <rect class="sand" x="336" y="326" width="248" height="288" rx="8"/>
+  <text class="t" x="348" y="352" font-size="14" font-weight="600">A container or a Linux VM</text>
+  <rect class="card" x="352" y="372" width="216" height="52" rx="8"/>
+  <text class="t" x="460.0" y="404" font-size="15" text-anchor="middle">Workload</text>
+  <rect class="ok" x="352" y="478" width="216" height="52" rx="8"/>
+  <text class="t mono" x="460.0" y="510" font-size="15" text-anchor="middle">wardyn-proxy</text>
+  <path class="lt" d="M460.0 424 L460.0 476" marker-end="url(#h-lt)"/>
+  <text class="a" x="468.0" y="456" font-size="13">its only way out</text>
+  <path class="lt" d="M460.0 530 L460.0 668" marker-end="url(#h-lt)"/>
+  <path class="ln" d="M460.0 230 L460.0 205 L573 205 L573 136" marker-end="url(#h-ln)"/>
+  <text class="m" x="468.0" y="222" font-size="13">dials out</text>
+  <rect class="zone" x="620" y="230" width="280" height="400" rx="10"/>
+  <text class="t" x="636" y="260" font-size="16" font-weight="600">An organisation runner</text>
+  <text class="m" x="636" y="284" font-size="14">wardyn-runnerd in a</text>
+  <text class="m" x="636" y="304" font-size="14">Kubernetes cluster</text>
+  <rect class="sand" x="636" y="326" width="248" height="288" rx="8"/>
+  <text class="t" x="648" y="352" font-size="14" font-weight="600">A pod or a Linux VM pod</text>
+  <rect class="card" x="652" y="372" width="216" height="52" rx="8"/>
+  <text class="t" x="760.0" y="404" font-size="15" text-anchor="middle">Workload</text>
+  <rect class="ok" x="652" y="478" width="216" height="52" rx="8"/>
+  <text class="t mono" x="760.0" y="510" font-size="15" text-anchor="middle">wardyn-proxy</text>
+  <path class="lt" d="M760.0 424 L760.0 476" marker-end="url(#h-lt)"/>
+  <text class="a" x="768.0" y="456" font-size="13">its only way out</text>
+  <path class="lt" d="M760.0 530 L760.0 668" marker-end="url(#h-lt)"/>
+  <path class="ln" d="M760.0 230 L760.0 196 L627 196 L627 136" marker-end="url(#h-ln)"/>
+  <text class="m" x="768.0" y="222" font-size="13">dials out</text>
+  <rect class="zone" x="920" y="230" width="280" height="400" rx="10"/>
+  <text class="t" x="936" y="260" font-size="16" font-weight="600">A Mac</text>
+  <text class="m" x="936" y="284" font-size="14">wardyn-runnerd and one</text>
+  <text class="m" x="936" y="304" font-size="14">wardyn-macvm per VM</text>
+  <rect class="sand" x="936" y="326" width="248" height="288" rx="8"/>
+  <text class="t" x="948" y="352" font-size="14" font-weight="600">A macOS VM guest</text>
+  <rect class="card" x="952" y="372" width="216" height="52" rx="8"/>
+  <text class="t" x="1060.0" y="404" font-size="15" text-anchor="middle">Workload</text>
+  <rect class="ok" x="952" y="478" width="216" height="52" rx="8"/>
+  <text class="t mono" x="1060.0" y="510" font-size="15" text-anchor="middle">wardyn-proxy</text>
+  <path class="lt" d="M1060.0 424 L1060.0 476" marker-end="url(#h-lt)"/>
+  <text class="a" x="1068.0" y="456" font-size="13">its only way out</text>
+  <path class="lt" d="M1060.0 530 L1060.0 668" marker-end="url(#h-lt)"/>
+  <path class="ln" d="M1060.0 230 L1060.0 180 L680 180 L680 136" marker-end="url(#h-ln)"/>
+  <text class="m" x="1068.0" y="222" font-size="13">dials out</text>
+  <rect class="card" x="20" y="670" width="1200" height="50" rx="10"/>
+  <text class="t" x="620.0" y="701" font-size="16" text-anchor="middle" font-weight="600">Allowed hosts</text>
+  <text class="m" x="20" y="746" font-size="14">Dashed: one run's sandbox, untrusted. A runner dials out to wardynd.</text>
+</svg>

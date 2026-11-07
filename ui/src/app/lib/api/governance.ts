@@ -70,6 +70,10 @@ export interface GovernanceLimits extends RunLimits {
   // absent or empty is no limit. There is no deny-all value, so the console
   // omits the key when the box is blank and never sends [].
   allowed_models?: string[];
+  // types.GovernanceLimits.RequiredImageSigners — site image signers
+  // (images.admission.signers, or wardyn-release) that must also vouch for a
+  // member's image. A requirement: more names is tighter. Absent requires nothing extra.
+  required_image_signers?: string[];
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
   // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and

@@ -1,0 +1,15 @@
+: Source: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create (stream_options.include_usage)
+: Read 2026-11-07. The doc: with include_usage an additional chunk is streamed before data: [DONE], its usage covers the
+: entire request and its choices is always an empty array; all other chunks carry "usage": null. The token figures
+: below are illustrative; the field names are the documented usage object (prompt_tokens, completion_tokens,
+: prompt_tokens_details.cached_tokens, completion_tokens_details.reasoning_tokens).
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-2026-01-01","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-2026-01-01","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-2026-01-01","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5-2026-01-01","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,"prompt_tokens_details":{"cached_tokens":64},"completion_tokens_details":{"reasoning_tokens":12}}}
+
+data: [DONE]
+

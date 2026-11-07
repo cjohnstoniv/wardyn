@@ -5,39 +5,9 @@
 
 ## Download verification
 
-- [`scripts/check-image-pins.sh`](../../scripts/check-image-pins.sh) checks every Dockerfile curl download, including local-only recipes.
-- Its bounded shell recognizer requires literal output filenames, checks of those same files before any intervening command, and fail-closed sequencing: an initial `set -e` with unconditional commands, or an uninterrupted `&&` chain ending the RUN.
-- Consecutive downloads may precede their individual checks.
-- `if`/`case` bodies must finish their checks before leaving the branch.
-- Unsupported syntax fails with a file/line diagnostic; the guard does not execute shell or establish the provenance of a hash.
-- [`scripts/test-image-pins.sh`](../../scripts/test-image-pins.sh) exercises the accepted and rejected forms.
-- The supported command names are defined in [`scripts/lib/image_downloads.py`](../../scripts/lib/image_downloads.py).
-- The recognizer validates that subset before classifying package names or stdout diagnostics as inert curl references.
-- Command-name expansion, shell wrappers, generated command text, and stdout redirection/pipelines from data emitters are unsupported (checksum/hash-validation pipelines and stderr diagnostics are the exceptions).
-- An initial `set -e` must run in the parent shell; setting it inside a pipeline does not protect later commands.
-
-- Curl arguments retain their quote context: variable expansions must be plain and double-quoted, and command substitutions, parameter operators and unquoted globs refuse.
-- URL variables must have a literal protocol prefix from an assignment that runs before the download.
-- Assignments that can be skipped cannot establish that property.
-- Alternatively, place `--` before the quoted URL, after all options.
-- This prevents a URL value from injecting another output or becoming a curl config option.
-- Dynamic filenames remain unsupported.
-- The guard does not derive `--remote-name` filenames from variables; use a literal URL or `-o`.
-- It does not interpret arbitrary shell, decode generated programs, or inspect commands hidden inside other files or installed tools.
-
-- Checksum input must contain one 64-hex field and a literal filename.
-- The guard accepts a literal hash, a variable assigned a literal 64-hex value in the same RUN, or a variable validated before downloading with this exact fail-closed pipeline:
-
-```sh
-printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'
-```
-
-- GNU grep's `-z` makes newlines part of the record and `-x` matches the entire record, so leading/trailing whitespace and additional lines refuse.
-- Shell variables cannot contain NUL.
-- See the [GNU grep manual](https://www.gnu.org/software/grep/manual/grep.html). The guard discards this fact after reassignment and does not infer validation from a branch that may be skipped.
-- Build-argument and manifest-derived hashes use the validator; unchanged literal noVNC/websockify pins are proved directly.
-- The affected recipes also use `sha256sum --strict -c -`.
-- [`--strict`](https://www.gnu.org/software/coreutils/manual/coreutils.html#cksum-common-options) rejects malformed checksum records; it does not replace the single-field proof or establish where the expected hash came from.
+- Every `curl` download in a Dockerfile needs a literal sha256 check of the file it writes. [`scripts/check-image-pins.sh`](../../scripts/check-image-pins.sh) enforces it, including for local-only recipes.
+- The shell forms it accepts are defined in [`scripts/lib/image_downloads.py`](../../scripts/lib/image_downloads.py) and exercised by [`scripts/test-image-pins.sh`](../../scripts/test-image-pins.sh). Unsupported syntax fails with a file and line.
+- A checksum variable must be assigned a literal 64-hex value or validated before the download with `printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'`. The affected recipes also run `sha256sum --strict -c -`.
 
 - Claude's native download pins the manifest before reading the binary's hash.
 - The default version has a baked manifest pin; alternate exact versions require `CLAUDE_MANIFEST_SHA256`.
@@ -205,14 +175,14 @@ Two details are load-bearing, and copying a shortened form silently drops them:
   - but deliberately **not** `openssh-client`/`corkscrew`/baked host keys
   - its SSH-clone story is unchanged.
 
-### An image that runs Claude Code (`claude-code`, `full`, BYOI `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6`)
+### An image that runs Claude Code (`claude-code`, `full`, BYOI `FROM ghcr.io/cjohnstoniv/agent-base:<release>`)
 
 - Also not part of the numbered contract
   - no other agent's CLI reads any of it
   - but an image whose agent is **Claude Code** must carry two things,
   - or its first interactive run parks first-use approvals on hosts the operator never chose and opens on a product tour instead of the agent:
 
-1. **These three `ENV` lines, in the Dockerfile.** `agent-base` already sets them, so `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6` inherits them and a BYOI author needs to do nothing; an image built from some other base must set them itself.
+1. **These three `ENV` lines, in the Dockerfile.** `agent-base` already sets them, so `FROM ghcr.io/cjohnstoniv/agent-base:<release>` (the release you run) inherits them and a BYOI author needs to do nothing; an image built from some other base must set them itself.
 
    ```dockerfile
    ENV DISABLE_AUTOUPDATER=1 \
@@ -298,6 +268,10 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 | `vscode/`       | `wardyn/agent-vscode:local`  | none by default (agent-base); adds `code-server` behind the UI-sandbox relay |
 | `harnesses/`    | `wardyn/agent-harnesses:local` | `claude` and `codex` in one image (local build only) |
 | `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
+| `base/`         | `wardyn/agent-base:local`    | none (`make agent-image-base`; the base the others build on) |
+| `novnc/`        | `wardyn/agent-novnc:local`   | none by default (agent-base); a noVNC desktop behind the UI-sandbox relay (`make agent-image-novnc`) |
+| `novnc-signin/` | `wardyn/agent-novnc-signin:local` | the noVNC image plus the person's browser, for desktop sign-ins (`make agent-image-novnc-signin`) |
+| `vm-linux/`     | none (no `make` target)      | the reference guest image of a Linux VM sandbox, no desktop; see [Linux VM sandboxes](../../docs/operations/linux-vm-sandboxes.md) |
 
 - `claude-code/` and `codex-cli/` are the two user-facing agent harnesses; `make agent-images-core` builds them plus `base/`, which carries the setup connectivity probe.
 - `base/`, `claude-code/` and `codex-cli/` (so `full/` too) also carry AWS CLI v2 for the AWS CLI component, installed exactly as `aws-sso/` installs it; [scripts/test-image-recipes.py](../../scripts/test-image-recipes.py) fails when the copies drift.

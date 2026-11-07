@@ -170,6 +170,16 @@ what keeps this render check and the boot check agreeing.
 {{- end -}}
 
 {{/*
+"true" when the UI-sandbox gateway may run on one shared origin with SSO configured:
+uiSandbox.acceptSharedOrigin, or WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN set in env/extraEnv to something
+wardynd reads as true (the same set as wardyn.allowNoOperatorList).
+*/}}
+{{- define "wardyn.allowUISharedOrigin" -}}
+{{- $v := include "wardyn.envValue" (dict "ctx" . "name" "WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN") | lower -}}
+{{- if or (($.Values.uiSandbox | default dict).acceptSharedOrigin) (has $v (list "1" "true" "yes" "on" "<valuefrom>")) }}true{{ end -}}
+{{- end -}}
+
+{{/*
 Refuse at render when an optional port collides with the console's HTTP port.
 wardynd refuses to BOOT when uiSandbox.port equals service.port (the separate
 browser origin is the control — cmd/wardynd/main.go validateUISandboxConfig),

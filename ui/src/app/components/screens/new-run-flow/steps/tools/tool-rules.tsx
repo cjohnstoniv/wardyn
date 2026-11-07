@@ -49,7 +49,7 @@ export function ToolRules({ fact, harnessName, personal, remoteMcp, onAdd, onRem
             <li key={`mine:${r.tool}`} className={ROW_CLASS}>
               <span className="min-w-0 flex-1 font-mono [overflow-wrap:anywhere]">{r.tool}</span>
               {r.effect === "hold" && r.tool.startsWith("mcp__") && <span className="text-muted-foreground">{NR_TOOLS.MCP_ASKS}</span>}
-              <Chip tone={EFFECT_TONE[r.effect]}>{EFFECT_LABEL[r.effect]}</Chip>
+              <Chip tone={EFFECT_TONE[r.effect as ToolEffect] ?? "neutral"}>{EFFECT_LABEL[r.effect as ToolEffect] ?? r.effect}</Chip>
               <Button type="button" variant="ghost" size="sm" aria-label={`${NR_TOOLS.ROW_REMOVE} ${r.tool}`} onClick={() => onRemove(r.tool)}>
                 {NR_TOOLS.ROW_REMOVE}
               </Button>

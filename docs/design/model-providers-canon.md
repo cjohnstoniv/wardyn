@@ -51,7 +51,7 @@ takes. The packet supersedes the design record's §5.1 chips: the admin's own co
 ## Frozen strings — the provider editor (#537)
 
 The #537 packet's rows: `docs/design/model-providers-mock/canon.html` Table 1 (branch
-`design/551-providers-mock-packet`, owner-approved 2026-09-25), under the same ids. Its
+`design/551-providers-mock-packet`, approved 2026-09-25), under the same ids. Its
 `MODEL_PROVIDERS.ADD_CTA` and kind-label rows are the ones above. The two agent reasons it reuses,
 `INTEGRATIONS.X_KEY_CODEX` and `INTEGRATIONS.X_OPENAI_CLAUDE`, are `lib/integrations.ts`'s own.
 
@@ -103,7 +103,7 @@ line is `MODEL_PROVIDERS.PROVIDES.KEY` (each person adds their own Bedrock API k
 
 ## Frozen strings — the Bedrock and Claude subscription kinds (#538)
 
-`mp-packet-B.html`'s own "Frozen strings" table (owner-approved 2026-09-22 as packet MP-B), for E3
+`mp-packet-B.html`'s own "Frozen strings" table (approved 2026-09-22 as packet MP-B), for E3
 and E4 — the two rows `docs/design/model-providers-mock/canon.html` Table 1 left as "#538 builds it".
 The agent reasons reused, `INTEGRATIONS.X_BEDROCK_CODEX` and `INTEGRATIONS.X_SUB_CODEX`, are
 `lib/integrations.ts`'s own; the AWS sign-in labels reused, `AGENTS.FIELD_SSO_START_URL`,
@@ -128,7 +128,7 @@ as every other row below.
 
 ## Owner decisions (packet MP-C) — the Agents tab default (#539)
 
-Packet MP-C ("Choosing at Launch", owner-approved 2026-09-28, recommended on every question). Its
+Packet MP-C ("Choosing at Launch", approved 2026-09-28, recommended on every question). Its
 Agents-tab strings are frozen in the `AGENTS` table of `workspace-providers-prompt.md` §7.7, beside the
 rest of that tab's copy, and parsed back by `workspace-providers-copy.test.ts`.
 

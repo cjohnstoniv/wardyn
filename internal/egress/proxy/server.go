@@ -314,7 +314,9 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	p.deferredScan = deferred
 	p.vm, p.portRule = cfg.VM, effectivePortRule(cfg.VM, cfg.PortRule)
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
+	p.mcp.setApproveEach(cfg.MCPApproveEach)
 	p.forgeHosts = forgeHostSet(cfg.ForgeHosts)
+	p.meterOff = cfg.DisableModelUsage
 	if p.hardDeny, err = compileHardDeny(cfg.HardDeny); err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("hard deny: %w", err)

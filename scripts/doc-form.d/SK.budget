@@ -11,7 +11,7 @@
 # docs/operations/secrets-and-keys.md 11904 adds 274 over 11630, measured (0.10 rc.11 gateway identity): which providers can turn identity on, what turning it on and off does, and what a suspension, a pause and an edit do to a run.
 # docs/operations/secrets-and-keys.md 11998 adds 94 over 11904, measured (0.10 rc.11 gateway identity): what turning it off keeps, how long a call can be refused, and the shared email form.
 # docs/operations/secrets-and-keys.md 12008 adds 10 over 11998, measured (0.10 rc.11 gateway identity): what works after a base_url change that keeps the audience.
-docs/operations/secrets-and-keys.md=12021 share=25 # +13 (rc.12 docs batch), measured: the gateway token life is 60 to 600 seconds, not a flat 10 minutes
+docs/operations/secrets-and-keys.md=12016 share=25 # two release notes cut and the settings diagram split into two decision nodes (-5)
 # docs/operations/secrets-and-keys.md 10535 adds 1001 over 9534 (0.9 F-588 M1): the 'Key service: AWS KMS' section, AWS KMS in the key-service lists, and the custody sentence for all three key services.
 # docs/operations/secrets-and-keys.md 10434 adds 900 (0.9 F-588 M1): the 'Key service: AWS KMS' section and AWS KMS in the key-service lists.
 # docs/operations/secrets-and-keys.md 10575 adds 40 (0.9 F-588 M2): the Helm bullet in 'Key service: AWS KMS' and the TestLive_AWSKMS bullet under 'Not verified live yet'.
@@ -21,7 +21,7 @@ docs/operations/secrets-and-keys.md=12021 share=25 # +13 (rc.12 docs batch), mea
 # docs/operations/monitoring.md 2159 adds 21 over 2138: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # 0.10: docs/operations/monitoring.md 2166 adds 8, measured: the SSH connection-refusal counter row.
 # rc.12: docs/operations/monitoring.md 2264 adds 98 over 2166, measured: the OpenTelemetry logs section.
-docs/operations/monitoring.md=2264 share=13
+docs/operations/monitoring.md=2250 share=13 # -14 net, measured: seven metric rows added (the partition-headroom gauge, the re-auth, drive-probe, device-ingest, federation-lag and start-wait series), offset by the fence, the table's Detail column and the two-counters section cut
 # docs/operations/monitoring.md=2001 adds 158 (0.9 F-1513): the five wardyn_audit_delivery_* metric rows (#1513).
 # docs/operations/monitoring.md=2029 adds 28 (0.9 Q-b): the run_queue sweep row.
 # docs/operations/run-lifetime.md 2026 adds 19 over 2007: revive refusals name the Azure CLI case and say a refused live run keeps its access, measured.
@@ -29,9 +29,9 @@ docs/operations/monitoring.md=2264 share=13
 # docs/operations/run-lifetime.md 2077 adds 33 over 2044 (0.9.3 FIN-E), measured: the pool idle-stop default and maximum.
 # docs/operations/run-lifetime.md 2088 adds 11 over 2077, measured (0.10 OC-API1b): an extend re-checks the owner's placement.
 # docs/operations/run-lifetime.md 2102 adds 14 over 2088, measured (rc.8 svccap): max_end_ahead_sec is the renewal unit of a capped service.
-docs/operations/run-lifetime.md=2102 share=21
+docs/operations/run-lifetime.md=2045 share=21 # -57, measured: the fence, the note about it, issue numbers and release narration removed
 # docs/operations/kubernetes-known-gaps.md 2110 adds 50 over 2060, measured: the proxy DNS rule's coverage and what needs an operator policy (0.9.3 ASK-6 review).
 # docs/operations/kubernetes-known-gaps.md 2153 = 2110 + 43, measured: the proxy DNS peer's fixed namespace and label, and how to check yours
 # docs/operations/kubernetes-known-gaps.md 2165 adds 12 over 2153, measured (rc.8 E5): the replicas row points at the high-availability page.
-docs/operations/kubernetes-known-gaps.md=2213 share=15 # +7, ground-truth row partial and linked; +41 (rc.12 agent-sandbox backend), measured: a pointer section
+docs/operations/kubernetes-known-gaps.md=1938 share=15 # -275, measured: the fence, the DiskMiB history and the 0.7.x narration removed; the enforcement vocabulary gains the Docker no-quota outcomes
 # docs/operations/secrets-and-keys.md 9534 adds 44 (0.9 G-sec-rest, #1977): the 'Requiring it' paragraph says the flag covers new writes only, existing local-key rows are not moved, and kek_local_rows reports them.

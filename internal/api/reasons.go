@@ -281,8 +281,8 @@ const (
 	// agent pod). Nothing changed; stop the run and start a new one.
 	reasonReviveUnsupported = "revive_unsupported"
 
-	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history
-	// paging (runs_policy.go) — one reason per rejected query parameter.
+	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history paging (runs_policy.go): one
+	// reason per rejected query parameter.
 	reasonInvalidOwnerParam         = "invalid_owner_param"          // ?owner= is not "", "me", or "all"
 	reasonInvalidStatusParam        = "invalid_status_param"         // ?status= names a value outside the closed set
 	reasonStatusNeedsExclusive      = "status_needs_exclusive"       // status=needs was combined with another status value
@@ -380,7 +380,7 @@ const (
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
 	reasonApprovalRuleNotFound      = "approval_rule_not_found"      // no approval rule has that name
 	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
-	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
+	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, one MCP call, a run no service identity created, or a match that no longer holds
 	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
 	reasonApprovalRuleHostDenied    = "approval_rule_host_denied"    // a person's deny for this host still stands on this run, so a rule does not decide it
 
@@ -389,7 +389,7 @@ const (
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 
-	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
+	// POST /site-config/test-proxy and POST /site-config/test-redirect (site_config_probe.go).
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
 	reasonSiteConfigProbeURLInvalid     = "site_config_probe_url_invalid"     // the probe target is not a plain http(s) URL
 	reasonEgressRedirectFromRequired    = "egress_redirect_from_required"     // an egress-redirect edit named no `from`
@@ -697,6 +697,13 @@ const (
 	reasonGatewayIdentityUnavailable = "gateway_identity_unavailable"
 )
 
+// A portal revoke with ?cut_in_flight=true (gateway_identity_cut.go): the runs it launched get no more
+// gateway tokens (403 on the mint, 409 on a revive), and a value of the parameter that is not true or false.
+const (
+	reasonGatewayAccessCut        = "gateway_access_cut"
+	reasonInvalidCutInFlightParam = "invalid_cut_in_flight_param"
+)
+
 // A run refused at create because its laptop local model is on a port the runner's person has not allowed
 // (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
 const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"
@@ -825,4 +832,38 @@ const (
 const (
 	reasonMemberDriveDeleteDeferred = "member_drive_delete_deferred" // 202: the Mac is offline; the disk is removed when it reconnects
 	reasonMemberDriveRecordOnly     = "member_drive_record_only"     // 200: the Mac is no longer registered; only the record was removed
+)
+
+// POST /runs Idempotency-Key (runs_idempotency.go).
+const (
+	reasonIdempotencyKeyInvalid  = "idempotency_key_invalid"   // 400: not one value of 1-255 visible ASCII characters
+	reasonIdempotencyKeyReused   = "idempotency_key_reused"    // 422: the key was used with a different request in the last 24 hours
+	reasonIdempotencyKeyInFlight = "idempotency_key_in_flight" // 409: a request with the key is still being answered; Retry-After says when to try again
+)
+
+// One MCP call's approval raise on the internal route (approvals_mcp_call.go).
+const (
+	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid" // 400: a requested_scope carrying call_sha256 that is not the hash of its own server, tool and arguments, repeats a key or spells one in another case, shows a tool name that is not its raw tool's, or is on a kind other than tool_call
+	reasonMCPCallTooLarge     = "mcp_call_too_large"     // 400: an MCP call larger than a person can be shown (arguments over 32 KiB, or a scope over 64 KiB)
+)
+
+// The signed audit receipt, checkpoint and key routes (audit_receipt.go).
+const (
+	reasonAuditReceiptRequestInvalid   = "audit_receipt_request_invalid"   // 400: events or one run, in the shapes the route reads
+	reasonAuditReceiptNotFound         = "audit_receipt_not_found"         // 404: no such audit event, or the run has no audit rows
+	reasonAuditReceiptPending          = "audit_receipt_pending"           // 409: newer than the last signed checkpoint; retry after Retry-After
+	reasonAuditReceiptUnchained        = "audit_receipt_unchained"         // 409: in no checkpoint and will never be (no row hash, or before signing began)
+	reasonAuditReceiptTooLarge         = "audit_receipt_too_large"         // 413: more events or checkpoints than one receipt carries
+	reasonAuditReceiptSigningOff       = "audit_receipt_signing_off"       // 503: checkpoint signing is off, or its key could not be loaded
+	reasonAuditReceiptStoreUnavailable = "audit_receipt_store_unavailable" // 501: needs the Postgres store
+	reasonAuditReceiptReadFailed       = "audit_receipt_read_failed"       // 500: the receipt could not be read or assembled
+)
+
+// Image admission's refusals (run_image_admission.go): the same values as imageadmit.Reason.
+const (
+	reasonImageAdmissionNoPolicy    = "image_admission_no_policy"   // no signer the site trusts covers the member's image, or a signer the profile requires does not or is undefined
+	reasonImageSignatureMissing     = "image_signature_missing"     // no signature on the image's digest from a signer that covers it
+	reasonImageSignatureInvalid     = "image_signature_invalid"     // signed, but by another identity or key than the covering signer requires
+	reasonImageAttestationMissing   = "image_attestation_missing"   // the signer did not attest a type it requires
+	reasonImageAdmissionUnavailable = "image_admission_unavailable" // the image's registry or a trust root could not be read (503)
 )

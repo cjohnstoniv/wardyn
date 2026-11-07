@@ -571,6 +571,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
 	s.writeAuditDelivery(ctx, w)
+	s.writeAuditCheckpoint(w)
 	writeApprovalNotify(w)
 	s.writeSubstrateGauges(ctx, w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous

@@ -16,6 +16,7 @@ import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
 import type { RunService, RunServiceStatus } from "./run-service";
+import type { ImageAdmissionVerdict } from "./image-admission";
 import type { RunnerPoolSelection } from "./runner-pools";
 import type { RunMachine } from "./kept-machine";
 
@@ -100,6 +101,8 @@ export interface RunQueue {
   limit_sentence?: string;
 }
 
+export type { ImageAdmissionVerdict } from "./image-admission";
+
 export interface AgentRun {
   id: string;
   created_at: string;
@@ -179,6 +182,8 @@ export interface AgentRun {
   // shape its experience, workload and tools fit. Absent when they fit more than one, for a run
   // from an older client, or one created before the field.
   shape?: RunShape;
+  // SHA-256 of the run's effective policy, written once at dispatch (Go: types.AgentRun.PolicyDigest); the run's later audit rows carry it as data.policy_digest. Absent before dispatch.
+  policy_digest?: string;
   correlation_id?: string; // The caller's own reference for the run, given at create (Go: types.AgentRun.CorrelationID); absent when none was.
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
@@ -187,6 +192,9 @@ export interface AgentRun {
   // devcontainer build, workspace-built, or BYOI-wrapped) — provenance, shown
   // on run detail. Empty/absent for legacy rows.
   image?: string;
+  // The image admission verdict for the member's image (Go: types.AgentRun.ImageAdmission); absent when
+  // admission was off, the run named no member image, an operator started it, or the run predates it.
+  image_admission?: ImageAdmissionVerdict | null;
   // The scan/verify/record-only TRUSTED linkage (internal/types/types.go's
   // AgentRun.WorkspaceID) — set for a record/verify step run, nil for an
   // ordinary user run. Modeled here ONLY so runHasWorkspace (below) can read

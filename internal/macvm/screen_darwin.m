@@ -346,7 +346,29 @@ void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps
 	});
 }
 
+void wardynWindowAction(int n); // screen_darwin.go (cgo export): the open edit window's Go callback n
+
+// The numbers the edit window passes to wardynWindowAction (screen_darwin.go's windowAction constants).
+#define WARDYN_WINDOW_ASK_STOP 0
+
+// WardynScreenAskStop is the edit window's delegate: its close button asks the guest to shut down through
+// Go, off the main thread, and the window stays up until the guest has (wardynScreenClose).
+@interface WardynScreenAskStop : NSObject <NSWindowDelegate>
+@end
+
+@implementation WardynScreenAskStop
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		wardynWindowAction(WARDYN_WINDOW_ASK_STOP);
+	});
+	return NO;
+}
+@end
+
+static WardynScreenAskStop *wardynScreenStopper; // main thread only; the window's delegate is weak
+
 static BOOL wardynScreenViewOnly; // main thread only: the window is a run window (see wardynScreenShowWindow)
+static BOOL wardynScreenAsksStop; // main thread only: the run window is the edit's, which a lock leaves up
 
 // wardynScreenTeardown closes the window and lets go of its VM; main thread only. A run window first detaches its
 // view from the VM, which goes on running.
@@ -357,11 +379,13 @@ static void wardynScreenTeardown(void) {
 		((VZVirtualMachineView *)wardynScreenWindow.contentView).virtualMachine = nil;
 	}
 	wardynScreenViewOnly = NO;
+	wardynScreenAsksStop = NO;
 	[wardynScreenWindow orderOut:nil];
 	wardynScreenWindow.contentView = nil;
 	wardynScreenWindow.delegate = nil;
 	wardynScreenWindow = nil;
 	wardynScreenCloser = nil;
+	wardynScreenStopper = nil;
 	atomic_store(&wardynScreenState, 0);
 }
 
@@ -403,7 +427,7 @@ static _Atomic int wardynScreenLockLast;
 	atomic_store(&wardynScreenLockLast, 1);
 	atomic_fetch_add(&wardynScreenLockCount, 1);
 	dispatch_async(dispatch_get_main_queue(), ^{
-		if (wardynScreenViewOnly && wardynScreenWindow != nil) {
+		if (wardynScreenViewOnly && !wardynScreenAsksStop && wardynScreenWindow != nil) {
 			wardynScreenTeardown(); // the state goes to 0, which the Go side polls
 		}
 	});
@@ -440,12 +464,16 @@ long wardynScreenLockNotices(void) { return atomic_load(&wardynScreenLockCount);
 int wardynScreenLockNoticed(void) { return atomic_load(&wardynScreenLockLast); }
 
 // wardynScreenShowWindow opens a run window on vm, a VZVirtualMachine the block keeps until the window closes:
-// close-only (see WardynScreenCloseOnly), not floating, with title and steps (never NULL) and no Show code
-// control. At most one window: with one open it does nothing and the state stays as it was.
-void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
+// close-only (see WardynScreenCloseOnly), not floating, with title and steps (never NULL). A run window passes
+// codeFile NULL (no Show code control) and askStop 0. The edit window passes its setup-code file's path and
+// askStop 1: its close button asks the guest to shut down (WardynScreenAskStop) and a screen lock leaves it up.
+// At most one window: with one open it does nothing and the state stays as it was.
+void wardynScreenShowWindow(void *vm, const char *title, const char *steps, const char *codeFile, int askStop) {
 	VZVirtualMachine *machine = (__bridge VZVirtualMachine *)vm;
 	NSString *t = [[NSString alloc] initWithUTF8String:title];
 	NSString *s = [[NSString alloc] initWithUTF8String:steps];
+	NSString *cf = codeFile == NULL ? nil : [[NSString alloc] initWithUTF8String:codeFile];
+	BOOL edit = askStop != 0;
 	dispatch_async(dispatch_get_main_queue(), ^{
 		if (wardynScreenWindow != nil) {
 			return;
@@ -458,9 +486,14 @@ void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
 		                                              defer:NO];
 		w.releasedWhenClosed = NO;
 		w.title = t;
-		wardynScreenCloseOnly = [[WardynScreenCloseOnly alloc] init];
-		w.delegate = wardynScreenCloseOnly;
-		[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, nil)];
+		if (edit) {
+			wardynScreenStopper = [[WardynScreenAskStop alloc] init];
+			w.delegate = wardynScreenStopper;
+		} else {
+			wardynScreenCloseOnly = [[WardynScreenCloseOnly alloc] init];
+			w.delegate = wardynScreenCloseOnly;
+		}
+		[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf)];
 		w.contentAspectRatio = NSMakeSize(16, 9);
 		VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 		view.virtualMachine = machine;
@@ -470,6 +503,7 @@ void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
 		[w center];
 		wardynScreenWindow = w;
 		wardynScreenViewOnly = YES;
+		wardynScreenAsksStop = edit;
 		// An accessory app's window opens behind the active app, so it orders itself front regardless.
 		[w makeKeyAndOrderFront:nil];
 		[w orderFrontRegardless];

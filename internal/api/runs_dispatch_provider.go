@@ -386,7 +386,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			return nil, nil, injections, providerDispatch{}, false
 		}
 		llms, lanePairs = append(llms, llm), append(lanePairs, pairs[i])
-		if lane.chosen != nil && !s.takeProviderGatewayRoute(ctx, lr, &prov, lane.chosen.provider) {
+		if lane.chosen != nil && !s.takeProviderGatewayRoute(ctx, lr, &prov, lane.chosen.provider, llm) {
 			return nil, nil, injections, providerDispatch{}, false
 		}
 		if lane.chosen == nil || !providerKeyKind(lane.chosen.provider.Kind) {

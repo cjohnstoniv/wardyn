@@ -612,9 +612,13 @@ func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ cli
 	if _, ok := f.networks[networkID]; !ok {
 		return client.NetworkInspectResult{}, fakeNotFound{msg: "no such network: " + networkID}
 	}
+	opts := f.networks[networkID]
 	var res client.NetworkInspectResult
 	res.Network.Name = networkID
 	res.Network.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[networkID]}}
+	// What the create asked for, as a daemon reports it back.
+	res.Network.Internal, res.Network.Options = opts.Internal, opts.Options
+	res.Network.EnableIPv6 = opts.EnableIPv6 != nil && *opts.EnableIPv6
 	return res, nil
 }
 

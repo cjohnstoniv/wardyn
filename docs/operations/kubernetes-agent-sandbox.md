@@ -19,8 +19,6 @@
   - a controller rewriting a pod for real (fake clients only);
   - RuntimeClass under real Kata;
   - any other controller version;
-  - running under the chart's Role end to end (CI's account is cluster-admin; the verbs are checked with `kubectl auth can-i`).
-- The CI job that backs this is new. Treat each tested claim as true only while that job is green on the release you run.
 
 ## How a run is made
 
@@ -108,7 +106,6 @@
 - Teardown finds the run's agent pod by its fixed name, not by a label, so a pod whose labels were edited is still deleted.
 - A mutating webhook that injects a sidecar makes the read-back refuse the run, though the plain path accepts it. That is deliberate.
 - A cluster-wide default PriorityClass (`globalDefault: true`) makes runs refuse at start when placement leaves `priorityClassName` unset, naming `spec.priorityClassName`, though the plain path accepts it. Name a class in the placement's `priorityClassName` (`WARDYN_K8S_SANDBOX_PLACEMENT`), so the read-back expects it.
-- A real controller rewrite is tested with fake clients only.
 
 ## What the person sees
 
