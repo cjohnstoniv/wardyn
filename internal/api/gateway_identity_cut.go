@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -28,10 +29,13 @@ const (
 )
 
 // cutInFlightOf reads ?cut_in_flight= on a portal revoke: absent or false is a plain revoke, true
-// also cuts. Any other value, or the parameter twice, is refused before anything is written.
+// also cuts. Any other value, the parameter twice, or a query that does not parse is refused before
+// anything is written: URL.Query drops a pair it cannot parse, which would read as a plain revoke.
 func cutInFlightOf(w http.ResponseWriter, r *http.Request) (cut, ok bool) {
-	vals, set := r.URL.Query()[cutInFlightParam]
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	vals, set := query[cutInFlightParam]
 	switch {
+	case err != nil:
 	case !set:
 		return false, true
 	case len(vals) == 1 && vals[0] == "false":
