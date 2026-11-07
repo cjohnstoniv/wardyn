@@ -73,11 +73,11 @@ git log --no-merges --format='%H %(trailers:key=Signed-off-by,valueonly)' \
 
 ## AI assistance
 
-Parts of this codebase were written with AI assistance. The project's position:
+Most of this codebase is written by AI coding agents under a human maintainer; [docs/HOW-WARDYN-IS-BUILT.md](docs/HOW-WARDYN-IS-BUILT.md) describes the process. The project's position:
 
 - AI assistance is permitted.
 - The **human** who signs off under the DCO takes full responsibility for the contribution — that it is theirs to submit, that it is licence-clean, and that it does not reproduce third-party code without attribution.
-- All such output is human-reviewed before it is committed.
+- A human maintainer directs the agents, decides the product and security calls, and tests the changes. A different model reviews each change before it merges.
 - Commits authored by a tooling identity acting on a contributor's behalf are that contributor's responsibility. The one exception on the released line is Dependabot (`dependabot[bot]`), whose dependency-update commits arrive as pull requests and are reviewed before merge.
 
 This is stated because it is an increasingly common intake question, and an undisclosed non-human `Author:` line is a worse discovery than a disclosed policy.
