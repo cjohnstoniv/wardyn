@@ -37,8 +37,10 @@ func TestLsofRootHoldsHasItsOwnBound(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel) // frees the hanging runner too if the production bound is ever removed
 	done := make(chan error, 1)
-	go func() { done <- lsofRootHolds(context.Background(), hang, c) }()
+	go func() { done <- lsofRootHolds(ctx, hang, c) }()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "took longer than") {
