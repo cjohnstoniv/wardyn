@@ -21,8 +21,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// eachRow is one approval row the fake control plane holds.
-type eachRow struct {
+// approveEachRow is one approval row the fake control plane holds.
+type approveEachRow struct {
 	id    uuid.UUID
 	scope types.MCPCallScope
 	state types.ApprovalState
@@ -36,7 +36,7 @@ type eachCP struct {
 	srv *httptest.Server
 
 	mu       sync.Mutex
-	rows     []*eachRow
+	rows     []*approveEachRow
 	rejoins  []uuid.UUID
 	refuse   int                 // when set, every new raise is answered with this status
 	newState types.ApprovalState // the state a new row starts in; PENDING when empty
@@ -93,7 +93,7 @@ func newEachCP(t *testing.T) *eachCP {
 				http.Error(w, "refused", c.refuse)
 				return
 			}
-			row := &eachRow{id: uuid.New(), scope: scope, state: types.ApprovalPending}
+			row := &approveEachRow{id: uuid.New(), scope: scope, state: types.ApprovalPending}
 			if c.newState != "" {
 				row.state = c.newState
 			}
@@ -123,13 +123,15 @@ func newEachCP(t *testing.T) *eachCP {
 func (c *eachCP) decide(i int, s types.ApprovalState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.rows[i].state = s
+	if i < len(c.rows) { // a missing row is left for the test's own count check
+		c.rows[i].state = s
+	}
 }
 
-func (c *eachCP) snapshot() []eachRow {
+func (c *eachCP) snapshot() []approveEachRow {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]eachRow, len(c.rows))
+	out := make([]approveEachRow, len(c.rows))
 	for i, row := range c.rows {
 		out[i] = *row
 	}
@@ -204,8 +206,8 @@ func upstreamParams(t *testing.T, u *mcpUpstream) map[string]json.RawMessage {
 	return params
 }
 
-// waitRows waits until the fake control plane holds n rows.
-func waitRows(t *testing.T, cp *eachCP, n int) {
+// waitEachRows waits until the fake control plane holds n rows.
+func waitEachRows(t *testing.T, cp *eachCP, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for cp.count() < n {
@@ -272,7 +274,11 @@ func TestMCPApproveEachSendsExactlyWhatWasShown(t *testing.T) {
 	if rec := f.post(t, mcpToken("codex-cli"), "linear", body); rec.Code != http.StatusOK || f.up.hitCount() != 1 {
 		t.Fatalf("answer %d %q, upstream hits %d", rec.Code, rec.Body.String(), f.up.hitCount())
 	}
-	s := cp.snapshot()[0].scope
+	rows := cp.snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("rows %d, want 1", len(rows))
+	}
+	s := rows[0].scope
 	if string(s.Arguments) != `{"a":"<b>&é","z":[1,2]}` || string(s.Extra) != `{"task":{"ttl":1000}}` {
 		t.Fatalf("scope arguments %s extra %s", s.Arguments, s.Extra)
 	}
@@ -300,7 +306,7 @@ func TestMCPApproveEachOncePerApproval(t *testing.T) {
 		wg.Add(1)
 		go func() { defer wg.Done(); recs[i] = f.post(t, mcpToken("codex-cli"), "linear", call) }()
 	}
-	waitRows(t, cp, 1)
+	waitEachRows(t, cp, 1)
 	time.Sleep(50 * time.Millisecond) // both are waiting on the one row
 	cp.decide(0, types.ApprovalApproved)
 	wg.Wait()
@@ -419,7 +425,7 @@ func TestMCPApproveEachClientGoneStopsWaiting(t *testing.T) {
 	req = req.WithContext(ctx)
 	done := make(chan struct{})
 	go func() { f.p.ServeHTTP(httptest.NewRecorder(), req); close(done) }()
-	waitRows(t, cp, 1)
+	waitEachRows(t, cp, 1)
 	cancel()
 	select {
 	case <-done:
@@ -495,7 +501,7 @@ func TestMCPApproveEachCaps(t *testing.T) {
 		req := mustLocalReq(t, http.MethodPost, "/wardyn/mcp/"+mcpToken("codex-cli")+"/linear", strings.NewReader(eachCall(i, "delete_issue", fmt.Sprintf(`{"n":%d}`, i))))
 		go func() { defer wg.Done(); f.p.ServeHTTP(httptest.NewRecorder(), req.WithContext(ctx)) }()
 	}
-	waitRows(t, cp, 16)
+	waitEachRows(t, cp, 16)
 	time.Sleep(20 * time.Millisecond)
 	wantText(t, f.post(t, mcpToken("codex-cli"), "linear", eachCall(99, "delete_issue", `{"n":99}`)), "Too many calls are already waiting for a person in this run")
 	cancel()
