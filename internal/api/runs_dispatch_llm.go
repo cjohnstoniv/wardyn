@@ -79,6 +79,8 @@ type bedrockTransportAudit struct {
 	hosts                                 []string
 	// signing is the AWS sign-in lane's re-signing choice (awsSigningAudit); nil on the bearer lane.
 	signing *awsSigV4Why
+	// gateway is the host of the gateway a re-signed lane's calls go to, "" for none.
+	gateway string
 }
 
 // providerSubscription reports whether this run chose a Claude subscription
@@ -92,9 +94,13 @@ func (t llmTransport) providerSubscription() bool {
 func (t llmTransport) signsBedrock() bool { return t.bedrockReady && t.bedrock.sigv4Hosts != nil }
 
 // withdrawSigV4 drops the AWS re-signer once the ceiling's re-assertion withheld the Bedrock lane it
-// signed for: the re-signer's grant is that lane's (named in dropped_broker_lanes).
+// signed for: the re-signer's grant is that lane's (named in dropped_broker_lanes). Its gateways'
+// identity routes go with it, so no route is left for a gateway nothing signs for.
 func (p *dispatchLLMPlan) withdrawSigV4(signed bool, llm llmTransport) {
 	if signed && !llm.bedrockReady {
+		if p.awsSigV4 != nil {
+			p.gatewayRoutes = dropSignedGatewayRoutes(p.gatewayRoutes, p.awsSigV4.Gateways)
+		}
 		p.awsSigV4 = nil
 	}
 }
@@ -162,8 +168,12 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 		mode = "sso-inject"
 	}
 	var signing *awsSigV4Why
+	var gateway string
 	if b.ssoInject {
 		signing = &b.sigv4Why
+	}
+	if b.sigv4Gateway != nil {
+		gateway = b.sigv4Gateway.Host
 	}
 	return secretEnvKeys, bedrockTransportAudit{
 		region: b.region, model: b.model, hosts: b.egressHosts,
@@ -172,7 +182,7 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 		// where the call actually went rather than leaving an auditor to infer
 		// it from the region.
 		endpoint: b.runtimeHost,
-		mode:     mode, detail: detail, signing: signing,
+		mode:     mode, detail: detail, signing: signing, gateway: gateway,
 	}
 }
 
@@ -193,6 +203,9 @@ func (s *Server) recordBedrockTransport(ctx context.Context, run types.AgentRun,
 	}
 	if a.signing != nil {
 		awsSigningAudit(data, *a.signing)
+	}
+	if a.gateway != "" {
+		data["aws_signing_gateway"] = a.gateway
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.bedrock.configure",
 		run.ID.String(), "success", mustJSON(data)))

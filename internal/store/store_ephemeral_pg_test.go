@@ -182,7 +182,7 @@ func TestPG_GetDelegatedTokenByID(t *testing.T) {
 	if _, err := st.GetDelegatedTokenByID(ctx, uuid.New(), now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown grant: err=%v, want ErrNotFound", err)
 	}
-	if _, err := st.RevokeDelegate(ctx, d.ID, now); err != nil {
+	if _, _, err := st.RevokeDelegate(ctx, d.ID, now, false); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	if _, err := st.GetDelegatedTokenByID(ctx, grant.ID, now); !errors.Is(err, store.ErrNotFound) {

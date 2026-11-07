@@ -31,7 +31,7 @@ type DelegateStore interface {
 	CreateDelegate(ctx context.Context, d types.Delegate, raw string) (types.Delegate, error)
 	GetDelegateByRaw(ctx context.Context, raw string) (types.Delegate, error)
 	ListDelegates(ctx context.Context) ([]types.Delegate, error)
-	RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (types.Delegate, error)
+	RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time, cut bool) (types.Delegate, int, error)
 	MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw string, now time.Time) (types.DelegatedToken, error)
 	GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error)
 	GetDelegatedTokenByID(ctx context.Context, id uuid.UUID, now time.Time) (types.DelegatedToken, error)
@@ -48,12 +48,15 @@ type DelegateReader interface {
 
 var _ DelegateReader = PG{}
 
-const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at`
+const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at, cut_in_flight_at`
 
-func scanDelegate(row pgx.Row) (types.Delegate, error) {
+func scanDelegate(row pgx.Row) (types.Delegate, error) { return scanDelegateWith(row) }
+
+// scanDelegateWith scans delegateCols, then any columns a query selects after them into extra.
+func scanDelegateWith(row pgx.Row, extra ...any) (types.Delegate, error) {
 	var d types.Delegate
-	err := row.Scan(&d.ID, &d.Name, &d.IdPClientID, &d.Group, &d.CredentialSHA256, &d.RegisteredBy,
-		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt)
+	err := row.Scan(append([]any{&d.ID, &d.Name, &d.IdPClientID, &d.Group, &d.CredentialSHA256, &d.RegisteredBy,
+		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt, &d.CutInFlightAt}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Delegate{}, ErrNotFound
 	}
@@ -98,16 +101,30 @@ func (s PG) ListDelegates(ctx context.Context) ([]types.Delegate, error) {
 	return collect(ctx, s.Pool, "list", "delegates", q, nil, scanDelegate)
 }
 
-// RevokeDelegate marks id revoked. Unknown or already-revoked is ErrNotFound,
-// so a second revoke writes no second audit row. Outstanding delegated
-// tokens need no write of their own: GetDelegatedTokenByRaw joins on this
-// column.
-func (s PG) RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (types.Delegate, error) {
+// RevokeDelegate marks id revoked and, with cut, stamps cut_in_flight_at, after which no run the
+// portal launched gets a gateway token (api.gatewayMintVia reads it at every mint). A cut of a
+// portal already revoked but not yet cut stamps the cut alone. Unknown, already revoked without a
+// cut, or already cut is ErrNotFound, so a repeat writes no second audit row. One statement, so a
+// revoke and a cut racing each land once. inFlight counts the portal's non-terminal runs, for the
+// audit row. Outstanding delegated tokens need no write of their own: GetDelegatedTokenByRaw joins
+// on revoked_at.
+func (s PG) RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time, cut bool) (_ types.Delegate, inFlight int, _ error) {
+	states := make([]string, 0, len(types.NonTerminalRunStates))
+	for _, st := range types.NonTerminalRunStates {
+		states = append(states, string(st))
+	}
 	const q = `
-		UPDATE delegates SET revoked_at = $2
-		WHERE id = $1 AND revoked_at IS NULL
-		RETURNING ` + delegateCols
-	return scanDelegate(s.Pool.QueryRow(ctx, q, id, now))
+		WITH d AS (
+			UPDATE delegates SET revoked_at = COALESCE(revoked_at, $2),
+				cut_in_flight_at = CASE WHEN $3::boolean THEN COALESCE(cut_in_flight_at, $2) ELSE cut_in_flight_at END
+			WHERE id = $1 AND (revoked_at IS NULL OR ($3::boolean AND cut_in_flight_at IS NULL))
+			RETURNING ` + delegateCols + `
+		)
+		SELECT ` + delegateCols + `,
+			(SELECT count(*) FROM agent_runs r WHERE r.created_via = d.id AND r.state = ANY($4))
+		FROM d`
+	d, err := scanDelegateWith(s.Pool.QueryRow(ctx, q, id, now, cut, states), &inFlight)
+	return d, inFlight, err
 }
 
 const delegatedTokenCols = `t.id, t.delegate_id, t.principal, t.email, t.user_type, t.groups, t.groups_truncated, t.created_at, t.expires_at, t.rev_seq, t.actor_sub, t.actor_iss`

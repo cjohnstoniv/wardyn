@@ -29,7 +29,7 @@
 3. Add a `custom_endpoint` provider whose `base_url` is the model hostname and port, for example `https://llm-gw.wardyn.svc.cluster.local:8443`. A person's credential is stored as for any provider.
    - Two providers with identity on can share one gateway only on paths apart, such as `/anthropic` and `/openai`. A run that uses both on one path is refused.
    - A Bedrock provider with a bearer key can send identity too. Put the gateway in its `bedrock.base_url`, and each person's key goes to the gateway.
-   - A Bedrock provider with SSO sign-in cannot, because AWS signs the `Host` header. Use a bearer key row, or the gateway as a custom endpoint.
+   - A Bedrock provider with SSO sign-in can send identity only while Wardyn signs AWS requests at its proxy: [Bedrock with SSO sign-in](#bedrock-with-sso-sign-in).
 4. Add the model hostname to the policy's `allowed_domains`. The model route needs no `internal_hosts` entry, and adding one lifts the private-address guard for that host on every path ([Internal model gateway](../OPERATIONS.md#internal-model-gateway)).
 5. Allow the MCP hostname in the run's policy, and add it to `internal_hosts` when it names a private address. Wardyn then governs whether a run reaches the gateway, and the gateway decides which tools a caller gets.
 6. To have the gateway know which run and person made an MCP call, set `mcp.gateway_audience` on the organisation's MCP component (its `url` is the gateway's MCP address). Run identity is turned on per model provider and makes the signing key, so turn it on for a provider first.
@@ -37,6 +37,43 @@
    - One audience belongs to one address, across model providers and MCP servers.
    - An MCP component edited after a run started is refused a new token for that run, as a changed provider is.
    - An MCP server whose address falls under another destination's identity route is refused (`502`) rather than sent that destination's token.
+
+## Bedrock with SSO sign-in
+
+A `bedrock_sso` provider can send run identity to a gateway, and AWS still checks each person's own signature. It is off unless an admin turns `gateway_identity` on for the row.
+
+- **It needs** `WARDYN_AWS_SIGV4_AT_PROXY` on, with `WARDYN_AWS_SSO_PROXY_INJECT` on and `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` unset. Otherwise turning identity on for the row is refused at save. `gateway_identity_bedrock_sso` in `GET /api/v1/model-providers` says whether this install can.
+- If the install stops signing at the proxy after the save, the row's runs are refused with the reason. They never fall back to role credentials in the sandbox.
+- **Set** `bedrock.base_url` to the gateway, for example `https://ai-gw.corp.example/bedrock`, and `bedrock.region` to the region whose `bedrock-runtime.<region>.amazonaws.com` the gateway forwards to.
+- **Give the gateway a DNS name of your own.** A `bedrock.base_url` on any AWS name is refused, so the token never goes to AWS. That includes a PrivateLink `vpce` name and a name AWS made for the gateway, such as an API Gateway `execute-api` name or a load balancer's `elb` name.
+- The proxy signs each Bedrock call as the person, for that regional address with the gateway's path prefix cut. It sends the call to the gateway with `X-Wardyn-Identity` and `X-Wardyn-Call-Id`. The role credentials stay in the proxy, and the sandbox holds a placeholder key pair.
+
+The gateway must:
+
+- verify the token, then strip `X-Wardyn-Identity` and `X-Wardyn-Call-Id`;
+- cut its path prefix, set `Host` to `bedrock-runtime.<region>.amazonaws.com` and forward the call there;
+- forward the method, the path bytes, `Authorization`, `X-Amz-Date`, `X-Amz-Security-Token`, `X-Amz-Content-Sha256`, every other signed header and the body unchanged. It must not decode or normalise the path: a `%2F` in an inference-profile ARN stays `%2F`.
+
+The body is signed:
+
+- A call goes to the gateway only with its body hash signed. The proxy refuses `UNSIGNED-PAYLOAD`, a streaming unsigned payload, and a declared hash that does not match the body.
+- A body over 16 MiB is refused, because the proxy reads the whole body to hash it.
+
+Limits:
+
+- Bedrock's bidirectional-stream API is refused, because the proxy refuses event-stream request bodies on every call it signs. Converse, InvokeModel and the response-stream calls work.
+- Control-plane calls to `bedrock.<region>.amazonaws.com` go to AWS directly, signed at the proxy, not through the gateway.
+- A signed Bedrock call gets the generic forward scan (`inspect_forward_egress`), as direct signing at the proxy does, not the model prompt checks.
+- A run on a person's own runner is refused, because that runner cannot reach the token mint.
+- A gateway that signs again with an AWS role of its own also works, but AWS then sees the gateway's role, not the person.
+- The signature was checked against an independent SigV4 signer, not against AWS or a named gateway product.
+
+What the gateway gets:
+
+- Each call signed as the person: the prompt, the access key id, the session token and the signature, never the secret key.
+- It cannot change the call or send it to another AWS service or region, because those are signed.
+- It can send the same call again, more than once, for a few minutes after it was signed.
+- A gateway in front of a bearer-key row gets the person's long-lived key instead.
 
 ## The gateway's config
 
@@ -141,6 +178,25 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 
 - Each mint is about five store reads. At 60 seconds, 500 concurrent runs come to about 83 reads a second.
 - A rolling wardynd upgrade longer than the outage a run survives fails that run's model calls, so a short life is the admin's trade.
+
+## When a run's gateway access ends
+
+- Each mint checks the run's person, its service identity and sponsor, the portal that launched it, and the provider or MCP server. A refused mint gives no new token.
+- The bound: within half the token lifetime while wardynd is reachable, and up to the held token's expiry if it is not. Requests already forwarded and open streams run to completion.
+
+| Event | A running run's gateway access |
+|---|---|
+| Person suspended or fully revoked | ends: `403` `identity_deactivated` |
+| Service identity suspended or retired | ends: `403` `service_identity_inactive` |
+| Sponsor suspended or fully revoked | ends: `403` `identity_deactivated` |
+| Sponsor handover | continues; new tokens name the new sponsor |
+| Provider or MCP server changed or turned off | ends: `403` `gateway_identity_changed` |
+| Portal revoked | continues, as before |
+| Portal revoked with `cut_in_flight=true` | ends for good: `403` `gateway_access_cut` |
+
+- A cut stops gateway calls only. The run, its files, its other egress, a model key its proxy already holds and an open terminal socket carry on. `POST /api/v1/runs/{id}/kill` stops the run.
+- A token already issued stays valid at the gateway until `exp`, but only the run's proxy holds it. A 60-second `token_lifetime_seconds` cuts within about 30 seconds.
+- A revive of a cut run is refused `409` `gateway_access_cut`.
 
 ## The key set's address
 

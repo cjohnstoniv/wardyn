@@ -697,6 +697,13 @@ const (
 	reasonGatewayIdentityUnavailable = "gateway_identity_unavailable"
 )
 
+// A portal revoke with ?cut_in_flight=true (gateway_identity_cut.go): the runs it launched get no more
+// gateway tokens (403 on the mint, 409 on a revive), and a value of the parameter that is not true or false.
+const (
+	reasonGatewayAccessCut        = "gateway_access_cut"
+	reasonInvalidCutInFlightParam = "invalid_cut_in_flight_param"
+)
+
 // A run refused at create because its laptop local model is on a port the runner's person has not allowed
 // (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
 const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"
@@ -825,4 +832,11 @@ const (
 const (
 	reasonMemberDriveDeleteDeferred = "member_drive_delete_deferred" // 202: the Mac is offline; the disk is removed when it reconnects
 	reasonMemberDriveRecordOnly     = "member_drive_record_only"     // 200: the Mac is no longer registered; only the record was removed
+)
+
+// POST /runs Idempotency-Key (runs_idempotency.go).
+const (
+	reasonIdempotencyKeyInvalid  = "idempotency_key_invalid"   // 400: not one value of 1-255 visible ASCII characters
+	reasonIdempotencyKeyReused   = "idempotency_key_reused"    // 422: the key was used with a different request in the last 24 hours
+	reasonIdempotencyKeyInFlight = "idempotency_key_in_flight" // 409: a request with the key is still being answered; Retry-After says when to try again
 )

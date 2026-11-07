@@ -163,6 +163,11 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // answers a pool refusal when the insert lost to a pool change, or a server error.
 func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID uuid.UUID, pool types.ResolvedRunnerPool, err error) {
 	s.cfg.Identity.RevokeRun(context.WithoutCancel(r.Context()), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
+	// A later request took this one's Idempotency-Key over, so its run is the key's.
+	if errors.Is(err, store.ErrRunCreateKeySuperseded) {
+		writeRunCreateKeyInFlight(w)
+		return
+	}
 	if errors.Is(err, store.ErrRunnerPoolStale) {
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
@@ -364,6 +369,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markRunCreateExempt(ctx, createDigestInput(req, f.carriedImage), createData)
 	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
+	stampIdempotencyKey(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 	s.auditRunComponents(ctx, runID, createdByType, createdBy, comps)

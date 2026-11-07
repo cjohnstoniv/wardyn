@@ -7,7 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -17,37 +17,42 @@ import (
 // guard without binding the key in the same transaction.
 func TestRunInsertWritersBindRunCreateKey(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	names, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	writers := 0
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, decl := range f.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				inserts, binds := false, false
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					switch n := n.(type) {
-					case *ast.Ident:
-						inserts = inserts || n.Name == "createRunSQL"
-					case *ast.CallExpr:
-						if id, ok := n.Fun.(*ast.Ident); ok && id.Name == "bindRunCreateKey" {
-							binds = true
-						}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			inserts, binds := false, false
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.Ident:
+					inserts = inserts || n.Name == "createRunSQL"
+				case *ast.CallExpr:
+					if id, ok := n.Fun.(*ast.Ident); ok && id.Name == "bindRunCreateKey" {
+						binds = true
 					}
-					return true
-				})
-				if !inserts {
-					continue
 				}
-				writers++
-				if !binds {
-					t.Errorf("%s executes createRunSQL but never calls bindRunCreateKey", fn.Name.Name)
-				}
+				return true
+			})
+			if !inserts {
+				continue
+			}
+			writers++
+			if !binds {
+				t.Errorf("%s executes createRunSQL but never calls bindRunCreateKey", fn.Name.Name)
 			}
 		}
 	}

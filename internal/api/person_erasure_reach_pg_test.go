@@ -84,6 +84,12 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 			VALUES ($1, $2, $3, $4, $4 || '@corp.example', 'member', false, now() + interval '10 minutes')`,
 			uuid.New(), delegate, "sha-token-"+string(rune('a'+i)), who)
 	}
+	// POST /runs Idempotency-Keys: alice's direct one and one her portal sent for her, and bob's.
+	for i, k := range []struct{ who, via string }{{alice, ""}, {alice, delegate.String()}, {bob, ""}} {
+		exec(`INSERT INTO run_create_keys (principal, via, key_sha256, request_sha256, claim_token, claim_until, expires_at)
+			VALUES ($1, $2, $3, 'req', $4, now() + interval '5 minutes', now() + interval '1 day')`,
+			k.who, k.via, "sha-key-"+string(rune('a'+i)), uuid.New())
+	}
 
 	// Alice's audit subject: her identity row.
 	if _, err := pg.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: alice, Issuer: "https://dex.example", Email: "alice@corp.example"}, time.Now().UTC()); err != nil {
@@ -107,10 +113,14 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
 		t.Fatal(err)
 	}
-	for k, want := range map[string]float64{"pats_deleted": 2, "delegated_deleted": 2, "live_left": 1} {
+	for k, want := range map[string]float64{"pats_deleted": 2, "delegated_deleted": 2, "live_left": 1, "run_create_keys_deleted": 2} {
 		if got := answer.Detail.Credentials[k]; got != want {
 			t.Errorf("credentials detail %s = %v, want %v (%s)", k, got, want, w.Body)
 		}
+	}
+
+	if n := count(`SELECT count(*) FROM run_create_keys WHERE principal = $1`, bob); n != 1 {
+		t.Error("bob's idempotency key was touched by alice's erasure")
 	}
 
 	var by, reason, state string

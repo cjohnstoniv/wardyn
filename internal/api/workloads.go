@@ -421,6 +421,7 @@ func workloadCreateRequest(r *http.Request, wl store.Workload) (*http.Request, e
 	cr.Method, cr.URL, cr.RequestURI = http.MethodPost, &url.URL{Path: "/api/v1/runs"}, ""
 	cr.Body, cr.ContentLength, cr.GetBody = io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
 	cr.Header.Set("Content-Type", "application/json")
+	cr.Header.Del(idempotencyKeyHeader) // a launch calls handleCreateRun, never the keyed route; this keeps it so
 	return cr, nil
 }
 

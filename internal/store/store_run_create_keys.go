@@ -67,6 +67,13 @@ type RunCreateKeyClaim struct {
 	RunID     uuid.UUID          // RunCreateKeyDone
 	Response  *RunCreateResponse // RunCreateKeyDone, when an answer was kept
 	CreatedAt time.Time          // the key's first use (every state but Claimed of a new row)
+	// ClaimUntil is when the lease of the key's latest claim ends, and LeaseLive whether it was still
+	// ahead of the database clock at the read. Both are read before any takeover and are unset for a new
+	// row. A Done key with no saved answer and a live lease may still be answering its first request.
+	ClaimUntil time.Time
+	LeaseLive  bool
+	// ResponseErased: erasing the person's run tasks cleared the kept answer (ClearRunCreateResponsesOf).
+	ResponseErased bool
 }
 
 // RunCreateKeyStore keeps POST /runs Idempotency-Keys. A claim leases the key to one request; the run
@@ -138,15 +145,17 @@ func readRunCreateKey(ctx context.Context, q Querier, k RunCreateKey, token uuid
 		body     []byte
 	)
 	err := q.QueryRow(ctx, `SELECT request_sha256, claim_until > now(), run_id, response_status, response_location,
-			response_body, created_at
+			response_body, created_at, claim_until, response_erased
 		FROM run_create_keys WHERE principal = $1 AND via = $2 AND key_sha256 = $3 FOR UPDATE`,
-		k.Principal, k.Via, k.KeySHA256).Scan(&request, &live, &runID, &status, &location, &body, &out.CreatedAt)
+		k.Principal, k.Via, k.KeySHA256).Scan(&request, &live, &runID, &status, &location, &body, &out.CreatedAt, &out.ClaimUntil,
+		&out.ResponseErased)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: read idempotency key: %w", err)
 	}
+	out.LeaseLive = live
 	switch {
 	case request != k.RequestSHA256:
 		out.State = RunCreateKeyMismatch
@@ -218,8 +227,9 @@ func bindRunCreateKey(ctx context.Context, q queryRower, runID uuid.UUID) error 
 }
 
 // SaveRunCreateResponse keeps the answer for a key that names a run under token, whatever its status, so
-// a refusal after the insert replays as itself. It reports whether the key names a run under token; an
-// unbound claim keeps nothing, so a refusal before the insert is never replayed. A body over
+// a refusal after the insert replays as itself. It reports whether it kept it: an unbound claim keeps
+// nothing, so a refusal before the insert is never replayed, and nor does a key whose answer an erasure
+// cleared (the release that follows a false finds the key bound and deletes nothing). A body over
 // MaxRunCreateResponseBytes is not kept, and a replay is then rebuilt from the run.
 func (s PG) SaveRunCreateResponse(ctx context.Context, id RunCreateKeyID, token uuid.UUID, status int, location string, body []byte) (bool, error) {
 	var (
@@ -234,7 +244,8 @@ func (s PG) SaveRunCreateResponse(ctx context.Context, id RunCreateKeyID, token 
 		}
 	}
 	tag, err := s.Pool.Exec(ctx, `UPDATE run_create_keys SET response_status = $5, response_location = $6, response_body = $7
-		WHERE principal = $1 AND via = $2 AND key_sha256 = $3 AND claim_token = $4 AND run_id IS NOT NULL`,
+		WHERE principal = $1 AND via = $2 AND key_sha256 = $3 AND claim_token = $4 AND run_id IS NOT NULL
+			AND NOT response_erased`,
 		id.Principal, id.Via, id.KeySHA256, token, st, loc, raw)
 	if err != nil {
 		return false, fmt.Errorf("store: save idempotency key response: %w", err)

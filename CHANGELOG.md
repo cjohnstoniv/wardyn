@@ -31,25 +31,44 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `governance_restrictions`, `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and
   `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
   `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
-
+- Revoking a portal still leaves the runs it launched their gateway access, as before. To cut it, pass `cut_in_flight=true` when you revoke; on an already revoked portal it cuts it then.
+- `POST /api/v1/runs` now honours `Idempotency-Key`. A client that already sends that header gets the first answer
+  replayed for 24 hours instead of a new run, and a value outside 1 to 255 visible ASCII characters is refused with
+  400 `idempotency_key_invalid`. A retry with a key is safe only once every control-plane replica runs 0.10.0 or
+  later; an older replica ignores the key.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`. Without
+  it `/healthz` cannot tell Kubernetes node sensors apart and reads only the newest heartbeat. An upgrade from before
+  0.10.0-rc.12 also needs `SELECT, INSERT, UPDATE, DELETE` on `wall_presets` and `kept_machines`. An upgrade from
+  before 0.10.0-rc.9 also needs every grant the 0.10.0-rc.8 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `workloads`, `workload_bindings`, `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`,
+  `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`,
+  `governance_restrictions`, `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and
+  `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
+  `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 
 ### Added
 
 - Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
-
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 - Audit: every audit row of a run written after its policy is resolved now carries `policy_digest`, the SHA-256 of the run's effective policy as recorded in its `run.policy.resolve` row, and `GET /runs/{id}` returns it too. It is on by default and refuses nothing. SIEM parsers that compare a row's `data` object exactly will see the new key; rows written before the run's policy was recorded, rows with no run, and rows a device forwards carry none.
 - `wardyn-guest-agent tls-check <host>` inside a macOS VM checks a host the way apps that use only the system trust store do, and exits 1 when TLS fails.
 - A portal can name the agent acting for a person. `POST /api/v1/token` accepts an `actor_token` your identity provider issued to the portal, and every audit row the delegated token writes names the agent in `data.via.actor`. On by default with no setting: the agent is recorded, never given access, and a portal that sends no `actor_token` sees no change.
 - `POST /api/v1/workloads/{name}/preview` answers what an apply would do: created, updated or unchanged, each changed field, whether a run starts and which run it replaces, and the refusal the apply would meet. It stores nothing. A service identity's token may call it.
-
+- Run identity for an Amazon Bedrock provider people sign in to with SSO. With `WARDYN_AWS_SIGV4_AT_PROXY` on, Wardyn signs each Bedrock request as the person for the regional Bedrock address and sends it to your gateway with the run's identity token. The gateway forwards it to AWS unchanged. Off unless an admin turns it on for the provider.
+- Revoking a portal can also cut the gateway access of the runs it launched: `DELETE /api/v1/admin/delegates/{id}?cut_in_flight=true`. Their gateway calls are refused within about half the provider's token lifetime. Off by default.
+- `POST /api/v1/runs` honours an `Idempotency-Key` header for 24 hours. A retry with the same key and body gets the
+  first answer back with `Idempotent-Replayed: true` instead of a second run. A different body is refused (422
+  `idempotency_key_reused`), and a retry while the first is still being answered gets 409
+  `idempotency_key_in_flight`. `/healthz` reports `idempotent_run_create`. On by default; a request without the
+  header is unchanged.
 
 ### Changed
 
+- macOS: the runner now signs each guest agent it pushes into a base with a code signing identity made once on that Mac (in the VM directory's `agent-signing/`), and the base trusts that certificate for code signing only, so a Full Disk Access grant can last through tools updates. On by default; if signing fails the agent is pushed signed ad hoc, as before. `macos-vm status` says which. The first tools update after upgrading changes the signature, so grant Full Disk Access once more in edit-base.
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
 - `edit-base` no longer prints the setup-code file's path. It points at the window's Type code and Show code buttons. The guest agent now answers three edit-window requests in tools mode only (open an admin Terminal, trust the install list's certificates, open Full Disk Access), each run as the console user.
 - A runner whose proxy image cannot be pulled at start now waits and tries again (every 15 seconds at first, then every 5 minutes) instead of exiting and restarting; `wardyn-runnerd doctor` shows the next try in its status line, and the organisation is told why once the runner connects. A stop still exits cleanly.
-
 
 ### Fixed
 
@@ -57,6 +76,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Linux VM run's terminal, commands and agent start now always run inside the VM. If the runner can't tell whether a run is a VM, the request fails and can be retried; if Linux VM sandboxes were turned off (or failed their start-up check) after the VM started, the request is refused, and the run can still be stopped or ended, including when its audit log fills up.
 - In focus mode, switching the side panel to another widget after one failed to display now shows the new widget instead of the previous error.
 - Run networks no longer carry an address on the Docker host.
+- A Mac runner restarted before its new proxy image could be pulled no longer leaves macOS VM helpers holding both VM slots: at start the runner ends the helpers an earlier start left behind that never took their slot, it starts the tools update that replaces an older guest agent in the base only once it is serving, trying a refused start again after 10 minutes, and it starts one tools update at a time.
 - A window open on your Mac through `wardyn window` now counts as activity, so idle auto-stop no longer stops a macOS VM run while someone works in its window.
 - Revoking a personal API token, or ending a CLI session, now closes a `wardyn window` that it opened. An at-start window asked for with an API token or a CLI sign-in before the upgrade does not open; open it again with `wardyn window`.
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
@@ -83,6 +103,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VM runs: a Terminal opened in the window, and apps started from the Dock or Finder, now get the run's non-secret settings (the proxy, the CA bundle, the provider sign-in files, the git identity), so Claude Code in the window's Terminal is signed in. A run's secret variables (`env_secret`) are never placed in the window's Terminal or desktop. An app already open when the window shows ready may need a relaunch. While the settings are being applied, `wardyn window --status` and the run page say so, and an at-start window waits for them (up to ten minutes) without holding the run's start; if they could not be applied, the window still opens and the status names the reason and the retry, `agent-run --session-env-retry` in the window's Terminal.
 - A run's gateway identity is now refreshed before the first call after its half-life instead of behind it, so a refusal of the refresh applies to that call. A refresh that fails but may pass, such as an unreachable control plane, still leaves the held token in use until it expires. Once the control plane cuts the run's gateway access, the proxy answers every call to that gateway with 403 and stops asking.
 - Review now refuses an Azure DevOps capability list that reaches past the provider's ceiling (`ado_capabilities_above_ceiling`), with the same sentence launch gave, instead of letting the run fail after the click. It is on by default and refuses nothing launch would not.
+
+### Known issues
+
+- macOS: that the guest agent keeps Full Disk Access through a tools update with the signature made on that Mac is not yet proven on a real Mac. After an update, check `macos-vm status`; if Full Disk Access reads refused, grant it again in edit-base.
 
 ## [0.10.0-rc.13] — 2026-11-04
 

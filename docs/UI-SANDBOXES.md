@@ -198,6 +198,9 @@
 | `upstream_protocol_mismatch` | 400 `invalid_request_error` | 400 `UpstreamProtocolMismatchException` |
 | `audit_record_too_large` | 414 `invalid_request_error` | 414 `ValidationException` |
 | `audit_spool_unavailable` | 503 `api_error` | 503 `ServiceUnavailableException` |
+| `gateway_access_cut` | 403 `permission_error` | 403 `AccessDeniedException` |
+
+- `gateway_access_cut`: the portal that started the run was revoked with `cut_in_flight=true`, so the run's gateway calls stop for good. The cut lands within half the token lifetime while the control plane is reachable, and up to the token's expiry if it is not. Requests already forwarded and open streams run to completion. Start a new run.
 
 ## Extensions are not installable by default
 

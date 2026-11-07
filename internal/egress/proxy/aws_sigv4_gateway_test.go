@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -239,6 +240,27 @@ func TestAWSSigV4Gateway_RefusesOutsideThePrefix(t *testing.T) {
 				t.Fatalf("%d mints for a refused request, want none", n)
 			}
 		})
+	}
+}
+
+// A request to the gateway on a port its entry does not name is refused with its own reason, naming
+// the port, before anything is minted or sent.
+func TestAWSSigV4Gateway_RefusesAnotherPort(t *testing.T) {
+	g := newSGWHarness(t)
+	rec := httptest.NewRecorder()
+	req := sgwRequest(t, sgwHost, sgwPrefix+"/model/anthropic.claude-x:0/converse", `{}`, map[string]string{"Content-Type": "application/json"})
+	g.p.serveAWSSigV4(rec, req, sgwHost, 8443)
+	if rec.Code != http.StatusForbidden || rec.Header().Get("X-Wardyn-Reason") != awsSigV4GatewayPort {
+		t.Fatalf("status %d reason %q, want 403 %s", rec.Code, rec.Header().Get("X-Wardyn-Reason"), awsSigV4GatewayPort)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "only on port 443") || strings.Contains(body, "dot segment") {
+		t.Fatalf("body %q, want the port sentence", body)
+	}
+	if n := len(g.arrivals()); n != 0 {
+		t.Fatalf("the gateway saw %d requests, want none", n)
+	}
+	if n := g.mints.Load(); n != 0 {
+		t.Fatalf("%d mints for a refused request, want none", n)
 	}
 }
 

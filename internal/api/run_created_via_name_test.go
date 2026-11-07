@@ -70,7 +70,7 @@ func TestGetRun_NamesThePortalThatLaunchedIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.revoke {
-				if _, err := st.RevokeDelegate(ctx, d.ID, time.Now()); err != nil {
+				if _, _, err := st.RevokeDelegate(ctx, d.ID, time.Now(), false); err != nil {
 					t.Fatal(err)
 				}
 			}

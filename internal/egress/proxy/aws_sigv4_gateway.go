@@ -15,13 +15,17 @@ import (
 // gateway and signs with the placeholder. The proxy signs each request again as the person, for
 // the regional Bedrock host behind the gateway with the gateway's path prefix cut, and sends it
 // to the gateway unchanged otherwise, with the run's identity token. The gateway checks the token,
-// strips the X-Wardyn-* headers, cuts its prefix and forwards the call to that host as it is, so
+// strips X-Wardyn-Identity and X-Wardyn-Call-Id, cuts its prefix and forwards the call to that host as it is, so
 // AWS verifies the person's own signature. Off unless the control plane writes an entry, which it
 // does only for a provider whose admin turned run identity on: the person's AWS identity then
 // reaches AWS through the gateway, and the gateway sees each signed call but never the secret key.
 
-// awsSigV4GatewayPath is the refusal of a gateway request the route's prefix does not cover.
-const awsSigV4GatewayPath = "aws_sigv4_gateway_path"
+// awsSigV4GatewayPath is the refusal of a gateway request the route's prefix does not cover, and
+// awsSigV4GatewayPort of one on a port other than the entry's.
+const (
+	awsSigV4GatewayPath = "aws_sigv4_gateway_path"
+	awsSigV4GatewayPort = "aws_sigv4_gateway_port"
+)
 
 // AWSSigV4Gateway is one gateway the run's Bedrock calls go to, signed for SigningHost. The run's
 // gateway_identity carries a provider route with the same Host, Port and PathPrefix.
@@ -94,13 +98,10 @@ func awsGatewayRouteMatches(rt GatewayIdentityRoute, gw AWSSigV4Gateway) bool {
 		strings.TrimSuffix(rt.PathPrefix, "/") == strings.TrimSuffix(gw.PathPrefix, "/")
 }
 
-// awsSigV4GatewayRoute is the identity route a request to a gateway goes out on, or nil when the
-// request is not one to send: another port, or a path the route does not cover, as decoded or
-// as sent (a dot segment, either spelling, covers nothing).
+// awsSigV4GatewayRoute is the identity route a request to a gateway on its own port goes out on, or
+// nil when the request is not one to send: a path the route does not cover, as decoded or as sent
+// (a dot segment, either spelling, covers nothing). The caller refuses another port first.
 func (p *Proxy) awsSigV4GatewayRoute(r *http.Request, host string, port int, scope awsSigV4HostScope) *GatewayIdentityRoute {
-	if port != scope.port {
-		return nil
-	}
 	gw := AWSSigV4Gateway{Host: host, Port: port, PathPrefix: scope.prefix}
 	raw := adoRawPath(r)
 	for i := range p.gatewayRoutes {
