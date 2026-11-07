@@ -432,7 +432,7 @@ func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.
-	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
+	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run, now, req.Repo, spec.WorkspaceRepos, spec.GitHubCapabilities, comps, &gw) {
 		return grantWiring{}, nil, false
 	}
 	gw.gitPushWithheld = withheld.hosts(gw.adoGitHosts)

@@ -156,7 +156,8 @@ func governSites() []governSite {
 				c := governanceCeiling{Spec: types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{"code_read"},
 					GitHubCapabilities: []ghscope.Capability{"code_read"}}}
 				spec, _, _, err := s.resolvePolicy(ctx, nil, c)
-				return err == nil && len(spec.AzureDevOpsCapabilities) == 0 && len(spec.GitHubCapabilities) == 0
+				// The Azure DevOps list is a bound, never a grant; the GitHub list stays, as the run's wall.
+				return err == nil && len(spec.AzureDevOpsCapabilities) == 0 && slices.Equal(spec.GitHubCapabilities, []ghscope.Capability{"code_read"})
 			}},
 		{"governance_run_doors.go boundUIApps", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
