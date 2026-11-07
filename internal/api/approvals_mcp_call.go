@@ -204,3 +204,14 @@ func canonicalMCPCallScope(sc types.MCPCallScope) (json.RawMessage, bool) {
 	out, err := json.Marshal(sc)
 	return out, err == nil
 }
+
+// projectCallText sets CallText on every MCP call row in place: the exact text of its arguments, so a
+// client never has to read a number out of the scope's JSON. Rows that are not MCP calls stay nil.
+func projectCallText(rows []types.ApprovalRequest) {
+	for i := range rows {
+		rows[i].CallText = nil
+		if isMCPCallRow(rows[i]) {
+			rows[i].CallText = types.MCPCallTextOf(rows[i].RequestedScope)
+		}
+	}
+}

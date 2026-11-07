@@ -70,9 +70,7 @@ func TestMCPCallTextIsLossless(t *testing.T) {
 
 // No extra params, no extra text; arguments absent read as {}; a scope that is not an MCP call has none.
 func TestMCPCallTextEdges(t *testing.T) {
-	s := MCPCallScope{Tool: "mcp__jira__ping", MCPServer: "jira", CallSHA256: "k"}
-	raw, _ := json.Marshal(s)
-	got := MCPCallTextOf(raw)
+	got := MCPCallTextOf(json.RawMessage(`{"tool":"mcp__jira__ping","mcp_server":"jira","call_sha256":"k"}`))
 	if got == nil || got.Arguments != "{}" || got.Extra != "" {
 		t.Errorf("MCPCallTextOf(no arguments) = %+v, want arguments {} and no extra", got)
 	}

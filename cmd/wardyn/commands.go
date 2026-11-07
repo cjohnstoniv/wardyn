@@ -534,6 +534,29 @@ func approvalHost(a types.ApprovalRequest) string {
 	return s.Host
 }
 
+// printMCPCall adds the tool, the server and the call's arguments to `approval get` for an MCP call row.
+// The arguments print as the server's text, or for an older server as the same text made from the raw
+// scope: either way no number goes through a float.
+func printMCPCall(w io.Writer, a types.ApprovalRequest) {
+	text := a.CallText
+	if text == nil {
+		text = types.MCPCallTextOf(a.RequestedScope)
+	}
+	if text == nil {
+		return
+	}
+	var sc types.MCPCallScope
+	_ = json.Unmarshal(a.RequestedScope, &sc)
+	server := sc.MCPServer
+	if sc.MCPHost != "" {
+		server += " (" + sc.MCPHost + ")"
+	}
+	fmt.Fprintf(w, "TOOL:      %s\nSERVER:    %s\nARGUMENTS:\n%s\n", sc.Tool, server, text.Arguments)
+	if text.Extra != "" {
+		fmt.Fprintf(w, "EXTRA:\n%s\n", text.Extra)
+	}
+}
+
 // approvalCmd groups the approval verbs: list and get read, approve and deny
 // decide a single request.
 func approvalCmd(client clientFn) *cobra.Command {
@@ -633,6 +656,7 @@ func approvalCmd(client clientFn) *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "ID:        %s\nRUN:       %s\nKIND:      %s\nSTATE:     %s\nHOST:      %s\nREQUESTED: %s\nSCOPE:     %s\nHOLD:      %s\n",
 						a.ID, a.RunID, a.Kind, a.State, approvalHost(a),
 						a.RequestedAt.Format(time.RFC3339), a.DecisionScope, approvalHoldHint(a))
+					printMCPCall(cmd.OutOrStdout(), a)
 					return nil
 				}
 				if len(aps) < approvalScanPage {
