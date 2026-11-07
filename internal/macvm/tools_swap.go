@@ -20,6 +20,14 @@ import (
 // The staging and swap half of a tools update: the update lock and staging copy, and the exchange that
 // puts the updated copy in place of a base or of a kept machine's folder.
 
+// ErrToolsUpdateBusy is a tools update or a derivation that finds base's update lock held. Its text is what the person reads, so it is a sentence, as the edit-base refusals are.
+const ErrToolsUpdateBusy ToolsUpdateRefusal = "A tools update of this macOS base is already running."
+
+// ToolsUpdateRefusal is why a tools update starts nothing.
+type ToolsUpdateRefusal string
+
+func (r ToolsUpdateRefusal) Error() string { return string(r) }
+
 // beginUpdate takes base's update lock for a tools update or a re-prepare and
 // sweeps what a crashed one left in the staging dir <base>.update (a half-built
 // base, or an old generation after a swap), whether or not the caller goes on
