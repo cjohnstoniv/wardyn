@@ -129,6 +129,8 @@ var ungovernedCallerCensus = map[string]struct {
 	"secrets.go:handlePutSecret":                               {1, "authz-only: the credential namespace"},
 	"secrets.go:secretOwnerParam":                              {1, "authz-only: the credential namespace"},
 	"run_image_admission.go:imageAdmission":                    {1, "authz-only: image admission skips an operator, as the digest rule does, and admits no run policy"},
+	"run_image_admission.go:imageAdmissionPreview":             {1, "authz-only: the preview's image_admission display skips an operator, as imageAdmission does"},
+	"run_image_admission.go:markImageAdmissionExempt":          {1, "authz-only: the image_admission_exempt audit marker"},
 	"site_config_images.go:imageDigestVerdict":                 {1, "authz-only: the image digest rule skips an operator, and admits no run policy"},
 	"site_config_images.go:reviveImageDigestRefusal":           {1, "V: the digest rule re-asked at revive by the owner's authority; the boundary floor check runs at revive"},
 	"setup.go:handleSetupStatus":                               {3, "authz-only: setup rows"},

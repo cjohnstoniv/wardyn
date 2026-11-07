@@ -29,21 +29,24 @@ func TestPolicyPreviewImageAdmissionCheckedAtLaunch(t *testing.T) {
 		profile []string
 		image   string
 		machine types.MachineKind
+		govern  bool
 		want    bool
 	}{
-		{"block absent", types.SiteConfig{}, member, nil, admitTagRef, "", false},
-		{"off with signers", admissionSite(types.ImageAdmissionOff), member, nil, admitTagRef, "", false},
-		{"enforce", admissionSite(types.ImageAdmissionEnforce), member, nil, admitTagRef, "", true},
-		{"audit", admissionSite(types.ImageAdmissionAudit), member, nil, admitTagRef, "", true},
-		{"profile signer, site off", types.SiteConfig{}, member, []string{admitProfile}, admitTagRef, "", true},
-		{"enforce, pinned", admissionSite(types.ImageAdmissionEnforce), member, nil, admitPinned, "", true},
-		{"no member image", admissionSite(types.ImageAdmissionEnforce), member, nil, "", "", false},
-		{"operator", admissionSite(types.ImageAdmissionEnforce), admin, nil, admitTagRef, "", false},
-		{"macOS VM", admissionSite(types.ImageAdmissionEnforce), member, nil, admitTagRef, types.MachineMacOSVM, false},
+		{"block absent", types.SiteConfig{}, member, nil, admitTagRef, "", false, false},
+		{"off with signers", admissionSite(types.ImageAdmissionOff), member, nil, admitTagRef, "", false, false},
+		{"enforce", admissionSite(types.ImageAdmissionEnforce), member, nil, admitTagRef, "", false, true},
+		{"audit", admissionSite(types.ImageAdmissionAudit), member, nil, admitTagRef, "", false, true},
+		{"profile signer, site off", types.SiteConfig{}, member, []string{admitProfile}, admitTagRef, "", false, true},
+		{"enforce, pinned", admissionSite(types.ImageAdmissionEnforce), member, nil, admitPinned, "", false, true},
+		{"no member image", admissionSite(types.ImageAdmissionEnforce), member, nil, "", "", false, false},
+		{"operator", admissionSite(types.ImageAdmissionEnforce), admin, nil, admitTagRef, "", false, false},
+		{"governed admin", admissionSite(types.ImageAdmissionEnforce), admin, nil, admitTagRef, "", true, true},
+		{"macOS VM", admissionSite(types.ImageAdmissionEnforce), member, nil, admitTagRef, types.MachineMacOSVM, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &fakeAdmitter{}
 			s := admissionServer(tc.site, a)
+			s.cfg.GovernAdminRuns = tc.govern
 			req := createRunRequest{Image: tc.image, MachineKind: string(tc.machine)}
 			got := s.imageAdmissionPreview(governReq(tc.ctx).Context(), req, "", tc.profile)
 			if r, ad := a.calls(); r != 0 || ad != 0 {
@@ -52,7 +55,9 @@ func TestPolicyPreviewImageAdmissionCheckedAtLaunch(t *testing.T) {
 			if (got == client.ImageAdmissionCheckedAtLaunch) != tc.want || (!tc.want && got != "") {
 				t.Errorf("preview image_admission = %q, want checked at launch = %v", got, tc.want)
 			}
-			launch := runAdmission(admissionServer(tc.site, &fakeAdmitter{}), tc.ctx, foldPreflight, tc.image, tc.profile,
+			ls := admissionServer(tc.site, &fakeAdmitter{})
+			ls.cfg.GovernAdminRuns = tc.govern
+			launch := runAdmission(ls, tc.ctx, foldPreflight, tc.image, tc.profile,
 				func(f *runFold) { f.req.MachineKind = string(tc.machine) })
 			if checked := launch.f.admission != nil && launch.f.admission.Verdict != types.ImageAdmissionNotApplicable; checked != tc.want {
 				t.Errorf("launch checked = %v (verdict %+v), preview says %v: they disagree", checked, launch.f.admission, tc.want)
