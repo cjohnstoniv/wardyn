@@ -17,8 +17,9 @@ const (
 	SignatureInvalid Reason = "image_signature_invalid"
 	// AttestationMissing: the signer signed the image but did not attest a type it requires.
 	AttestationMissing Reason = "image_attestation_missing"
-	// Unavailable: the registry or a trust root could not be read. Set by the caller that reads them.
-	Unavailable Reason = "image_admission_unavailable"
+	// AdmissionUnavailable: the registry or a trust root could not be read. Set by the caller that reads
+	// them; the registry's own error is the Unavailable type.
+	AdmissionUnavailable Reason = "image_admission_unavailable"
 )
 
 // Verdict is the outcome of one check. An empty Reason is an admission.
