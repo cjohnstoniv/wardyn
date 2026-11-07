@@ -170,7 +170,7 @@ func TestPG_QueuePortalLaunchAfterTheTokenExpired(t *testing.T) {
 		t.Errorf("the start row's via = %v; want the portal and the delegated token", queueAuditData(t, rows[0])["via"])
 	}
 
-	if _, err := e.pg.RevokeDelegate(context.Background(), d.ID, time.Now()); err != nil {
+	if _, _, err := e.pg.RevokeDelegate(context.Background(), d.ID, time.Now(), false); err != nil {
 		t.Fatal(err)
 	}
 	e.free(second)

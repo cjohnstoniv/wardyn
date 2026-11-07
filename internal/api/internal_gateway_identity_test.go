@@ -64,6 +64,12 @@ type gatewayStore struct {
 	blkErr  error
 	service types.ServiceIdentity
 	svcErr  error
+	// blockedWho, when set, is the one principal IdentityBlocked answers blocked for.
+	blockedWho string
+
+	// The portals a delegated run was launched through, and a read of one that fails.
+	*fakeDelegateStore
+	delErr error
 
 	// comps and runComps are the stored components and the run's snapshot of them (the MCP arm's reads).
 	comps    map[uuid.UUID]types.Component
@@ -114,10 +120,10 @@ func (s *gatewayStore) set(f func(*gatewayStore)) {
 	f(s)
 }
 
-func (s *gatewayStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
+func (s *gatewayStore) IdentityBlocked(_ context.Context, who string, _ int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.blocked, s.blkErr
+	return s.blocked || (s.blockedWho != "" && who == s.blockedWho), s.blkErr
 }
 
 func (s *gatewayStore) GetServiceIdentity(context.Context, string) (types.ServiceIdentity, error) {
@@ -193,7 +199,8 @@ func newGatewayFixture(t *testing.T) *gatewayFixture {
 		ModelProviderID: "corp-gw", RunnerPoolExecutor: "runner:pool-exec", RunnerTarget: "docker",
 		Placement: types.PlacementRemote, CreatedAt: time.Now().Add(-time.Minute),
 	}
-	f.st = &gatewayStore{site: testGatewaySite(testGatewayProvider()), run: f.run, sealed: map[uuid.UUID][]byte{}}
+	f.st = &gatewayStore{site: testGatewaySite(testGatewayProvider()), run: f.run, sealed: map[uuid.UUID][]byte{},
+		fakeDelegateStore: newFakeDelegateStore()}
 	cfg := baseTestConfig(f.h, f.st)
 	cfg.RunConfigKey = make([]byte, kek.DEKSize)
 	cfg.Now = func() time.Time { return f.now }

@@ -55,7 +55,7 @@ func (s *gapCovDelegateStore) CreateDelegate(context.Context, types.Delegate, st
 func (s *gapCovDelegateStore) ListDelegates(context.Context) ([]types.Delegate, error) {
 	panic("ListDelegates is not part of the exchange")
 }
-func (s *gapCovDelegateStore) RevokeDelegate(context.Context, uuid.UUID, time.Time) (types.Delegate, error) {
+func (s *gapCovDelegateStore) RevokeDelegate(context.Context, uuid.UUID, time.Time, bool) (types.Delegate, int, error) {
 	panic("RevokeDelegate is not part of the exchange")
 }
 func (s *gapCovDelegateStore) GetDelegatedTokenByRaw(context.Context, string, time.Time) (types.DelegatedToken, error) {

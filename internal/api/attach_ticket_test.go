@@ -396,7 +396,7 @@ func TestAttachWS_TicketAuthority(t *testing.T) {
 		t.Helper()
 		_, via := seedDelegation(t, ast.fakeDelegateStore, principal)
 		if revoke {
-			if _, err := ast.RevokeDelegate(context.Background(), via.Delegate, now); err != nil {
+			if _, _, err := ast.RevokeDelegate(context.Background(), via.Delegate, now, false); err != nil {
 				t.Fatal(err)
 			}
 		}
