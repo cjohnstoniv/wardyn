@@ -37,6 +37,7 @@ export interface RestrictionLimits {
   deny_kept_machines?: boolean;
   deny_placements?: PlacementValue[];
   allowed_macos_bases?: string[];
+  required_image_signers?: string[];
   max_concurrent_runs?: number;
   max_cpu_millis?: number;
   max_memory_mib?: number;

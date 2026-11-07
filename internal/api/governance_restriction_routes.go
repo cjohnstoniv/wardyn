@@ -234,6 +234,12 @@ func (s *Server) writeRestriction(w http.ResponseWriter, r *http.Request, id uui
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRestrictionInvalid, err.Error())
 		return
 	}
+	if b := body.Limits.RequiredImageSigners; b != nil {
+		if msg := s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", *b); msg != "" {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonRestrictionInvalid, msg)
+			return
+		}
+	}
 	var cur types.Restriction
 	if !create {
 		var err error

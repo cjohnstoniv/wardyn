@@ -75,7 +75,11 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
 	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses OIDC"),
 	reflect.TypeFor[types.ProviderOIDC]():        strings.Fields("Issuer AuthorizeURL TokenURL ClientID ClientSecretRef Scopes IdentityBinding"), // ClientSecretRef names an operator secret, never its value
-	reflect.TypeFor[types.SiteImages]():          strings.Fields("RequireDigest"),
+	reflect.TypeFor[types.SiteImages]():          strings.Fields("RequireDigest Admission"),
+	reflect.TypeFor[types.SiteImageAdmission]():  strings.Fields("Mode Scope TrustedRoots Signers"),
+	reflect.TypeFor[types.ImageTrustedRoot]():    strings.Fields("Name Path"),
+	reflect.TypeFor[types.ImageSigner]():         strings.Fields("Name Images Keyless PublicKey TransparencyLog RequireAttestations SignaturePredicates"), // PublicKey is a public key, never a credential
+	reflect.TypeFor[types.ImageKeyless]():        strings.Fields("Issuer Identity IdentityRegexp SourceRepository TrustedRoot"),
 	reflect.TypeFor[types.LocalModelSettings]():  strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
