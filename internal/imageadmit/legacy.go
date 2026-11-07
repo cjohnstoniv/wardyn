@@ -60,8 +60,9 @@ type LegacyReader interface {
 // ReadLegacy reads the layers of subject's .sig tag, then its .att tag, at most MaxCandidatesPerSigner in all.
 // A tag the registry does not have adds nothing. A layer over MaxBlobBytes is kept by its descriptor alone and
 // never read: an SBOM attestation is often several MB, and it must not stop the check of the signature beside
-// it. Any other read error is returned unchanged, so the caller can tell an unreachable registry from an
-// unsigned image.
+// it. A blob that is missing or not its digest is kept the same way, as one bad candidate. A registry that
+// cannot be read (*Unavailable, a deadline) and a tag manifest that cannot be read are returned unchanged, so
+// the caller can tell an unreachable registry from an unsigned image.
 func ReadLegacy(ctx context.Context, r LegacyReader, ref Ref, subject string) ([]LegacyLayer, error) {
 	var out []LegacyLayer
 	for _, suffix := range []string{".sig", ".att"} {
@@ -81,10 +82,10 @@ func ReadLegacy(ctx context.Context, r LegacyReader, ref Ref, subject string) ([
 				continue
 			}
 			b, err := r.Blob(ctx, ref, d)
-			if err != nil {
+			if err != nil && registryDown(err) {
 				return nil, err
 			}
-			out = append(out, LegacyLayer{Descriptor: d, Blob: b})
+			out = append(out, LegacyLayer{Descriptor: d, Blob: b}) // a blob that failed to read refuses itself
 		}
 	}
 	return out, nil

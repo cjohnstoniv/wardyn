@@ -100,8 +100,9 @@ func (a *Admitter) Admit(ctx context.Context, req Requirements) (Verdict, error)
 	}
 }
 
-// check reads the signatures for key's digest, verifies them and keeps the verdict. It runs once per key at a
-// time, under its own deadline.
+// check reads the signatures for key's digest, from its referrers and its legacy cosign tags, verifies them and
+// keeps the verdict. It runs once per key at a time, under its own deadline. A legacy tag the registry has not
+// got adds nothing; any other legacy read error fails the check, as a referrer read does.
 func (a *Admitter) check(ctx context.Context, req Requirements, ref Ref, key cacheKey) (Verdict, error) {
 	if v, ok := a.cache.get(key, a.now()); ok { // a check that just ended kept it
 		v.Cached = true
@@ -119,7 +120,11 @@ func (a *Admitter) check(ctx context.Context, req Requirements, ref Ref, key cac
 	if err != nil {
 		return unavailable(ref, key.digest, err), err
 	}
-	v := Check(req, key.digest, bundles)
+	legacy, err := ReadLegacy(ctx, a.reg, repo, key.digest)
+	if err != nil {
+		return unavailable(ref, key.digest, err), err
+	}
+	v := CheckCandidates(req, key.digest, Candidates{Bundles: bundles, Legacy: legacy})
 	a.cache.put(key, v, a.now())
 	return v, nil
 }

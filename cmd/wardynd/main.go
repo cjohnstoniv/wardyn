@@ -185,7 +185,8 @@ func run() error {
 		return err
 	}
 	// After the transport, which image admission's registry client copies (image_admission.go).
-	if _, err := newImageRegistry(os.Getenv); err != nil {
+	imageAdmission, err := newImageAdmitter(os.Getenv)
+	if err != nil {
 		return err
 	}
 	// (Validated before the DB connect on purpose: a typo'd path fails in
@@ -397,10 +398,11 @@ func run() error {
 	leader := db.NewSweeperLeader(pool, holder)
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	srv := api.New(api.Config{
-		SweeperLease: leader,
-		SweepHealth:  ticks,
-		Store:        st,
-		Identity:     idp,
+		ImageAdmissionConfig: api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
+		SweeperLease:         leader,
+		SweepHealth:          ticks,
+		Store:                st,
+		Identity:             idp,
 		// Reads its row on first use, so an install with identity off has no key
 		// and takes no query per anonymous JWKS request past one each 30 seconds.
 		GatewayIdentity: bootKeys.gatewayIdentity(),
