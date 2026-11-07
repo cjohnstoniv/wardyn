@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -514,5 +515,31 @@ func TestMCPListFilterOtherMediaTypeFailsClosed(t *testing.T) {
 	f, _ = newListFixture(t, types.RunPolicySpec{}, replyWith("text/plain", listPage))
 	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpListReq); rec.Body.String() != listPage {
 		t.Fatalf("body %q; want the bytes on an exchange that is not filtered", rec.Body)
+	}
+}
+
+// TestMCPListFilterLogNamesNoTool: the proxy's log of a filtered list carries counts
+// only. A server that echoes a credential as a hidden tool's name gets nothing into
+// the log, which is written before the relay's masking.
+func TestMCPListFilterLogNamesNoTool(t *testing.T) {
+	const secret = "Bearer fabricated-injected-credential-7f3a9c"
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	page, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 3, "result": map[string]any{"tools": []any{map[string]string{"name": secret}, map[string]string{"name": "get"}}}})
+	spec := types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolDeny}, {Tool: "mcp__linear__get", Effect: types.ToolAllow}}}
+	f, _ := newListFixture(t, spec, replyWith("application/json", string(page)))
+	rec := f.post(t, mcpToken("codex-cli"), "linear", mcpListReq)
+	if names, _ := listedTools(t, rec.Body.Bytes()); !slices.Equal(names, []string{"get"}) {
+		t.Fatalf("tools %v; want get alone", names)
+	}
+	if logs.Len() == 0 {
+		t.Fatalf("no log line captured; the filter's log must still be written")
+	}
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "fabricated-injected-credential") {
+			t.Fatalf("a hidden tool's name reached the log: %s", line)
+		}
 	}
 }
