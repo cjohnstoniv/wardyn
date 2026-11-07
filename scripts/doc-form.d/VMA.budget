@@ -1,0 +1,14 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the page, so growth fails.
+# The macOS VM page (19386 words, no budget before) is split into five pages by reader: the entry page, use, base image, host, troubleshooting. 22611 words in all against 22738 before, with the Linux page.
+# docs/operations/macos-vms.md 2133 measured: the entry page (what a run gets, requirements, switches, settings, qualifying Macs, licence, upgrades, removal) and the map that keeps the old anchors.
+docs/operations/macos-vms.md=2133 share=2
+# docs/operations/macos-vm-use.md 6510 measured: quickstart, keeping a machine, windows, watching, recording, limits, folders and drives.
+docs/operations/macos-vm-use.md=6510 share=7
+# docs/operations/macos-vm-base-image.md 4669 measured: preparing, setup by hand, editing a base, the prep proxy, customising, boot-time hosts.
+docs/operations/macos-vm-base-image.md=4669 share=5
+# docs/operations/macos-vm-host.md 3755 measured: VM count, disk, logins, the shared ledger, backups, credentials, the Mac's controls, what the host can see, the run record.
+docs/operations/macos-vm-host.md=3755 share=1
+# docs/operations/macos-vm-troubleshooting.md 2101 measured: where to look, symptoms and fixes, and what has not run on a real Mac.
+docs/operations/macos-vm-troubleshooting.md=2101 share=3
+# docs/operations/linux-vm-sandboxes.md 3405 measured, 3352 before: adds the recording, output cap, AWS wipe and limit rows a run needs, less the folded pause-fencing repeats and the drive restatement.
+docs/operations/linux-vm-sandboxes.md=3405 share=3
