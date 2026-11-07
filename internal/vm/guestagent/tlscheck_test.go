@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func tlsCheckServer(t *testing.T) (*httptest.Server, *x509.CertPool) {
@@ -138,5 +139,120 @@ func TestParseTLSCheckTarget(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("%q: got %q, %v; want %q", in, got, err, want)
 		}
+	}
+}
+
+// proxyListener accepts connections for a test, hands each to serve, and counts them.
+func proxyListener(t *testing.T, serve func(net.Conn)) (addr string, conns *atomic.Int32) {
+	t.Helper()
+	pl, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pl.Close() })
+	conns = new(atomic.Int32)
+	go func() {
+		for {
+			c, err := pl.Accept()
+			if err != nil {
+				return
+			}
+			conns.Add(1)
+			go func() {
+				defer c.Close()
+				serve(c)
+			}()
+		}
+	}()
+	return pl.Addr().String(), conns
+}
+
+func envOf(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+
+// The run proxy is plain http: an https:// proxy URL is refused before any byte is sent, so the
+// CONNECT (and any credentials in the URL) never travel in the clear to a TLS port.
+func TestTLSCheckRefusesHTTPSProxyScheme(t *testing.T) {
+	var bytesIn atomic.Int32
+	addr, conns := proxyListener(t, func(c net.Conn) {
+		buf := make([]byte, 512)
+		n, _ := c.Read(buf)
+		bytesIn.Add(int32(n))
+	})
+	env := map[string]string{"HTTPS_PROXY": "https://tester:invented-pass@" + addr}
+	code, out, errw := runTLSCheck(t, tlsChecker{getenv: envOf(env)}, "example.com:443")
+	if code != 2 || out != "" || !strings.Contains(errw, "http") || !strings.Contains(errw, "https") {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errw)
+	}
+	if conns.Load() != 0 || bytesIn.Load() != 0 {
+		t.Fatalf("the https proxy URL was dialed: conns=%d bytes=%d", conns.Load(), bytesIn.Load())
+	}
+}
+
+// URL credentials go in Proxy-Authorization on the CONNECT, never in Authorization.
+func TestTLSCheckProxyCredentialsUseProxyAuthorization(t *testing.T) {
+	srv, pool := tlsCheckServer(t)
+	const want = "Basic dGVzdGVyOmludmVudGVkLXBhc3M=" // tester:invented-pass
+	var gotProxyAuth, gotAuth atomic.Value
+	addr, _ := proxyListener(t, func(c net.Conn) {
+		br := bufio.NewReader(c)
+		req, err := http.ReadRequest(br)
+		if err != nil || req.Method != http.MethodConnect {
+			return
+		}
+		gotProxyAuth.Store(req.Header.Get("Proxy-Authorization"))
+		gotAuth.Store(req.Header.Get("Authorization"))
+		if req.Header.Get("Proxy-Authorization") != want {
+			_, _ = io.WriteString(c, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\n\r\n")
+			return
+		}
+		up, err := net.Dial("tcp", srv.Listener.Addr().String())
+		if err != nil {
+			return
+		}
+		defer up.Close()
+		_, _ = io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+		go func() { _, _ = io.Copy(up, br) }()
+		_, _ = io.Copy(c, up)
+	})
+	env := map[string]string{"HTTPS_PROXY": "http://tester:invented-pass@" + addr}
+	code, out, errw := runTLSCheck(t, tlsChecker{roots: pool, getenv: envOf(env)}, "example.com:"+portOf(srv))
+	if code != 0 {
+		t.Fatalf("code=%d out=%q err=%q proxy-auth=%v", code, out, errw, gotProxyAuth.Load())
+	}
+	if gotProxyAuth.Load() != want || gotAuth.Load() != "" {
+		t.Fatalf("Proxy-Authorization=%v Authorization=%v", gotProxyAuth.Load(), gotAuth.Load())
+	}
+}
+
+// A proxy URL without a port is dialed on :80, as net/http does for an http proxy.
+func TestTLSCheckProxyWithoutPortDefaultsTo80(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	env := map[string]string{"HTTPS_PROXY": "http://127.0.0.1"}
+	_, err := dialTLSCheck(ctx, envOf(env), "example.com:443")
+	if err == nil || strings.Contains(err.Error(), "missing port") || !strings.Contains(err.Error(), "127.0.0.1:80") {
+		t.Fatalf("err = %v, want a dial of 127.0.0.1:80", err)
+	}
+}
+
+// A proxy that sends bytes right behind its 200 is refused and the connection is closed.
+func TestTLSCheckProxyEarlyDataClosesConn(t *testing.T) {
+	closed := make(chan error, 1)
+	addr, _ := proxyListener(t, func(c net.Conn) {
+		if _, err := http.ReadRequest(bufio.NewReader(c)); err != nil {
+			return
+		}
+		_, _ = io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\nEARLY")
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, err := io.Copy(io.Discard, c)
+		closed <- err
+	})
+	env := map[string]string{"HTTPS_PROXY": "http://" + addr}
+	code, _, errw := runTLSCheck(t, tlsChecker{getenv: envOf(env)}, "example.com:443")
+	if code != 2 || !strings.Contains(errw, "before the handshake") {
+		t.Fatalf("code=%d err=%q", code, errw)
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("the proxy connection was left open: %v", err)
 	}
 }
