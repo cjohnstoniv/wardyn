@@ -244,6 +244,18 @@ func TestAdmitUnavailableSentences(t *testing.T) {
 	}
 }
 
+// A referrers index that does not parse is the registry's content, not an outage: the image has no
+// signature to read, and the refusal says so rather than that the registry could not be read.
+func TestAdmitMalformedReferrersIndexIsAMissingSignature(t *testing.T) {
+	s, f, a, _ := signedImage(t)
+	f.setErr("Referrers", fmt.Errorf("%w: manifest is not JSON", imageadmit.ErrMalformed))
+	v, err := admit(t, a, compile(t, s, corpCI()), ref)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	wantReason(t, v, imageadmit.SignatureMissing)
+}
+
 // Concurrent checks of one image under one policy share one set of signature reads.
 func TestAdmitConcurrentChecksShareOneFlight(t *testing.T) {
 	s, f, a, _ := signedImage(t)
