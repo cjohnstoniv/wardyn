@@ -39,7 +39,7 @@ const UNLISTED: { value: FirstUseMode | ""; label: string }[] = [
 ];
 
 export type IdleUnit = "seconds" | "minutes";
-export type WallToolEffect = "hold" | "deny";
+export type WallToolEffect = "hold" | "approve_each" | "deny";
 
 /**
  * A tool rule or a path as a row. `fresh` is a row added in this edit and not yet typed into: Save drops it when it is
@@ -116,7 +116,7 @@ export function toForm(s: PersonalWallsSpec): Form {
     adoOnly: s.azure_devops_capabilities !== undefined,
     ado: s.azure_devops_capabilities ?? [],
     adoLoaded: s.azure_devops_capabilities ?? [],
-    tools: (s.tool_rules ?? []).map((r) => newToolRow(r.tool, r.effect === "deny" ? "deny" : "hold", false)),
+    tools: (s.tool_rules ?? []).map((r) => newToolRow(r.tool, r.effect === "deny" || r.effect === "approve_each" ? r.effect : "hold", false)),
     paths: (s.push_rules?.deny_paths ?? []).map((p) => newPathRow(p, false)),
     recording: s.recording === "terminal" || s.recording === "screen_actions" ? s.recording : undefined,
     idleOn: s.auto_stop_after_sec !== undefined,
@@ -358,9 +358,9 @@ function CapabilityList({ id, title, forge, pushName, groups, only, picked, onCh
   );
 }
 const RULE_ROW = "grid grid-cols-[minmax(0,1fr)_9rem_2rem] items-center gap-2 max-[399px]:grid-cols-[minmax(0,1fr)_2rem]";
-const EFFECT_TONE: Record<WallToolEffect, string> = { hold: "text-warning", deny: "text-danger" };
+const EFFECT_TONE: Record<WallToolEffect, string> = { hold: "text-warning", approve_each: "text-warning", deny: "text-danger" };
 
-/** Tool rules: a tool and what to do with it, hold or deny. No default row: `*` is a rule like any other. */
+/** Tool rules: a tool and what to do with it: hold, approve each call, or deny. No default row: `*` is a rule like any other. */
 function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem: ReturnType<typeof formProblems> }) {
   const uid = React.useId();
   const patch = (id: number, p: Partial<ToolRow>) => edit({ tools: form.tools.map((r) => (r.id === id ? { ...r, ...p } : r)) });
@@ -400,7 +400,7 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                     onChange={(e) => patch(r.id, { effect: e.target.value as WallToolEffect })}
                     className={cn("h-8 w-full rounded-md border border-input bg-input-background px-2 font-mono text-sm font-medium", EFFECT_TONE[r.effect])}
                   >
-                    {(["hold", "deny"] as const).map((e) => (
+                    {(["hold", "approve_each", "deny"] as const).map((e) => (
                       <option key={e} value={e} className="text-foreground">
                         {e}
                       </option>

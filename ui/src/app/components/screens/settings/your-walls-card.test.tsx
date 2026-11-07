@@ -376,7 +376,7 @@ describe("Your walls: every limit has a control", () => {
     expect(list.queryByText(YOUR_WALLS.CAPS_NO_PUSH_BROKER_OFF)).not.toBeInTheDocument();
   });
 
-  it("tool rules: no default row, a new rule starts at hold, hold and deny only, * is a rule like any other", async () => {
+  it("tool rules: no default row, a new rule starts at hold, hold, approve_each and deny only, * is a rule like any other", async () => {
     render(<YourWallsCard />);
     await open();
     const rules = within(screen.getByTestId("walls-tool-rules"));
@@ -385,7 +385,7 @@ describe("Your walls: every limit has a control", () => {
     await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
     const effect = rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement;
     expect(effect.value).toBe("hold");
-    expect([...effect.options].map((o) => o.value)).toEqual(["hold", "deny"]);
+    expect([...effect.options].map((o) => o.value)).toEqual(["hold", "approve_each", "deny"]);
     expect(rules.queryByText("*")).not.toBeInTheDocument();
     setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) }), "*");
     await user.selectOptions(effect, "deny");
