@@ -11,7 +11,6 @@ import (
 	"io"
 	"math/big"
 	"net"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -174,7 +173,7 @@ func TestARDClientBoundsAStalledServer(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		if !errors.Is(err, os.ErrDeadlineExceeded) {
+		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Open against a silent server = %v, want a deadline error", err)
 		}
 	case <-time.After(5 * time.Second):
