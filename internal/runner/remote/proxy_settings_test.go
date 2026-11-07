@@ -39,8 +39,9 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingGitPushWithheld: func(pc *runner.ProxyConfig) {
 		pc.GitPushWithheld = map[string]string{"github.com": "this run may not push"}
 	},
-	runnerwire.ProxySettingForgeHosts:    func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
-	runnerwire.ProxySettingAllowedModels: func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
+	runnerwire.ProxySettingForgeHosts:     func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
+	runnerwire.ProxySettingAllowedModels:  func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
+	runnerwire.ProxySettingMCPApproveEach: func(pc *runner.ProxyConfig) { pc.MCPApproveEach = &proxy.MCPApproveEachConfig{} },
 }
 
 // oldCapsJSON is a 0.9.x runner's caps event as it sends it: no proxy_settings key.
