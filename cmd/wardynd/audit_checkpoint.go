@@ -12,6 +12,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auditreceipt"
 	"github.com/cjohnstoniv/wardyn/internal/auditsign"
@@ -124,6 +126,14 @@ func (c checkpointStore) Insert(ctx context.Context, cp auditsign.Checkpoint) (a
 func (c checkpointStore) Latest(ctx context.Context) (auditsign.Checkpoint, bool, error) {
 	cp, found, err := c.s.LatestAuditCheckpoint(ctx)
 	return fromStored(cp), found, err
+}
+
+func (c checkpointStore) EventSeq(ctx context.Context, id uuid.UUID, afterSeq int64) (int64, bool, error) {
+	rows, err := c.s.AuditReceiptRows(ctx, []uuid.UUID{id}, nil, afterSeq, 1)
+	if err != nil || len(rows) == 0 {
+		return 0, false, err
+	}
+	return rows[0].Seq, true, nil
 }
 
 func fromStored(c store.AuditCheckpoint) auditsign.Checkpoint {

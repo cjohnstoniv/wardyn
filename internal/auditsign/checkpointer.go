@@ -60,6 +60,9 @@ type Store interface {
 	Insert(ctx context.Context, cp Checkpoint) (existing Checkpoint, err error)
 	// Latest is the stored checkpoint with the highest seq_hi.
 	Latest(ctx context.Context) (cp Checkpoint, found bool, err error)
+	// EventSeq is the seq of the stored audit row with this id above afterSeq; found is false while it is not
+	// in the chain (spooled, or never written).
+	EventSeq(ctx context.Context, id uuid.UUID, afterSeq int64) (seq int64, found bool, err error)
 }
 
 // Failure reasons, the label of wardyn_audit_checkpoint_failures_total.
@@ -133,10 +136,16 @@ type Signer struct {
 
 	// start is the chain head the first checkpoint follows, read once while no checkpoint is stored.
 	start *Row
-	// ownRow is set after this signer recorded a checkpoint's audit row and cleared by the next checkpoint: a
-	// range holding only that row is not signed, so an idle install writes nothing.
-	ownRow  bool
+	// own is the audit.checkpoint.create row this signer last wrote and the checkpoint it describes. A range
+	// that holds exactly that row, found in the chain by its id, right after that checkpoint, is not signed, so
+	// an idle install writes nothing. Any other lone row is signed.
+	own     *ownRow
 	latched bool
+}
+
+type ownRow struct {
+	event     uuid.UUID
+	statement string // the checkpoint the row describes, which must still be the newest stored one
 }
 
 // Run ticks every interval until ctx ends, the first tick at once.
@@ -213,7 +222,10 @@ func (s *Signer) signOne(ctx context.Context) bool {
 		return false
 	}
 	s.Status.lag.Store(max(hw-afterSeq, 0))
-	if len(rows) == 0 || (len(rows) == 1 && s.ownRow) {
+	if len(rows) == 0 {
+		return false
+	}
+	if len(rows) == 1 && found && s.isOwnRow(ctx, latest, rows[0]) {
 		return false
 	}
 
@@ -246,8 +258,30 @@ func (s *Signer) signOne(ctx context.Context) bool {
 	}
 	s.Status.lastUnix.Store(now.UnixNano())
 	s.Status.lag.Store(max(hw-st.SeqHi, 0))
-	s.ownRow = s.recordCheckpoint(ctx, st, cp)
+	s.own = nil
+	if id, ok := s.recordCheckpoint(ctx, st, cp); ok {
+		s.own = &ownRow{event: id, statement: text}
+	}
 	return len(rows) == s.MaxRows
+}
+
+// isOwnRow reports whether row, alone after latest, is the audit row this signer wrote for latest: latest is
+// still the checkpoint it wrote (another signer's newer one clears the claim) and the stored row with that
+// event id is this row. A lookup error signs the row: an extra checkpoint is cheaper than a missing receipt.
+func (s *Signer) isOwnRow(ctx context.Context, latest Checkpoint, row Row) bool {
+	if s.own == nil {
+		return false
+	}
+	if s.own.statement != latest.Statement {
+		s.own = nil
+		return false
+	}
+	seq, found, err := s.Store.EventSeq(ctx, s.own.event, latest.SeqHi)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: audit checkpoint: could not look up the last checkpoint's own row; signing the range", slog.Any("err", err))
+		return false
+	}
+	return found && seq == row.Seq
 }
 
 // ours parses a stored checkpoint and checks its signature against this install's keys. A row whose columns
@@ -268,8 +302,9 @@ func (s *Signer) latch(ctx context.Context, reason string, seq int64, detail str
 }
 
 // recordCheckpoint writes the audit.checkpoint.create row: a complete, self-verifying signed checkpoint for every
-// sink. It reports whether the row was written or kept for a later write.
-func (s *Signer) recordCheckpoint(ctx context.Context, st auditreceipt.Statement, cp Checkpoint) bool {
+// sink. It returns the row's id and whether the store accepted it now; a spooled row is not in the chain yet,
+// so it is never treated as the chain's tail.
+func (s *Signer) recordCheckpoint(ctx context.Context, st auditreceipt.Statement, cp Checkpoint) (uuid.UUID, bool) {
 	data, _ := json.Marshal(map[string]any{
 		"seq_lo": st.SeqLo, "seq_hi": st.SeqHi, "rows": st.Rows,
 		"head_hash": st.HeadHash, "digest": st.Digest, "seq_digest": st.SeqDigest,
@@ -289,7 +324,6 @@ func (s *Signer) recordCheckpoint(ctx context.Context, st auditreceipt.Statement
 	err := s.Record.Record(ctx, ev)
 	if err != nil && !errors.Is(err, audit.ErrSpooled) {
 		audit.LogWriteFailure(ctx, ev, err)
-		return false
 	}
-	return true
+	return ev.ID, err == nil
 }
