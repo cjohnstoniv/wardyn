@@ -562,7 +562,7 @@ func (o *EditOptions) printUntrusted(base string) {
 		}
 		if !header {
 			fmt.Fprintln(o.Out)
-			fmt.Fprintln(o.Out, "Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
+			fmt.Fprintln(o.Out, "Not yet trusted in this base. Click Trust the list's CAs in the window, or run each command in the admin Terminal. Check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
 			header = true
 		}
 		subject, sum := "not available: the install list's file is not the one this base was built from", r.Fingerprint
@@ -586,7 +586,7 @@ func (o *EditOptions) printUntrusted(base string) {
 	}
 	if !header {
 		fmt.Fprintln(o.Out)
-		fmt.Fprintln(o.Out, "Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
+		fmt.Fprintln(o.Out, "Not yet trusted in this base. Click Trust the list's CAs in the window, or run each command in the admin Terminal. Check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
 	}
 	sum := "not available: this Mac's signing certificate does not read"
 	if cert, err := readAgentSigningCert(o.Layout.AgentSigningDir()); err == nil {
