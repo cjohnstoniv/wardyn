@@ -410,7 +410,7 @@ const groundtruthSensorListed = 7 * 24 * time.Hour
 //
 // groundtruthNodeReadFailed is the reason /healthz gives for it, anonymous
 // view included: it names no node and no error text.
-const groundtruthNodeReadFailed = "node sensor health could not be read"
+const groundtruthNodeReadFailed = "Node sensor health could not be read"
 
 func (s *Server) groundtruthNodeSensors(ctx context.Context) ([]store.GroundtruthSensor, int, error) {
 	gs, ok := s.cfg.Store.(store.GroundtruthSensorStore)

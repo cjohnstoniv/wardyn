@@ -471,10 +471,10 @@ func TestHealthzEbpfNodeReadFailureIsDegraded(t *testing.T) {
 	srv := nodeSensorServer(h, &nodeSensorStore{beat: beat, listErr: errors.New("permission denied for table groundtruth_sensors")}, now)
 	h.srv = srv
 	status := srv.ebpfGroundtruthStatus(context.Background())
-	if status["state"] != "degraded" || status["reason"] != "node sensor health could not be read" {
+	if status["state"] != "degraded" || status["reason"] != "Node sensor health could not be read" {
 		t.Fatalf("status = %v, want degraded with the node-read reason", status)
 	}
-	if anon := healthzEbpf(t, h); anon["state"] != "degraded" || anon["reason"] != "node sensor health could not be read" {
+	if anon := healthzEbpf(t, h); anon["state"] != "degraded" || anon["reason"] != "Node sensor health could not be read" {
 		t.Errorf("anonymous ebpf_groundtruth = %v, want degraded with the same reason", anon)
 	}
 
