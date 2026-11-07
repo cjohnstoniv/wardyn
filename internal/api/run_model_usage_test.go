@@ -26,7 +26,7 @@ func usageDecisionBody(u egress.ModelUsage, bodyRunID uuid.UUID) string {
 }
 
 func egressRows(h *harness) (n int) {
-	for _, ev := range h.audit.events {
+	for _, ev := range h.audit.snapshot() {
 		if strings.HasPrefix(ev.Action, "egress.") {
 			n++
 		}
