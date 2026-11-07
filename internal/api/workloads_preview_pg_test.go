@@ -180,7 +180,7 @@ func TestPG_WorkloadPreview_Outcomes(t *testing.T) {
 
 	// At the cap a new name is a 422 in the body.
 	if _, err := e.pool.Exec(ctx, `INSERT INTO workloads (owner, name, source, intent, digest, created_by)
-		SELECT $1, 'fill' || g, 'api', '{}', 'x', $1 FROM generate_series(1, $2::int) g`, svcPrin, store.MaxWorkloadsPerOwner); err != nil {
+		SELECT $1::text, 'fill' || g, 'api', '{}', 'x', $1::text FROM generate_series(1, $2::int) g`, svcPrin, store.MaxWorkloadsPerOwner); err != nil {
 		t.Fatal(err)
 	}
 	full := decodePreview(t, e.as(t, tok.Token, http.MethodPost, "/api/v1/workloads/one-more/preview", workloadBody(pol, "t", "")), http.StatusOK)
