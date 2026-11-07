@@ -735,3 +735,39 @@ func TestUsageMeter_OlderRunnerSpoolStillReplays(t *testing.T) {
 		}
 	}
 }
+
+// On a Kubernetes runner the proxy writes through wardyn-runnerd's sink: it meters only while the
+// connected runner's accept says it replays usage rows, so a reconnect to an older runner (a rollback)
+// stops the rows again.
+func TestUsageMeter_RemoteRunnerMustSayItReplaysUsage(t *testing.T) {
+	rs, f := startedSink(t)
+	p := &Proxy{sink: &decisionSink{remote: rs}}
+	metered := func() bool {
+		_, _, ok := p.usageShape(httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", nil))
+		return ok
+	}
+	c := accept(t, rs, <-f.sessions, 1, 0, 10, 1<<20)
+	if metered() {
+		t.Fatal("metered behind a runner whose accept did not say it replays usage rows")
+	}
+	_ = c.Close()
+	c = <-f.sessions
+	if h := readFrame(t, c); h.T != FrameHello {
+		t.Fatalf("hello = %+v", h)
+	}
+	writeFrame(t, c, SinkFrame{T: FrameAccept, Gen: 2, Usage: true})
+	writeFrame(t, c, SinkFrame{T: FrameGrant, Gen: 2, Through: 10, Bytes: 1 << 20})
+	rs.mu.Lock()
+	for rs.gen != 2 || rs.through != 10 {
+		rs.cond.Wait()
+	}
+	rs.mu.Unlock()
+	if !metered() {
+		t.Fatal("not metered behind a runner that replays usage rows")
+	}
+	_ = c.Close()
+	accept(t, rs, <-f.sessions, 3, 0, 10, 1<<20)
+	if metered() {
+		t.Fatal("still metered after reconnecting to an older runner")
+	}
+}

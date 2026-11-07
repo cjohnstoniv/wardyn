@@ -58,7 +58,13 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, err
 	}
-	return &decisionSink{local: spool, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]spoolReservation{}}, nil
+	usage, err := spool.UsageRecords(context.Background())
+	if err != nil {
+		lock.Close()
+		spool.Close()
+		return nil, err
+	}
+	return &decisionSink{local: spool, localUsage: usage, writerLock: lock, out: out, activityDir: dir, reservations: map[uuid.UUID]spoolReservation{}}, nil
 }
 
 // spoolReservation is one admitted request's hold on the spool: the activity

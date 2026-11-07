@@ -43,10 +43,26 @@ const maxDecodedUsageBytes = 256 << 20
 // admission reservation and the meter both ask it, so the meter never wraps a request whose usage
 // row has no room reserved.
 func (p *Proxy) usageShape(r *http.Request) (modelusage.Shape, string, bool) {
-	if p.meterOff || r.Method != http.MethodPost || r.URL == nil {
+	if p.meterOff || !p.sink.takesUsage() || r.Method != http.MethodPost || r.URL == nil {
 		return "", "", false
 	}
 	return modelusage.Classify(r.URL.EscapedPath())
+}
+
+// takesUsage reports whether the sink's reader replays usage rows. A runner's spool is replayed by
+// wardyn-runnerd, which may predate them: its spool hash would refuse the row and stop replay, so the
+// runner must say so (the local spool's manifest, the remote sink's accept). The control plane's own
+// endpoint upgrades before proxies do.
+func (s *decisionSink) takesUsage() bool {
+	switch {
+	case s == nil:
+		return false
+	case s.remote != nil:
+		return s.remote.usage.Load()
+	case s.local != nil:
+		return s.localUsage
+	}
+	return true
 }
 
 // meteredSource is the rule source of a model call forwardInspectedLLM meters: the brokered route

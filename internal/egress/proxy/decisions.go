@@ -31,6 +31,7 @@ import (
 type decisionSink struct {
 	writerLock   *os.File
 	local        *runnerspool.Spool
+	localUsage   bool        // the runner that made local replays usage rows (runnerspool UsageRecords)
 	remote       *remoteSink // k8s runners: runnerd's sink, the only spool writer
 	reservations map[uuid.UUID]spoolReservation
 	heldBytes    int64 // the sum of the reservations' bytes

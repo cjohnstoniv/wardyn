@@ -88,6 +88,10 @@ type manifest struct {
 	// cleared only once the VM is ended: a restart in between still finishes the end, whatever Full
 	// says by then (a reconnecting proxy's Accept resets it).
 	EndPending bool `json:"end_pending,omitempty"`
+	// UsageRecords says the runner that made this spool replays rows carrying model-token counts
+	// (DecisionLog.Usage). A spool an older runner made lacks it, and its proxy writes no such row:
+	// that runner's hash check would refuse the row and stop its replay there.
+	UsageRecords bool `json:"usage_records,omitempty"`
 }
 
 // Disposition is the one durable outcome of a producer sequence.
@@ -216,7 +220,7 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 			if len(names) != 1 || names[0] != "lock" {
 				return errors.New("spool metadata missing beside existing data")
 			}
-			return s.writeManifest(manifest{RunID: runID, SpoolID: uuid.New()})
+			return s.writeManifest(manifest{RunID: runID, SpoolID: uuid.New(), UsageRecords: true})
 		}
 		if err != nil {
 			return err
@@ -450,6 +454,16 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+// UsageRecords reports whether the runner that made this spool replays model-token usage rows.
+func (s *Spool) UsageRecords(ctx context.Context) (ok bool, err error) {
+	err = s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		ok = m.UsageRecords
+		return err
+	})
+	return ok, err
 }
 
 // Full reports whether the spool is full for the proxy that writes it: the sink can grant no record,
