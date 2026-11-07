@@ -61,6 +61,12 @@ const (
 	// the run's rules block is answered with.
 	mcpBlockedCode    = -32001
 	mcpBlockedMessage = "Blocked by this run's tool rules"
+
+	// ruleSourceMCPListFiltered records a tool list the broker left blocked tools
+	// out of, with the count; ruleSourceMCPListUnreadable a tool list or answer it
+	// could not check, replaced or refused (mcp_list_filter.go).
+	ruleSourceMCPListFiltered   = "brokered:mcp:list-filtered"
+	ruleSourceMCPListUnreadable = "brokered:mcp:list-unreadable"
 )
 
 // mcpServerKeyRE is a server key: the <server> of mcp__<server>__<tool>, so
@@ -351,9 +357,7 @@ func (x *mcpExchange) refuseBlockedCalls(w http.ResponseWriter, body []byte) boo
 		return true
 	}
 	if !slices.ContainsFunc(msgs, func(m mcpMessage) bool {
-		return m.tool != "" && slices.ContainsFunc(mcpToolNames(x.server.key, m.tool), func(name string) bool {
-			return x.p.mcpToolEffect(x.harness, name) == types.ToolDeny
-		})
+		return m.tool != "" && x.p.mcpCallEffect(x.harness, x.server.key, m.tool) == types.ToolDeny
 	}) {
 		return false
 	}
@@ -437,6 +441,24 @@ func (p *Proxy) mcpToolEffect(harness, tool string) types.ToolEffect {
 		return types.ToolHold
 	}
 	return eff
+}
+
+// mcpCallEffect is the one predicate for a server's tool: refuseBlockedCalls
+// refuses its call, and the tool list filter leaves it out, exactly when this is
+// deny. It is the strictest effect over every name a rule may give the tool
+// (mcpToolNames). An effect this build does not know ranks with deny and is
+// answered as deny, so a rule it cannot read never opens a tool.
+func (p *Proxy) mcpCallEffect(harness, key, tool string) types.ToolEffect {
+	var strictest types.ToolEffect
+	for _, name := range mcpToolNames(key, tool) {
+		if e := p.mcpToolEffect(harness, name); types.ToolEffectStrictness(e) > types.ToolEffectStrictness(strictest) {
+			strictest = e
+		}
+	}
+	if types.ToolEffectStrictness(strictest) >= types.ToolEffectStrictness(types.ToolDeny) {
+		return types.ToolDeny
+	}
+	return strictest
 }
 
 func jsonRPCError(id json.RawMessage, code int, msg string) map[string]any {
@@ -524,6 +546,11 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	if route != nil && !p.attachGatewayIdentity(w, x.r, out.Header, route, s.host, s.port, ruleSourceMCP, callID) {
 		return
 	}
+	// The tool list filter reads the answer, so it asks for identity bytes.
+	listActive := p.mcpListFilterActive(x.harness, s.key)
+	if listActive {
+		out.Header.Set("Accept-Encoding", "identity")
+	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID}, s.host, "MCP upstream error")
@@ -543,6 +570,9 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)
 	allow.GatewayCallID = callID
 	p.emitDialledAllow(allow, s.host)
+	if listActive && !x.filterToolLists(w, resp, callID) {
+		return
+	}
 	if route != nil {
 		p.relayGatewayRoute(w, x.r, s.host, s.port, resp, ruleSourceMCP, out.Header.Get(gatewayIdentityHeader), callID)
 		return

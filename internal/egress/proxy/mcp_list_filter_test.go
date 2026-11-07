@@ -412,7 +412,8 @@ func TestMCPListAndCallShareOnePredicate(t *testing.T) {
 		"harness default": {harness: []types.HarnessToolRules{
 			{Harness: "codex-cli", Default: types.ToolDeny, Rules: []types.ToolRule{{Tool: "mcp__linear__get", Effect: types.ToolAllow}}},
 			{Harness: "claude-code", Default: types.ToolAllow}}},
-		"harness astral": {harness: []types.HarnessToolRules{{Harness: "codex-cli", Default: types.ToolAllow, Rules: []types.ToolRule{deny("mcp__linear__admin__delete")}}}},
+		"harness unknown effect": {harness: []types.HarnessToolRules{{Harness: "codex-cli", Default: types.ToolAllow, Rules: []types.ToolRule{{Tool: "mcp__linear__get", Effect: "a_later_effect"}}}}},
+		"harness astral":         {harness: []types.HarnessToolRules{{Harness: "codex-cli", Default: types.ToolAllow, Rules: []types.ToolRule{deny("mcp__linear__admin__delete")}}}},
 	}
 	tools := []string{"delete_issue", "delete.issue", "del-ete", "get", "admin\U0001F600delete"}
 	var mu sync.Mutex

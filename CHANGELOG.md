@@ -31,6 +31,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `governance_restrictions`, `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and
   `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
   `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
+- On a remote MCP server where a run's tool rules block a tool, that server's tool lists now leave the blocked tools out, a tool list Wardyn cannot read is answered with an error, and one message from that server larger than 10 MiB ends its response.
 
 
 ### Added
@@ -49,6 +50,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
 - `edit-base` no longer prints the setup-code file's path. It points at the window's Type code and Show code buttons. The guest agent now answers three edit-window requests in tools mode only (open an admin Terminal, trust the install list's certificates, open Full Disk Access), each run as the console user.
 - A runner whose proxy image cannot be pulled at start now waits and tries again (every 15 seconds at first, then every 5 minutes) instead of exiting and restarting; `wardyn-runnerd doctor` shows the next try in its status line, and the organisation is told why once the runner connects. A stop still exits cleanly.
+- An agent no longer sees a remote MCP server's tools that its run's tool rules block: Wardyn leaves them out of the server's tool list, page by page, and still refuses their calls.
 
 
 ### Fixed
