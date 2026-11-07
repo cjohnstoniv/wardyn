@@ -296,7 +296,7 @@ func TestSessionEnvFileRefusesANonRootDir(t *testing.T) {
 
 func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	p := sessionEnvPaths(t)
-	if err := EnsureZshHook(p); err != nil {
+	if err := EnsureZshHook(p, 502); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p.Zshenv)
@@ -309,7 +309,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	if !strings.Contains(string(b), p.Script) || strings.Count(string(b), "# Wardyn run settings") != 1 {
 		t.Errorf("hook = %q", b)
 	}
-	if err := EnsureZshHook(p); err != nil {
+	if err := EnsureZshHook(p, 502); err != nil {
 		t.Fatal(err)
 	}
 	if again, _ := os.ReadFile(p.Zshenv); string(again) != string(b) {
@@ -320,7 +320,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := EnsureZshHook(p); err != nil {
+		if err := EnsureZshHook(p, 502); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -337,7 +337,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	if err := os.Symlink(target, link.Zshenv); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnsureZshHook(link); err == nil {
+	if err := EnsureZshHook(link, 502); err == nil {
 		t.Error("followed a symlink")
 	}
 	if b, _ := os.ReadFile(target); string(b) != "keep" {
@@ -348,7 +348,7 @@ func TestEnsureZshHookCreatesAppendsOnceAndRefusesASymlink(t *testing.T) {
 	if err := os.Mkdir(dir.Zshenv, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnsureZshHook(dir); err == nil {
+	if err := EnsureZshHook(dir, 502); err == nil {
 		t.Error("accepted a directory as the zsh file")
 	}
 }

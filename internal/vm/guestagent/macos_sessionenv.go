@@ -26,7 +26,8 @@ import (
 // public by contract (Init.Env); SecretEnv is never read here, so an env_secret value reaches neither the
 // Terminal nor a GUI app. Two routes carry the settings, since each covers what the other misses:
 //
-//   - a shell file, written before Init answers and sourced by zsh through a hook in /etc/zshenv;
+//   - a shell file, written before Init answers and sourced through a hook in /etc/zshenv by the agent
+//     account's zsh only (root's and the admin's zsh read /etc/zshenv too, and never need the run's proxy);
 //   - launchd's user domain, set once the agent account is at the console (applySessionEnv).
 //
 // Neither ever fails the Init. Where the second stands is reported as SessionEnvStatus, so the host can
@@ -136,19 +137,25 @@ var (
 	sessionEnvKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	// sessionEnvOwn are the session's own variables, which the run's never replace.
 	sessionEnvOwn = []string{"HOME", "USER", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR"}
+	// sessionEnvStartup are variables a shell reads at start, and sessionEnvLoader the prefixes the dynamic
+	// loader reads: through them the run would choose what a shell or an app loads, so none is passed on.
+	sessionEnvStartup = []string{"ZDOTDIR", "ENV", "BASH_ENV", "FPATH", "PS4", "PROMPT_COMMAND"}
+	sessionEnvLoader  = []string{"DYLD_", "LD_"}
 )
 
 // SessionEnv is the settings for the GUI session and the shell file, KEY=VALUE and sorted. It starts from
 // env, the non-secret half, and never reads secret except to drop a key that appears in both (fail
 // closed). When ca is set, env's CA variables give way to it, as initEnv does, so a Linux path never
 // leaks into the GUI. Prepare inputs (keys ending _B64), the managed-files list, the session's own
-// variables, a key that is not a shell name and a value with a NUL or a newline are left out.
+// variables, shell and loader startup variables, a key that is not a shell name and a value with a NUL or a
+// newline are left out.
 func SessionEnv(env, secret map[string]string, ca []string) []string {
 	var out []string
 	for k, v := range env {
 		if _, dup := secret[k]; dup ||
 			(len(ca) > 0 && isCAKey(k)) ||
 			strings.HasSuffix(k, "_B64") || k == EnvManagedFiles || slices.Contains(sessionEnvOwn, k) ||
+			slices.Contains(sessionEnvStartup, k) || slices.ContainsFunc(sessionEnvLoader, func(pre string) bool { return strings.HasPrefix(k, pre) }) ||
 			!sessionEnvKey.MatchString(k) || strings.ContainsAny(v, "\x00\n") {
 			continue
 		}
@@ -203,12 +210,13 @@ func parseSessionEnvScript(b []byte) ([]string, error) {
 	return out, nil
 }
 
-// EnsureZshHook makes p.Zshenv source p.Script, once: it creates the file at 0644, or appends the hook
-// line to what is there, and does nothing when the line is already in. A link, or anything but a regular
-// file, is refused. It is written on the run's clone, never the base.
-func EnsureZshHook(p SessionEnvPaths) error {
+// EnsureZshHook makes p.Zshenv source p.Script in agentUID's zsh, once: it creates the file at 0644, or
+// appends the hook line to what is there, and does nothing when the line is already in. The line checks the
+// shell's effective uid first, so every other account's zsh (root's, the admin's) never reads the script. A
+// link, or anything but a regular file, is refused. It is written on the run's clone, never the base.
+func EnsureZshHook(p SessionEnvPaths, agentUID uint32) error {
 	p = p.resolved()
-	line := "[ -r " + p.Script + " ] && . " + p.Script + " " + sessionEnvHookMarker
+	line := `[ "$EUID" = ` + strconv.FormatUint(uint64(agentUID), 10) + " ] && [ -r " + p.Script + " ] && . " + p.Script + " " + sessionEnvHookMarker
 	created := false
 	var st unix.Stat_t
 	if err := unix.Lstat(p.Zshenv, &st); errors.Is(err, unix.ENOENT) {
@@ -283,7 +291,7 @@ func (d *Desktop) StartSessionEnv(ctx context.Context, p SessionEnvPaths, agentU
 	list := SessionEnv(env, secret, ca)
 	if err := SessionEnvFile(p, list); err != nil {
 		slog.Warn("guest agent: the run's settings are not in the shell file", "err", err)
-	} else if err := EnsureZshHook(p); err != nil {
+	} else if err := EnsureZshHook(p, agentUID); err != nil {
 		slog.Warn("guest agent: the zsh hook for the run's settings is not in place", "err", err)
 	}
 	if err := writeSessionEnvStatus(p, SessionEnvStatus{State: SessionEnvPending}, agentUID); err != nil {
