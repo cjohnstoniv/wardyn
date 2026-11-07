@@ -489,6 +489,9 @@ func (s *Server) macWindowCheck(ctx context.Context, run types.AgentRun, a macWi
 	if macRunPreparing(run) {
 		return rn, runError(http.StatusConflict, reasonMacWindowPreparing, macWindowPreparingMsg)
 	}
+	if rf := s.macGUIEnvRefusal(ctx, run, ask.reopen); rf != nil { // the settings are still being applied to the desktop
+		return rn, rf
+	}
 	if !ask.reopen && s.macWindows.open(run.ID) != nil {
 		return rn, runError(http.StatusConflict, reasonMacWindowOpen, types.MacWindowOpenMsg(rn.Name))
 	}
@@ -909,6 +912,7 @@ func (s *Server) macWindowViewFor(ctx context.Context, run types.AgentRun, a mac
 		slog.WarnContext(ctx, "wardynd: could not read whether a window may open", "run_id", run.ID, "err", rf.err)
 	}
 	v := macWindowStateOf(rf)
+	s.macGUIEnvNote(ctx, run, &v)
 	v.LastClose = s.macWindowLoadLastClose(ctx, run.ID, a.Principal)
 	return &v
 }
