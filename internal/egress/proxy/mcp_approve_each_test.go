@@ -38,6 +38,7 @@ type eachCP struct {
 	mu       sync.Mutex
 	rows     []*approveEachRow
 	rejoins  []uuid.UUID
+	posts    int                 // raises and rejoins answered, of any outcome
 	refuse   int                 // when set, every new raise is answered with this status
 	newState types.ApprovalState // the state a new row starts in; PENDING when empty
 	// approveOnPoll approves a PENDING row when it is polled for the n-th time (0 = never).
@@ -54,6 +55,7 @@ func newEachCP(t *testing.T) *eachCP {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/internal/approvals" {
+			defer func() { c.posts++ }()
 			var body struct {
 				Kind           types.ApprovalKind `json:"kind"`
 				RequestedScope json.RawMessage    `json:"requested_scope"`
@@ -627,39 +629,71 @@ func TestMCPApproveEachOtherCallsUntouched(t *testing.T) {
 func TestMCPApproveEachStaleApprovedPollNeverRespends(t *testing.T) {
 	f, cp := newEachFixture(t)
 	f.p.mcp.setApproveEach(&MCPApproveEachConfig{Windows: map[string]int{"codex-cli": 300}})
+	// Registered after the control plane, so it runs first: a held answer never blocks its Close.
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	within := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	closed := func(ch <-chan struct{}) func() bool {
+		return func() bool {
+			select {
+			case <-ch:
+				return true
+			default:
+				return false
+			}
+		}
+	}
 	call := eachCall(1, "delete_issue", `{"id":"ENG-1"}`)
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Add(1)
 		go func() { defer wg.Done(); f.post(t, mcpToken("codex-cli"), "linear", call) }()
 	}
-	waitEachRows(t, cp, 1)
-	time.Sleep(50 * time.Millisecond) // both are waiting on A
-	release := make(chan struct{})
+	waiters := make(chan struct{})
+	go func() { wg.Wait(); close(waiters) }()
+	// Both calls hold A: each took a slot and had its raise (or rejoin) answered with the one row.
+	within("both calls to wait on A", func() bool {
+		cp.mu.Lock()
+		posts, rows := cp.posts, len(cp.rows)
+		cp.mu.Unlock()
+		f.p.mcp.calls.mu.Lock()
+		defer f.p.mcp.calls.mu.Unlock()
+		k := f.p.mcp.calls.byKey
+		return posts == 2 && rows == 1 && len(k) == 1 && func() bool {
+			for _, v := range k {
+				return v.live == 2
+			}
+			return false
+		}()
+	})
 	cp.mu.Lock()
 	cp.stall, cp.stalled = release, make(chan struct{})
 	stalled := cp.stalled
 	cp.mu.Unlock()
 	cp.decide(0, types.ApprovalApproved)
-	<-stalled // one waiter's A=APPROVED answer is held
-	deadline := time.Now().Add(5 * time.Second)
-	for f.up.hitCount() != 1 {
-		if time.Now().After(deadline) {
-			t.Fatalf("upstream hits %d, want the other waiter to spend A", f.up.hitCount())
-		}
-		time.Sleep(time.Millisecond)
-	}
+	within("one A=APPROVED answer to be held", closed(stalled))
+	within("the other call to spend A", func() bool { return f.up.hitCount() == 1 })
 	// A third call raises B, which is approved and spent.
 	third := make(chan struct{})
 	go func() { defer close(third); f.post(t, mcpToken("codex-cli"), "linear", call) }()
-	waitEachRows(t, cp, 2)
+	within("the third call to raise B", func() bool { return cp.count() == 2 })
 	cp.decide(1, types.ApprovalApproved)
-	<-third
+	within("the third call to finish", closed(third))
 	if f.up.hitCount() != 2 {
 		t.Fatalf("upstream hits %d after B, want 2", f.up.hitCount())
 	}
-	close(release) // the stale A=APPROVED answer arrives
-	wg.Wait()
+	once.Do(func() { close(release) }) // the stale A=APPROVED answer arrives
+	within("the held call to finish", closed(waiters))
 	if f.up.hitCount() != 2 {
 		t.Fatalf("upstream hits %d, want 2: two approvals send two calls", f.up.hitCount())
 	}
