@@ -928,6 +928,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
 		}
 	}
+	m.reapOrphanHelpers(ctx)
 	m.checkSession(ctx)
 	m.recompute()
 	return m

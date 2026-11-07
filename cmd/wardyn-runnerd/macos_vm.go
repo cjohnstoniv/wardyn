@@ -122,8 +122,8 @@ type macOSVMs struct {
 
 	mu    sync.Mutex
 	caps  *runnerwire.MacVMCaps
-	drift string      // the base agent version a tools update was last asked for
-	kept  macOSVMKept // the driver's kept machines and this Mac's limit for them
+	drift macOSVMDrift // the tools updates checkAgent asked for (askDrift)
+	kept  macOSVMKept  // the driver's kept machines and this Mac's limit for them
 	items macOSVMItems
 	bases macOSVMBases
 }
@@ -421,16 +421,10 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 }
 
 // checkAgent is the guest agent drift trigger: a base whose agent is not this runner's needs a tools
-// update, asked for once per base agent version. The base keeps serving meanwhile.
+// update, asked for while serving until one starts per base agent version (askDrift). The base keeps
+// serving meanwhile.
 func (m *macOSVMs) checkAgent(man macvm.Manifest) {
-	if man.AgentVersion == "" || man.AgentVersion == m.version {
-		return
-	}
-	m.mu.Lock()
-	asked := m.drift == man.AgentVersion
-	m.drift = man.AgentVersion
-	m.mu.Unlock()
-	if asked {
+	if man.AgentVersion == "" || man.AgentVersion == m.version || !m.askDrift(man.AgentVersion) {
 		return
 	}
 	slog.Warn("macOS VM base: its guest agent is not this runner's; a tools update replaces it", "base_agent", man.AgentVersion, "runner", m.version)
@@ -748,13 +742,20 @@ func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) err
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
+	if slices.ContainsFunc(m.own(admission.KindToolsUpdate), func(e admission.Entry) bool { return !m.vmGone(e) }) {
+		return macvm.ErrToolsUpdateBusy // one at a time, as the helper's update lock has it
+	}
 	items, err := m.baseFileArgs(nil)
 	if err != nil {
 		return err
 	}
-	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
+	err = m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
 		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, ledger: m.ledgerDir, descr: "tools update"})
+	if err == nil {
+		m.driftStarted(man.AgentVersion)
+	}
+	return err
 }
 
 // kindEditBase is an edit's ledger entry: one VM slot for its boots, which run one at a time. serve hands
