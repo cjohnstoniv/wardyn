@@ -1,6 +1,6 @@
 # Unsaved-edit guard, save-conflict copy, and the sidebar Settings entry (#460)
 
-Owner-approved mock for issue #460. Strings below are canon, byte-for-byte. `UNSAVED.*` and
+Strings below are canon, byte-for-byte. `UNSAVED.*` and
 `NAV.*` are re-exported from `ui/src/app/lib/unsaved-copy.ts`, itself sourced from
 `UNSAVED_GUARD` in `ui/src/app/components/wardyn/copy/shell.ts` — nothing here duplicates them.
 `CONFLICT.*` and `PROVIDERS.DISCARD_AND_RELOAD` stay in their existing home,
