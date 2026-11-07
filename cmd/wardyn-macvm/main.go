@@ -395,7 +395,9 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
 		// the build beside this helper (§3.4, guest agent drift).
 		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
-		Items: items,
+		// Signed with this Mac's identity first, so the agent keeps Full Disk Access through updates.
+		Signer: &macvm.HostAgentSigner{Dir: macvm.Layout{Root: *j.root}.AgentSigningDir()},
+		Items:  items,
 	}}, nil
 }
 

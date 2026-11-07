@@ -15,7 +15,7 @@ import (
 
 // macos-vm status says how the base's guest agent is signed. Only an agent signed ad hoc loses Full Disk
 // Access at each tools update; one signed on this Mac whose certificate the base does not trust names
-// edit-base; Full Disk Access as the last tools update read it is shown.
+// edit-base; Full Disk Access as the base last read it is shown.
 func TestStatusSaysTheAgentIsAdHoc(t *testing.T) {
 	status := func(rec string) string {
 		dir := t.TempDir()
@@ -33,7 +33,7 @@ func TestStatusSaysTheAgentIsAdHoc(t *testing.T) {
 	}
 	got := status(`{"agent_signature":"this_mac","agent_signing_cert":"trusted","guest":{"full_disk_access":"allowed"}}`)
 	if strings.Contains(got, lost) || !strings.Contains(got, "guest agent: signed on this Mac\n") ||
-		!strings.Contains(got, "Full Disk Access: allowed (read after the last tools update)\n") {
+		!strings.Contains(got, "Full Disk Access: allowed (as the base last read it)\n") {
 		t.Fatalf("signed status:\n%s", got)
 	}
 	got = status(`{"agent_signature":"this_mac","agent_signing_cert":"not_trusted"}`)

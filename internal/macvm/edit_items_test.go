@@ -170,7 +170,7 @@ func TestEditBaseNamesProfilesThenReadsItemsBack(t *testing.T) {
 	}
 	for _, w := range []string{
 		"run /bin/rm -rf " + adminDir, "run /usr/bin/stat " + adminDir, "run /bin/rm -rf " + stageWifi, "run /usr/bin/stat " + stageWifi,
-		"posture", "verify-cert",
+		"posture", "verify-cert", "posture", // the read-back records Full Disk Access in tools.json
 	} {
 		want = append(want, w+" after 2 codes")
 	}

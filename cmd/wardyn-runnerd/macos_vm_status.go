@@ -211,8 +211,8 @@ func toolsFailure(baseDir string) string {
 }
 
 // selftestWithheld is a status line for each harness the ready base in baseDir withheld because the
-// launcher's self-test failed for it. The end of the self-test's output is in the base's tools.json,
-// which the line names.
+// launcher's self-test failed for it, then agentSignatureLines. The end of the self-test's output is in
+// the base's tools.json, which the line names.
 func selftestWithheld(baseDir string) []string {
 	rec, err := macvm.ReadToolsRecord(baseDir)
 	if err != nil {
@@ -225,6 +225,25 @@ func selftestWithheld(baseDir string) []string {
 		}
 	}
 	slices.Sort(lines)
+	return append(lines, agentSignatureLines(rec)...)
+}
+
+// agentSignatureLines say how the base's guest agent is signed and Full Disk Access as the base last read
+// it. Only an agent signed ad hoc loses the grant at each tools update. A record from before the
+// signature says nothing.
+func agentSignatureLines(rec macvm.ToolsRecord) []string {
+	var lines []string
+	switch {
+	case rec.AgentSignature == macvm.AgentSignedAdHoc:
+		lines = append(lines, "guest agent: signed ad hoc; Full Disk Access is lost at each tools update")
+	case rec.AgentSignature == macvm.AgentSignedThisMac && rec.AgentSigningCert == macvm.ItemNotTrusted:
+		lines = append(lines, "guest agent: signed on this Mac; the base does not trust its certificate yet: run macos-vm edit-base and trust it")
+	case rec.AgentSignature == macvm.AgentSignedThisMac:
+		lines = append(lines, "guest agent: signed on this Mac")
+	}
+	if rec.Guest != nil && rec.Guest.FullDiskAccess != "" {
+		lines = append(lines, "Full Disk Access: "+rec.Guest.FullDiskAccess+" (as the base last read it)")
+	}
 	return lines
 }
 

@@ -27,6 +27,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- macOS: the runner now signs each guest agent it pushes into a base with a code signing identity made once on that Mac (in the VM directory's `agent-signing/`), and the base trusts that certificate for code signing only, so a Full Disk Access grant can last through tools updates. On by default; if signing fails the agent is pushed signed ad hoc, as before. `macos-vm status` says which. The first tools update after upgrading changes the signature, so grant Full Disk Access once more in edit-base.
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
 
 ### Fixed
@@ -57,6 +58,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Settings: saving an unrelated change no longer reorders stored capabilities, and walls errors now point at their field.
 - The console's Content-Security-Policy now sets `form-action`, and the console sends `Permissions-Policy` and, under TLS, `Strict-Transport-Security`.
 - The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
+
+### Known issues
+
+- macOS: that the guest agent keeps Full Disk Access through a tools update with the signature made on that Mac is not yet proven on a real Mac. After an update, check `macos-vm status`; if Full Disk Access reads refused, grant it again in edit-base.
 
 ## [0.10.0-rc.13] — 2026-11-04
 

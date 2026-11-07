@@ -81,7 +81,8 @@ func TestAgentSigningCertIsACodeSigningCert(t *testing.T) {
 	if pk, ok := cert.PublicKey.(*rsa.PublicKey); !ok || pk.N.BitLen() != 3072 {
 		t.Fatalf("public key %T, want RSA-3072", cert.PublicKey)
 	}
-	if err := cert.CheckSignatureFrom(cert); err != nil {
+	// CheckSignatureFrom wants a CA parent; a code signing leaf signs only itself.
+	if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil || !bytes.Equal(cert.RawIssuer, cert.RawSubject) {
 		t.Fatalf("not self-signed: %v", err)
 	}
 	if cert.KeyUsage != x509.KeyUsageDigitalSignature {
@@ -306,8 +307,9 @@ func signCert() string {
 }
 
 // A tools update pushes the signed copy to both the agent's path and the run launcher's, puts the signing
-// certificate in the base and trusts it for code signing only, and records the signature, the
-// certificate's trust and Full Disk Access as the agent read it.
+// certificate in the base and trusts it for code signing only, and records the signature and the
+// certificate's trust. Full Disk Access is read by the agent the boot started with, so it is recorded only
+// when that agent was signed on this Mac too: the new build then has the same designated requirement.
 func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 	f := newTools(t)
 	g := &signGuest{guest: newGuest(), fda: "allowed"}
@@ -321,7 +323,10 @@ func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 	stage := &macvm.ToolsStage{ToolsOptions: f.opts, Boot: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
 		return g, func(context.Context) error { return nil }, nil
 	}}
-	res := runStage(t, stage)
+	res, err := stage.Run(context.Background(), macvm.Stage2Input{AgentSignature: macvm.AgentSignedThisMac})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, p := range []string{guestagent.MacAgentBinaryPath, guestagent.MacAgentRunPath} {
 		if string(g.files[p]) != "signed:new agent" {
 			t.Fatalf("%s holds %q, want the signed copy", p, g.files[p])
@@ -345,6 +350,13 @@ func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 	if res.Guest == nil || res.Guest.FullDiskAccess != "allowed" {
 		t.Fatalf("Full Disk Access not recorded: %+v", res.Guest)
 	}
+	// After an agent signed ad hoc (or none recorded), the old agent's answer says nothing of the new build.
+	for _, before := range []string{macvm.AgentSignedAdHoc, ""} {
+		res, err := stage.Run(context.Background(), macvm.Stage2Input{AgentSignature: before})
+		if err != nil || res.Guest == nil || res.Guest.FullDiskAccess != "" {
+			t.Fatalf("before %q: Full Disk Access %+v recorded (%v)", before, res.Guest, err)
+		}
+	}
 
 	// Through a prepare's record: the fields land in tools.json.
 	pf, tf, _ := stage2Prep(t)
@@ -357,7 +369,7 @@ func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec, err := macvm.ReadToolsRecord(pf.opts.Layout.BaseDir(0))
-	if err != nil || rec.AgentSignature != macvm.AgentSignedThisMac || rec.AgentSigningCert != macvm.ItemTrusted || rec.Guest == nil || rec.Guest.FullDiskAccess != "allowed" {
+	if err != nil || rec.AgentSignature != macvm.AgentSignedThisMac || rec.AgentSigningCert != macvm.ItemTrusted || rec.Guest == nil || rec.Guest.FullDiskAccess != "" {
 		t.Fatalf("record %+v %v", rec, err)
 	}
 }

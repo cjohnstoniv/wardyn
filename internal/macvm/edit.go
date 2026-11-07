@@ -50,7 +50,7 @@ var editScreen = ScreenText{
 	Steps: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
 		"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
 		"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
-		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". It lets every program a run starts in this VM read protected folders, in every run.\n" +
+		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
 		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
@@ -501,7 +501,8 @@ func (o *EditOptions) reportRead(staging, desktop, fda string) EditRecord {
 // SHA-256 and the command that trusts it once a person signed in as wardyn-admin runs it. Nothing runs it
 // for them. With no such item it prints nothing. The subject and hash come from the install list's file for
 // that item when the file is the one the base was built from; otherwise the base's recorded fingerprint
-// and no subject.
+// and no subject. Last, when the base reads this Mac's guest agent signing certificate as not trusted, the
+// same for it, trusted for code signing only.
 func (o *EditOptions) printUntrusted(base string) {
 	rec, err := ReadToolsRecord(base)
 	if err != nil {
@@ -553,6 +554,21 @@ func (o *EditOptions) printUntrusted(base string) {
 		fmt.Fprintf(o.Out, "%s\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p ssl -k %s %s/%s\n",
 			r.Name, subject, colons(sum), guestagent.MacSystemKeychain, guestagent.ItemDir(r.Name), guestagent.ItemCert)
 	}
+	if rec.AgentSignature != AgentSignedThisMac || rec.AgentSigningCert != ItemNotTrusted {
+		return
+	}
+	if !header {
+		fmt.Fprintln(o.Out)
+		fmt.Fprintln(o.Out, "Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
+	}
+	sum := "not available: this Mac's signing certificate does not read"
+	if cert, err := readAgentSigningCert(o.Layout.AgentSigningDir()); err == nil {
+		sum = colons(sum256(cert.Raw))
+	}
+	// Code signing only: the guest agent keeps Full Disk Access through tools updates once the base
+	// trusts the certificate it is signed with.
+	fmt.Fprintf(o.Out, "guest agent signing certificate (this Mac's, for code signing only)\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p codeSign -k %s %s\n",
+		strconv.Quote("CN="+agentSigningCN), sum, guestagent.MacSystemKeychain, agentSigningCertPath())
 }
 
 // macOSAccounts are macOS's own accounts below uid 500 that have no leading "_".

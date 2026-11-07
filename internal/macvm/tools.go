@@ -181,6 +181,10 @@ type Stage2Input struct {
 	Previous []ItemRecord
 	// Kept is a derivation's (DeriveBase): the tools.json of the Standard it cloned, whose tools it keeps.
 	Kept *ToolsRecord
+	// AgentSignature is how the guest agent the base held before this stage 2 was signed (a tools
+	// update's): Full Disk Access as the running agent reads it says something of a newly pushed build only
+	// when both are signed on this Mac.
+	AgentSignature string
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -313,6 +317,10 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	}
 	if err == nil {
 		res.Guest = readPosture(ctx, g, res.Items)
+		// The agent answering is the one this boot started with, not the build just pushed.
+		if res.AgentVersion != "" && (in.AgentSignature != AgentSignedThisMac || res.AgentSignature != AgentSignedThisMac) {
+			res.Guest.FullDiskAccess = ""
+		}
 	}
 	if err == nil {
 		err = selftestBase(ctx, g, &res, o.Log)
@@ -406,15 +414,26 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
-		if err := pushAgent(ctx, g, o.Agent.Path, o.Agent.Dest); err != nil {
+		path, signed := agentToPush(ctx, o)
+		if signed != nil {
+			defer signed.Done()
+		}
+		if err := pushAgent(ctx, g, path, o.Agent.Dest); err != nil {
 			return res, fmt.Errorf("macvm: replacing the guest agent: %w", err)
 		}
 		res.AgentVersion = o.Agent.Version
 		// The same binary is the run launcher by its name, so a run's agent-run is always this build's.
-		if err := pushAgent(ctx, g, o.Agent.Path, guestagent.MacAgentRunPath); err != nil {
+		if err := pushAgent(ctx, g, path, guestagent.MacAgentRunPath); err != nil {
 			return res, fmt.Errorf("macvm: installing the run launcher: %w", err)
 		}
-		res.AgentRun = true
+		res.AgentRun, res.AgentSignature = true, AgentSignedAdHoc
+		if signed != nil {
+			res.AgentSignature = AgentSignedThisMac
+			var err error
+			if res.AgentSigningCert, err = trustAgentCert(ctx, g, signed.Cert, o.Log); err != nil {
+				return res, err
+			}
+		}
 	}
 	var cltErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -717,9 +736,12 @@ type ToolsRecord struct {
 	ItemsDigest string       `json:"items_digest,omitempty"`
 	Items       []ItemRecord `json:"items,omitempty"`
 	// Guest is the guest posture read when the base was last prepared, updated or edited.
-	Guest            *GuestPosture `json:"guest,omitempty"`
-	AgentSignature   string        `json:"agent_signature,omitempty"`
-	AgentSigningCert string        `json:"agent_signing_cert,omitempty"`
+	Guest *GuestPosture `json:"guest,omitempty"`
+	// AgentSignature is how the guest agent stage 2 pushed is signed (AgentSignedThisMac or
+	// AgentSignedAdHoc), and AgentSigningCert whether the base trusts this Mac's signing certificate for
+	// code signing (ItemTrusted or ItemNotTrusted).
+	AgentSignature   string `json:"agent_signature,omitempty"`
+	AgentSigningCert string `json:"agent_signing_cert,omitempty"`
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -734,7 +756,7 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
-		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest}
+		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature, AgentSigningCert: r.AgentSigningCert}
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
@@ -891,7 +913,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		DiskPath: filepath.Join(nb, DiskFile), AuxPath: filepath.Join(nb, AuxFile),
 	}
 	prev, _ := ReadToolsRecord(base)
-	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items})
+	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items, AgentSignature: prev.AgentSignature})
 	if res.ToolsDial != "" {
 		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial, ToolsDialAt: time.Now().UnixNano()})
 	}
