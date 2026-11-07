@@ -32,16 +32,25 @@ func resolveData(t *testing.T, spec types.RunPolicySpec, stamp string) string {
 // policyReceipt is a one-checkpoint receipt over a run's resolve row and two actions stamped as given.
 func policyReceipt(t *testing.T, priv ed25519.PrivateKey, resolve string, actionStamps ...string) (Bundle, []Row) {
 	t.Helper()
-	rows := testChain(1, 1+len(actionStamps), "")
-	run := uuid.New()
-	rows[0].Action, rows[0].RunID, rows[0].Data = "run.policy.resolve", &run, &resolve
-	for i, s := range actionStamps {
-		rows[i+1].Action, rows[i+1].RunID = "egress.allow", &run
+	actions, datas := []string{"run.policy.resolve"}, []string{resolve}
+	for _, s := range actionStamps {
 		d := `{"host": "a.example"}`
 		if s != "" {
 			d = `{"host": "a.example", "policy_digest": "` + s + `"}`
 		}
-		rows[i+1].Data = &d
+		actions, datas = append(actions, "egress.allow"), append(datas, d)
+	}
+	return runReceipt(t, priv, actions, datas)
+}
+
+// runReceipt is a one-checkpoint receipt over one run's rows, the i-th with actions[i] and datas[i], seqs from 1.
+func runReceipt(t *testing.T, priv ed25519.PrivateKey, actions, datas []string) (Bundle, []Row) {
+	t.Helper()
+	rows := testChain(1, len(actions), "")
+	run := uuid.New()
+	for i := range rows {
+		d := datas[i]
+		rows[i].Action, rows[i].RunID, rows[i].Data = actions[i], &run, &d
 	}
 	// Re-chain: the content changed, so every hash did.
 	prev := ""
@@ -152,5 +161,68 @@ func TestVerifyBundle_WithheldResolveRowCarriesNoPolicy(t *testing.T) {
 	}
 	if p, ok := policyOf(rep, 2); !ok || p.Resolve != 0 {
 		t.Fatalf("action policy = %+v, %v; want a stamp not linked to any resolve row", p, ok)
+	}
+}
+
+// generationData is a run.policy.generation row's data as a revive writes it: the generation and its policy
+// nested under "policy", stamped with that generation's digest.
+func generationData(t *testing.T, gen int, spec types.RunPolicySpec) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"generation": gen, "policy": spec, "policy_digest": spec.Digest(), "policy_generation": gen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// A revived run's rows stamped with generation 2's digest link to the generation row, which verifies from its
+// nested policy; rows stamped before the revive still link to dispatch's resolve row.
+func TestVerifyBundle_RevivedRunLinksToGenerationRow(t *testing.T) {
+	priv, pub := testKey(1)
+	gen1 := types.RunPolicySpec{AllowedDomains: []string{"a.example"}}
+	gen2 := types.RunPolicySpec{AllowedDomains: []string{"a.example", "b.example"}}
+	d1, d2 := gen1.Digest(), gen2.Digest()
+	act := func(d string) string { return `{"host": "a.example", "policy_digest": "` + d + `"}` }
+	b, _ := runReceipt(t, priv,
+		[]string{"run.policy.resolve", "egress.allow", "run.policy.generation", "egress.allow"},
+		[]string{resolveData(t, gen1, d1), act(d1), generationData(t, 2, gen2), act(d2)})
+	rep := VerifyBundle(b, keysOf(pub))
+	if !rep.Complete() {
+		t.Fatalf("failures %+v", rep.Failures)
+	}
+	if p, ok := policyOf(rep, 3); !ok || p.Status != PolicyVerified || p.Digest != d2 {
+		t.Fatalf("generation row policy = %+v, want verified %s", p, d2)
+	}
+	if p, _ := policyOf(rep, 4); p.Status != PolicyLinked || p.Resolve != 3 {
+		t.Fatalf("revived row policy = %+v, want linked to the generation row at seq 3", p)
+	}
+	if p, _ := policyOf(rep, 2); p.Status != PolicyLinked || p.Resolve != 1 {
+		t.Fatalf("pre-revive row policy = %+v, want linked to the resolve row at seq 1", p)
+	}
+	// A generation row whose nested policy is not the one its stamp names fails like a resolve row.
+	tampered := strings.Replace(generationData(t, 2, gen2), "b.example", "evil.example", 1)
+	b, _ = runReceipt(t, priv, []string{"run.policy.generation"}, []string{tampered})
+	if rep := VerifyBundle(b, keysOf(pub)); !hasReason(rep, ReasonPolicyDigest) {
+		t.Fatalf("tampered generation row: failures %+v, want %s", rep.Failures, ReasonPolicyDigest)
+	}
+}
+
+// policy_digest "unknown" names no policy: a row stamped so links nothing, even beside a masked policy row
+// stamped unknown, which would otherwise pass as matching content.
+func TestVerifyBundle_UnknownStampLinksNothing(t *testing.T) {
+	priv, pub := testKey(1)
+	spec := types.RunPolicySpec{AllowedDomains: []string{"a.example"}}
+	unknown := types.PolicyDigestUnknown
+	masked := strings.Replace(resolveData(t, spec, unknown), `{`, `{"mask_scope":"globals_only",`, 1)
+	b, _ := policyReceipt(t, priv, masked, unknown, spec.Digest())
+	rep := VerifyBundle(b, keysOf(pub))
+	if p, ok := policyOf(rep, 2); !ok || p.Status != PolicyUnlinked || p.Resolve != 0 {
+		t.Fatalf("unknown-stamped row policy = %+v, %v; want unlinked", p, ok)
+	}
+	if p, _ := policyOf(rep, 1); p.Status != PolicyUnlinked {
+		t.Fatalf("unknown-stamped resolve row policy = %+v, want unlinked and no verdict", p)
+	}
+	if p, _ := policyOf(rep, 3); p.Status != PolicyUnlinked {
+		t.Fatalf("row stamped with a digest no policy row carries = %+v, want unlinked", p)
 	}
 }
