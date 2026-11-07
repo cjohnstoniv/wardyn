@@ -237,6 +237,9 @@ func permissionLists(rules []types.ToolRule) (map[string][]string, error) {
 			continue
 		}
 		key, ok := permissionKey[r.Effect]
+		if r.Effect == types.ToolApproveEach {
+			return nil, fmt.Errorf("tool rule %q: approve_each has no Claude Code permission list; dispatch maps it to allow or deny before the rules are written", r.Tool)
+		}
 		if !ok {
 			return nil, fmt.Errorf("tool rule %q: effect %q is not allow, hold or deny", r.Tool, r.Effect)
 		}

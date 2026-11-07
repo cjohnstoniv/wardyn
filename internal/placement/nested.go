@@ -21,13 +21,14 @@ import (
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants GitPushWithheld PATGrants " +
 		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 KubeAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
-		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase ForgeHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
+		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase ForgeHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		"VM PortRule SigninListen"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),
 	reflect.TypeFor[proxy.ViaOrgRoute]():          strings.Fields("GrantID Host"),
+	reflect.TypeFor[proxy.MCPApproveEachConfig](): strings.Fields("Windows"),
 	reflect.TypeFor[proxy.GatewayIdentityRoute](): strings.Fields("Host Port PathPrefix ProviderID MCPKey Audience ProviderUID InspectionDeferred"),
 	reflect.TypeFor[proxy.ResidentMint]():         strings.Fields("GrantID Kind Username KnownHosts Token ExpiresAt Host"),
 	reflect.TypeFor[proxy.MCPServerConfig]():      strings.Fields("Key URL GrantID Ordinal"),
