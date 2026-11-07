@@ -27,8 +27,9 @@
 | AWS sign-ins | Ending a run wipes `~/.aws/sso/cache` and `~/.aws/cli/cache` in the guest, and the run record says when it cannot |
 | Sign-ins | The desktop's keychain and browser profiles are kept in the guest's memory and are gone when the guest shuts down ([Sign-ins in the desktop](#sign-ins-in-the-desktop)) |
 
-- Not in this release: the runner's own terminal session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
-- The gateway records a Linux VM's desktop at the recording level Screen and actions, while someone watches it. A sign-in pause keeps no frames ([Pause the agent to sign in](#pause-the-agent-to-sign-in)).
+- Not in this release: reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
+- A runner whose `--recording-store` is `pg` (the default) or `fs` refuses a Linux VM run with recording on: turn recording off for the run.
+- On a remote runner with `--recording-store off`, the gateway records the desktop at Screen and actions while someone watches. A sign-in pause keeps no frames ([Pause the agent to sign in](#pause-the-agent-to-sign-in)).
 - A disk size or process limit is not enforced. A policy or governance profile that sets `disk_mib` or `pids_limit` is refused for a Linux VM run. A disk size that is only requested, or filled in as a default, runs and is shown as not enforced.
 - Linux VMs need a pool where every runner offers them; a mixed pool refuses them.
 - Windows VMs are not available yet. `machine_kind` takes `container`, `linux_vm` and `macos_vm` only.

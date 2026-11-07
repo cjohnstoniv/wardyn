@@ -10,5 +10,5 @@ docs/operations/macos-vm-base-image.md=4669 share=5
 docs/operations/macos-vm-host.md=3755 share=1
 # docs/operations/macos-vm-troubleshooting.md 2101 measured: where to look, symptoms and fixes, and what has not run on a real Mac.
 docs/operations/macos-vm-troubleshooting.md=2101 share=3
-# docs/operations/linux-vm-sandboxes.md 3405 measured, 3352 before: adds the recording, output cap, AWS wipe and limit rows a run needs, less the folded pause-fencing repeats and the drive restatement.
-docs/operations/linux-vm-sandboxes.md=3405 share=3
+# docs/operations/linux-vm-sandboxes.md 3405 measured, 3352 before: adds the recording, output cap, AWS wipe and limit rows a run needs, less the folded pause-fencing repeats and the drive restatement. 3424 measured (+19): a runner that keeps recordings refuses a recorded Linux VM run; the gateway records the desktop only behind a runner with recording off.
+docs/operations/linux-vm-sandboxes.md=3424 share=3
