@@ -15,8 +15,9 @@ import (
 	"time"
 )
 
-// CheckpointFormat names the statement layout below; a verifier refuses any other.
-const CheckpointFormat = "wardyn-audit-checkpoint/1"
+// CheckpointFormat names the statement layout below; a verifier refuses any other. Layout 1 signed no
+// seq_digest, so it left seqs unbound, and it is refused by name.
+const CheckpointFormat = "wardyn-audit-checkpoint/2"
 
 // Statement is what wardynd signs for one checkpoint. The signed bytes are Bytes(): compact JSON, keys in
 // exactly this field order, nothing HTML-escaped. They are stored and shipped verbatim, and ParseStatement
@@ -30,9 +31,11 @@ type Statement struct {
 	SeqLo int64 `json:"seq_lo"`
 	SeqHi int64 `json:"seq_hi"`
 	Rows  int64 `json:"rows"`
-	// HeadHash is the row_hash at SeqHi; Digest is Fold(Prev, the rows' hashes).
-	HeadHash string `json:"head_hash"`
-	Digest   string `json:"digest"`
+	// HeadHash is the row_hash at SeqHi; Digest is Fold(Prev, the rows' hashes); SeqDigest is SeqDigest(the
+	// rows' seqs, their hashes), which binds each seq to its row.
+	HeadHash  string `json:"head_hash"`
+	Digest    string `json:"digest"`
+	SeqDigest string `json:"seq_digest"`
 	// Prev is StatementHash of the previous checkpoint's statement, or "" for the first.
 	Prev     string `json:"prev"`
 	SignedAt string `json:"signed_at"`
@@ -55,20 +58,22 @@ func ParseStatement(text string) (Statement, error) {
 	if err := dec.Decode(&s); err != nil {
 		return Statement{}, fmt.Errorf("statement: %w", err)
 	}
+	// The format first, so a statement in another layout is refused by name rather than as a bad encoding.
+	if s.Format != CheckpointFormat {
+		return Statement{}, fmt.Errorf("statement: format %q, want %q (no other checkpoint layout is read)", s.Format, CheckpointFormat)
+	}
 	if string(s.Bytes()) != text {
 		return Statement{}, errors.New("statement: not in its canonical encoding (key order, spacing, escapes or duplicates differ)")
 	}
 	switch {
-	case s.Format != CheckpointFormat:
-		return Statement{}, fmt.Errorf("statement: format %q, want %q", s.Format, CheckpointFormat)
 	case !isLowerHex(s.Kid, 32):
 		return Statement{}, errors.New("statement: kid is not 32 lower-case hex characters")
 	case s.SeqLo < 0 || s.SeqHi < s.SeqLo:
 		return Statement{}, fmt.Errorf("statement: seq range %d-%d is not a range", s.SeqLo, s.SeqHi)
 	case s.Rows < 1 || s.Rows > s.SeqHi-s.SeqLo+1:
 		return Statement{}, fmt.Errorf("statement: %d rows cannot fit seq %d-%d", s.Rows, s.SeqLo, s.SeqHi)
-	case !isLowerHex(s.HeadHash, 64) || !isLowerHex(s.Digest, 64):
-		return Statement{}, errors.New("statement: head_hash and digest must be 64 lower-case hex characters")
+	case !isLowerHex(s.HeadHash, 64) || !isLowerHex(s.Digest, 64) || !isLowerHex(s.SeqDigest, 64):
+		return Statement{}, errors.New("statement: head_hash, digest and seq_digest must be 64 lower-case hex characters")
 	case s.Prev != "" && !isLowerHex(s.Prev, 64):
 		return Statement{}, errors.New("statement: prev must be empty or 64 lower-case hex characters")
 	}
