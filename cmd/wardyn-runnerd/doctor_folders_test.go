@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/doctor"
-	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
 
 // folderSharesStage: OK only with a root and an allowed Full Disk Access reading that a tools update has
@@ -19,10 +18,7 @@ func TestFolderSharesStage(t *testing.T) {
 	read := time.Date(2026, 11, 1, 9, 0, 0, 0, time.Local)
 	later := read.Add(48 * time.Hour)
 	roots := []string{"/Users/a/Work", "/Volumes/Data"}
-	const (
-		thisMac = macvm.AgentSignedThisMac
-		adHoc   = macvm.AgentSignedAdHoc
-	)
+	const thisMac, adHoc, none = "this_mac", "ad_hoc", ""
 	for _, tc := range []struct {
 		name         string
 		roots        []string
@@ -34,15 +30,15 @@ func TestFolderSharesStage(t *testing.T) {
 		{"no root", nil, "allowed", thisMac, read, read, doctor.StatusSkip, []string{"no drive root", "setup --drive-root <dir>"}},
 		{"refused", roots, "refused", thisMac, read, read, doctor.StatusSkip, []string{"not granted", "within 10 seconds", "edit-base"}},
 		{"not read", roots, "", thisMac, time.Time{}, later, doctor.StatusSkip, []string{"has not been read", "edit-base"}},
-		{"no record", roots, "", "", time.Time{}, time.Time{}, doctor.StatusSkip, []string{"has not been read"}},
+		{"no record", roots, "", none, time.Time{}, time.Time{}, doctor.StatusSkip, []string{"has not been read"}},
 		{"tools newer, ad hoc", roots, "allowed", adHoc, read, later, doctor.StatusSkip, []string{"tools were updated after Full Disk Access was last read", "2026-11-01", "2026-11-03", "signed ad hoc loses it"}},
 		{"tools newer, signed on this Mac", roots, "allowed", thisMac, read, later, doctor.StatusOK, []string{"/Users/a/Work, /Volumes/Data (from runnerd.json", "allowed (as the base last read it, 2026-11-01)", "workspace roots are set on its server"}},
-		{"tools newer, no signature recorded", roots, "allowed", "", read, later, doctor.StatusOK, []string{"allowed (as the base last read it, 2026-11-01)"}},
+		{"tools newer, no signature recorded", roots, "allowed", none, read, later, doctor.StatusOK, []string{"allowed (as the base last read it, 2026-11-01)"}},
 		{"tools not newer, ad hoc", roots, "allowed", adHoc, read, read, doctor.StatusOK, []string{"allowed"}},
 		{"read date unknown, ad hoc", roots, "allowed", adHoc, time.Time{}, later, doctor.StatusOK, []string{"allowed (as the base last read it)"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st := folderSharesStage(tc.roots, "runnerd.json", tc.fda, tc.sig, tc.readAt, tc.tool)
+			st := folderSharesStage(tc.roots, "runnerd.json", tc.fda, tc.sig == adHoc, tc.readAt, tc.tool)
 			if st.Name != "folder-shares" || st.Status != tc.status {
 				t.Fatalf("stage %s is %s, want %s: %s", st.Name, st.Status, tc.status, st.Detail)
 			}

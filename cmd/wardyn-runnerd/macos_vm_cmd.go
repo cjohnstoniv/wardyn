@@ -493,7 +493,7 @@ func macOSVMDoctorStages(roots []string, rootsSource string) []doctor.Stage {
 	if rec, ok := macvm.ReadEditRecord(base, man); ok && rec.FullDiskAccess == fda {
 		readAt = rec.ReadAt
 	}
-	return append(stages, folderSharesStage(roots, rootsSource, fda, tools.AgentSignature, readAt, tools.TriedAt))
+	return append(stages, folderSharesStage(roots, rootsSource, fda, tools.AgentSignature == macvm.AgentSignedAdHoc, readAt, tools.TriedAt))
 }
 
 // daysAgo is "1 day ago" for one and "<n> days ago" for every other count.
