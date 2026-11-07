@@ -102,7 +102,7 @@ func TestEditWindowGetsTheCodeControl(t *testing.T) {
 		t.Fatalf("%d windows opened", e.scr.opens())
 	}
 	text := e.scr.texts[0]
-	if text.Title != "Wardyn: edit this macOS VM base" || !strings.HasPrefix(text.Strip, "Sign in as wardyn-admin with the one-time code:") {
+	if text.Title != "Wardyn: edit this macOS VM base" || !strings.HasPrefix(text.Strip, "The one-time code is wardyn-admin's password:") {
 		t.Errorf("the window's text %+v", text)
 	}
 	if text.CodeFile != e.f.opts.Layout.SetupCode() || text.AskStop == nil {
