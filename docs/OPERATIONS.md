@@ -23,6 +23,9 @@ The sections are written against the Compose stack ([`deploy/compose/`](../deplo
 - [Workspaces: three tiers](#workspaces-three-tiers)
 - [Integrations](operations/integrations.md#integrations)
 - [Network: upstream proxy and egress redirects](#network-upstream-proxy-and-egress-redirects)
+- [AWS sign-in per person and starting runs](#aws-sign-in-per-person-and-starting-runs)
+- [Model providers: changes, the internal gateway and a local server](#model-providers-changes-the-internal-gateway-and-a-local-server)
+- [Site config: artifact overrides, probes and directory autocomplete](#site-config-artifact-overrides-probes-and-directory-autocomplete)
 - [Toolchain, build images and recommended builds](operations/build-images.md)
 - [Secrets from files, age-key rotation and external key stores](operations/secrets-and-keys.md)
 - [Renamed in 0.8](#renamed-in-08)
@@ -2374,7 +2377,7 @@ grep 'daemon egress proxy configured' <logs>
 ### Control-plane to proxy TLS
 
 - Every run's `wardyn-proxy` sidecar calls `wardynd` for everything it does on the run's behalf, and one of those calls — `GET /api/v1/internal/injection/{grant}` — answers with a credential **value**.
-- Since 0.7.12 that hop is TLS on every install shape except a loopback-only local one, and the proxy trusts exactly one root for it.
+- That hop is TLS on every install shape except a loopback-only local one, and the proxy trusts exactly one root for it.
 - **wardynd's end.**
   - On first boot `wardynd` mints an internal CA (ECDSA P-256, ten years) and stores it in the secret store as `wardyn-internal-ca`, beside its signing key.
   - It is age-encrypted in Postgres, in every backup that carries the signing key, reserved from the secrets API and from every grant.
@@ -2417,13 +2420,6 @@ grep 'daemon egress proxy configured' <logs>
   - So a run token or the ground-truth bearer is only ever accepted over the pinned hop, and an Ingress or reverse proxy in front of the console exposes none of that surface.
   - A local install (loopback `http://` control plane) has no internal listener and keeps serving it on the console.
   - Every shipped caller dials `WARDYN_CONTROL_PLANE_URL`, the internal listener: each run's proxy (both runners hand it that URL in its sealed config, and brokered sidecar uploads go through the proxy) and the ingest.
-  - A proxy dispatched before 0.7.12 still dials `http://wardynd:8080` and gets `404` on every call after an upgrade (on the chart it has no route back at all: the runs namespace is never granted the `http` port).
-  - Such a run cannot be restarted on either runner.
-  - On Docker it has no stored proxy config (migration 0093 records one only for runs dispatched from then on).
-  - So `POST /api/v1/admin/runs/restart` answers it `ok:false` with reason `revive_config_not_stored`, and a single revive is a `409` (see [Run lifetime](operations/run-lifetime.md), "Upgrading to this release").
-  - On Kubernetes the substrate implements no `runner.ProxyReviver` (the agent pod pins the proxy pod's IP), so the restart refuses it with `runner.ErrReviveUnsupported` and reason `revive_unsupported`.
-  - On both, stop such runs (before upgrading, or after with `POST /api/v1/runs/{id}/kill`) and start a new run instead.
-  - The restart still replaces the proxy of a run whose config a supported release stored.
   - The proxy authenticates to `wardynd` with its run token (bearer, not mTLS — [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) B6).
 
 ### Serving the console under a sub-path
@@ -2743,6 +2739,8 @@ The residuals an operator should plan for:
   - List in `WARDYN_DAEMON_NO_PROXY` a private issuer or Graph host that wardynd can itself resolve and reach directly; leave it off the list when the corporate proxy is the only route to it.
   - A host the corporate proxy cannot reach and that is not on the list fails discovery at boot, and none of the site-config fields above can fix it.
   - For a split-horizon issuer (public URL, internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
+
+## AWS sign-in per person and starting runs
 
 ### AWS SSO per person
 
@@ -3241,8 +3239,7 @@ Naming these is the point of the walk, not a caveat on it:
 ### A run is holding for a sign-in
 
 - A run on the captured-AWS-SSO Bedrock lane can have its credential lapse **while it is working**.
-- Before 0.7.6 that was terminal: the agent's next model call failed and a mid-task context was lost.
-- Now the proxy **parks** the sandbox's next credential exchange while the credential's owner signs in again.
+- The proxy **parks** the sandbox's next credential exchange while the credential's owner signs in again.
 
 **Renewal comes first.**
 
@@ -3320,22 +3317,7 @@ Naming these is the point of the walk, not a caveat on it:
   3. Start new runs. The `wardyn-proxy` then trusts that CA when it re-originates the sign-in lane.
 - A proxy that cannot reach the AWS hosts is a routing problem, not a TLS one: use `upstream_proxy_no_proxy` and `internal_hosts` ("[Upstream proxy: the bypass list](#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)").
 
-> [!WARNING]
-> **A downgrade to 0.7.5 with `credential_reauth` rows present is UNSUPPORTED.**
-> Migration `0064` is additive (it widens a CHECK), so the upgrade needs nothing; the old CHECK would refuse the rows on the way back.
-> The upgrade runbook's `pg_dump` is the rollback.
-
-### Version combinations
-
-- `claimSingleInstance` excludes a second daemon (outside HA mode).
-- It does not exclude an old sidecar image, an old browser bundle or an old CLI, so:
-
-| combination | behaviour |
-|---|---|
-| 0.7.5 proxy sidecar, 0.7.6 daemon | No hold. The 423 is an unrecognised status, the re-resolve fails closed, and the run's model call fails as it did in 0.7.5. The approval row is still raised and still visible. |
-| 0.7.6 proxy sidecar, 0.7.5 daemon | No 423 is ever answered, so the hold never opens. Byte-identical to 0.7.5. |
-| 0.7.5 console, 0.7.6 daemon | The row renders through `WIRE_TO_COPY`'s fallback (the raw kind string in the chip) and the screen does not crash; the Approve/Deny pair is offered and the server answers 409. Tell people on an old bundle to reload. |
-| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; the 0.7.5 `approvals list` prints it verbatim. |
+## Model providers: changes, the internal gateway and a local server
 
 ### A provider change removes people's credentials
 
@@ -3444,6 +3426,8 @@ With `local.allow_on_laptop_runners: true` (off by default; set it with the swit
 > [!IMPORTANT]
 > **Upgrade note.** Move the proxy image pin with wardynd, image first, before you add a `local_model` provider.
 > wardynd writes `local_models` into the proxy's config for those runs only, and an older proxy refuses that key at startup.
+
+## Site config: artifact overrides, probes and directory autocomplete
 
 ### Upgrading from `artifact_overrides`
 
@@ -3663,6 +3647,8 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 
 ## Upgrades
 
+The steps a single release needs are in [CHANGELOG.md](../CHANGELOG.md), under that release's "Before you upgrade".
+
 > [!IMPORTANT]
 > **Upgrading to 0.9 removes three compatibility behaviours.**
 
@@ -3733,31 +3719,11 @@ There is **no rolling upgrade across this release**:
   - Over a database 0.8.6 or later migrated, the older binary stops earlier, at its boot audit check: `migrate: db: the audit chain canary could not append a row`, ending in `audit_events: rows are appended only through audit_append()`.
   - The audit conversion is one-way (see "Stopped-writer upgrade"); the meaning and the remedy are the same: start the newer release again, or restore the pre-upgrade dump before you run the older version.
 
-> [!IMPORTANT]
-> **Upgrading to 0.8 signs every SSO human out, once, under TLS (#1258).**
+> [!NOTE]
+> **A release that changes the session payload signs every SSO human out, once.**
 
-- With secure cookies on (TLS served directly, or `WARDYN_TLS_TERMINATED`), the session
-  cookie is now `__Host-wardyn_session`, and the old `wardyn_session` is never
-  read, not even as a fallback, so every human re-authenticates at their next
-  request.
-- The old cookie is left to expire.
-- A plain-HTTP install keeps the old
-  names and signs nobody out.
-- Admin-token and API-token auth are unaffected.
-
-> [!IMPORTANT]
-> **Upgrading to 0.7 signs every SSO human out, once.**
-
-- The session payload gained
-  a codec version and `decodeSession` requires an exact match
-  (`SessionCodecVersion`, [`internal/auth/oidc/session_codec.go`](../internal/auth/oidc/session_codec.go)).
-- So every cookie
-  minted by an earlier release decodes as no session and the human re-authenticates
-  at their next request.
-- Nothing is lost but the login: grants, group snapshots and
-  governance assignments are all read from the database.
-- **Admin-token and
-  API-token auth are unaffected** — neither carries a session cookie.
+- `decodeSession` requires an exact `SessionCodecVersion` match ([`internal/auth/oidc/session_codec.go`](../internal/auth/oidc/session_codec.go)), so a cookie minted by an earlier release decodes as no session and the human signs in again at their next request.
+- Grants, group snapshots and governance assignments are read from the database, and admin-token and API-token auth carry no session cookie, so only the login is lost.
 
 ```sh
 git pull && make compose-build          # rebuild wardynd at the new revision
@@ -3770,93 +3736,12 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
   rebuilds them.
 
 > [!IMPORTANT]
-> **0.7 needs the agent images rebuilt, or an allocated drive is unwritable.**
+> **`/home/agent/drive` is reserved: it is refused as an authored mount target.**
 
-- `/home/agent/drive` is the reserved in-container mount point a **user drive**
-  lands on (`runner.DriveTarget`, [`internal/runner/mount.go`](../internal/runner/mount.go)).
-- Every image
-  under [`deploy/images`](../deploy/images) now pre-creates it owned by `agent` — the ones on a public
-  base do it themselves, the ones on a sibling image inherit it.
-- A person's fresh
-  managed volume takes that ownership through Docker's copy-up.
-- **No pre-0.7 image
-  has the directory**: 0.6.6's base image created `/home/agent/work` and nothing
-  else.
-- So the daemon conjures a **root-owned** one at mount time and a drive you
-  allocated *writable* is unwritable by uid 1000 on its very first run.
-- Nothing
-  else goes wrong — the image builds, the container starts, the mount succeeds.
-- So the only symptom is the agent failing to write to its own drive.
-- And wardynd cannot repair it (fixing that ownership would mean re-owning a person's volume, which
-  the control plane never does).
-- Rebuild with `make agent-images-core`, and
-  re-pin anything listed in `WARDYN_AGENT_IMAGES` at the rebuilt tag; a **BYOI**
-  image is yours to fix, one `mkdir` (see "User drives on Docker" and
-  [`deploy/images/README.md`](../deploy/images/README.md)'s image contract).
-- `TestAgentImagesPreCreateDriveDir`
-  holds the rule for every image in this tree.
-- A deployment that registers no
-  drive is unaffected.
-
-> [!IMPORTANT]
-> **0.7 refuses `/home/agent/drive` as an AUTHORED mount target, and a row stored before this release still names it.**
-
-- The reserved target — the whole subtree,
-  so `/home/agent/drive/shared` too — is refused to every policy
-  `workspace_mounts[].target`, every `workspace_repos[].target` and every
-  workspace `local_dir` source target.
-- The check is `ValidateAuthoredTarget` ([`internal/runner/mount.go`](../internal/runner/mount.go)).
-- It is the authored-target arm of the same validator every
-  mount target runs.
-- Before 0.7 the rule was only the allowed-prefix one
-  (`/home/agent`, `/work`, `/workspace`), which admits it.
-- What a stored row does
-  next splits by where it lives.
-- A stored **workspace** source IS re-validated,
-  at run-create — `seedRequestWorkspace` re-runs `ValidateAuthoredTarget` over
-  every `ws.Sources` target ([`internal/api/runs_create.go`](../internal/api/runs_create.go)) — and is
-  refused `422` with `workspace <id> source target: target /home/agent/drive is
-  reserved for the user drive`.
-- A stored **policy**'s `workspace_mounts` or
-  `workspace_repos` row is never re-validated on read — `validatePolicySpec`
-  runs on the two **write** paths only — so it survives the upgrade and reaches
-  dispatch intact.
-- `buildRunMounts` re-checks the reserved target there and
-  **drops** the mount rather than failing the run, logging `wardynd: stored
-  policy binds the reserved user-drive target; dropping that mount` at WARN
-  ([`buildRunMounts` in `internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)).
-- The run starts one bind
-  short.
-- `buildRepoRecords` makes the same drop for a stored policy's
-  `workspace_repos[].target`, folded into its destination validation
-  ([`buildRepoRecords` in `internal/api/runs_scm.go`](../internal/api/runs_scm.go)), but with **no** distinct log line for that
-  arm.
-- That WARN is the *only* run-time signal a stored policy row produces —
-  no HTTP error, nothing the member sees.
-- And `buildRunMounts`' drop means
-  dispatch never reaches the driver-level `docker: denied workspace mount
-  "<source>" -> "<target>": target /home/agent/drive is reserved for the user
-  drive` refusal (the `ValidateAuthoredTarget` check in `Driver.agentMounts`,
-  [`internal/runner/docker/driver_mounts.go`](../internal/runner/docker/driver_mounts.go)) for this
-  case at all.
-- That check now guards only a path a stored policy row can
-  no longer take.
-
-Find both shapes before the upgrade window rather than in
-somebody's run or wardynd's log:
-
-```sh
-for path in policies workspaces; do
-  curl -fsS "$WARDYN_URL/api/v1/$path" -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
-    | grep -o '"target":"/home/agent/drive[^"]*"' || true
-done
-```
-
-- Re-target each hit anywhere else under `/home/agent`, `/work` or `/workspace`
-  and write the policy or workspace back.
-- Nothing migrates them for you, on
-  purpose: a mount target is an operator's authored decision, and silently moving
-  a bind is the outcome this refusal exists to prevent.
+- The whole subtree is refused to every policy `workspace_mounts[].target`, `workspace_repos[].target` and workspace `local_dir` source target (`ValidateAuthoredTarget`, [`internal/runner/mount.go`](../internal/runner/mount.go)).
+- A stored workspace is re-checked at run-create and refused `422`.
+- A stored policy row is not re-checked on read: dispatch drops that mount and logs `wardynd: stored policy binds the reserved user-drive target; dropping that mount` at WARN, so the run starts one bind short and the member sees no error.
+- Re-target any such row under `/home/agent`, `/work` or `/workspace`. Nothing migrates it for you.
 
 > [!NOTE]
 > On Helm, a **mixed-version rollout repeats that logout** for as long as both
@@ -3868,26 +3753,6 @@ done
   old binary never accepts a cookie the new one refuses, only the reverse — but
   plan the window.
 - `--wait` (below) is what keeps it short.
-
-> [!IMPORTANT]
-> **On Helm, a downgrade past 0.6 also stalls the rollout, before migrations ever matter.**
-
-- The chart's readiness probe targets `/readyz`, which the 0.6 images
-  introduced.
-- The empty default `image.tag` resolves to `.Chart.AppVersion`
-  (the chart's own `Chart.yaml`, always the shipped release's version), so a
-  stock install is fine.
-- An `image.tag`
-  explicitly **pinned** at or below `0.5.0`
-  serves only `/healthz`.
-- So the probe 404s forever, the pod never joins the
-  Service's endpoints, and `helm upgrade`/`rollout status` hangs NotReady with
-  nothing crashed and nothing logged.
-- Pin the probe back for such an image with
-  `--set readinessProbe.path=/healthz`, accepting that version's ceiling (a dead
-  Postgres reads healthy again).
-- CI does not catch this — `helm-install-test` and
-  the kind quickstart both build `wardynd` from source.
 
 ### Before you upgrade: a large recording store
 
@@ -4390,10 +4255,7 @@ env.WARDYN_OIDC_ISSUER for SSO — [...]
 > That is the case the chart's own render checks exercise.)
 
 - The new pod applies only the migration files `schema_migrations` does not already
-  record.
-- For the `0.5` → `0.6` upgrade this recipe serves, that is
-  `0042_capability_grants` and `0043_ssh_key_role`; re-running the same version
-  applies nothing and the count is `0`:
+  record; re-running the same version applies nothing and the count is `0`:
 
 ```console
 $ kubectl -n wardyn get pods -l app.kubernetes.io/name=wardyn
@@ -4401,7 +4263,7 @@ NAME                      READY   STATUS    RESTARTS   AGE
 wardyn-66c8f746c4-2b5mq   1/1     Running   0          25s
 
 $ kubectl -n wardyn logs deploy/wardyn | grep -c "applied migration"
-2
+<n>
 ```
 
 - A non-zero count is the expected shape of a version bump, not a warning.
@@ -5478,11 +5340,6 @@ What the switch needs, and refuses to render or boot without:
     given is masked, verbatim, in every artefact Wardyn persists or relays for that
     run, whichever replica serves the request and whether or not any replica
     restarted.
-  - (Until 0.8.6 the registry was an in-memory map that failed open.
-    A recording uploaded to a replica other than the one that handled the run's
-    injection, or after a restart, was persisted with live credentials in it and a
-    `success` audit event.
-    That is why a second replica was never supported.)
   - **A registry miss fails closed for runs dispatched by 0.8.6.**
     - Dispatch commits each run's *masking manifest* to Postgres before the sandbox
       can see a value:
