@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -541,5 +542,28 @@ func TestMCPListFilterLogNamesNoTool(t *testing.T) {
 		if strings.Contains(line, "fabricated-injected-credential") {
 			t.Fatalf("a hidden tool's name reached the log: %s", line)
 		}
+	}
+}
+
+// TestMCPListFilterShortFirstEventIsNotHeld: a first event shorter than a byte-order mark reaches the
+// client as soon as it is complete, while the server waits to send more.
+func TestMCPListFilterShortFirstEventIsNotHeld(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	s := &mcpSSEFilter{src: pr, br: bufio.NewReader(pr), start: true}
+	go func() { _, _ = pw.Write([]byte("\n")) }() // an empty event, then the server waits
+	got := make(chan string, 1)
+	go func() {
+		b := make([]byte, 16)
+		n, _ := s.Read(b)
+		got <- string(b[:n])
+	}()
+	select {
+	case v := <-got:
+		if v != "\n" {
+			t.Fatalf("read %q, want the empty event", v)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a one-byte first event was held back waiting for a byte-order mark")
 	}
 }
