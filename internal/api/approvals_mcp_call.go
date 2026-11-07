@@ -100,12 +100,43 @@ func mcpShownToolName(raw string) string {
 	return b.String()
 }
 
+// mcpCallDiscriminators are the keys only an MCP call scope carries.
+var mcpCallDiscriminators = []string{"call_sha256", "mcp_server", "mcp_tool"}
+
+// mcpCallKeyPresent reports whether scope is an object with a top-level key that folds to one of
+// mcpCallDiscriminators, read from the keys alone and before any value is decoded: a later variant,
+// a null or a non-string value can hide the hash from a decoder, and Postgres JSONB reorders case
+// variants on the way back, so presence of the key, not its decoded value, picks the strict path.
+func mcpCallKeyPresent(scope json.RawMessage) bool {
+	dec := json.NewDecoder(bytes.NewReader(scope))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		k, isKey := tok.(string)
+		if err != nil || !isKey {
+			return false
+		}
+		for _, d := range mcpCallDiscriminators {
+			if strings.EqualFold(k, d) {
+				return true
+			}
+		}
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return false
+		}
+	}
+	return false
+}
+
 // mcpCallScopeShaped decodes scope as one MCP call's typed scope when its keys are exact, it names
-// a server, and its display name is the one its raw tool name maps to (mcp_tool, else the display
+// a server and a non-empty string hash, and its display name is the one its raw tool name maps to (mcp_tool, else the display
 // name's own suffix).
 func mcpCallScopeShaped(scope json.RawMessage) (types.MCPCallScope, bool) {
 	var sc types.MCPCallScope
-	if !mcpCallScopeKeysExact(scope) || json.Unmarshal(scope, &sc) != nil || sc.MCPServer == "" {
+	if !mcpCallScopeKeysExact(scope) || json.Unmarshal(scope, &sc) != nil || sc.MCPServer == "" || sc.CallSHA256 == "" {
 		return sc, false
 	}
 	prefix := "mcp__" + sc.MCPServer + "__"
@@ -116,16 +147,16 @@ func mcpCallScopeShaped(scope json.RawMessage) (types.MCPCallScope, bool) {
 	return sc, raw != "" && sc.Tool == prefix+mcpShownToolName(raw)
 }
 
-// refuseBadMCPCallScope is the raise's check of a scope that carries call_sha256 (in any letter case,
-// as encoding/json reads it): the control plane recomputes the key from the scope's own server, tool
+// refuseBadMCPCallScope is the raise's check of a scope with a key that folds to call_sha256,
+// mcp_server or mcp_tool (mcpCallKeyPresent), whatever its value: the control plane recomputes the key from the scope's own server, tool
 // and arguments and refuses a mismatch, so what a person is shown is what was hashed. It also
 // refuses such a scope on another kind, one with a repeated or case-variant key, a display name that
 // is not its raw tool's, and a call larger than a person can be shown, never truncated. Each refusal
 // is a 400 with an auth.fail row: only a misbehaving proxy writes one. An accepted scope comes back
 // re-marshalled from its typed form with canonical arguments and extra, and the row stores that,
-// never the raw bytes. A scope with no call_sha256 comes back unchanged.
+// never the raw bytes. A scope with none of those keys comes back unchanged.
 func (s *Server) refuseBadMCPCallScope(w http.ResponseWriter, r *http.Request, kind types.ApprovalKind, scope json.RawMessage) (json.RawMessage, bool) {
-	if !types.IsMCPCallScope(scope) {
+	if !mcpCallKeyPresent(scope) {
 		return scope, false
 	}
 	const tooLarge = "The MCP call is larger than a person can be shown"
