@@ -274,7 +274,7 @@ func TestGatewayDispatchBedrockSSORefusedWithoutResign(t *testing.T) {
 	ev := waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), runID, "run.create", "failure")
 	want := `Model provider "bedrock-sso" sends run identity to a gateway, which needs Wardyn to sign its AWS requests at the proxy; ` +
 		`this install doesn't (WARDYN_AWS_SIGV4_AT_PROXY is off). Ask your operator.`
-	if got := auditData(t, ev)["error"]; got != want {
+	if got := auditData(t, *ev)["error"]; got != want {
 		t.Errorf("run.create failure error = %v, want %q (%s)", got, want, ev.Data)
 	}
 	fr := srv.cfg.Runner.(*fakeRunner)
