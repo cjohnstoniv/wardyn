@@ -224,6 +224,7 @@ const (
 	reasonAdminTokenNotConfigured  = "admin_token_not_configured"
 	reasonMissingBearerToken       = "missing_bearer_token"
 	reasonInvalidAdminToken        = "invalid_admin_token"
+	reasonAdminTokenRateLimited    = "admin_token_rate_limited" // too many failed admin token guesses from this address (429, Retry-After: 10)
 	// reasonIdentityProviderNotConfigured is shared by internalAuth and
 	// internalAuthGroundtruth: the identical cause (no embedded identity
 	// provider wired) refuses both the run-token and the sensor-token chains.

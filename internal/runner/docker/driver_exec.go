@@ -142,7 +142,9 @@ func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Wri
 	if len(argv) == 0 {
 		return "", errors.New("docker: exec: empty argv")
 	}
-	if v := d.vmFor(ctx, ref); v != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return "", fmt.Errorf("docker: exec: %w", err)
+	} else if v != nil {
 		return d.vmExec(ctx, v, ref, argv, out)
 	}
 	// EXEC-LESS path: a deferred (krun) agent is created NOW with the workload as

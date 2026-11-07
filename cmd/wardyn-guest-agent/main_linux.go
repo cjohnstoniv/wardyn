@@ -34,7 +34,7 @@ func main() {
 		os.Exit(code)
 	}
 	port := flag.String("port", "/dev/virtio-ports/"+guestagent.PortName, "the virtio-serial port to serve")
-	out := flag.String("out", "/run/wardyn-guest", "directory for detached execs' output (a tmpfs)")
+	out := flag.String("out", "/var/lib/wardyn-guest/out", "directory for detached execs' output (on the root disk, not the /run tmpfs)")
 	flag.Parse()
 	if err := run(*port, *out); err != nil {
 		slog.Error("wardyn-guest-agent", "err", err)
@@ -61,7 +61,7 @@ func run(port, out string) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, Mount: guestagent.MountVirtiofs, MarkerDir: "/run",
+	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, CADir: guestagent.CADir, SystemRoots: guestagent.SystemRoots, Mount: guestagent.MountVirtiofs, MarkerDir: "/run",
 		Swaps:       "/proc/swaps",
 		SignInStore: func(off bool) error { return guestagent.MountSignInStore(guestagent.AgentHome, off) }}
 	h, err := srv.Handler()

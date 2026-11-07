@@ -8,6 +8,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -52,18 +54,26 @@ func waitFullPass(t *testing.T, d *dockerSink) {
 	d.fullPasses.Wait()
 }
 
-// The full-spool rule is behind the Linux VM switch: a runner whose caps offer no VM never ends a
-// run for a full spool, and the containment tick drives the rule on one that does.
+// The full-spool rule is behind the Linux VM switch: a runner whose caps offer no VM and that holds
+// no VM it made earlier never ends a run for a full spool, and the containment tick drives the rule
+// on one that offers VMs, or whose VMs went off while one it made is still there.
 func TestFullSpoolRuleFollowsTheLinuxVMSwitch(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		caps *runnerwire.VMCaps
+		left bool // a VM's run directory is left from before VM sandboxes went off
 		want int
-	}{{"VMs off", nil, 0}, {"VMs on", &runnerwire.VMCaps{}, 1}} {
+	}{{"VMs off", nil, false, 0}, {"VMs on", &runnerwire.VMCaps{}, false, 1}, {"VMs off with a VM left", nil, true, 1}} {
 		t.Run(tc.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			if tc.left {
+				if err := os.MkdirAll(filepath.Join(vmStateDir(stateDir), "runs", uuid.NewString()), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
 			h := newSinkHarness(t)
 			e := &endCalls{isVM: true}
-			endVMsOnFullSpool(h.sink, tc.caps, e.end)
+			endVMsOnFullSpool(h.sink, tc.caps, stateDir, e.end)
 			h.fillSpool(false)
 			d := &dockerSink{spoolSink: h.sink}
 			d.extras(nil, nil).options.Tick(t.Context())
@@ -83,7 +93,7 @@ func TestFullSpoolRuleFollowsTheLinuxVMSwitch(t *testing.T) {
 func TestFullSpoolPassDoesNotHoldTheTick(t *testing.T) {
 	h := newSinkHarness(t)
 	e := &endCalls{isVM: true, hold: make(chan struct{})}
-	endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, e.end)
+	endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, t.TempDir(), e.end)
 	h.fillSpool(false)
 	d := &dockerSink{spoolSink: h.sink}
 	tick := d.extras(nil, nil).options.Tick
@@ -137,7 +147,7 @@ func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
 	t.Cleanup(func() { closeJoinBound, cancelUnwindBound = prevJoin, prevUnwind })
 	start := func(t *testing.T, end func(context.Context, uuid.UUID) (bool, error)) (*dockerSink, func(context.Context)) {
 		h := newSinkHarness(t)
-		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, end)
+		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, t.TempDir(), end)
 		h.fillSpool(false)
 		d := &dockerSink{spoolSink: h.sink}
 		tick := d.extras(nil, nil).options.Tick
@@ -191,7 +201,7 @@ func TestDockerSinkCloseJoinsTheFullSpoolPass(t *testing.T) {
 	t.Run("no pass starts once Close has begun", func(t *testing.T) {
 		h := newSinkHarness(t)
 		e := &endCalls{isVM: true, fails: 100} // the run stays unhandled: a new pass would end it again
-		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, e.end)
+		endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, t.TempDir(), e.end)
 		h.fillSpool(false)
 		d := &dockerSink{spoolSink: h.sink}
 		tick := d.extras(nil, nil).options.Tick
@@ -218,7 +228,7 @@ func TestNoFullSpoolPathWithoutTheLinuxVMSwitch(t *testing.T) {
 	t.Cleanup(func() { closeJoinBound = prev })
 	h := newSinkHarness(t)
 	e := &endCalls{isVM: true}
-	endVMsOnFullSpool(h.sink, nil, e.end) // VMs off
+	endVMsOnFullSpool(h.sink, nil, t.TempDir(), e.end) // VMs off
 	h.fillSpool(false)
 	d := &dockerSink{spoolSink: h.sink}
 	d.extras(nil, nil).options.Tick(t.Context())

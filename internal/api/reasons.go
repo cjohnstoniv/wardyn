@@ -281,8 +281,8 @@ const (
 	// agent pod). Nothing changed; stop the run and start a new one.
 	reasonReviveUnsupported = "revive_unsupported"
 
-	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history
-	// paging (runs_policy.go) — one reason per rejected query parameter.
+	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history paging (runs_policy.go): one
+	// reason per rejected query parameter.
 	reasonInvalidOwnerParam         = "invalid_owner_param"          // ?owner= is not "", "me", or "all"
 	reasonInvalidStatusParam        = "invalid_status_param"         // ?status= names a value outside the closed set
 	reasonStatusNeedsExclusive      = "status_needs_exclusive"       // status=needs was combined with another status value
@@ -389,7 +389,7 @@ const (
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 
-	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
+	// POST /site-config/test-proxy and POST /site-config/test-redirect (site_config_probe.go).
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
 	reasonSiteConfigProbeURLInvalid     = "site_config_probe_url_invalid"     // the probe target is not a plain http(s) URL
 	reasonEgressRedirectFromRequired    = "egress_redirect_from_required"     // an egress-redirect edit named no `from`

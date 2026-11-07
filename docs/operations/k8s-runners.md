@@ -25,7 +25,7 @@
 | Kubelet version | 1.31 or newer on every schedulable node of the sandbox architecture. Boot refuses with `kubelet_below_floor` and names the nodes. |
 | NetworkPolicy enforcement | The CNI must enforce policy. Boot runs an egress canary and starts only on an `enforced` verdict. |
 | Runs namespace | Exists before the install, is dedicated to this runner, and is covered by no platform default-deny policy. The chart never creates it. |
-| Storage | One ReadWriteOnce volume. NFS-class and ReadWriteMany storage are unsupported because the state relies on `flock`. |
+| Storage | One ReadWriteOnce volume, `10Gi` unless `persistence.size` says otherwise. NFS-class and ReadWriteMany storage are unsupported because the state relies on `flock`. |
 | Node list | The ServiceAccount lists every Node in the cluster (cluster-wide read of names, addresses, labels, taints and images). A cluster that refuses this cannot host organisation runners. |
 | Pod-to-ClusterIP traffic | The cluster must not rewrite its source address (for example kube-proxy `masqueradeAll`). Boot refuses with `relay_source_rewritten`. |
 | Organisation URL | `WARDYN_RUNNER_ORG_URL` is set on the control plane. The runner's `org` value must match it. |
@@ -91,11 +91,11 @@
 9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
-- The chart is not published to a registry. Install it from a checkout of the release tag, where the default `image.tag` is that release.
+- The chart is not published to a registry. A checkout's default `image.tag` is its own release.
 - The registration token already fixes `owner_kind` as organisation, so the runner is `org_cluster` from registration. The claim records who bound it and when.
 - A break-glass mint (an admin API token under four-eyes) is audited `governance.change.bypass` and never counts as the second human. Claiming it is audited `runner.claim` with `break_glass` true.
 - The init container runs `wardyn-runnerd register --substrate k8s --if-unregistered`. The Ed25519 key is generated on the volume and never leaves it.
-- Register measures nothing on Kubernetes. The three totals are required in practice: `limits.totalCPU` in CPUs, `limits.totalMemory` and `limits.totalDisk` in GB. Register refuses until they are set.
+- Register measures nothing on Kubernetes, so it refuses until the three totals are set: `limits.totalCPU` in CPUs, `limits.totalMemory` and `limits.totalDisk` in GB.
 
 ### Values
 
@@ -106,6 +106,8 @@
 | `extraRunsNamespaces` | More pre-existing runs namespaces beside `runsNamespace`, which stays the default: see [Several runs namespaces](#several-runs-namespaces). Each is unique and not the release namespace, or the render fails. Fit checks read the default quota only; tighter extra quotas refuse at pod create |
 | `sandbox.arch` | `amd64` or `arm64` (required): pinned as every run pod's `kubernetes.io/arch` selector |
 | `sandbox.maxPodLifetime` | Upper bound on both pods' `activeDeadlineSeconds`; default `168h` |
+| `image.repository`, `image.tag`; `proxyImage.repository` | Runnerd and proxy images. An empty `image.tag` means the chart's app version, which the proxy image also takes |
+| `persistence.size`, `persistence.storageClass` | The runner's volume: `10Gi` and the cluster's default storage class unless set |
 | `registration.existingSecret` | The Secret holding the token under `token` (required) |
 | `limits.*` | `maxRuns`, `totalCPU`, `totalMemory`, `totalDisk`, `perRunCPU`, `perRunMemory`, `perRunDisk`; zero leaves a flag out |
 | `recording` | `pg`, `fs` or `off`: the runner's ceiling for session recording |
@@ -116,6 +118,7 @@
 | `apiServer.ports`, `apiServer.peers` | The apiserver egress rule: ports `443` and `6443`, and raw NetworkPolicy peers |
 | `egress.orgCIDRs`, `egress.extra`, `egress.hardDenyCIDRs` | The organisation egress rule, extra raw egress rules, and extra CIDRs every proxy denies |
 | `k8s.*` | Sandbox placement: `sandbox.nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, labels, `runtimeClasses.CC2` and `CC3`, `imagePullSecret` |
+| `k8s.linuxVM` | `true` offers Linux VM sandboxes as pods under `runtimeClasses.CC3`, which must name a microVM runtime such as Kata: see [Linux VM sandboxes](linux-vm-sandboxes.md#on-a-kubernetes-runner) |
 | `rbac.create` | `false` when a platform team applies the RBAC itself: see [RBAC order](#rbac-order) |
 | `workloads.namespaces` | Namespaces whose `WardynWorkload` resources runnerd watches (`WARDYN_RUNNERD_WORKLOAD_NAMESPACES`). Each gets a Role for `wardynworkloads` and `wardynworkloads/status`, which is patch-only. The CRD is applied by hand on an upgrade: see [the WardynWorkload resource](workloads.md#kubernetes-the-wardynworkload-resource) |
 
@@ -169,7 +172,7 @@
 
 - One release serves one architecture: `sandbox.arch` is `amd64` or `arm64`.
 - A mixed cluster installs two releases. Each takes its own release name, registration Secret (a fresh token) and runs namespace.
-- A shared runs namespace cannot work: the foreign-object check refuses a namespace holding another runner's objects.
+- A runs namespace cannot be shared: the foreign-object check refuses one holding another runner's objects.
 - A `kubernetes.io/arch` in `k8s.sandbox.nodeSelector` of another architecture refuses boot. A node affinity that excludes the architecture is not checked: the pods stay `Pending` instead.
 
 ## Several runs namespaces
@@ -187,7 +190,7 @@
 | A runner serves each named namespace for one pool | "This runner already serves {namespace} for another pool." |
 | A membership with no namespace uses the default and excludes every other pool | "This organization runner is already in another pool. Remove it from that pool first." |
 | A name that is not a namespace name: lowercase letters, digits and `-`, at most 63 characters | `400` |
-| A runner that does not advertise the namespace, such as one older than this release, is not eligible for it | The run is refused `runner_pool_no_eligible_member` |
+| A runner that does not advertise the namespace is not eligible for it | The run is refused `runner_pool_no_eligible_member` |
 | A namespace the runner no longer lists | The create is refused at dispatch, and runnerd refuses it as `runs_namespace_not_served` |
 
 - Boot runs the access review, the foreign-object check and the egress canary for every listed namespace. A namespace holding another runner's objects, or one where the canary is not `enforced`, refuses boot.
@@ -202,8 +205,7 @@
 3. `Recreate` stops the old pod before the new one starts. The organisation supports runnerd N and N-1.
 4. Runs survive the restart only if runnerd is READY again and each proxy renews before its deadline: see [Self-lapse](#self-lapse-and-outages).
 
-- The state volume holds the runner's identity. Losing it is identity loss: mint a new token, use a fresh volume and revoke the old runner.
-- There is no re-key.
+- The state volume holds the runner's identity. If it is lost, mint a new token, use a fresh volume and revoke the old runner. There is no re-key.
 - Upgrade the control plane first. Runnerd N-1 keeps working against it.
 
 ## Self-lapse and outages
@@ -251,7 +253,7 @@
 | No decision sink | The decision sink did not start, so the runner refuses to create a sandbox | Read the sink error in the log |
 | Arch conflict | `k8s.sandbox.nodeSelector` names another `kubernetes.io/arch` | Remove the key or match `sandbox.arch` |
 
-- The kubelet floor is conservative. Since [Kubernetes 1.27](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) the kubelet moves a deleted pod to a terminal phase before it is deleted, except static pods and force-deleted pods without a finalizer. [Pod disruption conditions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#pod-disruption-conditions), including `DeletionByPodGC`, are stable since 1.31.
+- The kubelet floor is conservative. Since [Kubernetes 1.27](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) the kubelet moves a deleted pod to a terminal phase first, except static pods and force-deleted pods without a finalizer. [Pod disruption conditions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#pod-disruption-conditions), including `DeletionByPodGC`, are stable since 1.31.
 - Below the floor a stop has no terminal status, so the run waits in termination unknown instead of ending.
 - A node that joins below the floor after boot is shown on the runner card.
 
@@ -288,11 +290,11 @@ A revoked runner whose runnerd never returns leaves objects behind. Select them 
 4. Delete the NetworkPolicies, last.
 
 - Never clear the finalizer for a run on a partitioned node or one whose state is unknown. Its pods and policies stay until the node is confirmed powered off or returns.
-- A reinstall refuses until the namespace is clean. Pods end at their deadline anyway.
+- A reinstall refuses until the namespace is clean.
 
 ### A stop still held after the upgrade
 
-Before 0.10.0-rc.4 the runner did not accept a proxy pod deleted before its proxy started as stopped. The upgraded runner does, when it reconnects, from what its own reads of the pod and its node show. If a run is still held after that, the runner's evidence does not prove the stop, and the run keeps its fence:
+An upgraded runner retries a held stop when it reconnects, from its own reads of the pod and its node. If the run is still held after that, the evidence does not prove the stop, and the run keeps its fence:
 
 - Do not remove `wardyn.dev/stop-proof` or delete the run's pods, NetworkPolicies or Secret by hand. One read of the pod cannot show what the runner checks: that no earlier read showed a container ID, and that the node is the machine the run bound to.
 - Release it only as [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) says: the `out-of-service` taint, or a node record, for the node states that section names.
@@ -322,7 +324,7 @@ Before 0.10.0-rc.4 the runner did not accept a proxy pod deleted before its prox
 
 - It builds a kind cluster of one control plane and two workers on Calico, and installs this chart with its rendered Role against a fake organisation.
 - It runs [`test/k6`](../../test/k6/k6_test.go) under runnerd's own ServiceAccount token, never cluster-admin.
-- It runs on the 1.31 floor (`kindest/node:v1.31.4`) and on `kindest/node:v1.35.0`. Both passed all 19 cases on the 0.9.3 tree; the table groups those with an operator-visible result.
+- It runs on the 1.31 floor (`kindest/node:v1.31.4`) and on `kindest/node:v1.35.0`, in the nightly workflow. The table groups the cases with an operator-visible result.
 
 | Case | What it shows |
 |---|---|
@@ -340,12 +342,12 @@ Before 0.10.0-rc.4 the runner did not accept a proxy pod deleted before its prox
 | Retained-policy probe | A pod held for deletion, and one whose finalizer was stripped, make 0 connections through the retained policy on kind's Calico |
 | Node name reuse | A pod GC mark and a reused name are recorded on the tick, and `StopProxy` is refused |
 
-The bind and delete cases are the release gate for the unbound-pod arm, and they passed on both versions.
+The bind and delete cases are the release gate for the unbound-pod arm.
 
 The run did not cover:
 
 - Cases that need an organisation hub session, which the fake organisation does not provide. They are a renew through the relay, the proxy's self-lapse end to end, and a hard-denied agent request.
-- The same missing hub hides restart fence replay, sink re-registration, the organisation-triggered sweep and keystore deletion on revoke. They also hide an in-flight request across the 3-second drain. These have unit tests only; none ran in a cluster.
+- The same missing hub hides restart fence replay, sink re-registration, the organisation-triggered sweep, keystore deletion on revoke and an in-flight request across the 3-second drain. These have unit tests only.
 - Placement by trust class for an organisation runner and the refusal for a personal runner.
 - Enforcement on a CNI other than Calico on kind, or a managed cloud's control plane.
 - Two kubelets under one Node name, or a holder acting on a stale snapshot. Both are unsupported; the operator requirement above stands in for them.

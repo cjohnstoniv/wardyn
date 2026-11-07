@@ -19,7 +19,7 @@ func TestWaitFullPassFollowsThePassNotADeadline(t *testing.T) {
 	t.Parallel()
 	h := newSinkHarness(t)
 	e := &endCalls{isVM: true, hold: make(chan struct{})}
-	endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, e.end)
+	endVMsOnFullSpool(h.sink, &runnerwire.VMCaps{}, t.TempDir(), e.end)
 	h.fillSpool(false)
 	d := &dockerSink{spoolSink: h.sink}
 	d.extras(nil, nil).options.Tick(t.Context())

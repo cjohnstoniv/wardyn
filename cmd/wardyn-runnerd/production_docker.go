@@ -100,7 +100,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
 		ProxyServesAnyPeer: docker.ProxyServesAnyPeerFromEnv(), UserDriveHostRoots: driveRoots,
 		ProxyPeersOnlyByDefault: docker.ProxyPeersOnlyByDefaultFromEnv(), PeersOnlyFallback: opts.offline.peersOnlyChanged,
-		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})
+		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits, AllowHostReachableRunNetwork: docker.AllowHostReachableRunNetworkFromEnv()})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
@@ -115,7 +115,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
 	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
-	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
+	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, stateDir, sub.EndVM)
 	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
 	extras.boundFolders = true
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.

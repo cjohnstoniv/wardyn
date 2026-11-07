@@ -1,6 +1,6 @@
 # Contributing to Wardyn
 
-Thank you for your interest in contributing to Wardyn, the open-source governance control plane for coding agents. This document outlines the process and requirements for contributing.
+Rules for changing Wardyn: sign-off, invariants, gates, branching.
 
 ## Developer Certificate of Origin
 
@@ -25,7 +25,7 @@ All contributions to Wardyn are made under the Apache License 2.0. By contributi
 
 ## Security Invariants
 
-All contributors MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
+All contributors MUST preserve the security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
 
 1. **Keep credentials out of the sandbox wherever they can be brokered** — Late binding via the broker, except the exceptions in [THREAT-MODEL.md](./threatmodel/THREAT-MODEL.md) section 5.1a. Some are structural (`ssh_key`); others are coverage gaps or modes (`env_secret`, `file_secret`, PAT broker off). That enumeration is authoritative — do not restate a count here, it is what drifts.
 2. **Approval mints the credential** — For a grant with `requires_approval: true`, credential scope is verified atomically in the same transaction; a grant without it is policy-eligible and mints by design.
@@ -39,7 +39,7 @@ All contributors MUST preserve the six security invariants documented in [ARCHIT
 Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target and, for anything the Kubernetes runner supports, the `conformance-k8s` CI job (needs a local `kind` cluster to run outside CI — see RELEASING.md; a driver-agnostic honesty stub keeps the contract enforced everywhere else). Every pull request runs these CI checks. A **subset** of them is a server-side merge block on `main`; branch protection is the source of truth, not this list — read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`. The rest are the review bar, and a red one is still a red one:
 
 - `go build` and `go vet` — both plain and `-tags docker`
-- Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=74 over the
+- Go unit suites with a coverage floor: `make cover-check` (enforces the `COVER_MIN` floor in the Makefile over the
   UNION of all three shipped builds — tagless + `-tags docker` + `-tags docker,k8s`),
   `make test-report-docker` (fakeDocker), `make test-report-k8s`,
   `make test-report-pg` (real Postgres), and `make test-race-pg` — the race
@@ -48,7 +48,7 @@ Features are not done until they pass the conformance suite (`test/conformance`)
 - Conformance tests: Docker + the driver-agnostic stub (blocking in CI), plus
   `conformance-k8s` for the Kubernetes runner
 - UI: ESLint (`react-hooks` and `no-floating-promises`, run by `make lint`), `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite
-- Docs: the mermaid diagram + label-truth gate (`make diagrams`)
+- Docs: `make lint` (form, links) and `make diagrams` (SVG labels, alt text)
 - Deploy: `helm lint` + `helm template` render assertions over the default AND
   `ci/all-on-values.yaml` value sets, `docker compose config` validation, and
   `helm-install-test` (kind cluster: postgres + helm install + `/healthz`)
@@ -249,7 +249,3 @@ A change to a console flow is settled in a prototype before it is built, not aft
 The component library that prototypes draw on is kept in step with a claude.ai
 design-system project; [docs/design/SYNC.md](docs/design/SYNC.md) covers picking that up
 on a new account.
-
-## Questions?
-
-Open an issue or reach out to the maintainers. We're here to help!

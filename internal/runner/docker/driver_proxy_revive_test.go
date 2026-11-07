@@ -180,7 +180,7 @@ func TestReplaceProxy_ARefusedPinFailsAsReplaceFailed(t *testing.T) {
 	if err := d.StopProxy(ctx, sb.Ref); err != nil {
 		t.Fatalf("StopProxy: %v", err)
 	}
-	f.networks[internalNetName(runID)] = client.NetworkCreateOptions{Driver: "bridge", Internal: true}
+	f.networks[internalNetName(runID)] = runNetworkOptions(nil, true) // no subnet in the request
 
 	err = d.ReplaceProxy(ctx, sb.Ref, renderedTestConfig(t, "fresh"))
 	if !errors.Is(err, runner.ErrProxyReplaceFailed) || !strings.Contains(err.Error(), "user configured subnets") {

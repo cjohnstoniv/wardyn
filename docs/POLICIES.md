@@ -10,6 +10,7 @@
 
 - The policy a run *started from* and the one it *got* differ.
 - Launch adds workspace and source-control hosts, routes GitHub through the git-broker, applies the governance profile's walls and the org's disk size, and clamps a member's policy to their limits.
+- A governance profile is the same object as a governance unit: the API calls it a unit (`/governance/units`), and a policy record's `source`, `cause` and `layer` say `unit`.
 - `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
 - Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a super admin.
@@ -27,7 +28,7 @@
   - `composer.Clamp` is the enforcement net, and a member's clamp warnings are visible before launch.
   - Preflight (`POST /runs/preflight`) runs on its own as the run is edited, and the **Check again** button runs it on demand.
   - Launch is blocked by a refusal for the current body graded under 60s ago.
-- **"Make a policy from this run"**, on a run's detail page. Synthesizes a policy from that run's observed behavior via `handleSynthesizeProfile` (`POST /runs/{id}/profile/synthesize`) — the honest home for "write the policy from what happened," rather than a promise the run screen can't keep.
+- **"Make a policy from this run"**, on a run's detail page. Synthesizes a policy from that run's observed behavior via `handleSynthesizeProfile` (`POST /runs/{id}/profile/synthesize`).
 - All three share one component, `policy-panel.tsx` — a mono JSON textarea plus template chips (Minimal, Model provider only, Package registries, CI baseline, Allow-all — observe first).
 - Three of which (Model provider only, Package registries, CI baseline) are compiled-in, derived from three [`examples/policies/`](../examples/policies/) files — **not** read from disk at runtime.
 - So editing a file there does not change what the console offers.
@@ -43,10 +44,7 @@
 | `allow_all_egress` | `bool` | `false` | Switches egress from allowlist-only to deny-list-only, so any non-denied **public** host is allowed; the private-IP guard, the credential-injection rule and the GitHub-host denies still hold. See [`allow_all_egress`](#allow_all_egress). |
 | `first_use_approval` | `string` | `always_deny` | How an unknown domain is handled. See the three modes below. A legacy boolean still decodes (`true`→`deny_with_review`, `false`→`always_deny`). |
 | `first_use_hold_seconds` | `int` | `0` (→ `30`) | Only `wait_for_review`: how long a connection is held awaiting a decision before it fails closed. `0`/absent keeps the built-in **30s**. |
-| | | | Bounded at write time: negative, or over **600**, is rejected (`400`) at every ingest point, and a policy stored before that bound existed is clamped to 600 by the proxy when the run starts. |
 | `max_holds` | `int` | `0` (→ `16`) | Only `wait_for_review`: cap on concurrent held connections; the next held connection over the cap fails fast. `0`/absent keeps the built-in **16**. |
-| | | | Bounded at write time: negative, or over **256**, is rejected (`400`) at every ingest point, and a policy stored before that bound existed is clamped to 256 by the proxy when the run starts. |
-| | | | Each held connection is a goroutine polling the control plane once a second, which is what the cap exists to bound. |
 | `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction, enforced on the forward, `CONNECT`, TLS-intercepted and brokered model lanes; a refused request is `403` with `rule_source` `policy:method`. See [`allowed_methods`](#allowed_methods). |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. |
 | `eligible_grants` | `[]GrantSpec` | `[]` | The ceiling of credential scopes this run may request. Eligibility is not issuance — the broker still mints. |
@@ -64,6 +62,11 @@
 | `github_capabilities` | `[]string` | omitted = the provider row's `default_profile` | The GitHub twin of `azure_devops_capabilities`, chosen only within the row's `capability_ceiling`. Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. See [`github_capabilities`](#github_capabilities). |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
+
+- `first_use_hold_seconds`: negative or over **600** is rejected (`400`) at every ingest point. A policy stored before that bound existed is clamped to 600 by the proxy when the run starts.
+- `max_holds`:
+  - Negative or over **256** is rejected (`400`) at every ingest point. A policy stored before that bound existed is clamped to 256 by the proxy when the run starts.
+  - Each held connection is a goroutine polling the control plane once a second, which is what the cap exists to bound.
 
 ### `allowed_domains`
 
@@ -145,6 +148,7 @@
 - A narrower choice is always honoured, and a member's list that the bound cuts down says what was dropped in the `201`'s `warnings` (and the run's `run.create` `clamp_warnings`);
   - a choice that leaves nothing permitted refuses the launch with reason `ado_capabilities_none_permitted` rather than falling back to the default, and `POST /runs/preflight` refuses it with the same reason.
 - An unset choice stays unset (the row's `default_profile` applies), including for a member who launches with no policy at all; the governance list is never inherited unasked.
+- A governance profile's `azure_devops_capabilities` adds standing access above the row's `default_profile`; it is not a wall below it, so it cannot make a unit read-only. Use `eligible_grants` or a second provider row for that.
 - An admin's own run keeps its list, bounded by the ceiling alone.
 - Inert for a run not on that lane.
 - See [AZURE-DEVOPS.md](AZURE-DEVOPS.md).
@@ -153,7 +157,8 @@
 
 - The GitHub twin of `azure_devops_capabilities`: this run's GitHub capabilities in place of a GitHub provider row's `default_profile`, chosen only within the row's `capability_ceiling`.
 - Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`.
-- A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused), and a ceiling's list is never handed to a member as their choice.
+- A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused).
+- A profile's list bounds its members' runs, the GitHub CLI included: a member who names none gets the profile's list, and a list sharing none with it is refused.
 - Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. Entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall also narrows the GitHub CLI's capabilities ([Your walls](#your-walls)).
 
 ### Brokered GitHub: the denies you did not write
@@ -185,7 +190,7 @@
 - So a brokered run that dials any of those names cannot `curl` the GitHub API, `gh pr create`, fetch a release tarball or a raw `githubusercontent.com` file, or clone/push over SSH to the same forge.
 - The narrowed envelope is disclosed in the `run.policy.resolve` audit event.
 
-**It is a name deny, and that is the whole of its reach.**
+**It denies host names only.**
 
 - The proxy keys the verdict on the host string the sandbox asked for (`evalHost`), so a `CONNECT` to a raw GitHub IP is a different key and none of these denies see it.
 - A deny entry that IS a literal IP is the one case where the key is not the raw string: host strings and policy entries alike are canonicalized through `net.IP` first.
@@ -202,19 +207,18 @@
 - If you run a brokered policy with `allow_all_egress`, the broker route is the only *convenient* route, not the only one.
 - It is what git itself uses, since a clone/push URL carries a name, never a bare IP.
 
-### `git_pat` is never-resident too, as of 0.7
+### `git_pat` is not resident while the broker is on
 
-- Through 0.6 the two git lanes had opposite credential postures, and the asymmetry was the gap rather than a design:
+- Where each git lane's credential is held:
 
 | Lane | Credential |
 |---|---|
-| `github_token` | minted proxy-side, injected on the outbound leg — **never in the sandbox**, per-repo, ref-confined, ≤1h |
-| `git_pat` (GitLab, Bitbucket) | handed to the **in-sandbox** credential helper — **resident** for the life of the run, at whatever scope the operator's PAT carries |
+| `github_token` | minted proxy-side and injected on the outbound leg, not in the sandbox, when the run is brokered for a repo; per-repo, ref-confined, ≤1h |
 | Azure DevOps | the person's own credential (a token Wardyn creates for the run, their Entra token, or one they pasted in), injected proxy-side — **never in the sandbox**. There is no shared `git_pat` lane; see [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
 
-- The grant kind's own doc explains why it started that way: git-over-HTTPS is an opaque `CONNECT` tunnel, and a proxy cannot inject Basic-auth into one.
+- Git-over-HTTPS is an opaque `CONNECT` tunnel, and a proxy cannot inject Basic-auth into one.
 
-**The fix removes the tunnel rather than injecting into it.**
+**The broker removes the tunnel rather than injecting into it.**
 
 - `agent-run` rewrites a granted host to a plain-HTTP broker path (`url.<proxy>/wardyn/git/<host>/.insteadOf https://<host>/`), so the proxy terminates the request itself, mints the PAT server-side, and sets Basic auth on the outbound leg.
 - The sandbox speaks cleartext to its **own sidecar** over a loopback-equivalent hop and never holds the credential.
@@ -331,9 +335,10 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 | Lane | Route to the forge | What binds a push |
 |---|---|---|
 | `github_token` with repos (brokered) | `/wardyn/gh/<org>/<repo>` only — every name above is denied | Per-repo allowlist **plus** the receive-pack pkt-line parser ([`internal/egress/proxy/git_broker.go`](../internal/egress/proxy/git_broker.go)), which reads the refs being pushed and refuses any outside `refs/heads/wardyn/<run-id>/`. |
-| | | Default-on; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out, and a push forwarded unparsed carries the distinct decision-log `rule_source` `brokered:git:branch-ns-off` so the posture is provable per push |
 | An `ssh_key` grant for the **same** forge | None | Refused at write (`400`) going forward; for anything already stored, the grant is withheld from the sandbox at dispatch and refused at mint — there is no credential left to push with |
 | A `git_pat` grant for the **same** forge (`github.com` or a `*.github.com` host) | None | Same three seams. A GitHub `git_pat` is typically a *user* PAT — broader than the repo-scoped installation token beside it, and bound by no branch namespace |
+
+- `github_token` with repos: Default-on; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out, and a push forwarded unparsed carries the distinct decision-log `rule_source` `brokered:git:branch-ns-off` so the posture is provable per push
 
 
 - An `ssh_key` or `git_pat` grant for a **different** host (`gitlab.com` or a GHES host, say, alongside a `github.com` `github_token`) is untouched by any of it.
@@ -343,7 +348,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - `agent-run` writes an ssh config naming that socket and a known-hosts command, clones, closes the agent, then removes the config and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
 - The grant id rides the sandbox env (`WARDYN_SSH_GRANTS`), but the proxy's mint route never answers an `ssh_key` grant with the key, and the broker issues it once per run unless the grant is approval-gated.
 - The proxy's mint route refuses only *brokered GitHub* grant ids (`isBrokeredGitGrant`).
-- That forge's key is bounded by the operator who supplied it, not by Wardyn ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a) — the honest scope for a non-brokered credential, unchanged by any of the above.
+- That forge's key is bounded by the operator who supplied it, not by Wardyn ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a) — the scope for a non-brokered credential, unchanged by any of the above.
 
 - **If the run needs direct GitHub fetches, drop the `github_token` grant** (and allowlist the hosts you need).
 - A run with no git grants keeps whatever GitHub egress its policy grants — the confinement is no-op without one.
@@ -568,7 +573,7 @@ What the check does and does not settle:
 - Where the run's policy names no list, your list narrows the provider's default: Azure DevOps at dispatch, the GitHub CLI's capabilities at create. Walls that cannot be read then refuse the run `credential_withheld_unread`.
 - An approved request for an Azure DevOps capability is not checked against your list.
 - `tool_rules` holds at most 32 rules, one per tool, and `push_rules.deny_paths` at most 64 paths in the policy's own pattern language.
-- These six apply when the run is created and are recorded in the run's policy like any other knob; they are not applied again at dispatch. The one exception is an Azure DevOps list over the default profile, met at dispatch and recorded there.
+- `azure_devops_capabilities`, `github_capabilities`, `tool_rules`, `push_rules` and `auto_stop_after_sec` apply when the run is created and are recorded in the run's policy like any other knob; they are not applied again at dispatch. Two are met at dispatch: an Azure DevOps list over the default profile, and the `recording` floor when the policy names no level.
 - In the console, choosing **Only these sites** also selects **Block it** for unlisted sites.
 
 ### How your walls apply
@@ -648,7 +653,7 @@ What the check does and does not settle:
 > - `denied_domains` is not that remedy: a bare deny entry is port-blind too, so denying `files.example.org` takes `:443` away with `:22`.
 > - What CAN be port-scoped is the ALLOWLIST, which does accept a `host:port` qualifier (`allowed_domains: ["files.example.org:443"]`, `Classify` in [`internal/egress/domainmatch/domainmatch.go`](../internal/egress/domainmatch/domainmatch.go)).
 > - But only for a host the policy already names, since an approval-raised host is exactly the case where no allowlist entry exists yet.
-> - So the honest options for a host whose other ports must stay closed are:
+> - So the options for a host whose other ports must stay closed are:
 >   - allow-list it port-qualified instead of leaving it to first-use approval,
 >   - or deny it outright and accept that the deny is host-wide (the proxy returns on a deny before it ever considers an approval).
 
@@ -669,7 +674,7 @@ What the check does and does not settle:
 - But not uniformly: on a **deny**, `once` is actually the *wider* of the two (`run` stays denied; `once` re-raises).
 - So a version-skewed peer costs a re-raise on a cached deny, never a silent widening.
 
-**"One connection" is the honest word, and it means different things on HTTPS and plain HTTP.**
+**"One connection" means a different thing on HTTPS and on plain HTTP.**
 
 - On HTTPS, `once` releases one CONNECT tunnel — and a single tunnel can carry many requests before the agent closes it, so one grant can cover far more traffic than "once" suggests.
 - On plain HTTP the proxy re-evaluates on every request, so a keep-alive connection burns one `once` grant per request there.
@@ -971,7 +976,7 @@ What the check does and does not settle:
 ## `desktop` — `DesktopControls`
 
 - What may cross a desktop's edge, one rule per direction. Each is `allowed` or `blocked`; an omitted field keeps its default.
-- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard.transfer` by direction, size and SHA-256, never by content.
+- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard.transfer` by direction and size alone, never by content.
 - The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
 - A member's policy that leaves `desktop` out gets its ceiling's controls; one that sets them can only block more, the defaults included.
 - What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
@@ -991,20 +996,14 @@ What the check does and does not settle:
 
 ## `tool_rules` — `[]ToolRule`
 
-**What problem this solves.**
-
-- `tool_approvals` has exactly two settings and no middle.
-- `auto` runs every tool with no gate at all; `hold` routes **every** gated call to a human.
-- On a real task the first is more autonomy than most operators want and the second is more interruptions than a human sustains.
-- An operator who tires of approving picks `auto` for everything, which is the worst of the two.
-- `tool_rules` is the middle.
+- `tool_approvals` has two settings: `auto` runs every tool with no gate at all, and `hold` routes **every** gated call to a human. `tool_rules` sets an effect per tool.
 - `tool_approvals` itself is **not** a policy field — it rides the `POST /runs` body (`"tool_approvals": "hold"`), which is why it is absent from the spec below: `wardyn policy render -f` rejects the whole file with `invalid RunPolicySpec: json: unknown field "tool_approvals"` if you paste it in.
 - A caller's own `"tool_approvals": "auto"` can still be overridden:
-  - since 0.8, a non-interactive run resolved to autonomy level `L1` under a governance profile's rubric has it derived down to `hold` regardless of what was requested,
+  - a non-interactive run resolved to autonomy level `L1` under a governance profile's rubric has it derived down to `hold` regardless of what was requested,
   - and the 201 carries a warning saying so (an agent with no tool-approval lane is refused instead)
   - See [three-roles.md § Three roles, and who sets the walls](operations/three-roles.md#three-roles-and-who-sets-the-walls) for the rubric that decides it.
 - The level never rewrites `tool_rules`, but it decides whether they take effect.
-- Since 0.9 a background Claude Code run whose resolved policy holds or denies any tool is routed through the tool gate automatically. So is one where the person set a tool rule or default.
+- A background Claude Code run whose resolved policy holds or denies any tool is routed through the tool gate automatically. So is one where the person set a tool rule or default.
   - Tools the rules do not name keep running without a prompt: when the policy has no `*` rule of its own, the routed run's default is `*: allow`, with provenance `posture`. A policy `*` rule stays in force.
   - A run already on the gated lane (an explicit `tool_approvals: hold`, a governance profile, autonomy `L1`) keeps its own default: an unmatched tool is held.
   - Codex CLI and other harnesses without Wardyn's gate are not routed.
@@ -1101,7 +1100,7 @@ The match is exact, so it would never fire and would silently read as enforcemen
 - An exec run, or a custom image's agent, has no walls Wardyn sets, so the policy refuses it.
 - The operator ceiling's axes bind a member's inline policy.
 - Review and the run (`inner_walls`) show the walls it launched with.
-- Setting it needs this release's proxy image (older ones refuse the key); a Codex sandbox mode, this release's runner.
+- Setting it needs the proxy image shipped with 0.10.0 (older ones refuse the key); a Codex sandbox mode needs the 0.10.0 runner.
 
 ## `push_rules` — `PushRulesSpec`
 
@@ -1119,11 +1118,12 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
 | The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
-| | | | A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
 | A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403`; on the Azure DevOps Entra lane, a push whose paths could not be worked out is instead a rejected ref whose reason git prints | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
 | A path matched `require_review_paths` on an **unattended** run | `403`; on the Azure DevOps Entra lane, a rejected ref whose reason git prints | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
+
+- `415` `brokered:git:push-uninspectable`: A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too.
 
 
 - A refused push is **never forwarded**, and the refused request mints nothing itself — but it does not prevent a credential being issued.
@@ -1144,8 +1144,9 @@ The match is exact, so it would never fire and would silently read as enforcemen
 |---|---|---|
 | GitHub App (`github_token`) | `/wardyn/gh/` | **None reachable.** The broker route admits only the three smart-HTTP endpoints and the installation token never leaves the proxy. `api.github.com` is denied to the run's egress, a GitHub CLI door aside; the broker's own GitHub API calls are reads (`GET`). |
 | `git_pat` | `/wardyn/git/<host>/` | **None reachable.** The route admits only the three smart-HTTP endpoints and the PAT never leaves the proxy. |
-| | | (With the broker switched `off`, or on the `ssh_key` lane, the credential is in the sandbox and no rule applies — the risk-grade item below.) |
 | Azure DevOps Entra | `/wardyn/git/<host>/` | The REST gate on `dev.azure.com` / `<org>.visualstudio.com`: pushes are read path by path and routes that name no paths are refused. See [Azure DevOps Entra](#azure-devops-entra). |
+
+- `git_pat`: with the broker `off` the token is in the sandbox; on the `ssh_key` lane the key stays in the proxy, but no rule reads an SSH push. Both are the risk-grade item below.
 
 
 - The REST door is judged before the capability check, as the git door is.
@@ -1270,7 +1271,7 @@ So an entry a pattern matches is judged one of two ways:
     - to another repository or branch, or
     - to the same branches in a different assignment (commits swapped between refs, a ref deleted instead of set),
     - are a new request and are held again.
-  - A request raised before `updates` existed matches no push this release makes, so such a push asks afresh.
+  - A request raised before `updates` existed matches no push the broker makes, so such a push asks afresh.
   - A denial sticks for the rest of the run: the same push is refused without asking again.
   - A request that expires or is cancelled undecided is forgotten, and the next push of those commits asks afresh.
 - **Bounded.** At most 16 pushes are held at once and 256 different pushes are remembered per run; past either the push is refused.
@@ -1318,19 +1319,21 @@ So an entry a pattern matches is judged one of two ways:
 |---|---|---|---|
 | `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above; each entry is at most **256 bytes** and the list has no count cap. See [`deny_paths`](#deny_paths). |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. |
-| | | | `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
 | `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
 | `deny_new_executables` | `bool` | `false` | Refuses a push that adds an executable file or makes a file executable. An edit to an executable passes unless a parent tree the push carries held it not executable; see [`push_rules`](#push_rules--pushrulesspec). `false`/absent is **off**. |
 | `deny_all` | `bool` | `false` | Refuses every push to every remote before it is read: content, ref updates and deletes, and Azure DevOps REST repository writes. Reads pass. A meet ORs it and a ceiling's `true` is kept. Read-only and Sealed set it. |
-| | | | `deny_all` is enforced where Wardyn brokers the traffic. Wardyn refuses unbrokered connections to the code hosts it knows, on any port. |
-| | | | A code host allowed as a plain domain on a self-hosted forge Wardyn doesn't know is a tunnel, and a token kept as an environment or file secret can push through it. |
-| | | | Known code hosts: `github.com` with its `api.`, `uploads.`, `gist.` and `ssh.` hosts, hosted Azure DevOps (not `marketplace.visualstudio.com`, the extension gallery), the site's SCM hosts and Git provider rows, and each `git_pat` and `ssh_key` grant's host. |
-| | | | A wildcard, `allow_all_egress` or a first-use approval does not reopen one. |
-| | | | Signing in to a known code host in the desktop browser is refused too, since a code host's web pages can commit. |
-| | | | With an environment or file secret on the run, Review adds: "A push token you add as a secret could still push to a code host Wardyn doesn't recognize, if this run can reach it." |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
-| | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |
+
+- `max_inspect_pack_mib`: `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**.
+- `deny_all`:
+  - `deny_all` is enforced where Wardyn brokers the traffic. Wardyn refuses unbrokered connections to the code hosts it knows, on any port.
+  - A code host allowed as a plain domain on a self-hosted forge Wardyn doesn't know is a tunnel, and a token kept as an environment or file secret can push through it.
+  - Known code hosts: `github.com` with its `api.`, `uploads.`, `gist.` and `ssh.` hosts, hosted Azure DevOps (not `marketplace.visualstudio.com`, the extension gallery), the site's SCM hosts and Git provider rows, and each `git_pat` and `ssh_key` grant's host.
+  - A wildcard, `allow_all_egress` or a first-use approval does not reopen one.
+  - Signing in to a known code host in the desktop browser is refused too, since a code host's web pages can commit.
+  - With an environment or file secret on the run, Review adds: "A push token you add as a secret could still push to a code host Wardyn doesn't recognize, if this run can reach it."
+- `require_review_paths`: Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins.
 
 ### Azure DevOps Entra
 
@@ -1384,7 +1387,6 @@ So an entry a pattern matches is judged one of two ways:
 | `mode` | `string` | `off` | `off`, `alert` (scan + audit, forward unchanged), or `block` (a qualifying finding refuses the request). When not off, at least one detector — a `detect_*`, a sidecar URL, or `classified_markers` — must be enabled. |
 | `workspace_secret_names` | `[]string` | `[]` | Operator-declared secret **names**, resolved against the at-rest secret store; a reserved platform-internal name is refused at write time. See [`workspace_secret_names`](#workspace_secret_names). |
 | `workspace_secret_values` | `[]string` | `[]` | **Not settable on a policy write** — populated internally by dispatch from `workspace_secret_names`, only in memory, only for the proxy sidecar. |
-| | | | Never stored, never read back, never logged (a stray value is redacted to a count wherever the spec is otherwise echoed). Values shorter than the masking floor are ignored. |
 | `detect_secrets` | `bool` | `false` | Exact match against the resolved `workspace_secret_names` corpus. |
 | `detect_secret_patterns` | `bool` | `false` | Regex catalog of well-known secret *formats* (AWS/GitHub/Slack/Google keys, PEM, JWTs, Stripe). Higher precision than entropy; false-positives on example keys in code. |
 | `detect_entropy` | `bool` | `false` | Shannon-entropy detector. High false-positive rate in code; emits medium severity so a strict `block_min_severity` can exclude it. |
@@ -1397,8 +1399,10 @@ So an entry a pattern matches is judged one of two ways:
 | `on_scanner_error` | `string` | `pass` | `pass` (fail-open, the request still flows) or `block` (fail-closed in block mode). |
 | `require_inspectable_llm` | `bool` | `false` | Refuse to schedule a run whose resolved LLM transport is opaque: Bedrock, SigV4 or bearer. A Claude subscription is inspectable, on a route-through host too. Requires `intercept_tls` — only TLS-MITM gives a runtime guarantee. Default only warns. |
 | `intercept_tls` | `bool` | `false` | Opt the run into TLS-MITM of opaque CONNECT tunnels to known LLM hosts, making the subscription-OAuth path inspectable. |
-| | | | The control plane provisions a per-run CA: the private key goes only to the proxy sidecar, the sandbox trusts only the public cert. Adds a CA trust dependency inside the sandbox (threatmodel §5.1a). |
 | `block_min_severity` | `string` | `low` | Minimum finding severity that blocks in `block` mode: `low`, `medium`, `high`, `critical`. |
+
+- `workspace_secret_values`: Never stored, never read back, never logged (a stray value is redacted to a count wherever the spec is otherwise echoed). Values shorter than the masking floor are ignored.
+- `intercept_tls`: The control plane provisions a per-run CA: the private key goes only to the proxy sidecar, the sandbox trusts only the public cert. Adds a CA trust dependency inside the sandbox (threatmodel §5.1a).
 
 ### `workspace_secret_names`
 
@@ -1426,7 +1430,7 @@ So an entry a pattern matches is judged one of two ways:
 |---|---|---|---|
 | `cpu_millis` | `int` | `2000` (2 vCPU) | Milli-CPU cap. |
 | `memory_mib` | `int` | `4096` | Hard memory cap, MiB. |
-| `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. |
+| `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. A Linux VM run refuses a policy that sets it. |
 | `disk_mib` | `int` | the pool's or server's default, else none | Main-drive size, MiB. A size the policy writes is a requirement: `overlay2` needs `xfs` with `pquota`, `btrfs`/`zfs` enforce it, other drivers run UNCAPPED with a warning, and Kubernetes enforces it by eviction. See [`disk_mib`](#disk_mib). |
 
 ### `disk_mib`
@@ -1440,6 +1444,7 @@ So an entry a pattern matches is judged one of two ways:
   - so a run whose policy sets `disk_mib` is **refused by the daemon at create** instead of starting without the cap its policy promised.
   - That is deliberate: a promised cap must not silently evaporate.
 - `btrfs`/`zfs` enforce it natively.
+- A Linux VM run refuses a policy `disk_mib`, since its disk is not capped; a requested size runs with a warning.
 - On a driver that cannot take a `size` option at all (`vfs`, `fuse-overlayfs`, …) **Docker warns and a soft size proceeds UNCAPPED** — `applyDiskQuota` returns without setting `StorageOpt`. A size the policy writes is refused before then (below).
 - **On Kubernetes the cap is enforced by EVICTION**: `disk_mib` becomes the agent container's `resources.limits[ephemeral-storage]`
   - (with a small fixed 256Mi request rather than the cap — a node short on allocatable ephemeral storage can newly reject the pod),

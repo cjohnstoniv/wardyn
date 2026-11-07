@@ -484,6 +484,19 @@ func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.
 	return doVia(t, panicFails, srv, method, path, bearer, body)
 }
 
+// doFrom is do() from the TCP peer peer. A test that sends many bearers that are not the admin token gives
+// them their own addresses, so none meets the admin-token limiter's per-address burst (admin_token_limiter.go).
+func doFrom(t *testing.T, srv *Server, peer, method, path, bearer, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return doVia(t, func(tb testing.TB, h http.Handler) http.Handler {
+		inner := panicFails(tb, h)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.RemoteAddr = peer
+			inner.ServeHTTP(w, r)
+		})
+	}, srv, method, path, bearer, body)
+}
+
 // doVia is do's body with the panic-catcher wrapper as a parameter, so the one
 // test whose fixture panics on purpose reuses the same request shape.
 func doVia(t *testing.T, wrap func(testing.TB, http.Handler) http.Handler, srv *Server, method, path, bearer, body string) *httptest.ResponseRecorder {

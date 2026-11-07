@@ -916,7 +916,27 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 		requestMiB = f.req.Resources.DiskMiB
 	}
 	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
-	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+	if types.MachineKind(f.req.MachineKind) == types.MachineLinuxVM {
+		// A Linux VM's disk is its image-sized base plus an overlay on the runner, not the container's
+		// writable layer, so no runner enforces a size on it whatever it reports for containers.
+		// A process limit counts as written when the run's source policy asked for one (the Requested
+		// side of the applied amount, as the cut is judged) or the caller's governance profile authors
+		// one. The clamp fills an unset limit from the deployment's default, and the composed spec
+		// cannot tell that from an authored one.
+		applied := f.place.applied.PidsLimit
+		pidsWritten := (applied != nil && applied.Requested > 0) ||
+			(f.ceiling.Unit != nil && f.ceiling.Unit.AuthoredResources.PidsLimit > 0)
+		if linuxVMLimitRefusal(md, pidsWritten).write(s, f.w, f.r) {
+			return false
+		}
+		if md.MiB > 0 && !slices.Contains(f.policyWarns, warnLinuxVMDiskNotCapped) {
+			f.policyWarns = append(f.policyWarns, warnLinuxVMDiskNotCapped)
+		}
+		if f.spec.Resources != nil && f.spec.Resources.PidsLimit > 0 && !slices.Contains(f.policyWarns, warnLinuxVMPidsNotCapped) {
+			f.policyWarns = append(f.policyWarns, warnLinuxVMPidsNotCapped)
+		}
+	}
+	if !md.Soft && md.MiB > 0 && types.MachineKind(f.req.MachineKind) != types.MachineLinuxVM && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
 		msg := mainDriveUnenforceableMsg()
 		if !f.place.pooled {
 			msg = mainDriveUnenforceableUnpooledMsg()

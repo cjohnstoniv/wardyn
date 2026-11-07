@@ -128,11 +128,14 @@ const (
 // then every child of W.
 //
 // exit 3 means "there is no git work tree here" — a fact about the workspace,
-// reported as 200 vcs=none. Any other nonzero exit lands in the same place
-// (git missing from the image, a repo we cannot read): in every case we did
-// not obtain a diff, and saying so beats inventing one.
+// reported as 200 vcs=none. exit 4 means git cannot run at all (missing from
+// the image, a broken executable), checked BEFORE any candidate is tried so a
+// failing rev-parse is never mistaken for "not a repository"; it and every
+// other nonzero exit report vcs=unknown: we did not obtain a diff, and saying
+// so beats inventing one.
 const runFilesScript = `D=""
 W="${W:-/home/agent/work}"
+if ! git --version >/dev/null 2>&1; then printf 'path=%s\n' "$W"; exit 4; fi
 # Candidates, most specific first: the run's own repo clone (agent-run clones a
 # --repo run to $W/<repo-leaf>, one level BELOW the mount target, so W itself is
 # never a work tree for those runs), then W, then the exec's cwd, then any child

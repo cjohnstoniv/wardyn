@@ -72,6 +72,8 @@ var isOperatorCensus = map[string]int{
 	// ownership question for it.
 	// The second bounds a removal on stored policy content to the member's own grants.
 	"run_overrides_apply.go:applySecretOverrides": 2,
+	// An operator reading another person's terminal text through a run's output is audited, as a replay is.
+	"run_output.go:auditRunOutputRead": 1,
 	// Reading a recording is a privacy surface, not a launch.
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,

@@ -18,8 +18,6 @@
 ## Notification
 
 - **None is required.**
-- This page previously recorded a pending BIS/NSA notification.
-- That obligation does not apply to Wardyn, and the entry was wrong.
 - §742.15(b)(1) places publicly available 5D002 encryption source code outside the EAR outright.
 - The email notification to BIS and the ENC Encryption Request Coordinator was removed as a general condition by BIS's final rule of 29 March 2021.
 - What survives is §742.15(b)(2), which requires it **only** for source code that provides or performs *"non-standard cryptography."*
@@ -51,9 +49,7 @@
 | `wardynd-fips` image | the same code built against a pinned Go Cryptographic Module snapshot (`GOFIPS140`); no algorithm of its own |
 | Signing, hashing, key handling | `crypto/{ecdsa,ed25519,rsa,elliptic,hmac,sha256,sha1,subtle,rand}` |
 
-> [!NOTE]
-> Note for reviewers: the TLS-intercepting proxy is a deliberate, documented product capability, not an artefact — it is how egress policy is enforced.
-> It generates certificates locally; no key material leaves the deployment.
+The proxy that intercepts TLS for egress policy mints its certificates locally; no key material leaves the deployment.
 
 ## Sanctions and field of use
 
