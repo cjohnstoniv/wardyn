@@ -373,3 +373,22 @@ func TestInternalRaiseStoresTheValidatedMCPCallScope(t *testing.T) {
 		t.Fatalf("stored scope\n got %s\nwant %s", got, want)
 	}
 }
+
+// Any key that folds to call_sha256, mcp_server or mcp_tool puts a scope on the MCP call path,
+// whatever its value decodes to: a later variant that clears the hash, a null or a non-string hash,
+// or a repeat that breaks the decode is refused, never stored as a plain tool_call.
+func TestInternalRaiseMCPCallDiscriminatorKeysAreStrict(t *testing.T) {
+	for name, scope := range map[string]string{
+		"variant clears the hash": `{"tool":"mcp__corp__read","mcp_server":"corp","arguments":{},"call_sha256":"H","CALL_SHA256":""}`,
+		"null hash":               `{"tool":"mcp__corp__read","mcp_server":"corp","arguments":{},"call_sha256":null}`,
+		"number hash":             `{"tool":"mcp__corp__read","mcp_server":"corp","arguments":{},"call_sha256":7}`,
+		"empty hash":              `{"tool":"mcp__corp__read","mcp_server":"corp","arguments":{},"call_sha256":""}`,
+		"repeat breaks decode":    `{"tool":"mcp__corp__read","mcp_server":"corp","arguments":{},"call_sha256":"H","call_sha256":{}}`,
+		"server, no hash":         `{"tool":"mcp__corp__read","mcp_server":"corp","arguments":{}}`,
+		"variant server only":     `{"tool":"mcp__corp__read","MCP_SERVER":"corp","arguments":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raiseMCPRefused(t, types.ApprovalToolCall, scope, "mcp_call_scope_invalid")
+		})
+	}
+}
