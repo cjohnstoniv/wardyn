@@ -173,7 +173,7 @@ The full table is in the [SDK reference](../sdk.md).
 | `image_signature_invalid` | `403` | Signed, but by another identity or key |
 | `image_attestation_missing` | `403` | A required attestation is absent |
 | `image_admission_unavailable` | `503` | The registry or a trust root could not be read; the sentence names the cause |
-| `revive_image_not_admitted` | `403` | A revive while the image is held, of a run with no checked digest pinned. A run on an image Wardyn built for it is never refused; under scope all, one with no recorded image origin is |
+| `revive_image_not_admitted` | `403` | A revive while the image is held, of a run with no checked digest pinned. A run recorded as on an image Wardyn built for it is not refused; under scope all, one with no recorded image origin is |
 
 ## Audit
 

@@ -23,7 +23,7 @@ export interface ImageAdmissionVerdict {
   cached?: boolean;
   // Why the site's own signers would refuse the image under audit, when the profile's enforced signers admitted it.
   site_audit?: string;
-  // The image the run's create named; a revive re-checks digest under its coverage.
+  // The convention image a launch checked under scope all, as configured; empty for a member's image. A revive re-checks digest under its coverage.
   ref?: string;
   // Where the image came from when the member named none; alone (no mode or verdict) when admission decided nothing.
   origin?: "convention" | "devcontainer" | "workspace" | (string & {});
