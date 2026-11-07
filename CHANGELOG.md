@@ -25,6 +25,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Revoking a personal API token, or ending a CLI session, now closes a `wardyn window` that it opened. An at-start window asked for with an API token or a CLI sign-in before the upgrade does not open; open it again with `wardyn window`.
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
 - The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
+- A Linux VM run now ends when its harness exits, even when a background process it started still holds its output open; the stray processes are stopped, and the harness gets a terminal when it asks for one, as in a container.
+- Terminals and commands in an interactive Linux VM run now trust the run's TLS-interception certificate: the files the certificate variables name are written when the VM starts, so `curl`, `pip` and `aws` no longer fail on a missing CA file.
+- A Linux VM run's harness output is kept on the VM's disk instead of its memory, is capped at 64 MiB with a closing line that says so, and a full memory disk can no longer block pausing the agent.
+- After the VM's agent service restarts, a new terminal or command is refused with a reason instead of running without the run's proxy and credentials.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
