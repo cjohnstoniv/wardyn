@@ -753,7 +753,7 @@ func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) err
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
 		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, ledger: m.ledgerDir, descr: "tools update"})
 	if err == nil {
-		m.driftStarted(man.AgentVersion)
+		m.driftStarted(m.driftKey(man))
 	}
 	return err
 }
