@@ -1870,9 +1870,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/recording-chain; 49 since 0.10 (#2972) added GET
 		// /runs/{id}/desktop/sign-ins and POST .../pause and .../resume; 50 since
 		// 0.10 added POST /runs/{id}/desktop/watch-ticket (tierEntry); 51 since
-		// 0.10 added POST /runs/{id}/desktop/window (tierEntry).
-		if probed != 51 {
-			t.Errorf("probed %d classOwner routes, want 51 — a route that left classOwner takes its tier "+
+		// 0.10 added POST /runs/{id}/desktop/window (tierEntry); 52 since 0.10
+		// added GET /runs/{id}/model-usage.
+		if probed != 52 {
+			t.Errorf("probed %d classOwner routes, want 52 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
