@@ -96,6 +96,24 @@ Alert on:
 - `time() - wardyn_sweep_last_tick_seconds{result="success"}` exceeding the sweep's interval from the table, with margin for one missed tick.
 - The console row warns at three intervals. A sweep with no `success` sample has not finished a tick yet, so alert on `absent` only after its first three intervals.
 
+## Per-node sensor health
+
+With the [Kubernetes ground-truth sensor](kubernetes-ground-truth.md) on, each node's sensor sends a `kernel.sensor.ping` that names its node. A node counts as live while its last beat is under 24 hours old.
+
+| Live nodes | `/healthz` `ebpf_groundtruth` |
+|---|---|
+| None heard from, ever | `unavailable` |
+| 0 or 1 | One verdict from the newest beat of any node, as before per-node health existed. No `sensors[]`, and a node that went silent is not shown |
+| 2 or more | The worst live node's state (`degraded`, then `idle`, then `partial`, then `healthy`) and `sensors[]` |
+
+- With two or more live nodes, `sensors[]` has one entry per node: `node`, `state` and `last_heartbeat`. A node silent for 24 hours to 7 days is listed as `gone` and left out of the verdict. After 7 days it is not read.
+- A signed-in caller gets `sensors[]`, because node names describe your cluster. An anonymous caller gets the verdict, `last_heartbeat`, `reason` and `missing_kinds`, and no node list.
+- The counters never reach `/healthz`. With two or more live nodes the `wardyn_groundtruth_*` series on `/metrics` sum the live nodes.
+- When the worst state is not `healthy`, `reason` reads like "1 of 2 node sensors degraded", so an anonymous caller sees a node count only then.
+- If the node list cannot be read, the failure is logged. If any heartbeat was ever recorded, `/healthz` reports `degraded` with "Node sensor health could not be read", to anonymous callers too. With no heartbeat on record it reports `unavailable`.
+- A failed write of a node's row is logged and does not fail the heartbeat.
+- With two or more live nodes, a run's recent kernel events are read from the node its newest event came from, and are empty if it has none.
+
 ## Why two counters exist beside `wardyn_store_up`
 
 `wardyn_store_up` reads as reachability, not as whether the work succeeds. It scrapes `1` throughout an outage that is 500ing every token-authenticated request.

@@ -839,6 +839,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	./scripts/check-helm-templates.sh
 	./scripts/test-helm-runnerd.sh
 	./scripts/test-helm-agent-sandbox.sh
+	./scripts/test-helm-groundtruth.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \

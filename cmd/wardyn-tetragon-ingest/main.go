@@ -54,6 +54,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -117,11 +118,6 @@ func run() error {
 	if err := checkBootTokenSource(*token); err != nil {
 		return err
 	}
-	client, err := controlPlaneClient(*controlURL, *controlCAFile)
-	if err != nil {
-		return fmt.Errorf("refusing to start: %w", err)
-	}
-
 	// Env values were parsed strictly at flag registration (cliutil.FlagDuration:
 	// an unparseable WARDYN_GROUNDTRUTH_{HEARTBEAT,REFRESH,STATS} exits 2, matching
 	// docs/ENV.md's loud-read invariant; unset/empty keeps the default). A -flag
@@ -132,6 +128,17 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	client, err := waitForClient(ctx, func() (*http.Client, error) {
+		return controlPlaneClient(*controlURL, *controlCAFile)
+	}, caWaitBound, waitPause)
+	if stoppedDuringWait(ctx, err) {
+		slog.Info("wardyn-tetragon-ingest: shutdown before the control-plane CA appeared")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
 
 	sink := newEventSink(*controlURL, *token, *bufferSize, *batchSize, 2*time.Second, client)
 	defer func() {

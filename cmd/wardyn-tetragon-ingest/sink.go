@@ -23,13 +23,81 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// errCANotReady marks a CA file that is missing or empty: on Kubernetes wardynd
+// patches the CA into the sensor's Secret after the sensor can already be
+// running, so this is the state at first install, not a misconfiguration.
+var errCANotReady = errors.New("control-plane CA not present yet")
+
+const (
+	// caWaitBound is how long the ingest waits for the CA before it gives up
+	// and exits, so a Secret nothing ever fills stays a visible crash.
+	caWaitBound = 10 * time.Minute
+	caWaitFirst = time.Second
+	caWaitMax   = 15 * time.Second
+)
+
+// waitPause waits d, or reports false when ctx ends first.
+func waitPause(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// waitForClient builds the control-plane client, retrying with a doubling pause
+// (capped at caWaitMax) while the only fault is a CA that is not there yet. It
+// logs once when it starts waiting and once when it stops, never per attempt,
+// and fails on any other error at once or after bound of waiting. pause reports
+// false when the process is stopping.
+func waitForClient(ctx context.Context, build func() (*http.Client, error), bound time.Duration,
+	pause func(context.Context, time.Duration) bool) (*http.Client, error) {
+	var waited time.Duration
+	delay := caWaitFirst
+	logged := false
+	for {
+		c, err := build()
+		if err == nil {
+			if logged {
+				slog.Info("wardyn-tetragon-ingest: control-plane CA present; continuing", slog.Duration("waited", waited))
+			}
+			return c, nil
+		}
+		if !errors.Is(err, errCANotReady) {
+			return nil, err
+		}
+		if waited >= bound {
+			return nil, fmt.Errorf("gave up after waiting %s: %w", waited, err)
+		}
+		if !logged {
+			slog.Info("wardyn-tetragon-ingest: waiting for wardynd to publish the control-plane CA",
+				slog.String("reason", err.Error()), slog.Duration("give_up_after", bound))
+			logged = true
+		}
+		if !pause(ctx, delay) {
+			return nil, ctx.Err()
+		}
+		waited += delay
+		delay = min(delay*2, caWaitMax)
+	}
+}
+
+// stoppedDuringWait reports whether err is the process being told to stop while waitForClient
+// waited: a normal shutdown, not a refusal to start.
+func stoppedDuringWait(ctx context.Context, err error) bool {
+	return err != nil && errors.Is(err, context.Canceled) && ctx.Err() != nil
+}
+
 // controlPlaneClient is the ingest's end of wardynd's internal TLS hop
 // (internal/hoptls), under the proxy's rule: http:// only to a loopback host,
 // and https:// trusts wardynd's internal CA alone — never the system roots.
 // The bearer is audit-write-only, so what a plaintext hop would expose is
 // integrity: a captured token forges ground-truth events until it rotates.
 // caFile is the CA certificate wardynd writes beside
-// WARDYN_GROUNDTRUTH_TOKEN_FILE. ponytail: read once at boot; a CA rotation
+// WARDYN_GROUNDTRUTH_TOKEN_FILE. ponytail: read once, once present; a CA rotation
 // (replace-at-boot, years apart) needs an ingest restart.
 func controlPlaneClient(controlURL, caFile string) (*http.Client, error) {
 	if err := hoptls.CheckURL(controlURL); err != nil {
@@ -42,11 +110,14 @@ func controlPlaneClient(controlURL, caFile string) (*http.Client, error) {
 				"(wardynd writes control-plane-ca.pem beside WARDYN_GROUNDTRUTH_TOKEN_FILE)")
 		}
 		b, err := os.ReadFile(caFile)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s does not exist", errCANotReady, caFile)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("read control-plane CA: %w", err)
 		}
 		if len(bytes.TrimSpace(b)) == 0 {
-			return nil, fmt.Errorf("control-plane CA file %s is empty", caFile)
+			return nil, fmt.Errorf("%w: %s is empty", errCANotReady, caFile)
 		}
 		caPEM = b
 	}

@@ -742,6 +742,39 @@ k8s:
     # e.g. an ipBlock naming your cluster's actual apiserver/LB CIDR.
     to: []
 
+# Kernel ground-truth sensor for Kubernetes (docs/operations/kubernetes-ground-truth.md). Off by
+# default. On, the chart runs a DaemonSet from wardynd's own image (command /wardyn-tetragon-ingest)
+# that tails YOUR Tetragon's JSON export on each node, ties each event to the run whose agent pod
+# raised it, and posts it to wardynd's internal listener. The chart installs no Tetragon and no
+# TracingPolicy: Tetragon must already export to a file on the node. Needs k8s.enabled=true and a
+# k8s.runsNamespace (or allowRunsInReleaseNamespace), or the chart refuses to render.
+#
+# The token reaches the DaemonSet through one Secret, <release>-<namespace>-groundtruth, that wardynd patches
+# (token and control-plane-ca.pem) and the DaemonSet mounts. The wardynd Role gains `patch` on that
+# one Secret and nothing else; there is no new ClusterRole.
+groundtruth:
+  k8s:
+    enabled: false
+    # Where the DaemonSet and its Secret live. Empty means the release namespace. A hostPath
+    # volume needs a Pod Security level of privileged, which `baseline` forbids, so put the
+    # sensor in the namespace Tetragon already runs in (often kube-system) and set it here.
+    namespace: ""
+    # The node directory Tetragon writes its JSON export into, and the file's name. The chart
+    # mounts the DIRECTORY read-only (not the file) so a rotation that renames the file and
+    # creates a new one is followed. 600 root is Tetragon's default file mode, so the sensor runs as uid 0.
+    # Tetragon's chart default is /var/log/tetragon; check your release's exportDirectory.
+    exportDirectory: /var/log/tetragon
+    exportFilename: tetragon.log
+    nodeSelector: {}
+    # Tolerate the taints of every node that can host runs, or the sensor is blind there.
+    tolerations: []
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+
 # SSH gateway (see docs/SSH.md — native SSH/sftp/-L forwarding into a
 # running sandbox's tmux session). Off by default; a CONDITIONAL second port
 # on the wardynd Service/Deployment above (no second Service — see README

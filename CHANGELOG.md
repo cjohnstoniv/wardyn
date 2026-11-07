@@ -47,6 +47,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - Runs launched through a portal name the portal and the acting agent to an AI gateway: gateway tokens carry `wardyn_delegate` and, when the portal named an agent, a nested `act`. The run's `created_via_actor` names the agent, and so do the audit rows of a queued launch's start and of an attach ticket the portal minted. On by default with no setting: a portal that names no agent changes nothing but the new `wardyn_delegate` claim.
+- Kubernetes installs can now run Wardyn's kernel ground-truth sensor beside your own Tetragon (`groundtruth.k8s.enabled`, off by default); its events are tied to runs and people, and `/healthz` reports each node's sensor.
 - Approvals: the run's owner or an administrator approves one MCP call that a tool rule marks `approve_each`, once, and an approval rule never does. `WARDYN_CAPABILITY_SECOND_HUMAN` (off by default) also makes someone other than the run's creator decide it.
 - Tool rules can mark a remote MCP tool `approve_each`: each call waits for a person to approve that call with its exact arguments, and Wardyn sends exactly what was approved, once. It works for Codex CLI too. Nothing changes until a rule says `approve_each`.
 - Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
