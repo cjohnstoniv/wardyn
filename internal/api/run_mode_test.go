@@ -5,7 +5,6 @@ package api
 
 import (
 	"encoding/json"
-	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -20,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -653,6 +653,45 @@ func runRoutes(t *testing.T) map[string]bool {
 		})
 	}
 	return out
+}
+
+// TestBackgroundWatchIsTheDoorsOneException holds the contract's one exception to the door table: its route is the
+// desktop door's, the two functions that let a background run through ask its function, and the terminal, exec, SSH,
+// Files panel, sign-in and agent-pause symbols don't, so a watch's ticket opens none of them.
+func TestBackgroundWatchIsTheDoorsOneException(t *testing.T) {
+	bodies := backgroundDoorBodies(t)
+	calls := func(sym, name string) bool {
+		t.Helper()
+		body, ok := bodies[sym]
+		if !ok {
+			t.Fatalf("%s is not declared", sym)
+		}
+		found := false
+		ast.Inspect(body, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+					found = true
+				}
+			}
+			return !found
+		})
+		return found
+	}
+	for _, sym := range []string{"handleBackgroundWatchTicket", "uiBackgroundDoorRefused", "uiBackgroundWatchDenies", "backgroundWatchViewFor"} {
+		if !calls(sym, "backgroundWatchRefusal") {
+			t.Errorf("%s does not ask backgroundWatchRefusal", sym)
+		}
+	}
+	for _, door := range backgroundDoors {
+		for _, sym := range door.Symbols {
+			if calls(sym, "backgroundWatchRefusal") {
+				t.Errorf("%s (%s) asks the watch's function directly: only its own arms may", sym, door.Door)
+			}
+		}
+		if slices.Contains(door.Routes, "POST /runs/{id}/desktop/watch-ticket") != (door.Door == "desktop") {
+			t.Errorf("the watch's route and door %q disagree", door.Door)
+		}
+	}
 }
 
 // TestRunRoutesAreClassified is the completeness guard: every /runs/{id} route

@@ -5,7 +5,7 @@
 
 import type { Browser, Page } from "@playwright/test";
 import { consoleAPI, expandCard, expect, gotoConsole, test } from "./fixtures";
-import { BRAND_HEADER, BRANDING } from "../src/app/lib/branding-copy";
+import { BRAND_HEADER, BRANDING, BRANDING_FORM } from "../src/app/lib/branding-copy";
 import { CONSOLE_VIEW } from "../src/app/components/wardyn/copy/console-view";
 
 // Console branding (#1125) — the issue's done-when: "an e2e spec pins a branded
@@ -104,7 +104,9 @@ test.describe("a failed settings read", () => {
     await page.goto("/admin/settings");
     await expandCard(page, BRANDING.TITLE);
     const card = page.locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${BRANDING.TITLE}( |$)`), level: 3 }) });
-    await expect(card.getByText(BRANDING.LOAD_FAILED_SUMMARY)).toBeVisible();
+    // The card's one-line summary and the compact error block inside it both say it; exact keeps this on the summary.
+    await expect(card.getByText(BRANDING.LOAD_FAILED_SUMMARY, { exact: true })).toBeVisible();
+    await expect(card.getByText(BRANDING_FORM.LOAD_FAILED_TITLE, { exact: true })).toBeVisible();
     await expect(card.getByRole("button", { name: BRANDING.SAVE })).toHaveCount(0);
     await card.getByRole("button", { name: "Retry" }).click();
     await expect(card.getByLabel(BRANDING.ORG_NAME_LABEL)).toHaveValue("Example Corp");

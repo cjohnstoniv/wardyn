@@ -1,0 +1,21 @@
+api_version: wardyn/v1
+kind: RunTemplate
+name: contribute-to-azure-devops-repo
+description: Push a branch to an Azure DevOps repository and open a pull request. The repository is chosen at launch.
+coverage: partial
+intent:
+  interactive: false
+  task_mode: harness
+  agent: claude-code
+  inline_policy:
+    allowed_domains:
+      - dev.azure.com
+    azure_devops_capabilities:
+      - code_read
+      - code_write
+      - pr
+needs_setup:
+  - field: workspaces
+    reason: Pick the Azure DevOps repository to contribute to (for example the contoso organisation's example-service repository).
+  - field: task
+    reason: Write what the agent should change, for example the work item or bug to fix.

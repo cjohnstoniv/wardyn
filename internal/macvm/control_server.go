@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -158,6 +160,8 @@ func (cc *controlConn) op(req ControlRequest) bool {
 		}
 		r.DesktopPassword = pw
 		return reply(r)
+	case OpWindow:
+		return cc.window(req)
 	case OpEvents:
 		// Subscribe before the ack, so the client misses nothing
 		// published after its Events call returns.
@@ -171,6 +175,163 @@ func (cc *controlConn) op(req ControlRequest) bool {
 	default:
 		reply(ControlReply{Error: "unknown op " + req.Op})
 		return false
+	}
+}
+
+// windowHandler is what the run loop adds for OpWindow. A handler without it (the stage-2 VM) answers
+// every window request with WindowUnavailableSentence.
+type windowHandler interface {
+	openWindow(grant, title string, going func() bool) (*windowSession, *WindowRefusal)
+}
+
+// windowSession is one open window, held by the connection that asked for it.
+type windowSession struct {
+	win Window
+	// ready is the console check, asked every windowRecheck while the window is up.
+	ready func() error
+	// vmDone is closed when the VM has stopped.
+	vmDone <-chan struct{}
+	// end runs once when the window is gone: it frees the run's one window slot.
+	end func(reason string, held time.Duration)
+	at  time.Time
+}
+
+// windowRecheck is how often an open window asks whether the person is still at the Mac's screen.
+var windowRecheck = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(2 * time.Second))
+	return &v
+}()
+
+// windowReleaseWait bounds how long an open waits for a window whose holder's connection is ending.
+var windowReleaseWait = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(2 * time.Second))
+	return &v
+}()
+
+// windowReleaseHook runs once a window's hold has ended, before it is closed and its slot freed; tests hold it.
+var windowReleaseHook atomic.Pointer[func()]
+
+// windowWaitHook runs each time an open starts waiting for an ending window's slot; tests watch it.
+var windowWaitHook atomic.Pointer[func()]
+
+// windowWaitedHook runs when an open that waited has checked its own connection (and, if it left, given the
+// slot back); tests watch it.
+var windowWaitedHook atomic.Pointer[func()]
+
+var windowGrantRE = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+// windowTitleMax bounds the title a caller can set.
+const windowTitleMax = 200
+
+// cleanWindowTitle trims title to windowTitleMax characters and drops control characters.
+func cleanWindowTitle(title string) string {
+	title = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, title)
+	if rs := []rune(title); len(rs) > windowTitleMax {
+		title = string(rs[:windowTitleMax])
+	}
+	return strings.TrimSpace(title)
+}
+
+// window answers OpWindow: it checks the peer, asks the run loop for a window, and holds the connection
+// until the window ends. It always ends the connection.
+func (cc *controlConn) window(req ControlRequest) bool {
+	refuse := func(code, sentence string) bool {
+		cc.reply(ControlReply{Error: sentence, Code: code})
+		return false
+	}
+	// Whatever the run loop thinks, only the helper's own user gets a window onto the VM.
+	if uid, err := peerUID(cc.c); err != nil || int64(uid) != controlOwnerUID.Load() {
+		return refuse(WindowCodeNotOwner, WindowNotOwnerSentence)
+	}
+	wh, ok := cc.h.(windowHandler)
+	if !ok {
+		return refuse(WindowCodeUnavailable, WindowUnavailableSentence)
+	}
+	if !windowGrantRE.MatchString(req.Grant) {
+		return refuse(WindowCodeBadRequest, WindowBadRequestSentence)
+	}
+	// The window is going once it has ended here, or once its client has closed the connection: the
+	// client closes before it opens again, so a reopen can arrive before this goroutine reads that close.
+	var ended atomic.Bool
+	going := func() bool { return ended.Load() || peerClosed(cc.c) }
+	s, rf := wh.openWindow(req.Grant, cleanWindowTitle(req.Title), going)
+	if rf != nil {
+		return refuse(rf.Code, rf.Sentence)
+	}
+	reason := cc.holdWindow(s)
+	if h := windowReleaseHook.Load(); h != nil {
+		(*h)()
+	}
+	ended.Store(true)
+	s.win.Close()
+	s.end(reason, time.Since(s.at))
+	if reason != "" {
+		cc.reply(ControlReply{OK: true, Event: &Event{Time: time.Now().UTC(), Type: EventWindowClosed, Detail: reason}})
+	}
+	return false
+}
+
+// peerClosed reports whether c's client has closed its end: a read would return end of file now. It peeks
+// without blocking and consumes nothing, so the connection's own reader is undisturbed.
+func peerClosed(c *net.UnixConn) bool {
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return true
+	}
+	closed := false
+	if err := rc.Control(func(fd uintptr) {
+		n, _, rerr := unix.Recvfrom(int(fd), make([]byte, 1), unix.MSG_PEEK|unix.MSG_DONTWAIT)
+		closed = (n == 0 && rerr == nil) || (rerr != nil && rerr != unix.EAGAIN && rerr != unix.EINTR)
+	}); err != nil {
+		return true
+	}
+	return closed
+}
+
+// holdWindow answers the open, then waits for the window to end and returns why. The reason is empty when the
+// client went first: it needs no event.
+func (cc *controlConn) holdWindow(s *windowSession) string {
+	if !cc.reply(ControlReply{OK: true}) {
+		return ""
+	}
+	gone := make(chan struct{})
+	go func() {
+		_, _ = cc.c.Read(make([]byte, 1)) // returns when the client closes (or writes: nothing else is allowed)
+		close(gone)
+	}()
+	tick := time.NewTicker(time.Duration(windowRecheck.Load()))
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.win.Locked():
+			return WindowClosedHostLocked
+		case <-s.win.Closed():
+			select {
+			case <-s.win.Locked(): // a lock tore the window down: it is the lock's close, not the person's
+				return WindowClosedHostLocked
+			default:
+			}
+			return WindowClosedPerson
+		case <-gone:
+			return ""
+		case <-s.vmDone:
+			return WindowClosedRunEnded
+		case <-tick.C:
+			if err := s.ready(); err != nil {
+				// A lock that can no longer be told is a lock: the window fails closed.
+				if errors.Is(err, ErrNotAtMac) || errors.Is(err, ErrLockUnknown) {
+					return WindowClosedHostLocked
+				}
+				return WindowClosedFailed
+			}
+		}
 	}
 }
 

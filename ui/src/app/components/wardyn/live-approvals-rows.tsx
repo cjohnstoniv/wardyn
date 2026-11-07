@@ -6,7 +6,8 @@
 import * as React from "react";
 import { ChevronDown, Clock } from "lucide-react";
 import type { ApprovalRequest, ApprovalScope } from "../../lib/types";
-import { REAUTH_ROW, reauthAudience, reauthRowHint } from "./model-access-copy";
+import { REAUTH_ROW, oidcHoldProvider, reauthAudience, reauthRowHint } from "./model-access-copy";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import { useModelAccessDoor, useClaimModelAccessDoor, useShellSetupStatus } from "./model-access-context";
 import { resolveDoor } from "../../lib/model-access";
 import { OpenInUserView, viewOfPath } from "./console-view";
@@ -269,7 +270,15 @@ export function ReauthRow({
   // alone, never a button that opens nothing (#543) — the sentence stays
   // `mayAct`'s, as /approvals' card keeps it.
   const { status } = useShellSetupStatus();
-  const canAct = mayAct && (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
+  const oidcHold = oidcHoldProvider(audience, status);
+  const holdName = oidcHold ? oidcHold.name || oidcHold.id : undefined;
+  const canAct =
+    mayAct &&
+    (audience.oidc
+      ? !!oidcHold && !!resolveDoor(status, { provider: oidcHold.id }, "user")
+      : !audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
+  const label = audience.oidc ? OIDC_SIGN_IN.APPROVAL_LABEL(holdName ?? OIDC_SIGN_IN.APPROVAL_UNNAMED) : REAUTH_ROW.label;
+  const action = holdName ? OIDC_SIGN_IN.BUTTON(holdName) : REAUTH_ROW.action;
   const ownRow = adminView && !audience.shared && audience.mine;
   // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
@@ -277,8 +286,8 @@ export function ReauthRow({
     <div className="flex items-center gap-2" data-testid="live-approval-row">
       <Clock className="size-3.5 shrink-0 text-warning" aria-label="request held live" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Mono className="text-foreground" title={REAUTH_ROW.label}>
-          {REAUTH_ROW.label}
+        <Mono className="text-foreground" title={label}>
+          {label}
         </Mono>
         <span className="text-meta font-normal normal-case text-muted-foreground">
           {reauthRowHint(mayAct === audience.canAct ? audience : { ...audience, canAct: mayAct })}
@@ -289,12 +298,15 @@ export function ReauthRow({
           size="sm"
           variant="outline"
           className="h-7 shrink-0"
-          aria-label={REAUTH_ROW.ariaLabel}
+          aria-label={holdName ? action : REAUTH_ROW.ariaLabel}
           // The hold's OWN provider's door (#543): the claude-code default
           // may be another AWS provider, whose sign-in cannot clear it.
-          onClick={() => door.openDoor(audience.provider ? { for: { provider: audience.provider } } : undefined)}
+          onClick={() => {
+            const provider = oidcHold?.id ?? audience.provider;
+            door.openDoor(provider ? { for: { provider } } : undefined);
+          }}
         >
-          {REAUTH_ROW.action}
+          {action}
         </Button>
       )}
       {ownRow && <OpenInUserView runId={runId} className="h-7 shrink-0" />}

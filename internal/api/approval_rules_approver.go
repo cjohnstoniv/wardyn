@@ -15,6 +15,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -279,6 +280,15 @@ func (s *Server) authorizePolicyDecision(w http.ResponseWriter, r *http.Request,
 	}
 	if ap.Kind == types.ApprovalEgressDomain {
 		host := approvalHost(ap)
+		denied, err := s.personDeniedHost(ctx, ap.RunID, host)
+		if err != nil {
+			writeServerError(w, r, "read the run's denied hosts", err)
+			return ap, run, false, false
+		}
+		if denied {
+			writeErrorReason(w, http.StatusConflict, reasonApprovalRuleHostDenied, "a person denied this host for this run, so a rule does not decide it")
+			return ap, run, false, false
+		}
 		allowed, err := s.serviceEgressHostAllowed(ctx, run, host)
 		if err != nil {
 			writeServerError(w, r, "resolve capability", err)
@@ -291,6 +301,42 @@ func (s *Server) authorizePolicyDecision(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	return ap, run, true, true
+}
+
+// personDeniedHost reports whether a person's deny still stands against host on this run. The proxy's cache is what
+// enforces a deny, and a replaced proxy starts with none, so a rule reads the rows. The newest decision in force wins,
+// so a person can always undo their own deny; a tie goes to the deny. A once decision is spent and a lapsed until is
+// over, as in the cache, so neither counts either way, and a rule's approve is not a person's. The approved rows are
+// read only once a deny is found: most decisions have none to look for.
+func (s *Server) personDeniedHost(ctx context.Context, runID uuid.UUID, host string) (bool, error) {
+	now := s.cfg.Now()
+	newest := func(state types.ApprovalState) (at time.Time, found bool, err error) {
+		rows, err := s.runApprovalsOfKinds(ctx, runID, state, []types.ApprovalKind{types.ApprovalEgressDomain})
+		if err != nil {
+			return at, false, err
+		}
+		for _, ap := range rows {
+			lapsed := ap.DecisionScope == types.ScopeUntil && ap.DecisionExpiresAt != nil && !now.Before(*ap.DecisionExpiresAt)
+			byRule := state == types.ApprovalApproved && strings.HasPrefix(ap.DecidedBy, "policy:")
+			if ap.Kind != types.ApprovalEgressDomain || approvalHost(ap) != host || ap.DecisionScope.Normalize() == types.ScopeOnce || lapsed || byRule {
+				continue
+			}
+			found = true
+			if ap.DecidedAt != nil && ap.DecidedAt.After(at) {
+				at = *ap.DecidedAt
+			}
+		}
+		return at, found, nil
+	}
+	deniedAt, denied, err := newest(types.ApprovalDenied)
+	if err != nil || !denied {
+		return false, err
+	}
+	allowedAt, allowed, err := newest(types.ApprovalApproved)
+	if err != nil {
+		return false, err
+	}
+	return !allowed || !allowedAt.After(deniedAt), nil
 }
 
 // rereadApprovalRule is the rule as it stands now. The draft dry run judges the rule it was handed, which no store

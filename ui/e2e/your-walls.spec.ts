@@ -97,6 +97,10 @@ test.describe("Your walls", () => {
     await navToRoute(page, "/account");
     await page.getByRole("button", { name: new RegExp(`^${YOUR_WALLS.TITLE}( |$)`) }).click();
     await press(page, YOUR_WALLS.REMOVE_ALL);
+    // Remove all asks first; only its confirm removes the walls.
+    const confirm = page.getByRole("alertdialog", { name: YOUR_WALLS.REMOVE_ALL_TITLE });
+    await confirm.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL, exact: true }).click();
+    await expect(confirm).toHaveCount(0);
     await page.reload();
     await page.getByRole("button", { name: new RegExp(`^${YOUR_WALLS.TITLE}( |$)`) }).click();
     await expect(page.getByRole("radio", { name: YOUR_WALLS.SITES_ANY })).toBeChecked();
@@ -159,5 +163,38 @@ test.describe("Your walls", () => {
       }
       await page.request.delete(`/api/v1/governance/units/${unitID}`, { headers: auth });
     }
+  });
+
+  test("a tool rule, a path never pushed and an idle stop are set on Your account, saved and read back exactly", async ({ page }) => {
+    await asRealMember(page);
+    await gotoConsole(page);
+    await navToRoute(page, "/account");
+    await page.getByRole("button", { name: new RegExp(`^${YOUR_WALLS.TITLE}( |$)`) }).click();
+
+    await press(page, YOUR_WALLS.TOOLS_ADD);
+    await page.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) }).fill("WebFetch");
+    await press(page, YOUR_WALLS.PATHS_ADD);
+    await page.getByRole("textbox", { name: YOUR_WALLS.PATHS_PATH_N(1) }).fill(".github/workflows/");
+    await page.getByRole("radio", { name: YOUR_WALLS.IDLE_AFTER }).click();
+    await page.getByRole("textbox", { name: YOUR_WALLS.IDLE_NUMBER }).fill("90");
+    await page.getByRole("combobox", { name: YOUR_WALLS.IDLE_UNIT_LABEL }).selectOption("seconds");
+    await press(page, YOUR_WALLS.SAVE);
+    await expect(page.getByRole("status").filter({ hasText: YOUR_WALLS.SAVED })).toBeVisible();
+
+    // The server holds exactly what was set: the idle stop in seconds, not rounded to minutes.
+    const res = await page.request.get("/api/v1/me/walls", { headers: { Authorization: `Bearer ${MEMBER_TOKEN}` } });
+    expect(((await res.json()) as { spec: unknown }).spec).toEqual({
+      tool_rules: [{ tool: "WebFetch", effect: "hold" }],
+      push_rules: { deny_paths: [".github/workflows/"] },
+      auto_stop_after_sec: 90,
+    });
+
+    // A reload shows the same three controls, the idle stop still 90 seconds.
+    await page.reload();
+    await page.getByRole("button", { name: new RegExp(`^${YOUR_WALLS.TITLE}( |$)`) }).click();
+    await expect(page.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) })).toHaveValue("WebFetch");
+    await expect(page.getByRole("textbox", { name: YOUR_WALLS.PATHS_PATH_N(1) })).toHaveValue(".github/workflows/");
+    await expect(page.getByRole("textbox", { name: YOUR_WALLS.IDLE_NUMBER })).toHaveValue("90");
+    await expect(page.getByRole("combobox", { name: YOUR_WALLS.IDLE_UNIT_LABEL })).toHaveValue("seconds");
   });
 });

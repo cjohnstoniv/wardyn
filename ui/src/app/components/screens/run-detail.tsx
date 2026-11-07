@@ -32,18 +32,19 @@ import {
   type RunDetail,
 } from "../../lib/types";
 import { ERASED_VALUE } from "../../lib/types";
+import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
-import { canonicalAuditAction, exitCodeFromAudit } from "../../lib/api/audit";
+import { canonicalAuditAction, exitCodeFromAudit, gatewayCallId } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
-import { awsSigningLine, describeAction, describeEvent, describeObject, hasNoCaller, inboundDetail, isInbound } from "../../lib/audit-copy";
+import { awsSigningLine, describeAction, describeEvent, describeObject, hasNoCaller, inboundDetail, isFailedRecordingWrite, isInbound } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { InboundOutcome, NoCaller } from "../wardyn/audit-inbound";
-import { ActorTypeChip } from "../wardyn/primitives";
+import { ActorTypeChip, OutcomeBadge } from "../wardyn/primitives";
 import {
   AuditDecision,
   ErasedFields,
@@ -52,6 +53,7 @@ import {
   toolRuleDecision,
 } from "../wardyn/audit-decision";
 import { PolicyRemedy } from "../wardyn/policy-remedy";
+import { CopyButton } from "../wardyn/copy-button";
 import { newRunHref } from "./new-run-flow/draft/new-run-url";
 import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
@@ -75,13 +77,19 @@ import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
 import { PolicyTab } from "./run-detail/policy-tab";
+import { WallPresetRefusalLine } from "./run-detail/wall-preset-run-lines";
+import { presetRefusingEveryPush, PUSH_DENY_ALL_SOURCE } from "../../lib/wall-preset-words";
+import { usePresetRefusal } from "./run-detail/use-preset-refusal";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
+import { defaultSessionKey } from "./run-detail/recording-tab-copy";
+import { desktopSessions } from "./run-detail/desktop-replay";
 import { OutputTab } from "./run-detail/output-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run-flow/draft/clone-prefill";
 import { launchIntentSource } from "./new-run-flow/steps/shape/shape-sources";
 import { useRunDetail, type Tab } from "./run-detail/use-run-detail";
 import { Cockpit } from "./run-detail/cockpit";
+import { COULDNT_END, ENDING, toastRunName } from "../wardyn/copy/run-lifetime";
 
 // The route's component. KEYED by the route id on both run routes (/runs/:id
 // and /admin/runs/:id), so moving from run A to run B REMOUNTS the page: A's
@@ -121,7 +129,7 @@ function RunDetailPage({ id }: { id: string }) {
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
   const { copyAsync } = useCopyToClipboard(1400);
-  const { refused, wallsRefused, noteRefusal } = useRefusedApprovals();
+  const { refused, wallsRefused, presetRefused, noteRefusal } = useRefusedApprovals();
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
@@ -144,9 +152,9 @@ function RunDetailPage({ id }: { id: string }) {
   const kill = async (killId: string) => {
     try {
       await runsApi.killRun(killId);
-      toast.success(`Kill requested for ${killId}`);
+      toast.success(ENDING(run?.id === killId ? toastRunName(run) : killId));
     } catch (err) {
-      toast.error(`Failed to kill ${killId}`, {
+      toast.error(COULDNT_END(run?.id === killId ? toastRunName(run) : killId), {
         description: getErrorMessage(err),
       });
     } finally {
@@ -242,6 +250,17 @@ function RunDetailPage({ id }: { id: string }) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
     }
   };
+
+  // A macOS VM run stores nothing under its own key, so its Recording tab opens on its newest agent output cast
+  // (else its newest session) as soon as the run's recording rows are indexed; every other run opens on its own.
+  const macOSRun = !!run && isMacOSVM(run);
+  const defaultKey = defaultSessionKey(id, macOSRun, attachSessions(recordingAudit), desktopSessions(recordingAudit).map((e) => e.target!));
+  React.useEffect(() => {
+    if (macOSRun && recKey === id && defaultKey !== id) {
+      setRecKey(defaultKey);
+      setRecState("idle");
+    }
+  }, [macOSRun, recKey, id, defaultKey, setRecKey, setRecState]);
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
@@ -390,7 +409,8 @@ function RunDetailPage({ id }: { id: string }) {
 
           <TabsContent value="approvals" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
             <ApprovalsTab
-              approvals={approvals.map((a) => (wallsRefused.has(a.id) ? { ...a, walls_block: true } : a))}
+              approvals={approvals.map((a) => (wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a))}
+              presetRefused={presetRefused}
               run={run}
               viewerBlocked={viewerBlockedOnDecision(pending, securityOperator, run.created_by === principal)}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
@@ -407,7 +427,7 @@ function RunDetailPage({ id }: { id: string }) {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} runId={run.id} policy={run.policy} onMakePolicy={() => setProfileRunId(run.id)} />
+            <AuditTab events={audit} runId={run.id} policy={run.policy} hasWallPreset={!!run.wall_preset} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -420,6 +440,10 @@ function RunDetailPage({ id }: { id: string }) {
               recordingAudit={recordingAudit}
               level={run.recording_level}
               notRecorded={run.not_recorded}
+              macOS={isMacOSVM(run)}
+              screen={isVMKind(run.machine_kind)}
+              interactive={!!run.interactive}
+              ended={terminal}
               selected={recKey || id}
               onSelect={(key) => {
                 setRecKey(key);
@@ -477,6 +501,7 @@ function AuditTab({
   events,
   runId,
   policy,
+  hasWallPreset,
   onMakePolicy,
 }: {
   events: AuditEvent[];
@@ -484,9 +509,12 @@ function AuditTab({
   /** The run's own policy (GET /runs/{id}), never /me: an admin viewing someone
    *  else's run must see that run's owner, not their own. */
   policy?: RunDetail["policy"];
+  /** The run was launched with a wall preset (GET /runs/{id}): its policy view says whether it refuses every push. */
+  hasWallPreset: boolean;
   onMakePolicy: () => void;
 }) {
   const securityOperator = useSecurityOperator();
+  const presetView = usePresetRefusal(runId, events, hasWallPreset);
   return (
     <div className="max-w-4xl">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -527,9 +555,11 @@ function AuditTab({
             {events.map((e) => {
               const signing = awsSigningLine(e);
               const inbound = inboundDetail(e);
+              const callId = gatewayCallId(e);
+              const refusedBy = e.data?.rule_source === PUSH_DENY_ALL_SOURCE ? presetRefusingEveryPush(presetView) : undefined;
               return (
                 // One line from sm up; below sm the target drops to a second line of its own (#2917).
-                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
+                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound || callId || refusedBy ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
                   <span
                     data-testid="run-audit-time"
                     className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
@@ -574,9 +604,29 @@ function AuditTab({
                       <InboundOutcome allowed={e.action === "inbound.allow"} />
                     </span>
                   )}
+                  {isFailedRecordingWrite(e) && (
+                    <span data-testid="run-audit-outcome" className="ml-auto shrink-0">
+                      <OutcomeBadge outcome="failure" />
+                    </span>
+                  )}
                   {inbound && (
                     <span data-testid="run-audit-detail" className="min-w-0 basis-full truncate font-mono text-xs text-muted-foreground sm:pl-[208px]" title={inbound}>
                       {inbound}
+                    </span>
+                  )}
+                  {refusedBy && <WallPresetRefusalLine name={refusedBy} className="basis-full sm:pl-[208px]" />}
+                  {callId && (
+                    // Cut at a narrow width, and Copy still takes the whole value.
+                    <span data-testid="run-audit-call-id" className="flex min-w-0 basis-full items-center gap-1 font-mono text-xs text-muted-foreground sm:pl-[208px]">
+                      <span className="min-w-0 truncate" title={callId}>
+                        {AUDIT.CALL_ID_LINE(callId)}
+                      </span>
+                      <CopyButton
+                        text={callId}
+                        label={AUDIT.COPY_CALL_ID}
+                        iconClassName="size-3"
+                        className="shrink-0 rounded-sm p-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
                     </span>
                   )}
                   {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}

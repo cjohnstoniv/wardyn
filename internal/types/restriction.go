@@ -60,15 +60,17 @@ type RestrictionSpec struct {
 	WithheldGrants []GrantSpec `json:"withheld_grants,omitempty"`
 }
 
-// RestrictionLimits is the part of GovernanceLimits a restriction may carry. The five deny_* switches
+// RestrictionLimits is the part of GovernanceLimits a restriction may carry. The six deny_* switches
 // only turn on; the other bools can only be false.
 type RestrictionLimits struct {
 	LocalSelfDefinedComponents *bool        `json:"local_self_defined_components,omitempty"`
 	DenyTaskModeExec           *bool        `json:"deny_task_mode_exec,omitempty"`
 	DenyInteractive            *bool        `json:"deny_interactive,omitempty"`
 	DenyUIApps                 *bool        `json:"deny_ui_apps,omitempty"`
+	DenyBackgroundDesktopWatch *bool        `json:"deny_background_desktop_watch,omitempty"`
 	DenyUserDrive              *bool        `json:"deny_user_drive,omitempty"`
 	DenyMemberDrives           *bool        `json:"deny_member_drives,omitempty"`
+	DenyKeptMachines           *bool        `json:"deny_kept_machines,omitempty"`
 	DenyPlacements             *[]Placement `json:"deny_placements,omitempty"`
 	AllowedMacOSBases          *[]string    `json:"allowed_macos_bases,omitempty"`
 	MaxConcurrentRuns          *int         `json:"max_concurrent_runs,omitempty"`
@@ -124,8 +126,8 @@ func (s RestrictionSpec) Overlay() CeilingOverlay {
 func (l RestrictionLimits) Overlay() LimitsOverlay {
 	return LimitsOverlay{
 		LocalSelfDefinedComponents: l.LocalSelfDefinedComponents, DenyTaskModeExec: l.DenyTaskModeExec,
-		DenyInteractive: l.DenyInteractive, DenyUIApps: l.DenyUIApps, DenyUserDrive: l.DenyUserDrive,
-		DenyMemberDrives: l.DenyMemberDrives, DenyPlacements: l.DenyPlacements, AllowedMacOSBases: l.AllowedMacOSBases,
+		DenyInteractive: l.DenyInteractive, DenyUIApps: l.DenyUIApps, DenyBackgroundDesktopWatch: l.DenyBackgroundDesktopWatch,
+		DenyUserDrive: l.DenyUserDrive, DenyMemberDrives: l.DenyMemberDrives, DenyKeptMachines: l.DenyKeptMachines, DenyPlacements: l.DenyPlacements, AllowedMacOSBases: l.AllowedMacOSBases,
 		MaxConcurrentRuns: l.MaxConcurrentRuns, MaxCPUMillis: l.MaxCPUMillis, MaxMemoryMiB: l.MaxMemoryMiB,
 		MaxEphemeralDiskMiB: l.MaxEphemeralDiskMiB, MaxDriveSizeMiB: l.MaxDriveSizeMiB,
 		MaxEndAheadSec: l.MaxEndAheadSec, MaxWaitSec: l.MaxWaitSec, PauseIdleAfterSec: l.PauseIdleAfterSec,

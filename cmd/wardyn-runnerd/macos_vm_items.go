@@ -16,27 +16,12 @@ import (
 // The macOS base's install list (macos_vm_base_file): the helper flag a prepare and a tools update pass,
 // the trigger that starts a tools update when the list changes, and what the caps carry of it.
 
-// macOSVMBaseFile reads the runner setting macos_vm_base_file (tests replace it).
-var macOSVMBaseFile = func() (string, error) {
-	c, err := effectiveRunnerConfig("", nil)
-	if err != nil {
-		return "", err
-	}
-	return c.get("macos_vm_base_file"), nil
-}
-
 // macOSVMItems is the install list's state: file is the setting (err: it could not be read, so neither a
 // prepare nor a tools update starts); asked is the list digest a tools update was last asked for.
 type macOSVMItems struct {
 	file  string
 	err   error
 	asked string
-}
-
-// openMacOSVMItems reads the setting once, when the runner opens its macOS VMs.
-func openMacOSVMItems() (it macOSVMItems) {
-	it.file, it.err = macOSVMBaseFile()
-	return it
 }
 
 // baseFileArgs appends the helper's install list flag for a prepare or a tools update to extra: none

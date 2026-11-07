@@ -205,6 +205,30 @@ describe("RunRow — a local run's meta line (RS8)", () => {
   });
 });
 
+describe("RunRow — the machine kind in the meta line (UXR-31)", () => {
+  const metaOf = () => screen.getByTestId("run-row").querySelector("[title]")?.textContent ?? "";
+
+  it("names a macOS VM and a Linux VM after the repo, and says nothing for a container", () => {
+    const mac = renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", machine_kind: "macos_vm" }));
+    expect(metaOf()).toMatch(/^acme\/payments · macOS VM · started /);
+    mac.unmount();
+    const linux = renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", machine_kind: "linux_vm" }));
+    expect(metaOf()).toMatch(/^acme\/payments · Linux VM · started /);
+    linux.unmount();
+    renderRow(makeRun({ repo: "acme/payments", state: "RUNNING" }));
+    expect(metaOf()).toMatch(/^acme\/payments · started /);
+  });
+});
+
+describe("RunRow — a paused run (UXR-24)", () => {
+  it("says Paused in a neutral chip, not Running", () => {
+    renderRow(makeRun({ state: "RUNNING", paused_at: aheadByHours(-1), paused_reason: "idle" }));
+    const pill = screen.getByText("Paused").closest("span[class*='rounded']") as HTMLElement;
+    expect(pill.className).not.toMatch(/info|success|warning|danger/);
+    expect(screen.queryByText("Running")).toBeNull();
+  });
+});
+
 describe("RunRow — a scheduled run", () => {
   const queued = (reason: string, over: Partial<AgentRun> = {}) =>
     makeRun({
@@ -222,7 +246,7 @@ describe("RunRow — a scheduled run", () => {
     expect(screen.queryByText(/started/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(killRunMock).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole("button", { name: "Kill run" }));
+    await user.click(await screen.findByRole("button", { name: "End run" }));
     await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9"));
   });
 
@@ -296,6 +320,16 @@ describe("RunRow: a live service's health chip", () => {
     unknown.unmount();
     renderRow(makeRun());
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
+  });
+
+  it("with Wardyn's check opted in, a missing check reading past the grace reads Health unknown; the same run without it Healthy", () => {
+    const long = { created_at: aheadByHours(-2), admitted_at: aheadByHours(-2) };
+    const probe = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
+    const opted = renderRow(service(seen("healthy"), { ...long, service: probe }));
+    expect(pillOf("Health unknown").className).toMatch(/muted/);
+    opted.unmount();
+    renderRow(service(seen("healthy"), long));
+    expect(pillOf("Healthy").className).toMatch(/success/);
   });
 
   it("keeps an attention row's amber chip and a finished service's own state", () => {

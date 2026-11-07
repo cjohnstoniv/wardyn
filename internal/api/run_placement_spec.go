@@ -51,6 +51,10 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	if ref == nil {
 		stripped, ref = placement.LocalEligibility(p)
 	}
+	// A kept machine keeps no lasting credential: refused by kind before the substrate (keptSpecSecretKinds).
+	if ref == nil && spec.KeptMachine != nil && s.keptSecretRefusal(ctx, run, p.Spec, p.Origins) {
+		return false
+	}
 	if ref != nil {
 		// A personal component name stays out of the append-only record and the failure hint.
 		data, hint := map[string]any{"reason": ref.Reason}, "This run was not launched on your own runner: "+ref.Detail

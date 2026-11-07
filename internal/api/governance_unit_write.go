@@ -422,6 +422,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
 		warns = append(warns, posture)
 	}
+	warns = append(warns, s.governanceADOCeilingWarnings(r.Context(), effective)...)
 	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
 }
 
@@ -537,9 +538,8 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		return p, nil, keep, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
-	if base == nil && overlay != nil && slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == store.DefaultUnitID }) {
-		// Built on the deployment default with no base named: the Default unit is that base, for a
-		// pass-through unit as for an own-walls one (the console sends no parent for either).
+	if base == nil && overlay != nil && defaultIsImpliedBase(all, id, p.Mode) {
+		// Built on the deployment default with no base named: the Default unit is that base.
 		base = &store.DefaultUnitID
 	}
 	if p.Mode == types.UnitModePassThrough {
@@ -609,6 +609,19 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 	}
 	p, res, err = s.checkLockedGraphWrite(p, all, b, limit)
 	return p, res, keep, err
+}
+
+// defaultIsImpliedBase is whether a write of unit id in mode that names no base is built on the Default
+// unit. An own-walls unit is (the console sends no parent). A pass-through unit is only when it already
+// sits under Default (the console's no-op save): a new or moved one must name its parent, with or
+// without an overlay, and is refused alike.
+func defaultIsImpliedBase(all []types.GovernanceUnit, id uuid.UUID, mode string) bool {
+	byID := unitsByID(all)
+	if _, ok := byID[store.DefaultUnitID]; !ok {
+		return false
+	}
+	parent := byID[id].ParentID
+	return mode != types.UnitModePassThrough || (parent != nil && *parent == store.DefaultUnitID)
 }
 
 // requestLockedKnobs is the locks a unit write stores: the request's, normalized, when it sends them,

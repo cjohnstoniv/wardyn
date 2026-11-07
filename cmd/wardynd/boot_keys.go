@@ -15,10 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -237,6 +240,59 @@ func loadOrCreateRunConfigKey(ctx context.Context, secrets bootKeyStore) ([]byte
 			return key, nil
 		},
 	)
+}
+
+// gatewayIdentity returns api.Config.GatewayIdentity. This key is not made at
+// boot: an install that never turns identity on has no row, so the row is read
+// on first use and made only when create asks. A loaded signer lasts the
+// process, since a rotation needs every replica stopped. A miss or a failed read
+// is kept 30 seconds, because the JWKS route is anonymous and must not cost a
+// query per request.
+//
+// A row that fails to decrypt or to parse fails closed and is never made again:
+// valid is true for any row that exists, because a false one is what makes
+// loadOrCreateSecret write a new key, and gatewayidentity.New is the shape check.
+func (secrets bootKeyStore) gatewayIdentity() func(ctx context.Context, create bool) (*gatewayidentity.Signer, error) {
+	const recheck = 30 * time.Second
+	var (
+		mu      sync.Mutex
+		signer  *gatewayidentity.Signer
+		lastErr error
+		checked time.Time
+	)
+	valid := func([]byte) bool { return true }
+	return func(ctx context.Context, create bool) (*gatewayidentity.Signer, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if signer != nil {
+			return signer, nil
+		}
+		if !create && !checked.IsZero() && time.Since(checked) < recheck {
+			return nil, lastErr
+		}
+		var (
+			raw   []byte
+			found bool
+			err   error
+		)
+		if create {
+			raw, err = loadOrCreateSecret(ctx, secrets, secretGatewayIdentityKey, valid, func() ([]byte, error) {
+				slog.Info("wardynd: generated and persisted the AI gateway identity signing key")
+				return gatewayidentity.Rotate(nil, false, time.Now())
+			})
+			found = err == nil
+		} else {
+			raw, found, err = loadBootKey(ctx, secrets, secretGatewayIdentityKey, valid)
+		}
+		if found {
+			signer, err = gatewayidentity.New(raw)
+		}
+		if ctx.Err() != nil { // this caller went away; the next one asks again
+			return nil, err
+		}
+		lastErr, checked = err, time.Now()
+		return signer, err
+	}
 }
 
 // loadOrCreateSSHHostKey returns the SSH gateway's ed25519 host key,

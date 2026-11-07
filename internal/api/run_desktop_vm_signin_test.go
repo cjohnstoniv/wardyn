@@ -593,6 +593,40 @@ func TestDesktopSignIns_PauseHoldsTheDesktopRecordingUntilTheResume(t *testing.T
 	}
 }
 
+// A macOS VM's desktop is recorded at Screen and actions as a Linux VM's is, so its sign-in pause holds the
+// desktop recording and its pause and resume each write a desktop.recording row.
+func TestDesktopSignIns_MacOSVMPauseHoldsTheDesktopRecording(t *testing.T) {
+	for _, tc := range []struct {
+		kind types.MachineKind
+		held bool
+	}{{types.MachineMacOSVM, true}, {types.MachineLinuxVM, true}} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			f := newVMSignInFixture(t, "memory")
+			f.run.MachineKind = tc.kind
+			f.recordDesktop(t)
+			if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+				t.Fatalf("pause = %d %s", code, body)
+			}
+			if got := signInHeld(f.srv, f.run.ID); got != tc.held {
+				t.Errorf("desktop recording held while the sign-in is open = %v, want %v", got, tc.held)
+			}
+			if code, _, body := f.do(t, http.MethodPost, "/resume"); code != http.StatusOK {
+				t.Fatalf("resume = %d %s", code, body)
+			}
+			if signInHeld(f.srv, f.run.ID) {
+				t.Error("the resume left the desktop recording held")
+			}
+			wantRows := 0
+			if tc.held {
+				wantRows = 1
+			}
+			if p, r := desktopRows(f.h.audit); p != wantRows || r != wantRows {
+				t.Errorf("desktop.recording rows: %d pause, %d resume, want %d and %d", p, r, wantRows, wantRows)
+			}
+		})
+	}
+}
+
 // Not allowed is refused at the server, not only hidden: on a run whose desktop keeps none, and on
 // one the admin turned off after it started. Nothing reaches the runner.
 func TestDesktopSignIns_OffIsRefusedServerSide(t *testing.T) {

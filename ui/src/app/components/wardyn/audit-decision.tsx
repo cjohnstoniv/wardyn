@@ -19,10 +19,12 @@
 // page's Audit tab.
 import { Link } from "react-router-dom";
 import { cn } from "../ui/utils";
+import { ALLOWED_MODELS } from "../../lib/governance-copy";
 import { erasedFieldNames, toolRuleDecision, type AuditEvent } from "../../lib/types";
 import { AUDIT } from "../screens/audit-copy";
 import { Chip } from "./primitives";
 import { PUSH } from "./copy/push";
+import { PUSH_DENY_ALL_SOURCE } from "../../lib/wall-preset-words";
 
 // toolRuleDecision and RuleDecision moved to lib/types/audit.ts: egressFromAudit
 // (lib/api/audit.ts) has to exclude exactly the rows this component relabels,
@@ -86,6 +88,8 @@ export const ATTRIBUTED_RULE_SOURCES: ReadonlySet<string> = new Set([
   "brokered:git:push-too-large",
   "brokered:ado:denied",
   "brokered:ado-git:denied",
+  // The run's allowed-models gate: a refusal names the profile that limits the models, so its owner is who to ask.
+  "brokered:allowed-models",
 ]);
 
 // True for a refusal row (an egress.deny) whose rule_source is in the set. The
@@ -97,6 +101,8 @@ export function isAttributedRefusal(event: AuditEvent): boolean {
 
 export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
+  // Every refusal of the gate reads the same, whatever the cause text on the row says; the cause names which.
+  if (source === "brokered:allowed-models") return { label: ALLOWED_MODELS.AUDIT_REFUSED, tone: "danger" };
   if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };
   // Every other policy:* value the proxy emits is a refusal (denied,
   // default-deny, method, evaluator-error) — the row's outcome column already
@@ -118,6 +124,8 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (source === "brokered:git:push-uninspectable") {
     return { label: "Push refused — couldn't be inspected", tone: "danger" };
   }
+  // A run's walls or wall preset refuse every push (push_rules.deny_all): additive to the five labels above, which stay as shipped.
+  if (source === PUSH_DENY_ALL_SOURCE) return { label: "Refused: every push", tone: "danger" };
   // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
   // refusal: recorded once per run, at proxy construction, to audit the
   // deliberate SSRF-guard relaxation for the operator's own configured

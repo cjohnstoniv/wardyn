@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -414,10 +415,18 @@ func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 	}{
 		"VMs off":      {off: true, want: "does not offer Linux VM"},
 		"unknown kind": {mut: func(s *runner.SandboxSpec) { s.MachineKind = "windows_vm" }, want: "unknown machine kind"},
-		"drives":       {mut: func(s *runner.SandboxSpec) { s.Drives = []types.DriveMount{{ObjectName: "d"}} }, want: "no drives"},
-		"record":       {rec: true, want: "not recorded"},
-		"agent start":  {mut: agentStart, want: "not the agent CLI"},
-		"tiny":         {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
+		"a volume drive": {mut: func(s *runner.SandboxSpec) {
+			s.Drives = []types.DriveMount{{ObjectName: "d", Backend: types.DriveBackendDockerVolume}}
+		}, want: "only a drive bound to this runner"},
+		"a disk drive": {mut: func(s *runner.SandboxSpec) {
+			s.Drives = []types.DriveMount{{ObjectName: "d", Backend: types.DriveBackendMacDisk}}
+		}, want: "only a drive bound to this runner"},
+		"a bound drive, no virtiofs": {mut: func(s *runner.SandboxSpec) {
+			s.Drives = []types.DriveMount{{ObjectName: "/srv/share/alice", Backend: types.DriveBackendHostPath}}
+		}, want: "cannot share a folder"},
+		"record":      {rec: true, want: "not recorded"},
+		"agent start": {mut: agentStart, want: "not the agent CLI"},
+		"tiny":        {mut: func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 512 }, want: "256 MiB"},
 		"folder, no virtiofs": {mut: func(s *runner.SandboxSpec) {
 			s.Mounts = []runner.Mount{{Source: "/home/me/project", Target: "/home/agent/work", MemberAuthored: true}}
 		}, want: "cannot share a folder"},
@@ -830,6 +839,91 @@ func TestVMFolderRefusalsAreTheContainerPaths(t *testing.T) {
 	}
 }
 
+// A drive bound to the runner is shared as a folder is: its own virtiofsd, holding only the person's
+// home, read-only in the bind, in virtiofsd's flag and in the guest's mount. A runtime that declares
+// a recursive read-only bind gets one; one that does not gets a plain read-only bind and no warning
+// that a submount could be writable, because virtiofsd's flag covers it.
+func TestVMDriveShareIsReadOnlyAtEveryLayer(t *testing.T) {
+	for name, rro := range map[string]bool{"a runtime with recursive binds": true, "a runtime without": false} {
+		t.Run(name, func(t *testing.T) {
+			var logged bytes.Buffer
+			was := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+			t.Cleanup(func() { slog.SetDefault(was) })
+
+			root, home := driveHostRoot(t)
+			r := newVMRig(t)
+			r.d.cfg.UserDriveHostRoots = []string{root}
+			if !rro {
+				r.f.info = infoWithRuntimes(runtimeRunsc)
+				r.f.info.DefaultRuntime = runtimeRunsc
+			}
+			spec := vmSpec()
+			spec.Drives = []types.DriveMount{*hostPathDrive(home)}
+			if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+				t.Fatal(err)
+			}
+			if len(r.mounts) != 1 || r.mounts[0] != (guestagent.Mount{Tag: qemu.ShareTag(0), Target: runner.DriveTarget, ReadOnly: true}) {
+				t.Fatalf("guest mounts %+v, want the drive, read-only, at its target", r.mounts)
+			}
+			fs := r.container(t, vmfsName(spec.RunID, 0))
+			if !slices.Contains(fs.cfg.Cmd, "--readonly") || mountSource(fs, "/share") != home {
+				t.Fatalf("virtiofsd %v with %+v, want --readonly over the home alone", fs.cfg.Cmd, fs.host.Mounts)
+			}
+			for _, m := range fs.host.Mounts {
+				if m.Target != "/share" {
+					continue
+				}
+				recursive := m.BindOptions != nil && m.BindOptions.ReadOnlyForceRecursive
+				if !m.ReadOnly || recursive != rro {
+					t.Fatalf("the share's bind %+v, want read-only, recursive %v", m, rro)
+				}
+			}
+			if strings.Contains(logged.String(), "could be writable") {
+				t.Fatalf("a VM's read-only drive warned of a writable submount: %s", logged.String())
+			}
+		})
+	}
+}
+
+// A home the container path refuses (a link at a sibling's home, a link out of the drive's root, a
+// runner with no drive roots) is refused for a VM too, before anything is created.
+func TestVMDriveRefusalsCreateNothing(t *testing.T) {
+	root, home := driveHostRoot(t)
+	outside := t.TempDir()
+	for link, to := range map[string]string{"carol": home, "dave": outside} {
+		if err := os.Symlink(to, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := func(name string) types.DriveMount {
+		d := hostPathDrive(filepath.Join(root, name))
+		d.HomeName = name
+		return *d
+	}
+	for name, tc := range map[string]struct {
+		drive types.DriveMount
+		roots []string
+	}{
+		"a link at a sibling's home":   {drive: at("carol"), roots: []string{root}},
+		"a link out of the root":       {drive: at("dave"), roots: []string{root}},
+		"a runner with no drive roots": {drive: at("alice")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newVMRig(t)
+			r.d.cfg.UserDriveHostRoots = tc.roots
+			spec := vmSpec()
+			spec.Drives = []types.DriveMount{tc.drive}
+			if _, err := r.d.CreateSandbox(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "denied user drive") {
+				t.Fatalf("err = %v, want denied user drive", err)
+			}
+			if len(r.f.containers) != 0 || len(r.f.networks) != 0 {
+				t.Fatalf("a refused VM created %d containers, %d networks", len(r.f.containers), len(r.f.networks))
+			}
+		})
+	}
+}
+
 // The virtiofsd probe runs the QEMU image's virtiofsd as hardened as a share's container, and only
 // its clean exit lets the runner share folders into VMs.
 func TestVMProbeVirtiofsdNeedsItsCleanExit(t *testing.T) {
@@ -1025,5 +1119,22 @@ func TestVMEndVMConvergesAfterAPartialEnd(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A managed file with no mode reaches the guest at the default, never 0000; a set mode is kept.
+func TestVMGuestFilesResolveAnUnsetMode(t *testing.T) {
+	got := vmGuestFiles([]runner.ManagedFile{
+		{Path: "/etc/claude-code/managed-settings.json", Content: []byte("{}")},
+		{Path: "/etc/claude-code/other.json", Mode: 0o600, AgentOwned: true},
+	})
+	if len(got) != 2 {
+		t.Fatalf("files = %d, want 2", len(got))
+	}
+	if got[0].Mode != runner.DefaultManagedFileMode {
+		t.Errorf("unset mode reached the guest as %04o, want %04o", got[0].Mode, runner.DefaultManagedFileMode)
+	}
+	if got[1].Mode != 0o600 || !got[1].AgentOwned {
+		t.Errorf("a set mode or owner was changed: %+v", got[1])
 	}
 }

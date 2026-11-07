@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
@@ -40,21 +41,20 @@ import (
 // collaborators. All interface fields except Runner are required; Runner may be
 // nil for headless API-only operation (runs stay PENDING with a clear message).
 type Config struct {
-	// SweeperLease, when set, gates the sweeps that must run on one replica (the
-	// run pause) to the elected leader and fences them by lease epoch. Nil means
-	// this process is the only one sweeping: every pass runs and no fence applies.
+	// SweeperLease, when set, gates the one-replica sweeps (the run pause) to the elected
+	// leader and fences them by lease epoch. Nil: this process alone sweeps, unfenced.
 	SweeperLease SweeperLease
-	// SweepHealth records each background sweep's ticks in the shared sweep_ticks
-	// record and reads them back for the sweep gauges and the substrate_health
-	// setup row. Nil records nothing and reports no sweep.
+	// SweepHealth records each sweep's ticks in the shared sweep_ticks record and reads them
+	// back for the gauges and the substrate_health setup row. Nil records and reports nothing.
 	SweepHealth *sweephealth.Tracker
-	// Store is the abstract persistence seam (run/policy/grant/approval/audit
-	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
-	// directly, so a future pure-Go backend can be swapped in. Defaults to a
-	// store.NewPG(Pool) adapter when wired from wardynd.
+	// Store is the abstract persistence seam (run/policy/grant/approval/audit CRUD + reads),
+	// used instead of *pgxpool.Pool so a future pure-Go backend can be swapped in. Defaults
+	// to a store.NewPG(Pool) adapter when wired from wardynd.
 	Store store.Store
 	// Identity mints/verifies/revokes per-run identities (embedded by default).
 	Identity identity.Provider
+	// GatewayIdentity returns the AI gateway token's signer (contract: handleGatewayJWKS).
+	GatewayIdentity func(ctx context.Context, create bool) (*gatewayidentity.Signer, error)
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
 	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
@@ -105,11 +105,11 @@ type Config struct {
 	// person's audit-seal key through it. Nil makes the audit_personal_fields
 	// scope unavailable.
 	SubjectKeys *subjectkey.Manager
-	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
-	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
-	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
-	// sinks configured has nothing to report.
-	AuditSinkDrops func() map[string]int64
+	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for the
+	// wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit Fanout's
+	// DropsByName). Nil omits the metric: no SIEM sinks configured, nothing to report.
+	AuditSinkDrops       func() map[string]int64
+	ForgetRunCorrelation func(runIDs []uuid.UUID) // cmd/wardynd: the audit Fanout's ForgetRuns; person erasure calls it after clearing the ids. Nil with no sinks.
 	// AuditDelivery, when set, reports each acknowledged-delivery destination's
 	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
 	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
@@ -445,12 +445,12 @@ type Config struct {
 	// still be revoked (ado_run_pat_sweep.go). Nil: the revoke uses ADOEntra.
 	ADOEntraByRow func(ctx context.Context, rowID string) (ADOEntraConfig, bool, error)
 	// AzureFoundryEntra resolves the Entra application an azure_foundry provider row signs people in against,
-	// by the row's uid (azure_foundry_entra.go). It answers found=false for a uid that is not an azure_foundry
-	// row. The application is always the console's own sign-in application, so a deployment without Entra
-	// console login answers an unusable configuration and both legs refuse. Nil: no Azure sign-in is offered.
+	// by the row's uid (azure_foundry_entra.go); found=false for any other uid. It is always the console's own sign-in
+	// application, so a deployment without Entra console login answers an unusable configuration. Nil: none is offered.
 	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
 	// AzureCLIEntra is that same console application, keyed to an Azure CLI component's id (Server.azureCLIEntra).
 	AzureCLIEntra func(componentID string) ADOEntraConfig
+	EndpointOIDC  func() (EndpointOIDCEnv, bool) // the console login issuer and callback URL for an endpoint sign-in; ok=false: none
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// HostResolver is how the model-provider write boundary resolves an azure_foundry endpoint host for its
@@ -773,9 +773,10 @@ type Config struct {
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
-	runnerStreams runnerStreamState
-	cfg           Config
-	router        chi.Router
+	runnerStreams   runnerStreamState
+	gatewayIdentity gatewayIdentityState
+	cfg             Config
+	router          chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
 	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a time on this replica:
@@ -823,12 +824,12 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
-	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
+	// localAttachSubs (localAttachSubFor) and localCovered (promotionCovered) replace a local attach's substrate and corpus proof; queueRace runs at each queueRace* point (queueRaceAt). Tests only.
 	localAttachSubs func(id uuid.UUID) localAttachSub
-	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
-	localCovered func(runID uuid.UUID) bool
-	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
-	// output pause for THIS server only (tests).
+	localCovered    func(runID uuid.UUID) bool
+	queueRace       func(point string)
+	macWindowHost   // this replica's open attended windows and the tests' seams for them (run_mac_window.go)
+	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed output pause for THIS server only (tests).
 	pauseLimit time.Duration
 	// attachPrepare overrides attachPrepareTimeout for THIS server only (tests):
 	// the bound on one Runner.Attach.
@@ -851,7 +852,6 @@ type Server struct {
 	// substrateProbe is this replica's cached probe of the runner's substrate,
 	// read by /metrics and /setup/status (substrate_health.go).
 	substrateProbe substrateProbeCache
-
 	refRulesetMu   sync.Mutex
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck

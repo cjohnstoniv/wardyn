@@ -458,3 +458,124 @@ func TestAgentRunSelftestChecksTheManagedFolder(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, r.stdout.String())
 	}
 }
+
+// --prepare is a task's prep without a task: the repo cloned onto the run's branch, the start harness
+// set up and git's broker routes in place, then exit 0. It starts nothing and moves nowhere.
+func TestAgentRunPrepareSucceeds(t *testing.T) {
+	r := newLaunchRig(t, map[string]string{
+		"WARDYN_HARNESSES": "claude-code", "WARDYN_START_HARNESS": "claude-code", "WARDYN_RUN_ID": "run1",
+		"WARDYN_REPO_URL": "https://github.com/o/r.git", "WARDYN_REPO_SLUG": "o/r", "WARDYN_GITHUB_GRANT_ID": "g1",
+	})
+	r.onRun = func(_ string, argv []string) {
+		if len(argv) > 2 && argv[1] == "clone" {
+			_ = os.MkdirAll(filepath.Join(argv[len(argv)-1], ".git"), 0o755)
+		}
+	}
+	if code := r.a.Main([]string{"--prepare"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, r.stderr.String())
+	}
+	dest := filepath.Join(r.home, "work", "r")
+	if !r.ranArgv("git", "clone", "--depth", "1", "--", "https://github.com/o/r.git", dest) {
+		t.Errorf("no clone: %q", r.ran)
+	}
+	if !r.ranArgv("git", "checkout", "-b", "wardyn/run1/work") {
+		t.Errorf("no run branch: %q", r.ran)
+	}
+	if !r.ranArgv("git", "config", "--global", "url.http://wardyn-proxy:3128/wardyn/gh/o/r.insteadOf", "https://github.com/o/r") {
+		t.Errorf("no broker route: %q", r.ran)
+	}
+	if _, err := os.Stat(filepath.Join(r.home, ".claude.json")); err != nil {
+		t.Errorf("the harness was not set up: %v", err)
+	}
+	if r.execArgv != nil || r.dir != "" || r.stdout.Len() != 0 {
+		t.Errorf("--prepare started or moved: exec %q, dir %q, stdout %q", r.execArgv, r.dir, r.stdout.String())
+	}
+}
+
+// A run that starts as a shell names no start harness, yet its harnesses are set up: the credentials file
+// is in place so `claude` in the shell is signed in. A harness a macOS VM does not serve is skipped, and a
+// run that lists none is still cloned.
+func TestAgentRunPrepareWithoutAStartHarness(t *testing.T) {
+	r := newLaunchRig(t, map[string]string{
+		"WARDYN_HARNESSES": "claude-code gemini-cli", "WARDYN_START_HARNESS": "",
+		"WARDYN_CLAUDE_MANAGED_B64": base64.StdEncoding.EncodeToString([]byte(`{"k":"v"}`)),
+		"WARDYN_REPO_URL":           "https://github.com/o/r.git",
+	})
+	if code := r.a.Main([]string{"--prepare"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, r.stderr.String())
+	}
+	cred := filepath.Join(r.home, ".claude", ".credentials.json")
+	if b, err := os.ReadFile(cred); err != nil || string(b) != `{"k":"v"}` {
+		t.Errorf("credentials %q, %v", b, err)
+	}
+	if st, err := os.Stat(cred); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("credentials mode %v, %v", st, err)
+	}
+	if _, err := os.Stat(filepath.Join(r.home, ".claude.json")); err != nil {
+		t.Errorf("claude-code was not set up: %v", err)
+	}
+	if !slices.ContainsFunc(r.ran, func(a []string) bool { return len(a) > 1 && a[1] == "clone" }) {
+		t.Errorf("no clone: %q", r.ran)
+	}
+
+	r = newLaunchRig(t, map[string]string{"WARDYN_HARNESSES": "codex-cli", "WARDYN_REPO_URL": "https://github.com/o/r.git"})
+	if code := r.a.Main([]string{"--prepare"}); code != 0 {
+		t.Fatalf("codex-cli: exit %d: %s", code, r.stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(r.home, ".codex")); err != nil {
+		t.Errorf("codex-cli was not set up: %v", err)
+	}
+
+	r = newLaunchRig(t, map[string]string{"WARDYN_REPO_URL": "https://github.com/o/r.git"})
+	if code := r.a.Main([]string{"--prepare"}); code != 0 || !slices.ContainsFunc(r.ran, func(a []string) bool { return len(a) > 1 && a[1] == "clone" }) {
+		t.Errorf("a run listing no harness: exit %d, ran %q", code, r.ran)
+	}
+	if _, err := os.Stat(filepath.Join(r.home, ".claude.json")); err == nil {
+		t.Error("claude-code was set up for a run that lists none")
+	}
+}
+
+// A prep that fails prints the launcher's sentence and exits 1, as a task's prep does, and starts nothing.
+func TestAgentRunPrepareFailureSentence(t *testing.T) {
+	_, settings := managedRig(t)
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"home", map[string]string{"HOME": "relative"}, "HOME is not an absolute path"},
+		{"start folder", map[string]string{"WARDYN_START_FOLDER": "/no/such/folder"}, "the starting folder /no/such/folder is missing or isn't a plain folder, so the run was not started."},
+		{"no such harness", map[string]string{"WARDYN_HARNESSES": "claude-code", "WARDYN_START_HARNESS": "codex-cli"}, "the start harness codex-cli isn't one of this run's harnesses, so the run was not started."},
+		{"unserved harness", map[string]string{"WARDYN_HARNESSES": "gemini-cli", "WARDYN_START_HARNESS": "gemini-cli"}, "a macOS VM can't start gemini-cli in this release."},
+		{"managed file", map[string]string{EnvManagedFiles: managedEnv(settings+".gone", 0o644)}, "the managed file " + settings + ".gone isn't in place as root's file at mode 0644, so the run was not started."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLaunchRig(t, tc.env)
+			if code := r.a.Main([]string{"--prepare"}); code != 1 {
+				t.Fatalf("exit %d, want 1", code)
+			}
+			if got, want := r.stderr.String(), "agent-run: "+tc.want+"\n"; got != want {
+				t.Errorf("said %q, want %q", got, want)
+			}
+			if r.execArgv != nil || r.dir != "" {
+				t.Errorf("a failed prep started or moved: exec %q, dir %q", r.execArgv, r.dir)
+			}
+		})
+	}
+}
+
+// --prepare is the one new mode: --idle, --revive, --boot-seed and --continue stay refused.
+func TestAgentRunPrepareLeavesTheOtherModesRefused(t *testing.T) {
+	for _, mode := range []string{"--idle", "--revive", "--boot-seed", "--continue"} {
+		r := newLaunchRig(t, map[string]string{"WARDYN_REPO_URL": "https://github.com/o/r"})
+		if code := r.a.Main([]string{mode}); code != AgentRunRefused {
+			t.Errorf("%s: exit %d", mode, code)
+		}
+		if want := "agent-run: " + mode + " isn't supported in a macOS VM in this release.\n"; r.stderr.String() != want {
+			t.Errorf("%s: said %q", mode, r.stderr.String())
+		}
+		if r.ran != nil {
+			t.Errorf("%s: refused but ran %q", mode, r.ran)
+		}
+	}
+}

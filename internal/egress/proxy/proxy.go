@@ -60,7 +60,8 @@ type Proxy struct {
 	res       resolver
 	// scanner is the OPTIONAL outbound content-inspection engine. Nil == off
 	// (the common case). It is consulted only on the brokered LLM routes.
-	scanner *contentscan.Engine
+	scanner      *contentscan.Engine
+	deferredScan *deferredScan // a gateway route's cut engine (gateway_identity.go); nil, every request gets scanner
 	// scan is this engine's inspection slot and retained-bytes budget.
 	scan scanBudget
 	// ca is the OPTIONAL TLS-MITM certificate authority. Non-nil only when both a
@@ -109,6 +110,8 @@ type Proxy struct {
 	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
 	// no repo brokered (the route always 403s). See git_broker.go.
 	gitGrants map[string]uuid.UUID
+	// gitPushWithheld is Options.GitPushWithheld, keys lowercased (refuseWithheldPush).
+	gitPushWithheld map[string]string
 	// viaOrgRoutes are the destinations forwarded to the organisation (via_org.go).
 	viaOrgRoutes []ViaOrgRoute
 	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
@@ -250,6 +253,12 @@ type Proxy struct {
 	// localModels is each local_model upstream's route gate, keyed by
 	// localModelKey (local_model.go). Empty == no local model route.
 	localModels map[string]*localModel
+	// allowedModels is Config.AllowedModels and BedrockRoutes compiled (allowed_models.go). Nil == off.
+	allowedModels *modelLimit
+	// gatewayRoutes is Options.GatewayIdentity and gatewayHolders each route
+	// provider's token (gateway_identity.go). Empty == off.
+	gatewayRoutes  []GatewayIdentityRoute
+	gatewayHolders map[string]*gatewayTokenHolder
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
 	// attribution is Options.Attribution: the policy named in a policy-decided
@@ -260,6 +269,8 @@ type Proxy struct {
 	pushSets []types.PushRuleSet
 	// pushBase is Config.PushRuleBase compiled: the rules of an entry with no set.
 	pushBase *pushRuleSet
+	// forgeHosts is Config.ForgeHosts compiled (push_deny_all_forge.go).
+	forgeHosts map[string]bool
 	// harnessRules and harnessCreds are Config.HarnessToolRules and
 	// Config.HarnessCredentials, the per-harness regime of the approval route
 	// (tool_rules.go); empty means the older run-wide policy.ToolRules.
@@ -382,6 +393,7 @@ func newProxy(opts Options) *Proxy {
 		mitmPlaintext:        mitm.plaintext,
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
+		gitPushWithheld:      canonicalHostKeys(opts.GitPushWithheld),
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
@@ -410,6 +422,8 @@ func newProxy(opts Options) *Proxy {
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
+		gatewayRoutes:        opts.GatewayIdentity,
+		gatewayHolders:       map[string]*gatewayTokenHolder{},
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
@@ -487,6 +501,9 @@ func newProxy(opts Options) *Proxy {
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)
+	for _, rt := range opts.GatewayIdentity {
+		p.gatewayHolders[rt.holderKey()] = &gatewayTokenHolder{providerID: rt.ProviderID, mcpKey: rt.MCPKey, audience: rt.Audience, timeout: 15 * time.Second}
+	}
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")
@@ -636,6 +653,10 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		log := decisionLog(req, egress.Deny, gate.refusal)
 		return egress.Deny, "", &log
 	}
+	// Under push_rules.deny_all, a code host no door serves (push_deny_all_forge.go).
+	if log := p.pushDenyAllForgeDeny(req, host, gate.verdict); log != nil {
+		return egress.Deny, "", log
+	}
 	verdict, portDryRun := gate.verdict, gate.portDryRun
 	// approvalID records whether (and via which approval) this request's verdict
 	// was RELEASED by the first-use approval flow, so the eventual Allow decision
@@ -776,14 +797,6 @@ func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.Decisi
 	return log
 }
 
-// refuseGrantHostTunnel answers a CONNECT to a host one of the doors guards with
-// a refusal, in the order the doors were added, and reports whether it did.
-func (p *Proxy) refuseGrantHostTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
-	return p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
-		p.refuseKubeAPITunnel(w, r, host, port)
-}
-
 // handleConnect establishes a raw TCP tunnel for CONNECT (TLS passthrough).
 // Credentials CANNOT be injected into a CONNECT tunnel: the proxy has
 // hostname-only visibility and never sees the encrypted request headers.
@@ -870,6 +883,10 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 				p.sink.emit(*log)
 			}
 			p.mitmConnect(w, r, host, port)
+			return
+		}
+		// With allowed_models set, a model host is never an opaque tunnel: the gate cannot see into it.
+		if p.refuseOpaqueModelTunnel(w, r, host, port) {
 			return
 		}
 		// Opaque tunnel (no CA, or Bedrock/SigV4). Record a one-time llm.scan.bypass

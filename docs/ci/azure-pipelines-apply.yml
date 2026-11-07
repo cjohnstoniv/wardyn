@@ -1,0 +1,32 @@
+# Wardyn workload apply - Azure Pipelines example. NOT RUN BY ANY WARDYN CI JOB.
+# See docs/CI.md "Apply from a pipeline".
+#
+# Uses a service identity's token. It may run `wardyn apply --dry-run`, so the
+# first step previews the change before the gated apply.
+# Approvals on the `production` environment are the approval gate.
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: apply
+    jobs:
+      - deployment: apply_workload
+        environment: production
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                # Put the wardyn CLI on PATH first (a release asset, docs/VERIFY.md).
+                - script: wardyn apply -f workloads/web.yaml --dry-run
+                  displayName: Preview the change
+                  env:
+                    WARDYN_URL: https://wardyn.example.com
+                    WARDYN_TOKEN: $(WARDYN_CI_TOKEN)
+                - script: wardyn apply -f workloads/web.yaml --wait --timeout 10m
+                  displayName: Apply the workload
+                  env:
+                    WARDYN_URL: https://wardyn.example.com
+                    WARDYN_TOKEN: $(WARDYN_CI_TOKEN)

@@ -125,8 +125,16 @@ type ruleApprovals struct {
 	*authzApprovals
 	rec       *recRecorder
 	decideErr error
+	listErrs  map[types.ApprovalState]error
 	decides   int
 	created   []types.ApprovalRequest
+}
+
+func (a *ruleApprovals) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+	if err := a.listErrs[state]; err != nil {
+		return nil, err
+	}
+	return a.authzApprovals.List(ctx, state)
 }
 
 func (a *ruleApprovals) Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
@@ -343,6 +351,35 @@ func TestApprovalRuleApprovesAMatchingHold(t *testing.T) {
 			if p.RuleID != rule.ID || p.RuleName != "ci-review" || p.RuleVersion != 1 || p.RuleDigest != approvalRuleDigest(rule) ||
 				p.Matched["repo"] != "org/repo" || p.Matched[tc.key] != tc.matchedValue || data.Reason != "approval rule ci-review v1" {
 				t.Fatalf("data = %s", rows[0].Data)
+			}
+		})
+	}
+}
+
+// TestApprovalRuleLeavesARowWhenTheRunsDecisionsCannotBeRead: fail closed. Either read behind a person's deny failing
+// leaves the fresh row PENDING with one skip row naming the 500, never the rule's approve. With both reads answering,
+// the same row names the deny.
+func TestApprovalRuleLeavesARowWhenTheRunsDecisionsCannotBeRead(t *testing.T) {
+	t.Setenv(envApprovalRules, approvalRulesOn)
+	for _, tc := range []struct {
+		name   string
+		failed types.ApprovalState
+		want   string
+	}{
+		{name: "denied read fails", failed: types.ApprovalDenied, want: reasonInternalError},
+		{name: "approved read fails", failed: types.ApprovalApproved, want: reasonInternalError},
+		{name: "both reads answer", want: reasonApprovalRuleHostDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRuleFix(t)
+			id := uuid.New()
+			f.aps.byID[id] = types.ApprovalRequest{ID: id, RunID: f.run.ID, Kind: types.ApprovalEgressDomain, State: types.ApprovalDenied,
+				DecisionScope: types.ScopeRun, RequestedScope: json.RawMessage(ruleEgressScope), RequestedAt: time.Now()}
+			f.aps.listErrs = map[types.ApprovalState]error{tc.failed: errors.New("read failed")}
+			_, created := f.raise(types.ApprovalEgressDomain, ruleEgressScope)
+			skips := f.pending(created.ID)
+			if len(skips) != 1 || skipReason(t, skips[0]) != tc.want {
+				t.Fatalf("skip rows = %+v, want one with reason %s", skips, tc.want)
 			}
 		})
 	}

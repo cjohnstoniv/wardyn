@@ -138,6 +138,13 @@ func (c *Client) Init(ctx context.Context, in Init) (InitResult, error) {
 	return r, c.do(ctx, http.MethodPost, "/v1/init", in, &r)
 }
 
+// Scrub asks a macOS guest to remove what its run wrote, at a graceful stop; afterwards the agent
+// refuses Init and every exec. The caller bounds it with ctx. An agent that predates it answers an error.
+func (c *Client) Scrub(ctx context.Context) (ScrubReport, error) {
+	var r ScrubReport
+	return r, c.do(ctx, http.MethodPost, "/v1/scrub", nil, &r)
+}
+
 // PauseAgent stops the latest detached exec's process group; ErrNoExec when none is running. gen is
 // the pause's generation (AgentSignal), and fenced says the agent ordered the request by it: false from
 // an agent that predates it, which signals every request as it arrives.

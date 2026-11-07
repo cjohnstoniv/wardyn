@@ -98,6 +98,9 @@ const RevocationOrderLockClass int32 = 0x57525351 // ASCII "WRSQ"
 // insert, so two creates by one person cannot both pass the count.
 const MemberDriveLockClass int32 = 0x574D4452 // ASCII "WMDR"
 
+// KeptMachineLockClass serializes one person's store.CreateKeptMachine count and insert (second key: crc32 of the owner).
+const KeptMachineLockClass int32 = 0x574B504D // ASCII "WKPM"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

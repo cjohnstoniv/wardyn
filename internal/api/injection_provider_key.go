@@ -44,8 +44,13 @@ const providerKeyRecheck = 15 * time.Minute
 // providerKeyDestination is where the record says p's key goes for agent, and
 // how it rides: the key and endpoint arm's lane, or a Bedrock key provider's
 // own data-plane host as a bearer. ok=false for any other kind — a
-// wardyn-provider-<uid>-key name is never resolved for a provider with no key.
+// wardyn-provider-<uid>-key name is never resolved for a provider with no key —
+// and for an endpoint that signs people in, whose credential is the -oidc
+// sign-in resolveEndpointOIDCInjection serves: this arm never injects one.
 func providerKeyDestination(p types.ModelProvider, agent string) (host, header, format string, ok bool) {
+	if p.OIDC != nil {
+		return "", "", "", false
+	}
 	if p.Kind == types.ModelProviderBedrockBearer {
 		return providerBedrockRuntimeHost(p), "Authorization", "Bearer %s", true
 	}

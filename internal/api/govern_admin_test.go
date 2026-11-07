@@ -180,6 +180,10 @@ func governSites() []governSite {
 				_, err := s.capAllowed(ctx, capAgent, "claude-code")
 				return err != nil
 			}},
+		{"run_kept_machine.go keptMachineGovernanceRefusal", capSrv(&capStore{}),
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				return s.keptMachineGovernanceRefusal(ctx, walled(types.GovernanceLimits{DenyKeptMachines: true})) != nil
+			}},
 		{"user_drives_run.go driveDoorProfile", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				_, shut := s.driveDoorProfile(ctx, walled(types.GovernanceLimits{DenyUserDrive: true}))
@@ -331,23 +335,25 @@ func governSites() []governSite {
 // EverySiteIsListed holds the table to the call sites, so a new site is a failure until it is here or
 // has a row, and an entry whose function no longer asks runUngoverned is a failure too.
 var governSiteElsewhere = map[string]string{
-	"resolveRunPolicyFacts":   "row: inline_policy.go resolveRunPolicy inline clamp",
-	"resolveChainCeiling":     "row: governance.go resolveEffectiveCeiling",
-	"boundaryEndPlan":         "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
-	"memberResources":         "row: runs_dispatch_ceiling.go boundResources",
-	"uiAppsDenied":            "row: governance_run_doors.go boundUIApps",
-	"inboundAppsDenied":       "row: governance_run_doors.go boundInboundApps",
-	"recordLaneVeto":          "row: workspace_admission.go laneVetoedBy",
-	"deniedPlacements":        "test: run_placement_capabilities_test.go",
-	"gitHubOwnTokenDecider":   "test: gh_own_pat_test.go",
-	"handleRecordGoverned":    "test: record_govern_admin_test.go",
-	"markGovernanceExempt":    "test: govern_admin_doors_test.go",
-	"meGovernanceContact":     "none: /me display read, no switch-on test",
-	"attachAuthority":         "test: attach_authority_test.go",
-	"refuseNoTicketAttach":    "none: attach entry door, no switch-on test",
-	"revivePATNarrowing":      "test: run_revive_test.go",
-	"unionDirectGitHubEgress": "none: direct GitHub egress union, no switch-on test",
-	"macOSBaseAllowedFor":     "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
+	"resolveRunPolicyFacts":    "row: inline_policy.go resolveRunPolicy inline clamp",
+	"resolveChainCeiling":      "row: governance.go resolveEffectiveCeiling",
+	"boundaryEndPlan":          "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
+	"memberResources":          "row: runs_dispatch_ceiling.go boundResources",
+	"uiAppsDenied":             "row: governance_run_doors.go boundUIApps",
+	"inboundAppsDenied":        "row: governance_run_doors.go boundInboundApps",
+	"recordLaneVeto":           "row: workspace_admission.go laneVetoedBy",
+	"deniedPlacements":         "test: run_placement_capabilities_test.go",
+	"gitHubOwnTokenDecider":    "test: gh_own_pat_test.go",
+	"handleRecordGoverned":     "test: record_govern_admin_test.go",
+	"markGovernanceExempt":     "test: govern_admin_doors_test.go",
+	"meGovernanceContact":      "none: /me display read, no switch-on test",
+	"attachAuthority":          "test: attach_authority_test.go",
+	"refuseNoTicketAttach":     "none: attach entry door, no switch-on test",
+	"revivePATNarrowing":       "test: run_revive_test.go",
+	"unionDirectGitHubEgress":  "none: direct GitHub egress union, no switch-on test",
+	"imageDigestVerdict":       "test: run_image_digest_test.go",
+	"reviveImageDigestRefusal": "test: run_image_digest_test.go",
+	"macOSBaseAllowedFor":      "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 }
 
 // runUngovernedCallers is every function in dir's non-test sources that calls

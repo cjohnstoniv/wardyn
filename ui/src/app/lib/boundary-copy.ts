@@ -20,7 +20,7 @@ export const BOUNDARY = {
   ORG_BOUNDARY: "Your organisation's boundary",
   NOT_VISIBLE: "Not visible to Wardyn",
   RING_BOUNDARY_SUB: "Set here, by security admins",
-  RING_TEAMS: "Team walls",
+  RING_TEAMS: "Governance profiles",
   RING_TEAMS_SUB: "Each only narrows the one above.",
   RING_RESTRICTIONS: "Restrictions",
   RING_RESTRICTIONS_SUB: "Deny-only. Follow people into any team.",
@@ -81,10 +81,10 @@ export const BOUNDARY_DESKTOP = {
   NOW: "Now",
   ALLOWED: "Allowed",
   BLOCKED: "Blocked",
-  BELOW: "Teams below may only block more.",
+  BELOW: "Profiles below may only block more.",
   ENFORCED: "Enforced at the desktop relay, outside the sandbox. Every use is logged by direction, size and hash. Never the content.",
-  LOCK_ROW: "Lock for teams below",
-  LOCK_GROUP: "Lock the group for teams below",
+  LOCK_ROW: "Lock for profiles below",
+  LOCK_GROUP: "Lock the group for profiles below",
   /** not on the boards: the dry run's row for the drafted locks. */
   LOCKS: "Desktop locks",
   /** not on the boards: no desktop setting is locked. */

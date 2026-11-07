@@ -23,8 +23,10 @@ The spec is frozen on the run at create, with its defaults filled. It cannot cha
 | `health.path` | **Health check path** | `--health-path` | none: a TCP connect to the port. A path starts with `/` and is at most 256 URL characters |
 | `health.interval_sec` | **Check every** | `--health-every` | 15 seconds; 5 to 300 |
 | `health.failure_threshold` | **Unhealthy after** N **failed checks in a row** | `--health-failures` | 3; 1 to 10 |
+| `health.probe` | **Also check it from Wardyn** | `--health-probe control_plane` | off; `control_plane` is the only other value. See [Wardyn's own check](#wardyns-own-check) |
 
 - A `health` block needs a `port`. A `port` alone is not checked: the supervisor probes only when `health` is set.
+- Any other `health.probe` is `400 run_mode_invalid`, field `service.health.probe`.
 - `port` names the port the health check connects to. It opens that port to nobody.
 - To open a service's port from the run page, mark it **Callable from outside** in New Run. A background run opens only inbound ports, and its owner is always one of the callers. Inbound apps must be turned on for you.
 - A service created under an idle pause gets this warning on its 201: "Your admin pauses runs nobody is using, so this service will be paused while it waits for requests."
@@ -59,8 +61,11 @@ The run list and the run page show the service's health in place of "Running", t
 | Unhealthy | `probe_failing` | The health check failed `failure_threshold` times in a row |
 | Health unknown | `supervisor_missing` | No state file after 10 minutes: the image has no supervisor. See [Images](#images) |
 | Health unknown | `unreachable` | Wardyn could not read the file. The runner may be offline |
+| Health unknown | `paused` | The run is paused. The last check time is kept |
 
 The run page's **Service** panel adds **Restart**, **Health check**, **Health** ("checked 40 s ago"), **Restarts** (with the last exit code) and **Lease**.
+
+With [Wardyn's own check](#wardyns-own-check), **Health** reads **Sandbox says** and a **Wardyn's check** row follows. The chip shows the worse reading: Unhealthy, Health unknown, Starting, then Healthy.
 
 ## Keep it alive within the walls
 
@@ -90,6 +95,7 @@ Every minute the lease sweep looks at each running service. It renews the lease 
 
 Renewal moves the end to now plus the lease unit, or to the cap if that is sooner. The unit is cut to the boundary's maximum as every `PATCH` is. A lost race with a person's edit renews nothing. A ceiling tightened later lowers the unit at the next renewal; one loosened frees nothing on a run already created.
 
+- With [Wardyn's own check](#wardyns-own-check), it must be `starting` or `healthy` and fresh too. With no reading it counts as starting for 10 minutes, then unknown.
 - An unhealthy or unknown service is not renewed. It ends at its lease, with the usual `run.ending_soon` warnings at 24 hours, 1 hour and 10 minutes.
 - So the lease length is how long a failing service keeps its slot.
 - The owner can still extend the run by hand with `PATCH /runs/{id}`, whatever its health ([Extend](operations/run-lifetime.md#extend)). No `wardyn` command does it.
@@ -115,6 +121,23 @@ The supervisor writes `/home/agent/.wardyn/service.json`, and wardynd reads it e
 
 For an admin, the cap is the real limit on a service. Set the pool's `background.lifetime.max_sec` to what you accept for a service that lies about its health.
 
+## Wardyn's own check
+
+With `health.probe: control_plane`, wardynd also checks the port itself. It is off by default and fixed at create, so an older service never gets it.
+
+Wardyn's check reaches the port through the sandbox, not from the network outside it. A service that answers its health check passes, whatever else is wrong with it. The sandbox's health is its own report.
+
+| What wardynd does | Bound |
+|---|---|
+| Every minute, after the state file, runs `socat` to the port over the same exec channel | 5 seconds |
+| With a path: an HTTP/1.0 `GET`, no credentials, no redirects followed. A 2xx or 3xx status line passes | 4 KiB read |
+| Without a path: a TCP connect | Nothing sent |
+
+- Failures count Wardyn's checks, not the supervisor's. `failure_threshold` in a row reads unhealthy; below it the last health stands. A pass resets the count.
+- A check that cannot run reads unknown, `not_run`, never unhealthy. Paused and stale read unknown, as the sandbox's reading does.
+- The run carries it as `service_status.probe`: `health`, `reason`, `http_status`, `failures` and `observed_at`. `wardyn run get` prints it.
+- Each change of its health writes `run.service.health` with `source: control_plane`.
+
 ## Images
 
 The supervisor ships in the runner tools of the image. An image wrapped or built before this release has an `agent-run-lib.sh` without it.
@@ -128,13 +151,13 @@ The supervisor ships in the runner tools of the image. An image wrapped or built
 
 | Action | When | Data |
 |---|---|---|
-| `run.service.health` | The health changes | `from`, `to`, `reason`, `source` |
+| `run.service.health` | The health changes, per source | `from`, `to`, `reason`, `source` |
 | `run.service.restart` | The restart count rises | `restarts`, `delta`, `last_exit_code`, `source` |
 | `run.end.set` | Reason `service_renewed`: a lease renewed | `from`, `to`, `max`, `source`, `health` |
 | `run.end.set` | Outcome denied: a due renewal was refused or could not be checked; once per reason, then at most hourly | `subject`, `reason` |
 | `run.create` | A service starts | `service`, the frozen spec |
 
-At most one `run.service.health` and one `run.service.restart` row are written per run per sweep. [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) has the full rows.
+At most one `run.service.health` row per source and one `run.service.restart` row are written per run per sweep. [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) has the full rows.
 
 ## Limits
 
@@ -145,3 +168,5 @@ At most one `run.service.health` and one `run.service.restart` row are written p
 - A runner that goes offline leaves the supervisor running. Its last reading stays; once that is 15 minutes old, Health reads unknown and renewal stops.
 - A paused or lost service is not renewed.
 - Nothing in Wardyn renews a lease except a healthy service's own sweep and the owner's `PATCH`.
+- A service is one run. There are no replicas and no autoscaling, and no check from outside the sandbox. A service that must run in several copies, or whose health must not rest on the sandbox, belongs on the sandbox controller directly.
+- Wardyn's check reaches the port through the sandbox, not from the network outside it. A service that answers its health check passes, whatever else is wrong with it. The sandbox's health is its own report.

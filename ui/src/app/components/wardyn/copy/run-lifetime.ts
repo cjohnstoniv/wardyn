@@ -136,7 +136,16 @@ export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it.";
 // sentence stops at the one fact that's actually true.
 export const ENDED_BODY_TASK = "It has no network.";
 export const ENDED_EXTEND_AND_REVIVE = "Extend and revive";
+// UXR-15: one verb for stopping a run on the run page. The header's End run and the banner's button both open the same
+// confirm, whose own button says "End run".
 export const END_RUN = "End run";
+/** The toast names the run by its title (else its task), one line, bounded: a task can be a paragraph. */
+export function toastRunName(run: { title?: string; task?: string }): string {
+  const line = ((run.title ?? "").trim() || run.task || "").trim().split("\n")[0];
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line || "this run";
+}
+export const ENDING = (name: string) => `Ending ${name}`;
+export const COULDNT_END = (name: string) => `Couldn't end ${name}`;
 
 // ---- Lost and revive (design.md §4.1, mock "Paused, and lost then revived") ----
 

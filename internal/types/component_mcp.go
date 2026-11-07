@@ -47,7 +47,7 @@ var npmPinnedRE = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9.
 // server and never into the sandbox, so its only secret mode is a header to
 // the server's own host, over TLS. A local server's secrets follow every
 // component's rules.
-func (d ComponentDefinition) validateMCP() error {
+func (d ComponentDefinition) validateMCP(personDefined bool) error {
 	m := d.MCP
 	if m == nil {
 		return nil
@@ -58,6 +58,9 @@ func (d ComponentDefinition) validateMCP() error {
 	switch m.Transport {
 	case ComponentMCPTransportHTTP:
 	case ComponentMCPTransportStdio:
+		if m.GatewayAudience != "" {
+			return errors.New("mcp.gateway_audience: only a remote server is sent the run's identity")
+		}
 		return m.validateLocal()
 	case "sse":
 		return errors.New("mcp.transport: servers that use SSE are not supported yet; use the server's streamable HTTP address")
@@ -70,6 +73,9 @@ func (d ComponentDefinition) validateMCP() error {
 	host, err := MCPURLDestination(m.URL)
 	if err != nil {
 		return fmt.Errorf("mcp.url: %w", err)
+	}
+	if err := m.validateGatewayAudience(personDefined); err != nil {
+		return err
 	}
 	if !slices.ContainsFunc(d.Hosts, func(h string) bool { return mcpHostAdmits(h, host) }) {
 		return fmt.Errorf("mcp.url: its host %q must be one of this component's hosts", host.String())
@@ -84,6 +90,20 @@ func (d ComponentDefinition) validateMCP() error {
 		case del.PlainHTTP:
 			return fmt.Errorf("secrets[%d].delivery.plain_http: an MCP server's secret is only ever sent over TLS", i)
 		}
+	}
+	return nil
+}
+
+// validateGatewayAudience checks the audience of a remote server: an organisation's
+// alone, one line of at most MaxComponentMCPGatewayAudience bytes.
+func (m ComponentMCP) validateGatewayAudience(personDefined bool) error {
+	a := m.GatewayAudience
+	switch {
+	case a == "":
+	case personDefined:
+		return errors.New("mcp.gateway_audience: only an organisation's server is sent the run's identity")
+	case len(a) > MaxComponentMCPGatewayAudience || strings.TrimSpace(a) != a || !printable(a):
+		return fmt.Errorf("mcp.gateway_audience: must be printable text of at most %d bytes, with no space at either end", MaxComponentMCPGatewayAudience)
 	}
 	return nil
 }

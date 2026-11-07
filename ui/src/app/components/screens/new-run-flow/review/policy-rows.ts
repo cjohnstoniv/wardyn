@@ -10,6 +10,8 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
+import { pushesLines } from "../../../wardyn/policy-document/policy-facts";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import { sameValue } from "../draft/draft-reducer";
@@ -20,7 +22,7 @@ import type { ReviewPreflight } from "./review-seams";
 import { reachedHosts } from "../lenses/tools-lens";
 import { isLocalMcp, sandboxSecrets } from "../steps/tools/local-mcp";
 
-export type PolicyRowId = "barrier" | "network" | "credentials" | "files" | "tools";
+export type PolicyRowId = "barrier" | "network" | "credentials" | "files" | "tools" | "pushes";
 
 export interface PolicyRow {
   id: PolicyRowId;
@@ -47,7 +49,8 @@ const ROW_KEYS: Record<PolicyRowId, string[]> = {
   network: ["overrides.hosts", "inline_policy.allowed_domains", "inline_policy.denied_domains", "inline_policy.allow_all_egress", "inline_policy.first_use_approval"],
   credentials: ["model_provider", "integration_id", "overrides.agent.add_secrets", "overrides.agent.remove_secrets", "overrides.git_pat", "overrides.azure_devops"],
   files: ["workspaces", "drive", "start_folder", "no_repositories_or_drives", "keep_work_folder", "resources.disk_mib"],
-  tools: ["tool_approvals", "overrides.agent.tool_rules", "overrides.push_rules", "inline_policy.tool_rules", "inline_policy.push_rules"],
+  tools: ["tool_approvals", "overrides.agent.tool_rules", "inline_policy.tool_rules"],
+  pushes: ["overrides.push_rules", "inline_policy.push_rules", "inline_policy.github_capabilities", "inline_policy.azure_devops_capabilities", "wall_preset"],
 };
 
 /** The rows whose keys differ from what the origin loaded. Per-tool provider and rules count too. */
@@ -125,6 +128,14 @@ export function policyRows(
   const wallsDetail = wallTexts.length > 1 ? joined(...walls.map((w) => NR_REVIEW.POLICY_TOOLS_OF(harnessLabel(w.harness), w.text))) : wallTexts[0];
   const toolsDetail = effects.length === 1 ? joined(defaults[0].default.source.name, defaults[0].default.source.id === ACCEPT_EDITS_SOURCE ? NR_REVIEW.POLICY_ACCEPTS_EDITS : undefined) : undefined;
   const harnessRules = (access?.rows ?? []).filter(isLocalMcp).map((r) => ({ text: NR_REVIEW.POLICY_HARNESS_RULES(r.name), muted: true }));
-  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: joined(toolsDetail, wallsDetail), ...(harnessRules.length > 0 && { notes: harnessRules }) });
+  rows.push({ id: "tools", label: WALL_PRESETS.ROW_TOOLS, value, detail: joined(toolsDetail, wallsDetail), ...(harnessRules.length > 0 && { notes: harnessRules }) });
+  // Pushes are their own row (board WP-2): every push refused and no write access outrank where a push could go.
+  const spec = preview?.spec;
+  // The server says when pushes cannot be stopped here (broker off, no code_write). Every push refused outranks it:
+  // deny_all also refuses an unbrokered push to a known forge host, and then says what a secret could still reach.
+  const denyAll = spec?.push_rules?.deny_all === true;
+  const pushes = preview?.pushes_unstoppable && !denyAll ? WALL_PRESETS.PUSHES_UNSTOPPABLE : spec ? pushesLines(spec).join("; ") : "";
+  const secretsNote = denyAll && preview?.push_deny_all_secrets ? WALL_PRESETS.PUSH_DENY_ALL_SECRETS : undefined;
+  if (pushes) rows.push({ id: "pushes", label: WALL_PRESETS.ROW_PUSHES, value: pushes, ...(secretsNote && { detail: secretsNote }) });
   return rows;
 }

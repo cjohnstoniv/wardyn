@@ -76,6 +76,19 @@ func apiTokenIDFromContext(ctx context.Context) uuid.UUID {
 	return id
 }
 
+// cliSessionIDCtxKey carries the id of the CLI session whose access token authenticated the current request, when
+// one did. A CLI token is replaced on every refresh, so a decision that must outlive the request binds to this id.
+type cliSessionIDCtxKey struct{}
+
+func withCLISessionID(ctx context.Context, id uuid.UUID) context.Context {
+	return context.WithValue(ctx, cliSessionIDCtxKey{}, id)
+}
+
+func cliSessionIDFromContext(ctx context.Context) uuid.UUID {
+	id, _ := ctx.Value(cliSessionIDCtxKey{}).(uuid.UUID)
+	return id
+}
+
 // apiTokenAuth is the third auth branch, mounted by humanOrAdminAuth in front of
 // the admin bearer compare. A bearer carrying apiTokenPrefix is resolved against
 // api_tokens (verifyAPIToken); anything else (and any request with no bearer at
@@ -142,7 +155,11 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		}
 		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
-		next.ServeHTTP(w, r.WithContext(withAPITokenID(oidc.WithRevocationSeq(ctx, t.Principal, t.RevSeq), t.ID)))
+		ctx = withAPITokenID(oidc.WithRevocationSeq(ctx, t.Principal, t.RevSeq), t.ID)
+		if t.CLISessionID != nil {
+			ctx = withCLISessionID(ctx, *t.CLISessionID)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

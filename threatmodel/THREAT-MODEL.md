@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.10)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.14)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -459,6 +459,22 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Agent pod → runnerd, API server, in-cluster services | Egress to its own proxy only, then the proxy's hard deny | #89 |
 | Cluster admins → run material | None: choosing `org_cluster` trusts them | #89 |
 
+
+### B13a — Agent-sandbox controller vs. run
+
+- **[0.10, experimental]** With `k8s.agentSandbox.enabled`, a controller outside Wardyn creates each run's agent pod from a `Sandbox` ([setup and limits](../docs/operations/kubernetes-agent-sandbox.md)). Off by default; off renders no RBAC, policy or env for it.
+- A scheduling gate (`wardyn.dev/verify`) holds the pod. Wardynd reads it back and removes the gate only if it matches what Wardyn asked for.
+- The gate holds unless the controller or an admission hook removes it. Two admission policies now cover the create and the gate removal, only as far as the controller's identity and wardynd's are configured right.
+- A pod read back without its gate is refused and torn down with "may have started", never "nothing ran".
+- What backs these claims is the cases of the `conformance-k8s-agent-sandbox` CI job, which is new and not a required check. Treat them as true only while that job is green on the release you run.
+
+| Crossing | Guard | Residual |
+|---|---|---|
+| Controller → every run's pod (widening 1) | The controller's ClusterRole can create any pod in any namespace; Pod Security Admission still applies. Install the core controller only. | Turning it on trusts that controller with each run's pod. Image swap before the gate is removed is caught by the read-back; a swap afterwards is caught at the next Status read |
+| wardynd → pods (widening 2) | `pods: patch` in the runs namespace, to remove the gate; the patch carries the pod's UID and resourceVersion | Small: wardynd already creates and deletes pods there |
+| Anyone with write on `sandboxes` → run confinement (widening 3) | wardynd holds no patch or update on Sandboxes; the admission policies; nobody else may write `sandboxes` in the runs namespace | A label edit on a Sandbox is copied onto the live pod and un-selects it from its NetworkPolicy. Status checks the labels at each read, not continuously |
+| Read-back vs. later change | The read-back proves the pod at start; the Status read catches a replaced pod, a returned gate, a missing label or a changed image at its next read | Nothing proves the pod between reads. A real controller rewrite, Kata, other versions and the chart's Role end to end are untested |
+
 ### B14 — macOS VM guest vs. the Mac that runs it
 
 - **[0.10, off by default]** A run with `machine_kind: macos_vm` is a macOS guest under Apple's Virtualization framework on a company-managed Mac ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md)). B12 holds for it: the Mac's person is root there, and no control binds them.
@@ -466,9 +482,18 @@ that ceiling down; each run receives only the minimal subset its task needs.
 - **What the guest can reach in our code.** Four bounded inputs: the guest agent session, the network bridge's frames, a strict RFB shim that ends the session on any server message it does not know, and a DHCP responder that answers one fixed lease. The helper runs as the logged-in user, never root, with one virtualization entitlement.
 - **Inside the guest.** The agent is a standard user, not an admin. The setup account and its random password stay in every run's guest. The base's folder keeps the password in a file only the Mac's user can read, for `edit-base`; a run's copy doesn't get it. Remote Login is proved off on a live guest before the base is published. Nothing here relies on the guest's own protections. Full Disk Access for the guest agent lifts macOS privacy prompts for every process a run starts inside the guest; POSIX permissions still apply, and the guest is a per-run clone.
 - **Editing a base.** Rechecking the base's accounts and Remote Login detects a change but can't prevent one: whoever has admin rights on the host Mac can alter the base.
-- **Screen lock.** Stage 1 keeps the guest's display awake and writes a screen saver idle time of 0 for the prepare's host identity, not a run, and the guest signs in as `agent` on its own. Stage 1 does not turn macOS's screen lock off, so a run's desktop may show the lock screen. The guest has no console, and its screen is reached only through the helper, by a person who holds that run's desktop ticket through the organisation's authenticated gateway. A person who holds that session may see an unlocked guest.
+- **Screen lock.** Stage 1 keeps the guest's display awake and writes a screen saver idle time of 0 for the prepare's host identity, not a run, and the guest signs in as `agent` on its own. Stage 1 does not turn macOS's screen lock off, so a run's desktop may show the lock screen. The guest has no console of its own, and its screen is reached only through the helper, by a person who holds that run's desktop ticket through the organisation's authenticated gateway. A person who holds that session may see an unlocked guest.
 - **Profiles.** A profile installed in `edit-base`, with its payload, stays in the base's System keychain or configuration, where any admin in the guest can reach it, and blocks of the deleted staged files may survive on the base image.
 - **A person's drive.** A person's disk drive on a Mac is a Mac OS Extended disk image in the runner login's Application Support/Wardyn/macos-vm.noindex/drives. The guest does not encrypt it: its file permissions (that login only) protect it, and the Mac's own disk encryption does too when FileVault is on. It is readable by that macOS login and by root on the Mac, and kept until `reclaim_drive` deletes it on that Mac (a Mac no longer registered keeps the image); a run's VM attaches it only while it holds the drive's lock.
+- **Kept machine.** Where an admin turns on `macos_vm.allow_kept_machines`, a person's macOS VM can stay on their own Mac between runs ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md#keeping-the-machine)). Its disk is a folder under the runner login, readable by that login and by root, so B12 holds: the Mac's person can copy it.
+  - **What is on it.** The person's own files and sign-ins, and what every copy of the base holds, including the `agent` account's password in `/etc/kcpassword`. That password opens the keychain, so the Mac's file permissions and FileVault are the only guard on the sign-ins.
+  - **No Wardyn secret.** A kept machine is refused any secret that would live inside it: environment and file secrets, SSH keys and a resident git token. A run's Wardyn-delivered files, proxy certificate, credential placeholders, tool routes and desktop password are scrubbed at a normal stop and again at every start, before the run's setup. After a crash, a kill or a restart they stay until the next start. None is a live credential.
+  - **The certificate's trust.** macOS may refuse to remove a run certificate's trust without a person. The scrub then reports a failure listing the fingerprint, keeps its record, and tries again at the next start.
+  - **What carries forward.** Whatever ran in the machine, including anything an agent installed. The next run's network, proxy, recording and walls bind it as they bind any run. Harness walls inside the guest bind only the pinned harness. A fresh start, a delete, or a kill of its run by someone other than its owner removes it.
+  - **Offline.** A Mac that never runs its runner again keeps its machines. The runner enforces each machine's expiry date itself, but only while it runs.
+  - **Update window.** A resume updates the machine's tools first, booting its disk outside a run on the prep network. That network reaches only Apple's software-update hosts on port 443, with no credential, and exists until the update's helper exits.
+  - **Deleted files.** Deleting a file does not erase its blocks. Copies may stay in the disk file until the machine is deleted, and in the Mac's local snapshots and backups after that.
+- **Attended window.** Where an admin turns on `macos_vm.allow_attended_window`, the person who created a run and registered its Mac's runner can open a window onto the guest's display on that Mac. The server grants it only for the run's own person (not a service identity, a delegated token or an operator-owned run) on a human-attended Mac, and only when the run's recording level is not Screen and actions: a window is not recorded. The grant, each refusal and each close are audit rows, and a 30 second re-check ends the window on any refusal or any check it cannot make. The runner reports a window it did not grant, and the server audits that. While a window is open, the run's browser desktop is view only. The grant is per server replica, so an install with several replicas needs a single replica or sticky runner routing. A person at the Mac can still see everything the guest shows.
 - **Managed-Mac gate.** The run is placed only on a runner whose trust class is `managed_device` and whose posture says `mdm_managed` from the MDM's file. Both are assertions, and no device-certificate check exists yet (residuals #90 and #96).
 - **Licence and image.** The guest comes only from Apple's restore image, on the Mac that uses it. No macOS image is in a release, a registry or the organisation.
 
@@ -476,11 +501,13 @@ that ceiling down; each run receives only the minimal subset its task needs.
 |---|---|---|
 | Guest ↔ Mac network | One FileHandle NIC to the run's relay and proxy; no NAT; stage-one preparation has no egress at all. The guest's connection to the proxy itself (`HTTPS_PROXY`) goes unchanged to the agent port and is decided as a container's, with no TLS server-name check. The relay's own requests use a separate proxy port the guest cannot open | #96 |
 | Guest agent ↔ runner | Guest-initiated vsock; the same session parser as Linux VMs | #96 |
-| Desktop ↔ gateway | A runner-side RFB shim on a socket only the helper reaches; the existing ticket, clipboard filter and recording | #96 |
+| Desktop ↔ gateway | A runner-side RFB shim on a socket only the helper reaches; the existing ticket, clipboard filter and recording. The recording is of what the runner relays, so the person's own runner can alter the frames. Frames are never secret-masked (masking runs on terminal bytes): a secret the desktop shows is in the recording, and Review says so. A task run's agent output cast is masked, and where the masker cannot vouch for bytes it drops them and marks the cast incomplete (`mask_gap`): the gap is marked, not filled. The shim socket is mode `0700`, so any process under the runner's own login on the Mac can reach it | #96 |
+| Window ↔ the Mac's display | A grant for the run's own person on their own runner's Mac, re-checked every 30 seconds, one window per run, the browser desktop view only beside it, an ungranted window audited; unrecorded by design | #96 |
 | Other local accounts ↔ the VM ledger | A root-owned, sticky ledger: it can deny service, never admit past the cap | #96 |
 | Other local accounts ↔ a run's sockets | A login-made `0700` folder under a root-owned sticky parent, checked on every use: a planted name denies that login's VMs, never access | #96 |
 | Guest secrets ↔ the Mac's volume | The run's clone disk is deleted at the end, which is not secure erasure | #96 |
 | A person's drive ↔ the Mac's volume | A Mac OS Extended disk image under the runner login's folder, locked to one run at a time | #96 |
+| A kept machine ↔ the Mac's volume | A person's own disk under the runner login, with no secret Wardyn delivered: such secrets are refused, and the run's files are scrubbed at each stop and start. FileVault and file permissions guard the sign-ins on it. Its tools update runs on the prep network, which reaches only Apple's update hosts on port 443 | #96 |
 
 ---
 
@@ -824,6 +851,7 @@ is not the deployment described above.**
   - Adding every rendering is the REGISTERING side's job.
   - Proxy-side (`internal/egress/proxy`, the registry `Proxy.httpError` and the decision log consult) all four sites now do it through one definition.
     - `registerHeaderCredentialFor` / `registerBasicAuthCredential` (`inject.go`) and `upstreamProxy.maskValues` (`upstream.go`) — covering the formatted header value, the bare credential under a scheme prefix, and the decoded `user:pass` and password half behind a Basic rendering.
+  - An AI gateway route always scrubs its response: [AI gateway run identity](#ai-gateway-run-identity-opt-in-experimental).
   - Not covered, and underivable from what the proxy holds: a `Format` that glues the secret to a suffix rather than a space-separated prefix, and hex-encoded or model-narrated forms, which no verbatim matcher catches.
 
 **Recording and masking boundaries.**
@@ -2295,14 +2323,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     - `WARDYN_AGE_KEY` (or `WARDYN_AGE_KEY_FILE`) is the root of all Postgres secret-store encryption (`internal/secretstore/pg`): the age identity rows are encrypted under, or, with envelope encryption, the input the local KEK is HKDF-derived from.
     - Two things are stored under it in the same table.
     - First, every credential kept in the secret store: model API keys, forge tokens, SSH keys, captured AWS SSO sessions.
-    - Second, up to four process-global keys that `loadOrCreateSecret` ([`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)) mints on first use:
+    - Second, up to five process-global keys that `loadOrCreateSecret` ([`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)) mints on first use:
       - the embedded-identity ES256 signing key (`wardyn-signing-key`), always present, which signs every run-identity token (SVID) and the ground-truth sensor token;
       - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an OIDC issuer is configured;
       - the SSH gateway host key (`wardyn-ssh-host-key`), only when `WARDYN_SSH_LISTEN` is set;
-      - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when `WARDYN_UI_SANDBOX_LISTEN` is set.
+      - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when `WARDYN_UI_SANDBOX_LISTEN` is set;
+      - the AI gateway identity key (`wardyn-gateway-identity-key`), only after the first save that turns identity on.
     - An attacker who holds the age key and a read of that table (the DSN, a backup or a replica) therefore holds all of it at once.
     - That means every stored credential in cleartext and run-identity tokens the broker accepts.
-    - Wherever those features are on, it also means a console session forged for any human (admin included), forged UI relay cookies and the SSH gateway's identity.
+    - Wherever those features are on, it also means a console session forged for any human (admin included), forged UI relay cookies, the SSH gateway's identity and gateway tokens naming anyone.
     - The age key alone, without the ciphertext, decrypts nothing.
     - **Not under the age key:** the admin token, the OIDC and directory client secrets, and the DSN.
       - These boot secrets are read from env or their `_FILE` twin, and each is its own blast radius (the admin token is full API admin by itself).
@@ -3413,6 +3442,7 @@ has four-eyes.**
 - With the switch on, each such launch carries `governance_exempt: true` on `run.create`, so a SIEM rule can alert on one.
   - That is disclosure, not prevention, exactly as for the four-eyes bypass above, and the gate is only as strong as the handling of the token (SSO configured, token held out of band).
 - With no sign-in configured the switch binds nobody, and boot says so.
+- With the switch off, the default, an SSO admin's own runs are ungoverned too and get the deployment default, not a member's profile. That is the documented posture, and the docs recommend the switch wherever admins sign in with SSO.
 - `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to `recording` is the one deliberate exemption: Record Mode then runs for a governed admin with open egress and the operator's credential injections, and each recording is marked `governance_exempt` on `run.record.start`.
 
 ### Four-eyes on governance writes: what it guarantees, and nine residuals
@@ -3837,6 +3867,135 @@ The labelled series, every label, and where its values come from:
 - Those checks bound the value's shape, not what it does.
 - Whoever can set the value runs a command on the computer of every person who connects, the same class as whoever sets the chart's image.
 - The card's copy-paste command and the `--print` and `--config` output are run by the person, so a person must read what they paste.
+
+### AI gateway run identity (opt-in, experimental)
+
+- An admin can turn this on per model provider, so a gateway in front of a model learns whose call it is.
+- **It is off by default and experimental.** The token format and the key set's address may change before 0.11.
+- The disclosure, word for word: "When on, each model call to this gateway carries a signed token naming the person, the run and the runner."
+- A `custom_endpoint` row may opt in, and so may an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, `anthropic_subscription` included.
+- `wardynd` signs an ES256 token per run and provider, valid for 60 to 600 seconds (600 unless the provider sets `token_lifetime_seconds`) and minted again at half-life (`gatewayidentity.Signer`).
+- `wardyn-proxy` asks for it, holds it in memory and sends it as `X-Wardyn-Identity`, only on a request matching the provider's route: host, exact port and path prefix (`Proxy.gatewayRouteFor`).
+- The gateway verifies it against an anonymous key set, `GET /.well-known/wardyn-experimental/gateway-jwks.json`. [The AI gateway identity key](../docs/operations/secrets-and-keys.md#the-ai-gateway-identity-key) covers the key's storage and rotation.
+
+**Off changes nothing.**
+
+- On an install that never turned identity on, no key row exists. A run started with it off holds no route, so nothing is requested, signed or stripped.
+- Turning it off later keeps the key row and the routes of runs already started, and refuses new mints (`gatewayProviderOn`). A run already holding a token keeps stripping the gateway headers and signing with it until it expires, within 600 seconds; its calls on that route are then refused. Runs started afterwards hold no route for it.
+- With no provider on, the mint and the key set answer as paths no route holds, and on a run with no route a sandbox's own `X-Wardyn-Identity` passes as any other header does.
+- A gateway verifying that header still refuses a forged value by its signature.
+
+**A sandbox reading the token.**
+
+- Wardyn places no copy in the sandbox. The proxy config holds routes, never a token or a key, so the sealed `run_proxy_configs` row holds neither.
+- The token never reaches a decision row's `Cause`, the shaped error to the sandbox, `slog` or the runner audit spool. Tests pin this against a fake control plane whose refusal body carries a token (`TestGatewayIdentity_RefusalBodyNeverRepeated`, `TestGatewayIdentity_SpoolHoldsNoToken`).
+- A response on a route is always scrubbed, whatever `WARDYN_PROXY_RESPONSE_SCRUB` says, in its header values and its body (`Proxy.relayGatewayRoute`).
+- So an echo arrives in bytes the masker can read, the proxy deletes `Accept-Encoding`, `Range` and `If-Range` on a route. It refuses an answer that still carries a `Content-Encoding` other than `identity`, with a 502.
+- Every end of the answer counts as a cut: a trailing run of eight bytes or more (`gatewayCutFloor`) that begins a held token is replaced too, because a token missing its last characters can be recovered.
+- A header value's end counts the same way from eight bytes up. Shorter ones pass, because an ordinary value such as `true` ends in the letter every token starts with.
+- **Residual: masking matches exact bytes.** Both need a gateway or upstream that echoes.
+  - An echo that holds a token's signature from its first character through its twentieth has those 20 characters masked, which leaves it 120 bits short of a signature.
+  - A truncated echo can still show the token's claims (person, run, runner) with fewer than 20 signature characters, or the signature's later characters around the masked head.
+  - An echo that starts inside the first 20 signature characters matches nothing and passes whole. So a gateway that slices a token, like one that transforms it (re-lining, case, base64), can show all of its signature across two answers. Slicing and transforms by the gateway are out of scope.
+  - Under eight bytes of a held value's start may pass at the very end of an answer or header value.
+
+**A sandbox spending the identity.**
+
+- It can. Any process in the sandbox can make a model call that the proxy signs as the person, as it can with their model credential (residual #80).
+- The token adds attribution, not new reach. A gateway's log means "this person's run", never "this person typed it".
+
+**A sandbox forging the identity.**
+
+- `send` copies every sandbox header (`copyHeader`), so on a run with a route the proxy deletes both gateway header names on the plain, MITM and brokered lanes, MCP calls and the Git and PAT brokers included (`Proxy.stripGatewayHeaders`). A run with identity off is byte-identical to before.
+- An opaque tunnel is out of the proxy's reach, and a forged token fails the signature there.
+- **Residual:** a gateway in an optional or permissive mode takes a tunnelled call with no token as anonymous. Configure its check as strict.
+
+**The token used elsewhere.**
+
+- `aud` binds a token to one provider's audience. The route also holds the audience it expects, and the proxy refuses a token for any other (`gatewayTokenHolder.check`), so two independent layers check it.
+- The signing key is separate from `wardyn-signing-key`, so a gateway token never authenticates to the internal API.
+- Two providers may not share an audience with different destinations.
+- **Residual:** two services behind one destination and one audience accept each other's tokens.
+
+**A compromised gateway.**
+
+- It sees the identity, and it already sees the model credential the provider sends it.
+- **Residual:** it can replay a token to the same audience until `exp`.
+
+**A run that ends.**
+
+- Killed, kept, revoked or still queued: the mint runs `internalAuth` (`refuseTerminalRun`, `refuseRelayBinding`) after its off-check, so no new token is issued. The run id is the token's `claims.RunID`, never the request body.
+- **Residual: revocation latency is the token's life, 60 to 600 seconds (600 by default).** A gateway cannot learn of a kill, so a token already issued is valid to `exp`.
+- **Residual: pause does not stop mints; kill does.** A paused run (`pauseRun`) is not terminal, so its proxy keeps minting while the agent cannot act.
+
+**The signing key stolen.**
+
+- A thief forges any person at every gateway trusting the key set, with any `exp`, until the key is retired from the key set and the gateway refetches. The ten-minute lifetime bounds nothing here.
+- A planned rotation publishes the replaced key's public half for 15 more minutes. `wardynd -rotate-gateway-identity-key -retire-previous` drops it at once and writes a `secret.rekey` audit row.
+- Rotation stops every replica, so an emergency is an outage, accepted for this version.
+- Refetching is the gateway's own: agentgateway v1.7.0's source reads 15 minutes by default, with `max-age` overriding that down to 60 seconds. This was read, not run, so the procedure restarts each gateway.
+- A key row that fails to decrypt or parse fails closed: the mint answers 503 and the row is never made again.
+
+**Personal data at the gateway.**
+
+- The gateway's logs gain what the token says: `iss`, `aud`, `sub`, `jti`, `iat`, `exp`, `act`, `wardyn_run`, `wardyn_runner`, `wardyn_provider`, `wardyn_format`, and `sponsor` on a service run (`gatewayidentity.Claims`).
+- `sub` is the run's subject: a person, a service principal, or the fixed seat or admin-token name on runs started those ways.
+- `wardyn_runner` is the executor id (an operator slug, possibly a hostname), or the control plane's own runner type such as `docker`.
+- An admin opts in, with the disclosure at the switch.
+- **Residual:** retention is the gateway owner's, and the person named is not told in the console.
+- **Residual:** two Wardyns on one trust domain behind one gateway present one issuer.
+
+**A hostile gateway response.**
+
+- A call id is generated by Wardyn, never taken from an upstream request id. Every attempt on a model gateway route carries one, as does an MCP call on a run with a route; an MCP call carries no token.
+- Responses get the forced scrub and the encoding refusal above.
+
+**A control-plane outage.**
+
+- The proxy keeps a held token to `exp` while mints fail, with no grace past it, and then refuses the call without sending it (`Proxy.attachGatewayIdentity`).
+- That is sooner than other credentials, which keep a 15-minute last-good grace (`lastGoodGrace`). A long outage stops model calls on these routes, deliberately.
+- A route configured to sign never sends unsigned, because a lenient gateway would take the call as anonymous.
+- Each replica reads "is any provider on" at most every 30 seconds (`gatewayOnWindow`). A run started inside that window can have calls refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again (`lastGoodRetry`).
+
+**The key set.**
+
+- It holds public keys only, and answers as a path no route holds while identity is off.
+- **Residual:** it reveals that a Wardyn is there and has identity on.
+
+**A redirect.**
+
+- The proxy never follows one (`roundTripUpstream`), so a 3xx goes back to the sandbox and its next request meets the route table afresh.
+- A `Location` that echoes the token is masked, exact bytes as above.
+
+**A provider edited, deleted or recreated mid-run.**
+
+- The mint compares the live provider's UID, normalized destination (host, port, path) and audience with what was sealed at dispatch in `run_proxy_configs`, which `localStoredSpec` carries through revive and admin restart.
+- On a difference it refuses, and the message says to create a new run. Editing back to the original values passes.
+- A revive after such an edit is refused with the same step, rather than reviving a run that would fail closed.
+
+**A person offboarded mid-run.**
+
+- Suspension's `killStep` ends their runs, and the mint refuses a suspended person independently of that kill. A retired or suspended service identity, or its sponsor, is refused the same way.
+- **Residual:** a person whose email form is shared with another principal gets no cutoff under that form (`shared` in the suspension plan, `store.HeldEmails`), so such a run stops only when the kill ends it.
+- **Residual:** tokens already issued live to `exp`.
+
+**A hostile address on a provider.**
+
+- `validateOneLLMGateway` refuses IP literals (`ipguard.GatewayIPRefused`), credentials in the URL and the vendor's own host.
+- A name resolving privately is refused by `egressTarget` and `vetHost`, unless `InternalHosts` lifts it.
+- The host already receives the provider's model credential. The token adds attribution, replayable only to that `aud`.
+
+**Clock skew and replicas.**
+
+- The token has no `nbf`. A proxy clock ahead drops the token early, and one behind gets a 401 at the gateway, so both fail closed.
+- Several replicas sign with one row (`lockCreate`). A replica without the route answers as an unregistered path and the call is refused, so finish the rollout before turning identity on.
+- The first-mint audit row is kept per replica, in memory, for at most 4096 run and provider pairs (`gatewayFirstMintsKept`). A restart or a second replica writes another `first` row for the same run; a first mint is never missed.
+
+**Runs on a runner.**
+
+- A run with a route is refused on a person's own runner, and the mint is not relayed (`relayedInternalRoutes`).
+- It goes to a remote executor only if that executor reports the setting. An older executor would drop the route and send the sandbox's own header, so the run is refused there rather than sent unsigned.
+- **Residual: rolling a control plane back under a newer runner.** A newer runner's proxy records `gateway_call_id` on its spooled decision rows. A control plane from before that field decodes spooled rows strictly (`DecisionIngestFromRunner`), refuses such a row for good and acknowledges it, so that decision row is lost and only a bounded `runner.event.refuse` row with its hash remains. End those runs before rolling back.
 
 ### Known latent vulnerabilities
 

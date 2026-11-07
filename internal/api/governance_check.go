@@ -312,10 +312,12 @@ type checkDormant struct {
 }
 
 // checkEffective is one context's resolved walls, after the Wardyn boundary, and which layer set each
-// knob. Provenance is the leaf-level answer a run gets; PathProvenance names, where Provenance names
-// the leaf, the unit on the path that changed the value, and is Provenance on every other knob. It
-// names the units above the leaf, so it is a security-tier read: absent for any other caller (a unit
-// admin), whom contextWalls gives the leaf-level Provenance alone.
+// knob. Provenance is the leaf-level record, built from the context's ceiling (contextWalls); a run's
+// own provenance is built by its resolution steps from the run's policy, so the two can differ.
+// PathProvenance names, where Provenance names the leaf, the unit on the path that changed the value,
+// and is Provenance on every other knob. It names the units above the leaf, so it is a security-tier
+// read: absent for any other caller (a unit admin), whom contextWalls gives the leaf-level Provenance
+// alone.
 type checkEffective struct {
 	Ceiling        types.RunPolicySpec    `json:"ceiling"`
 	Limits         types.GovernanceLimits `json:"limits"`
@@ -394,14 +396,26 @@ func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice cont
 
 // contextWalls is context c, which is base after its restrictions (c is base when none apply), met
 // with boundary b. Provenance records the deployment, then base's unit on each knob it changed, then
-// the restriction that narrowed a knob, then the boundary, and marks a knob a lock above fixes, as a
-// run's provenance does; PathProvenance the same with base's path step by step
+// the restriction that narrowed a knob, then the boundary, and marks a knob a lock above fixes
+// (markLocked, which a run's provenance also uses). A run's provenance is not this record: it starts
+// from the run's own policy and credits the ceiling only where clamping changed a value.
+// For a standalone unit, base's unit is credited on every knob, since its walls do not follow the
+// deployment, except a size it omits. PathProvenance the same with base's path step by step
 // (ResolvedUnit.PathProvenance) in place of its unit. POST /governance/check and GET /governance both
 // answer through it, each redacting the ceiling at its own caller's tier, and giving PathProvenance to
 // a security-tier caller only.
 func contextWalls(deployment, base, c governanceCeiling, b types.Boundary, tier specReadTier) (*checkEffective, error) {
 	prov := startProvenance(deploymentProvenance)
-	prov.setBy(base.provenance(), deployment.Spec, base.Spec)
+	if u := base.Unit; u != nil && u.StandaloneRoot && !base.Operator {
+		// A standalone unit's walls do not follow the deployment default, so each is the unit's even
+		// where it equals the deployment's; only a size the unit omits is the deployment's.
+		prov = startProvenance(base.provenance())
+		if u.AuthoredResources == (types.ResourceLimits{}) {
+			prov["resources"] = deploymentProvenance
+		}
+	} else {
+		prov.setBy(base.provenance(), deployment.Spec, base.Spec)
+	}
 	path := startProvenance(deploymentProvenance)
 	if base.Unit != nil && base.Unit.PathProvenance != nil {
 		path = maps.Clone(base.Unit.PathProvenance)

@@ -153,7 +153,7 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 		"site_config_probe.go:runSiteConfigProbe",
 		"workspace_run_launch.go:dispatchAndSettle",
 	}
-	var gated, direct, directQueued, sandboxes, dispatchers, atTarget, leaseCreates []string
+	var gated, direct, directQueued, sandboxes, dispatchers, atTarget, leaseCreates, runCreates []string
 	fset := token.NewFileSet()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -200,6 +200,8 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 					atTarget = append(atTarget, where)
 				case "leaseDeliverCreate":
 					leaseCreates = append(leaseCreates, where)
+				case "createRunSandbox":
+					runCreates = append(runCreates, where)
 				}
 				return true
 			})
@@ -226,8 +228,12 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 	if !slices.Equal(atTarget, []string{"run_resident_delivery.go:leaseDeliverCreate"}) {
 		t.Errorf("createSandboxAtTarget is called from %v; only dispatchRun (through leaseDeliverCreate) may create a sandbox, on the run's persisted target", atTarget)
 	}
-	if !slices.Equal(leaseCreates, []string{"runs_dispatch.go:dispatchRun"}) {
-		t.Errorf("leaseDeliverCreate is called from %v; only dispatchRun may create a sandbox, on the run's persisted target", leaseCreates)
+	// createRunSandbox (dispatch's create, split out of dispatchRun for the same limit) is the one caller.
+	if !slices.Equal(leaseCreates, []string{"runs_dispatch.go:createRunSandbox"}) {
+		t.Errorf("leaseDeliverCreate is called from %v; only dispatchRun (through createRunSandbox) may create a sandbox, on the run's persisted target", leaseCreates)
+	}
+	if !slices.Equal(runCreates, []string{"runs_dispatch.go:dispatchRun"}) {
+		t.Errorf("createRunSandbox is called from %v; only dispatchRun may create a sandbox, on the run's persisted target", runCreates)
 	}
 	if !slices.Equal(dispatchers, wantDispatchers) {
 		t.Errorf("dispatchRun callers = %v, want %v — a new dispatch path must dispatch a row createRun wrote, then be listed here", dispatchers, wantDispatchers)

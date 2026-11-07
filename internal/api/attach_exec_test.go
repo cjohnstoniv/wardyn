@@ -192,7 +192,11 @@ func TestAttachWS_WriterSeededObserverIgnoresSizeAndFollowsWriter(t *testing.T) 
 	// The writer resizes: its PTY, the observer's PTY and the observer's browser
 	// all follow, and the observer's own size is never applied.
 	wsWrite(t, c1, websocket.MessageText, resizeFrame(140, 50))
+	// A frame sent before the resize (the writer still at 120x40) can arrive first.
 	m := readNextAttachMode(t, c2)
+	for m.ReadOnly && m.Holder != nil && m.Holder.Cols == 120 && m.Holder.Rows == 40 {
+		m = readNextAttachMode(t, c2)
+	}
 	if !m.ReadOnly || m.Holder == nil || m.Holder.Cols != 140 || m.Holder.Rows != 50 || m.Holder.Principal != holderOwner {
 		t.Fatalf("observer attach-mode after the writer's resize = %+v, want read_only with the writer at 140x50", m)
 	}

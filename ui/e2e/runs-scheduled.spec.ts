@@ -64,7 +64,7 @@ test.describe("Runs list: scheduled runs", () => {
     await expect(row.getByText("Queued", { exact: true })).toHaveCount(0);
     await row.getByRole("button", { name: SCHEDULED_RUN.CANCEL_RUN }).click();
     expect(kills).toEqual([]);
-    await page.getByRole("button", { name: "Kill run" }).click();
+    await page.getByRole("button", { name: "End run" }).click();
     await expect.poll(() => kills).toEqual(["POST"]);
   });
 

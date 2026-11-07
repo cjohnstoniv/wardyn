@@ -721,6 +721,11 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	if ado.capsFromPolicy {
 		// run.policy.resolve audits this policy: record the bounded list.
 		policy.AzureDevOpsCapabilities = slices.Clone(ado.caps)
+	} else if kept, refused := s.wallsADOCapabilities(ctx, run, ado.caps); refused != nil {
+		// The row's default profile meets the owner's walls here, where it is known; the audit records the list.
+		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, refused.reason, refused.detail)
+	} else if kept != nil {
+		ado.caps, policy.AzureDevOpsCapabilities = kept, slices.Clone(kept)
 	}
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
 	if !ok {

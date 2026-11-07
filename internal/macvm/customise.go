@@ -519,6 +519,8 @@ func verifyCA(ctx context.Context, g ToolsGuest, name string) (string, error) {
 
 // removeRotatedCAs removes from the System keychain, with its trust settings, each CA the base held that
 // the list no longer has (by fingerprint), and the stage directory of each item the list no longer names.
+// trustCA trusted in the admin domain, which delete-certificate -t does not reach, so the admin trust goes
+// first, by the certificate trustCA staged (still the old one: items are installed after this).
 func removeRotatedCAs(ctx context.Context, g ToolsGuest, l BaseList, previous []ItemRecord) error {
 	names, pins := map[string]bool{}, map[string]bool{}
 	for _, it := range l.Items {
@@ -526,7 +528,7 @@ func removeRotatedCAs(ctx context.Context, g ToolsGuest, l BaseList, previous []
 	}
 	for _, r := range previous {
 		if r.Kind == ItemKindCA && r.SHA1 != "" && !pins[r.SHA256] {
-			if err := runItem(ctx, g, "/usr/bin/security", "delete-certificate", "-t", "-Z", r.SHA1, guestagent.MacSystemKeychain); err != nil {
+			if err := untrustCA(ctx, g, guestagent.ItemDir(r.Name)+"/"+guestagent.ItemCert, r.SHA1); err != nil {
 				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w; macOS 26 can refuse that without a person at the guest, and the base stays ready and still trusts the old CA: to drop it, run prepare --reprepare", r.Name, r.Fingerprint, err)
 			}
 		}
@@ -571,6 +573,22 @@ func pushSecret(ctx context.Context, g ToolsGuest, sf SecretFile, dest string) e
 		return fmt.Errorf("%s is mode %#o; a secret file is its owner's alone (chmod 600)", sf.Path, fi.Mode().Perm())
 	}
 	return pushItem(ctx, g, sf.Path, sf.SHA256, dest, 0o600)
+}
+
+// untrustCA removes cer's admin trust and then the certificate; a step that finds nothing to remove
+// has nothing to do.
+func untrustCA(ctx context.Context, g ToolsGuest, cer, sha1Hex string) error {
+	for _, args := range [][]string{guestagent.RemoveTrustArgs(cer), guestagent.DeleteCertArgs(sha1Hex)} {
+		argv := append([]string{"/usr/bin/security"}, args...)
+		out, exit, err := g.Run(ctx, argv)
+		if err != nil {
+			return err
+		}
+		if exit != 0 && !strings.Contains(strings.ToLower(out), "could not be found") {
+			return fmt.Errorf("security %s exited %d", args[0], exit)
+		}
+	}
+	return nil
 }
 
 // runItem runs one item form and fails on a non-zero exit, naming the command and not its output.

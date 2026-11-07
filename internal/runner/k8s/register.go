@@ -33,6 +33,7 @@ func buildConfig(d substrate.Deps) Config {
 		ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
 		SandboxPlacement:    os.Getenv("WARDYN_K8S_SANDBOX_PLACEMENT"),
 		ReadNodes:           cliutil.EnvBool("WARDYN_K8S_READ_NODES", false),
+		AgentSandbox:        cliutil.EnvBool("WARDYN_K8S_AGENT_SANDBOX", false),
 		Record:              d.Record,
 		ConfinementRuntimes: d.ConfinementRuntimes,
 		// cliutil.EnvBool, not a literal "1" compare (#202): the shared
@@ -51,6 +52,9 @@ func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
 		return nil, errors.New("k8s: a runner takes its runs namespace from --runs-namespace; unset WARDYN_K8S_NAMESPACE")
 	}
 	cfg := buildConfig(d)
+	if cfg.AgentSandbox {
+		return nil, errAgentSandboxRunner
+	}
 	apply(&cfg)
 	if cfg.RunnerID == "" {
 		return nil, errors.New("k8s: runner driver has no runner id")

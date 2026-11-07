@@ -4,10 +4,12 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB } from "../../screens/run-detail/policy-tab-copy";
 import { WHY_CARD } from "../../../lib/why-card-copy";
 import { NR_TOOLS } from "./new-run/tools";
-import { APPROVAL_WALLS, NR_WALLS, YOUR_WALLS } from "./personal-walls";
+import { APPROVAL_WALLS, GITHUB_CAPABILITY_GROUPS, NR_WALLS, YOUR_WALLS } from "./personal-walls";
 
 // T4-a and T4-b, character for character as the owner approved them on board R15, and T4-c on board R16 (PLAN §6.12,
 // §6.13). Editing one is a
@@ -36,12 +38,34 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["T4-a21", YOUR_WALLS.SAVE, "Save walls"],
   ["T4-a22", YOUR_WALLS.REMOVE_ALL, "Remove all walls"],
   ["T4-a23", YOUR_WALLS.SAVED, "Saved. Runs you start from now on use these walls."],
-  ["T4-a24", YOUR_WALLS.RESTART_NOTE, "Runs already started keep their sites. Blocked sites, clipboard and credentials also apply when they restart."],
+  [
+    "restart note",
+    YOUR_WALLS.RESTART_NOTE,
+    "A restarted run takes on what you add to Never these sites, Credentials kept out and Refuse every push. Any other change, including Clipboard and files, tool rules, paths never pushed and Stop when idle, needs a new run. A restart never removes a limit the run started with.",
+  ],
+  ["UXR-14a", YOUR_WALLS.REMOVE_ALL_TITLE, "Remove all your walls?"],
+  ["UXR-14b", YOUR_WALLS.REMOVE_ALL_BODY, "Your runs go back to what your organisation allows. This also removes the walls you set from the CLI."],
+  ["UXR-14c", YOUR_WALLS.CANCEL, "Cancel"],
+  ["UXR-18a", YOUR_WALLS.BARRIER_NONE, "No minimum"],
+  ["UXR-18b", YOUR_WALLS.UNLISTED_ORG, "Your organisation's choice"],
+  ["UXR-33", YOUR_WALLS.SITE_HINT, "Enter a host, like github.com or *.github.com."],
+  ["UXR-40", YOUR_WALLS.CLIPBOARD_HINT, "Copy and paste apply to app desktops in containers; VM desktops have no copy and paste yet. Upload and download also apply to a Linux VM desktop's Files."],
+  ["P-22", YOUR_WALLS.PUSHES, "Pushes"],
+  ["P-23", YOUR_WALLS.REFUSE_PUSH, "Refuse every push"],
+  ["P-24", YOUR_WALLS.REFUSE_PUSH_HELP, "Refuses every push the run makes: new commits, branch and tag changes, and deletes. The run can still fetch."],
   ["T4-a25", YOUR_WALLS.KINDS.cloud_sts, "Cloud credentials"],
   ["T4-a26", YOUR_WALLS.KINDS.ssh_key, "SSH key"],
   ["T4-b01", NR_WALLS.ONLY_LISTED, "Only the sites listed"],
   ["T4-b02", NR_WALLS.ONLY_LISTED_HELP, "This run reaches only the listed sites and what its setup needs. Your organisation allows more."],
   ["T4-b03", NR_WALLS.LEAVE_OUT("pypi.org"), "Your walls leave out pypi.org."],
+  ["G4a01", NR_WALLS.APPLY_SITES_LISTED(4), "4 listed sites, plus what the run's setup needs"],
+  ["G4a02", NR_WALLS.APPLY_SITES_LISTED(1), "1 listed site, plus what the run's setup needs"],
+  ["G4a03", NR_WALLS.APPLY_SITES_SETUP_ONLY, "only the sites the run's setup needs"],
+  ["G4a04", NR_WALLS.APPLY_SITES_NEVER(2), "2 sites never reached"],
+  ["G4a05", NR_WALLS.APPLY_CREDENTIAL_LIMITS(2), "2 credential restrictions"],
+  ["G4a06", NR_WALLS.APPLY_CREDENTIAL_LIMITS(1), "1 credential restriction"],
+  ["G4a07", NR_WALLS.APPLY_BARRIER("Wall"), "barrier at least Wall"],
+  ["G4a08", NR_WALLS.CHANGE_WALLS, "Change your walls"],
   ["T4-b04", `${NR_WALLS.LEAVE_OUT_BEFORE}pypi.org${NR_WALLS.LEAVE_OUT_AFTER}`, "Your walls leave out pypi.org."],
   ["T4-b07", NR_WALLS.REVIEW_SITES(3), "3 sites · anything else refused"],
   ["T4-b08", NR_WALLS.REVIEW_SITE_ONE, "1 site · anything else refused"],
@@ -74,5 +98,34 @@ describe("the owner's approval refusal", () => {
   // internal/api/personal_walls.go words the same refusal for the owner; the two must read alike.
   it("reads as the sentence the server sends for a denied host", () => {
     expect(APPROVAL_WALLS.OWN_BEFORE + "a.evil.example" + APPROVAL_WALLS.OWN_AFTER).toBe("Your walls block a.evil.example. Change them in Settings.");
+  });
+});
+
+function repoRoot(): string {
+  let dir = resolve(process.cwd());
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, "go.mod"))) return dir;
+    dir = dirname(dir);
+  }
+  throw new Error("go.mod not found walking up from " + process.cwd());
+}
+
+describe("the GitHub capability checklist", () => {
+  const src = readFileSync(join(repoRoot(), "internal/ghscope/capability.go"), "utf8");
+  const consts = new Map<string, string>();
+  for (const m of src.matchAll(/^\s*(Cap\w+)\s+Capability = "([^"]+)"/gm)) consts.set(m[1], m[2]);
+
+  it("is exactly the grantable set in internal/ghscope/capability.go", () => {
+    const block = /var grantableCapabilities = map\[Capability\]bool\{([\s\S]*?)\n\}/.exec(src);
+    expect(block).not.toBeNull();
+    const grantable = [...block![1].matchAll(/(Cap\w+):\s*true/g)].map((m) => consts.get(m[1]));
+    expect(GITHUB_CAPABILITY_GROUPS.flatMap((g) => g.caps.map((c) => c.cap)).sort()).toEqual([...grantable].sort());
+  });
+
+  it("words each capability as the server does", () => {
+    const labels = new Map<string, string>();
+    const block = /var labels = map\[Capability\]string\{([\s\S]*?)\n\}/.exec(src)![1];
+    for (const m of block.matchAll(/(Cap\w+):\s*"([^"]+)"/g)) labels.set(consts.get(m[1])!, m[2]);
+    for (const c of GITHUB_CAPABILITY_GROUPS.flatMap((g) => g.caps)) expect(c.label).toBe(labels.get(c.cap));
   });
 });

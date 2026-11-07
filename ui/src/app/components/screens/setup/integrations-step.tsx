@@ -25,11 +25,16 @@ import { useConsoleMode } from "../../wardyn/console-view";
 // episodesFor keys on it). Split around the link so the sentence stays
 // otherwise byte-identical.
 export const STEP_LEDE_PREFIX =
-  "Optional. Wardyn runs governed commands, interactive runs and recordings with nothing connected. Most agent runs want a model credential — any other secret a run needs (including a git credential, set up under Providers) is added the same way, on the ";
+  "Governed commands, interactive runs and recordings need nothing connected. For agent runs, add a model provider in ";
+export const STEP_LEDE_MODELS_LINK = "Settings → Model providers";
+export const STEP_LEDE_MID = "; each person then connects their own credential in ";
+export const STEP_LEDE_ACCOUNT_LINK = "Your settings";
+export const STEP_LEDE_MID2 = ". Any other secret a run needs goes on the ";
 export const STEP_LEDE_LINK = "Secrets page";
-export const STEP_LEDE_SUFFIX = ", and handed to runs by name.";
+export const STEP_LEDE_SUFFIX =
+  " and is handed to runs by name. Git credentials live with their provider, in the next step.";
 // Preserved for any external byte-parity check against the old single string.
-export const STEP_LEDE = `${STEP_LEDE_PREFIX}${STEP_LEDE_LINK}${STEP_LEDE_SUFFIX}`;
+export const STEP_LEDE = `${STEP_LEDE_PREFIX}${STEP_LEDE_MODELS_LINK}${STEP_LEDE_MID}${STEP_LEDE_ACCOUNT_LINK}${STEP_LEDE_MID2}${STEP_LEDE_LINK}${STEP_LEDE_SUFFIX}`;
 
 export function IntegrationsStep() {
   // The funnel mounts at /setup or /admin/setup; the link stays in the view it is read in, since the admin token
@@ -39,6 +44,14 @@ export function IntegrationsStep() {
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">
         {STEP_LEDE_PREFIX}
+        <Link to="/admin/settings" className="font-medium text-primary hover:underline">
+          {STEP_LEDE_MODELS_LINK}
+        </Link>
+        {STEP_LEDE_MID}
+        <Link to="/account" className="font-medium text-primary hover:underline">
+          {STEP_LEDE_ACCOUNT_LINK}
+        </Link>
+        {STEP_LEDE_MID2}
         <Link to={secrets} className="font-medium text-primary hover:underline">
           {STEP_LEDE_LINK}
         </Link>

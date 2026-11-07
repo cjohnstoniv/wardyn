@@ -233,6 +233,8 @@ export interface PushRulesSpec {
   deny_new_executables?: boolean;
   // Refuses a push introducing a file over this many MiB; 0/absent = off, max 32 (the most a pack can carry is 32 MiB).
   max_file_size_mib?: number;
+  // Refuses every push to every remote: content, ref updates and deletes. false/absent = off.
+  deny_all?: boolean;
 }
 
 // pushRulesIsSet is gone with the New Run rail that was its only caller (it

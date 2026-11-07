@@ -7,12 +7,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,7 +20,9 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/httpkv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
 
@@ -106,16 +106,12 @@ func (e *kvError) Error() string {
 // bite at once (design rule 21).
 func (e *kvError) Unwrap() []error {
 	switch {
-	case transient(e.status):
+	case httpkv.Transient(e.status):
 		return []error{secretstore.ErrUnavailable}
 	case e.status == http.StatusUnauthorized || e.status == http.StatusForbidden:
 		return []error{kek.ErrAccess, e.cause}
 	}
 	return []error{e.cause}
-}
-
-func transient(status int) bool {
-	return status == 0 || status == http.StatusTooManyRequests || status >= 500
 }
 
 func statusOf(err error) int {
@@ -159,18 +155,10 @@ func httpsURL(setting, raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("%s %q is not an http(s) URL", setting, raw)
 	}
-	if u.Scheme == "http" && !loopback(u.Hostname()) {
+	if u.Scheme == "http" && !httpkv.Loopback(u.Hostname()) {
 		return nil, fmt.Errorf("%s %q is plain http:// to a non-loopback host; use https://", setting, raw)
 	}
 	return u, nil
-}
-
-func loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func newClient(cfg Config) (*client, error) {
@@ -227,7 +215,7 @@ func newClient(cfg Config) (*client, error) {
 
 // tlsConfig adds caFile (WARDYN_TRUSTED_CA_FILE) to the system roots.
 func tlsConfig(caFile string) (*tls.Config, error) {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	cfg := &tls.Config{MinVersion: hoptls.MinClientTLSVersion}
 	if caFile == "" {
 		return cfg, nil
 	}
@@ -235,11 +223,8 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read the trusted CA bundle: %w", err)
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pem) {
+	pool, err := hoptls.SystemPoolWith(pem)
+	if err != nil {
 		return nil, fmt.Errorf("the trusted CA bundle %s holds no PEM certificate", caFile)
 	}
 	cfg.RootCAs = pool
@@ -405,27 +390,20 @@ func firstLine(s string) string {
 // and whether it came from a retry (an earlier attempt may have landed): a
 // transport failure is the only error.
 func (c *client) send(ctx context.Context, hc *http.Client, op string, build func(context.Context) (*http.Request, error)) (int, []byte, http.Header, bool, error) {
-	for attempt := 0; ; attempt++ {
-		status, raw, hdr, err := c.sendOnce(ctx, hc, build)
-		if (err == nil && !transient(status)) || attempt == retries {
-			if err != nil {
-				return 0, nil, nil, attempt > 0, &kvError{op: op, cause: err}
-			}
-			return status, raw, hdr, attempt > 0, nil
-		}
-		wait := c.backoff << attempt
-		if s, perr := strconv.Atoi(hdr.Get("Retry-After")); perr == nil && s > 0 {
-			wait = max(wait, min(time.Duration(s)*time.Second, 10*time.Second))
-		}
-		select {
-		case <-ctx.Done():
-			if err == nil {
-				return status, raw, hdr, attempt > 0, nil
-			}
-			return 0, nil, nil, attempt > 0, &kvError{op: op, cause: err}
-		case <-time.After(wait):
-		}
+	var (
+		status int
+		raw    []byte
+		hdr    http.Header
+		err    error
+	)
+	retried := httpkv.Retry(ctx, retries, c.backoff, func() (bool, time.Duration) {
+		status, raw, hdr, err = c.sendOnce(ctx, hc, build)
+		return err != nil || httpkv.Transient(status), httpkv.RetryAfter(hdr, 10*time.Second)
+	})
+	if err != nil {
+		return 0, nil, nil, retried, &kvError{op: op, cause: err}
 	}
+	return status, raw, hdr, retried, nil
 }
 
 func (c *client) sendOnce(ctx context.Context, hc *http.Client, build func(context.Context) (*http.Request, error)) (int, []byte, http.Header, error) {
@@ -529,39 +507,7 @@ func (c *client) authed(ctx context.Context, method, u, op string, body []byte) 
 // default port (https://v.vault.azure.net:443/...) still matches a base that
 // omits it. A link carrying userinfo never matches.
 func sameOrigin(base, u *url.URL) bool {
-	return u.User == nil && u.Scheme == base.Scheme && sameHost(u.Hostname(), base.Hostname()) && effectivePort(u) == effectivePort(base)
-}
-
-// sameHost compares two host names as DNS does: ASCII letters fold and nothing
-// else does. strings.EqualFold would also take a Kelvin sign for a k.
-func sameHost(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range len(a) {
-		x, y := a[i], b[i]
-		if 'A' <= x && x <= 'Z' {
-			x += 'a' - 'A'
-		}
-		if 'A' <= y && y <= 'Z' {
-			y += 'a' - 'A'
-		}
-		if x != y {
-			return false
-		}
-	}
-	return true
-}
-
-// effectivePort is u's port, or its scheme's default when it names none.
-func effectivePort(u *url.URL) string {
-	if p := u.Port(); p != "" {
-		return p
-	}
-	if u.Scheme == "http" {
-		return "80"
-	}
-	return "443"
+	return u.User == nil && u.Scheme == base.Scheme && httpkv.SameHost(u.Hostname(), base.Hostname()) && httpkv.EffectivePort(u) == httpkv.EffectivePort(base)
 }
 
 // url resolves path against the vault, adding the API version. An absolute

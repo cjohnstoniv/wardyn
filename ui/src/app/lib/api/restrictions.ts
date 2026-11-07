@@ -31,8 +31,10 @@ export interface RestrictionLimits {
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
   deny_ui_apps?: boolean;
+  deny_background_desktop_watch?: boolean;
   deny_user_drive?: boolean;
   deny_member_drives?: boolean;
+  deny_kept_machines?: boolean;
   deny_placements?: PlacementValue[];
   allowed_macos_bases?: string[];
   max_concurrent_runs?: number;
