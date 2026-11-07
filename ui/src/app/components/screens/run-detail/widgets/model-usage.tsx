@@ -16,6 +16,7 @@
 // with the tokens reported so far, and is also named in its own line. A call is "uncounted" when the answer
 // carried no usable figure; it adds no tokens and its reason is named.
 //
+// A finished card has a Refresh button (Retry after a failed read) that keeps the numbers while it reads.
 // A later failed read keeps the last numbers with a quiet cue and no Live marker. A refusal (this run is not
 // readable by the caller) clears them. A server with no such route answers its own line, so the tile never leaves
 // a hole in the grid.
@@ -52,6 +53,7 @@ function failureKind(err: unknown): "unsupported" | "unavailable" | "transient" 
 
 export function ModelUsageWidget({ runId, live }: { runId: string; live: boolean }) {
   const [state, setState] = React.useState<UsageState>({ kind: "loading" });
+  const [busy, setBusy] = React.useState(false);
   const seq = React.useRef(0);
   const shownRun = React.useRef(runId);
 
@@ -80,6 +82,13 @@ export function ModelUsageWidget({ runId, live }: { runId: string; live: boolean
     void load();
   }, [load, runId, live]);
 
+  // A finished run stops polling, but usage a runner held back can still arrive, and a failed final read must be
+  // repeatable: the person asks again here, and the last reading stays on screen while the read is out.
+  const refresh = React.useCallback(() => {
+    setBusy(true);
+    void load().finally(() => setBusy(false));
+  }, [load]);
+
   const stopped = state.kind === "unsupported" || state.kind === "unavailable";
   usePoll(load, POLL_MS, !live || stopped);
 
@@ -96,7 +105,7 @@ export function ModelUsageWidget({ runId, live }: { runId: string; live: boolean
 
   return (
     <WidgetCard title={MODEL_USAGE.title} Icon={Gauge} right={right}>
-      {renderBody(state, live, () => {
+      {renderBody(state, live, busy, refresh, () => {
         setState({ kind: "loading" });
         void load();
       })}
@@ -104,7 +113,7 @@ export function ModelUsageWidget({ runId, live }: { runId: string; live: boolean
   );
 }
 
-function renderBody(state: UsageState, live: boolean, retry: () => void): React.ReactNode {
+function renderBody(state: UsageState, live: boolean, busy: boolean, refresh: () => void, retry: () => void): React.ReactNode {
   switch (state.kind) {
     case "loading":
       return (
@@ -131,11 +140,11 @@ function renderBody(state: UsageState, live: boolean, retry: () => void): React.
         </div>
       );
     case "ready":
-      return <Usage data={state.data} live={live} stale={state.stale} />;
+      return <Usage data={state.data} live={live} stale={state.stale} busy={busy} onRefresh={refresh} />;
   }
 }
 
-function Usage({ data, live, stale }: { data: ModelUsage; live: boolean; stale: boolean }) {
+function Usage({ data, live, stale, busy, onRefresh }: { data: ModelUsage; live: boolean; stale: boolean; busy: boolean; onRefresh: () => void }) {
   const { totals } = data;
   const rows = data.by_model;
   const countedRows = rows.filter((m) => countedCalls(m) > 0);
@@ -177,6 +186,11 @@ function Usage({ data, live, stale }: { data: ModelUsage; live: boolean; stale: 
       <Notes data={data} />
       {counted > 0 && <p className="mt-2.5 text-meta leading-snug text-muted-foreground">{MODEL_USAGE.footnote(vendors)}</p>}
       {stale && <p className="mt-2 text-meta leading-snug text-muted-foreground">{MODEL_USAGE.stale}</p>}
+      {!live && (
+        <Button variant="outline" size="sm" className="mt-2" disabled={busy} aria-busy={busy} onClick={onRefresh}>
+          {stale ? MODEL_USAGE.retry : MODEL_USAGE.refresh}
+        </Button>
+      )}
     </div>
   );
 }
