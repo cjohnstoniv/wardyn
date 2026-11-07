@@ -590,7 +590,7 @@ export interface SiteImageAdmission {
 /** Go: types.ImageTrustedRoot. */
 export interface ImageTrustedRoot {
   name: string;
-  /** Absolute path of a Sigstore trusted-root JSON file on the control plane. */
+  /** Absolute path of a Sigstore trusted-root JSON file in /etc/wardyn/sigstore on the control plane. */
   path: string;
 }
 

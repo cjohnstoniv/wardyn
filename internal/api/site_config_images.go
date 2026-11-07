@@ -7,15 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 
 	"github.com/cjohnstoniv/wardyn/internal/imageadmit"
+	"github.com/cjohnstoniv/wardyn/internal/imageadmit/rootfile"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -204,8 +203,8 @@ func auditSiteImages(datum map[string]any, before, im *types.SiteImages, named b
 	}
 }
 
-// siteImageRootMax bounds a trust root file read at write: a real root is a few kilobytes.
-const siteImageRootMax = 1 << 20
+// imageTrustedRootDir is rootfile.Dir, a variable only so tests can point it at a temporary directory.
+var imageTrustedRootDir = rootfile.Dir
 
 // validateSiteImageAdmission is PUT /site-config's check of images.admission: the block's shape (types) with
 // the image-grant grammar for each images entry, each trust root's file, read here as branding's logo is,
@@ -224,25 +223,18 @@ func validateSiteImageAdmission(im *types.SiteImages) error {
 			return fmt.Errorf("images.admission: trusted root %q: %w", r.Name, err)
 		}
 	}
-	if err := imageadmit.CheckSite(im.Admission, imageadmit.Options{}); err != nil {
+	if err := imageadmit.CheckSite(im.Admission, imageadmit.Options{RootDir: imageTrustedRootDir}); err != nil {
 		return fmt.Errorf("images.admission: %w", err)
 	}
 	return nil
 }
 
-// checkImageTrustedRootFile reads path and parses it as a Sigstore trusted root.
+// checkImageTrustedRootFile reads path through rootfile (a file in imageTrustedRootDir, never any other) and
+// parses it as a Sigstore trusted root. No message quotes the file.
 func checkImageTrustedRootFile(path string) error {
-	f, err := os.Open(path)
+	raw, err := rootfile.Read(imageTrustedRootDir, path)
 	if err != nil {
-		return errors.New("the file cannot be read")
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, siteImageRootMax+1))
-	switch {
-	case err != nil:
-		return errors.New("the file cannot be read")
-	case len(raw) > siteImageRootMax:
-		return fmt.Errorf("the file is larger than %d bytes", siteImageRootMax)
+		return err
 	}
 	if _, err := root.NewTrustedRootFromJSON(raw); err != nil {
 		return errors.New("the file is not a Sigstore trusted root")

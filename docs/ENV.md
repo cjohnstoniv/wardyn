@@ -2386,6 +2386,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GROUNDTRUTH_K8S_NAMESPACES` | CSV | (unset) | `k8s` source: the namespaces of Wardyn's agent pods; other namespaces stay unmapped (flag `-k8s-namespaces`) |
 | `WARDYN_NODE_NAME` | string | (unset) | `k8s` source: this sensor's node (downward API `spec.nodeName`), sent with heartbeats and events (flag `-node-name`) |
 | `WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS` | bool | `false` | opt-in: forward kernel exec/connect/write events the host sensor could not correlate to a Wardyn-managed run (other containers, the bare host) to the audit sink/SIEM. OFF by default so the undeletable audit log stays sandbox-scoped (flag `-forward-unmapped-host-events`) |
+| `WARDYN_GROUNDTRUTH_SOURCE` | string | `docker` | where container→run correlation comes from: `docker` (the Compose sidecar) or `k8s` (a Kubernetes DaemonSet: each event names its own pod, and docker is never touched). Any other value refuses start (flag `-source`) |
+| `WARDYN_GROUNDTRUTH_K8S_NAMESPACES` | CSV | (unset) | `k8s` source only: the namespaces Wardyn runs agent pods in; events from any other namespace stay unmapped. Required with `WARDYN_GROUNDTRUTH_SOURCE=k8s`: unset or empty refuses start (flag `-k8s-namespaces`) |
+| `WARDYN_NODE_NAME` | string | (unset) | `k8s` source only: this sensor's node (downward API `spec.nodeName`), carried on the heartbeat and on events whose export line has no `node_name` (flag `-node-name`) |
 
 ### `WARDYN_CONTROL_PLANE_CA_FILE`
 
@@ -2713,6 +2716,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Compose only — bind-mounts this host directory READ-ONLY at the fixed path `/etc/wardyn` inside the `wardynd` container.
 - The desktop tier's MDM payload ([`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) exports it as `/etc/wardyn` so the MDM-managed `WARDYN_DEFAULT_POLICY`, a HOST path wardynd reads off disk at boot, resolves inside the container too).
 - OR a corporate CA bundle on **any** compose install (point `WARDYN_TRUSTED_CA_FILE` above at a file under this mount, e.g. `/etc/wardyn/corp-ca.pem`).
+- OR a private Sigstore trusted root for image admission: site setting `images.admission.trusted_roots[].path` must name a file in `/etc/wardyn/sigstore` (on Kubernetes, mount it there with `extraVolumes` and `extraVolumeMounts`). A path anywhere else, or a link that leads out of that directory, refuses the write.
 - Unlike `WARDYN_WORKSPACES_ROOT` above, only the HOST side varies — the container side is the literal `/etc/wardyn`.
 - A deployment needing neither leaves it unset and mounts a harmless empty path.
 

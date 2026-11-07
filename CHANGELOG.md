@@ -22,10 +22,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Wrong admin-token attempts are now limited per client address (`admin_token_rate_limited`). Behind a load balancer or reverse proxy, list it in `WARDYN_TRUSTED_PROXIES` so each client counts on its own; otherwise one client's wrong attempts block every admin call.
 - Image admission is off by default: no image check runs until a security operator sets site setting `images.admission.mode` to `audit` or `enforce`. A governance profile that lists `required_image_signers` holds its members to those signers even while the site mode is off.
 - Model token counting is on by default and needs no setting. Turning it off with `WARDYN_MODEL_USAGE=off` needs the proxy image you pin (`WARDYN_PROXY_IMAGE`, `k8s.proxyImage`, a runner's proxy) at 0.10.0 or later: an older proxy refuses a run config that carries the opt-out. With the default config an older proxy starts and does not count. Runs on a runner older than 0.10.0 are not counted, because that runner cannot read the count rows. To move a runner back below 0.10.0, first stop its runs and keep it connected to the organisation until its spool is delivered: no `spools/*/0*.json` file is left in its state directory. An older runner replays every kept spool, ended runs included, before it reports ready, and stops at a count row it cannot read.
+- Image admission reads trusted-root files (`images.admission.trusted_roots[].path`) only from `/etc/wardyn/sigstore`. On compose, put them in a `sigstore` folder of the `WARDYN_MANAGED_DIR` mount; on Kubernetes, mount them there with `extraVolumes` and `extraVolumeMounts`. A saved path anywhere else, or a link that leads out of that folder, is never read: the image check cannot load that root until an admin moves the file there and saves the setting again with its new path.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
-  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
-  Without it a `POST /api/v1/runs` that sends an `Idempotency-Key` fails. Grant it `SELECT, INSERT` on
-  `audit_checkpoints` too; the migration already does for a role that can call `audit_append`. An upgrade from before 0.10.0-rc.12 also
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys` and
+  `SELECT, INSERT, UPDATE` on `groundtruth_sensors`. Without the first, a `POST /api/v1/runs` that sends an
+  `Idempotency-Key` fails; without the second, `/healthz` cannot tell Kubernetes node sensors apart and reads only the
+  newest heartbeat. Grant it `SELECT, INSERT` on `audit_checkpoints` too; the migration already does for a role that
+  can call `audit_append`. An upgrade from before 0.10.0-rc.12 also
   needs every grant the 0.10.0-rc.12 notes list: `SELECT, INSERT, UPDATE, DELETE` on `wall_presets`, `kept_machines`,
   `workloads`, `workload_bindings`, `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`,
   `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`,
@@ -37,16 +40,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   replayed for 24 hours instead of a new run, and a value outside 1 to 255 visible ASCII characters is refused with
   400 `idempotency_key_invalid`. A retry with a key is safe only once every control-plane replica runs 0.10.0 or
   later; an older replica ignores the key.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
-  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`. Without
-  it `/healthz` cannot tell Kubernetes node sensors apart and reads only the newest heartbeat. An upgrade from before
-  0.10.0-rc.12 also needs `SELECT, INSERT, UPDATE, DELETE` on `wall_presets` and `kept_machines`. An upgrade from
-  before 0.10.0-rc.9 also needs every grant the 0.10.0-rc.8 notes list: `SELECT, INSERT, UPDATE, DELETE` on
-  `workloads`, `workload_bindings`, `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`,
-  `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`,
-  `governance_restrictions`, `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and
-  `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
-  `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 - On a remote MCP server where a run's tool rules block a tool, that server's tool lists now leave the blocked tools out, a tool list Wardyn cannot read is answered with an error, and one message from that server larger than 10 MiB ends its response.
 - A run whose tool rules mark a remote MCP tool `approve_each` does not start on a proxy image or runner older than this release: its proxy config carries a key they refuse.
 - Watching a background macOS VM run's desktop now shows its apps, not a login window. If that is not acceptable, turn `macos_vm.allow_background_watch` off before you upgrade.

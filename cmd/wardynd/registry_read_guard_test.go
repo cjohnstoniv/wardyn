@@ -6,7 +6,6 @@ package main
 import (
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -26,10 +25,14 @@ var registryClients = []string{
 	"oras.land/oras-go",
 }
 
-// registryNameParsers are packages under registryClients that only parse image names and read no
-// registry, so they are allowed. go-containerregistry's pkg/name comes in through sigstore-go (its
-// signature payload parses the signed image's name); it imports nothing that makes a request.
-var registryNameParsers = []string{"github.com/google/go-containerregistry/pkg/name"}
+// registryNameParsers are packages under a registryClients path that only parse image names, like
+// github.com/distribution/reference: no transport, no client. Each is allowed as that exact package, never
+// its subtree. go-containerregistry's pkg/name imports nothing beyond the standard library and go-digest; it
+// reaches internal/api through sigstore-go, both its signature payload (which parses the signed image's name)
+// and its trusted root parser (image admission's check of a trusted root file at write).
+var registryNameParsers = map[string]bool{
+	"github.com/google/go-containerregistry/pkg/name": true,
+}
 
 // The API links no registry client under any build it ships with, so a registry read cannot come
 // back into it unnoticed.
@@ -44,7 +47,7 @@ func TestAPILinksNoRegistryClient(t *testing.T) {
 			t.Fatalf("go list -deps -tags=%q ./internal/api/...: %v\n%s", tags, err, stderr.String())
 		}
 		for _, pkg := range strings.Fields(string(out)) {
-			if slices.Contains(registryNameParsers, pkg) {
+			if registryNameParsers[pkg] {
 				continue
 			}
 			for _, client := range registryClients {

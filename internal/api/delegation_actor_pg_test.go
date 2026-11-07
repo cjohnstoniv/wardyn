@@ -16,6 +16,7 @@ import (
 	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -181,11 +182,22 @@ func TestTokenExchange_ActorRecorded(t *testing.T) {
 	}
 }
 
+// storePersonSecret has the person store their own secret "x", the one the strict policy's owner_only
+// git_pat grant names, so a run they own under that policy can be created.
+func (e *delegationPG) storePersonSecret(t *testing.T) {
+	t.Helper()
+	pat := accessSession(t, delegPerson, delegPersonEmail, oidc.RoleUser, []string{delegGroup})
+	if w := doSSO(t, e.h.srv, http.MethodPut, "/api/v1/secrets/x", pat, `{"value":"pat-own-secret-value"}`); w.Code/100 != 2 {
+		t.Fatalf("person writes their own secret: %d %s", w.Code, w.Body.String())
+	}
+}
+
 // Every row a delegated request writes, the API's and the identity provider's alike, names the actor in
 // data.via.actor beside the portal.
 func TestDelegatedRowsCarryTheActor(t *testing.T) {
 	e := newDelegationPG(t)
 	portal, cred := e.registerPortal(t, delegGroup)
+	e.storePersonSecret(t)
 	strict := e.storePolicy(t, "strict", "x", true)
 	tok := accessTokenOf(t, e.exchangeWithActor(t, portal, cred,
 		e.subjectToken(t, delegPerson, delegPersonEmail, []string{delegGroup}, nil), e.actorToken(t, nil)))
@@ -212,6 +224,7 @@ func TestDelegatedRowsCarryTheActor(t *testing.T) {
 func TestDelegatedRowsWithoutActorUnchanged(t *testing.T) {
 	e := newDelegationPG(t)
 	portal, cred := e.registerPortal(t, delegGroup)
+	e.storePersonSecret(t)
 	strict := e.storePolicy(t, "strict", "x", true)
 	tok := e.delegate(t, portal, cred, delegPerson, delegPersonEmail, delegGroup)
 	ex := e.rows("delegation.exchange")

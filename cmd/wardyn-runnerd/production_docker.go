@@ -128,7 +128,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	err = waitForProxyImage(ctx, opts.proxyImage, func(ctx context.Context) (err error) {
 		pair, err = chooseRelay(ctx, sub, opts.proxyImage, eng, want)
 		return err
-	}, opts.offline.waiting, sleepCtx)
+	}, opts.offline.waiting, proxyImageSleep)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
 	}

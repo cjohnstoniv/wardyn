@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -24,8 +23,10 @@ const adoAboveCeilingReason = "ado_capabilities_above_ceiling"
 
 // adoCeilingDoor posts a draft whose inline policy names caps to path as who:
 // "member" (no governance list), "governed" (a governance list granting
-// governance), or "operator" (an admin's own session, which is bound by the
-// ceiling alone; the admin token has no person and is off the lane). The row is
+// governance), or "operator" (an admin's own wdn_ token, which is bound by the
+// ceiling alone; the admin token has no person and is off the lane, and an
+// admin's session starts no run in the Admin view and is a member's in the User
+// view). The row is
 // adoEntraTestRow:
 // ceiling [code_read code_write pr], default profile [code_read code_write].
 func adoCeilingDoor(t *testing.T, who, path string, governance []adoscope.Capability, caps string) *httptest.ResponseRecorder {
@@ -38,9 +39,10 @@ func adoCeilingDoor(t *testing.T, who, path string, governance []adoscope.Capabi
 	}
 	srv, st, _ := govEscapeFixture(t, cs)
 	st.siteConfig = adoSite(adoEntraTestRow())
-	sub, cookie := govMemberSub, govSession(t, govMemberSub, []string{"eng"}, false)
+	sub := govMemberSub
 	if who == "operator" {
-		sub, cookie = uvAdminSub, uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "")
+		sub = uvAdminSub
+		giveAdminToken(st, sub)
 	}
 	st.workspaces = []types.Workspace{{
 		ID: uuid.New(), Name: "app", OwnedBy: sub,
@@ -51,7 +53,10 @@ func adoCeilingDoor(t *testing.T, who, path string, governance []adoscope.Capabi
 	if path == policyPreviewPath {
 		forbidPreviewSideEffects(t, srv)
 	}
-	return doSSO(t, srv, http.MethodPost, path, cookie, body)
+	if who == "operator" {
+		return do(t, srv, http.MethodPost, path, st.tokenRaw, body)
+	}
+	return doSSO(t, srv, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body)
 }
 
 // adoDispatchRefusal is what dispatch answers for the same inputs

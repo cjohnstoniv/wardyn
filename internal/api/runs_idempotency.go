@@ -192,9 +192,9 @@ func (s *Server) replayRunCreate(w http.ResponseWriter, r *http.Request, claim s
 	if kept.Location != "" {
 		w.Header().Set("Location", kept.Location)
 	}
-	if len(kept.Body) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-	}
+	// Every create answer is JSON; the type is fixed here rather than carried with the kept bytes.
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(kept.Status)
 	_, _ = w.Write(kept.Body) // the caller may have gone; the answer stays kept
 }
@@ -230,10 +230,15 @@ func (h *heldResponse) Write(b []byte) (int, error) {
 	return h.body.Write(b)
 }
 
+// send writes the held answer as JSON, whatever type the create set: every create answer is JSON, and the
+// same bytes are what a replay sends.
 func (h *heldResponse) send() {
 	if h.status == 0 {
 		h.status = http.StatusOK
 	}
-	h.w.WriteHeader(h.status)
-	_, _ = h.w.Write(h.body.Bytes()) // the caller may have gone; the answer stays kept
+	w := h.w
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(h.status)
+	_, _ = w.Write(h.body.Bytes()) // the caller may have gone; the answer stays kept
 }

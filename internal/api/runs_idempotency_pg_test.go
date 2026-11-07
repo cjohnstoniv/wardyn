@@ -163,6 +163,11 @@ func TestCreateRunKeyReplay(t *testing.T) {
 		t.Fatalf("replay = %d %q replayed=%q %s; want the first answer %d %q %s", second.Code, second.Header().Get("Location"),
 			second.Header().Get("Idempotent-Replayed"), second.Body, first.Code, first.Header().Get("Location"), first.Body)
 	}
+	for _, w := range []*httptest.ResponseRecorder{first, second} {
+		if w.Header().Get("Content-Type") != "application/json" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("answer headers = %v, want application/json and nosniff", w.Header())
+		}
+	}
 	if n := runsTitled(t, pool, task); n != 1 {
 		t.Errorf("runs = %d, want 1", n)
 	}
@@ -345,14 +350,15 @@ func TestCreateRunKeyStaleAttemptCannotInsert(t *testing.T) {
 		t.Fatalf("takeover = %d %s, want a fresh 201", w.Code, w.Body)
 	}
 	// The stale attempt reaches the insert holding its old claim.
+	h := panicFails(t, srv.Handler())
 	staleSrv := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		srv.Handler().ServeHTTP(w, r.WithContext(store.WithRunCreateKey(r.Context(), id, stale.Token)))
+		h.ServeHTTP(w, r.WithContext(store.WithRunCreateKey(r.Context(), id, stale.Token)))
 	})
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+adminToken)
 	r.Host, r.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	panicFails(t, staleSrv).ServeHTTP(w, r)
+	staleSrv.ServeHTTP(w, r)
 	if w.Code != http.StatusConflict || errorReason(w) != "idempotency_key_in_flight" {
 		t.Fatalf("stale attempt = %d %s, want 409 idempotency_key_in_flight", w.Code, w.Body)
 	}
@@ -428,10 +434,14 @@ func TestCreateRunKeyScopes(t *testing.T) {
 	portal, cred := e.registerPortal(t, delegGroup)
 	tok := e.delegate(t, portal, cred, delegPerson, delegPersonEmail, delegGroup)
 	person := accessSession(t, delegPerson, delegPersonEmail, oidc.RoleUser, []string{delegGroup})
+	// An admin starts runs from the user view only (POST /runs in the Admin view is 409 admin_view).
+	admin := signedAccessCookie(t, oidc.Session{V: oidc.SessionCodecVersion, Sub: "root", Email: "root@corp.example",
+		Role: oidc.RoleAdmin, UserType: types.UserTypeStandard, MemberMode: true,
+		Groups: []string{delegGroup}, Expiry: time.Now().UTC().Add(time.Hour)})
 	body := `{"agent":"claude-code","task":"idem-scopes-` + uuid.NewString() + `"}`
 	hdr := map[string]string{"Idempotency-Key": uuid.NewString()}
 	seen := map[uuid.UUID]bool{}
-	for name, auth := range map[string]func(*http.Request){"person": cookieAuth(person), "portal": bearerAuth(tok), "admin": cookieAuth(e.admin)} {
+	for name, auth := range map[string]func(*http.Request){"person": cookieAuth(person), "portal": bearerAuth(tok), "admin": cookieAuth(admin)} {
 		w := keyedPost(t, e.h.srv, http.MethodPost, "/api/v1/runs", body, auth, hdr)
 		if w.Code != http.StatusCreated || w.Header().Get("Idempotent-Replayed") != "" {
 			t.Fatalf("%s = %d replayed=%q %s, want a fresh 201", name, w.Code, w.Header().Get("Idempotent-Replayed"), w.Body)
@@ -563,6 +573,8 @@ func TestCreateRunKeyReplayAfterRunTasksErasure(t *testing.T) {
 	}
 	bobRun := run
 	bobRun.ID, bobRun.CreatedBy = uuid.New(), bob.Principal
+	// Bob's own text, so the count of runs still carrying the caller's task sees only the caller's run.
+	bobRun.Task, bobRun.Title, bobRun.Description = "bob-task", "bob-title", "bob-desc"
 	bobRun.SPIFFEID = "spiffe://wardyn.local/agent-run/" + bobRun.ID.String()
 	if _, err := st.CreateRun(store.WithRunCreateKey(ctx, bob, claim.Token), bobRun); err != nil {
 		t.Fatal(err)
