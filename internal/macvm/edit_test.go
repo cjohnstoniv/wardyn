@@ -195,7 +195,7 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	want := []string{
 		"This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks.",
 		"Starting the copy in a window. This takes about 2 minutes.",
-		"Sign in as wardyn-admin with the one-time code: click Show code in the window, or read it in " + e.f.opts.Layout.SetupCode() + ".",
+		"Sign in as wardyn-admin with the one-time code: click Type code in the window, or Show code to read it.",
 		"The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test.",
 		"Read from the edited base in this boot:",
 		"  Full Disk Access            could not be read",
@@ -248,6 +248,29 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	}
 	if e.screen != wantText {
 		t.Errorf("the edit window's text:\n%+v\nwant\n%+v", e.screen, wantText)
+	}
+}
+
+// The command's code line names the window's Type code and Show code buttons and no file: the setup-code
+// file's path is neither printed nor named, though the window still reads the file.
+func TestEditCodeLineNamesNoFile(t *testing.T) {
+	e := newEdit(t)
+	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+		t.Fatal(err)
+	}
+	var code string
+	for _, l := range e.lines() {
+		if strings.Contains(l, "one-time code") {
+			code = l
+		}
+	}
+	if !strings.Contains(code, "Type code") || !strings.Contains(code, "Show code") {
+		t.Errorf("the code line %q does not name the buttons", code)
+	}
+	for _, bad := range []string{e.f.opts.Layout.SetupCode(), "setup-code", "read it in"} {
+		if strings.Contains(e.out.String(), bad) {
+			t.Errorf("the output names %q:\n%s", bad, e.out.String())
+		}
 	}
 }
 

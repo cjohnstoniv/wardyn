@@ -26,7 +26,7 @@ import (
 // The lines `wardyn-runnerd macos-vm edit-base` prints, from the helper's edit-base (approved copy).
 const (
 	EditStartLine    = "This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks."
-	editCodeLine     = "Sign in as wardyn-admin with the one-time code: click Show code in the window, or read it in %s."
+	editCodeLine     = "Sign in as wardyn-admin with the one-time code: click Type code in the window, or Show code to read it."
 	editProfileLine  = "While signed in as wardyn-admin, open %s, then review and install the staged profile in System Settings."
 	EditCheckingLine = "The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test."
 	editReadyLine    = "The edited base is ready, and runs now use it. Desktop: %s."
@@ -228,7 +228,7 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
-	fmt.Fprintf(o.Out, editCodeLine+"\n", codeFile)
+	fmt.Fprintln(o.Out, editCodeLine)
 	for _, p := range offered {
 		fmt.Fprintf(o.Out, editProfileLine+"\n", p)
 	}

@@ -44,6 +44,7 @@ import (
 //	POST /v1/tools/desktop_password     DesktopPassword -> DesktopPasswordResult
 //	POST /v1/tools/admin_code           AdminCode -> AdminCodeResult (edit-base)
 //	GET  /v1/tools/posture              ToolsPosture (edit-base's recheck)
+//	POST /edit/admin-terminal|trust-cas|full-disk-access   the edit window's buttons (macos_edit_actions.go)
 const (
 	VsockToolsPort = 1026
 
@@ -192,6 +193,9 @@ type Tools struct {
 	AgentBinary, AgentPlist string
 	// BinDir is MacToolsBinDir when "" (tests set it).
 	BinDir string
+	// EditDir is MacEditDir and ItemStageDir MacItemStageDir when "" (tests set them): where the edit
+	// actions (macos_edit_actions.go) write their scripts and read the staged ca items.
+	EditDir, ItemStageDir string
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
@@ -215,6 +219,9 @@ func (t *Tools) ToolsHandler() http.Handler {
 	mux.HandleFunc("POST /v1/tools/exec", t.handleExec)
 	mux.HandleFunc("POST /v1/tools/admin_code", t.handleAdminCode)
 	mux.HandleFunc("GET /v1/tools/posture", t.handlePosture)
+	mux.HandleFunc("POST /edit/admin-terminal", t.handleEditAdminTerminal)
+	mux.HandleFunc("POST /edit/trust-cas", t.handleEditTrustCAs)
+	mux.HandleFunc("POST /edit/full-disk-access", t.handleEditFullDiskAccess)
 	if t.Desktop != nil {
 		mux.HandleFunc("GET /v1/tools/pointer", t.Desktop.servePointer)
 		mux.HandleFunc("POST /v1/tools/desktop_password", t.handleDesktopPassword)
