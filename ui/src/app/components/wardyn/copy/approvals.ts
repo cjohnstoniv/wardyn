@@ -293,3 +293,30 @@ export const APPROVAL_ASKED = {
   LINE_POST: (n: number) => `, one of ${n} agents in this run`,
   STRIP: (agent: string) => `· Asked by ${agent}`,
 } as const;
+
+// One MCP call's approval card (wardyn/mcp-call-card.tsx). The arguments are shown as the server's exact text.
+export const APPROVAL_MCP_CALL = {
+  TITLE: "Approve one MCP tool call",
+  ONCE: "Once",
+  FIELD_SERVER: "Server",
+  FIELD_TOOL: "Tool",
+  FIELD_SERVER_TOOL: "Server tool",
+  WHAT: (tool: string, server: string) => `the run calls ${tool} on ${server} with the arguments below.`,
+  BLAST:
+    "the server receives exactly these arguments and does what the tool does there. A call with different arguments is not covered.",
+  ARGUMENTS: "Arguments",
+  EXTRA: "Other parameters",
+  COPY_ARGUMENTS: "Copy arguments",
+  COPY_EXTRA: "Copy other parameters",
+  FINGERPRINT: (hex: string) => `Call ${hex}`,
+  APPROVE_NOTE: "Approves this one call with exactly these arguments. A different call asks again.",
+  DENY_NOTE: "Rejects this request and identical retries.",
+  APPROVE: "Approve once",
+  DENY: "Deny",
+  HELD_NOTE:
+    "The agent's call is waiting at the proxy for a short time. Approving sends it now, or the next time the run makes this same call.",
+  HELD_EXPIRED: "No longer waiting. Approving lets the next identical call through, once.",
+  NO_TEXT: "This server did not send the call's exact arguments, so Approve is off. Deny stays available.",
+  CANNOT_DECIDE: "Only the run's owner or an admin can decide this.",
+  LIST_TITLE: (tool: string, server: string) => `Call ${tool} on ${server}`,
+} as const;

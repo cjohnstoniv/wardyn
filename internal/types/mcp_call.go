@@ -296,3 +296,43 @@ func IsMCPCallScope(raw json.RawMessage) bool {
 	}
 	return json.Unmarshal(raw, &s) == nil && s.CallSHA256 != ""
 }
+
+// MCPCallText is an MCP call's canonical arguments and extra params as text, for a person to read and
+// copy. It is the canonical bytes with indentation added and nothing else: no number is parsed, so
+// every digit the approval binds is shown, where a JavaScript client reading the scope as JSON would
+// round 9007199254740993 to ...992. A client shows and copies these strings as they are.
+type MCPCallText struct {
+	Arguments string `json:"arguments"`
+	Extra     string `json:"extra,omitempty"`
+}
+
+// MCPCallTextOf is the text of the MCP call scope raw, or nil when raw is not one or its arguments
+// cannot be put in canonical form (a call the key refuses has no exact text to show).
+func MCPCallTextOf(raw json.RawMessage) *MCPCallText {
+	if !IsMCPCallScope(raw) {
+		return nil
+	}
+	var s MCPCallScope
+	if json.Unmarshal(raw, &s) != nil {
+		return nil
+	}
+	args, ext, err := canonCall(s.Arguments, s.Extra)
+	if err != nil {
+		return nil
+	}
+	out := &MCPCallText{Arguments: indentCanonical(args)}
+	if len(ext) > 0 {
+		out.Extra = indentCanonical(ext)
+	}
+	return out
+}
+
+// indentCanonical adds two-space indentation to canonical JSON. json.Indent works on the bytes, so
+// number and string spellings pass through untouched.
+func indentCanonical(canon []byte) string {
+	var b bytes.Buffer
+	if json.Indent(&b, canon, "", "  ") != nil {
+		return string(canon)
+	}
+	return b.String()
+}

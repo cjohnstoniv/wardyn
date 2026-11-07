@@ -22,6 +22,7 @@ import { AlertTriangle, ShieldAlert, Clock, Check, Loader2, X } from "lucide-rea
 import { toast } from "sonner";
 import {
   canDecideApproval,
+  isMCPCallRequest,
   decisionArgs,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
@@ -32,6 +33,7 @@ import {
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "./push-content-card";
+import { McpCallCard } from "./mcp-call-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
@@ -348,7 +350,7 @@ export function LiveApprovals({
       setAdminOnly((cur) => new Set(cur).add(id));
     }
   };
-  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind)) && !adminOnly.has(a.id);
+  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind, a)) && !adminOnly.has(a.id);
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -544,6 +546,20 @@ export function LiveApprovals({
               key={a.id}
               item={a}
               securityOperator={securityOperator}
+              run={run}
+              busy={busy === a.id ? busyAction : null}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
+            />
+          );
+        }
+        // One MCP call: its own card, which shows the exact arguments (the strip's plain row has no room for them).
+        if (isMCPCallRequest(a) && a.state === "PENDING") {
+          return (
+            <McpCallCard
+              key={a.id}
+              item={a}
+              canDecide={canDecide(a)}
               run={run}
               busy={busy === a.id ? busyAction : null}
               onApprove={() => decidePush(a, true)}

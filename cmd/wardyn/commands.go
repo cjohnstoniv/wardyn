@@ -637,6 +637,7 @@ func approvalCmd(client clientFn) *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "ID:        %s\nRUN:       %s\nKIND:      %s\nSTATE:     %s\nHOST:      %s\nREQUESTED: %s\nSCOPE:     %s\nHOLD:      %s\n",
 						a.ID, a.RunID, a.Kind, a.State, approvalHost(a),
 						a.RequestedAt.Format(time.RFC3339), a.DecisionScope, approvalHoldHint(a))
+					printMCPCall(cmd.OutOrStdout(), a)
 					return nil
 				}
 				if len(aps) < approvalScanPage {

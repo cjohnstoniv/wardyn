@@ -342,6 +342,10 @@ call of that remote MCP tool. Its `requested_scope`:
   `WARDYN_CAPABILITY_SECOND_HUMAN` set, the run's creator cannot decide it. An
   approval rule never does.
 - An approval sends that exact call once. A different call asks again.
+- Each listed row of an MCP call carries `call_text`: `arguments` and, when the call has them, `extra` as the
+  canonical JSON, indented, in text. Show and copy it as it is. Reading `requested_scope` as JSON in a client
+  that parses numbers as floating point rounds an integer past 2^53 and shortens a long decimal, while the approval binds
+  the exact value. `wardyn approval get` prints the same text, with the tool, the server's own tool name and the server.
 
 ## Run end
 

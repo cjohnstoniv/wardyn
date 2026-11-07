@@ -516,6 +516,10 @@ type ApprovalRequest struct {
 	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
 	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
 	Decidable *bool `json:"decidable,omitempty"`
+	// CallText is the exact text of an MCP call row's arguments and extra params (MCPCallText), projected at
+	// response time and never stored. The console and the CLI show and copy it as it is, never through a JSON
+	// number. Nil on every other row.
+	CallText *MCPCallText `json:"call_text,omitempty"`
 	// WallsBlock is true on a PENDING egress_domain row whose host the requesting run owner's own walls deny: no
 	// approver can admit it (personal_walls_host), so the console draws Approve disabled. Projected at response time
 	// and never stored; absent when the host is not denied or the walls could not be read.

@@ -376,7 +376,7 @@ describe("Your walls: every limit has a control", () => {
     expect(list.queryByText(YOUR_WALLS.CAPS_NO_PUSH_BROKER_OFF)).not.toBeInTheDocument();
   });
 
-  it("tool rules: no default row, a new rule starts at hold, hold and deny only, * is a rule like any other", async () => {
+  it("tool rules: no default row, a new rule starts at hold, hold, approve_each and deny only, * is a rule like any other", async () => {
     render(<YourWallsCard />);
     await open();
     const rules = within(screen.getByTestId("walls-tool-rules"));
@@ -385,7 +385,7 @@ describe("Your walls: every limit has a control", () => {
     await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
     const effect = rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement;
     expect(effect.value).toBe("hold");
-    expect([...effect.options].map((o) => o.value)).toEqual(["hold", "deny"]);
+    expect([...effect.options].map((o) => o.value)).toEqual(["hold", "approve_each", "deny"]);
     expect(rules.queryByText("*")).not.toBeInTheDocument();
     setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(1) }), "*");
     await user.selectOptions(effect, "deny");
@@ -393,6 +393,44 @@ describe("Your walls: every limit has a control", () => {
     setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "WebFetch");
     await user.click(save());
     expect(await sent()).toEqual({ tool_rules: [{ tool: "*", effect: "deny" }, { tool: "WebFetch", effect: "hold" }] });
+  });
+
+  it("tool rules: an approve_each rule loads as approve_each and is saved as approve_each, not turned into hold", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "mcp__jira__delete_issue", effect: "approve_each" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect((rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement).value).toBe("approve_each");
+    await user.click(rules.getByRole("button", { name: YOUR_WALLS.TOOLS_ADD }));
+    setField(rules.getByRole("textbox", { name: YOUR_WALLS.TOOLS_TOOL_N(2) }), "WebFetch");
+    await user.click(save());
+    expect(await sent()).toEqual({ tool_rules: [{ tool: "mcp__jira__delete_issue", effect: "approve_each" }, { tool: "WebFetch", effect: "hold" }] });
+  });
+
+  it.each([
+    ["Bash", true],
+    ["*", true],
+    ["mcp__jira", true],
+    ["mcp__jira__delete_issue", false],
+  ])("tool rules: for %s approve_each greyed is %s, with the reason as text", async (tool, greyed) => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool, effect: "hold" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    const select = rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement;
+    expect([...select.options].find((o) => o.value === "approve_each")?.disabled).toBe(greyed);
+    if (greyed) {
+      expect(document.getElementById(select.getAttribute("aria-describedby")!)).toHaveTextContent("Approve each call names one MCP tool. Add it as a rule for that tool.");
+    }
+  });
+
+  it("tool rules: a loaded approve_each on a name that cannot take it stays selected, and the form says why", async () => {
+    getMock.mockResolvedValue({ spec: { tool_rules: [{ tool: "mcp__jira", effect: "approve_each" }] } });
+    render(<YourWallsCard />);
+    await open();
+    const rules = within(screen.getByTestId("walls-tool-rules"));
+    expect((rules.getByRole("combobox", { name: YOUR_WALLS.TOOLS_EFFECT_N(1) }) as HTMLSelectElement).value).toBe("approve_each");
+    expect(rules.getByText(/cannot be approve_each/)).toBeInTheDocument();
   });
 
   it("tool rules: two rules for one tool are marked, say so, and keep Save off", async () => {

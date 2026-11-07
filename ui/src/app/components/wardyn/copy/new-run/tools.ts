@@ -101,6 +101,7 @@ export const NR_TOOLS = {
   DEFAULT_LABEL: "When a tool has no rule",
   EFFECT_ALLOW: "Run it",
   EFFECT_HOLD: "Ask first",
+  EFFECT_APPROVE_EACH: "Approve each call",
   EFFECT_DENY: "Block it",
   /** pending W-30: the recommended text until the owner answers. */
   DEFAULT_HELP_GATED: "Ask first holds the call until an admin approves it.",
@@ -121,6 +122,8 @@ export const NR_TOOLS = {
   MCP_FOR_HARNESS: "MCP servers for this harness",
   MCP_FOLLOWS: "Calls to an MCP server follow this harness's tool rules, as mcp__<server>__<tool>.",
   MCP_NONE: "None added. Add an MCP server below and it appears here.",
+  /** One MCP tool's rule that holds each call at the proxy for a person. */
+  MCP_APPROVE_EACH: "Wardyn asks a person to approve each exact call before sending it.",
   /** pending W-44: the recommended text until the owner answers. */
   MCP_ASKS: "The harness asks before an MCP tool runs; Wardyn does not hold the call.",
   RULE_TITLE: (name: string | number) => `Add a tool rule for ${name}`,
