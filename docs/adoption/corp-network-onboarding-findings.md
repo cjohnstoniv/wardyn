@@ -269,7 +269,7 @@ model, not just the feature). The third still needs a maintainer design call.
   empty `decision_scope`, so a normalized comparison would have converted every legacy approval in
   every deployment into a standing lease on upgrade.
 
-- **The `ssh_key` grant is clone-only and doesn't fit a bind-mounted workspace.** The key is
+- **The `ssh_key` grant is clone-only and doesn't fit a bind-mounted workspace.** *(As assessed against 0.4.1. In 0.10.0 the run's proxy holds the key and signs SSH sign-in requests; see the CHANGELOG entry on the `ssh_key` grant.)* The key is
   minted at *clone* time, used, then wiped (git has no SSH credential-helper seam, so it must be
   resident briefly). A `local_dir` workspace has no clone step, so the key is provisioned at startup
   and wiped before the agent runs interactive git — leaving SSH `pull`/`push` unauthenticated.

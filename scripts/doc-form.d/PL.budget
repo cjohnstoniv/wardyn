@@ -15,7 +15,7 @@ docs/PLUGGABILITY.md=4194 share=35 # +65 (rc.12 agent-sandbox backend), measured
 docs/VERIFY.md=1821 share=35
 docs/EXPORT.md=472 share=35 # -35, measured: the correction history and the note for reviewers went
 docs/RECORDING-ROOT-READ.md=149 share=35 # -183, measured: rewritten as current behaviour
-docs/adoption/README.md=249 share=35
+docs/adoption/README.md=244 share=35 # -5, measured: ssh_key status cell
 # docs/operations/ai-gateway.md 792 measured (an external AI gateway setup): the two hostnames, the config, what the gateway does with a request and what the nightly job asserts.
 # docs/operations/ai-gateway.md 1033 adds 241 over 792, measured: the image section (scan result and what it cannot see), the JWKS start-up and refresh timings, and three corrections to the request table and assertions.
 # docs/operations/ai-gateway.md 1775 adds 740 over 1035, measured (run identity): the jwtAuth and access-log config rows, four job assertions, the claim table, the key set's address and the call-id join recipe.
