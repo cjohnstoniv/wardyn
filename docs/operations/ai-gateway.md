@@ -3,8 +3,7 @@
 # An external AI gateway: setup
 
 - An AI gateway such as [agentgateway](https://agentgateway.dev) runs beside Wardyn and serves model and MCP traffic for every caller. [Pluggability](../PLUGGABILITY.md#an-external-ai-gateway-for-example-agentgateway) says where it fits.
-- This page is the intended setup: the config, the hostnames and the Wardyn settings that go with them. Its image is `agentgateway` v1.7.0, pinned by digest in [`deploy/kind/gateway/gateway.yaml`](../../deploy/kind/gateway/gateway.yaml).
-- **Status.** The nightly job `ai-gateway-kind` runs this setup and is new. It has no scheduled green run yet, so nothing below is claimed as tested by CI until it has one.
+- This page is the intended setup: the config, the hostnames and the Wardyn settings that go with them.
 
 ## What the setup is
 
@@ -88,11 +87,7 @@ The setup was checked against the pinned image in a one-container trial. These a
 
 ## The image
 
-- The gateway image is the operator's own choice to trust. This setup takes it unmodified and pins it by digest.
-- Trivy 0.70.0 (`trivy image --severity CRITICAL`, run on a `docker save` of the digest) found no CRITICAL findings on the base layers on 2026-11-02. It cannot see the Rust binary's crates.
-- For the crates, `Cargo.lock` at the v1.7.0 tag lists 804 registry packages. Querying them against OSV (`api.osv.dev/v1/querybatch`) flags 6.
-  - The flagged `rmcp` 0.10.0 has six advisory ids. `crates/agentgateway/Cargo.toml` at the tag declares it under `[dev-dependencies]`, so it appears not to be linked into the binary.
-  - The other five (`atomic-polyfill`, `crypto-bigint`, `ctutils`, `paste`, `pulldown-cmark`): whether they are linked is not determined.
+The gateway image is the operator's own choice to trust. This setup uses `agentgateway` v1.7.0 unmodified, pinned by digest in [`deploy/kind/gateway/gateway.yaml`](../../deploy/kind/gateway/gateway.yaml).
 
 ## If the gateway verifies tokens from a JWKS URL
 

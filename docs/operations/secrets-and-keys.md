@@ -6,11 +6,12 @@ How to deliver `wardynd`'s boot secrets from files, rotate or split the local ag
 
 ```mermaid
 flowchart LR
-    write["credential write"] --> kek{{"WARDYN_KEK /<br/>WARDYN_SECRET_STORE"}}
-    kek -->|local, default| local["Postgres row<br/>sealed under age key"]
-    kek -->|"KEK=transit, azurekv or awskms"| transit["Postgres row<br/>wrapped by a key service"]
-    kek -->|STORE=vaultkv| vault["value in Vault KV<br/>pointer row only"]
-    kek -->|STORE=azurekv| azure["value in Azure Key Vault<br/>pointer row only"]
+    write["credential write"] --> store{{"WARDYN_SECRET_STORE<br/>default pg"}}
+    store --> kek{{"store pg: WARDYN_KEK<br/>default local"}}
+    store -->|vaultkv| vault["value in Vault KV<br/>pointer row only"]
+    store -->|azurekv| azure["value in Azure Key Vault<br/>pointer row only"]
+    kek -->|local| local["Postgres row<br/>sealed under the age key"]
+    kek -->|"transit, azurekv or awskms"| transit["Postgres row<br/>wrapped by a key service"]
 ```
 
 ## Secrets from files (Vault Agent / CSI)
@@ -138,7 +139,7 @@ env:
 
 ## Rotating the age key
 
-- Each stored secret is an envelope ([`internal/secretstore/pg`](../../internal/secretstore/pg), since 0.7.12).
+- Each stored secret is an envelope ([`internal/secretstore/pg`](../../internal/secretstore/pg)).
 - The value is sealed with AES-256-GCM under its own data key, bound to the row's owner and name.
 - That data key is wrapped by a `local` key-encryption key, derived from `WARDYN_AGE_KEY` with HKDF-SHA256, one per purpose.
 - It's recorded on each row as `kek_id` (`local/cred:<fingerprint of the public recipient>` for credentials, `local/platform:<fingerprint>` for wardynd's own boot keys; rows written before 0.8 say `local:<fingerprint>`, and `wardynd -rewrap` moves them).
@@ -202,7 +203,7 @@ The key file is a **bare `AGE-SECRET-KEY-…` line** (`#` comment lines allowed,
 
 **Rotating on compose:**
 
-1. Take the Postgres dump (see Backup) FIRST. It is the only rollback for the data half; the `.bak` below is only the rollback for the key half.
+1. Take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)) FIRST. It is the only rollback for the data half; the `.bak` below is only the rollback for the key half.
 2. Stop the daemon. Nothing may be writing secrets during the rotation.
    ```sh
    docker compose -f deploy/compose/docker-compose.yaml stop wardynd
@@ -407,7 +408,7 @@ The two `auth/token/` paths are the client's own token upkeep (`token-file` auth
 
 **Moving an install to Transit, and back.** Reads follow each row's `kek_id`, so a daemon configured with both keys reads every row while `-rewrap` moves them:
 
-1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Set `WARDYN_KEK=transit` and `WARDYN_VAULT_TRANSIT_KEY=wardyn` with the `WARDYN_VAULT_*` client settings, keep `WARDYN_AGE_KEY`, and restart: new rows are wrapped by Transit, and old ones still read.
 3. Rewrap the rest, with the same settings:
    ```sh
@@ -501,7 +502,7 @@ Set the versionless ids, `https://<vault>.vault.azure.net/keys/wardyn-kek` and `
 
 **Moving an install to Key Vault, and back.** As for Transit, above:
 
-1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Set `WARDYN_KEK=azurekv`, both key ids and the identity settings, keep `WARDYN_AGE_KEY`, and restart.
 3. Run `wardynd -rewrap` with the same settings. Expected output: `every sealed secret and principal key is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
 4. Unset `WARDYN_AGE_KEY` and restart.
@@ -617,7 +618,7 @@ Set `WARDYN_AWS_KMS_KEY` to the key's full ARN, `arn:<partition>:kms:<region>:<a
 
 **Moving an install to AWS KMS, and back.** As for Key Vault, above:
 
-1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Set `WARDYN_KEK=awskms` and `WARDYN_AWS_KMS_KEY`, keep `WARDYN_AGE_KEY`, and restart. New rows are wrapped by KMS and old ones still read.
 3. Run `wardynd -rewrap` with the same settings.
 4. Unset `WARDYN_AGE_KEY` and restart.
@@ -712,7 +713,7 @@ Restart every replica with the settings it ran with afterwards. After a move ont
 - Only a person's credential (`owned_by` not empty). The boot keys (signing, session, SSH host and the rest), the operator namespace and the mask key stay v1 under the platform or credential key.
 - The setting does not change that, and no principal key exists for the operator namespace.
 - In store mode (`WARDYN_SECRET_STORE=vaultkv` or `azurekv`) a write is still a pointer to the organisation's store; the setting does nothing there.
-- With the setting `off`, nothing is written as v3 but every v3 row is still read, so turning it back off within 0.8.6 loses nothing.
+- With the setting `off`, nothing is written as v3 but every v3 row is still read, so turning it back off loses nothing.
 
 **Moving existing rows: `wardynd -rewrap-principal-keys`.** A maintenance mode, safe beside a serving daemon with the same settings.
 
@@ -846,7 +847,7 @@ Do it in this order:
 > [!WARNING]
 > **Residual: assignments are the one thing a database writer can move.** Someone who can write the `key_domain_assignments` table can move a subject's future writes into a domain whose key they hold. They cannot declare a domain or read anything already written.
 >
-> The mitigations are four-eyes on the two assignment writes (GOV4, `WARDYN_GOVERNANCE_SECOND_HUMAN`), the audit row each API change writes, and the 30-day `/setup/status` row that reports assignment changes. A write made straight to the table leaves no audit row of its own. A compromised wardynd process still exposes everything it can reach.
+> The mitigations are four-eyes on the two assignment writes (`WARDYN_GOVERNANCE_SECOND_HUMAN`), the audit row each API change writes, and the 30-day `/setup/status` row that reports assignment changes. A write made straight to the table leaves no audit row of its own. A compromised wardynd process still exposes everything it can reach.
 
 ## Store mode: credentials in Vault
 
@@ -967,7 +968,7 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and `WARDYN_VAULT_ROLE_PLATFORM=wardy
 
 **Moving an install to Vault, and back.** Online, one row per transaction, safe while a daemon serves; idempotent and resumable.
 
-1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see Backup).
+1. Boot this version once with your `WARDYN_AGE_KEY` (it converts any pre-envelope rows), and take the Postgres dump (see [Backup](../OPERATIONS.md#backup-what-pg_dump-carries-here-and-what-it-does-not)).
 2. Configure `WARDYN_VAULT_*` and `WARDYN_SECRET_STORE=vaultkv`, keep `WARDYN_AGE_KEY` set, and restart: new writes go to Vault, old rows still read.
 3. Move the rest:
    ```sh
