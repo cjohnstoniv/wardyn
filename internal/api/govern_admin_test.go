@@ -357,6 +357,8 @@ var governSiteElsewhere = map[string]string{
 	"imageAdmission":           "test: run_image_admission_test.go",
 	"imageAdmissionPreview":    "test: policy_preview_image_admission_test.go",
 	"markImageAdmissionExempt": "test: run_image_admission_exempt_test.go",
+	"reviveImageAdmission":     "test: run_revive_image_admission_test.go",
+	"conventionImageAdmission": "test: run_image_pin_test.go",
 	"macOSBaseAllowedFor":      "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 }
 

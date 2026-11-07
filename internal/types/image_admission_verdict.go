@@ -27,6 +27,10 @@ type ImageAdmissionVerdict struct {
 	// SiteAudit is the reason the site's own signers would refuse the image under audit, when the governance
 	// profile's enforced signers admitted it.
 	SiteAudit string `json:"site_audit,omitempty"`
+	// Ref is the image checked when it is not the member's: the convention image (agent, harness set or
+	// architecture variant) a launch checked under scope all, as configured. Empty for a member's image, whose
+	// ref is the run's ImageInput. A revive re-checks Digest under Ref's coverage.
+	Ref string `json:"ref,omitempty"`
 }
 
 // ImageAdmissionVerdict.Verdict values.

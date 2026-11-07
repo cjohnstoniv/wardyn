@@ -133,6 +133,8 @@ var ungovernedCallerCensus = map[string]struct {
 	"run_image_admission.go:markImageAdmissionExempt":          {1, "authz-only: the image_admission_exempt audit marker"},
 	"site_config_images.go:imageDigestVerdict":                 {1, "authz-only: the image digest rule skips an operator, and admits no run policy"},
 	"site_config_images.go:reviveImageDigestRefusal":           {1, "V: the digest rule re-asked at revive by the owner's authority; the boundary floor check runs at revive"},
+	"run_image_pin.go:conventionImageAdmission":                {1, "authz-only: the convention image check under scope all skips an operator, as create does, and admits no run policy"},
+	"run_revive_image.go:reviveImageAdmission":                 {1, "V: image admission re-asked at revive by the owner's authority; the boundary floor check runs at revive"},
 	"setup.go:handleSetupStatus":                               {3, "authz-only: setup rows"},
 	"setup_checks_kek.go:kekLocalRows":                         {1, "authz-only: setup rows"},
 	"setup_checks_keys.go:keyCustodyRows":                      {1, "authz-only: setup rows"},

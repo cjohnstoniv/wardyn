@@ -4,11 +4,25 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// SetRunImageAdmission scoped-writes ONLY the run's image admission verdict (nil clears it): a launch's check
+// of the convention image under scope all, made after the row exists.
+func (s PG) SetRunImageAdmission(ctx context.Context, id uuid.UUID, v *types.ImageAdmissionVerdict) error {
+	raw, err := imageAdmissionJSON(v)
+	if err != nil {
+		return err
+	}
+	return s.execRun(ctx, "set run image admission",
+		`UPDATE agent_runs SET image_admission=$1, updated_at=now() WHERE id=$2`, raw, id)
+}
 
 // imageAdmissionJSON is the image_admission column's value: NULL for a run with no verdict.
 func imageAdmissionJSON(v *types.ImageAdmissionVerdict) ([]byte, error) {

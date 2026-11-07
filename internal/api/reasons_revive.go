@@ -58,3 +58,6 @@ const (
 	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases
 	reasonRunCapacityStoreUnavailable       = "run_capacity_store_unavailable"        // this store cannot report fleet capacity
 )
+
+// Image admission at revive (run_revive_image.go).
+const reasonReviveImageNotAdmitted = "revive_image_not_admitted" // the image is held (images.admission enforce, or a profile's required_image_signers) and the run's create pinned no checked digest: started before admission was enforced, or in audit mode

@@ -177,6 +177,12 @@ func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried s
 // checkImage is one check: coverage first, with no registry read, then the registry and the signatures. The
 // refusal is nil when the image is admitted. An error behind an unavailable answer goes to the log only.
 func (s *Server) checkImage(ctx context.Context, adm *types.SiteImageAdmission, ref string, site bool, profile []string) (imageadmit.Verdict, *runRefusal) {
+	return s.checkImageAt(ctx, adm, ref, ref, site, profile)
+}
+
+// checkImageAt is checkImage with coverage asked about ref and the registry about at, a pin of ref: a revive
+// re-checks the digest its create admitted, never the tag.
+func (s *Server) checkImageAt(ctx context.Context, adm *types.SiteImageAdmission, ref, at string, site bool, profile []string) (imageadmit.Verdict, *runRefusal) {
 	a := s.cfg.ImageAdmitter
 	if a == nil {
 		return imageadmit.Verdict{}, runError(http.StatusServiceUnavailable, reasonImageAdmissionUnavailable, fmt.Sprintf(imageAdmitterMissingMsg, ref))
@@ -189,6 +195,7 @@ func (s *Server) checkImage(ctx context.Context, adm *types.SiteImageAdmission, 
 	case v != nil:
 		return *v, imageAdmissionRefusal(ref, *v)
 	}
+	req.Ref = at
 	got, err := a.Admit(ctx, req)
 	if err != nil {
 		slog.WarnContext(ctx, "api: image admission check could not be made", slog.String("image", ref), slog.Any("err", err))

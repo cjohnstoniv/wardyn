@@ -355,6 +355,13 @@ func (c ownerCeiling) withRevivedRestrictions(list []types.Restriction) ownerCei
 		if r.Limits.AllowedMacOSBases != nil && len(*r.Limits.AllowedMacOSBases) > 0 {
 			c.allowedMacOSBases = append(slices.Clone(c.allowedMacOSBases), *r.Limits.AllowedMacOSBases)
 		}
+		if r.Limits.RequiredImageSigners != nil { // a requirement: the union, as meet takes it
+			for _, n := range *r.Limits.RequiredImageSigners {
+				if !slices.Contains(c.requiredImageSigners, n) {
+					c.requiredImageSigners = append(slices.Clone(c.requiredImageSigners), n)
+				}
+			}
+		}
 	}
 	return c
 }

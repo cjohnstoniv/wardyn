@@ -2294,6 +2294,9 @@ func (s *authzStore) SetRunImage(_ context.Context, id uuid.UUID, image string) 
 func (s *authzStore) SetRunImageArches(_ context.Context, id uuid.UUID, arches []string) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.ImageArches = arches })
 }
+func (s *authzStore) SetRunImageAdmission(_ context.Context, id uuid.UUID, v *types.ImageAdmissionVerdict) error {
+	return s.mutateRun(id, func(r *types.AgentRun) { r.ImageAdmission = v })
+}
 func (s *authzStore) SetRunDiskMiB(_ context.Context, id uuid.UUID, mib int) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.DiskMiB = mib })
 }

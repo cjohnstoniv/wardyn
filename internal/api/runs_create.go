@@ -573,6 +573,8 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	// is before the cases below, so a BYOI wrap, a devcontainer build or a workspace base image still
 	// replaces the image entirely.
 	image = archImage(image, defaultImageKey(req, fact), s.runArch(ctx, run), s.cfg.AgentImageVariants)
+	conventional := image // what the run gets by convention, held to image admission under scope all
+	byConvention := true  // the image's origin: false once the request or a workspace chose the image
 
 	// Shared FAILED path for the two explicit build lanes (BYOI + devcontainer):
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not
@@ -612,7 +614,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case pw != nil:
 		// A ready prewrapped image runs as is: no wrap and no wardyn-byoi/ tag, so no selftest exec
 		// (design final §3).
-		image, arches = pw.Image, pw.Check.AcceptedArches
+		image, arches, byConvention = cmp.Or(imagePin(run), pw.Image), pw.Check.AcceptedArches, false
 	case req.Image != "" && s.cfg.ImageBuilder == nil:
 		// Validation let this through as a ready prewrapped image, and its row is gone since: with no
 		// builder nothing else may run it.
@@ -628,13 +630,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			return "", nil, true
 		}
 		s.announceImageBuild(ctx, runID)()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil, false)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, cmp.Or(imagePin(run), req.Image), outTag, nil, false)
 		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
 			return "", nil, true
 		}
-		image = built.Ref
+		image, byConvention = built.Ref, false
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
 				"byoi_base": req.Image, "image": built.Ref,
@@ -652,7 +654,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error()})
 			return "", nil, true
 		}
-		image = built.Ref
+		image, byConvention = built.Ref, false
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
 				"devcontainer_repo": req.DevcontainerRepo, "image": built.Ref,
@@ -686,10 +688,10 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		if !ok {
 			return "", nil, true
 		}
-		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{})
+		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{Pinned: imagePin(run)})
 		endBuild()
 		if res.OK {
-			image, arches = res.Image, res.ImageArches
+			image, arches, byConvention = res.Image, res.ImageArches, false
 		} else if res.BaseErr != nil {
 			// The chosen base image failed to wrap (the builder is wired): the same fail-closed answer as
 			// the workspace_id door, not the convention image under a 201. The resolver already wrote the one
@@ -699,6 +701,14 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			// A fixed hint: the builder's error text is driver text; it goes to the log, and the resolver's
 			// run.build row carries it for the operator.
 			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
+			return "", nil, true
+		}
+	}
+
+	if byConvention {
+		var refusal *runRefusal
+		if image, refusal = s.conventionImageAdmission(ctx, run, image); refusal != nil {
+			s.failConventionImage(ctx, runID, conventional, refusal)
 			return "", nil, true
 		}
 	}
