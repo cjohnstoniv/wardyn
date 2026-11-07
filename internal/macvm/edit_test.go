@@ -238,7 +238,7 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	want := []string{
 		"This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks.",
 		"Starting the copy in a window. This takes about 2 minutes.",
-		"Sign in as wardyn-admin with the one-time code: click Type code in the window, or Show code to read it.",
+		"The VM signs in as agent by itself. The one-time code is wardyn-admin's password, for its password prompts: click Type code in the window to type it, or Show code to read it.",
 		"The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test.",
 		"Read from the edited base in this boot:",
 		"  Full Disk Access            could not be read",
