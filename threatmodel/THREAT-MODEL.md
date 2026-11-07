@@ -524,6 +524,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | L2 wardyn-proxy 🟢 **[shipped]** | Allowlist, approval, injection and the unconditional loopback/multicast/metadata guard: [detail](#l2-wardyn-proxy). | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
 | L3 MCP gateway 🟡 **[partial]** | Per-tool-call approval and logging **[shipped]**: `tool_rules` resolved proxy-side (`decideByToolRules`) plus the in-sandbox `cmd/wardyn-toolgate` relay, every outcome on the decision log. Interception of tool-call EGRESS **[planned]** | The shipped half stops a gated tool call the operator's rules refuse, and records the rest. It does NOT stop tool-call egress: the relay is in-sandbox and cooperative (B3), so an agent that never calls it is not gated |
 
+- L0 residual (Docker): a run's network has no address on the Docker host only on Docker Engine 28.0.0 or later; a run started before that change, or under `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, keeps one, and its agent can reach services the Docker host serves there ([run networks](../docs/OPERATIONS.md#docker-host-run-networks)).
 - Four egress layers stack outward: L0 structural confinement (Docker) and the L2 proxy carry
   enforcement on every path, L1 is shipped on Kubernetes (canary-proven NetworkPolicy; the Docker
   nftables form remains planned).
@@ -3044,18 +3045,19 @@ pins account/role and on one that does not.
 
 ### Operator overrides that boot past a fail-closed gate
 
-- Four shipped env vars let a deployment start after a gate this document otherwise describes as unconditional.
+- Five shipped env vars let a deployment start after a gate this document otherwise describes as unconditional.
 - They exist because a fail-closed gate with no escape hatch is a gate operators disable by not upgrading.
 - But a deployment that sets one is **not** the deployment §4 and §7 describe, so each is listed here with what it costs.
-- All four are read once at construction and every one logs an unmissable warning when it is taken.
+- All five are read once at construction and every one logs an unmissable warning when it is taken.
 - Only the two Kubernetes overrides also surface as a setup-checklist row: `WARDYN_ALLOW_UNENFORCEABLE_CAPS` warns per run, and only when a limit is actually discarded; `WARDYN_ALLOW_TEST_ENDPOINTS` warns at boot on either relaxation it is paired with.
-- Neither has a row.
+- Neither has a row, and nor does `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK`, which warns per run; `scripts/up.sh doctor` warns on an engine that needs it.
 
 | Override | Gate it passes | What the deployment loses |
 |---|---|---|
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` | The boot-time egress canary PROVED this cluster's CNI does not enforce `NetworkPolicy`, which normally refuses substrate construction | L1 entirely; L2 still stands ([below](#wardyn_k8s_allow_unenforced_netpol1)) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1` | Canary phase A failed in exactly the shape a platform-applied ambient default-deny produces | PROOF, not enforcement ([below](#wardyn_k8s_ack_ambient_default_deny1)) |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` | The Docker daemon's create response reported it DISCARDED a requested CPU / memory / pids limit (`verifyCapsEnforced`), which normally refuses the run BEFORE `ContainerStart` | The per-run resource ceiling on that host ([below](#wardyn_allow_unenforceable_caps1)) |
+| `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` | A Docker Engine older than 28.0.0, which cannot create a run network with no address on the Docker host, and a run network created before that change, which normally refuse the run | L0 against the Docker host itself: the agent can reach services the host serves on its address on the run network ([run networks](../docs/OPERATIONS.md#docker-host-run-networks)) |
 | `WARDYN_ALLOW_TEST_ENDPOINTS=true` | The outright refusal of `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` ([`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)) and the `http://` refusal on a model provider's `bedrock.base_url` (`validateModelProviders`, [`internal/api/model_providers.go`](../internal/api/model_providers.go)) | An impersonable IAM Identity Center and cleartext model-plane traffic ([below](#wardyn_allow_test_endpointstrue)) |
 
 - `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` is narrower than "boot past the canary".

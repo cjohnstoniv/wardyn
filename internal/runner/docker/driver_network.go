@@ -308,14 +308,37 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 // back, doesn't satisfy IpamConf.IsStatic). So the daemon picks a subnet on a network it is then
 // asked to remove, and the network is created asking for that subnet; a race that takes it in
 // between makes the create fail on the overlap, and the pick is retried.
+//
+// Both ways of picking the subnet create the same shape (runNetworkOptions), and the created network is
+// read back and checked (checkRunNetwork) before anything joins it.
 func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string) (string, error) {
-	name := internalNetName(runID)
-	if d.cfg.RunSubnetPool.IsValid() {
-		return d.createPoolRunNetwork(ctx, name, labels)
+	isolated, err := d.runNetworkIsolation(ctx)
+	if err != nil {
+		return "", err
 	}
+	name := internalNetName(runID)
+	var id string
+	if d.cfg.RunSubnetPool.IsValid() {
+		id, err = d.createPoolRunNetwork(ctx, name, runNetworkOptions(labels, isolated))
+	} else {
+		id, err = d.createDaemonRunNetwork(ctx, name, runNetworkOptions(labels, isolated))
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := d.checkRunNetwork(ctx, id, remedyDaemon); err != nil {
+		// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand it.
+		_, _ = d.cli.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
+		return "", err
+	}
+	return id, nil
+}
+
+// createDaemonRunNetwork creates network name as base asks, on a subnet the daemon picks.
+func (d *Driver) createDaemonRunNetwork(ctx context.Context, name string, base client.NetworkCreateOptions) (string, error) {
 	var err error
 	for range 3 {
-		opts := client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: labels}
+		opts := base
 		var subnet netip.Prefix
 		if subnet, err = d.daemonSubnet(ctx, name, opts); err != nil {
 			break
