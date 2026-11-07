@@ -61,7 +61,12 @@ for img in $IMAGES; do
   else echo "FAIL $img cosign verify"; tail -3 "$OUT/cosign-$img.err"; fails=$((fails+1)); fi
 done
 echo "--- assets"
-gh release view "$TAG" --repo cjohnstoniv/wardyn --json isPrerelease,isDraft,assets --jq '"prerelease=\(.isPrerelease) draft=\(.isDraft) assets=\(.assets|length)", (.assets[].name)' | tee "$OUT/assets.txt"
+gh release view "$TAG" --repo cjohnstoniv/wardyn --json isPrerelease,isDraft,name,assets --jq '"prerelease=\(.isPrerelease) draft=\(.isDraft) assets=\(.assets|length) title=\(.name)", (.assets[].name)' | tee "$OUT/assets.txt"
+# The Release title is "Wardyn $TAG", set by release.yml's draft and by release-patch.sh; releases before 0.10.0 were cut by hand and are not held to it.
+if [ "$(printf '%s\n' "${V%%-*}" 0.10.0 | sort -V | head -1)" = 0.10.0 ]; then
+  title=$(head -1 "$OUT/assets.txt" | sed -n 's/^.* assets=[0-9]* title=//p')
+  if [[ "$title" == "Wardyn $TAG" ]]; then echo "OK   release title"; else echo "FAIL release title: \"$title\" (want \"Wardyn $TAG\")"; fails=$((fails+1)); fi
+fi
 expected=$({ for img in $IMAGES; do echo "sbom-$img.cdx.json"; done; echo "$WANT"; echo "wardyn-$V.tgz"; } | sort -u)
 have=$(tail -n +2 "$OUT/assets.txt" | sort -u)
 for name in $(comm -23 <(echo "$expected") <(echo "$have")); do echo "FAIL missing asset: $name"; fails=$((fails+1)); done

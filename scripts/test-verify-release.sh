@@ -69,7 +69,7 @@ cat > "${bin}/gh" <<'STUB'
 echo "gh $*" >> "${LOG}"
 case "$1 $2" in
   "release view")
-    echo "prerelease=false draft=false assets=0"
+    echo "prerelease=false draft=false assets=0 title=${RELEASE_TITLE-Wardyn v${VER}}"
     while read -r i; do echo "sbom-$i.cdx.json"; done < "${DIR}/images.txt"
     # The package exists from 0.9.3 (and a test can leave it out).
     # The licence tarball exists from 0.9.4.
@@ -104,7 +104,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" RELEASE_TITLE="${RELEASE_TITLE-Wardyn v$1}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -178,6 +178,17 @@ NO_WINDOWS=1 run 0.10.0 v0.10.0 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-windows-amd64.exe' >/dev/null && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-windows-arm64.exe' >/dev/null \
   || fail "V=0.10.0 without the Windows CLI binaries was accepted"
 pass "install-cli.sh, install-cli.ps1 and the Windows CLI binaries are required from 0.10.0 on, and not before"
+
+# 3b3. the Release title is "Wardyn v<version>" from 0.10.0 on, and not checked before.
+run 0.10.0-rc.14 v0.10.0-rc.14 bundle
+printf '%s' "${out}" | grep '^OK   release title$' >/dev/null || fail "V=0.10.0-rc.14 with its title did not report 'OK   release title': $(printf '%s' "${out}" | grep -i title)"
+RELEASE_TITLE='v0.10.0-rc.14' run 0.10.0-rc.14 v0.10.0-rc.14 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: "v0.10.0-rc.14" (want "Wardyn v0.10.0-rc.14")$' >/dev/null || fail "V=0.10.0-rc.14 with a wrong title was accepted: rc=${rc} $(printf '%s' "${out}" | grep -i title)"
+RELEASE_TITLE='' run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep '^FAIL release title: "" (want "Wardyn v0.10.0")$' >/dev/null || fail "V=0.10.0 with an empty title was accepted: rc=${rc}"
+RELEASE_TITLE='0.9.5' run 0.9.5 v0.9.5 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.5 (cut before titles were held) exited ${rc} over its title: $(printf '%s' "${out}" | tail -3)"
+pass "the release title is required from 0.10.0 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle
