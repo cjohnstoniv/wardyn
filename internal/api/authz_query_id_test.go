@@ -75,6 +75,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityRun, readers: []string{"auditScope"},
 		pinnedBy: "TestAuditMemberScope_QueryAndExportAgree",
 	},
+	// The signed receipt of a run is the security tier's: a member naming any run, theirs included, gets the
+	// router's constant 403 before the handler reads the id.
+	"GET /api/v1/audit/receipt?run_id": {
+		entity: entityRun, readers: []string{"parseReceiptRequest"},
+		foreign: 403, pinnedBy: "TestAuditReceipt_MemberRefused",
+	},
 	// ?owner= is admin-only: a member naming it at all gets a constant 403.
 	"GET /api/v1/secrets?owner": {
 		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleListSecrets"},
@@ -193,6 +199,8 @@ var queryParamNotAnID = map[string]string{
 	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
 	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
+	"event":                     "GET /audit/receipt (security tier): an audit event id to receipt; a session below the security tier is refused before it is read, and an audit row is not one principal's entity",
+	"after_seq":                 "GET /audit/receipt and GET /audit/checkpoints (security tier): the seq a page of the signed chain continues after; a position in the deployment-wide log, not an entity",
 	"since":                     "audit time filter; narrows an already-scoped feed",
 	"order":                     "GET /audit: oldest-first or newest-first (order=desc) over a trail the caller's scope already bounds; it picks which end of that scoped trail is read and names no entity",
 	"until":                     "audit time filter; narrows an already-scoped feed",
