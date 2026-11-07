@@ -222,6 +222,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.prepareRecordingDirs(ctx, agentResp.ID)
 	}
 	d.keepExecOutput(agentContainerName(spec.RunID), spec.ExecOutput)
+	d.notVMs.Store(agentContainerName(spec.RunID), struct{}{}) // made as a container: no VM lookup needs to ask the engine
 
 	return runner.Sandbox{
 		// The deterministic name, not agentResp.ID: Docker's API accepts either for every call this

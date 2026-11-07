@@ -651,7 +651,9 @@ func (d *Driver) EnsureProxyImage(ctx context.Context) error {
 
 // CanReplaceProxy — see runner.ProxyReviver: Docker always can.
 func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	return nil
@@ -675,7 +677,9 @@ func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
 // place, so its logs still name the cause; the next revive removes it by name
 // before starting another.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	id, err := d.proxyRunID(ctx, ref)
@@ -732,7 +736,9 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 // back, and an agent started first could take the address its own hosts
 // entry pins as wardyn-proxy. Recording dirs are prepared again as at create.
 func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
-	if d.vmFor(ctx, ref) != nil {
+	if v, err := d.vmLookup(ctx, ref); err != nil {
+		return err
+	} else if v != nil {
 		return errVMUnsupported
 	}
 	id, err := d.proxyRunID(ctx, ref)
