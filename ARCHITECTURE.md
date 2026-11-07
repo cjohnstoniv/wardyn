@@ -30,31 +30,14 @@
 
 The layers of the code, and the interface each extension implements, are mapped in [docs/EXTENDING.md](docs/EXTENDING.md).
 
-How they fit together:
-
-```mermaid
-flowchart LR
-  entry(["Human operator<br/>UI or wardyn CLI"])
-  subgraph control["Control plane (trusted)"]
-    wardynd["wardynd<br/>REST API + embedded UI<br/>policy engine / approval FSM<br/>token broker / audit ingest"]
-    pg[("Postgres<br/>append-only audit")]
-    wardynd --> pg
-  end
-  subgraph sandbox["Per-run sandbox (UNTRUSTED) — gatewayless network"]
-    %% rec is declared first on purpose: with agent first, dagre ranks rec
-    %% between wardynd and agent and routes the launch edge through its box.
-    rec["wardyn-rec<br/>PTY recorder"]
-    agent["Coding agent<br/>claude-code / codex-cli"]
-    rec -->|"cast, brokered to wardynd"| proxy["wardyn-proxy<br/>L2 egress sidecar"]
-    agent -->|"only path out"| proxy
-  end
-  entry --> wardynd
-  wardynd -->|"launch (docker driver)"| agent
-  proxy -->|"allowlisted L7, creds injected"| net(("Internet / APIs"))
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/run-placement-dark.svg">
+  <img src="docs/img/run-placement.svg" alt="Where a run executes: wardynd's own driver, a laptop runner, an organisation runner in Kubernetes and a Mac, each runner dialling out to wardynd and each sandbox leaving only through its own wardyn-proxy.">
+</picture>
 
 - The trusted control plane places each run in an untrusted sandbox whose only path out is its own `wardyn-proxy`.
-- The diagram draws the in-process Docker driver. A registered runner also places runs, on a laptop's Docker, in a Kubernetes cluster or in a VM ([runner substrates](#wardyn-runnerd-runner-substrates)).
+- `wardynd`'s own driver places runs on Docker on its host, or on Kubernetes (alpha). A registered runner dials out to `wardynd` and places runs on a laptop's Docker, in a Kubernetes cluster or on a Mac ([runner substrates](#wardyn-runnerd-runner-substrates)).
+- A laptop runner can run a Linux VM sandbox: QEMU in the run's agent container. An organisation runner runs one as the run's pod under the `CC3` RuntimeClass. A runner on a Mac runs macOS VM sandboxes, one `wardyn-macvm` helper per VM.
 - Decision logs flow back into the append-only audit log — drawn in [The three audit streams](threatmodel/THREAT-MODEL.md#the-three-audit-streams-mechanically).
 - Masked session recordings are optional and kept in their own store, with their own retention.
 - The console itself (`wardynd`'s embedded UI) is served under a single CSP (`securityHeaders`, [`internal/api/security_headers.go`](internal/api/security_headers.go)).
@@ -184,29 +167,17 @@ flowchart LR
   - so a kill can
     never resurrect a finished run):
 
-```mermaid
-stateDiagram-v2
-  [*] --> PENDING: create run
-  [*] --> QUEUED: runner pool at its cap
-  QUEUED --> PENDING: slot freed
-  QUEUED --> FAILED: wait ended
-  QUEUED --> KILLED: kill switch
-  PENDING --> STARTING: dispatch
-  PENDING --> FAILED: build error (before dispatch)
-  STARTING --> RUNNING: sandbox up
-  STARTING --> FAILED: launch error
-  RUNNING --> COMPLETED: agent exit 0
-  RUNNING --> FAILED: agent error / container lost
-  RUNNING --> STOPPED: idle auto-stop
-  PENDING --> KILLED: kill switch
-  STARTING --> KILLED: kill switch
-  RUNNING --> KILLED: kill switch
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/run-states-dark.svg">
+  <img src="docs/img/run-states.svg" alt="Run states: PENDING, or QUEUED at a pool's cap, then STARTING and RUNNING, ending COMPLETED, FAILED, STOPPED or KILLED, with a kept run staying RUNNING until its files' grace ends.">
+</picture>
 
-- `QUEUED` waits for a slot in a capped runner pool and holds nothing.
+- A run is created `PENDING`, or `QUEUED` when its runner pool is at its cap. `QUEUED` waits for a slot and holds nothing. A freed slot moves it to `PENDING`; an ended wait ends it `FAILED`.
+- Dispatch moves `PENDING` to `STARTING`, and the sandbox coming up moves it to `RUNNING`. A build error before dispatch, a launch error, an agent error or a gone sandbox ends it `FAILED`; an agent exit 0 ends it `COMPLETED`.
+- A kill switch ends any live state `KILLED`. A running run is also `KILLED` at its lifetime end: a background run at its end, or any run at its maximum lifetime.
+- A run whose end passed, or whose agent container exited under it or lost the control plane past its token's life, is kept: it stays `RUNNING` with no network until its files' grace ends, then it is `STOPPED` ([Run lifetime](docs/operations/run-lifetime.md)).
+- An idle stop, `WARDYN_RUN_MAX_AGE` and a computer folder a person brings back to their own computer also end a run `STOPPED`.
 - `COMPLETED`, `FAILED`, `STOPPED`, and `KILLED` are terminal.
-- `RUNNING` becomes `STOPPED` on idle auto-stop, when a kept machine's lease ends, and when a person brings a computer folder back to their own computer, which ends the run.
-- A kept machine stays `RUNNING` after the agent exits, until its lease ends and the ended-run grace passes.
 - `WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved
   forward-compatibility values; no transition produces them today.
 
@@ -415,36 +386,10 @@ stateDiagram-v2
 
 ### Invariant 2, mechanically
 
-```mermaid
-sequenceDiagram
-  actor Op as Approver (human sub)
-  participant API as wardynd API
-  participant Sbx as Sandbox (proxy / git-helper)
-  participant Br as Token broker
-  participant DB as Postgres
-  participant M as Credential minter (e.g. GitHub App)
-  Op->>API: POST /approvals/{id}/approve
-  API->>DB: approval state PENDING -> APPROVED (records the decision only)
-  Sbx->>Br: MintForGrant(caller run identity, grantID)
-  Note over Br: a grant without requires_approval skips this sequence and mints directly (auto-mint, audited per mint)
-  Br->>DB: snapshot grant + approval (state must be APPROVED, minted_jti empty)
-  alt not approved, or already minted
-    DB-->>Br: no eligible row
-    Br-->>Sbx: refuse (no widening, no second mint)
-  else approved and unminted
-    DB-->>Br: the exact approved scope
-    Br->>M: mint short-lived credential (approved scope, 1h TTL)
-    M-->>Br: token
-    Br->>DB: BEGIN, re-read grant + approval (must equal the snapshot)
-    alt changed since the snapshot
-      Br->>M: revoke the token (discarded, never returned)
-    else unchanged
-      Br->>DB: UPDATE approvals SET minted_jti (only while still empty)
-      Br->>DB: COMMIT
-      Br-->>Sbx: minted (scope == what the approver saw)
-    end
-  end
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/credential-mint-dark.svg">
+  <img src="docs/img/credential-mint.svg" alt="Minting a credential an approval covers: the approval is recorded first, then the broker snapshots the approved grant, mints, and returns the credential only from the transaction that re-reads the approval unchanged and writes minted_jti.">
+</picture>
 
 - This describes a grant with `requires_approval: true`.
 - Approval records the human decision only; the credential is minted **later**,
@@ -454,6 +399,7 @@ sequenceDiagram
     exact run and grant and claims `minted_jti`,
   - so the minted scope always equals
     the approved scope and a grant can never mint twice.
+  - Every minted credential lasts at most an hour; one the commit refuses is revoked at its issuer where it has one.
 - `api_key` grants are then
   injected proxy-side (the agent never sees them); a GitHub App token and a `git_pat`
   (broker on) are set at the proxy, and a PAT reaches `git` through
