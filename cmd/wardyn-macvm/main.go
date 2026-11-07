@@ -390,12 +390,18 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
 		Leaked: j.leaked(d), Log: relayLog}
+	// Stage 2's warnings (a harness withheld, the agent signed ad hoc and how to recover) go to the job's
+	// log, as the command's own do, not nowhere.
+	log := slog.New(slog.NewTextHandler(d.stderr, nil))
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
+		Log:     log,
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
 		// the build beside this helper (§3.4, guest agent drift).
 		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
-		Items: items,
+		// Signed with this Mac's identity first, so the agent keeps Full Disk Access through updates.
+		Signer: &macvm.HostAgentSigner{Dir: macvm.Layout{Root: *j.root}.AgentSigningDir(), Log: log},
+		Items:  items,
 	}}, nil
 }
 
