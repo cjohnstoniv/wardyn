@@ -103,14 +103,13 @@ func harnessToolKey(set types.HarnessToolRules, tool string) string {
 // than the run-wide regime made it. A set with no opinion on the tool counts as a
 // hold, which is what its own call would get.
 func (p *Proxy) strictestToolEffect(tool string) (types.ToolEffect, string, bool) {
-	rank := map[types.ToolEffect]int{types.ToolAllow: 0, types.ToolHold: 1, types.ToolDeny: 2}
 	strictest, matched := types.ToolAllow, ""
 	for i, set := range p.harnessRules {
 		eff, ok := types.ToolEffectForHarness(p.harnessRules, set.Harness, tool)
 		if !ok {
 			eff = types.ToolHold
 		}
-		if i == 0 || rank[eff] > rank[strictest] {
+		if i == 0 || types.ToolEffectStrictness(eff) > types.ToolEffectStrictness(strictest) {
 			strictest, matched = eff, harnessToolKey(set, tool)
 		}
 	}

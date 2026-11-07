@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -334,17 +336,71 @@ const (
 	ToolHold ToolEffect = "hold"
 	// ToolDeny refuses the call without asking anyone.
 	ToolDeny ToolEffect = "deny"
+	// ToolApproveEach makes every call of one remote MCP tool wait for a person's yes on that
+	// call and its exact arguments; the proxy then sends exactly what was approved, once. It is
+	// stricter than hold (which leaves the asking to the harness) and looser than deny. It is
+	// available with no switch: nothing names it until a policy, a wall or a person writes it,
+	// and writing it can only make a tool stricter.
+	ToolApproveEach ToolEffect = "approve_each"
 )
 
-// ValidToolEffect reports whether e is one of the three effects. A closed enum,
+// ValidToolEffect reports whether e is one of the four effects. A closed enum,
 // checked at every ingest point: an unrecognised effect must be a 400, never a
 // silently-ignored rule that reads as enforcement.
 func ValidToolEffect(e ToolEffect) bool {
 	switch e {
-	case ToolAllow, ToolHold, ToolDeny:
+	case ToolAllow, ToolHold, ToolApproveEach, ToolDeny:
 		return true
 	}
 	return false
+}
+
+// ToolEffectStrictness is the one order every layer ranks tool effects by: allow < hold <
+// approve_each < deny. Clamp, meet, Leq and the proxy's strictest-of-sets all call it, so a new
+// effect cannot be ranked differently in two places. "" is no opinion and ranks below allow, so
+// a caller that starts from "" and takes the stricter ends on the first real effect. An effect
+// this build does not know ranks with deny: a table that forgot it fails closed, never open.
+func ToolEffectStrictness(e ToolEffect) int {
+	switch e {
+	case "":
+		return -1
+	case ToolAllow:
+		return 0
+	case ToolHold:
+		return 1
+	case ToolApproveEach:
+		return 2
+	}
+	return 3
+}
+
+var (
+	exactToolNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+	mcpToolNameRE   = regexp.MustCompile(`^mcp__.+__.+$`)
+)
+
+// ValidToolRule is ValidToolEffect for a whole rule: the effect is one of the four, and
+// approve_each is written only on one tool's exact MCP name (mcp__<server>__<tool>), never on a
+// pattern, a built-in tool or the "*" default. Every door that reads a rule calls it.
+func ValidToolRule(r ToolRule) error {
+	if !ValidToolEffect(r.Effect) {
+		return fmt.Errorf("tool %q has unknown effect %q", r.Tool, r.Effect)
+	}
+	if r.Effect == ToolApproveEach && !(exactToolNameRE.MatchString(r.Tool) && mcpToolNameRE.MatchString(r.Tool)) {
+		return fmt.Errorf("tool %q cannot be approve_each: it applies to one MCP tool's exact name, mcp__<server>__<tool>", r.Tool)
+	}
+	return nil
+}
+
+// HasApproveEach reports whether any rule in the run-wide list or in any harness's set is
+// approve_each. The sealed proxy config carries its mcp_approve_each key exactly then.
+func HasApproveEach(rules []ToolRule, sets []HarnessToolRules) bool {
+	if slices.ContainsFunc(rules, func(r ToolRule) bool { return r.Effect == ToolApproveEach }) {
+		return true
+	}
+	return slices.ContainsFunc(sets, func(s HarnessToolRules) bool {
+		return s.Default == ToolApproveEach || slices.ContainsFunc(s.Rules, func(r ToolRule) bool { return r.Effect == ToolApproveEach })
+	})
 }
 
 // ToolRule is one entry in ToolRules: a tool NAME and what to do with it. Tool is matched exactly

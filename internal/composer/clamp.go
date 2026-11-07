@@ -870,16 +870,9 @@ func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec
 	return warns
 }
 
-// toolStrictness orders the three effects so a clamp can take the stricter: allow < hold < deny.
-func toolStrictness(e types.ToolEffect) int {
-	switch e {
-	case types.ToolDeny:
-		return 2
-	case types.ToolHold:
-		return 1
-	}
-	return 0
-}
+// toolStrictness is types.ToolEffectStrictness, the one order every layer ranks tool effects by:
+// allow < hold < approve_each < deny, an effect it does not know ranked with deny.
+func toolStrictness(e types.ToolEffect) int { return types.ToolEffectStrictness(e) }
 
 // ceilingToolEffect mirrors proxy.Policy.ToolEffectFor's lookup order (exact rule, else "*" default,
 // else hold) so the clamp and enforcement agree.

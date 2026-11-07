@@ -21,7 +21,7 @@ func TestCanonicalJSON(t *testing.T) {
 		{"negative zero", `-0.0`, `0`},
 		{"fraction", `[0.50]`, `[0.5]`},
 		{"escapes re-encoded", `"Aé\n"`, `"Aé\n"`},
-		{"html escaped by encoding/json", `"<a&b>"`, `"<a&b>"`},
+		{"html escaped by encoding/json", `"<a&b>"`, "\"\\u003ca\\u0026b\\u003e\""},
 		{"empty containers", `{"a":[],"b":{}}`, `{"a":[],"b":{}}`},
 	}
 	for _, c := range ok {

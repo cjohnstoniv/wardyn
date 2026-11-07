@@ -106,6 +106,8 @@ local_models.*.keep_alive_seconds
 local_models.*.max_context
 local_models.*.max_output
 local_models.*.models
+mcp_approve_each
+mcp_approve_each.windows
 mcp_bindings
 mcp_bindings.harness
 mcp_bindings.servers

@@ -234,7 +234,8 @@ func ValidateHarnessCredentials(creds []HarnessCredential) error {
 
 // ValidateHarnessToolRules is the structural check a consumer of the carrier
 // makes: a harness once, a closed effect, no rule named "*" (the default has its
-// own field) and no tool named twice.
+// own field), no tool named twice, and approve_each only on a rule for one exact
+// MCP tool, never as a default.
 func ValidateHarnessToolRules(sets []HarnessToolRules) error {
 	seen := map[string]bool{}
 	for i, s := range sets {
@@ -242,16 +243,19 @@ func ValidateHarnessToolRules(sets []HarnessToolRules) error {
 			return fmt.Errorf("harness_tool_rules[%d]: name each harness once", i)
 		}
 		seen[s.Harness] = true
-		if s.Default != "" && !ValidToolEffect(s.Default) {
+		switch {
+		case s.Default == ToolApproveEach:
+			return fmt.Errorf("harness_tool_rules[%d]: default approve_each is not allowed; it names one MCP tool's rule", i)
+		case s.Default != "" && !ValidToolEffect(s.Default):
 			return fmt.Errorf("harness_tool_rules[%d]: default %q is not allow, hold or deny", i, s.Default)
 		}
 		tools := map[string]bool{}
 		for j, r := range s.Rules {
-			switch {
-			case r.Tool == "" || r.Tool == "*" || tools[r.Tool]:
+			if r.Tool == "" || r.Tool == "*" || tools[r.Tool] {
 				return fmt.Errorf("harness_tool_rules[%d].rules[%d]: name a tool once; the default is its own field", i, j)
-			case !ValidToolEffect(r.Effect):
-				return fmt.Errorf("harness_tool_rules[%d].rules[%d]: effect %q is not allow, hold or deny", i, j, r.Effect)
+			}
+			if err := ValidToolRule(r); err != nil {
+				return fmt.Errorf("harness_tool_rules[%d].rules[%d]: %w", i, j, err)
 			}
 			tools[r.Tool] = true
 		}
