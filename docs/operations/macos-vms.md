@@ -29,11 +29,17 @@
 
 ## What a run gets
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../img/macos-vm-run-dark.svg">
+  <img src="../img/macos-vm-run.svg" alt="A macOS VM run on a Mac: under the runner's login, wardyn-runnerd, the wardyn-macvm helper holding the guest, the run's socket folder, and Docker with the run's relay and proxy, the guest's one NIC being its only way out.">
+</picture>
+
 | Part | What it is |
 |---|---|
 | The machine | A macOS guest with the CPUs and memory the run was given, never more than the runner's per-run limits. It runs as the standard user `agent` |
 | The disk | A copy-on-write clone of the Mac's base image, made for the run and deleted when the run ends |
 | The agent | The Wardyn guest agent in the guest serves terminals and starts the run through the launcher, `/usr/local/bin/agent-run` ([What starts in a guest](#what-starts-in-a-guest)). It dials out to the runner over a virtual socket; nothing connects in |
+| The helper | The runner's login runs `wardyn-runnerd` and one `wardyn-macvm` helper per VM. The helper joins the guest's virtual sockets to `agent.sock` and `desktop.sock` in the run's socket folder (`/Users/Shared/Wardyn/sock/u<uid>/<run-key>/`, mode `0700`; [the socket folder](macos-vm-host.md#the-shared-ledger)), and the runner dials them there |
 | Tools | Apple's Command Line Tools (git, clang, python3) and the pinned harness CLIs, installed once into the base. A Mac offers only the harnesses its base can run |
 | Network | One virtual NIC, wired to the run's own network relay and proxy in Docker. The guest has no other way out |
 | Proxy and connections | The proxy variables and the cap of 1,024 open connections per run are a Linux VM's ([what a run gets](linux-vm-sandboxes.md#what-a-run-gets)) |
