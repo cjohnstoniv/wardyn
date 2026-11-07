@@ -286,7 +286,7 @@ func TestImageAdmissionScopeAllChecksTheConventionImage(t *testing.T) {
 
 	t.Run("enforce, scope all: checked and pinned", func(t *testing.T) {
 		a := &fakeAdmitter{}
-		image, failed, _, _, _ := launch(t, t.Context(), site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll), a, convention)
+		image, failed, _, _, _ := launch(t, memberContext(), site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll), a, convention)
 		if failed || image != pinned {
 			t.Fatalf("dispatched %q (failed %v), want the pin %q", image, failed, pinned)
 		}
@@ -298,7 +298,7 @@ func TestImageAdmissionScopeAllChecksTheConventionImage(t *testing.T) {
 		a := &fakeAdmitter{admit: func(imageadmit.Requirements) (imageadmit.Verdict, error) {
 			return imageadmit.Verdict{Reason: imageadmit.SignatureMissing, Digest: admitDigest, Signers: []string{admitSigner}}, nil
 		}}
-		_, failed, st, audit, run := launch(t, t.Context(), site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll), a, convention)
+		_, failed, st, audit, run := launch(t, memberContext(), site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll), a, convention)
 		if !failed {
 			t.Fatal("an unsigned convention image under scope all was dispatched")
 		}
@@ -317,8 +317,8 @@ func TestImageAdmissionScopeAllChecksTheConventionImage(t *testing.T) {
 		sc   types.SiteConfig
 		req  createRunRequest
 	}{
-		{"enforce, scope member", t.Context(), site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeMember), convention},
-		{"off", t.Context(), site(types.ImageAdmissionOff, types.ImageAdmissionScopeAll), convention},
+		{"enforce, scope member", memberContext(), site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeMember), convention},
+		{"off", memberContext(), site(types.ImageAdmissionOff, types.ImageAdmissionScopeAll), convention},
 		{"operator, enforce, scope all", admin, site(types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll), convention},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -364,7 +364,7 @@ func TestImageAdmissionScopeAllRecordsTheConventionVerdict(t *testing.T) {
 	sc.Images.Admission.Scope = types.ImageAdmissionScopeAll
 	srv, st, _, run := pinFixture(t, nil)
 	st.site, srv.cfg.ImageAdmitter = sc, &fakeAdmitter{}
-	image, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil)
+	image, _, failed := srv.resolveCreateRunImage(memberContext(), createRunRequest{Agent: "claude-code"}, run, nil)
 	if failed {
 		t.Fatal("the admitted convention launch failed")
 	}
@@ -382,7 +382,7 @@ func TestImageAdmissionScopeAllRecordsTheConventionVerdict(t *testing.T) {
 
 	srv, st, _, run = pinFixture(t, nil)
 	st.site, srv.cfg.ImageAdmitter, st.admissionErr = sc, &fakeAdmitter{}, errors.New("db down")
-	if _, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil); !failed {
+	if _, _, failed := srv.resolveCreateRunImage(memberContext(), createRunRequest{Agent: "claude-code"}, run, nil); !failed {
 		t.Fatal("a convention image whose verdict could not be recorded was dispatched")
 	}
 	if got := st.state(run.ID); got != types.RunFailed {
@@ -405,7 +405,7 @@ func TestImageAdmissionScopeAllAuditChecksAndRuns(t *testing.T) {
 		t.Helper()
 		srv, st, _, run := pinFixture(t, nil)
 		st.site, st.admissionErr, srv.cfg.ImageAdmitter = site(mode), recordErr, a
-		image, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil)
+		image, _, failed := srv.resolveCreateRunImage(memberContext(), createRunRequest{Agent: "claude-code"}, run, nil)
 		return image, failed, st
 	}
 	conventional, failed, _ := launch(t, types.ImageAdmissionOff, &fakeAdmitter{}, nil)

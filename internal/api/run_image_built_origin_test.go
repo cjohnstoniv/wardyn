@@ -138,7 +138,7 @@ func TestImageOriginRecordedAtLaunch(t *testing.T) {
 		t.Run("convention image, "+mode+", scope all", func(t *testing.T) {
 			srv, st, _, run := pinFixture(t, nil)
 			st.site, srv.cfg.ImageAdmitter = site(mode, types.ImageAdmissionScopeAll), &fakeAdmitter{}
-			if _, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code"}, run, nil); failed {
+			if _, _, failed := srv.resolveCreateRunImage(memberContext(), createRunRequest{Agent: "claude-code"}, run, nil); failed {
 				t.Fatal("the launch failed")
 			}
 			if got := recordedJSON(t, st); !strings.Contains(got, `"origin":"convention"`) || !strings.Contains(got, `"verdict":"admitted"`) {
