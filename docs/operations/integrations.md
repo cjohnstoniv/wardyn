@@ -106,6 +106,23 @@ A model run is credentialed by the model provider it chose (`enforceRunModelProv
 - The 0.8.2 upgrade converts a 0.7.x or 0.8.0 integration pin, an integration's `DefaultFor: agent_runs` mark and the agent roster's model credential fields into model providers and drops the AI integration rows (`0100_model_provider_conversion`, see [CHANGELOG](../../CHANGELOG.md)).
 - Record, verify and build sessions no longer mint an `api_key` grant from an operator secret either (`recordSessionModelAccess`, [`internal/api/record_model_provider.go`](../../internal/api/record_model_provider.go)).
 
+### The provider kinds
+
+- **API key** (`anthropic_api_key`, `openai_api_key`): each person stores their own key for the provider. The proxy injects `x-api-key` at startup; **never resident**.
+- **Claude subscription** (`anthropic_subscription`): each person signs in to the provider from Getting started.
+  - A short-lived sign-in sandbox runs `claude setup-token`. The captured token is stored age-encrypted in that person's own namespace and injected proxy-side as `Authorization: Bearer`.
+  - The sandbox holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
+  - It needs a Claude Code image pinned in `WARDYN_AGENT_IMAGES` (from a clone, `make agent-images-core` builds one). The one-line install's `agent-base` is not one.
+
+> [!WARNING]
+> - **Security note:** a `claude setup-token` is **long-lived (~1 year)** and does **not** auto-rotate — it sits age-encrypted at rest in the secret store, masked from all streams, host-pinned to `api.anthropic.com`, and never enters a run's sandbox. It exists only in the short-lived sign-in sandbox that captures it, which stops when idle.
+> - Protect `deploy/compose/.env` and the postgres volume, and revoke the token in the Anthropic console if a host is compromised.
+
+- **AWS Bedrock** is a provider of kind `bedrock_sso` (each person signs in with AWS; the region, model and base URL live on the provider record) or `bedrock_bearer`.
+  - With `bedrock_bearer`, each person stores a Bedrock bearer token, proxy-injected as `Authorization: Bearer` into `bedrock-runtime.*`, **never resident**.
+  - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
+  - A `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [threat model §5.1a](../../threatmodel/THREAT-MODEL.md#51a-llm-egress-content-inspection--the-honest-claims-contract)).
+
 ## Azure Foundry (`azure_foundry`)
 
 > [!WARNING]
