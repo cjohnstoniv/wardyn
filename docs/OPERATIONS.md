@@ -3982,7 +3982,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0257` (`0257_delegation_actor`) adds `delegated_tokens.actor_sub` and `actor_iss` (`0094`'s table, empty on every existing row), `agent_runs.created_via_actor` (`0001`'s table) and `attach_tickets.via_actor` (`0026`'s table), both NULL on every existing row: the agent a portal named as acting for the person; no grant changes.
 - `0258` (`0258_run_create_keys`) creates `run_create_keys`: one row per `POST /api/v1/runs` `Idempotency-Key`, kept 24 hours. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
 - `0259` (`0259_audit_checkpoints`) creates the append-only `audit_checkpoints` table; a split-role install grants `INSERT, SELECT` on it to each role that may call `audit_append`, and nothing else.
-- `0256` (`0256_groundtruth_sensors`) creates `groundtruth_sensors`: each ground-truth sensor's latest heartbeat, one row per Kubernetes node (`''` for the Compose sensor), which `/healthz` reads to judge every node. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`.
+- `0260` (`0260_delegate_cut_in_flight`) adds `delegates.cut_in_flight_at` (`0094`'s table): when a portal's revoke also cut the gateway access of the runs it launched; NULL on every existing row; no grant changes.
+- `0261` (`0261_groundtruth_sensors`) creates `groundtruth_sensors`: each ground-truth sensor's latest heartbeat, one row per Kubernetes node (`''` for the Compose sensor), which `/healthz` reads to judge every node. A split-role install grants the app role `SELECT, INSERT, UPDATE` on `groundtruth_sensors`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
