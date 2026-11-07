@@ -98,8 +98,8 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn -n "${N
   || { tail -30 "${EVIDENCE_DIR}/helm-upgrade.log" >&2; die "helm upgrade failed"; }
 kc -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=240s || die "wardynd did not come back after the upgrade"
 
-# The sensor exits at start until wardynd has patched the CA into the Secret and the kubelet has synced it,
-# so a few restarts at first are expected.
+# The sensor waits at start (up to 10 minutes) until wardynd has patched the CA into the Secret and the
+# kubelet has synced it, so the DaemonSet can be up before the Secret is filled.
 step "waiting for the sensor DaemonSet and the Secret's token"
 SENSOR_DS="$(kc -n "${NAMESPACE}" get daemonset -l app.kubernetes.io/component=groundtruth -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
 [[ -n "${SENSOR_DS}" ]] || die "the upgrade created no sensor DaemonSet in ${NAMESPACE}"

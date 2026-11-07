@@ -46,7 +46,7 @@ helm upgrade wardyn deploy/helm/wardyn --reuse-values \
 | NetworkPolicy | In another namespace, wardynd's internal-port rule admits that namespace's sensor pods only. Never the http, ssh or ui ports |
 | Env | `WARDYN_GROUNDTRUTH_SOURCE=k8s`, `WARDYN_GROUNDTRUTH_K8S_NAMESPACES` (the runs namespace) and `WARDYN_NODE_NAME` (the node). wardynd gets `WARDYN_GROUNDTRUTH_TOKEN_SECRET` and not the file form; setting both refuses boot |
 
-- On first install the sensor can restart a few times. It needs the CA that wardynd patches into the Secret, and the kubelet syncs that file about a minute later.
+- On first install the sensor starts before the CA exists. It waits for wardynd to patch it into the Secret and for the kubelet to sync the file, about a minute, and logs the wait once. It exits after 10 minutes without one.
 - The Secret is kept on uninstall. Delete it by hand if you remove the sensor for good.
 
 ### What an event becomes
