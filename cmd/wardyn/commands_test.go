@@ -1007,10 +1007,10 @@ func TestApprovalGetNamesTheRawMCPTool(t *testing.T) {
 		return out.String()
 	}
 	dotted, underscored := get("delete.issue", "delete.issue"), get("delete_issue", "")
-	if !strings.Contains(dotted, "\nSERVER TOOL: delete.issue\n") {
+	if !strings.Contains(dotted, "\nSERVER TOOL: \"delete.issue\"\n") {
 		t.Errorf("dotted call output lacks its raw tool line:\n%s", dotted)
 	}
-	if !strings.Contains(underscored, "\nSERVER TOOL: delete_issue\n") {
+	if !strings.Contains(underscored, "\nSERVER TOOL: \"delete_issue\"\n") {
 		t.Errorf("underscored call output lacks its raw tool line (the display name less its prefix):\n%s", underscored)
 	}
 	// The key lines differ only through the raw tool and the key itself; the raw lines must differ.
@@ -1024,6 +1024,50 @@ func TestApprovalGetNamesTheRawMCPTool(t *testing.T) {
 	}
 	if line(dotted) == "" || line(dotted) == line(underscored) {
 		t.Errorf("two different tools read the same: %q and %q", line(dotted), line(underscored))
+	}
+}
+
+// TestApprovalGetEscapesMCPTerminalControls: the raw tool name comes from the remote server and the arguments
+// from the agent, so `approval get` must not let either clear the screen, start a line of its own or reorder
+// text. The names print quoted with every control and non-ASCII rune escaped; a bidi control inside an
+// argument string prints as its \u escape, which means the same string.
+func TestApprovalGetEscapesMCPTerminalControls(t *testing.T) {
+	runID, id := uuid.New(), uuid.New()
+	hostile := "x\x1b[2J\r\nTOOL:      forged\u202eevil"
+	args := json.RawMessage(`{"note":"a\u202eb\u001b[2Jc"}`)
+	scope := types.MCPCallScope{Tool: "mcp__jira__x", MCPServer: "jira", MCPTool: hostile, Arguments: args}
+	key, err := scope.ComputeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope.CallSHA256 = key
+	raw, _ := json.Marshal(scope)
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{ID: id, RunID: runID, Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedScope: raw},
+	})
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approval", "get", id.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approval get: %v", err)
+	}
+	got := out.String()
+	for _, bad := range []string{"\x1b", "\r", "\u202e"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("output holds the raw control %q:\n%q", bad, got)
+		}
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "TOOL:      forged") {
+			t.Errorf("the tool name started a line of its own: %q", line)
+		}
+	}
+	for _, want := range []string{`\x1b[2J\r\nTOOL:      forged\u202eevil"`, `a\u202eb`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks the escaped form %s:\n%s", want, got)
+		}
 	}
 }
 
