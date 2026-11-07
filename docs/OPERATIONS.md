@@ -3982,6 +3982,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0257` (`0257_delegation_actor`) adds `delegated_tokens.actor_sub` and `actor_iss` (`0094`'s table, empty on every existing row), `agent_runs.created_via_actor` (`0001`'s table) and `attach_tickets.via_actor` (`0026`'s table), both NULL on every existing row: the agent a portal named as acting for the person; no grant changes.
 - `0258` (`0258_run_create_keys`) creates `run_create_keys`: one row per `POST /api/v1/runs` `Idempotency-Key`, kept 24 hours. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `run_create_keys`.
 - `0259` (`0259_audit_checkpoints`) creates the append-only `audit_checkpoints` table; a split-role install grants `INSERT, SELECT` on it to each role that may call `audit_append`, and nothing else.
+- `0260` (`0260_agent_runs_policy_generations`) adds `agent_runs.policy_generations` (`0001`'s table): the run's policy generations, one per revive after dispatch's, each with its digest and its proxy's run token ids; `[]` on every existing row; no grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

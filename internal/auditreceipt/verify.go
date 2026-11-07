@@ -76,7 +76,7 @@ var RedactableActions = map[string]bool{
 	"drive.write": true, "drive.member.create": true, "source.write": true,
 	"recovery.rehearse.begin": true, "recovery.rehearse": true,
 	"site_config.write": true, "site_config.redirect.test": true,
-	"run.policy.resolve": true, "run.policy.effective": true,
+	"run.policy.resolve": true, "run.policy.effective": true, "run.policy.generation": true,
 	"policy.create": true, "policy.update": true, "policy.delete": true,
 	"preset.create": true, "preset.update": true,
 }

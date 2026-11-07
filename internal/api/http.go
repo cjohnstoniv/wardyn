@@ -973,7 +973,7 @@ func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 }
 
 func contextWithClaims(ctx context.Context, c *identity.Claims) context.Context {
-	return context.WithValue(ctx, claimsCtxKey{}, c)
+	return context.WithValue(audit.WithPolicyToken(ctx, c.RunID, c.JTI), claimsCtxKey{}, c) // rows it records carry the token's policy generation
 }
 
 // claimsFromContext returns the verified run claims placed by internalAuth.

@@ -212,8 +212,8 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 	tx.db.mu.Lock()
 	defer tx.db.mu.Unlock()
 	switch {
-	case strings.Contains(sql, "policy_digest FROM agent_runs"):
-		// insertAuditEventTx stamps the mint row with the run's digest; the fake holds none.
+	case strings.Contains(sql, "policy_digest, policy_generations"):
+		// insertAuditEventTx stamps the mint row with the run's policy; the fake holds none.
 		return errRow{errNoRow}
 
 	case strings.Contains(sql, "FROM credential_grants g"):
