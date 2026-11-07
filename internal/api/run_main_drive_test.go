@@ -237,7 +237,8 @@ func vmPidsStep(t *testing.T, st *memberBoundStore, req createRunRequest) (bool,
 
 // TestLinuxVMPidsLimitRefusesOnlyAWrittenLimit: the clamp fills an unset process limit for a member,
 // and that filled number is not a limit anyone wrote. A limit the run's policy writes, or an outer
-// profile writes, is refused; a filled one is admitted and disclosed.
+// profile writes, is refused; a filled one is admitted and disclosed. Each member is under a profile:
+// the clamp runs on a stored policy only there (run_policy_resolution.go).
 func TestLinuxVMPidsLimitRefusesOnlyAWrittenLimit(t *testing.T) {
 	base := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
 	withPids := func(n int) types.RunPolicySpec {
@@ -251,7 +252,7 @@ func TestLinuxVMPidsLimitRefusesOnlyAWrittenLimit(t *testing.T) {
 		policy  types.RunPolicySpec
 		want    string // the refusal's reason; "" admits
 	}{
-		"no pids field anywhere":      {policy: base},
+		"no pids field anywhere":      {profile: &types.GovernanceUnit{ID: uuid.New(), Name: "open", Ceiling: base}, policy: base},
 		"an unset limit under a cap":  {profile: &types.GovernanceUnit{ID: uuid.New(), Name: "sized", Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}, Resources: &types.ResourceLimits{CPUMillis: 1000}}}, policy: base},
 		"an explicit inner limit":     {policy: withPids(256), want: reasonRequestFieldUnavailable},
 		"an explicit outer profile":   {profile: &types.GovernanceUnit{ID: uuid.New(), Name: "tight", Ceiling: withPids(256)}, policy: base, want: reasonRequestFieldUnavailable},
