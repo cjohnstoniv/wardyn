@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -342,5 +343,112 @@ func TestKernelWindowMultiNodeUsesRunNode(t *testing.T) {
 	st.events = []types.AuditEvent{exec}
 	if got := srv.kernelWindow(context.Background(), run); got != (recordmode.KernelWindow{}) {
 		t.Fatalf("unknown node: window = %+v, want empty", got)
+	}
+}
+
+// runnerFactsRunner answers per-runner facts (runner.TargetInspector) from a fixed table; a runner
+// not in it is unknown (offline, or nothing advertised yet).
+type runnerFactsRunner struct {
+	runner.Runner
+	facts map[uuid.UUID]runner.TargetFacts
+}
+
+func (runnerFactsRunner) Name() string { return "remote" }
+
+func (r runnerFactsRunner) RunnerFacts(id string) (runner.TargetFacts, bool) {
+	f, ok := r.facts[uuid.MustParse(id)]
+	return f, ok
+}
+
+func (runnerFactsRunner) ExecutorFacts(context.Context, string) (runner.TargetFacts, bool) {
+	return runner.TargetFacts{}, false
+}
+
+// TestGroundtruthPodOnRunnerHeldToRunnerNamespaces: a run on a self-hosted runner lives in that
+// runner's cluster, so its events are held to the namespaces the runner advertises, not to the
+// control plane's own. Where the control plane has no source for the run's namespaces (the runner
+// is unknown or advertises none, or the run is on a remote-hosted runner) the check is skipped and
+// the event keeps its run.
+func TestGroundtruthPodOnRunnerHeldToRunnerNamespaces(t *testing.T) {
+	t.Setenv("WARDYN_K8S_NAMESPACE", "wardyn-runs")
+	now := time.Now().UTC()
+	known, bare, offline := uuid.New(), uuid.New(), uuid.New()
+	rn := runnerFactsRunner{facts: map[uuid.UUID]runner.TargetFacts{
+		known: {RunsNamespaces: []string{"team-runs", "team-runs-2"}},
+		bare:  {},
+	}}
+	for name, tc := range map[string]struct {
+		runnerID   *uuid.UUID
+		executor   string
+		ns         string
+		wantReason string
+	}{
+		"runner namespace":                     {runnerID: &known, ns: "team-runs-2"},
+		"outside the runner's namespaces":      {runnerID: &known, ns: "other-team", wantReason: "namespace_not_runs"},
+		"control plane namespace on a runner":  {runnerID: &known, ns: "wardyn-runs", wantReason: "namespace_not_runs"},
+		"runner advertises no namespaces":      {runnerID: &bare, ns: "anything"},
+		"runner unknown to the control plane":  {runnerID: &offline, ns: "anything"},
+		"remote-hosted runner":                 {executor: "hosted-runner-1", ns: "anything"},
+		"in-process driver, other namespace":   {ns: "team-runs", wantReason: "namespace_not_runs"},
+		"in-process driver, its own namespace": {ns: "wardyn-runs"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			st := &nodeSensorStore{run: types.AgentRun{ID: runID, State: types.RunRunning, CreatedAt: now.Add(-time.Hour),
+				UpdatedAt: now, RunnerID: tc.runnerID, RunnerPoolExecutor: tc.executor}}
+			cfg := baseTestConfig(h, st)
+			cfg.Now = func() time.Time { return now }
+			cfg.Runner = rn
+			srv := New(cfg)
+			postBatch(t, h, srv, podExec(runID, tc.ns+"/wardyn-agent-"+runID.String(), "/bin/ev"))
+			got, ed := recordedByTarget(t, h, "/bin/ev")
+			if tc.wantReason == "" {
+				if got.RunID == nil || ed.Reason != "" {
+					t.Fatalf("run=%v reason=%q, want the event kept on its run", got.RunID, ed.Reason)
+				}
+				return
+			}
+			if got.RunID != nil || ed.Reason != tc.wantReason {
+				t.Fatalf("run=%v reason=%q, want run cleared with %s", got.RunID, ed.Reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestGroundtruthPodEventAfterLeaseEndedDowngrades: a run whose lease ended stays RUNNING until
+// the ended-run grace, but its pod is gone from the time the lease ended (LostAt), so a k8s event
+// more than 15 minutes after that loses its run. Another lost reason keeps the run.
+func TestGroundtruthPodEventAfterLeaseEndedDowngrades(t *testing.T) {
+	t.Setenv("WARDYN_K8S_NAMESPACE", "wardyn-runs")
+	now := time.Now().UTC()
+	for name, tc := range map[string]struct {
+		reason     types.LostReason
+		lostAgo    time.Duration
+		wantReason string
+	}{
+		"lease ended 16m ago": {reason: types.LostEnded, lostAgo: 16 * time.Minute, wantReason: "run_ended"},
+		"lease ended 5m ago":  {reason: types.LostEnded, lostAgo: 5 * time.Minute},
+		"rebooted 16m ago":    {reason: types.LostReboot, lostAgo: 16 * time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			lost := now.Add(-tc.lostAgo)
+			st := &nodeSensorStore{run: types.AgentRun{ID: runID, State: types.RunRunning, CreatedAt: now.Add(-time.Hour),
+				UpdatedAt: now, LostAt: &lost, LostReason: tc.reason}}
+			srv := nodeSensorServer(h, st, now)
+			postBatch(t, h, srv, podExec(runID, "wardyn-runs/wardyn-agent-"+runID.String(), "/bin/late"))
+			got, ed := recordedByTarget(t, h, "/bin/late")
+			if tc.wantReason == "" {
+				if got.RunID == nil || ed.Reason != "" {
+					t.Fatalf("run=%v reason=%q, want the event kept on its run", got.RunID, ed.Reason)
+				}
+				return
+			}
+			if got.RunID != nil || ed.Reason != tc.wantReason {
+				t.Fatalf("run=%v reason=%q, want run cleared with %s", got.RunID, ed.Reason, tc.wantReason)
+			}
+		})
 	}
 }
