@@ -138,6 +138,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Security
 
 - A run's image check is made where the run is created and the run is pinned to the checked digest, so an image re-tagged after the check is not what runs.
+- Wardyn now builds with Go 1.27.3 and go-jose 4.1.7, which fix certificate-verification and token-parsing security issues.
 
 ### Known issues
 
