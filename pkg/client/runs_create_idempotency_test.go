@@ -305,3 +305,83 @@ func TestRetryAfterIsHonouredAndCapped(t *testing.T) {
 		}
 	}
 }
+
+// keepAliveClient uses the stock transport with keep-alives ON, as the SDK's default client does. The
+// Idempotency-Key header makes net/http treat a body-bearing POST as replayable, so on a reused connection
+// that dies before the response headers the transport would send it again by itself.
+func keepAliveClient(url string) *Client {
+	return &Client{BaseURL: url, Token: "tok", HTTPClient: &http.Client{
+		CheckRedirect: noRedirect,
+		Transport:     &http.Transport{},
+	}}
+}
+
+// dropAfterCommit counts the run creates a server committed. After the connection is warmed it commits each POST
+// and then closes the connection before sending any header.
+type dropAfterCommit struct {
+	mu      sync.Mutex
+	creates int
+	keyed   bool
+}
+
+func (d *dropAfterCommit) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			if d.keyed {
+				_, _ = io.WriteString(w, `{"idempotent_run_create":true}`)
+			} else {
+				_, _ = io.WriteString(w, `{"status":"ok"}`)
+			}
+			return
+		}
+		_, _ = io.ReadAll(r.Body)
+		d.mu.Lock()
+		d.creates++
+		d.mu.Unlock()
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		_ = conn.Close()
+	})
+}
+
+func (d *dropAfterCommit) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.creates
+}
+
+// TestCreateRunDefaultIssuesOnePostOnAWarmConnection: the default call is one POST even when a reused keep-alive
+// connection resets after the server committed the run, against a server that predates the key.
+func TestCreateRunDefaultIssuesOnePostOnAWarmConnection(t *testing.T) {
+	d := &dropAfterCommit{}
+	srv := httptest.NewServer(d.handler())
+	t.Cleanup(srv.Close)
+	c := keepAliveClient(srv.URL)
+	if _, err := c.Healthz(context.Background()); err != nil { // warms the connection
+		t.Fatal(err)
+	}
+	if _, err := c.CreateRun(context.Background(), CreateRunRequest{Agent: "a"}); err == nil {
+		t.Fatal("want the lost answer returned")
+	}
+	if got := d.count(); got != 1 {
+		t.Fatalf("server committed %d creates, want exactly 1", got)
+	}
+}
+
+// TestCreateRunRetryCountsOnlyTheLoopsAttempts: with Retry on, a server that predates the key but is reported as
+// supporting it is retried only by the SDK loop, so the server sees one POST per attempt and no more.
+func TestCreateRunRetryCountsOnlyTheLoopsAttempts(t *testing.T) {
+	noSleep(t)
+	d := &dropAfterCommit{keyed: true}
+	srv := httptest.NewServer(d.handler())
+	t.Cleanup(srv.Close)
+	c := keepAliveClient(srv.URL)
+	if _, err := c.Healthz(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateRunWith(context.Background(), CreateRunRequest{Agent: "a"}, CreateRunOptions{Retry: true}); err == nil {
+		t.Fatal("want the lost answer returned after the attempts")
+	}
+	if got := d.count(); got != createRunAttempts {
+		t.Fatalf("server saw %d POSTs, want %d (the loop's attempts)", got, createRunAttempts)
+	}
+}
