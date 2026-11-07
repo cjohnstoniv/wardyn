@@ -13,9 +13,10 @@ import (
 )
 
 // Bundle formats. A receipt carries rows for at least one event; a checkpoint export carries only signed
-// statements, so verifying it checks signatures and the prev chain, never inclusion.
+// statements, so verifying it checks signatures and the prev chain, never inclusion. Receipt layout 1 carried
+// no seqs beside its hash list, and it is refused by name.
 const (
-	ReceiptFormat     = "wardyn-audit-receipt/1"
+	ReceiptFormat     = "wardyn-audit-receipt/2"
 	CheckpointsFormat = "wardyn-audit-checkpoints/1"
 )
 
@@ -25,12 +26,13 @@ type Bundle struct {
 	Checkpoints []Checkpoint `json:"checkpoints"`
 }
 
-// Checkpoint is one signed statement, with its rows' hash list and events when the bundle proves inclusion.
-// A receipt also carries, header only, every checkpoint between two that hold its events, so the prev chain
-// verifies across them.
+// Checkpoint is one signed statement, with its rows' hash list, their seqs (Seqs[i] is the seq of the row
+// whose hash is RowHashes[i]) and events when the bundle proves inclusion. A receipt also carries, header
+// only, every checkpoint between two that hold its events, so the prev chain verifies across them.
 type Checkpoint struct {
 	Statement string   `json:"statement"`
 	Signature []byte   `json:"signature"`
+	Seqs      []int64  `json:"seqs,omitempty"`
 	RowHashes []string `json:"row_hashes,omitempty"`
 	Events    []Event  `json:"events,omitempty"`
 }
@@ -57,6 +59,9 @@ const (
 	ReasonDigest       = "digest_mismatch"
 	ReasonHead         = "head_mismatch"
 	ReasonSeq          = "seq_out_of_range"
+	ReasonSeqList      = "seq_list_mismatch"
+	ReasonSeqDigest    = "seq_digest_mismatch"
+	ReasonSeqMismatch  = "seq_mismatch"
 	ReasonIndex        = "index_out_of_range"
 	ReasonHashList     = "hash_list_mismatch"
 	ReasonPrevHash     = "prev_hash_mismatch"
@@ -135,8 +140,10 @@ func (r Report) Complete() bool { return r.OK() && r.Withheld() == 0 }
 // VerifyBundle checks a bundle against the keys the operator pinned, in this order per checkpoint: the
 // statement's encoding; its signature with the pinned key its kid names (unknown, retired or wrong keys fail);
 // its prev link to the checkpoint before it in the bundle; its hash list (count, fold to the digest, last hash
-// to head_hash); and each event (seq inside the range, its row_hash at its index, its prev_hash the hash
-// before it, and its content re-hashed unless withheld). It never stops early: every failure is reported.
+// to head_hash) and seqs (one per hash, ascending from seq_lo to seq_hi, digested with the hashes to
+// seq_digest); and each event (seq inside the range and the signed seq at its index, its row_hash at its
+// index, its prev_hash the hash before it, and its content re-hashed unless withheld). It never stops early:
+// every failure is reported.
 func VerifyBundle(b Bundle, keys Keys) Report {
 	rep := Report{Format: b.Format, Checkpoints: []CheckpointResult{}, Events: []EventResult{}, Failures: []Failure{}}
 	fail := func(cp int, seq int64, reason, format string, args ...any) {
@@ -161,7 +168,7 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 	}
 	switch {
 	case b.Format != ReceiptFormat && b.Format != CheckpointsFormat:
-		fail(-1, 0, ReasonFormat, "format %q is neither %q nor %q", b.Format, ReceiptFormat, CheckpointsFormat)
+		fail(-1, 0, ReasonFormat, "format %q is neither %q nor %q (no other bundle layout is read)", b.Format, ReceiptFormat, CheckpointsFormat)
 		return rep
 	case len(b.Checkpoints) == 0:
 		fail(-1, 0, ReasonFormat, "the bundle holds no checkpoint")
@@ -210,11 +217,14 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 		}
 
 		// 3. The hash list.
-		if b.Format == CheckpointsFormat && (len(c.RowHashes) > 0 || len(c.Events) > 0) {
+		if b.Format == CheckpointsFormat && (len(c.RowHashes) > 0 || len(c.Seqs) > 0 || len(c.Events) > 0) {
 			fail(i, st.SeqLo, ReasonFormat, "a checkpoint export carries no rows")
 		}
 		if len(c.Events) > 0 && len(c.RowHashes) == 0 {
 			fail(i, st.SeqLo, ReasonFormat, "events without their checkpoint's hash list")
+		}
+		if len(c.Seqs) > 0 && len(c.RowHashes) == 0 {
+			fail(i, st.SeqLo, ReasonSeqList, "seqs without their checkpoint's hash list")
 		}
 		listOK := false
 		if len(c.RowHashes) > 0 {
@@ -229,6 +239,13 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 			}
 			if c.RowHashes[len(c.RowHashes)-1] != st.HeadHash {
 				fail(i, st.SeqHi, ReasonHead, "the last hash is not the signed head_hash")
+				listOK = false
+			}
+			if err := checkSeqList(c.Seqs, len(c.RowHashes), st); err != nil {
+				fail(i, st.SeqLo, ReasonSeqList, "%v", err)
+				listOK = false
+			} else if d := SeqDigest(c.Seqs, c.RowHashes); d != st.SeqDigest {
+				fail(i, st.SeqLo, ReasonSeqDigest, "the seqs and hashes digest to %s, the signed seq_digest is %s", d, st.SeqDigest)
 				listOK = false
 			}
 		}
@@ -246,6 +263,10 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 				fail(i, seq, ReasonIndex, "index %d is outside the %d-entry hash list", ev.Index, len(c.RowHashes))
 				rep.Events = append(rep.Events, r)
 				continue
+			}
+			// A row's hash does not cover its seq: only the signed seq list says which seq the row at this index has.
+			if len(c.Seqs) == len(c.RowHashes) && seq != c.Seqs[ev.Index] {
+				fail(i, seq, ReasonSeqMismatch, "seq %d is not entry %d of the signed seq list (%d)", seq, ev.Index, c.Seqs[ev.Index])
 			}
 			if ev.Row.RowHash == nil || *ev.Row.RowHash != c.RowHashes[ev.Index] {
 				fail(i, seq, ReasonHashList, "the row's row_hash is not entry %d of the signed hash list", ev.Index)
@@ -280,6 +301,23 @@ func VerifyBundle(b Bundle, keys Keys) Report {
 		prevText, prevSt = c.Statement, &st
 	}
 	return rep
+}
+
+// checkSeqList accepts a checkpoint's seqs only as the signer reads them: one per hash, strictly ascending,
+// from the statement's seq_lo to its seq_hi.
+func checkSeqList(seqs []int64, hashes int, st Statement) error {
+	if len(seqs) != hashes {
+		return fmt.Errorf("%d seqs for %d hashes", len(seqs), hashes)
+	}
+	if seqs[0] != st.SeqLo || seqs[len(seqs)-1] != st.SeqHi {
+		return fmt.Errorf("the seqs run %d-%d, the signed range is %d-%d", seqs[0], seqs[len(seqs)-1], st.SeqLo, st.SeqHi)
+	}
+	for j := 1; j < len(seqs); j++ {
+		if seqs[j] <= seqs[j-1] {
+			return fmt.Errorf("seq %d follows %d: the seqs are not ascending", seqs[j], seqs[j-1])
+		}
+	}
+	return nil
 }
 
 // checkRedaction accepts a withheld event only as the projector makes one: an action it redacts, and data

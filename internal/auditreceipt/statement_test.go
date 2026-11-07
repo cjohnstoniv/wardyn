@@ -10,7 +10,7 @@ import (
 
 func sampleStatement() Statement {
 	return Statement{Format: CheckpointFormat, Kid: strings.Repeat("0f", 16), SeqLo: 101, SeqHi: 250, Rows: 150,
-		HeadHash: strings.Repeat("1a", 32), Digest: strings.Repeat("2b", 32), Prev: strings.Repeat("3c", 32),
+		HeadHash: strings.Repeat("1a", 32), Digest: strings.Repeat("2b", 32), SeqDigest: strings.Repeat("4d", 32), Prev: strings.Repeat("3c", 32),
 		SignedAt: "2026-11-07T10:00:00.123456789Z"}
 }
 
@@ -19,8 +19,8 @@ func sampleStatement() Statement {
 // bytes that were signed.
 func TestStatement_ByteStableKeyOrder(t *testing.T) {
 	s := sampleStatement()
-	want := `{"format":"wardyn-audit-checkpoint/1","kid":"0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f","seq_lo":101,"seq_hi":250,"rows":150,` +
-		`"head_hash":"` + strings.Repeat("1a", 32) + `","digest":"` + strings.Repeat("2b", 32) + `","prev":"` + strings.Repeat("3c", 32) +
+	want := `{"format":"wardyn-audit-checkpoint/2","kid":"0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f","seq_lo":101,"seq_hi":250,"rows":150,` +
+		`"head_hash":"` + strings.Repeat("1a", 32) + `","digest":"` + strings.Repeat("2b", 32) + `","seq_digest":"` + strings.Repeat("4d", 32) + `","prev":"` + strings.Repeat("3c", 32) +
 		`","signed_at":"2026-11-07T10:00:00.123456789Z"}`
 	if got := string(s.Bytes()); got != want {
 		t.Fatalf("statement bytes:\n got %s\nwant %s", got, want)
@@ -45,7 +45,9 @@ func TestStatement_ByteStableKeyOrder(t *testing.T) {
 		"duplicate key":       strings.Replace(want, `"rows":150,`, `"rows":150,"rows":150,`, 1),
 		"unknown key":         strings.Replace(want, `"rows":150,`, `"rows":150,"extra":1,`, 1),
 		"trailing newline":    want + "\n",
-		"other format":        strings.Replace(want, "wardyn-audit-checkpoint/1", "wardyn-audit-checkpoint/2", 1),
+		"other format":        strings.Replace(want, "wardyn-audit-checkpoint/2", "wardyn-audit-checkpoint/3", 1),
+		"no seq_digest":       strings.Replace(want, `"seq_digest":"`+strings.Repeat("4d", 32)+`",`, "", 1),
+		"short seq_digest":    strings.Replace(want, strings.Repeat("4d", 32), "4d", 1),
 		"short kid":           strings.Replace(want, `"kid":"0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"`, `"kid":"0f"`, 1),
 		"upper-case hash":     strings.Replace(want, strings.Repeat("1a", 32), strings.Repeat("1A", 32), 1),
 		"seq_hi below lo":     strings.Replace(want, `"seq_hi":250`, `"seq_hi":100`, 1),

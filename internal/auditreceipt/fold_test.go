@@ -27,3 +27,27 @@ func TestFold_Vectors(t *testing.T) {
 		}
 	}
 }
+
+// TestSeqDigest_Vectors pins SeqDigest to digests computed with printf and sha256sum alone (the recipe in its
+// doc comment), starting from s_0 = sha256("wardyn-audit-seq-digest/1").
+func TestSeqDigest_Vectors(t *testing.T) {
+	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for _, tc := range []struct {
+		seqs   []int64
+		hashes []string
+		want   string
+	}{
+		{nil, nil, "e5a6baecd1274051718eb4b4191bbb6e93cfd62e431e9e606fa90458ee394c67"},
+		{[]int64{1, 12}, []string{a, b}, "01cd142272da2957949e2bca3acdcd441f9d06a7eb57b9bb507fbe42ef6f215b"},
+		{[]int64{3}, []string{""}, "f38767be285f1d2961b2d799cb97f36e2affaeec1e0bd70fb0d3a75e93cd7b6e"},
+		{[]int64{1}, []string{a, b}, ""},
+	} {
+		if got := SeqDigest(tc.seqs, tc.hashes); got != tc.want {
+			t.Errorf("SeqDigest(%v, %d hashes) = %q, want %q", tc.seqs, len(tc.hashes), got, tc.want)
+		}
+	}
+	// The pairing is what is digested: the same hashes under swapped seqs differ.
+	if SeqDigest([]int64{4, 7}, []string{a, b}) == SeqDigest([]int64{7, 4}, []string{a, b}) {
+		t.Fatal("swapped seqs give the same digest")
+	}
+}

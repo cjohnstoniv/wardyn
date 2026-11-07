@@ -55,11 +55,15 @@ func testCheckpoint(priv ed25519.PrivateKey, rows []Row, prevStatement string) C
 	if prevStatement != "" {
 		prev = StatementHash(prevStatement)
 	}
+	seqs := make([]int64, len(rows))
+	for i, r := range rows {
+		seqs[i] = r.Seq
+	}
 	s := Statement{Format: CheckpointFormat, Kid: KeyID(pub), SeqLo: rows[0].Seq, SeqHi: rows[len(rows)-1].Seq,
-		Rows: int64(len(rows)), HeadHash: *rows[len(rows)-1].RowHash, Digest: Fold(prev, hashesOf(rows)), Prev: prev,
-		SignedAt: "2026-11-07T10:00:00Z"}
+		Rows: int64(len(rows)), HeadHash: *rows[len(rows)-1].RowHash, Digest: Fold(prev, hashesOf(rows)),
+		SeqDigest: SeqDigest(seqs, hashesOf(rows)), Prev: prev, SignedAt: "2026-11-07T10:00:00Z"}
 	text := string(s.Bytes())
-	return Checkpoint{Statement: text, Signature: ed25519.Sign(priv, []byte(text)), RowHashes: hashesOf(rows)}
+	return Checkpoint{Statement: text, Signature: ed25519.Sign(priv, []byte(text)), Seqs: seqs, RowHashes: hashesOf(rows)}
 }
 
 func withEvents(c Checkpoint, rows []Row, idx ...int) Checkpoint {
@@ -70,7 +74,7 @@ func withEvents(c Checkpoint, rows []Row, idx ...int) Checkpoint {
 }
 
 func headerOnly(c Checkpoint) Checkpoint {
-	c.RowHashes, c.Events = nil, nil
+	c.Seqs, c.RowHashes, c.Events = nil, nil, nil
 	return c
 }
 
@@ -397,5 +401,41 @@ func TestVerifyBundle_OlderFormatRefused(t *testing.T) {
 	_, err := ParseStatement(old)
 	if err == nil || !strings.Contains(err.Error(), `"wardyn-audit-checkpoint/1"`) || strings.Contains(err.Error(), "canonical") {
 		t.Fatalf("an older statement: err %v, want a refusal naming its format", err)
+	}
+}
+
+// TestVerifyBundle_TamperedSeqList: the seqs beside the hash list are themselves signed, through seq_digest.
+func TestVerifyBundle_TamperedSeqList(t *testing.T) {
+	priv, pub := testKey(1)
+
+	// The list and the event relabelled together (4 as the skipped 3) still break the signed seq digest.
+	b, _ := gapCheckpoint(priv)
+	b.Checkpoints[0].Seqs = []int64{1, 2, 3, 7}
+	b.Checkpoints[0].Events[2].Row.Seq = 3
+	if rep := VerifyBundle(b, keysOf(pub)); rep.OK() || !hasReason(rep, ReasonSeqDigest) || rep.Events[2].OK {
+		t.Fatalf("a relabelled seq list: failures %+v, want %s", rep.Failures, ReasonSeqDigest)
+	}
+
+	for name, seqs := range map[string][]int64{
+		"not ascending":   {1, 4, 2, 7},
+		"outside range":   {1, 2, 4, 8},
+		"one short":       {1, 2, 7},
+		"left out":        nil,
+		"duplicated seqs": {1, 4, 4, 7},
+	} {
+		b, _ := gapCheckpoint(priv)
+		b.Checkpoints[0].Seqs = seqs
+		if rep := VerifyBundle(b, keysOf(pub)); rep.OK() || !hasReason(rep, ReasonSeqList) || rep.Checkpoints[0].Inclusion {
+			t.Errorf("seqs %s: failures %+v, want %s and no inclusion", name, rep.Failures, ReasonSeqList)
+		}
+	}
+
+	// A checkpoint export carries no seqs either.
+	b, _ = twoCheckpoints(priv)
+	b.Format = CheckpointsFormat
+	b.Checkpoints[0] = headerOnly(b.Checkpoints[0])
+	b.Checkpoints[1].RowHashes, b.Checkpoints[1].Events = nil, nil
+	if rep := VerifyBundle(b, keysOf(pub)); rep.OK() || !hasReason(rep, ReasonFormat) {
+		t.Fatalf("an export carrying seqs: failures %+v, want %s", rep.Failures, ReasonFormat)
 	}
 }

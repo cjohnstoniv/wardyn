@@ -211,8 +211,8 @@ func TestAuditCheckpoints_InsertReadAndConflict(t *testing.T) {
 	}
 }
 
-// TestAuditCheckpointRowHashes: a checkpoint's hash list is the stored row_hash of every row in its range, in
-// seq order.
+// TestAuditCheckpointRowHashes: a checkpoint's hash list is the seq and stored row_hash of every row in its
+// range, in seq order.
 func TestAuditCheckpointRowHashes(t *testing.T) {
 	pool := chainProbeDB(t)
 	ctx := context.Background()
@@ -222,7 +222,12 @@ func TestAuditCheckpointRowHashes(t *testing.T) {
 		evs[i] = appendChained(t, pool, "checkpoint.hashes")
 	}
 	got, err := pg.AuditCheckpointRowHashes(ctx, auditSeq(t, pool, evs[0].ID), auditSeq(t, pool, evs[2].ID))
-	if err != nil || len(got) != 3 || got[0] != evs[0].RowHash || got[2] != evs[2].RowHash {
+	if err != nil || len(got) != 3 {
 		t.Fatalf("row hashes = %v, %v", got, err)
+	}
+	for i, ev := range evs {
+		if got[i].Seq != auditSeq(t, pool, ev.ID) || got[i].RowHash != ev.RowHash {
+			t.Fatalf("row %d = %+v, want seq %d hash %s", i, got[i], auditSeq(t, pool, ev.ID), ev.RowHash)
+		}
 	}
 }

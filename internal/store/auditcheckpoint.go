@@ -58,7 +58,7 @@ type AuditCheckpointer interface {
 	InsertAuditCheckpoint(ctx context.Context, cp AuditCheckpoint) (existing AuditCheckpoint, err error)
 	LatestAuditCheckpoint(ctx context.Context) (cp AuditCheckpoint, found bool, err error)
 	AuditCheckpoints(ctx context.Context, afterSeq int64, limit int) ([]AuditCheckpoint, error)
-	AuditCheckpointRowHashes(ctx context.Context, seqLo, seqHi int64) ([]string, error)
+	AuditCheckpointRowHashes(ctx context.Context, seqLo, seqHi int64) ([]CheckpointRow, error)
 	AuditReceiptRows(ctx context.Context, ids []uuid.UUID, runID *uuid.UUID, afterSeq int64, limit int) ([]AuditPartitionRow, error)
 }
 
@@ -191,14 +191,16 @@ func (s PG) AuditCheckpoints(ctx context.Context, afterSeq int64, limit int) ([]
 		WHERE seq_hi > $1 ORDER BY seq_lo LIMIT $2`, []any{afterSeq, limit}, scanAuditCheckpoint)
 }
 
-// AuditCheckpointRowHashes is a checkpoint's hash list: the stored row_hash of every row from seqLo to seqHi,
-// in seq order. A hashless row in the range reads as "", which no fold accepts.
-func (s PG) AuditCheckpointRowHashes(ctx context.Context, seqLo, seqHi int64) ([]string, error) {
-	return collect(ctx, s.Pool, "read", "audit checkpoint row hashes", `SELECT COALESCE(row_hash, '') FROM audit_events
-		WHERE seq >= $1 AND seq <= $2 ORDER BY seq`, []any{seqLo, seqHi}, func(r pgx.Row) (string, error) {
-		var h string
-		err := r.Scan(&h)
-		return h, err
+// AuditCheckpointRowHashes is a checkpoint's hash list with its seqs: the seq and stored row_hash of every row
+// from seqLo to seqHi, in seq order. A receipt carries both, because the signed seq_digest binds each seq to
+// its row and a row's hash does not cover its seq. A hashless row in the range reads as "", which no fold
+// accepts.
+func (s PG) AuditCheckpointRowHashes(ctx context.Context, seqLo, seqHi int64) ([]CheckpointRow, error) {
+	return collect(ctx, s.Pool, "read", "audit checkpoint row hashes", `SELECT seq, COALESCE(row_hash, '') FROM audit_events
+		WHERE seq >= $1 AND seq <= $2 ORDER BY seq`, []any{seqLo, seqHi}, func(r pgx.Row) (CheckpointRow, error) {
+		var c CheckpointRow
+		err := r.Scan(&c.Seq, &c.RowHash)
+		return c, err
 	})
 }
 
