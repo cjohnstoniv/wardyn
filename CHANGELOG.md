@@ -26,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Tool rules in your walls or a wall preset now give the same result in any order, and a rule for a named tool takes precedence over `*`. A `*` rule now also applies to tools the run's policy names, unless your walls name that tool themselves, so walls can no longer leave a tool more open than they set.
 - The note under Your walls now says which limits a restarted run takes on; other changes need a new run.
 - A secret delivered to a run as a file or variable, with line breaks inside it (a private key, a kubeconfig), is now hidden in terminal output, live attach and recordings even when the terminal prints its lines with CR LF ends, or only some of its lines.
+- The audit row for a clipboard transfer through a desktop window no longer carries a SHA-256 of the text; it records the direction and size only.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
