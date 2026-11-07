@@ -978,6 +978,55 @@ func TestApprovalGetShowsMCPCall(t *testing.T) {
 	}
 }
 
+// TestApprovalGetNamesTheRawMCPTool: Claude Code shows every rune outside [A-Za-z0-9_-] as "_", so the
+// tools delete.issue and delete_issue of one server share the display name mcp__jira__delete_issue, and the
+// call key binds the raw name. `approval get` prints the raw name on its own line, so two such calls read
+// differently.
+func TestApprovalGetNamesTheRawMCPTool(t *testing.T) {
+	runID := uuid.New()
+	get := func(rawTool, mcpTool string) string {
+		scope := types.MCPCallScope{Tool: "mcp__jira__delete_issue", MCPServer: "jira", MCPTool: mcpTool, Arguments: json.RawMessage(`{"id":1}`)}
+		key, err := types.MCPCallKey("jira", rawTool, scope.Arguments, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scope.CallSHA256 = key
+		raw, _ := json.Marshal(scope)
+		id := uuid.New()
+		srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+			{ID: id, RunID: runID, Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedScope: raw},
+		})
+		out := &strings.Builder{}
+		root := rootCmd()
+		root.SetArgs([]string{"approval", "get", id.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+		root.SetOut(out)
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("approval get: %v", err)
+		}
+		return out.String()
+	}
+	dotted, underscored := get("delete.issue", "delete.issue"), get("delete_issue", "")
+	if !strings.Contains(dotted, "\nSERVER TOOL: delete.issue\n") {
+		t.Errorf("dotted call output lacks its raw tool line:\n%s", dotted)
+	}
+	if !strings.Contains(underscored, "\nSERVER TOOL: delete_issue\n") {
+		t.Errorf("underscored call output lacks its raw tool line (the display name less its prefix):\n%s", underscored)
+	}
+	// The key lines differ only through the raw tool and the key itself; the raw lines must differ.
+	line := func(out string) string {
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasPrefix(l, "SERVER TOOL:") {
+				return l
+			}
+		}
+		return ""
+	}
+	if line(dotted) == "" || line(dotted) == line(underscored) {
+		t.Errorf("two different tools read the same: %q and %q", line(dotted), line(underscored))
+	}
+}
+
 // TestApprovalsGetCmd_NotFound: the ID isn't in --run's approvals.
 func TestApprovalsGetCmd_NotFound(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
