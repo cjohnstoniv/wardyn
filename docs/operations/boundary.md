@@ -84,8 +84,10 @@ The dry run calls the same function the resolve calls in `hard_limits`, so its r
 
 ## No core dumps, no attaching
 
-wardynd, wardyn-proxy and wardyn-runnerd hold credentials in memory, so each first sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0).
+On Linux, wardynd, wardyn-proxy and wardyn-runnerd hold credentials in memory, so each first sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0).
 
 - A crash writes no core file, and a `core_pattern` handler receives nothing.
-- A process of the same user can no longer `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
+- A process of the same user cannot `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
 - This is intentional and not configurable.
+- On other platforms, such as `wardyn-runnerd` on macOS, the call does nothing and Wardyn applies no equivalent hardening.
+- There a crash may write a core file, and a process of the same user can attach.
