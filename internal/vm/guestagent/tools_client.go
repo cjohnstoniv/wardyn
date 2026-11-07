@@ -78,3 +78,15 @@ func (c *Client) ToolsDial(ctx context.Context) (ToolsDial, error) {
 	var d ToolsDial
 	return d, c.do(ctx, http.MethodGet, "/v1/dial/tools", nil, &d)
 }
+
+// ToolsBaseSettings asks the guest agent to apply its base settings (scope "": every row; "terminal":
+// Terminal's kill and saved-state removal). It sends no body. An agent that predates the route answers 404,
+// which is ErrNoExec.
+func (c *Client) ToolsBaseSettings(ctx context.Context, scope string) (BaseSettingsResult, error) {
+	path := "/v1/tools/base-settings"
+	if scope != "" {
+		path += "?" + url.Values{"scope": {scope}}.Encode()
+	}
+	var r BaseSettingsResult
+	return r, c.do(ctx, http.MethodPost, path, nil, &r)
+}

@@ -83,6 +83,11 @@ func newBaseRig(t *testing.T) *baseRig {
 				printed = map[string]string{"true": "1", "false": "0"}[val]
 			}
 			rig.store[path+".plist"][key] = printed
+		case a[0] == "/usr/bin/defaults" && len(a) == 4 && a[1] == "read":
+			if v, ok := rig.store[a[2]+".plist"][a[3]]; ok {
+				return []byte(v + "\n"), 0, nil
+			}
+			return []byte("The domain/default pair of (x, y) does not exist\n"), 1, nil
 		case a[0] == "/usr/bin/plutil" && len(a) == 3 && a[1] == "-p":
 			var b strings.Builder
 			b.WriteString("{\n")
@@ -364,5 +369,49 @@ func TestBaseSettingsAddsNoAllowedExec(t *testing.T) {
 		if err := ToolsExecAllowed(argv, MacToolsBinDir); err == nil && argv[0] != "/usr/bin/sw_vers" {
 			t.Errorf("tools exec allows %q", argv)
 		}
+	}
+}
+
+const (
+	safariPrefs = "/Users/agent/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari"
+	safariKey   = "WarnAboutFraudulentWebsites"
+)
+
+// Safari Safe Browsing is written as the agent in the session and read back once with `defaults read`,
+// which must print 0.
+func TestBaseSettingsRouteSafariSafeBrowsing(t *testing.T) {
+	rig := newBaseRig(t)
+	code, out := rig.post(baseSettings, "")
+	if code != 200 || len(skippedNames(t, out)) != 0 {
+		t.Fatalf("= %d %v", code, out)
+	}
+	cmds := rig.ran()
+	w := index(cmds, 502, "/usr/bin/defaults", "write", safariPrefs, safariKey, "-bool", "false")
+	r := index(cmds, 502, "/usr/bin/defaults", "read", safariPrefs, safariKey)
+	if w < 0 || r < w {
+		t.Fatalf("write at %d, read at %d; ran %v", w, r, cmds)
+	}
+	reads := 0
+	for _, c := range cmds {
+		if slices.Equal(c.argv, []string{"/usr/bin/defaults", "read", safariPrefs, safariKey}) {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Errorf("read %d times, want once and no retry", reads)
+	}
+}
+
+// A write the guest loses is recorded as skipped with "did not land", and the update is not failed.
+func TestBaseSettingsRouteSafariReadBackMismatchIsSkipped(t *testing.T) {
+	rig := newBaseRig(t)
+	rig.dropKeys[safariKey] = true
+	code, out := rig.post(baseSettings, "")
+	if code != 200 {
+		t.Fatalf("= %d", code)
+	}
+	sk := skippedNames(t, out)
+	if len(sk) != 1 || sk["safari-safe-browsing"] != "did not land" {
+		t.Fatalf("skipped %v", sk)
 	}
 }

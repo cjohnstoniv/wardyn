@@ -44,6 +44,7 @@ import (
 //	POST /v1/tools/desktop_password     DesktopPassword -> DesktopPasswordResult
 //	POST /v1/tools/admin_code           AdminCode -> AdminCodeResult (edit-base)
 //	GET  /v1/tools/posture              ToolsPosture (edit-base's recheck)
+//	POST /v1/tools/base-settings        BaseSettingsResult (the base's settings; macos_basesettings.go)
 //	POST /edit/admin-terminal|trust-cas|full-disk-access   the edit window's buttons (macos_edit_actions.go)
 const (
 	VsockToolsPort = 1026
@@ -219,6 +220,7 @@ func (t *Tools) ToolsHandler() http.Handler {
 	mux.HandleFunc("POST /v1/tools/exec", t.handleExec)
 	mux.HandleFunc("POST /v1/tools/admin_code", t.handleAdminCode)
 	mux.HandleFunc("GET /v1/tools/posture", t.handlePosture)
+	mux.HandleFunc("POST /v1/tools/base-settings", t.handleBaseSettings)
 	mux.HandleFunc("POST /edit/admin-terminal", t.handleEditAdminTerminal)
 	mux.HandleFunc("POST /edit/trust-cas", t.handleEditTrustCAs)
 	mux.HandleFunc("POST /edit/full-disk-access", t.handleEditFullDiskAccess)

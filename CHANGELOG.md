@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
+
+### Added
+
+- macOS VM bases now mark Setup Assistant's panes as seen for the agent account, stop the Fn key raising Dictation, turn Spotlight indexing and diagnostics upload off, and kill Terminal and remove its saved state, so a run's first desktop is clean. On by default. Prepare writes them and every tools update writes them again, through a new guest-agent route that takes no input and adds no allowed exec. Rows that fail or cannot be applied are listed in `tools.json` as `base_settings_skipped` and never fail an update. edit-base's finish also cleans Terminal.
+
 ## [0.10.0-rc.14] — 2026-11-07
 
 ### Before you upgrade

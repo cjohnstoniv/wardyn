@@ -371,6 +371,10 @@ func TestAFailureAtEachStepStopsStage1(t *testing.T) {
 				if p.SkipIfOK != nil {
 					probes++
 				}
+				if p.ThenBaseSettings && p.ID != c.ID { // the base-settings rows run right after it, unless it failed
+					rows, _ := basesettings.Stage1Rows(basesettings.Release{Version: "26.6.2", Build: "25G83"})
+					probes += len(rows)
+				}
 			}
 			if len(execs) != i+1+probes || !slices.Equal(execs[len(execs)-1].Argv, c.argv()) {
 				t.Fatalf("%d commands ran, the last %q; want the failing one last", len(execs), execs[len(execs)-1].Line)

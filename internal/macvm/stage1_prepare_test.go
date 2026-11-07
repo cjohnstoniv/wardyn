@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1/stage1test"
@@ -144,7 +145,15 @@ func TestPrepareStage1PublishesTheBaseOnlyAfterRemoteLoginIsOff(t *testing.T) {
 // isScreenSharingProbe is stage 1's `launchctl print` of the Screen Sharing service, under sudo or not.
 func isScreenSharingProbe(argv []string) bool {
 	probe := []string{"/bin/launchctl", "print", "system/com.apple.screensharing"}
-	return len(argv) >= len(probe) && slices.Equal(argv[len(argv)-len(probe):], probe) || slices.Contains(argv, "-screenLock")
+	return len(argv) >= len(probe) && slices.Equal(argv[len(argv)-len(probe):], probe) || slices.Contains(argv, "-screenLock") || isOptionalBaseSetting(argv)
+}
+
+// isOptionalBaseSetting is an Optional row of the base-settings table, whose failure stage 1 skips.
+func isOptionalBaseSetting(argv []string) bool {
+	rows, _ := basesettings.Rows(basesettings.Release{Version: "26.6.2", Build: "25G83"})
+	return slices.ContainsFunc(rows, func(r basesettings.Row) bool {
+		return r.Optional && len(argv) >= len(r.Argv) && slices.Equal(argv[len(argv)-len(r.Argv):], r.Argv)
+	})
 }
 
 func TestPrepareStage1FailureAtEachStepPublishesNoBase(t *testing.T) {

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
@@ -217,6 +218,8 @@ type ToolsResult struct {
 	// signing certificate, and AgentSigningCertSHA256 that certificate's SHA-256.
 	AgentSignature, AgentSigningCert string
 	AgentSigningCertSHA256           string
+	// BaseSettingsSkipped are the base settings that did not apply, with why.
+	BaseSettingsSkipped []basesettings.Skipped
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -330,6 +333,7 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 		}
 	}
 	if err == nil {
+		applyBaseSettings(ctx, g, &res, o.Log)
 		err = selftestBase(ctx, g, &res, o.Log)
 	}
 	res.Desktop = desktop
@@ -749,6 +753,8 @@ type ToolsRecord struct {
 	AgentSigningCert string `json:"agent_signing_cert,omitempty"`
 	// AgentSigningCertSHA256 is the SHA-256 of the certificate the agent is signed with (this_mac only).
 	AgentSigningCertSHA256 string `json:"agent_signing_cert_sha256,omitempty"`
+	// BaseSettingsSkipped are the base settings the last prepare or tools update could not apply.
+	BaseSettingsSkipped []basesettings.Skipped `json:"base_settings_skipped,omitempty"`
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -765,6 +771,7 @@ func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Ti
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
 		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature, AgentSigningCert: r.AgentSigningCert,
 		AgentSigningCertSHA256: r.AgentSigningCertSHA256}
+	rec.BaseSettingsSkipped = r.BaseSettingsSkipped
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}

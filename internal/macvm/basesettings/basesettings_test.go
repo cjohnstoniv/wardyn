@@ -180,3 +180,25 @@ func TestTerminalEntriesAreMarked(t *testing.T) {
 		t.Error("Setup Assistant is not killed before the rows are written")
 	}
 }
+
+// Safari Safe Browsing is Optional, the agent's, and in the stage-2 table only.
+func TestSafariSafeBrowsingIsStage2Only(t *testing.T) {
+	const prefs = "/Users/agent/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari"
+	r, ok := rendered(t)["safari-safe-browsing"]
+	if !ok || !r.Optional || r.User != Agent || !r.Stage2Only {
+		t.Fatalf("row %+v", r)
+	}
+	if want := []string{"/usr/bin/defaults", "write", prefs, "WarnAboutFraudulentWebsites", "-bool", "false"}; !slices.Equal(r.Argv, want) {
+		t.Errorf("argv %q", r.Argv)
+	}
+	if r.Read == nil || !slices.Equal(r.Read.Argv, []string{"/usr/bin/defaults", "read", prefs, "WarnAboutFraudulentWebsites"}) || r.Read.Want != "0" {
+		t.Errorf("read-back %+v", r.Read)
+	}
+	rows, err := Stage1Rows(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(rows, func(r Row) bool { return r.Name == "safari-safe-browsing" || r.Stage2Only }) {
+		t.Error("stage 1 would write a stage-2-only row")
+	}
+}
