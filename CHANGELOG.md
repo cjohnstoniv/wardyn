@@ -40,6 +40,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   replayed for 24 hours instead of a new run, and a value outside 1 to 255 visible ASCII characters is refused with
   400 `idempotency_key_invalid`. A retry with a key is safe only once every control-plane replica runs 0.10.0 or
   later; an older replica ignores the key.
+- `Client.CreateRun` and `wardyn run` now send an `Idempotency-Key` (a fresh UUID unless you pass one) and still make
+  one attempt: they never repeat a create on their own, so a lost answer is returned as the error. Retrying is opt-in
+  (`CreateRunOptions.Retry`, or re-running a job with the same `--idempotency-key`) and is safe only once every
+  control-plane replica runs 0.10.0 or later; an older replica ignores the key and starts a second run.
 - On a remote MCP server where a run's tool rules block a tool, that server's tool lists now leave the blocked tools out, a tool list Wardyn cannot read is answered with an error, and one message from that server larger than 10 MiB ends its response.
 - A run whose tool rules mark a remote MCP tool `approve_each` does not start on a proxy image or runner older than this release: its proxy config carries a key they refuse.
 - Watching a background macOS VM run's desktop now shows its apps, not a login window. If that is not acceptable, turn `macos_vm.allow_background_watch` off before you upgrade.
@@ -70,6 +74,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Gateway tokens for a run a portal launched now carry a `wardyn_delegate` claim holding the portal's id. A gateway rule that logs unknown claims will show it; token validators ignore it.
 - Docs: one section, [Sharing a folder: the settings](docs/operations/hybrid-laptops.md#sharing-a-folder-the-settings), names the three places a folder share is set and which refusal means which.
+- `wardyn run --idempotency-key KEY` keeps a re-run CI job from launching a second run: the same key and request get the first run back, and the CLI says so on stderr. The Go SDK gains `CreateRunWith`, with the same key and an opt-in retry of a lost answer; `Client.CreateRun` and the CLI make one attempt.
 - macOS: the runner now signs each guest agent it pushes into a base with a code signing identity made once on that Mac (in the VM directory's `agent-signing/`), and the base trusts that certificate for code signing only, so a Full Disk Access grant can last through tools updates. On by default; if signing fails the agent is pushed signed ad hoc, as before. `macos-vm status` says which. The first tools update after upgrading changes the signature, so grant Full Disk Access once more in edit-base.
 - `wardyn diff` and `wardyn apply --dry-run` ask the server what the apply would do, so they now show refusals the apply would meet and whether a run would start. `apply --dry-run` exits 1 when one would be refused. Against a server without the preview route they fall back to the old client-side comparison and say so on stderr.
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.

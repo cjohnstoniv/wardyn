@@ -46,6 +46,7 @@ scripts/ci-run.sh
 | `WARDYN_CI_TOKEN` | with `WARDYN_URL`: the CI [service identity](operations/api-tokens.md#service-identities)'s `wdn_` token — every `wardyn` call authenticates as it | **required** with `WARDYN_URL` |
 | `WARDYN_CI_MODEL_PROVIDER` | with `WARDYN_URL`, harness mode: the model provider the run uses, checked before launch | **required** there |
 | `WARDYN_CI_TIMEOUT` | `wardyn run --wait` bound | `30m` |
+| `WARDYN_CI_IDEMPOTENCY_KEY` | with `WARDYN_URL`: passed to the launch as `wardyn run --idempotency-key`; see "[Retrying a launch](#driving-an-existing-control-plane-instead)" | unset |
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`, `session.cast` — the run's terminal recording, when it has one) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | throwaway stack: `1` = leave it up for debugging | unset |
 | `WARDYN_CI_SKIP_BUILD` | throwaway stack: `1` = reuse existing local images | unset |
@@ -651,6 +652,17 @@ wardyn audit <id> --json       # a service token reads only its own runs' rows
 - `--placement remote|local` chooses where the sandbox lives. A local run goes to your own runners through `--pool <id>` or your default pool, else is refused `runner_pool_required`. `--runner <id>` pins one of your runners in that pool; unset, the pool picks an online one with room. Other refusals include `runner_offline` and `runner_at_capacity`.
 - `ci-run.sh` calls the same endpoint before launching.
 - A command that must stay up is a [service](SERVICES.md).
+
+**Retrying a launch.** `wardyn run` sends an `Idempotency-Key` and never retries a create itself. To make a job re-run safe, pass a key that is the same on every re-run of the job and differs between jobs and between the legs of a matrix. `ci-run.sh` reads it from `WARDYN_CI_IDEMPOTENCY_KEY`, and both example pipelines set it:
+
+```sh
+WARDYN_CI_IDEMPOTENCY_KEY="${{ github.run_id }}-${{ github.job }}-${{ strategy.job-index }}"   # GitHub Actions (job-index is the matrix leg)
+WARDYN_CI_IDEMPOTENCY_KEY="${BUILD_BUILDID}-${SYSTEM_JOBNAME}-${SYSTEM_JOBPOSITIONINPHASE:-0}"   # Azure Pipelines (position is set under strategy: parallel)
+wardyn run ... --idempotency-key "$WARDYN_CI_IDEMPOTENCY_KEY"      # the CLI directly
+```
+
+- For 24 hours the same key and request get the first run back; `wardyn run` says so on stderr. A different request with the key gets `422` `idempotency_key_reused`.
+- Re-run only once every control-plane replica runs 0.10.0 or later. An older replica ignores the key and starts a second run.
 
 **Provisioning the CI principal, once, against this deployment:**
 

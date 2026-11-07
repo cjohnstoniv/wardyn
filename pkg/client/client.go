@@ -14,7 +14,7 @@
 // The SDK covers these wardynd public route families (the ones external tooling
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
-//   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
+//   - runs (/api/v1/runs):               CreateRun, CreateRunWith, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
 //     OpenMacWindow, GetMacWindow, GetRunMachine

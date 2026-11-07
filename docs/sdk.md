@@ -705,6 +705,15 @@ to launch, and the same value when you retry that launch.
 - Retrying is safe only once every control-plane replica runs 0.10.0 or later. An older replica ignores the key and
   makes a second run.
 
+`Client.CreateRun` sends a fresh UUID as the key and makes one request. A lost answer comes back as the error; the call is never repeated for you. `CreateRunWith(ctx, req, CreateRunOptions{...})` adds:
+
+- `IdempotencyKey`: the key to send. Use one value for every re-run of a job.
+- `Retry: true`: up to three attempts, with the same key and bytes, after 1 s then 2 s. It retries a transport error, `409` `idempotency_key_in_flight` (after `Retry-After`, at most 5 s) and a `502`, `503` or `504` without a Wardyn `reason`; anything else is returned.
+- Before retrying a transport error or gateway `5xx`, it reads `/healthz`. Without `idempotent_run_create` it returns the error, noting the run may exist.
+- `CreateRunResult.Replayed`: the answer came from an earlier create with the key.
+
+`/healthz` shows only the replica that answers, so `Retry` is unsafe while replicas run mixed versions.
+
 ## Error handling
 
 Non-2xx responses are returned as `*client.APIError`:

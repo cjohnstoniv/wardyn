@@ -116,7 +116,7 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 // `wardyn runs list` keeps working.
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
-	var title, description, file, correlationID string
+	var title, description, file, correlationID, idempotencyKey string
 	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote, runIn string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout, maxWait time.Duration
@@ -218,7 +218,7 @@ func runCmd(client clientFn) *cobra.Command {
 			if dryRun {
 				return printPreflight(cmd.Context(), cmd.OutOrStdout(), client(), body, createJSON)
 			}
-			run, err := client().CreateRun(cmd.Context(), body)
+			run, err := client().CreateRunWith(cmd.Context(), body, sdk.CreateRunOptions{IdempotencyKey: idempotencyKey})
 			if err != nil {
 				return err
 			}
@@ -240,6 +240,9 @@ func runCmd(client clientFn) *cobra.Command {
 					fmt.Fprintln(cmd.OutOrStdout(), interactiveLine(body.Startup, run.ID.String()))
 				}
 			}
+			if run.Replayed {
+				fmt.Fprintf(cmd.ErrOrStderr(), "run %s was already created by an earlier attempt with this key\n", run.ID)
+			}
 			// Advisory server warnings (workspace collision, dropped ssh grant):
 			// the run is live either way, so silence here is a degraded run no
 			// CI artifact records.
@@ -250,7 +253,7 @@ func runCmd(client clientFn) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; "+
-		"only --title, --description, --wall-preset, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --correlation-id, --json and --dry-run go with it. "+
+		"only --title, --description, --wall-preset, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --correlation-id, --idempotency-key, --json and --dry-run go with it. "+
 		"A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
@@ -258,6 +261,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "short name for this run; runs sharing a title are grouped in the console (optional here, required in the console)")
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&correlationID, "correlation-id", "", "your own reference for this run, up to 128 characters of letters, digits and . _ : / - (optional; carried on the run's audit rows sent to audit sinks)")
+	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "make a re-run of this command safe: with the same key, a second launch gets the first run back instead of starting another (1 to 255 visible ASCII characters, kept 24 hours; default a fresh value per call, which protects nothing across processes). In CI use a value stable across a job re-run, such as the build id and job name")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	where.register(cmd)
 	machine.register(cmd) // its flag checks send no request, so they run before the wall preset's lookup
