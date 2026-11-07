@@ -58,8 +58,10 @@ type LegacyReader interface {
 }
 
 // ReadLegacy reads the layers of subject's .sig tag, then its .att tag, at most MaxCandidatesPerSigner in all.
-// A tag the registry does not have adds nothing. Any other read error is returned unchanged, so the caller
-// can tell an unreachable registry from an unsigned image.
+// A tag the registry does not have adds nothing. A layer over MaxBlobBytes is kept by its descriptor alone and
+// never read: an SBOM attestation is often several MB, and it must not stop the check of the signature beside
+// it. Any other read error is returned unchanged, so the caller can tell an unreachable registry from an
+// unsigned image.
 func ReadLegacy(ctx context.Context, r LegacyReader, ref Ref, subject string) ([]LegacyLayer, error) {
 	var out []LegacyLayer
 	for _, suffix := range []string{".sig", ".att"} {
@@ -73,6 +75,10 @@ func ReadLegacy(ctx context.Context, r LegacyReader, ref Ref, subject string) ([
 		for _, d := range m.Layers {
 			if len(out) == MaxCandidatesPerSigner {
 				return out, nil
+			}
+			if d.Size > MaxBlobBytes {
+				out = append(out, LegacyLayer{Descriptor: d})
+				continue
 			}
 			b, err := r.Blob(ctx, ref, d)
 			if err != nil {
@@ -103,7 +109,7 @@ func legacyCandidates(layers []LegacyLayer, digest string) []candidate {
 }
 
 func legacyCandidate(l LegacyLayer, digest string) (candidate, error) {
-	if len(l.Blob) > MaxBundleBytes {
+	if l.Descriptor.Size > MaxBundleBytes || len(l.Blob) > MaxBundleBytes {
 		return candidate{}, fmt.Errorf("its blob is larger than %d bytes", MaxBundleBytes)
 	}
 	if sum256(l.Blob) != l.Descriptor.Digest {
