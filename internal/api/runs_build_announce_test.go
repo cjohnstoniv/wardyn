@@ -48,6 +48,11 @@ type buildEventStore struct {
 	log *buildEventLog
 }
 
+// GetSiteConfig answers the launch's image admission read: nothing set, so admission is off.
+func (s *buildEventStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *buildEventStore) SetRunStatusDetail(_ context.Context, _ uuid.UUID, detail string) error {
 	s.log.add("detail:" + detail)
 	return nil

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -183,6 +184,9 @@ type imageResolveOpts struct {
 	// ReclaimLoser removes a build's own tag when its swap is lost, and reports the loss as not
 	// OK. The build door sets it; a run launch keeps its image, which its run is about to start.
 	ReclaimLoser bool
+	// Pinned is the ref image admission pinned the run's member image to (imagePin): a chosen base image is
+	// run as it, or wrapped FROM it, and a stored wrap serves the run only when built FROM its digest.
+	Pinned string
 }
 
 // observedRef is the ref the swap compares against: what the requester saw (a refresh) or
@@ -255,7 +259,11 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	// like a nil BaseImage — falls through to the devcontainer/generated path
 	// instead of a fixed ref.
 	if prewrappedBase(primary.BaseImage) {
-		return s.prewrappedWorkspaceImage(ctx, primary.BaseImage.Image)
+		res := s.prewrappedWorkspaceImage(ctx, primary.BaseImage.Image)
+		if res.OK && opts.Pinned != "" {
+			res.Image = opts.Pinned
+		}
+		return res
 	}
 	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		if s.cfg.ImageBuilder == nil {
@@ -283,7 +291,8 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 		// to a different base ref) always busts the cache instead of reading a
 		// stale image built for a different source.
 		byoiHash := byoiCacheKey(b.Kind, b.Image)
-		if !opts.Refresh && primary.ImageRef != "" && primary.BuiltProfileHash == byoiHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
+		if !opts.Refresh && primary.ImageRef != "" && primary.BuiltProfileHash == byoiHash && s.cachedImageStillPresent(ctx, primary.ImageRef) &&
+			s.wrapBuiltFromPin(ctx, primary, opts.Pinned) {
 			hit := map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": primary.ImageRef, "cache_hit": true}
 			s.addCacheHitFields(ctx, primary, hit)
 			buildAudit("success", hit)
@@ -300,7 +309,7 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		reason := reasonFor(byoiHash)
 		announce()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink, opts.Refresh)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, cmp.Or(opts.Pinned, b.Image), outTag, logSink, opts.Refresh)
 		if berr != nil {
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
 			return imageResolveResult{BaseErr: berr}

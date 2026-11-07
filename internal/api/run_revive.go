@@ -237,7 +237,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		return reviveResult{}, rerr
 	}
-	imageMark, rerr := s.reviveImageDigestRefusal(ctx, run, actorType, actor)
+	imageMark, rerr := s.reviveImageRefusals(ctx, run, c.requiredImageSigners, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
