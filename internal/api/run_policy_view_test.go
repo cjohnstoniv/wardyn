@@ -949,6 +949,29 @@ func TestLatestPolicyResolve_LastWinsAndSkipsUndecodable(t *testing.T) {
 	}
 }
 
+// TestLatestPolicyResolve_ARevivedGenerationReplacesThePolicy: after a revive the run's proxy enforces the
+// policy its newest run.policy.generation row records, so that is what the readers see, with the dispatch
+// envelope's other facts kept. A generation row that does not decode is skipped.
+func TestLatestPolicyResolve_ARevivedGenerationReplacesThePolicy(t *testing.T) {
+	mk := func(action string, data string, at time.Time) types.AuditEvent {
+		return types.AuditEvent{Action: action, Data: json.RawMessage(data), Time: at}
+	}
+	t0 := time.Now()
+	events := []types.AuditEvent{
+		mk("run.policy.resolve", `{"allowed_domains":["wide.example","kept.example"],"disk_mib_filled":true}`, t0),
+		mk("run.policy.generation", `{"generation":2,"policy":{"allowed_domains":["kept.example"]}}`, t0.Add(time.Second)),
+		mk("run.policy.generation", `{not json`, t0.Add(2*time.Second)),
+	}
+	d, at, ok := latestPolicyResolve(events)
+	if !ok || !slices.Equal(d.AllowedDomains, []string{"kept.example"}) || !d.DiskMiBFilled || !at.Equal(t0.Add(time.Second)) {
+		t.Errorf("latest = %+v at %v ok %v; want the generation's domains, the dispatch envelope's disk fact", d, at, ok)
+	}
+	later := append(events, mk("run.policy.generation", `{"generation":3,"policy":{"allowed_domains":["third.example"]}}`, t0.Add(3*time.Second)))
+	if d, _, _ := latestPolicyResolve(later); !slices.Equal(d.AllowedDomains, []string{"third.example"}) {
+		t.Errorf("allowed domains %v after generation 3, want third.example", d.AllowedDomains)
+	}
+}
+
 // TestExplainRunPolicy_DiskBasis: the recorded basis of the main drive decides how the run policy
 // view explains its size. A size the run's policy wrote is the policy's own and explains nothing
 // (and is not called an admin's, since an inline policy is written by the person who launched);
