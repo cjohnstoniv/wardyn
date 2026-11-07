@@ -24,7 +24,7 @@
 | Installing the package failed and macOS VMs stay off | A login held the admission lock for over 10 seconds. Reinstall the package |
 | The runner says the ledger is busy | Another account holds the lock, or the ledger is crowded with entries. See [The shared ledger](macos-vm-host.md#the-shared-ledger) |
 | A third VM refused | The Mac already runs two, or preparing holds one |
-| Both VM slots stay taken after an upgrade or a restart loop | At start the runner ends the `update-tools` and `prepare` helpers an earlier start left. It logs "macOS VM: ended a helper a previous runner left"; nothing to do. A helper it can't read stays: end it by hand |
+| Both VM slots stay taken after an upgrade or a restart loop | At start the runner ends old `update-tools` and `prepare` helpers that never claimed a slot (a live VM's is kept) and logs "macOS VM: ended a helper a previous runner left". One it can't read stays: end it by hand |
 | `max` is 0 | Docker's memory leaves no budget, the Mac has too little free disk, or a per-run limit is below the base's minimum ([How many VMs a Mac offers](macos-vm-host.md#how-many-vms-a-mac-offers)) |
 | A run ended because the Mac ran low on disk | Free space fell below 5 GiB, possibly held by snapshots ([Disk](macos-vm-host.md#disk)) |
 | The runner says the Mac needs a restart | The framework still holds a slot. Restart the Mac |
@@ -37,7 +37,7 @@
 | A tools update says "A tools update of this macOS base is already running." | Another tools update or a prepare holds the base's update lock. The second update now fails at once instead of waiting. Wait for the running one to finish, then run it again |
 | A tools update stops removing a CA, saying macOS 26 can refuse that | The update stops, and the old base stays ready and still trusts the old CA. Change the list as you want it and run `wardyn-runnerd macos-vm prepare --new-image`, which builds a new base from it |
 | `edit-base` says the guest did not take the one-time code | The setup account's password in the guest is not the one Wardyn keeps, or was changed in the session. Runs keep the old base. If it fails again before the window opens, run `prepare --new-image` |
-| After an upgrade, `wardyn-runnerd doctor` says "waiting for the proxy image; next try at <time>" | Not in the registry yet. The runner stays up and retries after 15 s, 30 s, 1 and 2 minutes, then every 5. The organisation is told stage `proxy-image` at the first connect |
+| After an upgrade, `wardyn-runnerd doctor` says "waiting for the proxy image; next try at <time>" | The proxy image could not be pulled (not published, no access, or network); the log says. It retries after about 15 s, 30 s, 1 and 2 minutes, then every 5 |
 | The runner logs that it offers none and names `--per-run-memory` or `--per-run-cpu` | A per-run limit is below the base's minimum. Raise it ([How many VMs a Mac offers](macos-vm-host.md#how-many-vms-a-mac-offers)) |
 
 The runner drawer shows most of these from fixed codes and numbers the runner reports. Whether someone is logged in goes only as yes or no, and no user or account name is sent. In an error, the runner's home folder shows as `~`.
