@@ -46,6 +46,30 @@ func TestPG_RunImageAdmission_RoundTrips(t *testing.T) {
 	}
 }
 
+// TestPG_RunImageAdmission_SetWritesIt: a launch's verdict for the convention image, written after create,
+// reads back with its ref; nil clears it.
+func TestPG_RunImageAdmission_SetWritesIt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	r := newRun(types.RunPending)
+	persistRun(t, ctx, pool, r)
+	v := admissionVerdictFixture()
+	v.Ref = "registry.example.com/team/agent:1"
+	for _, want := range []*types.ImageAdmissionVerdict{v, nil} {
+		if err := pg.SetRunImageAdmission(ctx, r.ID, want); err != nil {
+			t.Fatal(err)
+		}
+		got, err := pg.GetRun(ctx, r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got.ImageAdmission, want) {
+			t.Errorf("verdict %+v read back as %+v", want, got.ImageAdmission)
+		}
+	}
+}
+
 // TestPG_RunImageAdmission_StartRewritesIt: a queued run joins with the verdict its create reached, and the
 // start, which checks the image afresh, writes the verdict it reached, including none.
 func TestPG_RunImageAdmission_StartRewritesIt(t *testing.T) {

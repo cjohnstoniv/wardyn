@@ -15,8 +15,8 @@ import (
 
 // reviveImageNotAdmittedMsg refuses a revive while the image is held when the run's create pinned no digest.
 // %s is the image as the run's create named it.
-const reviveImageNotAdmittedMsg = "Image %s was not checked and pinned by image admission when this run was created " +
-	"(it was created before images.admission was enforced, or in audit mode), so its tag may now name another image"
+const reviveImageNotAdmittedMsg = "Image %s was not checked and pinned by image admission when this run started " +
+	"(it started before images.admission enforced it, or in audit mode), so its tag may now name another image"
 
 // reviveImageRefusals is a revive's image decisions in order, the digest rule then image admission, and the
 // marks the run.revive row carries for an owner they exempt.
@@ -41,9 +41,11 @@ func (s *Server) reviveImageRefusals(ctx context.Context, run types.AgentRun, pr
 // never of its tag, which may name another image by now: while the image is held, a run whose create pinned
 // nothing (created before admission was enforced, in audit mode, which never pins, or before the run recorded
 // its image) is refused, and its owner starts a new run. Coverage is asked about the image as the create asked
-// it, so a signer entry written for a short name still covers the run whose pin is the canonical name. The
-// authority is the run owner's, as reviveImageDigestRefusal reads it: an exempt owner is not checked, and the
-// mark says so. Audit mode refuses nothing here, as at create. An unreadable site config refuses.
+// it, so a signer entry written for a short name still covers the run whose pin is the canonical name. A
+// sandbox on the convention image is held only under scope all, by the site's signers alone, at the digest its
+// launch recorded (ImageAdmissionVerdict.Ref); under scope member it stays unchecked. The authority is the run
+// owner's, as reviveImageDigestRefusal reads it: an exempt owner is not checked, and the mark says so. Audit
+// mode refuses nothing here, as at create. An unreadable site config refuses.
 func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, profile []string, actorType types.ActorType, actor string) (map[string]any, *reviveError) {
 	sc, ok := s.siteConfigSnapshot(ctx)
 	if s.cfg.Store != nil && !ok {
@@ -54,10 +56,17 @@ func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, p
 	if sc.Images != nil {
 		adm = sc.Images.Admission
 	}
-	mode := adm.EffectiveMode()
-	if (mode == types.ImageAdmissionOff && len(profile) == 0) ||
-		(run.ImageInput != nil && *run.ImageInput == "") || // the convention image: no member chose it
-		run.MachineKind.IsMacOSVM() { // a macOS VM never runs the member image
+	mode, recorded := adm.EffectiveMode(), run.ImageAdmission
+	// The sandbox runs the convention image when its create named no member image, or when its launch checked
+	// one under scope all (Ref set). A profile's signers bind only a member's image.
+	convention := (run.ImageInput != nil && *run.ImageInput == "") || (recorded != nil && recorded.Ref != "")
+	if convention {
+		if adm.EffectiveScope() != types.ImageAdmissionScopeAll {
+			return nil, nil
+		}
+		profile = nil
+	}
+	if (mode == types.ImageAdmissionOff && len(profile) == 0) || run.MachineKind.IsMacOSVM() { // a macOS VM never runs the image
 		return nil, nil
 	}
 	exempt := run.OperatorOwned
@@ -70,11 +79,16 @@ func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, p
 	if mode != types.ImageAdmissionEnforce && len(profile) == 0 {
 		return nil, nil
 	}
-	pin, ref := imagePin(run), run.Image
-	if run.ImageInput != nil {
+	ref, pin := run.Image, imagePin(run)
+	switch {
+	case convention && recorded != nil && recorded.Ref != "":
+		ref = recorded.Ref
+	case convention, run.ImageInput == nil:
+		pin = "" // nothing was recorded for the image this sandbox runs
+	default:
 		ref = *run.ImageInput
 	}
-	if pin == "" || run.ImageInput == nil {
+	if pin == "" {
 		return nil, s.reviveImageAdmissionDenied(ctx, run, actorType, actor, ref, "",
 			reasonReviveImageNotAdmitted, fmt.Sprintf(reviveImageNotAdmittedMsg, ref))
 	}

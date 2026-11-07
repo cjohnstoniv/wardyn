@@ -40,6 +40,7 @@ type Store interface {
 	SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error
 	SetRunImage(ctx context.Context, id uuid.UUID, image string) error
 	SetRunImageArches(ctx context.Context, id uuid.UUID, arches []string) error
+	SetRunImageAdmission(ctx context.Context, id uuid.UUID, v *types.ImageAdmissionVerdict) error
 	SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error
 	SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error
 	TouchRun(ctx context.Context, id uuid.UUID) error

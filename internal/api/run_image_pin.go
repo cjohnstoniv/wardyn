@@ -41,7 +41,9 @@ func (s *Server) wrapBuiltFromPin(ctx context.Context, ws types.Workspace, pin s
 // architecture variant of either) to image admission when the site's scope is all and its mode enforce, and
 // returns the ref to dispatch: the pin when it was checked, else image. It runs at launch, where the placed
 // runner's architecture has chosen the image. Operators and the break-glass admin are not checked, as at
-// create; audit mode and scope member leave it unchecked. A refusal fails the run (the image is the operator's
+// create; audit mode and scope member leave it unchecked. An admitted image's verdict (the image as
+// configured, its digest and pin) is written to the run before dispatch, so a revive re-checks that digest;
+// a run whose verdict cannot be written is failed. A refusal fails the run (the image is the operator's
 // choice, so the member gets no 403); an unreadable site config refuses, since the mode lives in it.
 func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRun, image string) (string, *runRefusal) {
 	if image == "" || run.MachineKind.IsMacOSVM() {
@@ -65,6 +67,11 @@ func (s *Server) conventionImageAdmission(ctx context.Context, run types.AgentRu
 	pinned, err := imageAdmissionPinnedRef(image, v.Digest)
 	if err != nil {
 		return "", runServerError("pin the admitted image", err)
+	}
+	verdict := admittedImage(types.ImageAdmissionEnforce, v)
+	verdict.PinnedRef, verdict.Ref = pinned, image
+	if err := s.cfg.Store.SetRunImageAdmission(ctx, run.ID, verdict); err != nil {
+		return "", runServerError("record the convention image's admission", err)
 	}
 	return pinned, nil
 }
