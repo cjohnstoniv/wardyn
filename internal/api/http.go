@@ -642,13 +642,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonMissingBearerToken, "missing bearer token")
 			return
 		}
-		// A guess spends a token of the peer's bucket before it is compared, and a match gives it back, so
-		// only failures count and a peer that is out of them is refused without being compared at all.
-		peer, now := peerKey(r.RemoteAddr), s.cfg.Now()
-		if !s.adminTokenPeerLimiter.allow(peer, now) {
-			s.auditAuthFailed(r, "admin_token_rate_limited")
-			w.Header().Set("Retry-After", "10")
-			writeErrorReason(w, http.StatusTooManyRequests, reasonAdminTokenRateLimited, "too many failed admin token attempts from this address; retry later")
+		if !s.admitAdminTokenGuess(w, r) {
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.AdminToken)) != 1 {
@@ -656,7 +650,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
 			return
 		}
-		s.adminTokenPeerLimiter.refund(peer, now)
+		s.refundAdminTokenGuess(r)
 		next.ServeHTTP(w, r)
 	})
 }

@@ -42,7 +42,6 @@ func New(cfg Config) *Server {
 		cliSignInState:      newCLISignInState(),
 	}
 	s.scimState = newSCIMState()
-	s.adminTokenPeerLimiter = principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}
 	s.defaultRunnerHooks()
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}

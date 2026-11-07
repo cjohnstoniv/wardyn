@@ -553,7 +553,8 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | optional inbound cookie policy: `allow:<names>` forwards only those cookies to the app, `deny:<names>` strips them (comma-separated, `prefix*` for a prefix). Unset forwards every cookie except `wardyn_*`. |
 | | Set it when the relay's parent domain is shared with other applications — see "Header hygiene" below |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. |
-| | **The documented default for a production deployment, and the recommendation for any install with more than one user**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below. With SSO configured, boot is refused while it is unset unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin (chart: `uiSandbox.originTemplate`, or `uiSandbox.acceptSharedOrigin`). |
+| | **The documented default for a production deployment, and the recommendation for any install with more than one user**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below. |
+| | With SSO configured, boot is refused while it is unset unless `WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN=true` accepts the shared origin (chart: `uiSandbox.originTemplate` or `uiSandbox.acceptSharedOrigin`) |
 | | Put `{run}` in the first host label: the console's CSP turns that label into a wildcard |
 
 - **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
