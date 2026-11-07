@@ -285,7 +285,8 @@ func parseManifest(body []byte, hdr http.Header, wantDigest string) (*Manifest, 
 		return nil, fmt.Errorf("%w: asked for %s, the bytes are %s", ErrDigestMismatch, wantDigest, got)
 	}
 	if h := hdr.Get("Docker-Content-Digest"); strings.HasPrefix(h, "sha256:") && h != got {
-		return nil, fmt.Errorf("%w: the registry announced %s, the bytes are %s", ErrDigestMismatch, h, got)
+		// The announced value is not repeated: a registry that was sent a Basic credential could echo it here.
+		return nil, fmt.Errorf("%w: the registry announced another digest, the bytes are %s", ErrDigestMismatch, got)
 	}
 	var j struct {
 		MediaType    string            `json:"mediaType"`
