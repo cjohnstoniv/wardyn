@@ -483,3 +483,36 @@ func TestMCPListChangedPassesThrough(t *testing.T) {
 		t.Fatalf("chunks %q; want the notice byte-identical", rec.chunks)
 	}
 }
+
+// TestMCPListFilterHybridMessageFailsClosed: a message that is both a request and a
+// tool list answer could be read either way, so it is replaced with the error.
+func TestMCPListFilterHybridMessageFailsClosed(t *testing.T) {
+	hybrid := `{"jsonrpc":"2.0","id":3,"method":"tools/list","result":{"tools":[{"name":"delete_issue"}]}}`
+	f, _ := newListFixture(t, denyDelete, replyWith("application/json", hybrid))
+	rec := f.post(t, mcpToken("codex-cli"), "linear", mcpListReq)
+	wantListError(t, bytes.TrimSpace(rec.Body.Bytes()), "3")
+	wantDecision(t, f.buf, egress.Deny, listUnreadableSource)
+}
+
+// TestMCPListFilterOtherMediaTypeFailsClosed: on a filtered exchange, an answer that
+// is neither JSON nor an event stream is replaced with the error; an answer with no
+// body keeps its status; an exchange that is not filtered passes any media type.
+func TestMCPListFilterOtherMediaTypeFailsClosed(t *testing.T) {
+	f, _ := newListFixture(t, denyDelete, replyWith("text/plain", listPage))
+	rec := f.post(t, mcpToken("codex-cli"), "linear", mcpListReq)
+	if strings.Contains(rec.Body.String(), "delete_issue") {
+		t.Fatalf("the blocked tool reached the agent: %q", rec.Body)
+	}
+	wantListError(t, bytes.TrimSpace(rec.Body.Bytes()), "null")
+	wantDecision(t, f.buf, egress.Deny, listUnreadableSource)
+
+	f, _ = newListFixture(t, denyDelete, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", `{"jsonrpc":"2.0","method":"notifications/initialized"}`); rec.Code != http.StatusAccepted || rec.Body.Len() != 0 {
+		t.Fatalf("status %d body %q; want 202 and no body", rec.Code, rec.Body)
+	}
+
+	f, _ = newListFixture(t, types.RunPolicySpec{}, replyWith("text/plain", listPage))
+	if rec := f.post(t, mcpToken("codex-cli"), "linear", mcpListReq); rec.Body.String() != listPage {
+		t.Fatalf("body %q; want the bytes on an exchange that is not filtered", rec.Body)
+	}
+}
