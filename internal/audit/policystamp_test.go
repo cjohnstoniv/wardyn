@@ -131,7 +131,7 @@ func TestPolicyStampRecorder_StripsEscapedWriterKey(t *testing.T) {
 		return "", errors.New("db down")
 	}
 	failed := uuid.New()
-	forged := json.RawMessage(`{"policy_digest":"forged","k":1}`)
+	forged := json.RawMessage(`{"policy\u005fdigest":"forged","k":1}`)
 	for name, tc := range map[string]struct {
 		run  *uuid.UUID
 		want string
