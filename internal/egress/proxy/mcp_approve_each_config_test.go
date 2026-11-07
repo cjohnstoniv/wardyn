@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -142,14 +141,10 @@ func TestOlderProxyConfigRefusesApproveEach(t *testing.T) {
 		t.Fatalf("a config without the key must load on the previous struct: %v", err)
 	}
 
-	// Every release snapshot (v*.txt) predates the effect, so none lists the key.
-	// current.txt rolls forward and rightly lists the key, so it is never checked here.
-	names, err := filepath.Glob(configKeysDir + "v*.txt")
-	if err != nil || len(names) == 0 {
-		t.Fatalf("no release snapshots found under %s: %v", configKeysDir, err)
-	}
-	for _, name := range names {
-		b, err := os.ReadFile(name)
+	// The releases that predate the effect, by name. Later snapshots roll forward from
+	// current.txt and rightly list the key, so they are never checked here.
+	for _, name := range []string{"v0.9.3.txt"} {
+		b, err := os.ReadFile(configKeysDir + name)
 		if err != nil {
 			t.Fatal(err)
 		}
