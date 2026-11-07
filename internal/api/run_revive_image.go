@@ -42,8 +42,10 @@ func (s *Server) reviveImageRefusals(ctx context.Context, run types.AgentRun, pr
 // nothing (created before admission was enforced, in audit mode, which never pins, or before the run recorded
 // its image) is refused, and its owner starts a new run. Coverage is asked about the image as the create asked
 // it, so a signer entry written for a short name still covers the run whose pin is the canonical name. A
-// sandbox on the convention image is held only under scope all, by the site's signers alone, at the digest its
-// launch recorded (ImageAdmissionVerdict.Ref); under scope member it stays unchecked. The authority is the run
+// sandbox on the convention image (its create named no image) is held only under scope all, by the site's
+// signers alone, at the digest its launch recorded (ImageAdmissionVerdict.Ref); under scope member it stays
+// unchecked. A run whose create named an image is the member's, whatever its verdict records: one that records
+// a convention check holds no admitted pin of that image, so it is refused. The authority is the run
 // owner's, as reviveImageDigestRefusal reads it: an exempt owner is not checked, and the mark says so. Audit
 // mode refuses nothing here, as at create. An unreadable site config refuses.
 func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, profile []string, actorType types.ActorType, actor string) (map[string]any, *reviveError) {
@@ -57,9 +59,10 @@ func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, p
 		adm = sc.Images.Admission
 	}
 	mode, recorded := adm.EffectiveMode(), run.ImageAdmission
-	// The sandbox runs the convention image when its create named no member image, or when its launch checked
-	// one under scope all (Ref set). A profile's signers bind only a member's image.
-	convention := (run.ImageInput != nil && *run.ImageInput == "") || (recorded != nil && recorded.Ref != "")
+	// The sandbox runs the convention image only when its create named no image. A profile's signers bind only a
+	// member's image. stamped: the verdict is a launch's check of the convention image (Ref set).
+	convention := run.ImageInput != nil && *run.ImageInput == ""
+	stamped := recorded != nil && recorded.Ref != ""
 	if convention {
 		if adm.EffectiveScope() != types.ImageAdmissionScopeAll {
 			return nil, nil
@@ -81,9 +84,9 @@ func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, p
 	}
 	ref, pin := run.Image, imagePin(run)
 	switch {
-	case convention && recorded != nil && recorded.Ref != "":
+	case convention && stamped:
 		ref = recorded.Ref
-	case convention, run.ImageInput == nil:
+	case convention, run.ImageInput == nil, stamped:
 		pin = "" // nothing was recorded for the image this sandbox runs
 	default:
 		ref = *run.ImageInput
