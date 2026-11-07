@@ -403,6 +403,7 @@ A service identity is automation that runs under its own name. It is not a perso
 | `PUT`, `DELETE /model-providers/{id}/credential` | its own model key, in its own namespace |
 | `PUT /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}` | keep a named run request running, and read it |
 | `DELETE /workloads/{name}`, `POST /workloads/{name}/restart` | remove a workload (ends its run), or restart it |
+| `POST /workloads/{name}/preview` | what a `PUT` of the same body would do; stores nothing |
 | `POST /templates/import` | the file check `diff` and `apply --dry-run` make; stores nothing |
 
 - Every other route, including any added later, answers `403` `service_scope` with an `authz.denied` row.

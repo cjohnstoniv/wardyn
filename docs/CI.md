@@ -677,6 +677,7 @@ A pipeline can keep a [workload](operations/workloads.md) declared with `wardyn 
 
 - A service identity's token may `apply`, `diff`, `apply --dry-run`, `workload list|get|delete|restart` and read runs.
 - `apply` exits `0` when the workload is applied, `1` when the organisation refuses the new run (the spec is stored and the old run keeps running). [Exit codes](operations/workloads.md#apply)
+- Before the approval gate, ask what the apply would do with `POST /api/v1/workloads/{name}/preview`, with the body of the `PUT`. It answers created, updated or unchanged, each changed field, whether a run starts and which run it replaces, and the refusal the apply would meet. It stores nothing. [Preview an apply](operations/workloads.md#preview-an-apply)
 - Put the step behind your platform's approval gate: a GitHub environment with required reviewers, or an Azure DevOps environment with approvals.
 - The workload runs under the service identity's walls and grants, like any run it launches.
 

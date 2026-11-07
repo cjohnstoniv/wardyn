@@ -93,6 +93,23 @@ intent:
 
 `wardyn diff` exits `0` when every workload equals the stored one, `1` when any differs or is not stored yet, and `2` or more on an error. A file that does not parse and a spec the server refuses exit `2`.
 
+## Preview an apply
+
+`POST /api/v1/workloads/{name}/preview` takes the body of `PUT /api/v1/workloads/{name}` and answers what the PUT would do. It stores nothing and starts nothing. A service identity's token may call it, for its own workloads.
+
+| Field | Meaning |
+|---|---|
+| `op` | `create`, `update` or `none` (a `description`-only change is `none`) |
+| `outcome` | `created`, `updated` or `unchanged`; empty with a `refusal` |
+| `changes` | Each changed field by path, with `op` `add`, `remove` or `change`, and `from` and `to`. Never `null` |
+| `launch` | `would_launch` (`replaces` is the run that ends), `none`, or `would_refuse` with the launch's `reason` and sentence |
+| `refusal` | The `409` or `422` the PUT would answer, in a `200` so `changes` show |
+
+- A preview is one read: another apply can change the workload after it.
+- A launch refused at a gate that audits may leave the dry-run audit row a refused `POST /runs/preflight` leaves.
+- It cannot see two launch refusals: the image or devcontainer inputs, and an identity-provider `422`.
+- Each preview that owes a launch counts against the caller's preflight rate; over it, the answer is the preflight's `429`.
+
 ## What an apply does
 
 | You apply | Outcome | Run |

@@ -25,10 +25,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- A portal can name the agent acting for a person. `POST /api/v1/token` accepts an `actor_token` your identity provider issued to the portal, and every audit row the delegated token writes names the agent in `data.via.actor`. On by default with no setting: the agent is recorded, never given access, and a portal that sends no `actor_token` sees no change.
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 - Audit: every audit row of a run written after its policy is resolved now carries `policy_digest`, the SHA-256 of the run's effective policy as recorded in its `run.policy.resolve` row, and `GET /runs/{id}` returns it too. It is on by default and refuses nothing. SIEM parsers that compare a row's `data` object exactly will see the new key; rows written before the run's policy was recorded, rows with no run, and rows a device forwards carry none.
 - `wardyn-guest-agent tls-check <host>` inside a macOS VM checks a host the way apps that use only the system trust store do, and exits 1 when TLS fails.
+- A portal can name the agent acting for a person. `POST /api/v1/token` accepts an `actor_token` your identity provider issued to the portal, and every audit row the delegated token writes names the agent in `data.via.actor`. On by default with no setting: the agent is recorded, never given access, and a portal that sends no `actor_token` sees no change.
+- `POST /api/v1/workloads/{name}/preview` answers what an apply would do: created, updated or unchanged, each changed field, whether a run starts and which run it replaces, and the refusal the apply would meet. It stores nothing. A service identity's token may call it.
 
 
 ### Changed
@@ -39,7 +40,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A run's gateway identity is now refreshed before the first call after its half-life instead of behind it, so a refusal of the refresh applies to that call. A refresh that fails but may pass, such as an unreachable control plane, still leaves the held token in use until it expires. Once the control plane cuts the run's gateway access, the proxy answers every call to that gateway with 403 and stops asking.
 - A Linux VM run's terminal, commands and agent start now always run inside the VM. If the runner can't tell whether a run is a VM, the request fails and can be retried; if Linux VM sandboxes were turned off (or failed their start-up check) after the VM started, the request is refused, and the run can still be stopped or ended, including when its audit log fills up.
 - In focus mode, switching the side panel to another widget after one failed to display now shows the new widget instead of the previous error.
 - Run networks no longer carry an address on the Docker host.
@@ -67,6 +67,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The console's Content-Security-Policy now sets `form-action`, and the console sends `Permissions-Policy` and, under TLS, `Strict-Transport-Security`.
 - The Files changed widget now says a run's repository state is unknown when git cannot run in the sandbox, instead of showing no repository.
 - macOS VM runs: a Terminal opened in the window, and apps started from the Dock or Finder, now get the run's non-secret settings (the proxy, the CA bundle, the provider sign-in files, the git identity), so Claude Code in the window's Terminal is signed in. A run's secret variables (`env_secret`) are never placed in the window's Terminal or desktop. An app already open when the window shows ready may need a relaunch. While the settings are being applied, `wardyn window --status` and the run page say so, and an at-start window waits for them (up to ten minutes) without holding the run's start; if they could not be applied, the window still opens and the status names the reason and the retry, `agent-run --session-env-retry` in the window's Terminal.
+- A run's gateway identity is now refreshed before the first call after its half-life instead of behind it, so a refusal of the refresh applies to that call. A refresh that fails but may pass, such as an unreachable control plane, still leaves the held token in use until it expires. Once the control plane cuts the run's gateway access, the proxy answers every call to that gateway with 403 and stops asking.
 
 ## [0.10.0-rc.13] — 2026-11-04
 
