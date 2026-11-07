@@ -630,7 +630,7 @@ What the check does and does not settle:
 | Composition | The union of the layers' names. A layer cannot remove a name another layer sets |
 | Effect | An image a named signer does not cover is refused `403` `image_admission_no_policy`, naming the profile requirement |
 | Signer removed later | The profile's people fail closed with `image_admission_no_policy`, naming the missing signer |
-| Not affected | Operators. A profile never names keys, identities or roots |
+| Not affected | Ungoverned operators (break-glass). A governed admin ([`WARDYN_GOVERN_ADMIN_RUNS`](ENV.md)) follows the requirements that apply to them. A profile never names keys, identities or roots |
 
 ## Approval decision scopes
 

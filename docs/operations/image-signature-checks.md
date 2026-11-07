@@ -10,7 +10,7 @@
 
 - It proves who signed the image digest, and which statements that signer made about it.
 - It does not prove the image is safe, patched or free of malware.
-- It does not check images an operator picks: operators and the break-glass admin are not refused.
+- It does not check images that ungoverned operators (break-glass) pick. With [`WARDYN_GOVERN_ADMIN_RUNS`](../ENV.md) on, an admin who is not exempt is governed, and the image requirements that apply to them can refuse their run.
 - It does not check the proxy image. Runners take that from their own pin ([Verify](../VERIFY.md) covers it).
 - It does not check macOS VM runs, which never run the image. Their verdict is `not_applicable`.
 - With `scope: "all"` it also checks the image a run gets by convention. A failure there fails the run with the reason as its hint.
