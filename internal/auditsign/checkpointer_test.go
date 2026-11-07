@@ -249,7 +249,8 @@ func TestCheckpointLoop_CapsTenThousandPerCheckpoint(t *testing.T) {
 	if len(st.cps) != 3 {
 		t.Fatalf("checkpoints = %d, want 3", len(st.cps))
 	}
-	for i, want := range [][2]int64{{1, 10000}, {10001, 20000}, {20001, 25001}} {
+	// The first two checkpoints' own audit rows (25002, 25003) are new rows by the third: it covers them too.
+	for i, want := range [][2]int64{{1, 10000}, {10001, 20000}, {20001, 25003}} {
 		if st.cps[i].SeqLo != want[0] || st.cps[i].SeqHi != want[1] {
 			t.Errorf("checkpoint %d = %d-%d, want %d-%d", i, st.cps[i].SeqLo, st.cps[i].SeqHi, want[0], want[1])
 		}
@@ -348,7 +349,9 @@ type conflictOnce struct {
 	hit Checkpoint
 }
 
-func (c conflictOnce) Latest(context.Context) (Checkpoint, bool, error) { return Checkpoint{}, false, nil }
+func (c conflictOnce) Latest(context.Context) (Checkpoint, bool, error) {
+	return Checkpoint{}, false, nil
+}
 func (c conflictOnce) Insert(context.Context, Checkpoint) (Checkpoint, error) {
 	return c.hit, ErrExists
 }

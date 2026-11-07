@@ -110,10 +110,9 @@ type Config struct {
 	// DropsByName). Nil omits the metric: no SIEM sinks configured, nothing to report.
 	AuditSinkDrops       func() map[string]int64
 	ForgetRunCorrelation func(runIDs []uuid.UUID) // cmd/wardynd: the audit Fanout's ForgetRuns; person erasure calls it after clearing the ids. Nil with no sinks.
-	// AuditDelivery, when set, reports each acknowledged-delivery destination's
-	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
-	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
-	// configured with delivery "acknowledged"). Nil omits the series.
+	// AuditDelivery, when set, reports each acknowledged-delivery destination's checkpoint and the head it
+	// lags behind for the wardyn_audit_delivery_* metrics (cmd/wardynd wires it to the store only when the
+	// webhook sink is configured with delivery "acknowledged"). Nil omits the series.
 	AuditDelivery func(ctx context.Context) ([]store.AuditDeliveryStatus, error)
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
@@ -469,6 +468,7 @@ type Config struct {
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	HostCapacityConfig
+	AuditReceiptConfig
 	// MaxConcurrentRuns caps non-terminal runs across the whole deployment, every
 	// replica and every creation door (env WARDYN_MAX_CONCURRENT_RUNS); 0 or less
 	// is unlimited. Past it every door answers 422 run_quota (createRun); POST /runs
