@@ -232,7 +232,7 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 	if !ok {
 		return "", gatewayidentity.Claims{}, errors.New("the run token names no agent run")
 	}
-	return signer.Sign(gatewayidentity.Claims{
+	c := gatewayidentity.Claims{
 		Issuer:   issuer,
 		Audience: dest.audience,
 		Subject:  claims.Sub,
@@ -241,7 +241,16 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 		Provider: dest.provider,
 		MCP:      dest.mcp,
 		Sponsor:  sponsor,
-	}, dest.lifetime)
+	}
+	// The portal and the agent it named come from the stored run, never the request, so a revived or
+	// restarted run keeps them. On by default: it grants no reach, the agent is provenance only.
+	if run.CreatedVia != nil {
+		c.Delegate = run.CreatedVia.String()
+		if a := run.CreatedViaActor; a != nil {
+			c.NamePriorActor(a.Sub, a.Iss)
+		}
+	}
+	return signer.Sign(c, dest.lifetime)
 }
 
 // gatewayFirstMint reports whether this replica has not yet recorded a first mint

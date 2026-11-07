@@ -368,6 +368,9 @@ export interface AgentRun {
   // run was launched through on its owner's behalf. Absent for a run its
   // owner launched themselves.
   created_via?: string;
+  // AgentRun.CreatedViaActor: the agent that portal named when it launched the run, as the subject and
+  // issuer of the identity provider token the portal held for it. Absent when it named none.
+  created_via_actor?: { sub: string; iss: string };
   // AgentRun.OperatorOwned (#1476): the run's owner is the operator itself
   // (admin token, local mode), not a person. A super admin may still open it
   // interactively; on a person's run only the owner may. Absent when false.
