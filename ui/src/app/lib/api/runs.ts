@@ -26,6 +26,7 @@ import type {
   RunPolicyView,
   RunResources,
 } from "../types";
+import type { ModelUsage } from "../types/model-usage";
 import type { ComponentRef } from "../types/components";
 import type { PolicyPreviewResult } from "../types/policy-preview";
 import type {
@@ -41,6 +42,7 @@ import type {
 } from "../types/new-run-contract";
 import {
   asJson,
+  errEnvelope,
   errText,
   HttpError,
   LAUNCH_DEADLINE_MS,
@@ -481,6 +483,19 @@ export const runs = {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/resources`, { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<RunResources>(res);
+  },
+
+  // GET /api/v1/runs/{id}/model-usage — token counts the run proxy read off the
+  // provider's own answers. Stored rows, so a finished run answers too. The
+  // refusal keeps its reason: the console tells a server with no such route (a
+  // 404 with no envelope) from a run the caller may not read (a 404 with one).
+  async getModelUsage(runId: string): Promise<ModelUsage> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/model-usage`, { method: "GET" });
+    if (!res.ok) {
+      const env = await errEnvelope(res);
+      throw new HttpError(res.status, env.message, env.reason);
+    }
+    return asJson<ModelUsage>(res);
   },
 
   // GET /api/v1/runs/{id}/attach/holder (renamed from attach-holder in 0.8 —

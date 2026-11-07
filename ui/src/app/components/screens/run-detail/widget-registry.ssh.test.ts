@@ -42,16 +42,16 @@ describe("RUN_WIDGETS.ssh", () => {
 
   it("the live preset of a VM run puts it under the Desktop tile, and Effective policy under it", () => {
     const at = (id: string) => presetLayout("live", false, true).find((w) => w.widget === id);
-    expect(at("desktop")).toEqual({ widget: "desktop", x: 8, y: 20, w: 4, h: 4 });
-    expect(at("ssh")).toEqual({ widget: "ssh", x: 8, y: 24, w: 4, h: 5 });
-    expect(at("effective-policy")?.y).toBe(29);
+    expect(at("desktop")).toEqual({ widget: "desktop", x: 8, y: 24, w: 4, h: 4 });
+    expect(at("ssh")).toEqual({ widget: "ssh", x: 8, y: 28, w: 4, h: 5 });
+    expect(at("effective-policy")?.y).toBe(33);
   });
 
-  it("the live preset of any other run has no Desktop tile and no gap: Attach at 20, Effective policy at 25", () => {
+  it("the live preset of any other run has no Desktop tile and no gap: Attach at 24, Effective policy at 29", () => {
     const l = presetLayout("live");
     expect(l.find((w) => w.widget === "desktop")).toBeUndefined();
-    expect(l.find((w) => w.widget === "ssh")).toEqual({ widget: "ssh", x: 8, y: 20, w: 4, h: 5 });
-    expect(l.find((w) => w.widget === "effective-policy")?.y).toBe(25);
+    expect(l.find((w) => w.widget === "ssh")).toEqual({ widget: "ssh", x: 8, y: 24, w: 4, h: 5 });
+    expect(l.find((w) => w.widget === "effective-policy")?.y).toBe(29);
   });
 
   it("the finished preset of any other run has no Desktop tile", () => {

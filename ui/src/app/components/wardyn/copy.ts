@@ -170,3 +170,4 @@ export { TERMINAL, TERMINAL_COPY, TERMINAL_LINK, TERMINAL_RENDERER } from "./cop
 
 export { RECORDING_DISABLED_TITLE, RECORDING_DISABLED_DESC } from "./copy/recording-disabled";
 export { RAIL_PROVIDER, RAIL_CHECK } from "./copy/new-run-rail";
+export { MODEL_USAGE } from "./copy/model-usage";
