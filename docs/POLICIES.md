@@ -1146,7 +1146,7 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | `git_pat` | `/wardyn/git/<host>/` | **None reachable.** The route admits only the three smart-HTTP endpoints and the PAT never leaves the proxy. |
 | Azure DevOps Entra | `/wardyn/git/<host>/` | The REST gate on `dev.azure.com` / `<org>.visualstudio.com`: pushes are read path by path and routes that name no paths are refused. See [Azure DevOps Entra](#azure-devops-entra). |
 
-- `git_pat`: With the broker switched `off`, or on the `ssh_key` lane, the credential is in the sandbox and no rule applies — the risk-grade item below.
+- `git_pat`: with the broker `off` the token is in the sandbox; on the `ssh_key` lane the key stays in the proxy, but no rule reads an SSH push. Both are the risk-grade item below.
 
 
 - The REST door is judged before the capability check, as the git door is.

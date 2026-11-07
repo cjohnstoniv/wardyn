@@ -4412,7 +4412,7 @@ workloads.
 - The full CC1 posture is rootless-compatible — cap-drop ALL, no-new-privileges, `RuntimeDefault`
   seccomp (never `unconfined`), host-gated AppArmor, retained SELinux labeling
   ([`internal/runner/docker/hardening.go`](../internal/runner/docker/hardening.go)).
-- And **all tier-independent controls hold unchanged**: the per-run L0
+- And all tier-independent controls hold unchanged: the per-run L0
   network, the wardyn-proxy sidecar as sole egress path, brokered **never-resident** credentials
   (the [§5.1a](#51a-llm-egress-content-inspection--the-honest-claims-contract) exceptions aside), and the three audit streams.
 

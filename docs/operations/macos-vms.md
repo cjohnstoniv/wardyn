@@ -11,20 +11,20 @@
 
 | Topic | Page |
 |---|---|
-| Quickstart, windows, recording, limits | [macos-vm-use.md](macos-vm-use.md) |
+| <a id="quickstart-an-interactive-developer-sandbox"></a><a id="what-stays-on-a-kept-disk"></a><a id="the-life-of-a-kept-machine"></a><a id="deleting-a-kept-machine"></a><a id="when-a-limit-is-0"></a><a id="the-tools-update-of-a-kept-machine"></a><a id="recording"></a><a id="the-agent-output-cast"></a><a id="opening-a-window-on-your-mac"></a><a id="the-site-switch"></a><a id="when-a-window-is-refused"></a><a id="closing-a-window"></a><a id="audit-rows"></a><a id="limits-in-this-release"></a><a id="opening-a-drive-on-the-mac"></a>Quickstart, windows, recording, limits | [macos-vm-use.md](macos-vm-use.md) |
 | <a id="watching-a-background-runs-desktop"></a>Watching a background run's desktop | [macos-vm-use.md](macos-vm-use.md#watching-a-background-runs-desktop) |
 | <a id="folders"></a>Shared folders | [macos-vm-use.md](macos-vm-use.md#folders) |
 | <a id="drives"></a>Drives | [macos-vm-use.md](macos-vm-use.md#drives) |
 | <a id="apps-that-use-only-the-system-trust-store"></a>Apps that use only the system trust store | [macos-vm-use.md](macos-vm-use.md#apps-that-use-only-the-system-trust-store) |
-| Preparing, customising and the prep proxy | [macos-vm-base-image.md](macos-vm-base-image.md) |
+| <a id="preparing-the-base-image"></a><a id="the-prep-proxy"></a><a id="customising-the-base"></a><a id="the-organisation-ca"></a><a id="configuration-profiles"></a><a id="guest-posture"></a>Preparing, customising and the prep proxy | [macos-vm-base-image.md](macos-vm-base-image.md) |
 | <a id="setup-by-hand"></a>Setup by hand | [macos-vm-base-image.md](macos-vm-base-image.md#setup-by-hand) |
 | <a id="editing-a-base"></a>Editing a base | [macos-vm-base-image.md](macos-vm-base-image.md#editing-a-base) |
 | <a id="several-bases"></a>Several bases | [macos-vm-base-image.md](macos-vm-base-image.md#several-bases) |
 | <a id="apples-boot-time-hosts"></a>Apple's boot-time hosts | [macos-vm-base-image.md](macos-vm-base-image.md#apples-boot-time-hosts) |
-| Disk, logins, backups, credentials, what the host can see | [macos-vm-host.md](macos-vm-host.md) |
+| <a id="disk"></a><a id="logins-filevault-and-restarts"></a><a id="backups-spotlight-and-removal"></a><a id="credentials-and-sign-ins"></a><a id="the-guest-and-your-macs-controls"></a><a id="what-the-host-can-see"></a><a id="the-run-record"></a>Disk, logins, backups, credentials, what the host can see | [macos-vm-host.md](macos-vm-host.md) |
 | <a id="how-many-vms-a-mac-offers"></a>How many VMs a Mac offers | [macos-vm-host.md](macos-vm-host.md#how-many-vms-a-mac-offers) |
 | <a id="the-shared-ledger"></a>The shared ledger | [macos-vm-host.md](macos-vm-host.md#the-shared-ledger) |
-| Faults and where to look | [macos-vm-troubleshooting.md](macos-vm-troubleshooting.md) |
+| <a id="where-to-look-when-it-fails"></a><a id="when-a-mac-stops-offering-macos-vms"></a>Faults and where to look | [macos-vm-troubleshooting.md](macos-vm-troubleshooting.md) |
 | <a id="not-yet-tested-on-a-real-mac"></a>What has not run on a real Mac | [macos-vm-troubleshooting.md](macos-vm-troubleshooting.md#not-yet-tested-on-a-real-mac) |
 
 ## What a run gets

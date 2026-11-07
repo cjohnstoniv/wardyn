@@ -281,7 +281,8 @@ const (
 	// agent pod). Nothing changed; stop the run and start a new one.
 	reasonReviveUnsupported = "revive_unsupported"
 
-	// GET /runs list filters (runs_list_filter.go): one reason per rejected query parameter.
+	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history paging (runs_policy.go): one
+	// reason per rejected query parameter.
 	reasonInvalidOwnerParam         = "invalid_owner_param"          // ?owner= is not "", "me", or "all"
 	reasonInvalidStatusParam        = "invalid_status_param"         // ?status= names a value outside the closed set
 	reasonStatusNeedsExclusive      = "status_needs_exclusive"       // status=needs was combined with another status value

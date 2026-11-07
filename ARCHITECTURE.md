@@ -549,7 +549,7 @@ The compose stack ([`deploy/compose/docker-compose.yaml`](deploy/compose/docker-
 > **Deployment status:** containerized (compose) is the default; host mode is an
 > escape hatch (`WARDYN_SETUP_MODE=local`).
 
-- A first-class **team** deployment, the compose control plane packaged and supported as a sealed, multi-user shared service, **does not exist as a product yet and is not scheduled** (see [ROADMAP.md](ROADMAP.md)).
+- A **team** deployment, the compose control plane packaged and supported as a sealed, multi-user shared service, does not exist and is not scheduled (see [ROADMAP.md](ROADMAP.md)).
   - The Dex (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO sign-in lights up when OIDC is configured.
 - Authorization under it is real:
   - every OIDC session carries an **admin**, **security_admin** or **member** role derived at login (`WARDYN_OIDC_ROLE_MAP` against Entra App Roles, groups or email, merged with console-managed rows; unset = everyone admin, upgrade-safe);

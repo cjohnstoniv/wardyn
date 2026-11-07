@@ -1,7 +1,7 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the page, so growth fails.
 # The macOS VM page (19386 words, no budget before) is split into five pages by reader: the entry page, use, base image, host, troubleshooting. 22611 words in all against 22738 before, with the Linux page.
 # docs/operations/macos-vms.md 2133 measured: the entry page (what a run gets, requirements, switches, settings, qualifying Macs, licence, upgrades, removal) and the map that keeps the old anchors.
-docs/operations/macos-vms.md=2201 share=3 # 2201 measured (+68 over 2133, measured: the macOS VM run figure and the helper row; share 2 to 3 because the figure is one paragraph line)
+docs/operations/macos-vms.md=2231 share=3 # 2231 measured (+68 over 2133: the macOS VM run figure and the helper row, share 2 to 3 because the figure is one paragraph line; +30: an alias per old heading so every old link lands on its page row)
 # docs/operations/macos-vm-use.md 6510 measured: quickstart, keeping a machine, windows, watching, recording, limits, folders and drives.
 docs/operations/macos-vm-use.md=6510 share=7
 # docs/operations/macos-vm-base-image.md 4669 measured: preparing, setup by hand, editing a base, the prep proxy, customising, boot-time hosts.
