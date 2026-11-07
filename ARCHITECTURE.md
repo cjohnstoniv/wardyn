@@ -168,7 +168,10 @@ The layers of the code, and the interface each extension implements, are mapped 
 - A run is created `PENDING`, or `QUEUED` when its runner pool is at its cap, where it holds nothing. A freed slot moves it to `PENDING`; an ended wait ends it `FAILED`.
 - Dispatch moves `PENDING` to `STARTING`, and the sandbox coming up moves it to `RUNNING`. A build error before dispatch, a launch error, an agent error or a gone sandbox ends it `FAILED`; an agent exit 0 ends it `COMPLETED`.
 - A kill switch ends any live state `KILLED`. So does a running run's lifetime end: a background run's end, or any run's maximum lifetime.
-- A run whose end passed, or whose agent container exited or lost the control plane past its token's life, is kept when its substrate can keep a sandbox (Docker can; Kubernetes cannot) and the deployment sets a positive ended-run grace. A kept run stays `RUNNING` with no network until its files' grace ends, then `STOPPED`. Any other run is `STOPPED` and torn down at once ([Run lifetime](docs/operations/run-lifetime.md)).
+- A run whose end passed, or whose agent container exited or lost the control plane past its token's life, is kept.
+  - That needs a substrate that can keep a sandbox (Docker can; Kubernetes cannot) and a positive ended-run grace.
+  - A kept run stays `RUNNING` with no network until its files' grace ends, then `STOPPED`.
+  - Any other run is `STOPPED` and torn down at once ([Run lifetime](docs/operations/run-lifetime.md)).
 - An idle stop, `WARDYN_RUN_MAX_AGE` and a computer folder brought back to its own computer also end a run `STOPPED`.
 - `COMPLETED`, `FAILED`, `STOPPED`, and `KILLED` are terminal.
 - `WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved

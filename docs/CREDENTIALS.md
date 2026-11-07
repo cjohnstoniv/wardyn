@@ -17,7 +17,7 @@ A credential therefore reaches a destination in one of four shapes:
 
 - **Added at the proxy.** The value stays in the control plane's secret store and the proxy's memory.
 - **Minted and added at the proxy.** The control plane creates a short-lived credential for this run, and the proxy adds it. The one exception is a `github_token` grant with no brokered repository set: its minted token goes to the Git credential helper, so it is delivered inside.
-- **Delivered inside.** The value is written into the sandbox as a variable or a file (`env_secret`, `file_secret`), or handed to the Git credential helper (`git_pat` with the token broker off, or a `github_token` grant with no brokered repository set).
+- **Delivered inside.** The value is written into the sandbox as a variable or a file (`env_secret`, `file_secret`), or handed to the Git credential helper (`git_pat` with the token broker off). A `github_token` grant with no brokered repository set reaches the helper the same way.
 - **Made inside.** The workload derives the credential itself from something else, such as AWS role credentials from a `bedrock_sso` sign-in. With `WARDYN_AWS_SIGV4_AT_PROXY=on` the proxy re-signs the AWS lanes it can, so the role credentials stay out.
 
 For the two inside shapes the workload can read the value, and the proxy checks the host and adds nothing.
