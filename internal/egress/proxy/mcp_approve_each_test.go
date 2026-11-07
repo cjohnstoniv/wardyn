@@ -46,6 +46,9 @@ type eachCP struct {
 	// stall, when set, holds the first APPROVED answer to a poll until it is closed; stalled is
 	// closed once that answer is held.
 	stall, stalled chan struct{}
+	// holdRaise, when set, holds the answer to the next raise that makes a new row until it is
+	// closed; raiseHeld is closed once that answer is held. The row exists meanwhile.
+	holdRaise, raiseHeld chan struct{}
 }
 
 func newEachCP(t *testing.T) *eachCP {
@@ -103,6 +106,14 @@ func newEachCP(t *testing.T) *eachCP {
 				row.state = c.newState
 			}
 			c.rows = append(c.rows, row)
+			if c.holdRaise != nil {
+				release := c.holdRaise
+				c.holdRaise = nil
+				close(c.raiseHeld)
+				c.mu.Unlock()
+				<-release
+				c.mu.Lock()
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: row.id, State: types.ApprovalPending})
 			return
