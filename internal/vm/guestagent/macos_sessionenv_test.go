@@ -202,6 +202,48 @@ func TestSessionEnvSkipsUnsafeKeysAndValues(t *testing.T) {
 	}
 }
 
+// Variables a shell or the loader reads at start would let the run choose what another program loads; none
+// reaches the shell file or the desktop session.
+func TestSessionEnvRefusesShellAndLoaderStartupVariables(t *testing.T) {
+	for _, k := range []string{"ZDOTDIR", "ENV", "BASH_ENV", "FPATH", "PS4", "PROMPT_COMMAND",
+		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"} {
+		if got := SessionEnv(map[string]string{k: "/tmp/x", "PLAIN": "ok"}, nil, nil); !slices.Equal(got, []string{"PLAIN=ok"}) {
+			t.Errorf("%s: SessionEnv = %q, want only PLAIN=ok", k, got)
+		}
+	}
+}
+
+// The zsh hook is read by every zsh on the clone; it sources the run's settings only for the agent account,
+// so root's and the admin's shells never load them.
+func TestZshHookSourcesTheSettingsOnlyForTheAgentAccount(t *testing.T) {
+	bash, err := exec.LookPath("bash") // bash, like zsh, has EUID
+	if err != nil {
+		t.Skip("no bash to read the hook with")
+	}
+	me := uint32(os.Geteuid())
+	for _, c := range []struct {
+		name string
+		uid  uint32
+		want string
+	}{
+		{"the agent account", me, "ok"},
+		{"another account", me + 1, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := sessionEnvPaths(t)
+			d := &Desktop{Run: newGUIFake(true), Console: fakeConsole{err: ErrNoConsoleUser}, SessionEnvEvery: time.Millisecond, SessionEnvWait: time.Millisecond}
+			<-d.StartSessionEnv(context.Background(), p, c.uid, map[string]string{"PLAIN": "ok"}, nil, nil)
+			got, err := exec.Command(bash, "-c", `. "$1"; printf %s "$PLAIN"`, "bash", p.Zshenv).Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("PLAIN through the hook as uid %d (agent account %d) = %q, want %q", me, c.uid, got, c.want)
+			}
+		})
+	}
+}
+
 func TestSessionEnvFileRoundTripsThroughAShell(t *testing.T) {
 	p := sessionEnvPaths(t)
 	env := []string{`Q=it's a "test"`, `CMD=$(id)`, "TICK=`id`", "SPACES=a  b   c", `BS=back\slash`, "PLAIN=ok"}
