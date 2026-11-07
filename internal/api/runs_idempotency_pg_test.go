@@ -429,10 +429,14 @@ func TestCreateRunKeyScopes(t *testing.T) {
 	portal, cred := e.registerPortal(t, delegGroup)
 	tok := e.delegate(t, portal, cred, delegPerson, delegPersonEmail, delegGroup)
 	person := accessSession(t, delegPerson, delegPersonEmail, oidc.RoleUser, []string{delegGroup})
+	// An admin starts runs from the user view only (POST /runs in the Admin view is 409 admin_view).
+	admin := signedAccessCookie(t, oidc.Session{V: oidc.SessionCodecVersion, Sub: "root", Email: "root@corp.example",
+		Role: oidc.RoleAdmin, UserType: types.UserTypeStandard, MemberMode: true,
+		Groups: []string{delegGroup}, Expiry: time.Now().UTC().Add(time.Hour)})
 	body := `{"agent":"claude-code","task":"idem-scopes-` + uuid.NewString() + `"}`
 	hdr := map[string]string{"Idempotency-Key": uuid.NewString()}
 	seen := map[uuid.UUID]bool{}
-	for name, auth := range map[string]func(*http.Request){"person": cookieAuth(person), "portal": bearerAuth(tok), "admin": cookieAuth(e.admin)} {
+	for name, auth := range map[string]func(*http.Request){"person": cookieAuth(person), "portal": bearerAuth(tok), "admin": cookieAuth(admin)} {
 		w := keyedPost(t, e.h.srv, http.MethodPost, "/api/v1/runs", body, auth, hdr)
 		if w.Code != http.StatusCreated || w.Header().Get("Idempotent-Replayed") != "" {
 			t.Fatalf("%s = %d replayed=%q %s, want a fresh 201", name, w.Code, w.Header().Get("Idempotent-Replayed"), w.Body)
