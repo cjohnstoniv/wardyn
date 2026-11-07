@@ -104,7 +104,7 @@ Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Moun
 | **User drive** | An existing drive of yours |
 | **Shared drive** | An existing shared drive. You get your own folder on it |
 | **Folder on this machine** | A folder already onboarded in Workspaces, on the computer running Wardyn; with none it reads "No folders onboarded yet. Add one in Workspaces." Disabled when the server runs its sandboxes on Kubernetes |
-| **Your computer** | A folder from your own folder-only runner, when the deployment [allows it](ENV.md#wardyn_computer_folders); otherwise disabled with its reason |
+| **Your computer** | A folder from your folder-only runner, when the deployment [allows it](ENV.md#wardyn_computer_folders); otherwise disabled with a reason. [Settings](operations/hybrid-laptops.md#sharing-a-folder-the-settings) |
 
 - A drive that cannot attach is greyed with its reason, such as paused by your admin or not available in this pool's runners.
 - **Mount path** sits inside the sandbox user's home directory, and no two items may overlap. A drive's path is fixed. A repository's or folder's path is fixed too, unless it is its workspace's only item.

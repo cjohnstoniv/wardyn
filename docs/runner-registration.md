@@ -351,7 +351,7 @@ An install from before the file keeps working: its environment file or LaunchAge
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
-| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give for the substrate in `runnerd.json` or `doctor --substrate` | `drive_root` |
+| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give for the substrate in `runnerd.json` or `doctor --substrate` (all [folder-share settings](operations/hybrid-laptops.md#sharing-a-folder-the-settings)) | `drive_root` |
 | `service` | The installed service, and on Linux whether systemd reports it running | |
 | `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 
