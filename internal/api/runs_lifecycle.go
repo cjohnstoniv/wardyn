@@ -336,6 +336,7 @@ func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string
 	if perr := s.dropRunProxyConfig(ctx, runID); perr != nil {
 		data["proxy_config_error"] = perr.Error()
 	}
+	macGUIEnvForget(runID)
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
 	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
@@ -943,6 +944,7 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	if perr := s.dropRunProxyConfig(revokeCtx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
 	}
+	macGUIEnvForget(id)
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),
 	// and the erase of any value its runner holds resident, as revokeRunCascade does.
 	s.revokeRunPATs(revokeCtx, id, adoPATRevokeKill)

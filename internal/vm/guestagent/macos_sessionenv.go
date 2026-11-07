@@ -118,15 +118,15 @@ func ParseSessionEnvStatus(b []byte) (SessionEnvStatus, error) {
 	return SessionEnvStatus{}, bad
 }
 
-// SessionEnvPaths are the files the settings use. A zero field is the guest's own path (MacRunDir and
-// the Mac* paths); a test names its own.
+// SessionEnvPaths are the files the settings use. A zero field is the guest's own path (MacSessionEnvDir
+// and the Mac* paths); a test names its own.
 type SessionEnvPaths struct{ Dir, Script, Status, Zshenv string }
 
 // DefaultSessionEnvPaths is the guest's own.
 func DefaultSessionEnvPaths() SessionEnvPaths { return SessionEnvPaths{}.resolved() }
 
 func (p SessionEnvPaths) resolved() SessionEnvPaths {
-	p.Dir = cmp.Or(p.Dir, MacRunDir)
+	p.Dir = cmp.Or(p.Dir, MacSessionEnvDir)
 	p.Script = cmp.Or(p.Script, MacSessionEnvPath)
 	p.Status = cmp.Or(p.Status, MacSessionEnvStatusPath)
 	p.Zshenv = cmp.Or(p.Zshenv, MacZshEnvPath)
@@ -213,8 +213,12 @@ func parseSessionEnvScript(b []byte) ([]string, error) {
 // EnsureZshHook makes p.Zshenv source p.Script in agentUID's zsh, once: it creates the file at 0644, or
 // appends the hook line to what is there, and does nothing when the line is already in. The line checks the
 // shell's effective uid first, so every other account's zsh (root's, the admin's) never reads the script. A
-// link, or anything but a regular file, is refused. It is written on the run's clone, never the base.
+// link, or anything but a regular file, is refused. It is written on the run's clone, never the base. With
+// no agent account (uid 0, root's, as when the agent's ids are unknown) nothing is written.
 func EnsureZshHook(p SessionEnvPaths, agentUID uint32) error {
+	if agentUID == 0 {
+		return errors.New("no agent account to source the settings for (uid 0 is root's)")
+	}
 	p = p.resolved()
 	line := `[ "$EUID" = ` + strconv.FormatUint(uint64(agentUID), 10) + " ] && [ -r " + p.Script + " ] && . " + p.Script + " " + sessionEnvHookMarker
 	created := false
