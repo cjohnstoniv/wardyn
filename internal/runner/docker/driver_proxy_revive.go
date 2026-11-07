@@ -686,6 +686,11 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if err != nil {
 		return err
 	}
+	// A run whose network may have an address on the Docker host (one from before the upgrade) is
+	// refused while its proxy still runs; this error is not ErrProxyReplaceFailed either.
+	if err := d.checkRunNetwork(ctx, internalNetName(id), remedyNewRun); err != nil {
+		return err
+	}
 	var cp struct {
 		ControlPlaneURL string `json:"control_plane_url"`
 	}
@@ -743,6 +748,11 @@ func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
 	}
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
+		return err
+	}
+	// A kept agent goes back onto the network it was created on, so a network from before the upgrade,
+	// which may have an address on the Docker host, refuses the start.
+	if err := d.checkRunNetwork(ctx, internalNetName(id), remedyNewRun); err != nil {
 		return err
 	}
 	p, err := d.cli.ContainerInspect(ctx, proxyContainerName(id), client.ContainerInspectOptions{})

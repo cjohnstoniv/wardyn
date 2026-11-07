@@ -167,6 +167,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DOCKER_RUN_SUBNET_POOL` | IPv4 CIDR | (unset) | **`wardynd` and `wardyn-runnerd`, Docker substrate**: the range each run's network takes its own small subnet from, so runs stop using up the daemon's `default-address-pools`. Unset, the daemon picks each subnet. A full range refuses the run, naming this setting. [Details](OPERATIONS.md#docker-host-one-subnet-per-run) |
 | `WARDYN_DOCKER_RUN_SUBNET_SIZE` | int | `28` | **same**: the prefix length of each run's subnet in `WARDYN_DOCKER_RUN_SUBNET_POOL`, from the range's own length to `29`. Set without the pool, it refuses boot |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
+| `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK` | bool | off | **`wardynd` and `wardyn-runnerd`, Docker substrate**: escape hatch. Starts runs that are otherwise refused, whose agent can reach services on the Docker host. [Details](#wardyn_allow_host_reachable_run_network) |
 | `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` | int | `0` (= `2000`) | milli-CPU limit for a sandbox whose policy sets none, read by every fallback site through `runner.EffectiveLimits()` (flag `-sandbox-default-cpu-millis`). The Helm chart sets `1000`. [Details](#wardyn_sandbox_default_cpu_millis) |
 | `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB` | int | `0` (= `4096`) | memory limit (MiB) for a sandbox whose policy sets none, same sites as `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` (flag `-sandbox-default-memory-mib`). The Helm chart sets `2048` (`runner.sandbox.defaultResources.memoryMiB`) |
 | `WARDYN_PROXY_CPU_MILLIS` | int | `0` (= `500`) | milli-CPU limit of each run's `wardyn-proxy` sidecar, the same on the Docker and Kubernetes substrates (flag `-proxy-cpu-millis`; chart `runner.sandbox.proxyResources.cpuMillis`) |
@@ -724,6 +725,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Parsed by `cliutil.EnvBool` (`register.go`, `#202`), the shared parser: `1`/`true`/`yes`/`on` all enable it, and a garbage value exits 2 at boot instead of being silently ignored as `1`-only used to.
 - **Before #202** only the literal `1` enabled it and anything else — including `true` — read as off with no warning.
 - A deployment that set `true` here and got no error was relying on that bug, not this flag — see the CHANGELOG.
+
+### `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK`
+
+- Off by default, a run is refused on a Docker Engine older than 28.0.0, and so is restarting or reviving a run whose network predates the upgrade.
+- Set, those runs start, each with a warning, and their agent can reach services on the Docker host. Set it only on a trusted host.
+- See [Docker host: run networks](OPERATIONS.md#docker-host-run-networks).
 
 ### `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS`
 

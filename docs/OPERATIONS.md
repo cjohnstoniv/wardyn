@@ -3011,6 +3011,13 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 > [!WARNING]
 > Accepted: a runner started against a different Docker daemon than the one holding its sandboxes (another `DOCKER_HOST`) finds every sandbox gone, and its running runs end `FAILED`. No setting turns this off.
 
+### Docker host: run networks
+
+- Docker sandboxes need Docker Engine 28.0.0 or later. Each run's network then has no address on the Docker host, so the agent reaches its proxy and nothing on the host.
+- An older engine refuses every run, unless `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1` is set on `wardynd` or `wardyn-runnerd`.
+- A network keeps the shape it was created with. A run started before the upgrade is refused a restart or a revive; start a new run instead.
+- A daemon whose `default-network-opts` turn IPv6 on for bridge networks refuses runs.
+
 ### Docker host: one subnet per run
 
 - Every Docker sandbox gets its own internal network, and each network holds one subnet from the daemon's `default-address-pools`.

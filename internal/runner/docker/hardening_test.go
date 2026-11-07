@@ -59,8 +59,9 @@ func infoWithRuntimes(names ...string) system.Info {
 		rt[n] = system.RuntimeWithStatus{Status: st}
 	}
 	// DefaultRuntime is what "" resolves to on a real daemon, and the drive's
-	// bind-option decision asks about it by name.
-	return system.Info{Runtimes: rt, DefaultRuntime: "runc"}
+	// bind-option decision asks about it by name. ServerVersion is an engine
+	// new enough for a run network with no address on the Docker host.
+	return system.Info{Runtimes: rt, DefaultRuntime: "runc", ServerVersion: "29.4.2"}
 }
 
 // The daemon decides `rro` on the runtime's own OCI features struct, and so

@@ -100,7 +100,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
 		ProxyServesAnyPeer: docker.ProxyServesAnyPeerFromEnv(), UserDriveHostRoots: driveRoots,
 		ProxyPeersOnlyByDefault: docker.ProxyPeersOnlyByDefaultFromEnv(), PeersOnlyFallback: opts.offline.peersOnlyChanged,
-		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})
+		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits, AllowHostReachableRunNetwork: docker.AllowHostReachableRunNetworkFromEnv()})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
