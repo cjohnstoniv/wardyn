@@ -100,6 +100,13 @@ func (p *Proxy) meterUsage(r *http.Request, host string, port int, resp *http.Re
 	if !ok || p.sink == nil || resp.StatusCode < 200 || resp.StatusCode > 299 || resp.Body == nil {
 		return
 	}
+	// On a runner's sink a call meters only if its admission reserved the usage row: the runner's
+	// answer can change on a reconnect while the call waits, and a row with no reservation could be
+	// dropped. usageShape above still turns metering off for a runner that stopped taking the rows.
+	ticket, _ := r.Context().Value(usageTicketKey{}).(uuid.UUID)
+	if (p.sink.local != nil || p.sink.remote != nil) && ticket == uuid.Nil {
+		return
+	}
 	var req modelusage.Request
 	if body, held := r.Context().Value(chargedBodyKey{}).([]byte); held {
 		req = modelusage.ReadRequest(body) // only bytes the proxy already holds; never read again for this
@@ -112,8 +119,11 @@ func (p *Proxy) meterUsage(r *http.Request, host string, port int, resp *http.Re
 	})
 	m := &usageMeter{body: resp.Body, parser: parser, feed: parser}
 	m.emit = func(u modelusage.Usage) {
+		if !p.sink.takesUsage() { // the runner reconnected as one that cannot read the row
+			return
+		}
 		dl := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceLLMUsage)
-		dl.Request.AuditReservation, _ = r.Context().Value(usageTicketKey{}).(uuid.UUID)
+		dl.Request.AuditReservation = ticket
 		dl.Request.Host = cutUsageField(dl.Request.Host, usageFieldBytes)
 		dl.Request.Path = cutUsageField(dl.Request.Path, usagePathBytes)
 		dl.GatewayCallID = gatewayCallID
