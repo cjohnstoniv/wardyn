@@ -345,9 +345,12 @@ func (s *mcpSSEFilter) next() {
 	var lines []string
 	if s.start {
 		s.start = false
-		if bom, _ := s.br.Peek(3); bytes.Equal(bom, []byte("\xef\xbb\xbf")) {
-			_, _ = s.br.Discard(3)
-			raw = append(raw, bom...)
+		// Wait for three bytes only when the first could begin a BOM, so a short first event is not held.
+		if first, _ := s.br.Peek(1); len(first) == 1 && first[0] == 0xef {
+			if bom, _ := s.br.Peek(3); bytes.Equal(bom, []byte("\xef\xbb\xbf")) {
+				_, _ = s.br.Discard(3)
+				raw = append(raw, bom...)
+			}
 		}
 	}
 	for {
