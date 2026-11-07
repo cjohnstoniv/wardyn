@@ -949,10 +949,10 @@ func TestLatestPolicyResolve_LastWinsAndSkipsUndecodable(t *testing.T) {
 	}
 }
 
-// TestLatestPolicyResolve_ARevivedGenerationReplacesThePolicy: after a revive the run's proxy enforces the
-// policy its newest run.policy.generation row records, so that is what the readers see, with the dispatch
-// envelope's other facts kept. A generation row that does not decode is skipped.
-func TestLatestPolicyResolve_ARevivedGenerationReplacesThePolicy(t *testing.T) {
+// TestLatestPolicyResolve_NeverTakesAGenerationRow: a run.policy.generation row is a revive's proposal,
+// which applies only while agent_runs says its generation is current, so the scan of a run's rows keeps
+// the dispatch envelope (runEffectivePolicy picks the generation; run_effective_policy_test.go).
+func TestLatestPolicyResolve_NeverTakesAGenerationRow(t *testing.T) {
 	mk := func(action string, data string, at time.Time) types.AuditEvent {
 		return types.AuditEvent{Action: action, Data: json.RawMessage(data), Time: at}
 	}
@@ -960,15 +960,13 @@ func TestLatestPolicyResolve_ARevivedGenerationReplacesThePolicy(t *testing.T) {
 	events := []types.AuditEvent{
 		mk("run.policy.resolve", `{"allowed_domains":["wide.example","kept.example"],"disk_mib_filled":true}`, t0),
 		mk("run.policy.generation", `{"generation":2,"policy":{"allowed_domains":["kept.example"]}}`, t0.Add(time.Second)),
-		mk("run.policy.generation", `{not json`, t0.Add(2*time.Second)),
 	}
 	d, at, ok := latestPolicyResolve(events)
-	if !ok || !slices.Equal(d.AllowedDomains, []string{"kept.example"}) || !d.DiskMiBFilled || !at.Equal(t0.Add(time.Second)) {
-		t.Errorf("latest = %+v at %v ok %v; want the generation's domains, the dispatch envelope's disk fact", d, at, ok)
+	if !ok || !slices.Equal(d.AllowedDomains, []string{"wide.example", "kept.example"}) || !d.DiskMiBFilled || !at.Equal(t0) {
+		t.Errorf("latest = %+v at %v ok %v; want the dispatch envelope", d, at, ok)
 	}
-	later := append(events, mk("run.policy.generation", `{"generation":3,"policy":{"allowed_domains":["third.example"]}}`, t0.Add(3*time.Second)))
-	if d, _, _ := latestPolicyResolve(later); !slices.Equal(d.AllowedDomains, []string{"third.example"}) {
-		t.Errorf("allowed domains %v after generation 3, want third.example", d.AllowedDomains)
+	if _, _, ok := latestPolicyResolve(events[1:]); ok {
+		t.Error("a generation row alone reported as an envelope")
 	}
 }
 

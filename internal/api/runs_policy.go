@@ -441,9 +441,10 @@ func (s *Server) runCreatedViaName(ctx context.Context, run types.AgentRun) stri
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
-// scanned for its run.policy.resolve envelope. Dispatch writes that event
-// before the sandbox exists, so it is always among a run's first events; the
-// bound keeps a long-lived run's audit tail out of the query.
+// scanned for its run.create row, and, on a store without filtered reads, for
+// its policy rows (runEffectivePolicy). Dispatch writes those before the
+// sandbox exists, so they are among a run's first events; the bound keeps a
+// long-lived run's audit tail out of the query.
 const effectivePolicyAuditScan = 200
 
 // effectiveUIApps returns the ui_apps of the run's EFFECTIVE policy — the
@@ -456,47 +457,32 @@ const effectivePolicyAuditScan = 200
 // created with an INLINE policy the DEFAULT policy's apps — a widening this
 // must never do.
 //
+// A revived run's apps are its current policy generation's (runEffectivePolicy).
 // A run with no such event (never dispatched, or the audit store unavailable)
 // yields no apps, so every caller fails closed on it.
 func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.UIApp, error) {
-	if s.cfg.Store == nil {
-		return nil, nil
-	}
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, effectivePolicyAuditScan)
+	envelope, _, _, err := s.runEffectivePolicy(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	envelope, _, _ := latestPolicyResolve(events)
 	return envelope.UIApps, nil
 }
 
-// latestPolicyResolve is the policy the run's proxy enforces now, read from its audit events, and when that
-// was written: the last decodable run.policy.resolve envelope, with its policy replaced by the one a later
-// run.policy.generation row records (a revive writes one per generation, {"generation","policy"}), since a
-// revived proxy enforces that. The envelope's other facts stay the dispatch envelope's. dispatchRun writes
-// one resolve per run, behind claimDispatch, so last-wins only keeps the read defined if a second ever
-// lands. ok=false when there is none, and every caller fails closed on it.
+// latestPolicyResolve is the run's last decodable run.policy.resolve envelope among events, and when
+// it was written: the policy dispatch recorded. It never reads a run.policy.generation row, whose
+// policy applies only while agent_runs says that generation is current (runEffectivePolicy).
+// dispatchRun writes one resolve per run, behind claimDispatch, so last-wins only keeps the read
+// defined if a second ever lands. ok=false when there is none, and every caller fails closed on it.
 func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
-		if len(ev.Data) == 0 {
+		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
 			continue
 		}
-		switch canonicalAction(ev.Action) {
-		case "run.policy.resolve":
-			var d effectivePolicyDatum
-			if json.Unmarshal(ev.Data, &d) != nil {
-				continue
-			}
-			envelope, at, ok = d, ev.Time, true
-		case "run.policy.generation":
-			var g struct {
-				Policy *types.RunPolicySpec `json:"policy"`
-			}
-			if json.Unmarshal(ev.Data, &g) != nil || g.Policy == nil {
-				continue
-			}
-			envelope.RunPolicySpec, at, ok = *g.Policy, ev.Time, true
+		var d effectivePolicyDatum
+		if json.Unmarshal(ev.Data, &d) != nil {
+			continue
 		}
+		envelope, at, ok = d, ev.Time, true
 	}
 	return envelope, at, ok
 }

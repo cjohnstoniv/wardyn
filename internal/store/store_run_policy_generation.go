@@ -27,6 +27,10 @@ type RunPolicyGenerations interface {
 	// AbandonRunPolicyGeneration marks gen abandoned when it is still the newest, putting the one before
 	// it back as current: a revive that never replaced the old proxy.
 	AbandonRunPolicyGeneration(ctx context.Context, id uuid.UUID, gen int) error
+	// RunPolicyState reads the run's policy state (RunPolicyStateOf), for the readers of its effective
+	// policy: which generation is current, abandoned ones marked. found is false for a run the table does
+	// not hold.
+	RunPolicyState(ctx context.Context, id uuid.UUID) (st types.RunPolicyState, found bool, err error)
 }
 
 var _ RunPolicyGenerations = PG{}
@@ -45,6 +49,11 @@ func (s PG) AdvanceRunPolicyGeneration(ctx context.Context, id uuid.UUID, digest
 // AbandonRunPolicyGeneration — see RunPolicyGenerations.
 func (s PG) AbandonRunPolicyGeneration(ctx context.Context, id uuid.UUID, gen int) error {
 	return s.changePolicyGenerations(ctx, id, func(st types.RunPolicyState) types.RunPolicyState { return st.Abandon(gen) })
+}
+
+// RunPolicyState — see RunPolicyGenerations.
+func (s PG) RunPolicyState(ctx context.Context, id uuid.UUID) (types.RunPolicyState, bool, error) {
+	return RunPolicyStateOf(ctx, s.Pool, id)
 }
 
 func (s PG) changePolicyGenerations(ctx context.Context, id uuid.UUID, change func(types.RunPolicyState) types.RunPolicyState) error {

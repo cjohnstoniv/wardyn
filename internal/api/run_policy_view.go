@@ -224,7 +224,11 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		resp.WallPreset = runPolicyWallPresetOf(r, run, create.Source.WallPreset)
 	}
 
-	envelope, at, found := latestPolicyResolve(events)
+	envelope, at, found, err := s.runEffectivePolicy(ctx, run.ID)
+	if err != nil {
+		writeServerError(w, r, "read run policy", err)
+		return
+	}
 	if !found {
 		resp.State = policyViewNotYet
 		if run.State.IsTerminal() {
