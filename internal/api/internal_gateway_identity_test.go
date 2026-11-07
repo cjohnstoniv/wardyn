@@ -1058,8 +1058,8 @@ func testGatewayBedrockBearer() types.ModelProvider {
 }
 
 // A Bedrock key row may send identity once bedrock.base_url names a gateway, and is refused
-// without one, with the field the admin must fill; a Bedrock sign-in row is refused with the
-// way out, whatever it names.
+// without one, with the field the admin must fill; a Bedrock sign-in row with a gateway of its
+// own passes too (its own rules: TestGatewayIdentityBedrockSSOValidation).
 func TestGatewayIdentityBedrockKinds(t *testing.T) {
 	if err := validateProviderGatewayIdentity(testGatewayBedrockBearer()); err != nil {
 		t.Fatalf("a Bedrock key row with a gateway address refused: %v", err)
@@ -1078,10 +1078,8 @@ func TestGatewayIdentityBedrockKinds(t *testing.T) {
 	}
 	sso := testGatewayBedrockBearer()
 	sso.Kind = types.ModelProviderBedrockSSO
-	err = validateProviderGatewayIdentity(sso)
-	want := `model_providers: "corp-gw": gateway_identity is not available for bedrock_sso providers; use a bedrock_bearer row, or the gateway as a custom endpoint`
-	if err == nil || err.Error() != want {
-		t.Errorf("sign-in row: %v, want %q", err, want)
+	if err := validateProviderGatewayIdentity(sso); err != nil {
+		t.Errorf("sign-in row with a gateway address refused: %v", err)
 	}
 }
 
@@ -1133,12 +1131,12 @@ func TestGatewayDispatchBedrockBearerRoute(t *testing.T) {
 	srv := &Server{}
 	off := testGatewayBedrockBearer()
 	off.GatewayIdentity = nil
-	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, off) || d.gatewayRoutes != nil {
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, off, llmTransport{}) || d.gatewayRoutes != nil {
 		t.Fatalf("off: %+v", d.gatewayRoutes)
 	}
 	on := testGatewayBedrockBearer()
 	for range 2 {
-		if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, on) {
+		if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, on, llmTransport{}) {
 			t.Fatal("on: refused")
 		}
 	}
@@ -1147,11 +1145,11 @@ func TestGatewayDispatchBedrockBearerRoute(t *testing.T) {
 		t.Errorf("routes %+v", d.gatewayRoutes)
 	}
 	// A kind that cannot carry identity writes no route, even with the field stored.
-	sso := testGatewayBedrockBearer()
-	sso.Kind = types.ModelProviderBedrockSSO
+	sub := testGatewayBedrockBearer()
+	sub.Kind = types.ModelProviderAnthropicSubscription
 	var none providerDispatch
-	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &none, sso) || none.gatewayRoutes != nil {
-		t.Errorf("a sign-in row wrote a route: %+v", none.gatewayRoutes)
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &none, sub, llmTransport{}) || none.gatewayRoutes != nil {
+		t.Errorf("a subscription row wrote a route: %+v", none.gatewayRoutes)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -59,6 +60,13 @@ var proxySettingOfField = map[string]string{
 	// Dropped, the run's proxy holds no model list and admits every model the
 	// governance profile limits.
 	"ModelLimit": ProxySettingAllowedModels,
+}
+
+// proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.
+var proxyNestedSettings = map[string]string{
+	// Dropped, a newer proxy serves the gateway through its generic forwarder with calls the sandbox
+	// signed with the placeholder: they fail at AWS rather than being refused when placed.
+	ProxySettingAWSSigV4Gateways: "AWSSigV4",
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
@@ -122,6 +130,9 @@ func TestProxyConfigFieldsNewerThanV098AreGatedOrExempt(t *testing.T) {
 			t.Errorf("setting %s alone reports %v, want [%s]", field, got, setting)
 		}
 	}
+	for setting := range proxyNestedSettings {
+		settings = append(settings, setting)
+	}
 	slices.Sort(settings)
 	if want := slices.Sorted(slices.Values(ProxySettings)); !slices.Equal(settings, want) {
 		t.Errorf("proxySettingOfField settings %v, ProxySettings %v", settings, want)
@@ -170,5 +181,18 @@ func TestProxySettingsCensusFiresOnAPlantedField(t *testing.T) {
 	stale["RunToken"], stale["Gone"] = "planted", "planted"
 	if got := proxyFieldCensus(base, proxySettingOfField, stale); len(got) != 2 {
 		t.Fatalf("stale exemptions: census = %q", got)
+	}
+}
+
+// A re-signing grant with a gateway names the gateway setting beside its own, so a runner that
+// does not carry gateways is refused the run; one without a gateway names only its own.
+func TestProxySettingAWSSigV4GatewaysNamed(t *testing.T) {
+	pc := runner.ProxyConfig{AWSSigV4: &proxy.AWSSigV4Config{}}
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingAWSSigV4}) {
+		t.Errorf("no gateway: %v", got)
+	}
+	pc.AWSSigV4.Gateways = []proxy.AWSSigV4Gateway{{Host: "ai-gw.corp.example", Port: 443, SigningHost: "bedrock-runtime.us-east-1.amazonaws.com"}}
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingAWSSigV4, ProxySettingAWSSigV4Gateways}) {
+		t.Errorf("a gateway: %v", got)
 	}
 }

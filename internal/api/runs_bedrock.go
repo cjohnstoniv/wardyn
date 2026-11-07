@@ -220,6 +220,9 @@ type bedrockAuth struct {
 	sigv4Hosts []string
 	// sigv4Why is why the lane is not re-signed (the zero value when it is), for its audit row.
 	sigv4Why awsSigV4Why
+	// sigv4Gateway is the gateway a re-signed lane's calls go to, signed for its Bedrock host
+	// (bedrockSSOGatewayOf); nil when the provider sends no run identity or the lane is not re-signed.
+	sigv4Gateway *proxy.AWSSigV4Gateway
 	// residentGrant is the grant the boundary's eligible grants judge a resident captured session
 	// by (awsSSOResidentGrant); nil on every other lane.
 	residentGrant *types.GrantSpec
@@ -559,8 +562,11 @@ func (s *Server) stageAWSSSOFiles(env map[string]string, config string, blob aws
 // Phase B), the SSO egress hosts, and the blob's secrets masked. env is the
 // shared Bedrock env (bedrockBaseEnv) and hosts the Bedrock egress hosts; both
 // are extended. sso is the scope the blob was read in, and runID the run being
-// dispatched. The caller stamps readiness.
-func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSSOBlob, sso awsSSOScope, env map[string]string, hosts []string) bedrockAuth {
+// dispatched. gw is the provider's gateway when it sends run identity: the lane is then judged with
+// the gateway's signing host in the gateway's place, as the proxy signs it. The caller stamps readiness.
+func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSSOBlob, sso awsSSOScope, env map[string]string, hosts []string,
+	gw *proxy.AWSSigV4Gateway,
+) bedrockAuth {
 	// Phase B: with WARDYN_AWS_SSO_PROXY_INJECT on, the cache file
 	// carries an inert placeholder and the real access token is injected
 	// on the wire at portal.sso by the proxy. The switch is read ONCE,
@@ -581,8 +587,11 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 	}
 	// Re-signing: the placeholder profile and no route to the sign-in hosts; the proxy alone
 	// redeems the session (runs_dispatch_aws_sigv4.go).
-	sigv4Hosts, sigv4Why := s.awsSigV4Lane(hosts)
+	sigv4Hosts, sigv4Why := s.awsSigV4Lane(gatewaySignedHosts(hosts, gw))
 	sigv4 := sigv4Why.Code == ""
+	if !sigv4 {
+		gw = nil
+	}
 	switch {
 	case maskErr == nil && sigv4:
 		stageAWSSigV4Files(env, "")
@@ -597,7 +606,7 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 	// compares must be the one this run will actually present.
 	auth := bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
 		ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName,
-		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, sigv4Hosts: sigv4Hosts, sigv4Why: sigv4Why, maskErr: maskErr}
+		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, sigv4Hosts: sigv4Hosts, sigv4Why: sigv4Why, sigv4Gateway: gw, maskErr: maskErr}
 	if !proxyInjected {
 		auth.residentGrant = s.awsSSOResidentGrant(blob.Region)
 	}

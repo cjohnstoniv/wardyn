@@ -4094,7 +4094,12 @@ The labelled series, every label, and where its values come from:
 - An admin can turn this on per model provider, so a gateway in front of a model learns whose call it is.
 - **It is off by default and experimental.** The token format and the key set's address may change before 0.11.
 - The disclosure, word for word: "When on, each model call to this gateway carries a signed token naming the person, the run and the runner."
-- A `custom_endpoint` row may opt in, and so may an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, `anthropic_subscription` included.
+- A `custom_endpoint` row may opt in, and so may an `anthropic_api_key` or `openai_api_key` row with a `base_url`, a `bedrock_bearer` row with a `bedrock.base_url`, and a `bedrock_sso` row while `WARDYN_AWS_SIGV4_AT_PROXY` is on. Every other kind is refused at save, `anthropic_subscription` included.
+- A `bedrock_sso` row's gateway must be on a name AWS does not own (`proxy.AWSProviderOwnedHost`), checked at save and again when the proxy loads its config, so the token never goes to AWS.
+  - The proxy signs each call as the person for `bedrock-runtime.<region>.amazonaws.com` and sends it to the gateway, which forwards it unchanged ([Bedrock with SSO sign-in](../docs/operations/ai-gateway.md#bedrock-with-sso-sign-in)).
+  - The role credentials stay in the proxy. A run the install no longer signs at the proxy is refused rather than given them in the sandbox.
+  - The gateway sees each signed call, never the secret key. It cannot change the call or send it elsewhere, but it can send it again, more than once, for a few minutes.
+  - Wardyn cannot make the gateway strip `X-Wardyn-Identity` before it forwards to AWS. One that does not sends the token on to AWS.
 - `wardynd` signs an ES256 token per run and provider, valid for 60 to 600 seconds (600 unless the provider sets `token_lifetime_seconds`) and minted again at half-life (`gatewayidentity.Signer`).
 - `wardyn-proxy` asks for it, holds it in memory and sends it as `X-Wardyn-Identity`, only on a request matching the provider's route: host, exact port and path prefix (`Proxy.gatewayRouteFor`).
 - The gateway verifies it against an anonymous key set, `GET /.well-known/wardyn-experimental/gateway-jwks.json`. [The AI gateway identity key](../docs/operations/secrets-and-keys.md#the-ai-gateway-identity-key) covers the key's storage and rotation.

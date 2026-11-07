@@ -32,24 +32,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
   `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 
-
 ### Added
 
 - Docs: the SSO setup pages now recommend `WARDYN_GOVERN_ADMIN_RUNS`. It stays off by default.
-
 - Settings: Your walls and wall presets now have controls for GitHub and Azure DevOps capabilities, tool rules, paths never pushed, a recording minimum and an idle stop.
 - Audit: every audit row of a run written after its policy is resolved now carries `policy_digest`, the SHA-256 of the run's effective policy as recorded in its `run.policy.resolve` row, and `GET /runs/{id}` returns it too. It is on by default and refuses nothing. SIEM parsers that compare a row's `data` object exactly will see the new key; rows written before the run's policy was recorded, rows with no run, and rows a device forwards carry none.
 - `wardyn-guest-agent tls-check <host>` inside a macOS VM checks a host the way apps that use only the system trust store do, and exits 1 when TLS fails.
 - A portal can name the agent acting for a person. `POST /api/v1/token` accepts an `actor_token` your identity provider issued to the portal, and every audit row the delegated token writes names the agent in `data.via.actor`. On by default with no setting: the agent is recorded, never given access, and a portal that sends no `actor_token` sees no change.
 - `POST /api/v1/workloads/{name}/preview` answers what an apply would do: created, updated or unchanged, each changed field, whether a run starts and which run it replaces, and the refusal the apply would meet. It stores nothing. A service identity's token may call it.
-
+- Run identity for an Amazon Bedrock provider people sign in to with SSO. With `WARDYN_AWS_SIGV4_AT_PROXY` on, Wardyn signs each Bedrock request as the person for the regional Bedrock address and sends it to your gateway with the run's identity token. The gateway forwards it to AWS unchanged. Off unless an admin turns it on for the provider.
 
 ### Changed
 
 - macOS: `wardyn-macvm update-tools` (and the base derivation runnerd starts) now fails at once with "A tools update of this macOS base is already running." when another update or a prepare holds the base's update lock, instead of waiting for it.
 - `edit-base` no longer prints the setup-code file's path. It points at the window's Type code and Show code buttons. The guest agent now answers three edit-window requests in tools mode only (open an admin Terminal, trust the install list's certificates, open Full Disk Access), each run as the console user.
 - A runner whose proxy image cannot be pulled at start now waits and tries again (every 15 seconds at first, then every 5 minutes) instead of exiting and restarting; `wardyn-runnerd doctor` shows the next try in its status line, and the organisation is told why once the runner connects. A stop still exits cleanly.
-
 
 ### Fixed
 

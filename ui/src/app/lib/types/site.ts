@@ -274,6 +274,9 @@ export interface ModelProvidersRead extends ModelProviders {
   // origin with its base path: what an admin tells a gateway.
   gateway_identity_issuer?: string;
   gateway_jwks_path: string;
+  // Whether a bedrock_sso provider can send run identity on this install: only
+  // while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY).
+  gateway_identity_bedrock_sso: boolean;
 }
 
 // Closed set, server-validated.
