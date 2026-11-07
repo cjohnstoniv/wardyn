@@ -339,11 +339,11 @@ const (
 )
 
 // conventionVerdict is the verdict a launch records for a convention image checked under scope all, read from
-// the JSON the run row holds: ref is the convention image as configured, pinned_ref set only when enforce
-// admitted it.
+// the JSON the run row holds: origin convention, ref the convention image as configured, pinned_ref set only
+// when enforce admitted it.
 func conventionVerdict(t *testing.T, mode, verdict, pinned string) *types.ImageAdmissionVerdict {
 	t.Helper()
-	raw := fmt.Sprintf(`{"mode":%q,"verdict":%q,"digest":%q,"pinned_ref":%q,"ref":%q,"signer":%q}`,
+	raw := fmt.Sprintf(`{"mode":%q,"verdict":%q,"digest":%q,"pinned_ref":%q,"ref":%q,"signer":%q,"origin":"convention"}`,
 		mode, verdict, admitDigest, pinned, convRef, admitSigner)
 	var v types.ImageAdmissionVerdict
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
