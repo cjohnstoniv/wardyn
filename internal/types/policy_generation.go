@@ -53,6 +53,18 @@ func (s RunPolicyState) current() PolicyStamp {
 	return PolicyGeneration{Generation: 1, Digest: s.Digest}.stamp()
 }
 
+// CurrentGeneration is the number of the generation the run's proxy enforces: the newest one not
+// abandoned, or 1 before any revive and once every revive's generation was abandoned. Unlike current,
+// it keeps the number when generation 1 has no digest.
+func (s RunPolicyState) CurrentGeneration() int {
+	for i := len(s.Generations) - 1; i >= 0; i-- {
+		if g := s.Generations[i]; !g.Abandoned {
+			return g.Generation
+		}
+	}
+	return 1
+}
+
 func (g PolicyGeneration) stamp() PolicyStamp {
 	if g.Digest == "" {
 		return PolicyStamp{} // dispatched before the digest was recorded

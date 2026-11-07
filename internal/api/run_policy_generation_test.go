@@ -52,6 +52,11 @@ func (s *generationStore) AbandonRunPolicyGeneration(_ context.Context, _ uuid.U
 	return nil
 }
 
+func (s *generationStore) RunPolicyState(ctx context.Context, id uuid.UUID) (types.RunPolicyState, bool, error) {
+	st, err := s.lookup(ctx, id)
+	return st, true, err
+}
+
 // lookup is store.RunPolicyStateOf over the fake: the generations plus the live token lineage.
 func (s *generationStore) lookup(context.Context, uuid.UUID) (types.RunPolicyState, error) {
 	s.gmu.Lock()

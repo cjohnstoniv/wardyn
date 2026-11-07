@@ -51,6 +51,9 @@ func TestRunPolicyGeneration_AdvanceAndAbandon(t *testing.T) {
 	if st, _, _ := store.RunPolicyStateOf(ctx, pool, r.ID); st.Digest != "d1" || st.Stamp(false, "") != (types.PolicyStamp{Digest: "d1", Generation: 1}) {
 		t.Errorf("state after abandon = %+v, want d1 current", st)
 	}
+	if st, found, err := pg.RunPolicyState(ctx, r.ID); err != nil || !found || st.CurrentGeneration() != 1 {
+		t.Errorf("RunPolicyState after abandon = %+v (found %v, err %v), want generation 1 current", st, found, err)
+	}
 	if gen, err := pg.AdvanceRunPolicyGeneration(ctx, r.ID, "d3", nil, "jti-3"); err != nil || gen != 3 {
 		t.Errorf("the next advance = %d, %v; want 3", gen, err)
 	}

@@ -98,6 +98,30 @@ func TestRunPolicyState_AbandonedGenerationIsNeverReused(t *testing.T) {
 	}
 }
 
+// CurrentGeneration is the generation the run's proxy enforces: 1 before any revive, the revive's once
+// it replaced the proxy, and the one before it again once it was abandoned.
+func TestRunPolicyState_CurrentGeneration(t *testing.T) {
+	s := dispatched()
+	if got := s.CurrentGeneration(); got != 1 {
+		t.Errorf("before any revive: generation %d, want 1", got)
+	}
+	s, gen := s.Advance("d2", nil, "jti-2")
+	if got := s.CurrentGeneration(); got != gen {
+		t.Errorf("after a revive: generation %d, want %d", got, gen)
+	}
+	s, gen = s.Advance("d3", nil, "jti-3")
+	if got := s.Abandon(gen).CurrentGeneration(); got != 2 {
+		t.Errorf("after generation %d was abandoned: generation %d, want 2", gen, got)
+	}
+	if got := s.Abandon(gen).Abandon(2).CurrentGeneration(); got != 2 {
+		t.Errorf("abandoning a generation that is not the newest changed the current one to %d, want 2", got)
+	}
+	u, gen := RunPolicyState{}.Advance("d2", nil, "jti-2")
+	if got := u.Abandon(gen).CurrentGeneration(); got != 1 {
+		t.Errorf("an abandoned revive of a run with no recorded digest: generation %d, want 1", got)
+	}
+}
+
 // A run dispatched before its digest was recorded has generation 1 with no digest: its rows carry no
 // stamp, and the revive's generation is stamped as usual.
 func TestRunPolicyState_UnrecordedFirstGeneration(t *testing.T) {

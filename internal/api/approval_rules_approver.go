@@ -441,11 +441,10 @@ func (s *Server) matchApprovalRule(ctx context.Context, rule types.ApprovalRule,
 // runScopeCapabilities is the run's GitHub and Azure DevOps capability lists from the envelope dispatch recorded (the
 // reader beneath handleGetRunPolicy); a run with no envelope yet has none, so capabilities_within cannot match it.
 func (s *Server) runScopeCapabilities(ctx context.Context, run types.AgentRun) ([]string, error) {
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, effectivePolicyAuditScan)
+	env, _, found, err := s.runEffectivePolicy(ctx, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	env, _, found := latestPolicyResolve(events)
 	if !found {
 		return nil, nil
 	}

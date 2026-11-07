@@ -41,14 +41,10 @@ const desktopRulesUnreadableMsg = "This run's desktop rules could not be read. T
 // no envelope, is an error and never the defaults, which allow paste in and upload where the run's
 // rules may block them. The defaults are only for an envelope that has no desktop block.
 func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types.UIApp, types.DesktopControls, error) {
-	if s.cfg.Store == nil {
-		return nil, types.DesktopControls{}, errNoPolicyEnvelope
-	}
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, effectivePolicyAuditScan)
+	envelope, _, ok, err := s.runEffectivePolicy(ctx, runID)
 	if err != nil {
 		return nil, types.DesktopControls{}, err
 	}
-	envelope, _, ok := latestPolicyResolve(events)
 	if !ok {
 		return nil, types.DesktopControls{}, errNoPolicyEnvelope
 	}
