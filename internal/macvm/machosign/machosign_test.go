@@ -208,7 +208,7 @@ func TestSignedCopyReparses(t *testing.T) {
 			t.Fatal("the requirements blob in the signature is not the designated requirement")
 		}
 		wantDR := `identifier "` + ident + `" and certificate root = H"` + hex.EncodeToString(rootSHA1[:]) + `"`
-		if len(cs.Requirements) != 1 || cs.Requirements[0].Detail != wantDR || uint32(cs.Requirements[0].Type) != 3 {
+		if len(cs.Requirements) != 1 || machosigntest.AppleText(cs.Requirements[0].Detail) != wantDR || uint32(cs.Requirements[0].Type) != 3 {
 			t.Fatalf("requirements %+v, want designated %q", cs.Requirements, wantDR)
 		}
 

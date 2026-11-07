@@ -181,16 +181,19 @@ type AgentSigner interface {
 }
 
 // SignedAgent is a signed copy of the guest agent: Path is the copy, Cert the signing certificate (DER)
-// the base trusts for code signing, and Done removes the copy.
+// the base trusts for code signing, and Done removes the copy. Signer is the signer that made it
+// (AgentSignerWardyn or AgentSignerCodesign), and Errors why each signer tried before it failed, path-free.
 type SignedAgent struct {
-	Path string
-	Cert []byte
-	Done func()
+	Path   string
+	Cert   []byte
+	Done   func()
+	Signer string
+	Errors []string
 }
 
-// HostAgentSigner signs the guest agent with this Mac's signing identity in Dir (Layout.AgentSigningDir),
-// through openssl, security and codesign. Exec runs one command and returns its combined output (nil: on
-// this host, which works on macOS only).
+// HostAgentSigner signs the guest agent with this Mac's signing identity in Dir (Layout.AgentSigningDir):
+// in this process first (machosign), then through openssl, security and codesign. Exec runs one command and
+// returns its combined output (nil: on this host, which works on macOS only).
 type HostAgentSigner struct {
 	Dir  string
 	Exec func(ctx context.Context, argv []string) ([]byte, error)
@@ -198,35 +201,29 @@ type HostAgentSigner struct {
 	Log *slog.Logger
 }
 
-// SignAgent copies the agent at path into a new temp directory and signs the copy there. The identity
-// goes into a keychain made for this one signing, with random one-use passwords, and the keychain is
-// deleted again. The passwords are on the commands' argv while each runs; they open only that keychain
-// and that PKCS#12 file, in a 0700 temp directory of this login's. The copy is signed without the
-// hardened runtime (the agent needs none in the guest), and its designated requirement is read back: one
-// that is not exactly AgentRequirement is a failure.
+// SignAgent copies the agent at path into a new temp directory and signs the copy there: with Wardyn's own
+// signer first, then with codesign. Each signed copy must pass this Mac's codesign --verify --strict and read
+// back exactly AgentRequirement as its designated requirement before it is used; a copy that does not moves on
+// to the next signer. When none signs, the error is an *AgentSignError listing why each failed, path-free.
+// The copy is signed without the hardened runtime: the agent needs none in the guest.
 func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa SignedAgent, err error) {
-	cert, err := AgentSigningIdentity(ctx, s.Dir)
-	if err != nil {
-		return sa, err
-	}
+	var se AgentSignError
 	tmp, err := os.MkdirTemp("", "wardyn-agent-sign-")
 	if err != nil {
-		return sa, err
+		se.add("", err, func(m string) string { return m })
+		return sa, &se
 	}
 	defer func() {
 		if err != nil {
 			_ = os.RemoveAll(tmp)
 		}
 	}()
-	cp := filepath.Join(tmp, filepath.Base(guestagent.MacAgentBinaryPath))
-	if err := copyFile(ctx, path, cp); err != nil {
-		return sa, err
+	scrub := s.scrubber(path, tmp)
+	cert, err := AgentSigningIdentity(ctx, s.Dir)
+	if err != nil {
+		se.add("", err, scrub)
+		return sa, &se
 	}
-	if err := os.Chmod(cp, 0o755); err != nil {
-		return sa, err
-	}
-	kcPW, p12PW := randomHex(32), randomHex(32)
-	p12, kc := filepath.Join(tmp, "identity.p12"), filepath.Join(tmp, "signing.keychain-db")
 	exec := s.Exec
 	if exec == nil {
 		exec = hostExec
@@ -234,13 +231,52 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 	run := func(argv ...string) (string, error) {
 		out, err := exec(ctx, argv)
 		if err != nil {
-			return "", fmt.Errorf("macvm: signing the guest agent: %s %s: %w: %s", argv[0], argv[1], err, outputTail(string(out)))
+			return "", fmt.Errorf("macvm: signing the guest agent: %s %s: %w: %s", filepath.Base(argv[0]), argv[1], err, outputTail(string(out)))
 		}
 		return string(out), nil
 	}
+	cp := filepath.Join(tmp, filepath.Base(guestagent.MacAgentBinaryPath))
+	for _, sg := range []struct {
+		name string
+		sign func() error
+	}{
+		{AgentSignerWardyn, func() error { return s.signInProcess(cert, path, cp) }},
+		{AgentSignerCodesign, func() error { return s.signCodesign(ctx, exec, run, cert, path, cp, tmp) }},
+	} {
+		err := sg.sign()
+		if err == nil {
+			err = proveSigned(run, cp, cert)
+		}
+		if err == nil {
+			return SignedAgent{Path: cp, Cert: cert.Raw, Done: func() { _ = os.RemoveAll(tmp) }, Signer: sg.name, Errors: se.Errors}, nil
+		}
+		se.add(sg.name, err, scrub)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return sa, &se
+}
+
+// signCodesign signs a fresh copy of path at cp with codesign, through a keychain made for this one signing,
+// with random one-use passwords, and deleted again. The passwords are on the commands' argv while each runs;
+// they open only that keychain and that PKCS#12 file, in a 0700 temp directory of this login's. codesign looks
+// the identity up on the login's search list, so the keychain goes first on that list for the call, and the
+// list read before is put back after it, under its own bounded context, before the keychain is deleted. The
+// designated requirement is passed as text: without it codesign derives one naming the leaf certificate.
+func (s *HostAgentSigner) signCodesign(ctx context.Context, exec func(context.Context, []string) ([]byte, error), run func(...string) (string, error), cert *x509.Certificate, path, cp, tmp string) error {
+	_ = os.Remove(cp)
+	if err := copyFile(ctx, path, cp); err != nil {
+		return err
+	}
+	if err := os.Chmod(cp, 0o755); err != nil {
+		return err
+	}
+	kcPW, p12PW := randomHex(32), randomHex(32)
+	p12, kc := filepath.Join(tmp, "identity.p12"), filepath.Join(tmp, "signing.keychain-db")
 	if _, err := run("/usr/bin/openssl", "pkcs12", "-export", "-inkey", filepath.Join(s.Dir, agentSigningKey),
 		"-in", filepath.Join(s.Dir, agentSigningCert), "-out", p12, "-passout", "pass:"+p12PW); err != nil {
-		return sa, err
+		return err
 	}
 	_, cerr := run("/usr/bin/security", "create-keychain", "-p", kcPW, kc)
 	// A create the update's cancel cut short may have made the keychain all the same.
@@ -248,21 +284,44 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 		defer s.deleteKeychain(ctx, exec, kc)
 	}
 	if cerr != nil {
-		return sa, cerr
+		return cerr
+	}
+	out, err := run("/usr/bin/security", "list-keychains", "-d", "user")
+	if err != nil {
+		return err
+	}
+	list := keychainList(out)
+	_, err = run(append([]string{"/usr/bin/security", "list-keychains", "-d", "user", "-s", kc}, list...)...)
+	// Like the create, a set the cancel cut short may have taken effect.
+	if err == nil || ctx.Err() != nil {
+		defer s.restoreKeychains(ctx, exec, list)
+	}
+	if err != nil {
+		return err
 	}
 	for _, argv := range [][]string{
 		{"/usr/bin/security", "unlock-keychain", "-p", kcPW, kc},
 		{"/usr/bin/security", "import", p12, "-k", kc, "-P", p12PW, "-T", "/usr/bin/codesign"},
 		{"/usr/bin/security", "set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", kcPW, kc},
-		{"/usr/bin/codesign", "--force", "--keychain", kc, "--identifier", AgentSigningID, "--sign", agentCertSHA1(cert), cp},
+		// One "=" only: "-r=" takes the rest as requirement text.
+		{"/usr/bin/codesign", "--force", "--keychain", kc, "--identifier", AgentSigningID, "--sign", agentCertSHA1(cert), "-r=designated => " + AgentRequirement(cert), cp},
 	} {
 		if _, err := run(argv...); err != nil {
-			return sa, err
+			return err
 		}
+	}
+	return nil
+}
+
+// proveSigned is this Mac's own check of a signed copy: codesign --verify --strict passes, and the designated
+// requirement reads back as exactly AgentRequirement. Neither needs the certificate trusted.
+func proveSigned(run func(...string) (string, error), cp string, cert *x509.Certificate) error {
+	if _, err := run("/usr/bin/codesign", "--verify", "--strict", cp); err != nil {
+		return err
 	}
 	out, err := run("/usr/bin/codesign", "-d", "-r-", cp)
 	if err != nil {
-		return sa, err
+		return err
 	}
 	dr := ""
 	for _, line := range strings.Split(out, "\n") {
@@ -271,9 +330,9 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 		}
 	}
 	if want := AgentRequirement(cert); !strings.EqualFold(dr, want) {
-		return sa, fmt.Errorf("macvm: signing the guest agent: its designated requirement reads %q, want %q", dr, want)
+		return fmt.Errorf("macvm: signing the guest agent: its designated requirement reads %q, want %q", dr, want)
 	}
-	return SignedAgent{Path: cp, Cert: cert.Raw, Done: func() { _ = os.RemoveAll(tmp) }}, nil
+	return nil
 }
 
 // deleteKeychain deletes the signing's keychain, which also takes it off the login's search list. It runs
@@ -297,21 +356,6 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b) // crypto/rand.Read never returns an error
 	return hex.EncodeToString(b)
-}
-
-// agentToPush is the guest agent build stage 2 pushes: o.Signer's signed copy, or the build as it is
-// (signed ad hoc) when there is no signer or the signing failed. A failure is logged and never stops the
-// update: the signature is not a security boundary, and refusing would only leave the base's tools behind.
-func agentToPush(ctx context.Context, o ToolsOptions) (path string, signed *SignedAgent) {
-	if o.Signer == nil {
-		return o.Agent.Path, nil
-	}
-	sa, err := o.Signer.SignAgent(ctx, o.Agent.Path)
-	if err != nil {
-		o.Log.Warn("macvm: the guest agent was not signed on this Mac; pushing it signed ad hoc, so macOS drops its Full Disk Access at this update", "err", err.Error())
-		return o.Agent.Path, nil
-	}
-	return sa.Path, &sa
 }
 
 // agentSigningCertPath is where the base keeps the guest agent's signing certificate.

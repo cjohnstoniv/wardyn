@@ -6,6 +6,7 @@ package machosigntest
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"strings"
 )
 
@@ -81,4 +82,14 @@ func MachO(textPages, linkedit int) []byte {
 	be.PutUint32(b[sigOff+4:], 12)
 	copy(b[sigOff+12:], strings.Repeat(OldSignatureMark, 2))
 	return b
+}
+
+// AppleText is a requirement go-macho decompiled, as Apple's decompiler (reqdumper) prints it: go-macho prints a
+// certificate hash's raw bytes where reqdumper prints H"<hex>".
+func AppleText(detail string) string {
+	pre, hash, ok := strings.Cut(detail, "certificate root = ")
+	if !ok {
+		return detail
+	}
+	return pre + `certificate root = H"` + hex.EncodeToString([]byte(hash)) + `"`
 }

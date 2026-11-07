@@ -180,7 +180,7 @@ func TestAgentSignerOrderWardynCodesignAdHoc(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs := gm.CodeSignature()
-	if cs == nil || len(cs.CodeDirectories) != 1 || cs.CodeDirectories[0].ID != macvm.AgentSigningID || len(cs.Requirements) != 1 || cs.Requirements[0].Detail != req {
+	if cs == nil || len(cs.CodeDirectories) != 1 || cs.CodeDirectories[0].ID != macvm.AgentSigningID || len(cs.Requirements) != 1 || machosigntest.AppleText(cs.Requirements[0].Detail) != req {
 		t.Fatalf("the Wardyn-signed copy re-parses as %+v, want the designated requirement %q", cs, req)
 	}
 	if orig, _ := os.ReadFile(bin); !bytes.Equal(orig, machosigntest.MachO(2, 0x40)) {

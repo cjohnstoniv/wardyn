@@ -217,6 +217,7 @@ type ToolsResult struct {
 	// signing certificate, and AgentSigningCertSHA256 that certificate's SHA-256.
 	AgentSignature, AgentSigningCert string
 	AgentSigningCertSHA256           string
+	AgentSignRecord
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -421,7 +422,7 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
-		path, signed := agentToPush(ctx, o)
+		path, signed, signRec := agentToPush(ctx, o)
 		if signed != nil {
 			defer signed.Done()
 		}
@@ -433,7 +434,7 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		if err := pushAgent(ctx, g, path, guestagent.MacAgentRunPath); err != nil {
 			return res, fmt.Errorf("macvm: installing the run launcher: %w", err)
 		}
-		res.AgentRun, res.AgentSignature = true, AgentSignedAdHoc
+		res.AgentRun, res.AgentSignature, res.AgentSignRecord = true, AgentSignedAdHoc, signRec
 		if signed != nil {
 			sum := sha256.Sum256(signed.Cert)
 			res.AgentSignature, res.AgentSigningCertSHA256 = AgentSignedThisMac, hex.EncodeToString(sum[:])
@@ -749,6 +750,7 @@ type ToolsRecord struct {
 	AgentSigningCert string `json:"agent_signing_cert,omitempty"`
 	// AgentSigningCertSHA256 is the SHA-256 of the certificate the agent is signed with (this_mac only).
 	AgentSigningCertSHA256 string `json:"agent_signing_cert_sha256,omitempty"`
+	AgentSignRecord
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -764,7 +766,7 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
 		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature, AgentSigningCert: r.AgentSigningCert,
-		AgentSigningCertSHA256: r.AgentSigningCertSHA256}
+		AgentSigningCertSHA256: r.AgentSigningCertSHA256, AgentSignRecord: r.AgentSignRecord}
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
