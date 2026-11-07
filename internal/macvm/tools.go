@@ -831,7 +831,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	// Dropped last: the old generation is deleted under a kept machine's lock.
 	defer unlock()
 	base := site.dir
-	nb, done, err := beginUpdate(ctx, base, o.Log)
+	nb, done, err := beginUpdateOnce(ctx, base, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
 	}
