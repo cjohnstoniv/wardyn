@@ -232,3 +232,68 @@ func TestReviveImageAdmission_BuiltImageOrigin(t *testing.T) {
 		}
 	})
 }
+
+// TestReviveImageAdmission_StepRunOrigin: a run Wardyn launches itself (newStepRun: a source scan, a workspace
+// record, a harness sign-in, a site-config probe) names no image and is never checked at launch, even under
+// scope all, so newStepRun records origin wardyn and a revive under enforce with scope all does not refuse it.
+// A run that named no image and recorded no origin is still refused.
+func TestReviveImageAdmission_StepRunOrigin(t *testing.T) {
+	t.Run("newStepRun records origin wardyn", func(t *testing.T) {
+		srv := New(baseTestConfig(newHarness(t), &dispatchTestStore{}))
+		srv.cfg.Runner = &fakeRunner{}
+		gov := stepRunGoverned(governanceCeiling{}, false, false)
+		for _, task := range []string{harnessLoginTask, "source scan", "workspace record"} {
+			run, _, err := srv.newStepRun(t.Context(), uuid.New(), "owner", task, types.CC2, gov, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.ImageInput == nil || *run.ImageInput != "" || run.ImageAdmission == nil || run.ImageAdmission.Origin != "wardyn" {
+				t.Errorf("%s run: image input %v, image admission %+v; want \"\" and origin wardyn", task, run.ImageInput, run.ImageAdmission)
+			}
+		}
+	})
+	t.Run("a step run revives unchecked", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := scopeAllConventionFixture(t, &types.ImageAdmissionVerdict{Origin: "wardyn"}, a)
+		if code, body := f.reviveAs(t, true); code != http.StatusOK {
+			t.Fatalf("revive = %d %s, want 200: image admission does not check a run Wardyn launches itself", code, body)
+		}
+		if r, n := a.calls(); r != 0 || n != 0 {
+			t.Errorf("revive asked %d Require / %d Admit, want none", r, n)
+		}
+	})
+	t.Run("a step run: admin bulk restart", func(t *testing.T) {
+		f := scopeAllConventionFixture(t, &types.ImageAdmissionVerdict{Origin: "wardyn"}, &fakeAdmitter{})
+		if res := f.restart(t); !res.OK {
+			t.Fatalf("restart result = %+v, want ok", res)
+		}
+	})
+	t.Run("no origin recorded: still refused", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := scopeAllConventionFixture(t, nil, a)
+		code, body := f.reviveAs(t, true)
+		wantConventionNotAdmitted(t, f, a, code, body)
+	})
+	t.Run("a member's image with origin wardyn keeps the member's checks", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := reviveAdmissionFixture(t, types.ImageAdmissionEnforce, &types.ImageAdmissionVerdict{Origin: "wardyn"}, a)
+		f.st.site.Images.Admission.Scope = types.ImageAdmissionScopeAll
+		code, body := f.reviveAs(t, true)
+		wantReviveNotAdmitted(t, f, a, code, body)
+	})
+	// Only newStepRun writes origin wardyn: no POST /runs body carries a verdict or an origin, since the create
+	// decodes strictly and its request has no such field.
+	t.Run("POST /runs cannot carry an origin", func(t *testing.T) {
+		srv := agentRosterFixture(t, nil)
+		for _, extra := range []string{
+			`"image_admission":{"origin":"wardyn"}`,
+			`"image":"registry.example.com/team/agent:1","image_admission":{"origin":"wardyn"}`,
+			`"origin":"wardyn"`,
+		} {
+			w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"task":"echo hi","agent":"claude-code",`+extra+`}`)
+			if w.Code != http.StatusBadRequest || errorReason(w) != reasonInvalidRequestBody {
+				t.Errorf("create with %s = %d %s, want 400 %s", extra, w.Code, w.Body.String(), reasonInvalidRequestBody)
+			}
+		}
+	})
+}

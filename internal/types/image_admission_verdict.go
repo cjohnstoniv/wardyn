@@ -36,8 +36,9 @@ type ImageAdmissionVerdict struct {
 	// ref is the run's ImageInput. A revive re-checks Digest under Ref's coverage.
 	Ref string `json:"ref,omitempty"`
 	// Origin is where the image came from when the member named none, written by every launch whatever the
-	// admission mode: ImageOriginConvention, ImageOriginDevcontainer or ImageOriginWorkspace. Alone (no Mode or
-	// Verdict) when admission decided nothing about the image. Empty for a member's image and for a run launched
+	// admission mode: ImageOriginConvention, ImageOriginDevcontainer or ImageOriginWorkspace; ImageOriginWardyn
+	// is written at create by newStepRun alone. Alone (no Mode or Verdict) when admission decided nothing about
+	// the image. Empty for a member's image and for a run launched
 	// before origins were recorded.
 	Origin string `json:"origin,omitempty"`
 }
@@ -47,6 +48,7 @@ const (
 	ImageOriginConvention   = "convention"   // the agent's, harness set's or an architecture variant's image
 	ImageOriginDevcontainer = "devcontainer" // built from the request's devcontainer repository
 	ImageOriginWorkspace    = "workspace"    // built from a workspace with no base image: its repo's devcontainer or a generated image
+	ImageOriginWardyn       = "wardyn"       // a run Wardyn launches itself (newStepRun): scan, record, verify, harness login, capacity probe; never checked by image admission
 )
 
 // ImageAdmissionVerdict.Verdict values.

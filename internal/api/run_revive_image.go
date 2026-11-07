@@ -47,7 +47,8 @@ func (s *Server) reviveImageRefusals(ctx context.Context, run types.AgentRun, pr
 // run whose create named an image is the member's, whatever its verdict records: a launch's record for another
 // image (an origin, or a convention ref) holds no admitted pin of the member's image, so it is refused. A run
 // whose create named none is classified by the origin its launch recorded: an image Wardyn built for it
-// (devcontainer, workspace) is not covered by admission and never refused here; the convention image is held
+// (devcontainer, workspace) or a run Wardyn launched itself (wardyn, recorded only by newStepRun at create) is
+// not covered by admission and never refused here; the convention image is held
 // only under scope all, by the site's signers alone, at the digest its launch recorded (Ref). A run launched
 // before origins were recorded is taken as on the convention image, as before; under scope member it stays
 // unchecked. The authority is the run
@@ -71,8 +72,8 @@ func (s *Server) reviveImageAdmission(ctx context.Context, run types.AgentRun, p
 	// convention: the create named no image (nil: a row from before ImageInput, handled as the member's,
 	// unpinned). A profile's signers bind only a member's image.
 	convention := run.ImageInput != nil && *run.ImageInput == ""
-	if convention && (origin == types.ImageOriginDevcontainer || origin == types.ImageOriginWorkspace) {
-		return nil, nil // an image Wardyn built for the run: image admission does not cover it
+	if convention && (origin == types.ImageOriginDevcontainer || origin == types.ImageOriginWorkspace || origin == types.ImageOriginWardyn) {
+		return nil, nil // an image Wardyn built for the run, or a run Wardyn launched itself: image admission does not cover it
 	}
 	if convention {
 		if adm.EffectiveScope() != types.ImageAdmissionScopeAll {
