@@ -356,21 +356,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
-	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
-	stampConfinementDefault(createData, reqCC, f.confinementDefault)
-	if len(gw.delivery) > 0 {
-		createData["delivery"] = gw.delivery
-	}
-	stampDriveAudit(createData, f.drives, f.keep != nil, runID)
-	intent.stamp(createData, created.LaunchIntent != nil)
-	stampHarnessSet(createData, f.harnesses, f.image)
-	comps.stampRunCreate(createData)
-	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markRunCreateExempt(ctx, createDigestInput(req, f.carriedImage), createData)
-	stampImageAdmission(createData, f.admission)
-	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
-	stampIdempotencyKey(ctx, createData)
+	createData := s.runCreateAuditData(ctx, runCreateAudit{req: req, f: f, run: run, created: created, enforced: enforced, reqCC: reqCC,
+		jti: id.JTI, policyWarns: policyWarns, autonomy: autonomy, belowFloor: belowFloor, mpChoice: mpChoice, gw: gw, comps: comps,
+		intent: intent, runID: runID, createdByType: createdByType, createdBy: createdBy})
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 	s.auditRunComponents(ctx, runID, createdByType, createdBy, comps)
@@ -589,6 +577,47 @@ func noModelAccessWarning(req createRunRequest, mp runProviderChoice) []string {
 		return []string{la.Note}
 	}
 	return nil
+}
+
+// runCreateAudit is what the run.create row's data is built from, once the run row and its grants exist.
+type runCreateAudit struct {
+	req           createRunRequest
+	f             runFold
+	run, created  types.AgentRun
+	enforced      types.ConfinementClass
+	reqCC         types.ConfinementClass
+	jti           string
+	policyWarns   []string
+	autonomy      types.AutonomyResolution
+	belowFloor    bool
+	mpChoice      runProviderChoice
+	gw            grantWiring
+	comps         runComponents
+	intent        launchIntent
+	runID         uuid.UUID
+	createdByType types.ActorType
+	createdBy     string
+}
+
+// runCreateAuditData is handleCreateRun's run.create row data: createRunAuditData, then each stamp in turn.
+func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[string]any {
+	f := a.f
+	createData := createRunAuditData(a.req, f.policyID, a.enforced, a.reqCC, a.jti, a.policyWarns, a.autonomy, a.belowFloor, a.mpChoice)
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(a.run)
+	stampConfinementDefault(createData, a.reqCC, f.confinementDefault)
+	if len(a.gw.delivery) > 0 {
+		createData["delivery"] = a.gw.delivery
+	}
+	stampDriveAudit(createData, f.drives, f.keep != nil, a.runID)
+	a.intent.stamp(createData, a.created.LaunchIntent != nil)
+	stampHarnessSet(createData, f.harnesses, f.image)
+	a.comps.stampRunCreate(createData)
+	maps.Copy(createData, f.place.auditFields(a.created, s.runnerNameOf(ctx, a.created)))
+	s.markRunCreateExempt(ctx, createDigestInput(a.req, f.carriedImage), createData)
+	stampImageAdmission(createData, f.admission)
+	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)
+	stampIdempotencyKey(ctx, createData)
+	return createData
 }
 
 // createRunAuditData assembles the run.create event's payload.
