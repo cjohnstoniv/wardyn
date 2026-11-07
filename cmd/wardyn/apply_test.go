@@ -662,3 +662,38 @@ func TestDiffExitsTwoOnWouldRefuseLaunch(t *testing.T) {
 		}
 	}
 }
+
+// TestDiffNamesEveryWorkloadItWouldRefuse: a file of several workloads is checked to the end, so one run
+// shows each refusal and the diffs of the workloads that differ.
+func TestDiffNamesEveryWorkloadItWouldRefuse(t *testing.T) {
+	file := writeTemplateFile(t, "w.yaml", webYAML+"---\n"+workerCR)
+	refuse := sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldRefuse, Reason: "run_cap_reached", Message: "too many runs"}
+	web := previewOf(t, nil, "create", sdk.WorkloadCreated, refuse)
+	worker := web
+	worker.Name, worker.Proposed.Name = "worker", "worker"
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+		previewWeb:                              replyJSON(http.StatusOK, web),
+		"POST /api/v1/workloads/worker/preview": replyJSON(http.StatusOK, worker),
+	})
+	out, _, err := runRigWithStderr(t, rig, "diff", "-f", file)
+	if err == nil || exitCodeFor(err) != 2 || !strings.Contains(err.Error(), "workload/web") || !strings.Contains(err.Error(), "workload/worker") {
+		t.Errorf("err = %v (exit %d), want exit 2 naming web and worker", err, exitCodeFor(err))
+	}
+	if !strings.Contains(out, "workload/worker (file)") {
+		t.Errorf("the second workload's diff was not shown:\n%s", out)
+	}
+}
+
+// TestApplyDryRunJSONOmitsAPreflightThePreviewLacks: when the server's preview carries no setup checklist
+// (a launch that would be refused), --json has no "preflight" entry rather than an empty one.
+func TestApplyDryRunJSONOmitsAPreflightThePreviewLacks(t *testing.T) {
+	pv := previewOf(t, nil, "create", sdk.WorkloadCreated, sdk.WorkloadPreviewLaunch{State: sdk.WorkloadPreviewWouldRefuse, Reason: "run_cap_reached", Message: "too many runs"})
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){previewWeb: replyJSON(http.StatusOK, pv)})
+	out, _, _ := runRigWithStderr(t, rig, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML), "--dry-run", "--json")
+	if strings.Contains(out, `"preflight"`) {
+		t.Errorf("the entry has a preflight the server did not give:\n%s", out)
+	}
+	if !strings.Contains(out, `"preview"`) {
+		t.Errorf("the entry lost its preview:\n%s", out)
+	}
+}
