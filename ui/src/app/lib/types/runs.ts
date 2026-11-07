@@ -100,6 +100,26 @@ export interface RunQueue {
   limit_sentence?: string;
 }
 
+// One run's image admission verdict (Go: types.ImageAdmissionVerdict, image_admission_verdict.go).
+export interface ImageAdmissionVerdict {
+  // enforce when the image could be refused, audit when it was only reported.
+  mode: "enforce" | "audit" | (string & {});
+  // would_refuse is audit only; not_applicable is a macOS VM, which never runs the image.
+  verdict: "admitted" | "would_refuse" | "not_applicable" | (string & {});
+  // The refusal reason audit reported (would_refuse only).
+  reason?: string;
+  digest?: string;
+  // The member's ref pinned to digest, set only when the image was enforced and admitted.
+  pinned_ref?: string;
+  signer?: string;
+  identity?: string;
+  issuer?: string;
+  key_id?: string;
+  attestations?: string[];
+  // Why the site's own signers would refuse the image under audit, when the profile's enforced signers admitted it.
+  site_audit?: string;
+}
+
 export interface AgentRun {
   id: string;
   created_at: string;
@@ -189,6 +209,9 @@ export interface AgentRun {
   // devcontainer build, workspace-built, or BYOI-wrapped) — provenance, shown
   // on run detail. Empty/absent for legacy rows.
   image?: string;
+  // The image admission verdict for the member's image (Go: types.AgentRun.ImageAdmission); absent when
+  // admission was off, the run named no member image, an operator started it, or the run predates it.
+  image_admission?: ImageAdmissionVerdict | null;
   // The scan/verify/record-only TRUSTED linkage (internal/types/types.go's
   // AgentRun.WorkspaceID) — set for a record/verify step run, nil for an
   // ordinary user run. Modeled here ONLY so runHasWorkspace (below) can read
