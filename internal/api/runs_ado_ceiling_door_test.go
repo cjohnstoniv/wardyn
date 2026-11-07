@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -23,7 +24,9 @@ const adoAboveCeilingReason = "ado_capabilities_above_ceiling"
 
 // adoCeilingDoor posts a draft whose inline policy names caps to path as who:
 // "member" (no governance list), "governed" (a governance list granting
-// governance), or "operator" (the admin token). The row is adoEntraTestRow:
+// governance), or "operator" (an admin's own session, which is bound by the
+// ceiling alone; the admin token has no person and is off the lane). The row is
+// adoEntraTestRow:
 // ceiling [code_read code_write pr], default profile [code_read code_write].
 func adoCeilingDoor(t *testing.T, who, path string, governance []adoscope.Capability, caps string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -35,8 +38,12 @@ func adoCeilingDoor(t *testing.T, who, path string, governance []adoscope.Capabi
 	}
 	srv, st, _ := govEscapeFixture(t, cs)
 	st.siteConfig = adoSite(adoEntraTestRow())
+	sub, cookie := govMemberSub, govSession(t, govMemberSub, []string{"eng"}, false)
+	if who == "operator" {
+		sub, cookie = uvAdminSub, uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "")
+	}
 	st.workspaces = []types.Workspace{{
-		ID: uuid.New(), Name: "app", OwnedBy: govMemberSub,
+		ID: uuid.New(), Name: "app", OwnedBy: sub,
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo}},
 	}}
 	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",` +
@@ -44,10 +51,7 @@ func adoCeilingDoor(t *testing.T, who, path string, governance []adoscope.Capabi
 	if path == policyPreviewPath {
 		forbidPreviewSideEffects(t, srv)
 	}
-	if who == "operator" {
-		return do(t, srv, http.MethodPost, path, adminToken, body)
-	}
-	return doSSO(t, srv, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), body)
+	return doSSO(t, srv, http.MethodPost, path, cookie, body)
 }
 
 // adoDispatchRefusal is what dispatch answers for the same inputs
