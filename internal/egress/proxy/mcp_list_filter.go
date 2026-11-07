@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -89,14 +90,28 @@ func (x *mcpExchange) listRow(decision egress.Decision, ruleSource, cause, callI
 }
 
 // filterToolLists puts the tool list filter on an active exchange's answer, and
-// reports whether the relay may go on. Only JSON and event streams can carry a
-// JSON-RPC message; anything else (a 202, an error page) passes. An encoded
+// reports whether the relay may go on. Only JSON and event streams are read; an
+// answer of any other media type is replaced with the JSON-RPC error unless it
+// has no body (a 202 or 204 keeps its status), since a client could still parse
+// a list from it. An encoded
 // answer is refused: the broker asked for identity bytes and cannot read others.
 // A JSON answer is read whole here, so one over 10 MiB can still be answered 502;
 // an event stream is filtered one event at a time as the relay reads it.
 func (x *mcpExchange) filterToolLists(w http.ResponseWriter, resp *http.Response, callID string) bool {
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if mediaType != "application/json" && mediaType != "text/event-stream" {
+		if noBody(resp) {
+			return true
+		}
+		x.listRow(egress.Deny, ruleSourceMCPListUnreadable, "an answer that is neither JSON nor an event stream", callID)
+		msg, _ := json.Marshal(jsonRPCError(nil, mcpListUnreadableCode, mcpListUnreadableMessage))
+		resp.Header.Set("Content-Type", "application/json")
+		resp.Header.Del("Content-Length")
+		resp.Header.Del("Content-Encoding")
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{bytes.NewReader(msg), resp.Body}
 		return true
 	}
 	refuse := func(cause string) bool {
@@ -135,6 +150,17 @@ func (x *mcpExchange) filterToolLists(w http.ResponseWriter, resp *http.Response
 		io.Closer
 	}{bytes.NewReader(out), resp.Body}
 	return true
+}
+
+// noBody reports whether resp carries no body at all. It reads at most one byte,
+// which is dropped: an answer with a body is replaced whole.
+func noBody(resp *http.Response) bool {
+	if resp.ContentLength == 0 || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified {
+		return true
+	}
+	var b [1]byte
+	n, err := io.ReadFull(resp.Body, b[:])
+	return n == 0 && errors.Is(err, io.EOF)
 }
 
 // mcpListFilter rewrites the tool lists in one JSON document.
@@ -189,10 +215,14 @@ func (f *mcpListFilter) message(raw json.RawMessage) ([]byte, bool) {
 	if err != nil {
 		return f.refuse(raw, "a message with an ambiguous key, or not an object"), true
 	}
+	result, ok := obj["result"]
 	if _, isRequest := obj["method"]; isRequest {
+		if ok {
+			// Both a request and an answer: a client could read it as either.
+			return f.refuse(raw, "a message with both a method and a result"), true
+		}
 		return nil, false
 	}
-	result, ok := obj["result"]
 	if t := bytes.TrimSpace(result); !ok || len(t) == 0 || t[0] != '{' {
 		return nil, false
 	}
