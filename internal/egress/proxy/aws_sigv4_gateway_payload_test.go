@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +29,9 @@ func TestAWSSigV4Gateway_RefusesAnUnsignedOrWrongPayload(t *testing.T) {
 			rec := g.send(t, req, sgwHost)
 			if rec.Code != http.StatusForbidden || rec.Header().Get("X-Wardyn-Reason") != awsSigV4Payload {
 				t.Fatalf("gateway call with payload %q: status %d reason %q, want 403 %s", declared, rec.Code, rec.Header().Get("X-Wardyn-Reason"), awsSigV4Payload)
+			}
+			if want := "unsigned payload"; name != "another body's hash" && !strings.Contains(rec.Body.String(), want) {
+				t.Fatalf("refusal %q does not say it declares an %s", rec.Body, want)
 			}
 			if n := len(g.arrivals()); n != 0 {
 				t.Fatalf("the gateway saw %d requests whose body was not signed, want none", n)
