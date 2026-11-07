@@ -215,7 +215,8 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 	return nil, fmt.Errorf("%w: the store cannot list a person's runs", erasure.ErrNotAvailable)
 }
 
-// eraseRunTasks blanks the task text, title, description and correlation id of every run the person created. A run of theirs still waiting
+// eraseRunTasks blanks the task text, title, description and correlation id of every run the person created, and
+// clears the answers kept for the idempotency keys naming those runs (each key stays bound). A run of theirs still waiting
 // in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
 // snapshot included, and it would start under the very person being erased.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {
@@ -228,6 +229,15 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 		return nil, err
 	}
 	n, err := pe.BlankRunTasks(ctx, person)
+	// After the blank: the answers kept for their idempotency keys carry the same text.
+	var cleared int64
+	if ks, ok := s.cfg.Store.(runCreateAnswerEraser); ok {
+		var clearErr error
+		cleared, clearErr = ks.ClearRunCreateResponsesOf(ctx, person)
+		if err == nil {
+			err = clearErr
+		}
+	}
 	if s.cfg.ForgetRunCorrelation != nil {
 		// Listed after the clear, so a run created while it ran (blanked too) is forgotten as well, even on a
 		// partial failure: a sink read begun earlier is discarded.
@@ -237,11 +247,16 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 			err = listErr
 		}
 	}
-	out := map[string]any{"runs": n}
+	out := map[string]any{"runs": n, "create_answers_cleared": cleared}
 	if cancelled > 0 {
 		out["queued_cancelled"] = cancelled
 	}
 	return out, err
+}
+
+// runCreateAnswerEraser is the store that keeps POST /runs Idempotency-Keys and their answers.
+type runCreateAnswerEraser interface {
+	ClearRunCreateResponsesOf(ctx context.Context, createdBy string) (int64, error)
 }
 
 // eraseRunOutputsOf erases the stored output of every run the person created:

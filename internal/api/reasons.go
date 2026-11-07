@@ -833,3 +833,10 @@ const (
 	reasonMemberDriveDeleteDeferred = "member_drive_delete_deferred" // 202: the Mac is offline; the disk is removed when it reconnects
 	reasonMemberDriveRecordOnly     = "member_drive_record_only"     // 200: the Mac is no longer registered; only the record was removed
 )
+
+// POST /runs Idempotency-Key (runs_idempotency.go).
+const (
+	reasonIdempotencyKeyInvalid  = "idempotency_key_invalid"   // 400: not one value of 1-255 visible ASCII characters
+	reasonIdempotencyKeyReused   = "idempotency_key_reused"    // 422: the key was used with a different request in the last 24 hours
+	reasonIdempotencyKeyInFlight = "idempotency_key_in_flight" // 409: a request with the key is still being answered; Retry-After says when to try again
+)

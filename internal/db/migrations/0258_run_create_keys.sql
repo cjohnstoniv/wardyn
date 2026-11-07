@@ -8,6 +8,7 @@
 -- transaction that inserts the run, so a key never names a run that was not made and a run is never made
 -- twice for one key. The response_* columns hold the answer the first caller got once the key names a
 -- run: NULL until saved, or when the body passed the size cap. BYTEA, so a replay is byte-equal.
+-- response_erased is set when erasing the person's run tasks cleared the answer: no later save refills it.
 -- A split-role install grants the app role SELECT, INSERT, UPDATE, DELETE on it.
 CREATE TABLE IF NOT EXISTS run_create_keys (
     principal         TEXT        NOT NULL,
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS run_create_keys (
     response_status   INTEGER,
     response_location TEXT,
     response_body     BYTEA,
+    response_erased   BOOLEAN     NOT NULL DEFAULT false,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at        TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (principal, via, key_sha256)

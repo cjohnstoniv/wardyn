@@ -32,6 +32,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `desktop_vm_sign_ins`, and `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`,
   `cli_sessions` and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 - Revoking a portal still leaves the runs it launched their gateway access, as before. To cut it, pass `cut_in_flight=true` when you revoke; on an already revoked portal it cuts it then.
+- `POST /api/v1/runs` now honours `Idempotency-Key`. A client that already sends that header gets the first answer
+  replayed for 24 hours instead of a new run, and a value outside 1 to 255 visible ASCII characters is refused with
+  400 `idempotency_key_invalid`. A retry with a key is safe only once every control-plane replica runs 0.10.0 or
+  later; an older replica ignores the key.
 
 ### Added
 
@@ -43,6 +47,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `POST /api/v1/workloads/{name}/preview` answers what an apply would do: created, updated or unchanged, each changed field, whether a run starts and which run it replaces, and the refusal the apply would meet. It stores nothing. A service identity's token may call it.
 - Run identity for an Amazon Bedrock provider people sign in to with SSO. With `WARDYN_AWS_SIGV4_AT_PROXY` on, Wardyn signs each Bedrock request as the person for the regional Bedrock address and sends it to your gateway with the run's identity token. The gateway forwards it to AWS unchanged. Off unless an admin turns it on for the provider.
 - Revoking a portal can also cut the gateway access of the runs it launched: `DELETE /api/v1/admin/delegates/{id}?cut_in_flight=true`. Their gateway calls are refused within about half the provider's token lifetime. Off by default.
+- `POST /api/v1/runs` honours an `Idempotency-Key` header for 24 hours. A retry with the same key and body gets the
+  first answer back with `Idempotent-Replayed: true` instead of a second run. A different body is refused (422
+  `idempotency_key_reused`), and a retry while the first is still being answered gets 409
+  `idempotency_key_in_flight`. `/healthz` reports `idempotent_run_create`. On by default; a request without the
+  header is unchanged.
 
 ### Changed
 

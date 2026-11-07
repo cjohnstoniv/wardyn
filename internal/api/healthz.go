@@ -176,6 +176,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// its internal CA (internal/hoptls). false only on a local install whose
 		// control-plane URL is loopback http. One bit, no address or cert detail.
 		"proxy_hop_tls": s.cfg.ControlPlaneCAPEM != "",
+		// idempotent_run_create: POST /api/v1/runs honours Idempotency-Key, so a client may retry a create
+		// whose answer it lost. One bit; false only on a store that keeps no keys.
+		"idempotent_run_create": s.keepsRunCreateKeys(),
 	}
 	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
 	// grade, present ONLY on a k8s substrate — omitted from the map entirely

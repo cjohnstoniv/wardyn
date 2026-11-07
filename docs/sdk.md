@@ -665,6 +665,24 @@ The run's `machine` request field is `RunMachine`:
 
 `GatewayIdentityBedrockSSO` (`gateway_identity_bedrock_sso`) is true when a `bedrock_sso` provider can send run identity on this install, which needs `WARDYN_AWS_SIGV4_AT_PROXY` on.
 
+## Idempotent run create
+
+`POST /api/v1/runs` honours an `Idempotency-Key` header. Send a new value, such as a UUID, for each run you mean
+to launch, and the same value when you retry that launch.
+
+- The value is 1 to 255 visible ASCII characters. An RFC 8941 string in quotes is read without its quotes.
+- A key belongs to its caller. A portal acting for a person has a scope of its own.
+- For 24 hours from first use, a retry with the same key and body gets the first answer back byte for byte, with
+  `Idempotent-Replayed: true`. That is the same status, `Location` and body, a refusal made after the run was
+  inserted included. A refusal before the insert keeps nothing, so a retry after you fix its cause is judged afresh.
+- When the first answer was not kept, or was erased with the person's run tasks, the replay is a `201` rebuilt
+  from the run, without the first answer's warnings.
+- The same key with another body or break-glass reason gets `422` `idempotency_key_reused`. A retry while the first
+  request is still being answered gets `409` `idempotency_key_in_flight` with `Retry-After: 1`.
+- `/healthz` reports `"idempotent_run_create": true` when the server honours the key.
+- Retrying is safe only once every control-plane replica runs 0.10.0 or later. An older replica ignores the key and
+  makes a second run.
+
 ## Error handling
 
 Non-2xx responses are returned as `*client.APIError`:
@@ -868,6 +886,7 @@ start.
 | `member_drive_requires_person` / `member_drive_rate_limited` / `member_drive_name_invalid` / `member_drives_disabled` / `member_drives_denied_by_unit` / `member_drive_unsupported` / `member_drive_delete_unavailable` / `member_drive_name_taken` / `member_drive_limit_reached` | `POST /me/drives`, a person's own drive: `403` not a person's session or own token; `429` over 6 creates and deletes a minute; `400` a bad name; `422` the organisation switch is off, no managed backend or drive size here, or a substrate that could not delete what it creates; `403` a governance profile denies it; `409` a drive you can use has the name; `422` you hold the most drives allowed. |
 | `member_drive_in_use` / `member_drive_busy` / `member_drive_delete_failed` | `DELETE /me/drives/{id}` (also `member_drive_requires_person`, `member_drive_rate_limited`, `member_drive_delete_unavailable`): `409` a live or kept run holds the drive, or another delete is in flight; `503` the substrate failed and nothing was removed. A drive that is not yours, an admin drive and an unknown id all answer `404` `drive_not_found` with the same body. |
 | `member_drive_delete_deferred` / `member_drive_record_only` | `DELETE /me/drives/{id}` of a disk drive on a Mac: `202` the Mac is offline, and the disk goes when it reconnects; `200` the Mac is no longer registered, so only the record went. The body carries `reason` and `message`. |
+| `idempotency_key_invalid` / `idempotency_key_reused` / `idempotency_key_in_flight` | `POST /runs` with an `Idempotency-Key` (see [Idempotent run create](#idempotent-run-create)). `400`: the header is not one value of 1 to 255 visible ASCII characters. `422`: the key was used with a different body or break-glass reason in the last 24 hours; use a new key for a new run. `409` with `Retry-After: 1`: a request with the key is still being answered; retry. |
 | `user_drive_member_owned` | `409`: `PUT`/`DELETE /drives/{id}`, `POST /drives/grants` or `POST /drives/{id}/reclaim` named a person's own drive; a super admin deletes it with `DELETE /drives/member/{id}`. |
 | `run_mode_required` / `run_mode_invalid` / `start_folder_invalid` | `400`: a new client's mode (or a background task's workload) is unset, and is never inferred (`mode_contract: "0.9"` marks a request as a new client's even when it carries no other run-mode field); a run-mode carrier is malformed; a `start_folder` is malformed, names an attachment or a repository the run lacks, or leaves its mount. |
 | `run_mode_conflict` | `422`: run-mode carriers contradict each other, or an older field they replace (`agent`, `task`, `interactive`) rides beside them. The CLI's `--agent` / `--task` (and `--interactive`, `--task-mode`) with no run-mode flag are the deliberate exception: that request carries no `mode_contract` and stays the older-client shape. |
