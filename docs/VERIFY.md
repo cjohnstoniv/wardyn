@@ -121,9 +121,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_
 ## 5. Verify the release assets
 
 - Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the six `wardyn-<os>-<arch>` CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries, `wardyn-runner-units.tar.gz`, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed.
-- The CLI installers `install-cli.sh` and `install-cli.ps1` are release assets too, under the same `SHA256SUMS`.
-- The macOS runner package `wardyn-runnerd.pkg` (from 0.10.0 with the `wardyn` CLI) is a release asset too, covered by the same `SHA256SUMS`.
-- `wardyn-licenses.tar.gz` holds the licence texts for the binaries, under the same `SHA256SUMS`.
+- `install-cli.sh`, `install-cli.ps1`, the macOS runner package `wardyn-runnerd.pkg` (from 0.10.0 with the `wardyn` CLI) and `wardyn-licenses.tar.gz` (the licence texts for the binaries) are release assets too, all under the same `SHA256SUMS`.
 - `gh release download` is a GitHub CLI command too, so it needs the same sign-in; the assets are also plain downloads at `https://github.com/cjohnstoniv/wardyn/releases/download/v${WARDYN_VERSION}/<asset>`.
 
 ```sh
