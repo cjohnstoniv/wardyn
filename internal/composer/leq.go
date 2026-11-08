@@ -106,6 +106,29 @@ func leqAllowedDomains(a, b []string) bool {
 	return true
 }
 
+// AllowlistWithin reports whether every entry of next is covered by an entry of old on the whole entry:
+// leqAllowedDomains' rule, read under the port rule as well, so a bare old entry covers a port-qualified one
+// only on 80 or 443, the ports a bare entry reaches when the rule is on. It compares two lists as written,
+// so a list a policy open to all egress would read differently (ApplyRestrictionOverlay) cannot hide an
+// entry from it.
+func AllowlistWithin(next, old []string) bool {
+	var base []domEntry
+	for _, s := range old {
+		if e, ok := parseDomEntry(s); ok {
+			base = append(base, e)
+		}
+	}
+	for _, s := range next {
+		e, ok := parseDomEntry(s)
+		if !ok || !slices.ContainsFunc(base, func(f domEntry) bool {
+			return f.covers(e) && (f.port == e.port || e.port == 80 || e.port == 443)
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
 // leqDeniedDomains holds when every denial of b is still in force in a: some
 // entry of a covers it. An unreadable b entry must reappear as typed.
 func leqDeniedDomains(a, b []string) bool {

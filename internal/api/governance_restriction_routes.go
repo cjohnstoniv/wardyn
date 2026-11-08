@@ -194,8 +194,11 @@ func restrictionEffective(sp types.RestrictionSpec, l types.RestrictionLimits) (
 }
 
 // restrictionAtLeastAsStrict reports whether replacing old by next is exempt from a second human:
-// every old deny is kept (composer.Leq over what each leaves a person), the contact is unchanged (a
-// contact is who a refused person is told to ask), and next covers every member old does, or everyone.
+// every old deny is kept (composer.Leq over what each leaves a person open to all egress), next's
+// allowlist is within old's on the whole entry, host, port and literal (composer.AllowlistWithin over the
+// lists as written: what each leaves a person with an allowlist of their own, and the entries the open
+// reading does not seed), the contact is unchanged (a contact is who a refused person is told to ask), and
+// next covers every member old does, or everyone.
 func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWrite) bool {
 	a, err := restrictionEffective(next.Spec, next.Limits)
 	if err != nil {
@@ -206,6 +209,9 @@ func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWri
 		return false
 	}
 	if !composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits) || !sameJSON(old.Contact, next.Contact) {
+		return false
+	}
+	if ol := old.Spec.AllowedDomains; ol != nil && (next.Spec.AllowedDomains == nil || !composer.AllowlistWithin(*next.Spec.AllowedDomains, *ol)) {
 		return false
 	}
 	for _, g := range old.Spec.WithheldGrants {
