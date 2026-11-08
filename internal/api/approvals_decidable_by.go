@@ -9,6 +9,7 @@ package api
 import (
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -55,7 +56,7 @@ func (s *Server) listDecidableByMe(w http.ResponseWriter, r *http.Request) bool 
 		if c := b.RequestedAt.Compare(a.RequestedAt); c != 0 {
 			return c
 		}
-		return a.ID.String() < b.ID.String() // a total order, so the 500 cut is stable
+		return strings.Compare(a.ID.String(), b.ID.String()) // a total order, so the 500 cut is stable
 	})
 	runs := map[uuid.UUID]types.AgentRun{}
 	rows := []types.ApprovalRequest{}
