@@ -36,6 +36,7 @@ import { PUSH } from "./copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, Chip } from "./primitives";
+import { DecidedByLine, SecondPersonLine } from "./decider-lines";
 
 // Lives here rather than beside isAdoCapabilityRequest/isAdoConsentRequest in
 // lib/types/approvals.ts: that module is eager (isHeld is imported into the
@@ -141,6 +142,7 @@ export type PushCardRun = Pick<AgentRun, "state">;
 export function PushContentCard({
   item,
   securityOperator,
+  listed = false,
   run,
   busy,
   onApprove,
@@ -148,6 +150,8 @@ export function PushContentCard({
 }: {
   item: ApprovalRequest & { requested_scope: PushContentScope };
   securityOperator: boolean;
+  /** The server listed this row as one the viewer may decide now (the Waiting on you read): a unit's deciders rule names them. */
+  listed?: boolean;
   run: PushCardRun | null | undefined;
   /** Which decide call is in flight, else null — both buttons disable, only
    *  the pressed one spins (#458, the same shape as ado-capability-card.tsx). */
@@ -186,6 +190,8 @@ export function PushContentCard({
         <ApprovalKindChip kind="push_content" />
         <span className="text-sm font-semibold text-foreground">{PUSH.CARD_TITLE}</span>
       </div>
+      <DecidedByLine item={item} />
+      <SecondPersonLine item={item} />
 
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">{PUSH.FIELD_REPOSITORY}</dt>
@@ -232,7 +238,7 @@ export function PushContentCard({
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
         {runEnded ? (
           <p className="text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
-        ) : securityOperator ? (
+        ) : securityOperator || listed ? (
           <>
             <Button size="sm" variant="info" disabled={busy !== null} onClick={onApprove}>
               {busy === "approve" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} Approve
@@ -254,7 +260,7 @@ export function PushContentCard({
           <p className="mt-2.5 text-xs text-muted-foreground">
             {held ? PUSH.HELD_NOTE : PUSH.HELD_EXPIRED}
           </p>
-          {securityOperator && <p className="mt-1 text-xs text-muted-foreground">{PUSH.APPROVE_NOTE}</p>}
+          {(securityOperator || listed) && <p className="mt-1 text-xs text-muted-foreground">{PUSH.APPROVE_NOTE}</p>}
         </>
       )}
     </div>
