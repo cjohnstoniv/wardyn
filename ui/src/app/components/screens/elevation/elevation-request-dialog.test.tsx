@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The elevation request dialog (elevation-request board, frames A and B). Expected strings are the board's,
+// The elevation request dialog. Expected strings are the approved copy's,
 // spelled out rather than read back from the copy module.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
@@ -74,7 +74,7 @@ beforeEach(() => {
 });
 
 describe("ElevationRequestDialog: the form", () => {
-  it("opens on the board's frame A", () => {
+  it("opens with the approved wording", () => {
     setup();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("New elevation request")).toBeInTheDocument();
