@@ -249,6 +249,8 @@ type providerDispatch struct {
 	detail          string // the brokered-LLM 404's detail
 	// gatewayRoutes is ProxyConfig.GatewayIdentity: the routes that carry the run's signed identity.
 	gatewayRoutes []proxy.GatewayIdentityRoute
+	// extraHeaders is ProxyConfig.LLMHeaders: {gateway host → the non-secret headers its provider sets}.
+	extraHeaders map[string]map[string]string
 }
 
 // addLocalModel records a local_model lane's upstream, allowlist and bounds for
@@ -410,6 +412,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			}
 			prov.upstreams[lane.key.vendorHost] = lane.key.upstream
 		}
+		prov.addExtraHeaders(lane.key)
 	}
 	return llms, lanePairs, injections, prov, true
 }

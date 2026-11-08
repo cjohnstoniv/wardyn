@@ -105,6 +105,7 @@ kube_api.restart
 kube_api.write
 listen
 llm_channel_hosts
+llm_headers
 llm_unavailable_detail
 llm_upstreams
 local_models

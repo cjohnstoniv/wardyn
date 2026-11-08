@@ -395,6 +395,9 @@ type dispatchLLMPlan struct {
 	// address (nil when requests go to the vendor host) — a gateway reaches
 	// only the runs that chose it.
 	llmUpstreams map[string]string
+	// llmHeaders is ProxyConfig.LLMHeaders: the chosen custom_endpoint provider's extra gateway headers
+	// by host; nil, so no key is written, unless it has some.
+	llmHeaders map[string]map[string]string
 	// localModels is ProxyConfig.LocalModels: each local_model upstream's model
 	// allowlist and request bounds, for the proxy's route gate.
 	localModels map[string]types.LocalModelSettings
@@ -561,7 +564,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		awsSigV4:             awsSigV4,
 		kubectlCLI:           kubectlCLI,
 		mitmLLM:              subscription || mitmForInspect || limited,
-		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
+		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, llmHeaders: prov.extraHeaders, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
 		gatewayRoutes: prov.gatewayRoutes, modelLimit: p.modelLimit.runnerLimit(laneBedrockRoutes(llms)),
 	}, true
 }

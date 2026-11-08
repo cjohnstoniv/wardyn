@@ -241,6 +241,9 @@ type ProxyConfig struct {
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
 	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
 	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
+	// LLMHeaders is proxy.Config.LLMHeaders: gateway host -> the non-secret headers set on its requests.
+	// Omitted when empty, so a payload without any is byte for byte what an older runner was sent.
+	LLMHeaders map[string]map[string]string `json:"llm_headers,omitempty"`
 	// VM is proxy.Config.VM. Dispatch leaves it false: the Docker driver adds the
 	// key itself for a desktop VM, whose proxy's only client is the wardyn-vmnet
 	// relay it starts.
