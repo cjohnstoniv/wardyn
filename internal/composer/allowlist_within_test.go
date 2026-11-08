@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // AllowlistWithin holds only when the new list is a subset of the old one on the whole entry: host, port and
@@ -42,6 +43,26 @@ func TestAllowlistWithin(t *testing.T) {
 	} {
 		if got := composer.AllowlistWithin(tc.next, tc.old); got != tc.want {
 			t.Errorf("%s: AllowlistWithin(%v, %v) = %v, want %v", tc.name, tc.next, tc.old, got, tc.want)
+		}
+	}
+}
+
+// Leq reads an allowlist's ports as the port rule does: a bare entry reaches 80 and 443 only, so an entry
+// naming another port is never within it, and one naming 80 or 443 is.
+func TestLeqReadsAllowlistPortsUnderThePortRule(t *testing.T) {
+	for _, tc := range []struct {
+		a, b []string
+		want bool
+	}{
+		{[]string{"b.example:8443"}, []string{"b.example"}, false},
+		{[]string{"*.example:8443"}, []string{"*.example"}, false},
+		{[]string{"b.example:443"}, []string{"b.example"}, true},
+		{[]string{"b.example:80"}, []string{"b.example"}, true},
+		{[]string{"b.example:8443"}, []string{"b.example:8443"}, true},
+	} {
+		if got := composer.Leq(types.RunPolicySpec{AllowedDomains: tc.a}, types.RunPolicySpec{AllowedDomains: tc.b},
+			types.GovernanceLimits{}, types.GovernanceLimits{}); got != tc.want {
+			t.Errorf("Leq(%v <= %v) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
 	}
 }
