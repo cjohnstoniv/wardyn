@@ -18,6 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_deciders`. Without it `GET /governance` fails and a unit's deciders cannot be set.
+- Before you downgrade: an older binary ignores a portal's `run_in_under`, so the portal can start runs in any of the person's contexts.
 
 ### Added
 
@@ -32,6 +33,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VM bases now mark Setup Assistant's panes as seen for the agent account, stop the Fn key raising Dictation, turn Spotlight indexing and diagnostics upload off, and kill Terminal and remove its saved state, so a run's first desktop is clean. On by default. Prepare writes them and every tools update writes them again, through a new guest-agent route that takes no input and adds no allowed exec. Rows that fail or cannot be applied are listed in `tools.json` as `base_settings_skipped` and never fail an update. edit-base's finish also cleans Terminal.
 - `wardyn-runnerd doctor` on a macOS VM runner has a `guest-agent` stage: it fails when the guest agent went in signed ad hoc, quoting why each signer failed, and passes when this Mac's cert signed it. `macos-vm status` shows the signer and the signing errors, and the base's `tools.json` records them as `agent_signer` and `agent_sign_errors`, with no paths.
 - Platform envelopes: `PUT` and `DELETE /api/v1/governance/units/{id}/envelope` (and `SetEnvelope`, `ClearEnvelope` in the SDK) name the IdP groups the security tier approves for the unit that roots a platform. Security tier only, held under `WARDYN_GOVERNANCE_SECOND_HUMAN`; the Default unit, a unit on the path of another envelope, and a group already on another envelope are refused. `GET /governance` lists `envelopes`. By itself an envelope changes no approval and no run: none exists until security sets one.
+- A portal can be pinned to one governance unit when it is registered (`run_in_under`, a unit id or exact name): a run it launches must resolve to that unit or one below it, or `POST /runs` answers `403` `portal_unit_scope`. The check reads the context the run resolved to, so a default context outside the unit is refused too, and the person's restrictions still apply after the pick. Default: no pin, which changes nothing. The pin is set at registration only and is not checked against any other setting.
 
 ### Changed
 

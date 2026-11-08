@@ -128,6 +128,7 @@ const policyPreviewGateExceptionsMax = 12
 // deleted, reordered or moved off a door reds here.
 var wantRunFoldSteps = []pinnedStep{
 	{"stepRunContract", foldCreate | foldPreflight | foldPreview},
+	{"stepPortalUnit", foldCreate | foldPreflight | foldPreview},
 	{"stepBaseline", foldCreate | foldPreflight | foldPreview},
 	{"stepPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepSeedWorkspace", foldCreate | foldPreflight | foldPreview},

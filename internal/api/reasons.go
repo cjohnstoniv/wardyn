@@ -526,6 +526,9 @@ const (
 	reasonDelegateClientIDInvalid    = "delegate_client_id_invalid"
 	reasonDelegateClientIDIsPortal   = "delegate_client_id_is_portal" // idp_client_id named this deployment's own OIDC client
 	reasonDelegateGroupInvalid       = "delegate_group_invalid"
+	reasonDelegateRunInUnderInvalid  = "delegate_run_in_under_invalid" // run_in_under names no existing governance unit
+	reasonPortalUnitScope            = "portal_unit_scope"             // a pinned portal's launch resolved outside its unit
+	reasonPortalUnitUnavailable      = "portal_unit_unavailable"       // the portal's row or the units could not be read (503)
 
 	// /api/v1/setup/integrations and /api/v1/setup/onboarding.
 	reasonIntegrationInvalid              = "integration_invalid"                // the integration write fails validation

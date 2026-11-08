@@ -48,7 +48,7 @@ type DelegateReader interface {
 
 var _ DelegateReader = PG{}
 
-const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at, cut_in_flight_at`
+const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at, cut_in_flight_at, run_in_under`
 
 func scanDelegate(row pgx.Row) (types.Delegate, error) { return scanDelegateWith(row) }
 
@@ -56,7 +56,7 @@ func scanDelegate(row pgx.Row) (types.Delegate, error) { return scanDelegateWith
 func scanDelegateWith(row pgx.Row, extra ...any) (types.Delegate, error) {
 	var d types.Delegate
 	err := row.Scan(append([]any{&d.ID, &d.Name, &d.IdPClientID, &d.Group, &d.CredentialSHA256, &d.RegisteredBy,
-		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt, &d.CutInFlightAt}, extra...)...)
+		&d.CreatedAt, &d.LastUsedAt, &d.RevokedAt, &d.CutInFlightAt, &d.RunInUnder}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Delegate{}, ErrNotFound
 	}
@@ -71,10 +71,10 @@ func scanDelegateWith(row pgx.Row, extra ...any) (types.Delegate, error) {
 // (a reused credential in a 256-bit space).
 func (s PG) CreateDelegate(ctx context.Context, d types.Delegate, raw string) (types.Delegate, error) {
 	const q = `
-		INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by, run_in_under)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		RETURNING ` + delegateCols
-	out, err := scanDelegate(s.Pool.QueryRow(ctx, q, d.ID, d.Name, d.IdPClientID, d.Group, hashToken(raw), d.RegisteredBy))
+	out, err := scanDelegate(s.Pool.QueryRow(ctx, q, d.ID, d.Name, d.IdPClientID, d.Group, hashToken(raw), d.RegisteredBy, d.RunInUnder))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Delegate{}, ErrConflict

@@ -141,6 +141,8 @@ type runFoldStep struct {
 // The ORDER is security-relevant and is the contract; do not sort it:
 //   - The request contract first: it reads only the request, so a malformed or
 //     not-yet-honoured field answers before any store read or credential lookup.
+//   - A pinned portal's unit right after the contract: the ceiling arrives resolved, so the
+//     picked context is checked before any later step spends work on a launch the portal may not make.
 //   - The egress baseline is read once after request validation; the floor, the autonomy
 //     posture and the door's grading read that one value.
 //   - Policy first: the member clamp and grant narrowing run before anything
@@ -194,6 +196,7 @@ type runFoldStep struct {
 //     after the mint (unionRunEgress), so nothing above may grade them.
 var runFoldSteps = []runFoldStep{
 	{(*Server).stepRunContract, foldAll},
+	{(*Server).stepPortalUnit, foldAll},
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
