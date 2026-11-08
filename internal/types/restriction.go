@@ -67,6 +67,9 @@ type RestrictionSpec struct {
 	Desktop        *DesktopControls  `json:"desktop,omitempty"`
 	// Recording is a floor: a run of the restriction's people is recorded at least this much.
 	Recording *RecordingLevel `json:"recording,omitempty"`
+	// DataOut is a floor on the rule for content leaving a run of the restriction's people: the stricter of the
+	// two applies (allowed, review or blocked; docs/POLICIES.md#data_out).
+	DataOut *TransferRule `json:"data_out,omitempty"`
 	// WithheldGrants names credentials the run is not given: a grant of the same kind (a scope-less
 	// entry) or the same pairing is kept from it at dispatch and mint. It never reaches Overlay().
 	WithheldGrants []GrantSpec `json:"withheld_grants,omitempty"`
@@ -140,7 +143,7 @@ func (s RestrictionSpec) Overlay() CeilingOverlay {
 		DeniedDomains: s.DeniedDomains, AllowAllEgress: s.AllowAllEgress, FirstUseApproval: s.FirstUseApproval,
 		FirstUseHoldSeconds: s.FirstUseHoldSeconds, MaxHolds: s.MaxHolds, MinConfinementClass: s.MinConfinementClass,
 		AutoStopAfterSec: s.AutoStopAfterSec, GitPushAnyBranch: s.GitPushAnyBranch,
-		AllowedDomains: s.AllowedDomains, ToolRules: s.ToolRules, PushRules: s.PushRules, Desktop: s.Desktop, Recording: s.Recording,
+		AllowedDomains: s.AllowedDomains, ToolRules: s.ToolRules, PushRules: s.PushRules, Desktop: s.Desktop, Recording: s.Recording, DataOut: s.DataOut,
 	}
 	switch {
 	case out.AllowAllEgress != nil:

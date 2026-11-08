@@ -22,6 +22,8 @@ export interface BoundarySpec {
   eligible_grants?: GrantSpec[];
   // The desktop directions every run is held to (#2967); a direction left unset is its default.
   desktop?: DesktopControls;
+  // The least strict rule for content leaving any run; a run's own is at least this strict.
+  data_out?: "allowed" | "review" | "blocked";
   /** The Azure DevOps capabilities a run may hold, at launch, at each request and at each credential resolve. pr means its parts; absent is no cap. */
   azure_devops_capabilities?: string[];
   /** The GitHub capabilities the GitHub CLI and git pushes may use, at launch. Absent is no cap. */

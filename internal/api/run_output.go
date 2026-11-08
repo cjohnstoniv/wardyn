@@ -363,6 +363,9 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.refuseDataOutReader(w, r, run, "output", s.isSecurityOperator(r.Context())) {
+		return
+	}
 	limit := s.cfg.RunOutputTailBytes
 	if v := r.URL.Query().Get("tail"); v != "" {
 		n, err := strconv.Atoi(v)

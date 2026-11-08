@@ -57,6 +57,12 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 		return false
 	}
 	if s.recordingReader(r, run) {
+		// data_out review or blocked keeps a recording from its owner; a rule that cannot be read does too.
+		if rule, held := s.dataOutHolds(r.Context(), id); held {
+			at, actor := actorFromRequest(r)
+			s.auditDataOutDenied(r.Context(), id, at, actor, "recording", rule)
+			return false
+		}
 		return true
 	}
 	// Audited only once the run is confirmed to genuinely exist — a

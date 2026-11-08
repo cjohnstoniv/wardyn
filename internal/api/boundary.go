@@ -91,6 +91,11 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if sp.AllowAllEgress != nil && *sp.AllowAllEgress && sp.AllowedDomains != nil {
 		return errors.New("allow_all_egress true allows every host, so allowed_domains bounds nothing: name one of them")
 	}
+	if sp.DataOut != nil {
+		if err := validateDataOut(*sp.DataOut); err != nil {
+			return err
+		}
+	}
 	if m := limits.MaxEndAheadSec; m != nil && *m <= 0 {
 		return errors.New("limits.max_end_ahead_sec must be a positive number of seconds; omit it for no limit")
 	}

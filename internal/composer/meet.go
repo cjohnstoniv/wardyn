@@ -109,6 +109,7 @@ func (m *meeter) run(ov Overlay) {
 	m.meetPosture(ov.Ceiling)
 	m.meetPush(ov.Ceiling.PushRules)
 	m.meetLimits(ov.Limits)
+	m.impliedByDataOut()
 	m.checkResult()
 }
 
@@ -184,6 +185,9 @@ func (m *meeter) validatePresence(ov Overlay) {
 		if err := types.ValidateDesktopControls(&types.DesktopControls{PasteIn: d.PasteIn, CopyOut: d.CopyOut, Upload: d.Upload, Download: d.Download}); err != nil {
 			m.fail(ReasonOverlayInvalid, "desktop", "%v", err)
 		}
+	}
+	if d := c.DataOut; d != nil && !types.ValidDataOut(*d) {
+		m.fail(ReasonOverlayInvalid, "data_out", "data_out: %q is not a rule; want allowed, review or blocked", *d)
 	}
 	m.validateNonNegative(ov)
 	if d := ov.Limits.DenyPlacements; d != nil {

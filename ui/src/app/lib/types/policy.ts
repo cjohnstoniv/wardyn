@@ -339,6 +339,8 @@ export interface RunPolicySpec {
   // How much of a run is recorded (mirrors Go's RunPolicySpec.Recording). Absent chooses nothing:
   // the organisation's level applies. A ceiling's level is a minimum. Keystrokes are never recorded.
   recording?: RecordingLevel;
+  // The run's rule for content leaving it (mirrors Go's RunPolicySpec.DataOut). Absent is allowed.
+  data_out?: "allowed" | "review" | "blocked";
 }
 
 // review (download only): each download waits for a person's yes on that file (Go's types.TransferReview).

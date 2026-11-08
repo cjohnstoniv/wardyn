@@ -1,3 +1,4 @@
+# boundary.md 1782 measured at data-out + w4a: both sides' additions together.
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the rewrite, so growth fails.
 # docs/operations/boundary.md 736: the boundary doc, with the sweep and later end changes holding every run to its maximum
 # docs/operations/boundary.md 785 measured: the final seal meets late hosts with the boundary
@@ -11,6 +12,7 @@
 # docs/operations/boundary.md 1142 measured: break-glass only while the boundary bounds something; revive judges hosts only
 # docs/operations/boundary.md 1176 adds 34 over 1142, measured (0.10 W5-API-DESKTOP, #2967): the spec.desktop row and the unread seal's desktop
 # docs/operations/boundary.md 1241 adds 65 over 1176, measured (rc.8 E4, #2948): how a person's walls meet the run and the seal.
-docs/operations/boundary.md=1756 share=35 # 1756 measured (+16 over 1740: an unread layer at a resolve is a retryable 503); earlier: 1740 measured (+334 over 1406: the two capability-cap rows and the source-control capabilities section); earlier: 1406 measured (+30 at rc.14: the Linux-only qualifier on the no-core-dumps section); 1376 measured (+68 at rc.14: the no-core-dumps section moved in from monitoring.md); earlier: 1308 measured (+67 over 1241, measured: the nested-limits figure and the restriction, wall preset and layer-name bullet)
+# docs/operations/boundary.md 1428 adds 22 over 1406, measured: `data_out`: the spec.data_out row.
+docs/operations/boundary.md=1782 share=35 # 1406 measured (+30 at rc.14: the Linux-only qualifier on the no-core-dumps section); 1376 measured (+68 at rc.14: the no-core-dumps section moved in from monitoring.md); earlier: 1308 measured (+67 over 1241, measured: the nested-limits figure and the restriction, wall preset and layer-name bullet)
 # docs/operations/boundary.md 1740 = 1406 + 334, measured: the two capability-cap rows and the source-control capabilities section.
 # docs/operations/boundary.md 1756 = 1740 + 16, measured: an unread boundary or restriction at a credential resolve is a retryable 503.

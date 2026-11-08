@@ -56,6 +56,9 @@ type BoundarySpec struct {
 	// Desktop blocks desktop directions for every run (#2967). It only blocks more: a direction it
 	// allows is left to the layers below, and one it leaves unset is that direction's default.
 	Desktop *DesktopControls `json:"desktop,omitempty"`
+	// DataOut is the least strict rule for content leaving any run (allowed, review or blocked): a run's own
+	// is at least this strict (docs/POLICIES.md#data_out).
+	DataOut *TransferRule `json:"data_out,omitempty"`
 	// AzureDevOpsCapabilities caps every run's Azure DevOps capabilities in hard_limits: a capability it
 	// does not list is refused at dispatch, at each request, at each approval and at each credential
 	// resolve, whatever a provider row allows. pr reads as its parts. nil is no cap; an empty list is
@@ -94,7 +97,7 @@ func (b BoundarySpec) Overlay() CeilingOverlay {
 	out := CeilingOverlay{
 		AllowedDomains: b.AllowedDomains, DeniedDomains: b.DeniedDomains,
 		AllowAllEgress: b.AllowAllEgress, MinConfinementClass: b.MinConfinementClass,
-		Desktop: b.Desktop,
+		Desktop: b.Desktop, DataOut: b.DataOut,
 	}
 	if b.AllowedDomains != nil && b.AllowAllEgress == nil {
 		off := false

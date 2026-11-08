@@ -28,6 +28,8 @@ export interface RestrictionSpec {
   desktop?: DesktopControls;
   /** A floor: a run of the restriction's people is recorded at least this much. */
   recording?: RecordingLevel;
+  /** A floor on the rule for content leaving a run of the restriction's people. */
+  data_out?: "allowed" | "review" | "blocked";
   /** Credentials the run is not given: a scope-less entry names every grant of its kind. */
   withheld_grants?: GrantSpec[];
   /** The Azure DevOps capabilities its people's runs may hold. pr means its parts; absent is no cap. */

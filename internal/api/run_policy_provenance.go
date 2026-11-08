@@ -108,6 +108,7 @@ func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
 	s.FirstUseApproval = s.FirstUseApproval.Normalize()
 	d := s.Desktop.Effective()
 	s.Desktop = &d
+	s.DataOut = s.DataOut.DataOut()
 	return s
 }
 
