@@ -46,13 +46,12 @@ function renderCard(item: ReturnType<typeof row>, opts: { principal?: string; ca
 }
 
 describe("the file_download card", () => {
-  it("a decider sees who asked, the name, size and hash, and approves once (frame C)", async () => {
+  it("a decider sees who asked, the name, size and hash, and approves once", async () => {
     const { onApprove, onDeny } = renderCard(row({ requested_by: "dana.reyes@acme.example", deciders: ["unit_admins", "security"] }));
     const card = screen.getByTestId("file-download-card");
     expect(within(card).getByText(C.TITLE("build-logs.tar.gz"))).toBeInTheDocument();
     expect(within(card).getByText("Download")).toBeInTheDocument();
     expect(within(card).getByText(APPROVAL_MCP_CALL.ONCE)).toBeInTheDocument();
-    expect(within(card).getByText("dana.reyes@acme.example", { selector: "span.font-medium" })).toBeInTheDocument();
     expect(card).toHaveTextContent(`${DECIDERS_INBOX.DECIDED_BY_LABEL} admins of this unit or a security admin`);
     const facts = within(card).getAllByRole("definition").map((d) => d.textContent);
     expect(facts).toEqual(["build-logs.tar.gz", "18.4 MB (19,293,184 bytes)", SHA, "dana.reyes@acme.example"]);
@@ -67,7 +66,7 @@ describe("the file_download card", () => {
     expect(onDeny).toHaveBeenCalledTimes(1);
   });
 
-  it("the asker's own card disables the pair and says who decides (frame C2)", () => {
+  it("the asker's own card disables the pair and says who decides", () => {
     const { onApprove } = renderCard(row({ deciders: undefined }), { principal: "dana.reyes@acme.example", canDecide: false });
     const card = screen.getByTestId("file-download-card");
     expect(within(card).getByRole("button", { name: APPROVAL_MCP_CALL.APPROVE })).toBeDisabled();

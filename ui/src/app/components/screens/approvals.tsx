@@ -46,6 +46,7 @@ import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { PUSH } from "../wardyn/copy/push";
 import { APPROVALS_TAB, APPROVAL_MCP_CALL } from "../wardyn/copy/approvals";
+import { FILE_DOWNLOAD_CARD, KUBE_CALL_CARD } from "../wardyn/copy/files-review";
 import { DECIDERS_INBOX } from "../wardyn/copy/deciders-inbox";
 import { escapeUnsafeRunes } from "../../lib/escape-runes";
 import {
@@ -142,7 +143,13 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope, signIn?: string): 
       if (ck === "api_key") return host ? `Mint an API credential for ${host}` : "Mint an API credential";
       return "Mint a scoped credential";
     }
+    case "file_download":
+      return FILE_DOWNLOAD_CARD.LIST_TITLE(escapeUnsafeRunes(str(scope, "name") ?? ""));
     case "tool_call": {
+      // One held kubectl write (a call_sha256 and a cluster): the list names its method and namespace.
+      if (str(scope, "call_sha256") && str(scope, "cluster")) {
+        return KUBE_CALL_CARD.LIST_TITLE(escapeUnsafeRunes(str(scope, "method") ?? ""), escapeUnsafeRunes(str(scope, "namespace") ?? ""));
+      }
       // One MCP call (call_sha256 and a server): the list names the tool and the server it was for.
       if (str(scope, "call_sha256") && str(scope, "mcp_server")) {
         return APPROVAL_MCP_CALL.LIST_TITLE(escapeUnsafeRunes(str(scope, "tool") ?? ""), escapeUnsafeRunes(str(scope, "mcp_server") ?? ""));

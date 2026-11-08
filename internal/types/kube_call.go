@@ -4,6 +4,7 @@
 package types
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -69,6 +70,23 @@ type KubeCallScope struct {
 	CallSHA256 string          `json:"call_sha256"`
 	// HoldSeconds is how long the proxy holds the open request for the answer.
 	HoldSeconds int `json:"hold_seconds,omitempty"`
+}
+
+// KubeCallTextOf is a held kubectl write's body as text, for a person to read and copy: the canonical bytes
+// with indentation added (indentCanonical), so no number is parsed. A write with no body is "". nil when raw
+// is not a kubectl call scope.
+func KubeCallTextOf(raw json.RawMessage) *MCPCallText {
+	if !IsKubeCallScope(raw) {
+		return nil
+	}
+	var s KubeCallScope
+	if json.Unmarshal(raw, &s) != nil {
+		return nil
+	}
+	if len(bytes.TrimSpace(s.Body)) == 0 {
+		return &MCPCallText{Arguments: ""}
+	}
+	return &MCPCallText{Arguments: indentCanonical(s.Body)}
 }
 
 // KubeCanonicalQuery is raw in one spelling: keys sorted, each key's values in

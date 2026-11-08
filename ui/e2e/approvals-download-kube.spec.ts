@@ -76,6 +76,7 @@ test.describe("Approvals — a file download and a kubectl change", () => {
     await expect(card).toContainText(FILE_DOWNLOAD_CARD.TITLE("build-logs.tar.gz"));
     await expect(card).toContainText("18.4 MB (19,293,184 bytes)");
     await expect(card).toContainText(SHA);
+    await expect(page.getByText(`Requested by ${ASKER}`)).toBeVisible();
     await expect(card).toContainText(DECIDERS_INBOX.SECOND_PERSON);
     await card.getByRole("button", { name: APPROVAL_MCP_CALL.APPROVE }).click();
     await expect(card).toHaveCount(0);

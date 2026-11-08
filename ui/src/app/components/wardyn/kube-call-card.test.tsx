@@ -60,7 +60,7 @@ function renderCard(item: ReturnType<typeof row>, canDecide = true) {
 }
 
 describe("the kubectl change card", () => {
-  it("shows the exact request, its body text, the fingerprint and both notes (frame D)", async () => {
+  it("shows the exact request, its body text, the fingerprint and both notes", async () => {
     const { onApprove } = renderCard(row(patch, { call_text: { arguments: BODY_TEXT }, deciders: ["owner", "security"] }));
     const card = screen.getByTestId("kube-call-card");
     expect(within(card).getByText(C.TITLE)).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe("the kubectl change card", () => {
     expect(onApprove).toHaveBeenCalledTimes(1);
   });
 
-  it("with no call_text draws the fallback, Approve off, Deny on, and the not-waiting line (frame D2)", async () => {
+  it("with no call_text draws the fallback, Approve off, Deny on, and the not-waiting line", async () => {
     const { onDeny } = renderCard(row(patch, { held: false }));
     const card = screen.getByTestId("kube-call-card");
     expect(card).toHaveTextContent(C.NO_TEXT);
@@ -97,7 +97,7 @@ describe("the kubectl change card", () => {
     expect(onDeny).toHaveBeenCalledTimes(1);
   });
 
-  it("a bodiless write with empty text reads No body and Approve stays on (frame D3)", async () => {
+  it("a bodiless write with empty text reads No body and Approve stays on", async () => {
     const { onApprove } = renderCard(row(del, { call_text: { arguments: "" } }));
     const card = screen.getByTestId("kube-call-card");
     expect(within(card).getByText(C.NO_BODY)).toBeInTheDocument();
