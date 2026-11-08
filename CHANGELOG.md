@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.15] — 2026-11-08
+
 ### Before you upgrade
 
 - A refused egress request no longer counts as activity for idle auto-stop or idle pause, on every kind of run, with no switch: a run that is only being refused now idles out. Only an allowed request restarts the idle clock. On a macOS VM run the guest's Apple boot hosts never count, allowed or refused, on the control plane and in a runner's proxy (`activity_ignore_hosts`). A runner's proxy keeps the old behaviour until the runner is upgraded.
