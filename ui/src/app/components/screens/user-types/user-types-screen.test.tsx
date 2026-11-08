@@ -52,6 +52,7 @@ vi.mock("./explain-names", () => ({ useValueNames: () => () => null }));
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { CHANGES } from "../../../lib/governance-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { aheadByHours } from "../../../lib/test-clock";
 import type { UserType } from "../../../lib/types";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
@@ -436,6 +437,7 @@ describe("UserTypesScreen — a 202 is submitted, never saved", () => {
     await userEvent.click(screen.getByRole("button", { name: UT.SAVE }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.queryByTestId("user-type-editor")).not.toBeInTheDocument();
     expect(listUserTypesMock).toHaveBeenCalled();
   });

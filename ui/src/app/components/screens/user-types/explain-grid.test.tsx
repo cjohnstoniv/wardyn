@@ -54,7 +54,9 @@ vi.mock("../../../lib/api/model-providers", () => ({
   modelProviders: { getModelProviders: () => getModelProvidersMock() },
 }));
 
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
+import { CHANGES } from "../../../lib/governance-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import type { ExplainRow } from "../../../lib/api/permissions";
 import { KIND, PERM } from "../../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../../lib/types";
@@ -267,6 +269,28 @@ describe("ExplainGrid — Remove", () => {
     await userEvent.click(await screen.findByRole("button", { name: `${EXPLAIN.REMOVE} Codex` }));
     await userEvent.click(screen.getByRole("button", { name: PERM.REMOVE }));
     expect(await screen.findByRole("alert")).toHaveTextContent("security admins only");
+  });
+
+  it("a remove held for a second person shows the submitted note with Add a note", async () => {
+    answer([{ kind: "agent", value: "codex", state: "blocked" }], [grant({ id: "own-deny" })]);
+    deleteGrantMock.mockRejectedValue(
+      new PendingChangeError({
+        id: "c1",
+        target_kind: "capability_grant",
+        op: "delete",
+        target_key: "own-deny",
+        state: "pending",
+        proposed_by: "ana",
+        proposed_at: "2026-11-08T10:00:00Z",
+        expires_at: "2026-11-09T10:00:00Z",
+        diff: { changed: [] },
+      }),
+    );
+    renderGrid();
+    await userEvent.click(await screen.findByRole("button", { name: `${EXPLAIN.REMOVE} Codex` }));
+    await userEvent.click(screen.getByRole("button", { name: PERM.REMOVE }));
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
   });
 });
 

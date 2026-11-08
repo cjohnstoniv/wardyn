@@ -52,6 +52,7 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { CHANGES } from "../../lib/governance-copy";
+import { CHANGE_NOTE } from "../wardyn/copy/change-note";
 import { aheadByHours } from "../../lib/test-clock";
 import { setField } from "../../../test/set-field";
 import { expectActionBar } from "../../../test/action-bar";
@@ -751,6 +752,7 @@ describe("PermissionsScreen — a 202 is submitted, never saved", () => {
     await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(toastError).not.toHaveBeenCalled();
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(getPermissionsMock).toHaveBeenCalled());
@@ -783,6 +785,7 @@ describe("PermissionsScreen — a 202 is submitted, never saved", () => {
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.queryByText(PERM.DUPLICATE)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -885,6 +888,7 @@ describe("PermissionsScreen, who may define their own components", () => {
     renderScreen();
     await user.click(await screen.findByRole("switch", { name: SWITCH }));
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(toastError).not.toHaveBeenCalled();
     expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
   });
