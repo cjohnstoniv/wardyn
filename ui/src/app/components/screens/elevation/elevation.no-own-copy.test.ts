@@ -8,5 +8,5 @@ import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
 // The elevation screens render copy from wardyn/copy/elevation.ts and never author any.
 describe("elevation screens: canon", () => {
-  expectNoOwnCopy("src/app/components/screens/elevation", ["elevation-request-dialog.tsx", "my-elevation-requests.tsx", "elevation-decider-card.tsx"]);
+  expectNoOwnCopy("src/app/components/screens/elevation", ["elevation-request-dialog.tsx", "my-elevation-requests.tsx", "elevation-decider-card.tsx", "image-request-dialog.tsx", "request-dialog.tsx", "image-ref.ts"]);
 });
