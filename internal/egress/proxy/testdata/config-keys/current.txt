@@ -1,3 +1,4 @@
+activity_ignore_hosts
 ado_grant
 ado_grant.capabilities
 ado_grant.hosts

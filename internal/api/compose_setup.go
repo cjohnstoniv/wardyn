@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
-	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -81,18 +80,20 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
 	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
 	// separate run.Repo-keyed lookup needed here.
-	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, owner, spec))
+	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, owner, spec), nil)
 }
 
 // deriveRunSetupItems is deriveSetupItems over the workspaces a run attaches
 // (runFold.wsRefs), so Review names the workspace each requirement row comes
-// from, a workspace with no mount or repo of its own included.
+// from, a workspace with no mount or repo of its own included. placed is what
+// the fold read of the placement the run lands on (backendPlacement); the
+// compose panel has no placement and passes nil.
 func (s *Server) deriveRunSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec,
-	presentSecrets map[string]bool, llmAccess *composeLLMAccess, workspaces []types.Workspace,
+	presentSecrets map[string]bool, llmAccess *composeLLMAccess, workspaces []types.Workspace, placed *backendPlacement,
 ) []SetupItem {
 	var items []SetupItem
 
-	if it, ok := s.setupBackendItem(ctx, run, spec); ok {
+	if it, ok := s.setupBackendItem(ctx, run, spec, placed); ok {
 		items = append(items, it)
 	}
 	if it, ok := s.setupLLMAccessItem(run.Agent, llmAccess, spec); ok {
@@ -669,7 +670,7 @@ func setupEgressWorkspaceItem(spec types.RunPolicySpec, workspaces []types.Works
 // remedy is a host-level command or a hardware limit, so Detail points at Getting
 // Started. ok=false only when there is no explicit class to check (an empty run
 // class AND an empty policy floor).
-func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, spec types.RunPolicySpec) (SetupItem, bool) {
+func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, spec types.RunPolicySpec, placed *backendPlacement) (SetupItem, bool) {
 	final := types.ConfinementClass(run.ConfinementClass)
 	if final == "" {
 		final = spec.MinConfinementClass
@@ -681,6 +682,9 @@ func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, sp
 		Kind: "backend", ID: "backend:" + string(final),
 		Label:      "Sandbox barrier: " + tierLabel(final),
 		RequiredBy: "the proposal's confinement class",
+	}
+	if placed != nil {
+		return placedBackendItem(it, final, *placed), true
 	}
 	if s.cfg.Runner == nil {
 		it.Status = "missing"
@@ -711,20 +715,7 @@ func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, sp
 		}
 		return it, true
 	}
-	it.Status = "missing"
-	it.Fix = &SetupFix{Action: "none"}
-	switch final {
-	case types.CC3:
-		// Single-source the KVM copy: VaultKVMDetail names the real fix
-		// (bind-mount /dev/kvm) for a containerized wardynd instead of
-		// asserting a bare "hardware limit no install can fix".
-		it.Detail = setup.VaultKVMDetail()
-	case types.CC2:
-		it.Detail = "no Wall (gVisor) runtime registered on this host yet — fixable, run `wardyn setup wall`. See Getting Started."
-	default:
-		it.Detail = "no sandbox runtime registered on this host at all — check that wardynd's runner is configured and its container daemon is reachable. See Getting Started."
-	}
-	return it, true
+	return backendMissingItem(it, final), true
 }
 
 // tierLabel maps a ConfinementClass to its operator-facing tier name, mirroring
