@@ -8,6 +8,8 @@
 // PUT /governance/units/{id}/deciders, which answers the stored rules or a held change (always held
 // when a unit admin writes them).
 
+import { asJson, wfetch } from "./core";
+
 /** The kinds a rule may name (types.DeciderKinds). */
 export type DeciderKind =
   | "egress_domain"
@@ -54,4 +56,16 @@ export interface GovernanceDeciders {
   from?: Record<string, string>;
   bounded_by?: Record<string, string[]>;
   effective?: Record<string, DeciderRule>;
+}
+
+/** PUT /governance/units/{id}/deciders: replaces the unit's rules. A held write (always, for a unit admin)
+ *  throws PendingChangeError; a refusal throws HttpError with its `reason` (invalid_deciders,
+ *  decider_rule_wider_than_parent). */
+export async function putUnitDeciders(unitId: string, rules: DeciderRule[]): Promise<UnitDeciders> {
+  const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/deciders`, {
+    method: "PUT",
+    asPerson: true,
+    body: JSON.stringify({ rules }),
+  });
+  return asJson<UnitDeciders>(res);
 }
