@@ -313,7 +313,7 @@ var templateNestedCarried = map[string]string{
 	"CLIAWS":              "start_url sso_region account_id role_name region",
 	"CLIAzure":            "subscriptions access",
 	"CLIGitHub":           "capabilities",
-	"CLIKubectl":          "server ca_pem service_account namespaces access",
+	"CLIKubectl":          "server ca_pem service_account namespaces access approve_each",
 	"CLIServiceAccount":   "namespace name",
 	"ComponentCLI":        "kind azure aws github kubectl",
 	"ComponentDefinition": "description hosts secrets config cli mcp",
