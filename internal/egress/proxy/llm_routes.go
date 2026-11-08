@@ -486,11 +486,17 @@ func (p *Proxy) inspectForwardedLLM(w http.ResponseWriter, r *http.Request, host
 
 // inspectLLMOn is inspectLLM where deferred, when not nil, is the gateway route that
 // checks this request's prompt itself.
-func (p *Proxy) inspectLLMOn(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel, deferred *GatewayIdentityRoute) (io.Reader, *egress.ScanSummary, func(), bool) {
+func (p *Proxy) inspectLLMOn(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel, deferred *GatewayIdentityRoute) (body io.Reader, sum *egress.ScanSummary, release func(), blocked bool) {
 	noRelease := func() {}
 	if p.scanner == nil || p.scanner.Mode() == contentscan.ModeOff {
 		return r.Body, nil, noRelease, false
 	}
+	// Before the classifier: a route it cannot read (the Responses routes) is checked too (reroute_keys.go).
+	releaseKeys, refused := p.rerouteKeysRefused(w, r, host, port, rest, channel, deferred)
+	if refused {
+		return nil, nil, noRelease, true
+	}
+	defer func() { release = joinRelease(releaseKeys, release) }()
 	switch classifyLLM(channel, r.Method, rest) {
 	case scanMessages:
 		if deferred != nil {
@@ -611,6 +617,9 @@ func (p *Proxy) scanBufferedBodyWith(w http.ResponseWriter, r *http.Request, hos
 	release, rerr := noRelease, error(nil)
 	if held {
 		unread = http.NoBody
+		if rest, ok := r.Context().Value(chargedRestKey{}).(io.ReadCloser); ok { // the held body is a prefix (reroute_keys.go)
+			unread = rest
+		}
 	} else {
 		buffered, release, rerr = p.scan.readBody(r.Context(), r.Body, r.ContentLength, int64(maxLLMScanBody))
 	}

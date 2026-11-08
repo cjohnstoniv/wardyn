@@ -1429,6 +1429,7 @@ So an entry a pattern matches is judged one of two ways:
 | `block_min_severity` | `string` | `low` | Minimum finding severity that blocks in `block` mode: `low`, `medium`, `high`, `critical`. |
 
 - `workspace_secret_values`: Never stored, never read back, never logged (a stray value is redacted to a count wherever the spec is otherwise echoed). Values shorter than the masking floor are ignored.
+- Rerouting keys: a model call whose body carries `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` is refused in `block` and logged in `alert` (`scan:reroute-keys`), before the scan and on the Responses routes. A body that cannot be read for them is refused in `block` and logged as `unparsable` in `alert`. A route set to `inspection: gateway` is not checked.
 - `intercept_tls`: The control plane provisions a per-run CA: the private key goes only to the proxy sidecar, the sandbox trusts only the public cert. Adds a CA trust dependency inside the sandbox (threatmodel §5.1a).
 
 ### `workspace_secret_names`

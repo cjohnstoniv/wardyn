@@ -153,6 +153,7 @@ derives its role.
 - A harness's small model is not added for you. Local models keep their own lists.
 - Other writes to a model host are refused under `brokered:allowed-models`, file and skill uploads included.
 - A provider whose calls the proxy cannot read is refused with `403 allowed_models_unchecked`.
+- A body carrying `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` is refused too: a gateway reads them to pick another model.
 - An admin run that stands outside governance is not bound by this list. Test with a governed run.
 
 ### Worked example
