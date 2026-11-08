@@ -277,7 +277,11 @@ func pullRequestWrite(method string, req Request, sub, subNext2 string) (Verdict
 	if err := decodeUnique(body, &pr); err != nil {
 		return Verdict{}, err
 	}
-	completes := enumIs(pr.Status, "completed", 3) || (len(pr.AutoCompleteSetBy) > 0 && string(pr.AutoCompleteSetBy) != "null") ||
+	// The server's enum parser ORs a comma-joined list (active,abandoned is completed), so a status
+	// completes unless it is exactly one that does not.
+	keeps := len(pr.Status) == 0 || string(pr.Status) == "null" ||
+		enumIs(pr.Status, "notSet", 0) || enumIs(pr.Status, "active", 1) || enumIs(pr.Status, "abandoned", 2)
+	completes := !keeps || (len(pr.AutoCompleteSetBy) > 0 && string(pr.AutoCompleteSetBy) != "null") ||
 		pr.CompletionOptions != nil
 	votes := false
 	for _, r := range pr.Reviewers {
@@ -326,13 +330,14 @@ func threadWrite(req Request) (Verdict, error) {
 }
 
 // enumIs reports whether raw is the Azure DevOps enum value name (any case) or its number, as a JSON
-// number or a string of digits (the server's enum parser reads both).
+// number or a string of digits (the server's enum parser reads both). A list or anything else is not.
 func enumIs(raw json.RawMessage, name string, number float64) bool {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		s = strings.TrimSpace(s)
-		if n, err := strconv.ParseFloat(s, 64); err == nil {
-			return n == number
+		if s != "" && strings.Trim(s, "0123456789") == "" {
+			n, err := strconv.ParseFloat(s, 64)
+			return err == nil && n == number
 		}
 		return strings.EqualFold(s, name)
 	}
