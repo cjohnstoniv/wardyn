@@ -1564,7 +1564,7 @@ These risks are **not closed by v1 Wardyn**.
 1. **The model-API channel is an unavoidable data-exit path.**
    - The LLM gateway logs every prompt/token/tool call but cannot stop an agent encoding data into a prompt to a model it may call.
    - Wardyn does not prevent exfiltration over the model channel.
-   - The optional, off-by-default guardrail (`internal/contentscan`, policy `llm_inspection`) narrows this for the HONEST agent — it scans outbound prompts on the inspectable API-key route for operator-declared known secret values and can alert/block.
+   - The optional, off-by-default guardrail (`internal/contentscan`, policy `llm_inspection`) narrows this for the HONEST agent — it scans outbound prompts on the inspectable API-key route for operator-declared known secret values, and the `env_secret` and `file_secret` values placed in the run, and can alert/block.
    - But a prompt-injected agent can base64/hex/split-across-turns/encrypt around any scanner, and subscription-OAuth/Bedrock CONNECT modes stay opaque until the Phase-2 TLS-MITM tier (flagged `llm.scan.bypass`).
    - §5.1a is the claims contract.
 
@@ -3345,11 +3345,11 @@ exactly these terms.
 
 - "Prevents/blocks data exfiltration to the model," "exfil-proof," or "DLP." An agent can encode / split-across-turns / encrypt around any scanner — residual #1 STANDS.
 - "Detects all secrets and PII."
-  - The detectors are: declared known-secret VALUES (exact, default),
+  - The detectors are: declared known-secret VALUES and the values placed in the run (exact, whole value, default),
   - an OPT-IN regex catalog of well-known secret FORMATS (`detect_secret_patterns`; high precision, can FP on example keys),
   - an OPT-IN Shannon-entropy detector (`detect_entropy`; high-FP in code, pure-hex skipped, medium severity so `block_min_severity` can exclude it),
   - an OPT-IN regex/Luhn PII detector (`detect_pii`; ≈60-70% recall = high false-negative — visibility, NEVER a control),
-  - and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g. Presidio/LLM-Guard — fail-open by default, fail-closed under `on_scanner_error=block`).
+  - and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g. an unmodified Presidio analyzer with `detector_sidecar_format: presidio` — fail-open by default, fail-closed under `on_scanner_error=block`).
     - The sidecar scans at most 64 spans per request. Under the default fail-open (`on_scanner_error=pass`), spans past the 64th are not sent to it, so a request built with more spans gets the rest past the sidecar. The in-process detectors still scan every span, and the skip is recorded as `sidecar_call_cap`. To have every span scanned or the request refused, set `on_scanner_error=block`.
   - None is exhaustive; entropy and PII in particular are best-effort.
   - Detections stay content-free regardless of detector.

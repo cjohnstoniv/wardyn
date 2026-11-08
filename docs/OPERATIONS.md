@@ -35,7 +35,7 @@ The sections are written against the Compose stack ([`deploy/compose/`](../deplo
 - [Member drives, team drives and user drives on Kubernetes](#member-drives-team-drives-and-user-drives-on-kubernetes)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree), [Model gateways and detectors](operations/model-gateways.md)
 - [Workloads](operations/workloads.md): keep a run declared with `wardyn apply` or a WardynWorkload resource, bind a namespace, read its status, and the Argo CD health check.
 
 </details>
@@ -3370,7 +3370,7 @@ Naming these is the point of the walk, not a caveat on it:
 ### A provider change removes people's credentials
 
 <!-- Provider connection causes: itemised retention and disclosure rules; no additional prose budget. -->
-- Changing a provider’s address, header scheme or kind removes each person’s credential; nothing silently follows the new destination.
+- Changing a provider’s address, header scheme, extra headers or kind removes each person’s credential; nothing silently follows the new destination.
 - Affected people see the reason and new destination host in Your model connections and launch recovery, then review it before connecting again.
 - The owner-scoped change record contains only owner, provider ID and UID, reason, time and the already-disclosed destination host.
   - It contains no secret, encrypted copy, hash or secret-store reference.
@@ -3382,7 +3382,7 @@ Naming these is the point of the walk, not a caveat on it:
 
 ### Internal model gateway
 
-- Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`.
+- Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`. [Model gateways and detectors](operations/model-gateways.md) has the LiteLLM, Portkey and OpenRouter recipes.
 - An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by `base_url` alone. Its `fast_model` sets the haiku alias.
 
 > [!WARNING]
