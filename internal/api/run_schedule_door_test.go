@@ -102,3 +102,32 @@ func TestScheduledDoorOperatorExempt(t *testing.T) {
 		t.Errorf("a member under no denying profile was refused: %+v", rf)
 	}
 }
+
+// TestScheduledDoorQueuedStartOperatorExempt: the queued start asks the door with the owner's bound
+// authority, so a booked run an operator owns starts under a ceiling that denies scheduled runs,
+// and one a member owns ends scheduled_runs_denied. A run with no start time is never held to it.
+func TestScheduledDoorQueuedStartOperatorExempt(t *testing.T) {
+	s := New(Config{Store: &capStore{}, Audit: &recRecorder{}})
+	denying := types.GovernanceLimits{DenyScheduledRuns: true}
+	ceiling := governanceCeiling{Limits: denying, Unit: &ResolvedUnit{ID: uuid.New(), Name: "walled", Limits: denying}}
+	booked := time.Now().Add(time.Hour)
+	start := func(a queueAuthority, startAt *time.Time) *queuedStart {
+		st := &queuedStart{auth: a}
+		st.entry.StartAt = startAt
+		st.ctx = bindAuthority(context.Background(), a, contextChoice{})
+		return st
+	}
+	operator := queueAuthority{Sub: "op", Email: "op@corp.example", Role: oidc.RoleAdmin}
+	member := queueAuthority{Sub: "alice", Email: "alice@corp.example", Role: oidc.RoleUser}
+
+	if end := s.queueScheduleDoor(start(operator, &booked), ceiling); end != nil {
+		t.Errorf("an operator's booked run ended %+v; operators are exempt", end)
+	}
+	end := s.queueScheduleDoor(start(member, &booked), ceiling)
+	if end == nil || end.token != string(types.RunEndScheduledRunsDenied) || end.hint != types.RunEndScheduledRunsDenied.Sentence() {
+		t.Errorf("a member's booked run = %+v; want the scheduled_runs_denied end", end)
+	}
+	if end := s.queueScheduleDoor(start(member, nil), ceiling); end != nil {
+		t.Errorf("a member's run with no start time ended %+v", end)
+	}
+}
