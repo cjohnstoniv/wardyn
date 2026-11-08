@@ -15,7 +15,7 @@ import {
   navToRoute,
   sidebarLink,
 } from "./fixtures";
-import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // A real role `user` who holds a unit-admin grant reaches Governance and Audit; the same person
@@ -66,6 +66,7 @@ test.describe("governance — a unit admin in the console", () => {
     await expect(page).toHaveURL(/\/admin\/governance$/);
     await expect(page.getByRole("heading", { name: GOV.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByText(NAME).first()).toBeVisible();
+    await expect(page.getByRole("tab", { name: new RegExp(`^${CHANGES.TAB}`) })).toBeVisible();
     await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
   });
 

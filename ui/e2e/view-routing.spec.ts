@@ -77,7 +77,7 @@ test.describe("view routing", () => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     const made = await page.request.post("/api/v1/governance/units", {
       headers: auth,
-      data: { name: "view-routing-unit", ceiling: { allowed_domains: ["api.anthropic.com"] }, limits: {} },
+      data: { name: "view-routing-unit", ceiling: { allowed_domains: ["api.anthropic.com"], min_confinement_class: "CC3" }, limits: {} },
     });
     expect(made.status(), await made.text()).toBe(201);
     const unitId = (await made.json()).unit.id;
