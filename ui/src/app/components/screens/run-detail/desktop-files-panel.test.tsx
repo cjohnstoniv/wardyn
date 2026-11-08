@@ -9,12 +9,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
+import { aheadByHours } from "../../../lib/test-clock";
+import { makeApproval } from "../../../../test/factories";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
 
 const listMock = vi.fn();
 const uploadMock = vi.fn();
+const reviewMock = vi.fn();
+const downloadMock = vi.fn();
+const listApprovalsMock = vi.fn();
 vi.mock("../../../lib/api/desktop-files", () => ({
-  desktopFiles: { list: (...a: unknown[]) => listMock(...a), upload: (...a: unknown[]) => uploadMock(...a), download: vi.fn() },
+  desktopFiles: {
+    list: (...a: unknown[]) => listMock(...a),
+    upload: (...a: unknown[]) => uploadMock(...a),
+    review: (...a: unknown[]) => reviewMock(...a),
+    download: (...a: unknown[]) => downloadMock(...a),
+  },
+}));
+vi.mock("../../../lib/api/approvals", () => ({
+  approvals: { listApprovals: (...a: unknown[]) => listApprovalsMock(...a) },
 }));
 
 import { DesktopFilesPanel, transferSize } from "./desktop-files-panel";
@@ -27,6 +40,10 @@ const pausedRefusal = () => new HttpError(409, pausedMsg, "run_inspect_paused");
 beforeEach(() => {
   listMock.mockReset();
   uploadMock.mockReset();
+  reviewMock.mockReset();
+  downloadMock.mockReset();
+  listApprovalsMock.mockReset();
+  listApprovalsMock.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -141,5 +158,122 @@ describe("DesktopFilesPanel", () => {
 
   it("writes sizes the way the board does", () => {
     expect([48 * 1024, 2.4 * 1024 ** 2, 2.1 * 1024 ** 3].map(transferSize)).toEqual(["48 KB", "2.4 MB", "2.1 GB"]);
+  });
+});
+
+// Under desktop.download: review (the Files review board): the From tab lists the files, one row each.
+const reviewing = { ...defaults, download: "review" };
+const SHA = "9f2c" + "0".repeat(56) + "41ab";
+const fileRow = (o: Parameters<typeof makeApproval>[0]) =>
+  makeApproval({ id: "ap_1", kind: "file_download", requested_scope: { name: "a.csv", bytes: 84 * 1024, sha256: SHA, requested_by: "dana@acme.example" }, ...o });
+
+async function openFrom(files = [{ name: "a.csv", bytes: 84 * 1024 }]) {
+  listMock.mockResolvedValue({ folder: "~/Transfers", rules: reviewing, files });
+  render(<DesktopFilesPanel runId="r1" />);
+  const panel = await screen.findByRole("region", { name: C.title });
+  await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+  return panel;
+}
+
+describe("DesktopFilesPanel under review", () => {
+  it("lists the files with Request download and the review footer, not the allowed footer", async () => {
+    const panel = await openFrom([{ name: "a.csv", bytes: 84 * 1024 }, { name: "b.csv", bytes: 3 }]);
+    const rows = await within(panel).findAllByTestId("desktop-download");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByRole("button", { name: C.requestDownload })).toBeTruthy();
+    expect(within(panel).getByText(C.reviewFooter)).toBeTruthy();
+    expect(within(panel).queryByText(C.downloadsAllowed)).toBeNull();
+    expect(within(panel).queryByText(C.downloadBlocked)).toBeNull();
+    expect(listApprovalsMock).toHaveBeenCalledWith("", "r1");
+  });
+
+  it("shows each file's newest request: the older denied one does not hide the newer waiting one", async () => {
+    listApprovalsMock.mockResolvedValue([
+      fileRow({ id: "old", state: "DENIED", requested_at: aheadByHours(-3) }),
+      fileRow({ id: "new", state: "PENDING", requested_at: aheadByHours(-1) }),
+      makeApproval({ id: "other", kind: "egress_domain", state: "APPROVED" }),
+    ]);
+    const panel = await openFrom();
+    expect(await within(panel).findByText(C.stateWaiting)).toBeTruthy();
+    expect(within(panel).queryByText(C.stateDenied)).toBeNull();
+  });
+
+  it("blocked keeps the Blocked note and never reads the requests", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [{ name: "a.csv", bytes: 1 }] });
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+    expect(await within(panel).findByText(C.downloadBlocked)).toBeTruthy();
+    expect(within(panel).queryByText(C.reviewFooter)).toBeNull();
+    expect(listApprovalsMock).not.toHaveBeenCalled();
+  });
+
+  it("allowed is unchanged: Download, the allowed footer, no request read", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: { ...defaults, download: "allowed" }, files: [{ name: "a.csv", bytes: 1 }] });
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+    expect(await within(panel).findByRole("button", { name: `${C.download} a.csv` })).toBeTruthy();
+    expect(within(panel).getByText(C.downloadsAllowed)).toBeTruthy();
+    expect(within(panel).queryByText(C.reviewFooter)).toBeNull();
+    expect(listApprovalsMock).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable request list says so, keeps Request download, and Try again reads it again", async () => {
+    listApprovalsMock.mockRejectedValue(new Error("down"));
+    const panel = await openFrom();
+    expect(await within(panel).findByText(C.requestsUnreadable)).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: C.requestDownload })).toBeTruthy();
+    const reads = listApprovalsMock.mock.calls.length;
+    listApprovalsMock.mockResolvedValue([fileRow({})]);
+    await userEvent.click(within(panel).getByRole("button", { name: C.retry }));
+    expect(await within(panel).findByText(C.stateWaiting)).toBeTruthy();
+    expect(listApprovalsMock.mock.calls.length).toBe(reads + 1);
+    expect(within(panel).queryByText(C.requestsUnreadable)).toBeNull();
+  });
+
+  it("Request download asks, then shows the returned pending row at once", async () => {
+    reviewMock.mockResolvedValue(fileRow({}));
+    const panel = await openFrom();
+    await userEvent.click(await within(panel).findByRole("button", { name: C.requestDownload }));
+    expect(reviewMock).toHaveBeenCalledWith("r1", "a.csv");
+    expect(await within(panel).findByText(C.stateWaiting)).toBeTruthy();
+    expect(within(panel).queryByRole("button", { name: C.requestDownload })).toBeNull();
+  });
+
+  it.each([
+    [413, "desktop_transfer_too_large", "the file is over the 256 MiB limit for a reviewed download. Nothing was asked."],
+    [503, "desktop_review_unavailable", "the download's review could not be raised. Nothing was asked for or sent; try again."],
+    [429, "internal_approval_cap_reached", "this run has raised too many approvals; no more will be accepted"],
+  ])("a %i %s refusal of the ask prints the server's sentence under the row", async (status, reason, sentence) => {
+    reviewMock.mockRejectedValue(new HttpError(status, sentence, reason));
+    const panel = await openFrom();
+    await userEvent.click(await within(panel).findByRole("button", { name: C.requestDownload }));
+    expect(await within(panel).findByText(`${C.notAsked}: ${sentence}`)).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: C.requestDownload })).toBeTruthy();
+  });
+
+  it("a 409 already-waiting refusal re-reads the requests and shows Waiting", async () => {
+    const sentence = "a review of this file is already waiting; it is released once a person approves it";
+    reviewMock.mockRejectedValue(new HttpError(409, sentence, "desktop_review_pending"));
+    const panel = await openFrom();
+    await userEvent.click(await within(panel).findByRole("button", { name: C.requestDownload }));
+    await within(panel).findByText(`${C.notAsked}: ${sentence}`);
+    listApprovalsMock.mockResolvedValue([fileRow({})]);
+    expect(await within(panel).findByText(C.stateWaiting)).toBeTruthy();
+  });
+
+  it.each([
+    [409, "file_changed_since_review", "the file changed after it was reviewed: its bytes are not the ones approved. Nothing was sent; ask for another review."],
+    [409, "desktop_review_spent", "that approval already released its file; ask for another review. Nothing was sent."],
+    [403, "desktop_review_not_approved", "that approval is not an approved review of this file on this run. Nothing was sent."],
+  ])("a %i %s refusal of Download approved prints Download failed with the sentence", async (status, reason, sentence) => {
+    listApprovalsMock.mockResolvedValue([fileRow({ state: "APPROVED", decided_by: "lee@acme.example", decided_at: aheadByHours(-1) })]);
+    downloadMock.mockRejectedValue(new HttpError(status, sentence, reason));
+    const panel = await openFrom();
+    await userEvent.click(await within(panel).findByRole("button", { name: C.downloadApproved }));
+    expect(downloadMock).toHaveBeenCalledWith("r1", "a.csv", "ap_1");
+    expect(await within(panel).findByText(`${C.downloadFailed}: ${sentence}`)).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: C.downloadApproved })).toBeTruthy();
   });
 });
