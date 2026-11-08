@@ -152,6 +152,47 @@ func TestRestrictionWriteFourEyes(t *testing.T) {
 	}
 }
 
+// TestRestrictionAllowlistSwapHeld: with the switch on, replacing a restriction's allowlist by one that
+// names a host outside it is held for a second human and leaves the list as it was, whether the new list
+// swaps every host or adds one beside the old ones; dropping a host is direct.
+func TestRestrictionAllowlistSwapHeld(t *testing.T) {
+	e := newGovEnv(t)
+	for _, tc := range []struct {
+		name string
+		next []string
+		held bool
+	}{
+		{"swapped", []string{"evil.example"}, true},
+		{"one added", []string{"b.example", "c.example", "evil.example"}, true},
+		{"one dropped", []string{"b.example"}, false},
+	} {
+		base := types.RestrictionWrite{Name: "sw-" + strings.ReplaceAll(tc.name, " ", "-"), Spec: types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")},
+			Members: []types.RestrictionMember{userMember("sub-sw")}}
+		w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, base))
+		var created types.Restriction
+		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
+			t.Fatalf("%s: create %d %s", tc.name, w.Code, w.Body)
+		}
+		next := base
+		next.Spec = types.RestrictionSpec{AllowedDomains: strs(tc.next...)}
+		w = e.call(e.alice, http.MethodPut, "/api/v1/governance/restrictions/"+created.ID.String(), restrictionJSON(t, next))
+		want := http.StatusOK
+		if tc.held {
+			want = http.StatusAccepted
+		}
+		if w.Code != want {
+			t.Errorf("%s: replace = %d %s, want %d", tc.name, w.Code, w.Body, want)
+		}
+		got, err := e.pg.GetRestriction(context.Background(), created.ID)
+		if err != nil || got.Spec.AllowedDomains == nil {
+			t.Fatalf("%s: read back %+v %v", tc.name, got.Spec, err)
+		}
+		if stays := []string{"b.example", "c.example"}; tc.held && !slices.Equal(*got.Spec.AllowedDomains, stays) {
+			t.Errorf("%s: a held replacement changed the list to %v, want %v until approved", tc.name, *got.Spec.AllowedDomains, stays)
+		}
+	}
+}
+
 // TestRestrictionOverlappingReplacements: a replacement judged at least as strict as the restriction
 // it read is judged again on the restriction as it stands when it writes. Over members ov-a, one that
 // adds ov-b overlaps one that adds ov-c and commits first: ov-a and ov-b drop ov-c, so the first is
