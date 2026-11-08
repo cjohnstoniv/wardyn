@@ -56,6 +56,11 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 	if li == nil || len(li.WorkspaceSecretNames) == 0 {
 		return
 	}
+	// The block is shared with the policy this dispatch was handed, so the values
+	// land on a copy of it and the policy points at the copy.
+	cp := *li
+	cp.WorkspaceSecretValues = slices.Clone(li.WorkspaceSecretValues)
+	li, policy.LLMInspection = &cp, &cp
 	if s.cfg.Secrets == nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.resolve",
 			run.ID.String(), "failure", mustJSON(map[string]any{
@@ -189,8 +194,15 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 // returned, in grant-id order, for deliverResident and nothing else.
 func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
 	sandboxEnv map[string]string) ([]string, []residentValue) {
-	var resolvedNames []string
-	var resident []residentValue
+	names, resident, _ := s.resolveEnvSecretPlacements(ctx, run, policy, rows, sandboxEnv)
+	return names, resident
+}
+
+// resolveEnvSecretPlacements is resolveEnvSecretValues that also returns the values it
+// wrote into sandboxEnv (never a runner_resident one), for the known-secret check
+// (addPlacedSecrets).
+func (s *Server) resolveEnvSecretPlacements(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
+	sandboxEnv map[string]string) (resolvedNames []string, resident []residentValue, placed [][]byte) {
 	for _, g := range policy.EligibleGrants {
 		if g.Kind != types.GrantEnvSecret {
 			continue
@@ -248,6 +260,7 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 			default:
 				sandboxEnv[name] = string(val)
 				resolvedNames = append(resolvedNames, name)
+				placed = append(placed, val)
 			}
 		}
 		data := map[string]any{"name": name, "secret_name": secretName}
@@ -262,7 +275,7 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 			run.ID.String(), outcome, mustJSON(data)))
 	}
 	slices.SortFunc(resident, residentByGrantID)
-	return resolvedNames, resident
+	return resolvedNames, resident, placed
 }
 
 // residentGrantRow is the stored row an env_secret policy grant was written
