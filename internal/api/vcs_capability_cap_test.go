@@ -41,10 +41,11 @@ func (s *vcsLaneStore) PutBoundary(context.Context, types.BoundaryWrite, string)
 // vcsCapStore, vcsPATStore and vcsOwnPATStore are the resolve fixtures' stores holding a boundary.
 type vcsCapStore struct {
 	*adoCapStore
-	b types.Boundary
+	b    types.Boundary
+	bErr error
 }
 
-func (s *vcsCapStore) GetBoundary(context.Context) (types.Boundary, error) { return s.b, nil }
+func (s *vcsCapStore) GetBoundary(context.Context) (types.Boundary, error) { return s.b, s.bErr }
 
 func (s *vcsCapStore) PutBoundary(context.Context, types.BoundaryWrite, string) (types.Boundary, error) {
 	return s.b, nil
@@ -52,10 +53,11 @@ func (s *vcsCapStore) PutBoundary(context.Context, types.BoundaryWrite, string) 
 
 type vcsPATStore struct {
 	*adoPATStore
-	b types.Boundary
+	b    types.Boundary
+	bErr error
 }
 
-func (s *vcsPATStore) GetBoundary(context.Context) (types.Boundary, error) { return s.b, nil }
+func (s *vcsPATStore) GetBoundary(context.Context) (types.Boundary, error) { return s.b, s.bErr }
 
 func (s *vcsPATStore) PutBoundary(context.Context, types.BoundaryWrite, string) (types.Boundary, error) {
 	return s.b, nil
@@ -410,6 +412,54 @@ func TestBoundaryCapResolveUnreadableRun(t *testing.T) {
 }
 
 type vcsNoRunStore struct{ *vcsCapStore }
+
+// vcsRestrictedRunStore answers the run with restriction ids captured; the stores here keep no
+// restrictions, so each is unreadable.
+type vcsRestrictedRunStore struct{ *vcsPATStore }
+
+func (s *vcsRestrictedRunStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	r, err := s.vcsPATStore.GetRun(ctx, id)
+	r.RestrictionIDs = []uuid.UUID{uuid.New()}
+	return r, err
+}
+
+// An unread boundary or restriction at a resolve is a retryable 503 run_unreadable, not a cap that lists
+// nothing: it must not end a running minted_pat run's access for good.
+func TestBoundaryCapResolveUnreadLayersAreRetryable(t *testing.T) {
+	for name, tc := range map[string]func(fx *adoPATFixture){
+		"boundary": func(fx *adoPATFixture) {
+			fx.srv.cfg.Store = &vcsPATStore{adoPATStore: fx.st, b: capBoundary(adoRead), bErr: errors.New("boundary unreadable")}
+		},
+		"restriction": func(fx *adoPATFixture) {
+			fx.srv.cfg.Store = &vcsRestrictedRunStore{&vcsPATStore{adoPATStore: fx.st, b: types.Boundary{Mode: types.BoundaryNoLimits}}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newADOPATFixture(t)
+			fx.ok(t, "dev.azure.com", nil)
+			tc(fx)
+			w, _ := fx.resolve(t, "dev.azure.com", nil)
+			if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonRunUnreadable) {
+				t.Fatalf("status %d body %s, want 503 %s", w.Code, w.Body.String(), reasonRunUnreadable)
+			}
+			if got := fx.pats.revokedIDs(); len(got) != 0 {
+				t.Errorf("revoked %v, want no token revoked on a transient read failure", got)
+			}
+			if live := fx.st.unrevoked(t); len(live) != 1 {
+				t.Errorf("live rows = %d, want the run's token kept", len(live))
+			}
+		})
+	}
+}
+
+// The decide door stays closed on an unread layer, and dispatch still fails closed on it.
+func TestBoundaryCapUnreadLayerDecideRefused(t *testing.T) {
+	f := newADOCapFixtureRow(t, adoCaps(adoRead, adoCreate, adoVote), adoCaps(adoRead, adoCreate), nil)
+	f.srv.cfg.Store = &vcsCapStore{adoCapStore: f.srv.cfg.Store.(*adoCapStore), b: capBoundary(adoRead, adoCreate, adoVote), bErr: errors.New("boundary unreadable")}
+	if f.srv.adoEscalationWithinCeiling(context.Background(), f.runID, adoCapabilityScope{ProviderID: f.st.site.WorkspaceProviders.Git[0].ID, Capability: string(adoCreate)}) {
+		t.Error("the decide door admits a capability while the boundary is unreadable")
+	}
+}
 
 func (*vcsNoRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	return types.AgentRun{}, errors.New("run unreadable")
