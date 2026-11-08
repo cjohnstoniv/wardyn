@@ -289,7 +289,9 @@ func servedPage(served func([]types.AuditEvent, error) ([]types.AuditEvent, erro
 //
 // A member is scoped exactly as in handleQueryAudit: only ?run_id= of a run they
 // created, and an unowned/absent run_id yields an empty (200, zero-line) export —
-// the same no-existence-oracle collapse a collection endpoint uses.
+// the same no-existence-oracle collapse a collection endpoint uses. A unit admin
+// gets that same empty export for every request that is not their own run: they read
+// the unit view on GET /audit and have no export of the runs they govern.
 //
 // Requires a Pager backend (store.PG is one); a non-Pager store (test fakes with
 // no pager) gets 501 rather than a silently-capped read.
@@ -319,14 +321,16 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	// Same gate as handleQueryAudit by construction, not by copy — see the
 	// member paragraph above, which auditScope is now the single home of.
-	scope, unit, ok := s.auditScope(w, r, func() { w.Header().Set("Content-Type", "application/x-ndjson") })
-	if !ok || (unit != nil && !unitTargetFilterOK(w, filter)) {
+	writeEmpty := func() { w.Header().Set("Content-Type", "application/x-ndjson") }
+	scope, unit, ok := s.auditScope(w, r, writeEmpty)
+	if !ok {
+		return
+	}
+	if unit != nil {
+		writeEmpty() // a unit admin reads the unit view on GET /audit; the export is not theirs, and answers as a member's does
 		return
 	}
 	served := s.auditRowsFor(r, scope)
-	if unit != nil {
-		served = s.unitAuditRows(r)
-	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	wrote := false // a byte has reached the response: the 200 is committed
 	offset := 0    // rows read so far; the OFFSET of a store without keyset paging, the log's position otherwise
@@ -340,9 +344,6 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
 			store.Page{Limit: auditExportPageSize, Offset: offset})
 		return page, after, err
-	}
-	if unit != nil && scope == nil {
-		readPage = unit.exportPages(r, filter) // their units' feed, never the whole log
 	}
 	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
 	for {
@@ -358,9 +359,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range page {
 			ev := page[i]
-			// The path list is inlined after the row view, so a unit admin's export never takes it:
-			// the unit view holds no paths.
-			if unit == nil && ev.Action == pushPathsAuditAction {
+			if ev.Action == pushPathsAuditAction {
 				if ev, err = s.withPushPaths(r.Context(), ev); err != nil {
 					fail("push path list read", err)
 					return

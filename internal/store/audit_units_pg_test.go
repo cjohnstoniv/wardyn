@@ -18,12 +18,10 @@ import (
 // unitAuditReads is the unit-scoped audit read the test drives, asserted at run time.
 type unitAuditReads interface {
 	QueryAuditEventsForUnits(ctx context.Context, units []uuid.UUID, f store.AuditFilter, p store.Page) ([]types.AuditEvent, error)
-	QueryAuditEventsForUnitsAfter(ctx context.Context, units []uuid.UUID, f store.AuditFilter, afterSeq int64, limit int) ([]types.AuditEvent, int64, error)
 }
 
 // The unit read serves the rows of runs frozen to one of the units, newest first, with the filter applied
-// on top; a run with no unit, a run of another unit and a row with no run never match, and the keyset
-// twin walks the same rows in the same order.
+// on top; a run with no unit, a run of another unit and a row with no run never match.
 func TestQueryAuditEventsForUnitsPG(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
@@ -105,23 +103,6 @@ func TestQueryAuditEventsForUnitsPG(t *testing.T) {
 	page, err := reads.QueryAuditEventsForUnits(ctx, units, store.AuditFilter{}, store.Page{Limit: 3, Offset: 2})
 	if err != nil || !slices.Equal(auditIDs(page), order[2:5]) {
 		t.Errorf("page 3 rows from offset 2 = %v (%v), want %v", auditIDs(page), err, order[2:5])
-	}
-
-	var walked []uuid.UUID
-	var after int64
-	for range 100 {
-		evs, last, err := reads.QueryAuditEventsForUnitsAfter(ctx, units, store.AuditFilter{}, after, 4)
-		if err != nil {
-			t.Fatalf("keyset unit read: %v", err)
-		}
-		walked = append(walked, auditIDs(evs)...)
-		if len(evs) < 4 {
-			break
-		}
-		after = last
-	}
-	if !slices.Equal(walked, order) {
-		t.Errorf("keyset walk %v, want the paged order %v", walked, order)
 	}
 
 	for name, set := range map[string][]uuid.UUID{"no units": {}, "the nil unit only": {uuid.Nil}} {

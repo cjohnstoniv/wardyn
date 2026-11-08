@@ -16,8 +16,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// unitAdminAuditRead is whether a unit admin reads, on GET /audit and its export, the rows of the runs
-// frozen to a unit in their subtrees. On by default: a grant already conveys governing that team, and the
+// unitAdminAuditRead is whether a unit admin reads, on GET /audit alone (the export is not theirs), the rows
+// of the runs frozen to a unit in their subtrees. On by default: a grant already conveys governing that team, and the
 // unit view (audit_unit_view.go) serves only allow-listed fields. Set it false and a unit admin reads the
 // audit log as any member does.
 const unitAdminAuditRead = true
@@ -99,11 +99,4 @@ func (s *Server) serveUnitAuditFeed(w http.ResponseWriter, r *http.Request, scop
 	servePage(w, r, page, servedPage(s.unitAuditRows(r), read), func() ([]types.AuditEvent, error) {
 		return nil, errUnitAuditNoFallback
 	})
-}
-
-// exportPages is the export's page read for the unit feed: by position, as the whole log's export reads.
-func (scope *unitAuditScope) exportPages(r *http.Request, filter store.AuditFilter) func(after int64, offset int) ([]types.AuditEvent, int64, error) {
-	return func(after int64, _ int) ([]types.AuditEvent, int64, error) {
-		return scope.reader.QueryAuditEventsForUnitsAfter(r.Context(), scope.units, filter, after, auditExportPageSize)
-	}
 }
