@@ -11,13 +11,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
-### Before you upgrade
-
-- A run with an allowed-models list, or with content inspection in `alert` or `block` mode, now treats a model call whose body carries `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` as a refusal (`block`, and always under the allowed-models list) or a logged alert (`alert`). Claude Code and the Codex CLI send none of these keys. In `block` mode, a model call whose body is over the 32 MiB scan limit, has a `Content-Encoding`, or is not one JSON object is now refused where an oversize body used to pass with `on_scanner_error: pass`. A run with neither feature is unchanged, and so is a route set to `inspection: gateway`.
-- A macOS VM run now denies `mask.icloud.com`, `mask-h2.icloud.com` and `proxy.safebrowsing.apple` quietly, as it already does for the other Apple background hosts: no approval is raised and each denial is recorded. A run whose policy allows one of them by name keeps it. Allow the host in the run's policy to reach it.
-- A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
-- On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
-
 ### Added
 
 - A `custom_endpoint` model provider can carry up to 8 `extra_headers` (a name and a value of at most 2048 bytes each), which the run proxy sets on every request to the provider's gateway, after the stored credential and over a sandbox header of the same name. For a gateway that routes on a header, such as Portkey's `x-portkey-provider`. The default is none. Names that could carry a credential or change the request's framing are refused (`Authorization`, `Cookie`, hop-by-hop and `X-Wardyn-*` headers, any name containing key, token, secret, auth, password, cookie or credential, and the provider's own `auth_header`), as is a value shaped like a secret. Changing a provider's headers removes everyone's stored credential for it, as changing its `base_url` does, and the audit row names the headers, never their values. A remote runner that does not name `llm_headers` is refused a run that carries any.
@@ -26,6 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).
 - macOS VM bases now mark Setup Assistant's panes as seen for the agent account, stop the Fn key raising Dictation, turn Spotlight indexing and diagnostics upload off, and kill Terminal and remove its saved state, so a run's first desktop is clean. On by default. Prepare writes them and every tools update writes them again, through a new guest-agent route that takes no input and adds no allowed exec. Rows that fail or cannot be applied are listed in `tools.json` as `base_settings_skipped` and never fail an update. edit-base's finish also cleans Terminal.
 - `wardyn-runnerd doctor` on a macOS VM runner has a `guest-agent` stage: it fails when the guest agent went in signed ad hoc, quoting why each signer failed, and passes when this Mac's cert signed it. `macos-vm status` shows the signer and the signing errors, and the base's `tools.json` records them as `agent_signer` and `agent_sign_errors`, with no paths.
+- `llm_inspection.detector_sidecar_format` can be set to `presidio`, so `detector_sidecar_url` can point at an unmodified Presidio analyzer (`/analyze`). Unset, the default, keeps Wardyn's own format. It needs `detector_sidecar_url`, and in `block` mode it needs `block_min_severity` of at least `medium`, because Presidio also reports names, dates, URLs, ids and addresses, which are logged here at low severity. A reply that is not a JSON array counts as a sidecar error.
 
 ### Changed
 
@@ -40,6 +34,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A model call can no longer name another model through a gateway's rerouting keys while the allowed-models list is set. Under content inspection the keys are refused in `block` mode and logged in `alert` mode, including on the Responses routes the scan cannot read. A body that cannot be read for the keys is refused in `block` and logged as `unparsable` in `alert`.
 - On a configured model gateway's host, the proxy now drops every `x-portkey-*` header the sandbox sends, except the header the stored credential rule owns. Before this, a sandbox could set `x-portkey-custom-host` and send the stored key to a host it chose, through a gateway that honours it.
+
+### Before you upgrade
+
+- A run with an allowed-models list, or with content inspection in `alert` or `block` mode, now treats a model call whose body carries `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` as a refusal (`block`, and always under the allowed-models list) or a logged alert (`alert`). Claude Code and the Codex CLI send none of these keys. In `block` mode, a model call whose body is over the 32 MiB scan limit, has a `Content-Encoding`, or is not one JSON object is now refused where an oversize body used to pass with `on_scanner_error: pass`. A run with neither feature is unchanged, and so is a route set to `inspection: gateway`.
+- A macOS VM run now denies `mask.icloud.com`, `mask-h2.icloud.com` and `proxy.safebrowsing.apple` quietly, as it already does for the other Apple background hosts: no approval is raised and each denial is recorded. A run whose policy allows one of them by name keeps it. Allow the host in the run's policy to reach it.
+- A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
+- On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
 
 ## [0.10.0-rc.14] — 2026-11-07
 

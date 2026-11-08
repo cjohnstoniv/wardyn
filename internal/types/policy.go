@@ -487,6 +487,9 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	return out
 }
 
+// DetectorSidecarFormatPresidio is the one detector_sidecar_format other than Wardyn's own.
+const DetectorSidecarFormatPresidio = "presidio"
+
 // LLMInspectionSpec configures optional outbound LLM prompt inspection for a
 // run. The zero value (or a nil *LLMInspectionSpec on the policy) means OFF.
 type LLMInspectionSpec struct {
@@ -522,6 +525,14 @@ type LLMInspectionSpec struct {
 	// like any other scanner error: fail-OPEN by default, fail-CLOSED when on_scanner_error=block —
 	// so block mode with the sidecar as the SOLE detector DOES guarantee a block on sidecar failure.
 	DetectorSidecarURL string `json:"detector_sidecar_url,omitempty"`
+	// DetectorSidecarFormat names the request and reply format the sidecar speaks. Unset (the
+	// default, so an existing policy keeps working unchanged) is Wardyn's own format; the only
+	// other value is "presidio" (DetectorSidecarFormatPresidio), the analyzer's /analyze API, so
+	// an operator can point detector_sidecar_url at an unmodified Presidio. It needs
+	// detector_sidecar_url. In block mode it also needs block_min_severity of at least medium,
+	// because Presidio reports ordinary code text (dates, names, URLs, ids) as entities and the
+	// default threshold would refuse such prompts.
+	DetectorSidecarFormat string `json:"detector_sidecar_format,omitempty"`
 	// ClassifiedMarkers are operator-defined literal markers (e.g. "INTERNAL ONLY",
 	// "CONFIDENTIAL//NOFORN") whose presence in outbound content flags a
 	// classified-content leak. Case-insensitive substring match; category "classified".

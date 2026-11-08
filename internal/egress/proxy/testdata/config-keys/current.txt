@@ -168,6 +168,7 @@ policy.llm_inspection.detect_entropy
 policy.llm_inspection.detect_pii
 policy.llm_inspection.detect_secret_patterns
 policy.llm_inspection.detect_secrets
+policy.llm_inspection.detector_sidecar_format
 policy.llm_inspection.detector_sidecar_url
 policy.llm_inspection.inspect_forward_egress
 policy.llm_inspection.intercept_tls

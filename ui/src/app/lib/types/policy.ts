@@ -114,6 +114,8 @@ export interface LLMInspectionSpec {
   detect_entropy?: boolean;
   detect_pii?: boolean;
   detector_sidecar_url?: string;
+  // Unset = Wardyn's own format; "presidio" = Presidio's /analyze API.
+  detector_sidecar_format?: string;
   classified_markers?: string[];
   scan_attachments?: boolean;
   inspect_forward_egress?: boolean;
