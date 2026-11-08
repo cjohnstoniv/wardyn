@@ -692,6 +692,26 @@ export const governance = {
     });
     return asJson<GovernanceChange>(res);
   },
+
+  // PUT /api/v1/governance/units/{id}/envelope -> 200 the envelope, or PendingChangeError when held.
+  async setEnvelope(unitId: string, approvedGroups: string[]): Promise<GovernanceEnvelope> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/envelope`, {
+      method: "PUT",
+      asPerson: true,
+      body: JSON.stringify({ approved_groups: approvedGroups }),
+    });
+    return asJson<GovernanceEnvelope>(res);
+  },
+
+  // DELETE /api/v1/governance/units/{id}/envelope -> 204, or PendingChangeError when held.
+  async clearEnvelope(unitId: string): Promise<void> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/envelope`, {
+      method: "DELETE",
+      asPerson: true,
+    });
+    await throwIfPending(res);
+    await asNoContent(res);
+  },
 };
 
 async function writeProfile(res: Response): Promise<GovernanceUnitWrite> {
