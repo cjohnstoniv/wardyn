@@ -196,18 +196,7 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 		[]byte(base64.StdEncoding.EncodeToString([]byte(":"+blob.Token))), []byte(value)) {
 		return true
 	}
-	data := map[string]any{
-		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,
-		"token_mode": types.ADOTokenModeOwnPAT, "owner": snapshot.OwnerSubject,
-		"provider_row": snapshot.ProviderRowID, "organisation": snapshot.Organisation,
-		"capabilities": responseCaps, "expires_on": blob.ExpiresOn,
-	}
-	if capAsk.capability != "" {
-		data["capability"] = capAsk.capability
-		if capAsk.once != nil {
-			data["approval_id"] = capAsk.once.ID
-		}
-	}
+	data := adoOwnPATSuccessAudit(grantID, minted.JTI, snapshot, responseCaps, blob, capAsk)
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
 	writeJSON(w, http.StatusOK, injectionResponse{
@@ -222,6 +211,26 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 		Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true
+}
+
+// adoOwnPATSuccessAudit is the data of the secret.read success row
+// resolveADOOwnPATInjection records for an injected own token.
+func adoOwnPATSuccessAudit(grantID uuid.UUID, jti string, snapshot adoEntraScopeSnapshot,
+	responseCaps []adoscope.Capability, blob adoOwnPATBlob, capAsk adoCapabilityGrant,
+) map[string]any {
+	data := map[string]any{
+		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": jti,
+		"token_mode": types.ADOTokenModeOwnPAT, "owner": snapshot.OwnerSubject,
+		"provider_row": snapshot.ProviderRowID, "organisation": snapshot.Organisation,
+		"capabilities": responseCaps, "expires_on": blob.ExpiresOn,
+	}
+	if capAsk.capability != "" {
+		data["capability"] = capAsk.capability
+		if capAsk.once != nil {
+			data["approval_id"] = capAsk.once.ID
+		}
+	}
+	return data
 }
 
 // answerADOOwnPATExpired answers a token past the expiry its owner entered: at
