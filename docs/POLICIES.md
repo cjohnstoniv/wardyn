@@ -127,7 +127,8 @@
   - So does CPU use above 10% of one core read from the substrate (a metrics-server read on Kubernetes, the daemon's container stats on Docker; never an exec into the sandbox),
   - while file writes do not (`internal/lifecycle`, [`internal/api/run_activity.go`](../internal/api/run_activity.go)).
 - Without metrics-server the CPU signal is off, `/setup/status` says so (the Idle detection row), and idleness is the attach and egress clock alone;
-  - a refused or held request does not reset it, on any kind of run, so a run that is only being refused idles out; nor do the approvals poll and `credential:reauth-timeout`, which reports that nobody answered a re-auth hold.
+  - a refused or held request does not reset it, on any kind of run;
+  - nor do the approvals poll and `credential:reauth-timeout`, which reports that nobody answered a re-auth hold.
 - The reaper never stops a run that has a PENDING request still inside its own wait, min(`requested_at` + `wait_budget_sec`, `ends_at`) (`store.openHoldSQL`);
   - with no wait and no end set, that means until the approval-expiry ceiling (`WARDYN_APPROVAL_EXPIRY_AFTER`, 24h by default) is swept by `approval.ExpireStale`,
   - so a run parked on a request can outlive this threshold and keep its quota slot that long.
