@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command gatewayfake stands behind an AI gateway in the nightly gateway job
-// (scripts/kind-gateway-run.sh): a canned Anthropic Messages endpoint, a
-// one-tool MCP server, and a /_seen listing of what reached it. It holds no
-// provider key and calls nothing; the only credential it ever sees is the
-// throwaway value the job makes up.
+// (scripts/kind-gateway-run.sh) and in the gateway recipe test
+// (internal/egress/proxy/gateway_recipes_docker_test.go): a canned Anthropic Messages and OpenAI Responses
+// endpoint, a one-tool MCP server, and a /_seen listing of what reached it. It holds no provider key and
+// calls nothing; the only credential it ever sees is the throwaway value the job makes up.
 //
 // A TEST BINARY, never built by `make agent-images` and never published.
 package main
@@ -70,6 +70,7 @@ func (f *fake) handler() http.Handler {
 	mux.HandleFunc("/_seen", f.serveSeen)
 	mux.HandleFunc("/v1/messages", f.serveMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", f.serveCountTokens)
+	mux.HandleFunc("/v1/responses", f.serveResponses)
 	mux.HandleFunc("/mcp", f.serveMCP)
 	// Any other path the gateway forwards is recorded and refused, so /_seen
 	// names every path a harness reached beyond the two routes above.
@@ -146,6 +147,57 @@ func (f *fake) serveMessages(w http.ResponseWriter, r *http.Request) {
 		{"content_block_stop", map[string]any{"type": "content_block_stop", "index": 0}},
 		{"message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 5}}},
 		{"message_stop", map[string]any{"type": "message_stop"}},
+	}
+	for _, e := range events {
+		b, _ := json.Marshal(e.data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, b)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
+}
+
+// serveResponses answers POST /v1/responses. A "stream": true request gets the server-sent events the
+// Responses API sends, ending in response.completed with the usage; a plain one gets the response object.
+func (f *fake) serveResponses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	_ = readJSON(r, &req)
+	f.record(r, "model", "")
+	f.mu.Lock()
+	f.seen.ModelCalls++
+	f.mu.Unlock()
+	model := req.Model
+	if model == "" {
+		model = "fake-model"
+	}
+	response := func(status string, usage any) map[string]any {
+		return map[string]any{
+			"id": "resp_gatewayfake", "object": "response", "status": status, "model": model, "usage": usage,
+			"output": []map[string]any{{"type": "message", "id": "msg_1", "role": "assistant", "status": status,
+				"content": []map[string]string{{"type": "output_text", "text": replyText}}}},
+		}
+	}
+	usage := map[string]any{"input_tokens": 3, "output_tokens": 5, "total_tokens": 8}
+	if !req.Stream {
+		writeJSON(w, http.StatusOK, response("completed", usage))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	events := []struct {
+		name string
+		data map[string]any
+	}{
+		{"response.created", map[string]any{"type": "response.created", "response": response("in_progress", nil)}},
+		{"response.output_text.delta", map[string]any{"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": replyText}},
+		{"response.completed", map[string]any{"type": "response.completed", "response": response("completed", usage)}},
 	}
 	for _, e := range events {
 		b, _ := json.Marshal(e.data)
