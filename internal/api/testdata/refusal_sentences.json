@@ -260,6 +260,11 @@
     "sentence": "\"workspace not found\""
   },
   {
+    "reason": "decision_scope_above_rule",
+    "target": "id.String()",
+    "sentence": "fmt.Sprintf(\"the deciders of unit %s allow this %s request to be decided up to %q; %q reaches further\", v.unit, v.kind, limit, scope)"
+  },
+  {
     "reason": "delegation_scope",
     "target": "id.String()",
     "sentence": "(audit only)"
@@ -505,6 +510,11 @@
     "sentence": "fmt.Sprintf(mpRunModelEnvSecret, secretName, name)"
   },
   {
+    "reason": "not_a_decider",
+    "target": "id.String()",
+    "sentence": "\"the deciders of unit \" + v.unit.String() + \" decide this \" + v.kind + \" request: \" + strings.Join(v.deciderList(), \", \")"
+  },
+  {
     "reason": "not_owner",
     "target": "id.String()",
     "sentence": "(audit only)"
@@ -577,6 +587,16 @@
   {
     "reason": "second_human_required",
     "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — it is your run's request, so someone else approves or denies it\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you asked for this download or it is your run's, so someone else approves or denies it\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its Azure DevOps access\""
   },
   {
@@ -588,6 +608,11 @@
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies this MCP call\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies this kubectl change\""
   },
   {
     "reason": "second_human_required",
