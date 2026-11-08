@@ -147,7 +147,7 @@ The row, as `PUT /api/v1/components/{id}` takes it:
 - `approve_each: true` is valid with `restart` or `write` only. It holds every `POST`, `PUT`, `PATCH` and `DELETE` the door admits. A `GET` is never held, and a request the door refuses never asks anyone.
 - The approval names the cluster, namespace, method, path, query, media type and body. A person sees all of it, and the yes covers exactly that request.
 - A different query, such as `dryRun` against a real write, a different media type or a different body asks again.
-- A restart is keyed by what it restarts, not by its `restartedAt` time, so the next `kubectl rollout restart` of that deployment spends the same yes.
+- A restart is keyed by what it restarts, not by its `restartedAt` time, so running the same `kubectl rollout restart` of that deployment again is the same request and uses the same approval.
 - The proxy sends the query and body that were shown, once. A second identical request asks again.
 - A declined change stays refused for the rest of the run.
 - A body must be JSON, not encoded, and at most 32 KiB. Anything else is refused: protobuf, a YAML apply, a repeated key, a `Content-Encoding`.
