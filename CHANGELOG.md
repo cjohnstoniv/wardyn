@@ -18,6 +18,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
 
+### Before you downgrade
+
+- An older version ignores platform envelopes, so a held change of an envelope's unit, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs that unit. Changes below the envelope's unit and adds of its approved groups are held again, as before.
+
 ### Added
 
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
@@ -25,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).
 - macOS VM bases now mark Setup Assistant's panes as seen for the agent account, stop the Fn key raising Dictation, turn Spotlight indexing and diagnostics upload off, and kill Terminal and remove its saved state, so a run's first desktop is clean. On by default. Prepare writes them and every tools update writes them again, through a new guest-agent route that takes no input and adds no allowed exec. Rows that fail or cannot be applied are listed in `tools.json` as `base_settings_skipped` and never fail an update. edit-base's finish also cleans Terminal.
 - `wardyn-runnerd doctor` on a macOS VM runner has a `guest-agent` stage: it fails when the guest agent went in signed ad hoc, quoting why each signer failed, and passes when this Mac's cert signed it. `macos-vm status` shows the signer and the signing errors, and the base's `tools.json` records them as `agent_signer` and `agent_sign_errors`, with no paths.
+- With a platform envelope set on a unit, a unit admin's change to a unit below it applies directly when the new walls stay within the envelope unit's walls and the change stays below that unit. A unit admin's add of a group on the envelope's approved list to that unit or one below it, or a move of the group's membership between two such units, also applies directly. A change that removes a lock, changes a contact, or changes which legacy membership a person is selected by is still held. Every held change of the envelope's unit itself, and every unit admin grant or revoke on it, is decided by a security admin only. People, groups not on the list, and membership deletes keep their present rules. An envelope that cannot be read gives no direct write and leaves the envelope's unit to security admins. With no envelope, nothing changes.
 
 ### Changed
 

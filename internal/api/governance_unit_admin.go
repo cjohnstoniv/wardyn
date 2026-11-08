@@ -400,7 +400,7 @@ func unitChangeApprover(ch types.GovernanceChange) govApprover {
 	if !ok {
 		return securityApprover
 	}
-	return unitScopeApprover(strict, units...)
+	return envelopeRootApprover(ch, unitScopeApprover(strict, units...)) // an envelope's root is security's
 }
 
 // changeApprover is one who may decide a held change: any security admin, or a unit admin grant (a
@@ -467,6 +467,9 @@ func (s *Server) changeApprovers(ctx context.Context, ch types.GovernanceChange)
 		return nil
 	}
 	if units, strict, ok := unitChangeScope(ch); ok {
+		if s.envelopeSecurityOnly(ctx, ch) {
+			return []changeApprover{{Kind: "security"}}
+		}
 		return s.approversFor(ctx, units, strict, ch.ProposedBy, ch.ProposedByEmail)
 	}
 	if kind.forChange(ch).approver.reason == securityApprover.reason {
