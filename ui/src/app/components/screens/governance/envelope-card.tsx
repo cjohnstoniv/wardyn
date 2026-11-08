@@ -34,17 +34,20 @@ import { SubmittedNote } from "./submitted-note";
 // The envelope root at or above a unit: the unit itself, else the nearest ancestor with an envelope. The walk
 // goes through the listed profiles; a parent that is not listed is still checked as a root, so a unit admin
 // whose list starts below the root finds it.
-function rootOf(id: string | undefined, profiles: GovernanceUnit[], roots: Set<string>): string | null {
+function rootOf(id: string | undefined, profiles: GovernanceUnit[], envelopes: GovernanceEnvelope[]): string | null {
+  const roots = new Set(envelopes.map((e) => e.unit_id));
   const byId = new Map(profiles.map((p) => [p.id, p]));
   let cur = id;
   for (let i = 0; cur && i <= profiles.length + 1; i++) {
     if (roots.has(cur)) return cur;
-    cur = byId.get(cur)?.parent_id;
+    const p = byId.get(cur);
+    // The walk left the listed profiles at a unit that is not a root: the server lists only envelopes at or
+    // above a listed subtree, so one served envelope is this profile's; with several, the chip cannot say which.
+    if (!p) return envelopes.length === 1 ? envelopes[0].unit_id : null;
+    cur = p.parent_id;
   }
   return null;
 }
-
-const rootSet = (envelopes: GovernanceEnvelope[]) => new Set(envelopes.map((e) => e.unit_id));
 
 /** The Profiles table's Name-cell chip: Envelope root, or In envelope with the root's name, or nothing. */
 export function EnvelopeChip({
@@ -58,7 +61,7 @@ export function EnvelopeChip({
   envelopes: GovernanceEnvelope[];
   unitNames?: Record<string, string>;
 }) {
-  const root = rootOf(profile.id, profiles, rootSet(envelopes));
+  const root = rootOf(profile.id, profiles, envelopes);
   if (root === null) return null;
   const name = profiles.find((p) => p.id === root)?.name ?? unitNames?.[root] ?? root;
   return (
@@ -97,7 +100,6 @@ export function EnvelopeCard({
   if (envelopes === undefined) return null;
 
   const profiles = snapshot.profiles;
-  const roots = rootSet(envelopes);
   const nameOf = (id: string) => profiles.find((p) => p.id === id)?.name ?? snapshot.unit_names?.[id] ?? id;
 
   const closeForm = () => {
@@ -167,7 +169,7 @@ export function EnvelopeCard({
   }
 
   // Free to be a new root: not a root, and not inside another envelope.
-  const freeProfiles = profiles.filter((p) => rootOf(p.id, profiles, roots) === null);
+  const freeProfiles = profiles.filter((p) => rootOf(p.id, profiles, envelopes) === null);
 
   return (
     <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
@@ -380,10 +382,9 @@ function ReadOnlyCard({
   principal: string;
   nameOf: (id: string) => string;
 }) {
-  // Only an envelope that is the nearest at or above a profile the viewer can list.
-  const roots = rootSet(envelopes);
-  const covering = new Set(snapshot.profiles.map((p) => rootOf(p.id, snapshot.profiles, roots)));
-  const rows = envelopes.filter((e) => covering.has(e.unit_id));
+  // Every envelope the server sends a non-security viewer is at or above one of their subtrees. With several,
+  // the lists below name the first platform only.
+  const rows = envelopes;
   if (rows.length === 0) return null;
   const platform = nameOf(rows[0].unit_id);
   const administersRoot =
