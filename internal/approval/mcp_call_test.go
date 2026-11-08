@@ -88,3 +88,43 @@ func TestHoldMCPCallBounded(t *testing.T) {
 		t.Error("a decided row is never held")
 	}
 }
+
+func kubeCallRow(t *testing.T, extra map[string]any, requested time.Time) types.ApprovalRequest {
+	t.Helper()
+	scope := map[string]any{"cluster": "k8s.example.com", "namespace": "team-a", "method": "PATCH",
+		"path": "/apis/apps/v1/namespaces/team-a/deployments/web", "call_sha256": callKey, "hold_seconds": 90}
+	for k, v := range extra {
+		scope[k] = v
+	}
+	return types.ApprovalRequest{Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedAt: requested, RequestedScope: mustScope(t, scope)}
+}
+
+// TestTallyKeyKubeCall: a held kubectl write is its own tally key, never an MCP call's, and a
+// grant id makes it neither.
+func TestTallyKeyKubeCall(t *testing.T) {
+	now := time.Now().UTC()
+	if got := TallyKey(kubeCallRow(t, nil, now)); got != "tool_call:kube_call" {
+		t.Fatalf("TallyKey(kube call) = %q, want tool_call:kube_call", got)
+	}
+	g := uuid.New()
+	withGrant := kubeCallRow(t, nil, now)
+	withGrant.GrantID = &g
+	if got := TallyKey(withGrant); strings.HasPrefix(got, "tool_call:") {
+		t.Errorf("TallyKey(kube call with a grant) = %q", got)
+	}
+	if got := TallyKey(mcpCallRow(t, nil, now)); got != TallyToolCallMCP {
+		t.Errorf("TallyKey(mcp call) = %q", got)
+	}
+}
+
+// TestHoldKubeCallBounded: a held kubectl write is held for its window, like an MCP call the proxy holds.
+func TestHoldKubeCallBounded(t *testing.T) {
+	now := time.Now().UTC()
+	row := kubeCallRow(t, nil, now.Add(-10*time.Second))
+	if held, until := Hold(row, now); !held || !until.Equal(row.RequestedAt.Add(90*time.Second)) {
+		t.Fatalf("held=%v until=%v, want held until requested_at+90s", held, until)
+	}
+	if held, _ := Hold(row, now.Add(100*time.Second)); held {
+		t.Error("held after its window")
+	}
+}

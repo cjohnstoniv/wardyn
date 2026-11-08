@@ -324,7 +324,7 @@ var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // reader of the set — this guard, driveRefusalConstants
 // (user_drives_run_test.go) — must read all of them, or a value declared in
 // another file is invisible to it.
-var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go"}
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
 // reasonsGoFiles via go/parser rather than a line-anchored regex, so a

@@ -81,6 +81,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "closed effect enum, name charset/length, count cap; a proposal may narrow the ceiling's rules and never widen them"},
 	"Recording": {validated: true, clamped: true,
 		why: "closed levels (validateRecordingLevel), none of them keystrokes; raised to the ceiling's level (clampRecording), since a ceiling's level is a minimum. The organisation's level and lock apply at dispatch (types.RecordingChoice)"},
+	"DataOut": {validated: true, clamped: true,
+		why: "closed values (validateDataOut); the stricter of the proposal's and the ceiling's rule stands (clampDataOut), and an unset rule reads as allowed. The doors that hold content in read the sealed value at the run"},
 	"HarnessInnerWalls": {validated: true, clamped: true,
 		why: "closed values, the harness's own sandbox modes refused with their own reason (validateHarnessInnerWalls); each axis the ceiling chooses stands over the proposal's (clampInnerWalls). The create door refuses a run whose walls cannot meet the choice, a looser one included (innerWallsFor)"},
 	"Desktop": {validated: true, clamped: true,
@@ -99,7 +101,12 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 	// The fields the write-time validators bound, read off the syntax tree: a
 	// substring match over the whole file is satisfied by a field mentioned only
 	// in a comment, or only READ by a validator for another field's sake.
+	// validateLLMInspection lives in its own file (the file-size cap); its validator is part of
+	// the same write-time bound, so both files are read.
 	validated := writeBoundedFields(t, readRepoFile(t, "internal", "api", "policy.go"))
+	for f := range writeBoundedFields(t, readRepoFile(t, "internal", "api", "policy_llm_inspection.go")) {
+		validated[f] = true
+	}
 	// cloneProposal is the clamp's OWNERSHIP copy (it reallocates the caller's
 	// slices and pointees so the clamped spec aliases nothing). It names EVERY
 	// reference-semantics field by construction and bounds none of them, so
@@ -122,7 +129,7 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 			t.Errorf("RunPolicySpec.%s: the row needs a reason, not just two booleans", f.Name)
 		}
 		if got := validated[f.Name]; got != row.validated {
-			t.Errorf("RunPolicySpec.%s: validated=%v in the table, but internal/api/policy.go %s reference it",
+			t.Errorf("RunPolicySpec.%s: validated=%v in the table, but internal/api/policy.go and policy_llm_inspection.go %s reference it",
 				f.Name, row.validated, saysOrNot(got))
 		}
 		if got := strings.Contains(clampSrc, "."+f.Name); got != row.clamped {

@@ -45,6 +45,7 @@ var leqRules = map[string]string{
 	"desktop.upload":                   "a allows only what b allows, unset read as allowed",
 	"desktop.download":                 "a allows only what b allows, unset read as blocked",
 	"recording":                        "a records at least what b does",
+	"data_out":                         "a is at least as strict as b, unset read as allowed",
 	"push_rules.deny_paths":            "a keeps every path of b",
 	"push_rules.max_inspect_pack_mib":  "a is no looser cap than b, after the default under an active rule",
 	"push_rules.require_review_paths":  "a keeps every path of b",

@@ -425,6 +425,9 @@ func ceilingDeniesAny(deny []string, hosts []string) bool {
 type withholding struct {
 	deny   []string
 	layers []sealLayer
+	// pinnedOut is the name of the run's first organisation component whose unit pin no longer
+	// covers the run's unit: every credential is then withheld. Only the live doors set it.
+	pinnedOut string
 }
 
 // binds reports whether anything can be withheld at all.
@@ -460,9 +463,11 @@ func grantWithheldBy(g types.GrantSpec, list []types.GrantSpec) bool {
 }
 
 // credentialWithheld reports whether a grant is kept from the run: by its kind and scope
-// (grantWithheld), or because a host it delivers to is withheld (grantHosts).
+// (grantWithheld), because a host it delivers to is withheld (grantHosts), or because a component the
+// run carries is pinned to a unit the run is not in (pinnedOut): a grant does not record which
+// component it came from, so every one is.
 func (w withholding) credentialWithheld(g types.GrantSpec) bool {
-	return w.grantWithheld(g) || w.withheldAny(grantHosts(g))
+	return w.pinnedOut != "" || w.grantWithheld(g) || w.withheldAny(grantHosts(g))
 }
 
 // grantHosts is the hosts a grant's credential is delivered to: the git broker's re-origination set

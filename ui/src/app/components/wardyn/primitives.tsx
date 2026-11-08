@@ -408,6 +408,8 @@ const kindTone: Record<ApprovalKind, Tone> = {
   push_content: "warning",
   // The agent is waiting on a person, like the two above.
   human_takeover: "warning",
+  // A person is waiting to download the file, like the rows above.
+  file_download: "warning",
 };
 export function ApprovalKindChip({ kind, scope }: { kind: ApprovalKind; scope?: Record<string, unknown> }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);

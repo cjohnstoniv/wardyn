@@ -23,7 +23,7 @@
 | `audit` | Made, never pins | Runs. For a member's image, the create response carries a warning that starts "Image check (audit only):" and the `run.create` row records `would_refuse`. For the convention image, only the run's `image_admission` records it | A warning |
 | `enforce` | Made, and the run uses the checked digest | `403` with a reason below | `503` `image_admission_unavailable` |
 
-- `scope` is `member` (default: the image a member names) or `all` (also the convention image, checked when the run launches).
+- `scope` is `member` (default: the image a member names) or `all` (also the convention image, checked when the run launches). With `scope: "member"` and a mode of `audit` or `enforce`, Setup status shows an "Image checks" row to say the images runs get from their agent or harness set are not checked.
 - Runs Wardyn launches itself are not checked, even with `scope: "all"`: workspace record sessions, source scans, harness sign-in and the site-config connectivity probes. They run the workspace's built image, or else the agent image, and revive under any mode.
 - A governance profile that lists `required_image_signers` is held to those signers even while the site mode is `off` or `audit`. A profile can only tighten.
 - A run that was queued is checked again when it starts. `POST /runs/preflight` makes the same check of a member's image, and any audit row it writes carries `dry_run: true`. It cannot check the convention image, which is chosen at launch, once a runner is placed. The policy preview only reports "checked at launch" and reads no registry.

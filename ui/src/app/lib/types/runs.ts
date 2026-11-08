@@ -308,6 +308,8 @@ export interface AgentRun {
   // (migration 0159, #1319). Absent when neither bounds the lifetime and for a
   // run from before it; an extension never goes past it.
   lifetime_cap_at?: string;
+  // Which one bound lifetime_cap_at; "elevation" when the run's unit is an elevation that ends first.
+  lifetime_cap_source?: "pool" | "deployment" | "elevation";
   // When the run left the pool queue (migration 0162); absent for a run that never waited.
   admitted_at?: string;
   // A waiting run's place in its pool's queue; present only while the run is QUEUED.

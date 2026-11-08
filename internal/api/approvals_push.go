@@ -257,9 +257,10 @@ func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) (types.
 
 // handleGetPushPathList returns a push_content approval's complete path list
 // (GET /approvals/{id}/paths) to whoever GET /approvals shows the approval to:
-// the security tier, or the run's owner. Anyone else gets the byte-identical
-// 404 a missing approval gets. The row is immutable and read whatever state
-// the run is in, so the list outlives the run.
+// the security tier, the run's owner, or a decider its unit's rule names for
+// the hold. Anyone else gets the byte-identical 404 a missing approval gets.
+// The row is immutable and read whatever state the run is in, so the list
+// outlives the run.
 func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
@@ -273,7 +274,7 @@ func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get approval", err)
 		return
 	}
-	if run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); rerr != nil || !s.ownsRunOrAdmin(r, run) {
+	if run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); rerr != nil || !(s.ownsRunOrAdmin(r, run) || s.decidesApproval(r, ap, run)) {
 		// #656 slice 3: the SAME reasonApprovalNotFound notFoundIf's own 404
 		// above carries — TestPushPathListRouteVisibility pins this 404
 		// byte-identical to notFoundIf's for a genuinely missing approval, so

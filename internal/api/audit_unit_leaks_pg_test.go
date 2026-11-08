@@ -18,9 +18,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A held push's path list is inlined into the export for the security tier; a unit admin's export
-// serves the row in the unit view, with no paths.
-func TestAuditUnitExportServesNoPushPaths(t *testing.T) {
+// A held push's path list is inlined into the export for the security tier; a unit admin has no export,
+// and the unit view of the row holds no paths.
+func TestAuditUnitViewAndExportServeNoPushPaths(t *testing.T) {
 	e := newUnitAuditEnv(t)
 	ctx := context.Background()
 	ap, err := e.pg.CreateApproval(ctx, types.ApprovalRequest{ID: uuid.New(), RunID: e.runA, Kind: types.ApprovalPushContent,
@@ -35,15 +35,15 @@ func TestAuditUnitExportServesNoPushPaths(t *testing.T) {
 	e.seedRow(&e.runA, pushPathsAuditAction, ap.ID.String(), map[string]any{"approval_id": ap.ID.String(), "paths_total": 1})
 
 	w := e.call(e.adminA, http.MethodGet, "/api/v1/audit/export", "")
-	if w.Code != http.StatusOK || bytes.Contains(w.Body.Bytes(), []byte(held)) {
-		t.Fatalf("adminA's export: %d, serves the held path = %v", w.Code, bytes.Contains(w.Body.Bytes(), []byte(held)))
+	if w.Code != http.StatusOK || w.Body.Len() != 0 {
+		t.Fatalf("adminA's export: %d, %d bytes, want an empty 200 (a unit admin has no export)", w.Code, w.Body.Len())
 	}
-	row, ok := uaRow(ndjsonLines(t, w.Body.Bytes()), e.runA, pushPathsAuditAction)
+	row, ok := uaRow(e.read(e.adminA, "/api/v1/audit", ""), e.runA, pushPathsAuditAction)
 	if !ok {
-		t.Fatalf("adminA's export has no %s row of ua-a's run", pushPathsAuditAction)
+		t.Fatalf("adminA's view has no %s row of ua-a's run", pushPathsAuditAction)
 	}
 	if _, has := uaDataKeys(t, row)["paths"]; has {
-		t.Errorf("adminA's export serves paths on %s: %s", pushPathsAuditAction, row.Data)
+		t.Errorf("adminA's view serves paths on %s: %s", pushPathsAuditAction, row.Data)
 	}
 	sec, ok := uaRow(e.read(e.alice, "/api/v1/audit/export", "?action="+pushPathsAuditAction), e.runA, pushPathsAuditAction)
 	if !ok || !strings.Contains(string(uaDataKeys(t, sec)["paths"]), held) {
@@ -61,7 +61,7 @@ func TestAuditUnitViewServesNoFreeText(t *testing.T) {
 		"hosts":    []any{"api.example", "the host alice named"},
 		"provider": "anthropic", "mode": "inject", "count": 2,
 	})
-	for _, path := range uaPaths {
+	for _, path := range uaViewPaths {
 		for name, evs := range map[string][]types.AuditEvent{
 			"trail": e.read(e.adminA, path, "?run_id="+e.runA.String()),
 			"feed":  e.read(e.adminA, path, ""),
@@ -103,6 +103,9 @@ func TestAuditUnitTargetFilterIsNoOracle(t *testing.T) {
 						got.Code, got.Body.String(), want.Code, want.Body.String())
 				}
 			}
+		}
+		if path != "/api/v1/audit" {
+			continue // the export has no rows to serve a unit admin
 		}
 		if got := e.read(e.adminA, path, "?action_prefix=egress.&target=evil.example"); len(got) != 3 {
 			t.Errorf("%s: a target filter on egress rows served %d rows, want the 3 of the subtree's runs", path, len(got))

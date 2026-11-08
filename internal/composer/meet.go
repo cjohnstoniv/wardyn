@@ -109,6 +109,7 @@ func (m *meeter) run(ov Overlay) {
 	m.meetPosture(ov.Ceiling)
 	m.meetPush(ov.Ceiling.PushRules)
 	m.meetLimits(ov.Limits)
+	m.impliedByDataOut()
 	m.checkResult()
 }
 
@@ -179,9 +180,14 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if w := c.HarnessInnerWalls; w != nil && !validInnerWalls(*w) {
 		m.fail(ReasonOverlayInvalid, "harness_inner_walls", "sandbox_mode %q or approvals %q is not a value a policy may choose", w.SandboxMode, w.Approvals)
 	}
-	if d := c.Desktop; d != nil && !(types.ValidTransferRule(d.PasteIn) && types.ValidTransferRule(d.CopyOut) &&
-		types.ValidTransferRule(d.Upload) && types.ValidTransferRule(d.Download)) {
-		m.fail(ReasonOverlayInvalid, "desktop", "each direction is allowed or blocked")
+	if d := c.Desktop; d != nil {
+		// Every direction named, so the meet guard sees each one judged.
+		if err := types.ValidateDesktopControls(&types.DesktopControls{PasteIn: d.PasteIn, CopyOut: d.CopyOut, Upload: d.Upload, Download: d.Download}); err != nil {
+			m.fail(ReasonOverlayInvalid, "desktop", "%v", err)
+		}
+	}
+	if d := c.DataOut; d != nil && !types.ValidDataOut(*d) {
+		m.fail(ReasonOverlayInvalid, "data_out", "data_out: %q is not a rule; want allowed, review or blocked", *d)
 	}
 	m.validateNonNegative(ov)
 	if d := ov.Limits.DenyPlacements; d != nil {

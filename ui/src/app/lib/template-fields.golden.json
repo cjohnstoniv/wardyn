@@ -472,6 +472,14 @@
       "section": "run_wide"
     },
     {
+      "name": "data_out",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter.",
+      "section": "run_wide"
+    },
+    {
       "name": "git_push_any_branch",
       "part": "access_rules",
       "omitted": "baseline",

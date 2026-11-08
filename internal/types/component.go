@@ -133,6 +133,11 @@ type Component struct {
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// OwningUnitID pins an organisation component to a unit: only a run whose context is that unit or a
+	// unit below it may attach it. Read-only on the wire: written only by PUT /components/{id}/owning-unit.
+	// OwningUnitName is the unit's name, joined at read.
+	OwningUnitID   *uuid.UUID `json:"owning_unit_id,omitempty"`
+	OwningUnitName string     `json:"owning_unit_name,omitempty"`
 }
 
 // ComponentRef attaches one component to a run: a stored one by ID, a run-only
@@ -639,8 +644,9 @@ type CLIKubectl struct {
 	Server         string            `json:"server"`           // https://host[:port], no path
 	CAPEM          string            `json:"ca_pem,omitempty"` // PEM; empty trusts the system roots
 	ServiceAccount CLIServiceAccount `json:"service_account"`
-	Namespaces     []string          `json:"namespaces"` // 1..MaxCLIKubectlNamespaces
-	Access         string            `json:"access"`     // read (GET only) | restart (rollout restart) | write
+	Namespaces     []string          `json:"namespaces"`             // 1..MaxCLIKubectlNamespaces
+	Access         string            `json:"access"`                 // read (GET only) | restart (rollout restart) | write
+	ApproveEach    bool              `json:"approve_each,omitempty"` // each admitted write waits for a person's yes (kube_call.go)
 }
 
 // CLIServiceAccount names a Kubernetes service account.

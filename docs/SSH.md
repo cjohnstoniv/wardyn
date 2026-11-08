@@ -442,6 +442,9 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - It refuses a plain-http, non-loopback server: the gateway address and host key come from `/healthz`.
 - The directory is a start point, not a boundary; the CLI aborts unless `RealPath(".")` is the directory it asked for.
 - The sandbox's mtime has one-second resolution, so a same-size edit inside that second is not seen.
+- Under a run's [`data_out`](POLICIES.md#data_out) of `review` or `blocked`, the gateway refuses `sftp`, `scp`, commands and `-L` forwards. The shell stays open. A client may print only "request failed" before it reads the reason on the channel; the audit row `run.data_out.deny` carries it.
+- `wardyn sync` then only sends: the sandbox's `sftp-server` starts with `-P read,readlink`, and the gateway ends the sync at the first file-content reply. A rename check reads the sandbox's copy, so a renamed file is sent again.
+- With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
 
 #### Hold the agent for a local folder
 

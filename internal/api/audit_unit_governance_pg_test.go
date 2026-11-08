@@ -18,7 +18,7 @@ import (
 )
 
 // The governance arm of a unit admin's feed: the rows about their units that carry no run, listed in
-// store.unitGovernanceActions, through the governance view. The export serves run rows only.
+// store.unitGovernanceActions, through the governance view. A unit admin has no export, so it serves them none.
 
 // seedGovernance stores a governance row with no run and reports its id.
 func (e *unitAuditEnv) seedGovernance(action, actor, target string, data map[string]any) uuid.UUID {
@@ -145,13 +145,13 @@ func TestAuditUnitGovernanceChangeRowsAbsent(t *testing.T) {
 	}
 }
 
-// TestAuditUnitExportRowsUnchanged: the export serves run rows only, whatever governance rows the log
-// holds, and its bytes do not change when they arrive.
+// TestAuditUnitExportRowsUnchanged: a unit admin's export serves no governance row, whatever governance
+// rows the log holds, and its bytes do not change when they arrive.
 func TestAuditUnitExportRowsUnchanged(t *testing.T) {
 	e := newUnitAuditEnv(t)
 	before := e.call(e.adminA, http.MethodGet, "/api/v1/audit/export", "")
-	if before.Code != http.StatusOK || before.Body.Len() == 0 {
-		t.Fatalf("export before: %d with %d bytes, want the subtree's run rows", before.Code, before.Body.Len())
+	if before.Code != http.StatusOK {
+		t.Fatalf("export before: %d, want 200", before.Code)
 	}
 	id := e.seedGovernance("governance.unit.write", "carol@corp.example", e.a.ID.String(), nil)
 	if _, ok := ugByID(e.read(e.adminA, "/api/v1/audit", ""), id); !ok {
@@ -166,25 +166,31 @@ func TestAuditUnitExportRowsUnchanged(t *testing.T) {
 	}
 }
 
-// TestAuditUnitRunRowsUnchanged: with governance rows in the log, the feed's run rows are the export's.
+// TestAuditUnitRunRowsUnchanged: a governance row arriving leaves the feed's run rows as they were.
 func TestAuditUnitRunRowsUnchanged(t *testing.T) {
 	e := newUnitAuditEnv(t)
-	e.seedGovernance("governance.unit.write", "carol@corp.example", e.a.ID.String(), nil)
-	feed, export := e.read(e.adminA, "/api/v1/audit", ""), e.read(e.adminA, "/api/v1/audit/export", "")
-	runRows := map[uuid.UUID]string{}
-	for _, ev := range feed {
-		if ev.RunID != nil {
-			b, _ := json.Marshal(ev)
-			runRows[ev.ID] = string(b)
+	runRows := func() map[uuid.UUID]string {
+		out := map[uuid.UUID]string{}
+		for _, ev := range e.read(e.adminA, "/api/v1/audit", "") {
+			if ev.RunID != nil {
+				b, _ := json.Marshal(ev)
+				out[ev.ID] = string(b)
+			}
 		}
+		return out
 	}
-	if len(runRows) != len(export) {
-		t.Errorf("the feed serves %d run rows, the export %d", len(runRows), len(export))
+	before := runRows()
+	if len(before) == 0 {
+		t.Fatal("the feed serves no run rows, so this test proves nothing")
 	}
-	for _, ev := range export {
-		b, _ := json.Marshal(ev)
-		if runRows[ev.ID] != string(b) {
-			t.Errorf("run row %s differs between the feed and the export:\n feed   %s\n export %s", ev.ID, runRows[ev.ID], b)
+	e.seedGovernance("governance.unit.write", "carol@corp.example", e.a.ID.String(), nil)
+	after := runRows()
+	if len(after) != len(before) {
+		t.Errorf("the feed serves %d run rows after a governance row arrived, %d before", len(after), len(before))
+	}
+	for id, was := range before {
+		if after[id] != was {
+			t.Errorf("run row %s changed when a governance row arrived:\n before %s\n after  %s", id, was, after[id])
 		}
 	}
 }

@@ -160,6 +160,9 @@ func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run ty
 	if !ok {
 		return false
 	}
+	// Before placement swaps a file's content for a placeholder. spec.ProxyConfig.Policy is
+	// this dispatch's own copy, so the corpus the proxy is configured with grows here.
+	addPlacedSecrets(&spec.ProxyConfig.Policy, placedFileValues(files, by, rows)...)
 	*resident = append(*resident, s.placeResidentFileSecrets(ctx, run, files, spec, values)...)
 	if s.cfg.FileSecretPlaceholders {
 		s.placeFileSecrets(ctx, run, by, rows, files, spec)

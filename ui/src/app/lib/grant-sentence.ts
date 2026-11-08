@@ -48,11 +48,18 @@ function permissionPhrases(scope: GrantScope): string[] {
     .map(([resource, level]) => `${level} ${resource.replace(/_/g, " ")}`);
 }
 
+// CAPABILITY_WORDS names the capabilities whose wire word does not read as words; the rest drop their underscores.
+const CAPABILITY_WORDS: Record<string, string> = {
+  pr: "pull requests",
+  pr_write: "open pull requests",
+  pr_review: "review pull requests",
+};
+
 /** "GitHub token · read contents · no repositories listed". An unknown kind keeps its wire word. */
 export function grantSentence(kind: string, scope: GrantScope): string {
   const parts = [KIND_LABEL[kind] ?? kind];
   if (kind === "github_token") {
-    const perms = [...permissionPhrases(scope), ...capabilities(scope).map((c) => (c === "pr" ? "pull requests" : c.replace(/_/g, " ")))];
+    const perms = [...permissionPhrases(scope), ...capabilities(scope).map((c) => CAPABILITY_WORDS[c] ?? c.replace(/_/g, " "))];
     if (perms.length) parts.push(perms.join(", "));
     const repos = scopeRepos(scope);
     parts.push(repos.length ? repos.join(", ") : "no repositories listed");

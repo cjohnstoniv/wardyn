@@ -48,9 +48,11 @@ type kubeHarness struct {
 type kubeOpts struct {
 	write   bool
 	restart bool // the row says restart
-	caPEM   bool // the grant carries the API server's own certificate as its CA bundle
-	trustCA bool // the egress transport skips verification (the other harnesses' default)
-	allowed []string
+	// approveEach: the row says approve_each, set through the wire form as restart is.
+	approveEach bool
+	caPEM       bool // the grant carries the API server's own certificate as its CA bundle
+	trustCA     bool // the egress transport skips verification (the other harnesses' default)
+	allowed     []string
 }
 
 func newKubeHarness(t *testing.T, o kubeOpts) *kubeHarness {
@@ -89,6 +91,11 @@ func newKubeHarness(t *testing.T, o kubeOpts) *kubeHarness {
 	if o.restart {
 		// Set through the wire form, as the control plane's config reaches the proxy.
 		if err := json.Unmarshal([]byte(`{"restart":true}`), grant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.approveEach {
+		if err := json.Unmarshal([]byte(`{"approve_each":true}`), grant); err != nil {
 			t.Fatal(err)
 		}
 	}

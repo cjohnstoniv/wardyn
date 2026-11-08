@@ -19,6 +19,9 @@ import (
 // The arguments print as the server's text, or for an older server as the same text made from the raw
 // scope: either way no number goes through a float.
 func printMCPCall(w io.Writer, a types.ApprovalRequest) {
+	if printKubeCall(w, a) { // a held kubectl write (approval_kube_call.go)
+		return
+	}
 	text := a.CallText
 	if text == nil {
 		text = types.MCPCallTextOf(a.RequestedScope)

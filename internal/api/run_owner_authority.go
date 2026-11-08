@@ -73,6 +73,9 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if ref, err := s.componentGoneRefusal(ctx, comps); ref != nil || err != nil {
 		return ref, err
 	}
+	if ref, err := s.componentPinRefusal(ctx, run, comps); ref != nil || err != nil {
+		return ref, err
+	}
 	if callerIsOwner && s.runUngoverned(ctx) {
 		return nil, nil
 	}
@@ -278,6 +281,18 @@ func (s *Server) componentGoneRefusal(ctx context.Context, comps []types.RunComp
 		}
 	}
 	return nil, nil
+}
+
+// componentPinRefusal refuses a run that carries an organisation component now pinned to a unit the
+// run is not in: a revive, restart or end extension would keep the component in use outside its unit.
+// Asked of every caller, the owner's own admin session included, as componentGoneRefusal is.
+func (s *Server) componentPinRefusal(ctx context.Context, run types.AgentRun, comps []types.RunComponent) (*ownerRefusal, error) {
+	name, err := s.componentPinnedOut(ctx, run, comps)
+	if err != nil || name == "" {
+		return nil, err
+	}
+	return &ownerRefusal{status: http.StatusConflict, reason: reasonComponentUnitPinned,
+		msg: "a component this run was launched with is now pinned to a unit this run is not in; start a new run in that unit"}, nil
 }
 
 // ownerProviderRows is the git provider rows repos resolve to, as the
@@ -670,7 +685,12 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 // the claim and before the old proxy is touched: replacing a proxy with one
 // that exits at config load leaves the run no proxy at all.
 func encodeRevivedConfig(ctx context.Context, cfg *proxy.Config) ([]byte, *reviveError) {
-	b, err := json.Marshal(cfg)
+	// data_out and recording are kept by the control plane, never the proxy, and a previous release's proxy
+	// refuses both keys; the caller's cfg keeps them for the policy generation the doors read (sidecarPolicy
+	// does the same at dispatch).
+	sidecar := *cfg
+	sidecar.Policy.DataOut, sidecar.Policy.Recording = "", ""
+	b, err := json.Marshal(&sidecar)
 	if err != nil {
 		return nil, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, loggedMsg(ctx, "encode proxy config", err))
 	}

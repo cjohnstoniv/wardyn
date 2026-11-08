@@ -19,7 +19,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const componentCols = `id, owner, name, definition, version, created_by, created_at, updated_at`
+// componentCols is every read's columns: the row, its unit pin (owning_unit_id) and the pinned unit's
+// name. The INSERT and UPDATE lists never name the pin: only SetComponentOwningUnitQ writes it.
+const componentCols = `id, owner, name, definition, version, created_by, created_at, updated_at, ` +
+	`owning_unit_id, (SELECT u.name FROM governance_units u WHERE u.id = components.owning_unit_id)`
 
 // CreateComponent — see ComponentStore.
 func (s PG) CreateComponent(ctx context.Context, c types.Component) (types.Component, error) {
@@ -224,7 +227,9 @@ func marshalComponentDefinition(d types.ComponentDefinition) ([]byte, error) {
 func scanComponent(row pgx.Row) (types.Component, error) {
 	var c types.Component
 	var def []byte
-	err := row.Scan(&c.ID, &c.Owner, &c.Name, &def, &c.Version, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+	var owningUnitName *string
+	err := row.Scan(&c.ID, &c.Owner, &c.Name, &def, &c.Version, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.OwningUnitID, &owningUnitName)
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -234,10 +239,44 @@ func scanComponent(row pgx.Row) (types.Component, error) {
 	case err != nil:
 		return types.Component{}, fmt.Errorf("store: scan component: %w", err)
 	}
+	if owningUnitName != nil {
+		c.OwningUnitName = *owningUnitName
+	}
 	if err := json.Unmarshal(def, &c.Definition); err != nil {
 		return types.Component{}, fmt.Errorf("store: unmarshal component definition: %w", err)
 	}
 	return c, nil
+}
+
+// ComponentOwningUnitQ is organisation component id's unit pin on q (nil when unpinned).
+// ErrNotFound for an unknown id or a person's row.
+func ComponentOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID) (*uuid.UUID, error) {
+	var unit *uuid.UUID
+	err := q.QueryRow(ctx, `SELECT owning_unit_id FROM components WHERE id=$1 AND owner=''`, id).Scan(&unit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: read component owning unit: %w", err)
+	}
+	return unit, nil
+}
+
+// SetComponentOwningUnitQ pins organisation component id to unit on q, or unpins it when unit is nil:
+// the pin's only writer. The version does not move, since a pin is not a definition change.
+// ErrNotFound for an unknown id, a person's row or an unknown unit.
+func SetComponentOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID, unit *uuid.UUID) error {
+	tag, err := q.Exec(ctx, `UPDATE components SET owning_unit_id=$1, updated_at=now() WHERE id=$2 AND owner=''`, unit, id)
+	if isForeignKeyViolation(err) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("store: set component owning unit: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func scanRunComponent(row pgx.Row) (types.RunComponent, error) {

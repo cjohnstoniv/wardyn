@@ -23,7 +23,7 @@ export const APPROVALS_TAB = {
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.
-export type ApprovalKind = "tool" | "credential" | "egress" | "reauth" | "push" | "takeover";
+export type ApprovalKind = "tool" | "credential" | "egress" | "reauth" | "push" | "takeover" | "download";
 export const APPROVAL_BANNER_LABEL = {
   what: "What you're approving:",
   blast: "Blast radius:",
@@ -43,6 +43,8 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   push: "Push",
   // "Needs you" (M8-Banner-A's Approvals card chip).
   takeover: "Take over",
+  // A reviewed download (desktop.download review).
+  download: "Download",
 };
 
 // The ONE console label for the CANCELLED approval state (the run ended before
@@ -252,6 +254,7 @@ export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
   credential_reauth: "reauth",
   push_content: "push",
   human_takeover: "takeover",
+  file_download: "download",
 };
 
 // Hoisted from approvals.tsx (kept out of live-approvals.tsx's own module,

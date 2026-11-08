@@ -52,10 +52,13 @@ func CapabilitySecondHumanEnabled() bool { return envEnabled(envCapabilitySecond
 // Each branch names its const directly because envEnabled reads must be
 // listed in envToggles (TestEnvTogglesListEveryEnvEnabledRead).
 func secondHumanGate(ap types.ApprovalRequest) (name string, on bool) {
+	if ap.Kind == types.ApprovalFileDownload { // always on: nobody approves a download of their own (desktop_review.go)
+		return fileDownloadSecondHumanSwitch, true
+	}
 	if ap.Kind == types.ApprovalEgressDomain {
 		return envEgressSecondHuman, envEnabled(envEgressSecondHuman)
 	}
-	if _, isADO := adoEscalationScope(ap); isADO || isMCPCallRow(ap) { // one MCP call: the same owner rule
+	if _, isADO := adoEscalationScope(ap); isADO || isExactCallRow(ap) { // one MCP call or kubectl write: the same owner rule
 		return envCapabilitySecondHuman, envEnabled(envCapabilitySecondHuman)
 	}
 	return "", false
@@ -188,7 +191,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 // unchanged: an approval rule is refused, the admin token is the audited break-glass, local mode answers 503,
 // and a run that cannot be read fails closed.
 func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool, dv deciderVerdict) (string, bool) {
-	if !envEnabled(envEgressSecondHuman) && !envEnabled(envCapabilitySecondHuman) && !dv.secondHuman() {
+	if !envEnabled(envEgressSecondHuman) && !envEnabled(envCapabilitySecondHuman) && !dv.secondHuman() && !(haveAP && ap.Kind == types.ApprovalFileDownload) {
 		return "", true
 	}
 	actorType, principal := actorFromRequest(r)
@@ -269,8 +272,20 @@ func (s *Server) requireSecondHumanUnder(w http.ResponseWriter, r *http.Request,
 			sw+" is set, but the service identity that created this run could not be read to verify a second human decided it")
 		return "", false
 	}
-	if !authored {
+	if !authored && !askedForDownload(ap, principal) {
 		return "", true
+	}
+	if ap.Kind == types.ApprovalFileDownload {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you asked for this download or it is your run's, so someone else approves or denies it").
+			OnRun(ap.RunID))
+		return "", false
+	}
+	if isKubeCallRow(ap) {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you created this run, so someone else approves or denies this kubectl change").
+			OnRun(ap.RunID))
+		return "", false
 	}
 	if isMCPCallRow(ap) {
 		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+

@@ -224,6 +224,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveCarryRecordedRules(ctx, run.ID, cfg); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	corpus := inspectionCorpusOf(cfg.Policy) // the organisation's, before a laptop copy drops it
 	// The final seal, as dispatch's (run_policy_seal.go), then the ceiling's re-assertion over the
 	// layers it read, so a credential the boundary withholds goes as one the profile denies does.

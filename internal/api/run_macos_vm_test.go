@@ -109,7 +109,7 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 		{name: "runner's own refusal", mc: mac(func(m *runnerwire.MacVMCaps) { m.Refusal = "needs macOS 27 or later" }), ctx: member,
 			want: macOSPoolCannotTake, wantNot: "needs macOS 27"},
 		{name: "not marked managed, member", mc: mac(nil), row: func(r *types.Runner) { r.TrustClass = types.RunnerTrustPersonal }, ctx: member,
-			want: "Mac mini is not marked as company-managed. Ask a security operator to mark it.", wantNot: "wardyn runner trust"},
+			want: "Mac mini is not marked as company-managed. Ask a security admin to mark it as a managed device.", wantNot: "wardyn runner trust"},
 		{name: "not marked managed, security operator", mc: mac(nil), row: func(r *types.Runner) { r.TrustClass = types.RunnerTrustPersonal }, ctx: operator,
 			want: "Mac mini is not marked as company-managed. Mark it with `wardyn runner trust "},
 		{name: "posture from the OS probe", mc: mac(nil), row: func(r *types.Runner) { r.Posture.Evidence = types.PostureEvidenceOSProbe }, ctx: member,

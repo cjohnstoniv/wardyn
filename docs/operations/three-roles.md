@@ -249,6 +249,7 @@ Profiles narrow by omission: a profile that omits secret grants revokes them for
 - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
 - So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
 - A super admin is exempt from both at every door, as at create; a security admin is bound.
+- A run's lifetime cap is a hard end: see [At the lifetime cap](run-lifetime.md#at-the-lifetime-cap).
 - A limit set later reaches new sessions and later requests on an open UI-app session, which get a `403`. It does not sever a socket already open: a terminal, an SSH session or an open UI-app socket runs until it ends.
 - A limit set during a desktop sign-in stops new entry. An open display stays until it ends, and the agent comes back at End or within 30 minutes.
 - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.

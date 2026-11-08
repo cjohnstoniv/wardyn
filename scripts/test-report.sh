@@ -251,6 +251,11 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestDeviceCodeLoginRealCLI TestParseRealAWSCLICacheFile TestAWSSSOConfigAcceptedByRealBotocore'
   fi
+  # The gateway recipes run the real LiteLLM, Portkey and Presidio images, which only the hosted job may
+  # pull, so the test self-skips anywhere else; named here only where it can run, a rename or a skip goes red.
+  if [ "$SUITE" = "docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    REQUIRE_ALL="$REQUIRE_ALL TestGatewayRecipes_Live"
+  fi
   # #707: `make test-conformance-docker` ran these through a bare
   # `go test -run`, which exits 0 on "no tests to run" after a rename and on a
   # skip. Named here, the rename and the skip both go red.

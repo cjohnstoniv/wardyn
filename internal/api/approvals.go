@@ -78,6 +78,9 @@ const maxDecisionUntil = 30 * 24 * time.Hour
 // runs they created (store.ApprovalsByRunCreatorPager) — fail CLOSED, never an
 // unscoped fallback, when the backend does not implement it.
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
+	if s.listDecidableByMe(w, r) {
+		return
+	}
 	state := types.ApprovalState(r.URL.Query().Get("state"))
 	switch state {
 	case "", types.ApprovalPending, types.ApprovalApproved, types.ApprovalDenied, types.ApprovalExpired,
@@ -213,6 +216,10 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // with its run.
 const approvalRunEndedBody = "The run ended before anyone decided this; the approval has been cancelled and nothing was approved or denied"
 
+// approvalRunPastLifetimeBody is the 409 body when the run has reached its lifetime cap: the lease sweep
+// is about to end it and cancel the row, so nothing is decided in between.
+const approvalRunPastLifetimeBody = "This run has reached its lifetime cap and is being ended; the request can no longer be decided"
+
 // refuseIfRunEnded is decide()'s last pre-Decide() rule. The terminal cascade
 // (cancelRunApprovals) is supposed to have moved a dead run's rows to
 // CANCELLED already, but that cascade is best-effort — a failed CancelForRun
@@ -223,11 +230,11 @@ const approvalRunEndedBody = "The run ended before anyone decided this; the appr
 // sandbox that is gone, which is exactly the widening CANCELLED exists to
 // stop. So CAS-cancel it here and answer 409, rather than a question whose
 // asker no longer exists. decide has loaded the approval by here; the run is read
-// only when the member gate had not. false means the response is written.
+// only when the member gate had not. A non-empty answer is the bypass-failure class: the response is written.
 func (s *Server) refuseIfRunEnded(
 	w http.ResponseWriter, r *http.Request,
 	ap types.ApprovalRequest, run types.AgentRun, haveRun bool,
-) bool {
+) string {
 	if !haveRun && ap.RunID != uuid.Nil && s.cfg.Store != nil {
 		if got, gerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); gerr == nil {
 			run, haveRun = got, true
@@ -241,9 +248,15 @@ func (s *Server) refuseIfRunEnded(
 			s.cancelRunApprovals(r.Context(), ap.RunID)
 		}
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
-		return false
+		return "run_ended"
 	}
-	return true
+	// A run at its lifetime cap is being ended by the lease sweep, whose kill cancels this row. It is not
+	// decided in between: an approve now would hand a credential or a host to a run that is over.
+	if haveRun && pastLifetimeCap(run, s.cfg.Now()) && (ap.State == "" || ap.State == types.ApprovalPending) {
+		writeErrorReason(w, http.StatusConflict, reasonApprovalRunPastLifetime, approvalRunPastLifetimeBody)
+		return "run_past_lifetime"
+	}
+	return ""
 }
 
 // decisionScopeFitsKind refuses a decision_scope on a kind that takes none: only an egress_domain approval takes one,
@@ -313,6 +326,30 @@ func (s *Server) refuseUndecidableKind(w http.ResponseWriter, r *http.Request, i
 func (s *Server) approvalResolved(ctx context.Context, approved bool, runID uuid.UUID) {
 	s.metrics.approvalDecided(approved)
 	s.approvalClosed(ctx, runID)
+}
+
+// decisionScopeForKind is rule 4 for one approval. The kinds with a scope rule of their own settle the scope in
+// this order; every other kind must fit decisionScopeFitsKind. It writes the refusal and reports false.
+func (s *Server) decisionScopeForKind(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest,
+	scope types.ApprovalScope, approve bool,
+) (types.ApprovalScope, bool) {
+	var isADO, isMCP, isFD, isKube, ok bool
+	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok { // an Azure DevOps escalation
+		return scope, false
+	}
+	if scope, isMCP, ok = mcpCallDecisionRule(w, ap, scope); !ok { // one MCP call is decided once (approvals_mcp_call.go)
+		return scope, false
+	}
+	if scope, isFD, ok = fileDownloadDecisionRule(w, ap, scope); !ok { // a reviewed download is decided once (desktop_review.go)
+		return scope, false
+	}
+	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok { // one kubectl write is decided once (approvals_kube_call.go)
+		return scope, false
+	}
+	if !isADO && !isMCP && !isKube && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
+		return scope, false
+	}
+	return scope, true
 }
 
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
@@ -449,15 +486,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// checking the kind would cost a load on the approval's grant_id for a rule
 	// the broker already enforces at the only place a lease can be spent. A `run`
 	// scope on another credential kind is recorded and simply leases nothing.
-	var isADO bool // an Azure DevOps escalation has its own scope rule
-	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok {
-		return
-	}
-	var isMCP bool // one MCP call is decided once (approvals_mcp_call.go)
-	if scope, isMCP, ok = mcpCallDecisionRule(w, ap, scope); !ok {
-		return
-	}
-	if !isADO && !isMCP && !decisionScopeFitsKind(w, ap.Kind, scope) {
+	if scope, ok = s.decisionScopeForKind(w, r, ap, scope, approve); !ok {
 		return
 	}
 	// The unit deciders rule that governs this request, how this caller decides under it, and its max_scope
@@ -495,10 +524,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// Defence in depth: the run may have ENDED while this approval sat in
 	// the queue (refuseIfRunEnded). Placed with the other pre-Decide() rules, and
 	// for their reason: PENDING -> decided is one-way.
-	if !s.refuseIfRunEnded(w, r, ap, run, haveRun) {
+	if class := s.refuseIfRunEnded(w, r, ap, run, haveRun); class != "" {
 		// The admin token got past the four-eyes gate above before this refusal, so the break-glass
 		// leaves its failure row here as it does when Decide fails (docs/ENV.md: every bypass writes one).
-		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, "run_ended")
+		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, class)
 		return
 	}
 
@@ -695,7 +724,7 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 	// STRUCTURALLY by its grant_id (adoEscalationScope), never by its scope.
 	// One MCP call is the other, known by call_sha256 with no grant (isMCPCallRow).
 	_, isADO := adoEscalationScope(ap)
-	isMCP := isMCPCallRow(ap)
+	isMCP := isExactCallRow(ap) // a held kubectl write is decided as one MCP call is
 	if err != nil || (ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP) {
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return ap, run, false, false

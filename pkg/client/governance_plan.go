@@ -30,6 +30,7 @@ func (c *Client) PlanGovernance(ctx context.Context, doc GovernanceDocument, pru
 // planGovernance is PlanGovernance's pure core: the steps that turn current
 // into doc, in the order an apply would issue them.
 func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan, error) {
+	current, doc = withoutExpiring(current), withoutExpiring(doc) // elevations are granted through requests
 	plan := GovernancePlan{Steps: make([]ApplyStep, 0)}
 	profileByName := make(map[string]GovernanceUnit, len(current.Units))
 	currentIDToName := make(map[uuid.UUID]string, len(current.Units))
@@ -123,6 +124,13 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 		return p.ID, ok
 	}, nil)
 	steps, unchanged := planUnitAdmins(admins, doc.Admins, prune)
+	plan.Steps = append(plan.Steps, steps...)
+	plan.Unchanged += unchanged
+	// The deciders after the admins, as an apply issues them: updates parents first, then the clears.
+	steps, unchanged, err = planUnitDeciders(current, doc, admins.unitID, prune)
+	if err != nil {
+		return GovernancePlan{}, err
+	}
 	plan.Steps = append(plan.Steps, steps...)
 	plan.Unchanged += unchanged
 

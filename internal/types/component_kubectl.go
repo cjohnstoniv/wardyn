@@ -97,6 +97,9 @@ func (k *CLIKubectl) validate() error {
 	if k.Access != ComponentAccessRead && k.Access != ComponentAccessRestart && k.Access != ComponentAccessWrite {
 		return fmt.Errorf("cli.kubectl.access: %q is not read, restart or write", k.Access)
 	}
+	if k.ApproveEach && k.Access == ComponentAccessRead {
+		return errors.New("cli.kubectl.approve_each: holds writes, so it needs access restart or write")
+	}
 	return nil
 }
 

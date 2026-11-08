@@ -10,5 +10,11 @@
 # docs/operations/unit-admins.md 956 adds 136 over 820, measured: the audit route row and the unit view of audit rows (scope, kept fields, the data keys it serves).
 # docs/operations/unit-admins.md 990 adds 34 over 956, measured: unit-view values are codes (no free text), no held push paths, the target filter rule.
 # docs/operations/unit-admins.md 1007 adds 17 over 990, measured at the rc.16 w3 batch B train: the merged lanes' additions together.
+# docs/operations/unit-admins.md=902 measured (+82 over 820): the deciders pointers, the lock bullet and the held-write row.
+# docs/operations/unit-admins.md 1089 = ours 1007 + theirs 902 - base 820 at the 0.10 W7 merge of the 0.10 W7 merge of lane/016-approvers-docs into the rc.16 w3 batch D train.
+# docs/operations/unit-admins.md 1105 adds 16 over 1089, measured: the audit export serves a unit admin only runs they created.
+# docs/operations/unit-admins.md 1152 adds 47 over 1105, measured: a unit's own held changes are decided strictly from above it.
+# docs/operations/unit-admins.md 1171 adds 19 over 1152, measured: the elevation requests row.
 # docs/operations/unit-admins.md 1179 adds 172 over 1007, measured: the governance rows in the unit view of audit rows (who the actor is, what is left out), the model-usage route row and the actor-filter rule.
-docs/operations/unit-admins.md=1179 share=35
+# docs/operations/unit-admins.md 1336 measured with both sides merged: the export, strictly-from-above and elevation requests rows (1171) and the governance rows in the unit view, the model-usage route row and the actor-filter rule (+165).
+docs/operations/unit-admins.md=1336 share=35

@@ -109,6 +109,9 @@ var kernelDoors = map[string][]string{
 	// A member's Azure DevOps disconnect: a row they may not use answers as
 	// no row (D-6).
 	"adoDisconnectRow": {"capWorkspaceProvider"},
+	// POST /governance/requests, kind image: an image the person already holds
+	// exactly is a 409, never a second request. It grants nothing.
+	"imageRequestChecks": {"capImage"},
 }
 
 // kernelDoorCalls walks internal/api's non-test sources and returns, per

@@ -289,12 +289,13 @@ func (s MCPCallScope) ComputeKey() (string, error) {
 	return MCPCallKey(s.MCPServer, raw, s.Arguments, s.Extra)
 }
 
-// IsMCPCallScope reports whether raw is an MCP call scope: an object with a non-empty call_sha256.
+// IsMCPCallScope reports whether raw is an MCP call scope: an object with a non-empty call_sha256
+// that is not a kubectl call scope (IsKubeCallScope).
 func IsMCPCallScope(raw json.RawMessage) bool {
 	var s struct {
 		CallSHA256 string `json:"call_sha256"`
 	}
-	return json.Unmarshal(raw, &s) == nil && s.CallSHA256 != ""
+	return json.Unmarshal(raw, &s) == nil && s.CallSHA256 != "" && !IsKubeCallScope(raw)
 }
 
 // MCPCallText is an MCP call's canonical arguments and extra params as text, for a person to read and

@@ -85,6 +85,9 @@ type queuedLaunch struct {
 	// so its resolve selects the context the launch did, and sameUnit compares like with like.
 	RunIn       uuid.UUID   `json:"run_in,omitzero"`
 	OwningUnits []uuid.UUID `json:"owning_units,omitempty"`
+	// StrictPins are the choice's strict pins (contextChoice.StrictPins); a launch queued before them
+	// has none.
+	StrictPins []contextPin `json:"strict_pins,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
 	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
@@ -502,7 +505,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		launch.UnitID = &id
 	}
 	choice := contextChoiceFrom(ctx)
-	launch.RunIn, launch.OwningUnits = choice.RunIn, choice.OwningUnits
+	launch.RunIn, launch.OwningUnits, launch.StrictPins = choice.RunIn, choice.OwningUnits, choice.StrictPins
 	raw, err := json.Marshal(launch)
 	if err != nil {
 		return store.RunQueueEntry{}, err

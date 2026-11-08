@@ -41,6 +41,9 @@ export interface EgressRedirect {
 
 export interface RunnerSettings {
   enabled: boolean;
+  // A new local run is refused on a personal-trust runner. Off (absent) by default; set only by
+  // PUT /runners/settings.
+  require_managed_device?: boolean;
 }
 
 export interface SiteConfig {

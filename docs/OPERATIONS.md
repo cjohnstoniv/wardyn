@@ -35,7 +35,7 @@ The sections are written against the Compose stack ([`deploy/compose/`](../deplo
 - [Member drives, team drives and user drives on Kubernetes](#member-drives-team-drives-and-user-drives-on-kubernetes)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree), [Model gateways and detectors](operations/model-gateways.md)
 - [Workloads](operations/workloads.md): keep a run declared with `wardyn apply` or a WardynWorkload resource, bind a namespace, read its status, and the Argo CD health check.
 
 </details>
@@ -2188,6 +2188,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 ## Network: upstream proxy and egress redirects
 
 - `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) is the operator-wide network config, kept in Postgres beside [State stores](#state-stores): the corporate upstream proxy and the outbound redirects every run's egress inherits. Unconfigured is a valid, common state.
+- `PUT /site-config` replaces the keys the body names. A top-level block the body leaves out keeps its stored value: `agent_providers`, `model_providers`, `workspace_providers`, `components`, `images`, `macos_vm`, `branding`, `policy_help`, `internal_hosts`, `upstream_proxy_no_proxy`, `governance_max_depth`, `sign_in_help_text` and `sign_in_help_url`. Inside `macos_vm`, each switch and limit left out is kept too. `runners`, `recording`, the egress baseline, `integrations` and `onboarding_completed_at` change only through their own routes. To turn something off, send it: `"allow_kept_machines": false`, or `"images": {"admission": {"mode": "off"}}`.
 - It lives in the database, so `make reset` and `make reset-all` take it with the volume. To keep it, run `wardyn site-config get > corp-baseline.json` before and `wardyn site-config set corp-baseline.json` after. The document carries secret **names**, never values, so it is safe to keep beside the repo.
 - Values never round-trip, so `set` re-attaches the names even when a named secret was never restored. It prints a warning for each dangling ref, and the setup checklist's "Site config" row grades `warn` while one remains.
 
@@ -2915,6 +2916,18 @@ The residuals an operator should plan for:
   - IAM Identity Center is the system of record, so terminating their Identity Center session (or removing their assignment) stops the refresh token redeeming and their console reads *sign in again* — the offboarding step.
   - The session also dies with its OIDC client registration.
 
+#### How long an AWS sign-in lasts
+
+A `bedrock_sso` sign-in lasts as long as IAM Identity Center's session for it. Wardyn renews the session's access token by itself, but it cannot extend the session. When that session ends, AWS refuses the renewal, the run asks its owner to sign in again, and the message says how long after sign-in it happened. When people sign in to Wardyn and to IAM Identity Center through the same identity provider, three settings outside Wardyn decide how often that happens:
+
+1. **IAM Identity Center session duration.** IAM Identity Center console → Settings → Authentication → Session duration → User interactive sessions. The default is 8 hours; it can be 15 minutes to 90 days. A change applies to new sessions only.
+2. **Your identity provider's session for the IAM Identity Center application.** If the identity provider sends a session end time in its SAML assertion (`SessionNotOnOrAfter`), the shorter of the two applies. A sign-in-frequency or conditional-access policy on that application can also end it. Give it the same policy as the Wardyn console's application, so one doesn't end before the other.
+3. **The same people on both applications.** Assign the Wardyn console application and the IAM Identity Center application to the same groups, so anyone who can start a run can also renew its AWS session.
+
+None of these changes what a role may do, only how long a sign-in lasts.
+
+Wardyn does not turn its own sign-in into an IAM Identity Center token through a trusted token issuer. That AWS call is signed with AWS credentials, so Wardyn would have to hold a standing AWS credential of its own.
+
 ### One live sign-in sandbox per person
 
 - Starting a sign-in closes that person's previous one.
@@ -3370,7 +3383,7 @@ Naming these is the point of the walk, not a caveat on it:
 ### A provider change removes people's credentials
 
 <!-- Provider connection causes: itemised retention and disclosure rules; no additional prose budget. -->
-- Changing a provider’s address, header scheme or kind removes each person’s credential; nothing silently follows the new destination.
+- Changing a provider’s address, header scheme, extra headers or kind removes each person’s credential; nothing silently follows the new destination.
 - Affected people see the reason and new destination host in Your model connections and launch recovery, then review it before connecting again.
 - The owner-scoped change record contains only owner, provider ID and UID, reason, time and the already-disclosed destination host.
   - It contains no secret, encrypted copy, hash or secret-store reference.
@@ -3382,8 +3395,11 @@ Naming these is the point of the walk, not a caveat on it:
 
 ### Internal model gateway
 
-- Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`.
+- Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`. [Model gateways and detectors](operations/model-gateways.md) has the LiteLLM, Portkey and OpenRouter recipes.
 - An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by `base_url` alone. Its `fast_model` sets the haiku alias.
+- Codex CLI on a `custom_endpoint` or `local_model` provider calls `<base_url><path>/responses`, the OpenAI Responses API, so the endpoint must serve it.
+  - Set the Model field of the harness entry (it is per harness entry; the console hint is in [`model-providers-copy.ts`](../ui/src/app/lib/model-providers-copy.ts)) to a name the endpoint accepts.
+  - From 0.10.0-rc.15, Codex CLI uses that Model on `custom_endpoint` too.
 
 > [!WARNING]
 > A Claude subscription provider's `base_url` re-points the sign-in token too.
@@ -4044,6 +4060,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0263` (`0263_agent_runs_policy_generations`) adds `agent_runs.policy_generations` (`0001`'s table): the run's policy generations, one per revive after dispatch's, each with its digest and its proxy's run token ids; `[]` on every existing row; no grant changes.
 - `0264` (`0264_run_model_usage`) creates `run_model_usage`: one row per metered model call, keyed by the call id the proxy made (a retry or a replay stores it once), with the provider-reported token counts, the call's state and reason; rows go with their run. A split-role install grants the app role `SELECT, INSERT` on `run_model_usage`.
 - `0266` (`0266_governance_envelopes`) creates `governance_envelopes`: one row per platform envelope, the unit that is a platform's root and the IdP groups the security tier approved for it; a row goes with its unit. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_envelopes`.
+- `0270` (`0270_approvals_decision_basis`) adds `approvals.decision_basis` and `approvals.decision_rule_unit` (`0001`'s table): how a decision under a unit's deciders rule was made and whose rule it was, NULL on every existing row; no grant changes.
+- `0271` (`0271_approval_file_download`) replaces `approvals_kind_check` (`0001`'s table) to admit `file_download` and adds a partial unique index that keeps one pending review of a file per run; no row or grant change.
+- `0272` (`0272_context_pins`) adds `components.owning_unit_id` (a foreign key to `governance_units`, restrict on delete; organisation rows only) and `workspaces.owning_unit_strict` (default false; true needs a pin). No grant change.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

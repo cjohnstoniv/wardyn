@@ -251,9 +251,9 @@ type AgentRun struct {
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
 	Queue  *RunQueue  `json:"queue,omitempty"`
 	EndsAt *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
-	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
+	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums), or the end of the elevation the run was launched under when that is earlier; absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool, deployment or elevation).
 	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
-	LifetimeCapSource LimitSource `json:"-"`
+	LifetimeCapSource LimitSource `json:"lifetime_cap_source,omitempty"`
 	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
 	RunLimits RunLimits  `json:"run_limits"`
@@ -409,13 +409,18 @@ const (
 	// to APPROVED with a holder, hand back stamps handed_back_at, decline moves it to DENIED. It
 	// grants the run nothing — the person drives what the agent already has.
 	ApprovalHumanTakeover ApprovalKind = "human_takeover"
+	// ApprovalFileDownload: a person asked to download one file from a run whose desktop.download is review.
+	// Its scope is FileDownloadScope (name, size, hash, who asked), never the content. Decided once, by the
+	// security tier or a unit's file_download deciders, never by the run's own people or the asker; an approval
+	// releases those bytes once (store.PG.SpendFileDownloadApproval).
+	ApprovalFileDownload ApprovalKind = "file_download"
 )
 
 // ApprovalKinds is the closed set, checked by test against the constants above — closedEnumChecks
 // once missed approvals.kind entirely, which would have let a DB-rejected constant pass every gate green.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
-	ApprovalPushContent, ApprovalHumanTakeover,
+	ApprovalPushContent, ApprovalHumanTakeover, ApprovalFileDownload,
 }
 
 // ApprovalState is the approval lifecycle.
@@ -509,6 +514,11 @@ type ApprovalRequest struct {
 	DecisionScope ApprovalScope `json:"decision_scope,omitempty"`
 	// DecisionExpiresAt is set only when DecisionScope is until — a different clock than the EXPIRED-state sweeper, which ages out stale PENDING requests.
 	DecisionExpiresAt *time.Time `json:"decision_expires_at,omitempty"`
+	// DecisionBasis is how a DECIDED row was decided under the unit deciders rule that governed it (owner,
+	// unit_admin:<unit>, group:<name>, security, policy or admin_token), and DecisionRuleUnit is the unit that
+	// holds that rule. Both are stored with the decision and empty when no rule governed it.
+	DecisionBasis    string     `json:"decision_basis,omitempty"`
+	DecisionRuleUnit *uuid.UUID `json:"decision_rule_unit,omitempty"`
 	// ExpiresAt is when a PENDING request stops waiting: min(requested_at+WaitBudgetSec, EndsAt); computed on read, never stored.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
@@ -520,6 +530,13 @@ type ApprovalRequest struct {
 	// unit_admins, group:<name>, then security), projected at response time and never stored. Nil when no rule
 	// governs the row.
 	Deciders []string `json:"deciders,omitempty"`
+	// MaxScope and SecondHuman are that rule's own max_scope and second_human, projected beside Deciders and
+	// never stored. A deployment's four-eyes switch can require a second person where the rule does not.
+	MaxScope    ApprovalScope `json:"max_scope,omitempty"`
+	SecondHuman bool          `json:"second_human,omitempty"`
+	// RequestedBy is the run's creator, projected at response time and never stored, on a PENDING row served to
+	// a decider who is not that creator (GET /approvals?decidable_by=me). Absent on the creator's own row.
+	RequestedBy string `json:"requested_by,omitempty"`
 	// CallText is the exact text of an MCP call row's arguments and extra params (MCPCallText), projected at
 	// response time and never stored. The console and the CLI show and copy it as it is, never through a JSON
 	// number. Nil on every other row.

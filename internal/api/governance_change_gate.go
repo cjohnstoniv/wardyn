@@ -174,6 +174,9 @@ type govKind struct {
 	// the current state, and writes the target through the Querier forms of the store writes. It never
 	// touches the pool, and it never audits: the audit rows follow the commit.
 	apply func(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error)
+	// rejectAction, when set, is the kind's own row a reject writes after governance.change.reject (a
+	// request kind's, governance_requests.go); empty for every other kind.
+	rejectAction string
 }
 
 // govApplied is what an applied change leaves for the audit rows written after the commit.
@@ -209,10 +212,15 @@ var governanceChangeKinds = map[string]govKind{
 	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
+	govKindComponentOwningUnit: {approver: securityApprover, apply: applyComponentOwningUnitChange},
 	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 	govKindUnitDeciders:        {approver: securityApprover, apply: applyUnitDecidersChange},
 	govKindEnvelope:            {approver: securityApprover, apply: applyEnvelopeChange},
+	// An elevation's approver is its unit's rule (forChange, requestApprover).
+	types.GovernanceTargetElevation: {apply: applyElevationChange, rejectAction: "governance.elevation.reject"},
+	// An image request's approver is the met image rule at its unit (forChange, requestApprover).
+	types.GovernanceTargetImageRequest: {apply: applyImageRequestChange, rejectAction: "governance.image_request.reject"},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
@@ -237,6 +245,10 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 		}
 	case govKindMembership, govKindUnitAdmin, govKindUnitDeciders:
 		k.approver = unitChangeApprover(ch)
+	case types.GovernanceTargetElevation:
+		k.approver = requestApprover(ch, types.DeciderKindElevation)
+	case types.GovernanceTargetImageRequest:
+		k.approver = requestApprover(ch, types.DeciderKindImage)
 	}
 	return k
 }
@@ -277,6 +289,11 @@ type govProposal struct {
 	// belongsBy is, for a unit admin's membership add or delete, the units they are granted that its
 	// subject holds another membership below (governingRoots, heldBelongsStale).
 	belongsBy []uuid.UUID
+	// note is a request's reason and ticket, stored with the change; nil for every other write.
+	note *types.ChangeNote
+	// answer, when set, writes the 202 in place of the Location header and the pending_change body: a
+	// request answers with its own view, and its requester cannot read /governance/changes.
+	answer func(w http.ResponseWriter, saved types.GovernanceChange)
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -296,6 +313,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
 		ProposedByEmail: oidcEmailFromContext(r.Context()),
+		Note:            p.note,
 	}
 	saved, expired, err := s.cfg.Store.ProposeGovernanceChange(r.Context(), ch, s.governanceChangeTTL())
 	var pending *store.ErrGovernanceChangePending
@@ -331,6 +349,10 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		proposed["units"] = unitIDStrings(units)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success", mustJSON(proposed)))
+	if p.answer != nil {
+		p.answer(w, saved)
+		return
+	}
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
 	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": s.changeForRead(r, saved)})
 }

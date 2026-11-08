@@ -89,6 +89,16 @@ func restrictionAsSpec(sp types.RestrictionSpec) types.RunPolicySpec {
 	if sp.AutoStopAfterSec != nil {
 		spec.AutoStopAfterSec = *sp.AutoStopAfterSec
 	}
+	if sp.AllowedDomains != nil {
+		spec.AllowedDomains = *sp.AllowedDomains
+	}
+	if sp.ToolRules != nil {
+		spec.ToolRules = *sp.ToolRules
+	}
+	spec.Desktop = sp.Desktop
+	if sp.Recording != nil {
+		spec.Recording = *sp.Recording
+	}
 	return spec
 }
 
@@ -103,6 +113,11 @@ func validateRestriction(b *types.RestrictionWrite) error {
 	if err := types.RestrictionBoolsFalseOnly(b.Spec, b.Limits); err != nil {
 		return err
 	}
+	if b.Spec.DataOut != nil {
+		if err := validateDataOut(*b.Spec.DataOut); err != nil {
+			return err
+		}
+	}
 	if b.Contact != nil && b.Contact.IsZero() {
 		b.Contact = nil
 	}
@@ -111,7 +126,18 @@ func validateRestriction(b *types.RestrictionWrite) error {
 			return err
 		}
 	}
-	if err := validateAuthoredPolicySpec(restrictionAsSpec(b.Spec)); err != nil {
+	eff, err := restrictionEffective(b.Spec, b.Limits)
+	if err != nil {
+		return err
+	}
+	spec := restrictionAsSpec(b.Spec)
+	if b.Spec.PushRules != nil {
+		spec.PushRules = eff.Ceiling.PushRules // the composer's own conversion of the overlay
+	}
+	if err := validateAuthoredPolicySpec(spec); err != nil {
+		return err
+	}
+	if err := validateVCSCaps(b.Spec.AzureDevOpsCapabilities, b.Spec.GitHubCapabilities); err != nil {
 		return err
 	}
 	for i, g := range b.Spec.WithheldGrants {
@@ -124,10 +150,6 @@ func validateRestriction(b *types.RestrictionWrite) error {
 		if !withheldScopeless(g.Scope) && !validWithheldScope(g) {
 			return fmt.Errorf("withheld_grants[%d]: the scope does not decode into a usable pairing", i)
 		}
-	}
-	eff, err := restrictionEffective(b.Spec, b.Limits)
-	if err != nil {
-		return err
 	}
 	if msg := governanceLimitsRefusal(eff.Limits); msg != "" {
 		return errors.New(msg)
@@ -190,6 +212,9 @@ func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWri
 		if !grantWithheldBy(g, next.Spec.WithheldGrants) {
 			return false
 		}
+	}
+	if !vcsCapsAtLeastAsStrict(old.Spec, next.Spec) {
+		return false
 	}
 	if slices.Contains(next.Members, types.RestrictionMember{SubjectType: types.CapabilitySubjectAll}) {
 		return true

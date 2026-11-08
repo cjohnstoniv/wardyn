@@ -175,7 +175,7 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
+	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits, StrictPins: st.launch.StrictPins}
 	st.ctx = withPromotedStart(withFrozenPoolUnit(bindAuthority(st.prep, a, choice), st.launch.UnitID), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
@@ -497,6 +497,11 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	anchor := run
 	anchor.CreatedAt = *run.AdmittedAt
 	s.captureRunLimits(&anchor, ceiling, &f.end)
+	// A run whose cap passed while it waited (a cap set by an elevation that ended, say) ends here,
+	// before anything is minted, rather than starting for the seconds until the sweep kills it.
+	if end := lifetimePassedEnd(anchor, s.cfg.Now().UTC()); end != nil {
+		return end
+	}
 
 	id, err := s.cfg.Identity.MintRunIdentity(st.ctx, run.ID, runIdentitySubject(st.ctx, run.CreatedBy), requestSponsor(st.ctx, run.CreatedBy), internalAudience, run.OperatorOwned)
 	if err != nil {

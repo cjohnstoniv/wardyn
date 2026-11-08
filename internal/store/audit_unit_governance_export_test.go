@@ -5,7 +5,7 @@ package store
 
 import "github.com/google/uuid"
 
-// UnitAuditQueryForTest is the SQL and arguments the unit feed (withGovernance) or its export reads.
+// UnitAuditQueryForTest is the SQL and arguments the unit feed reads, with or without the governance arm.
 func UnitAuditQueryForTest(units []uuid.UUID, f AuditFilter, withGovernance bool) (string, []any) {
-	return unitAuditQuery(auditCols, units, f, 0, withGovernance)
+	return unitAuditQuery(units, f, withGovernance)
 }

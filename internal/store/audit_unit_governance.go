@@ -34,8 +34,8 @@ const unitGovernanceArmClause = `(run_id IS NULL AND action = ANY($2)
 	AND (target = ANY($3) OR data->>'unit_id' = ANY($3)
 		OR (jsonb_typeof(data->'units') = 'array' AND data->'units' ?| $3)))`
 
-// unitAuditFirstClause and its arguments: the runs' rows alone for the export, and with the governance
-// arm for the feed ($2 is the action list, $3 the unit ids as text).
+// unitAuditFirstClause and its arguments: the runs' rows alone for an actor-filtered feed, and with the
+// governance arm otherwise ($2 is the action list, $3 the unit ids as text).
 func unitAuditFirstClause(units []uuid.UUID, withGovernance bool) (string, []any) {
 	if !withGovernance {
 		return unitRunRowsClause, []any{units}

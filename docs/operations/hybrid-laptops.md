@@ -77,6 +77,20 @@
 - A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`). A class with no `require_posture` places on any runner, one that has never reported posture included; to demand a report, set at least one requirement.
 - `os_min` must name every OS a runner may run: a runner on an OS it leaves out misses it.
 
+### Device posture
+
+Wardyn does not attest a laptop. It has three checks, each weaker than it sounds:
+
+- **The trust mark** (`managed_device`): a security operator, with a second person approving, said this runner is a company-managed device. Check that against your MDM inventory. The runner cannot set it.
+- **The posture file** from your MDM is root-owned and wins over the runner's own probe, but root on the laptop can rewrite it.
+- **`require_posture`** compares the runner's last report to a class's requirement. It gates only `runner_resident` credentials.
+
+Not checked: an MDM device certificate, Apple Managed Device Attestation, or a TPM quote. A runner registers with a token, not proof of the device.
+
+`runners.require_managed_device` (super admin: `PUT /api/v1/runners/settings {"require_managed_device": true}`) refuses a new local run unless the pool has a `managed_device` or `org_cluster` runner. A pool of only `personal` runners answers `runner_trust_required`. Off by default, so an install that does not set it places as before. Runs already started keep their runner.
+
+The switch is only as strong as the mark: review marked runners against your MDM inventory, and unmark (`wardyn runner trust <runner-id> personal --reason "<why>"`) a laptop that leaves management.
+
 ### bedrock_sso on a laptop runner
 
 - A `bedrock_sso` model provider works on your own runner with AWS SSO proxy-inject on (`WARDYN_AWS_SSO_PROXY_INJECT`, the default).

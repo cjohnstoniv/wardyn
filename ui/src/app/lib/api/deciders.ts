@@ -29,6 +29,12 @@ export interface DeciderRule {
   max_scope?: "once" | "until" | "run";
   /** An elevation rule's longest grant, 15m to 24h, stored as one canonical duration ("4h" for "240m"). */
   max_elevation?: string;
+  /** An elevation rule's who may ask: one to eight group:<name> entries; required on an elevation rule. */
+  eligible_requesters?: string[];
+  /** An elevation rule's wait after an elevation ends before the same person may ask again, 0s to 168h. */
+  renew_after?: string;
+  /** An elevation rule's ticket format, a whole-ticket regular expression of at most 256 characters. */
+  ticket_pattern?: string;
 }
 
 /** types.UnitDeciders: the PUT's 200 body. */
@@ -39,9 +45,13 @@ export interface UnitDeciders {
   updated_at?: string;
 }
 
-/** governanceDecidersView: one unit's entry in GET /governance. `from` maps each kind to the unit whose rule governs it. */
+/** governanceDecidersView: one unit's entry in GET /governance. `from` maps each kind to the nearest unit with a rule;
+ *  `bounded_by` lists every unit on the chain with one, nearest first; `effective` is the rule they leave once met
+ *  (an empty `who` means the security tier alone). */
 export interface GovernanceDeciders {
   unit_id: string;
   rules: DeciderRule[];
   from?: Record<string, string>;
+  bounded_by?: Record<string, string[]>;
+  effective?: Record<string, DeciderRule>;
 }

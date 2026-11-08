@@ -562,7 +562,7 @@ var gitGeneratedRefResources = []string{"cherrypicks", "reverts"}
 
 // gitWrite is the git area, carrying four capabilities behind one scope: the
 // repository object (CapRepoAdmin), its policies (CapPolicyAdmin), its pull
-// requests (CapPR, or CapPolicyBypass when the body asks to bypass policy), and
+// requests (pr_create, pr_vote, pr_complete, or policy_bypass when the body asks to bypass policy), and
 // its refs (CapCodeWrite, with the refs the request names). POSITIONAL split, since one segment is a caller-chosen repository name.
 func gitWrite(method string, r route, req Request) (Verdict, error) {
 	switch r.res {
@@ -570,7 +570,7 @@ func gitWrite(method string, r route, req Request) (Verdict, error) {
 		return gitRepositoryWrite(method, r, req)
 	case "pullrequests":
 		// The organisation/project-level pull-request route.
-		return pullRequestWrite(method, req, r.at(4))
+		return pullRequestWrite(method, req, r.at(4), r.at(6))
 	case "policy", "policyconfigurations":
 		return Verdict{Capability: CapPolicyAdmin}, nil
 	}
@@ -600,7 +600,7 @@ func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 		// until its body is parsed.
 		return Verdict{Capability: CapUnclassifiedWrite}, nil
 	case "pullrequests":
-		return pullRequestWrite(method, req, r.at(6))
+		return pullRequestWrite(method, req, r.at(6), r.at(8))
 	case "policyconfigurations":
 		return Verdict{Capability: CapPolicyAdmin}, nil
 	case "permissions":

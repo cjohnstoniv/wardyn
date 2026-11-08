@@ -247,6 +247,8 @@ type liveGrant struct {
 	spec            types.GrantSpec
 	run             *types.AgentRun
 	found, withheld bool
+	// pinned: withheld because a component the run carries is now pinned to a unit it is not in.
+	pinned bool
 }
 
 // liveGrantWithheld reports whether the run is kept from grantID now (#3238): its captured profile as
@@ -278,7 +280,7 @@ func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID
 	if err != nil {
 		return lg, err
 	}
-	lg.found, lg.withheld = true, w.credentialWithheld(lg.spec)
+	lg.found, lg.withheld, lg.pinned = true, w.credentialWithheld(lg.spec), w.pinnedOut != ""
 	return lg, nil
 }
 
@@ -302,6 +304,16 @@ func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withh
 	if p != nil {
 		w.deny = p.Ceiling.DeniedDomains
 	}
+	// A component pin moved after launch: a run with no context has nothing to pin.
+	if run.UnitID != nil {
+		comps, err := s.runComponentSnapshot(ctx, run.ID)
+		if err != nil {
+			return withholding{}, err
+		}
+		if w.pinnedOut, err = s.componentPinnedOut(ctx, run, comps); err != nil {
+			return withholding{}, err
+		}
+	}
 	return w, nil
 }
 
@@ -324,14 +336,19 @@ func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, cla
 	if !lg.found || !lg.withheld {
 		return lg.run, false
 	}
+	reason, msg := reasonGrantWithheld,
+		"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches"
+	if lg.pinned {
+		reason, msg = reasonComponentUnitPinned,
+			"wardyn: this run is no longer given credentials: a component it carries is now pinned to a unit this run is not in; start a new run in that unit"
+	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
 		grantID.String(), "denied", mustJSON(map[string]any{
 			"grant_id": grantID.String(),
 			"kind":     string(lg.spec.Kind),
-			"reason":   reasonGrantWithheld,
+			"reason":   reason,
 		})))
-	writeErrorReason(w, http.StatusForbidden, reasonGrantWithheld,
-		"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches")
+	writeErrorReason(w, http.StatusForbidden, reason, msg)
 	return nil, true
 }
 
@@ -515,6 +532,11 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		s.auditRenewDenied(r, claims, "run_terminal:"+string(run.State))
 		// The SAME registered reason refuseTerminalRun's own terminal arm writes.
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
+		return
+	}
+	if pastLifetimeCap(run, s.cfg.Now().UTC()) {
+		s.auditRenewDenied(r, claims, "run_past_lifetime")
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run has reached its lifetime cap")
 		return
 	}
 	// A kept run (ended or lost) has no proxy on purpose; only a revive gives

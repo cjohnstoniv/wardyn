@@ -65,6 +65,7 @@ declare -A ALLOWLIST=(
   ["cmd/wardyn/audit_receipt_cmd_test.go"]=2 # passthrough only: a checkpoint statement's signed_at and a served key's created_at, signed or printed as given, never compared to the clock
   ["pkg/client/audit_receipt_test.go"]=1 # passthrough only: a served key's created_at, decoded as given, never compared to the clock
   ["internal/egress/proxy/kube_restart_test.go"]=3 # passthrough only: kubectl's restartedAt annotation value, matched as bytes in the patch body, never compared to the clock
+  ["internal/types/kube_call_test.go"]=6 # passthrough only: kubectl's restartedAt annotation values, hashed as bytes into a call key, never compared to the clock
   ["cmd/wardyn-runnerd/doctor_folders_test.go"]=3 # passthrough only: the edit record's read time and the tools record's tried time, printed in the stage detail, never compared to the clock
   ["cmd/wardyn-runnerd/doctor_folders_unix_test.go"]=2 # passthrough only: the base manifest's created time copied into the edit record, never compared to the clock
   ["ui/src/app/components/screens/approvals-mcp-call.test.tsx"]=2 # passthrough only: a wire row's requested_at and decided_at, decoded as given, never compared to the clock

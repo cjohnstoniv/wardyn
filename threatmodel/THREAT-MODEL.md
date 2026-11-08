@@ -1564,7 +1564,7 @@ These risks are **not closed by v1 Wardyn**.
 1. **The model-API channel is an unavoidable data-exit path.**
    - The LLM gateway logs every prompt/token/tool call but cannot stop an agent encoding data into a prompt to a model it may call.
    - Wardyn does not prevent exfiltration over the model channel.
-   - The optional, off-by-default guardrail (`internal/contentscan`, policy `llm_inspection`) narrows this for the HONEST agent — it scans outbound prompts on the inspectable API-key route for operator-declared known secret values and can alert/block.
+   - The optional, off-by-default guardrail (`internal/contentscan`, policy `llm_inspection`) narrows this for the HONEST agent — it scans outbound prompts on the inspectable API-key route for operator-declared known secret values, and the `env_secret` and `file_secret` values placed in the run, and can alert/block.
    - But a prompt-injected agent can base64/hex/split-across-turns/encrypt around any scanner, and subscription-OAuth/Bedrock CONNECT modes stay opaque until the Phase-2 TLS-MITM tier (flagged `llm.scan.bypass`).
    - §5.1a is the claims contract.
 
@@ -3345,11 +3345,11 @@ exactly these terms.
 
 - "Prevents/blocks data exfiltration to the model," "exfil-proof," or "DLP." An agent can encode / split-across-turns / encrypt around any scanner — residual #1 STANDS.
 - "Detects all secrets and PII."
-  - The detectors are: declared known-secret VALUES (exact, default),
+  - The detectors are: declared known-secret VALUES and the values placed in the run (exact, whole value, default),
   - an OPT-IN regex catalog of well-known secret FORMATS (`detect_secret_patterns`; high precision, can FP on example keys),
   - an OPT-IN Shannon-entropy detector (`detect_entropy`; high-FP in code, pure-hex skipped, medium severity so `block_min_severity` can exclude it),
   - an OPT-IN regex/Luhn PII detector (`detect_pii`; ≈60-70% recall = high false-negative — visibility, NEVER a control),
-  - and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g. Presidio/LLM-Guard — fail-open by default, fail-closed under `on_scanner_error=block`).
+  - and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g. an unmodified Presidio analyzer with `detector_sidecar_format: presidio` — fail-open by default, fail-closed under `on_scanner_error=block`).
     - The sidecar scans at most 64 spans per request. Under the default fail-open (`on_scanner_error=pass`), spans past the 64th are not sent to it, so a request built with more spans gets the rest past the sidecar. The in-process detectors still scan every span, and the skip is recorded as `sidecar_call_cap`. To have every span scanned or the request refused, set `on_scanner_error=block`.
   - None is exhaustive; entropy and PII in particular are best-effort.
   - Detections stay content-free regardless of detector.
@@ -3727,6 +3727,27 @@ has four-eyes.**
    - the SCIM purge, which deletes the departed person's user-subject governance assignments and
      capability grants directly, without a pending change: the identity provider is the single
      authority for that write.
+
+### Unit deciders: who may decide a hold, and five residuals
+
+- A unit's [deciders](../docs/operations/deciders.md) name who besides the security tier decides each kind of hold for runs launched in it. Without rules nothing changes.
+- `resolveDecider` in [`internal/api/deciders_resolve.go`](../internal/api/deciders_resolve.go) reads the rules, the grants and the caller's groups when a decision arrives, never when the hold is raised.
+- `unit_admins` and `group:<name>` never match the run's creator, the sponsor of a service identity that created it, or its recorded author. A read that cannot tell counts as a match and refuses.
+- A rule's `second_human` and `max_scope` bind security admins too. The admin token stays the audited break-glass for `second_human`.
+- It is published here because of what it leaves open.
+
+**Residuals:**
+
+1. **While the rules are unreadable, a security admin decides with no rule.**
+   - If the deciders table or the unit tree cannot be read, `deciderForDecide` in [`internal/api/deciders_resolve.go`](../internal/api/deciders_resolve.go) lets a security admin decide as if no rule governed the hold.
+   - That rule's `second_human` and `max_scope` do not bind them for the length of the outage: an `always` egress decision would pass.
+   - `WARDYN_EGRESS_SECOND_HUMAN` and `WARDYN_CAPABILITY_SECOND_HUMAN` still bind.
+   - Everyone else is refused: the run's owner gets `503` `deciders_unreadable`, and any other member the usual `404`.
+   - It is the availability trade: security must always be able to decide.
+2. **A revoke that lands during a decision does not undo it.** A decision reads the rule and the caller's grants, then commits through `decide` in [`internal/api/approvals.go`](../internal/api/approvals.go). A grant or group removed between the two does not stop that one decision. The egress grant check has the same window.
+3. **Deciders see other people's holds.** A decider reads the host, the tool call, the push paths and who asked. They never see the run, its output or a terminal.
+4. **A group decider is as current as its snapshot.** A person who leaves a group at the identity provider keeps deciding until their session ends or SCIM removes them. A token's group snapshot can be as old as the token. `WARDYN_ROLE_STAMP_TTL` (off by default) bounds both, and is advised when a group decides credentials or pushes.
+5. **A downgrade widens.** A build without deciders ignores the `governance_unit_deciders` table, so a rule that left out `owner` stops binding and the run's owner decides again.
 
 ### Coalesced `auth.fail` rows: the peer address is not the bound
 

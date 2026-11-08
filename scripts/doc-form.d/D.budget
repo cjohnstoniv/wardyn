@@ -13,4 +13,4 @@
 # 0.9.4 L8: docs/DESKTOP.md 7468 adds 95 over 7373: tier rows, the legacy-figure note and the rollback warning.
 # 0.9.4 W1 merge +3 again (L8): the merged text measures 3 over the sum.
 # #2819 +5, measured: the Topology alt and caption now describe the client-mode runner figure (board R11-2819 strings).
-docs/DESKTOP.md=7554 share=35 # -1, measured: the smoke recipe lost its tester task and the sales line; the figure gained the list of secrets that do enter the sandbox
+docs/DESKTOP.md=7561 share=35 # 7561 measured (+7: the PUT /site-config line names what a write keeps); earlier: 7554 (-1, measured: the smoke recipe lost its tester task and the sales line; the figure gained the list of secrets that do enter the sandbox

@@ -63,6 +63,7 @@
 | `desktop` | `DesktopControls` | omitted = paste in and upload allowed, copy out and download blocked | The desktop's clipboard and file-transfer rules by direction. See [below](#desktop--desktopcontrols). |
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
+| `data_out` | `string` | omitted = allowed | Content leaving the run: `allowed`, `review` or `blocked`. See [below](#data_out). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for brokered git pushes on every broker lane and the Azure DevOps REST door ([details](#push_rules--pushrulesspec)). With `deny_all`, a run holding an `ssh_key`, or a `git_pat` while the git token broker is off, is refused at start. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -123,11 +124,12 @@
   - The `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30.
 - `0` = never reaped;
 - `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle).
-- Idleness is `updated_at` age — an attach or an egress call resets it.
+- Idleness is `updated_at` age — an attach or an allowed egress request resets it.
   - So does CPU use above 10% of one core read from the substrate (a metrics-server read on Kubernetes, the daemon's container stats on Docker; never an exec into the sandbox),
   - while file writes do not (`internal/lifecycle`, [`internal/api/run_activity.go`](../internal/api/run_activity.go)).
 - Without metrics-server the CPU signal is off, `/setup/status` says so (the Idle detection row), and idleness is the attach and egress clock alone;
-  - the one egress decision that does not reset it is `credential:reauth-timeout`, which reports that nobody answered a re-auth hold.
+  - a refused or held request does not reset it, on any kind of run;
+  - nor do the approvals poll and `credential:reauth-timeout`, which reports that nobody answered a re-auth hold.
 - The reaper never stops a run that has a PENDING request still inside its own wait, min(`requested_at` + `wait_budget_sec`, `ends_at`) (`store.openHoldSQL`);
   - with no wait and no end set, that means until the approval-expiry ceiling (`WARDYN_APPROVAL_EXPIRY_AFTER`, 24h by default) is swept by `approval.ExpireStale`,
   - so a run parked on a request can outlive this threshold and keep its quota slot that long.
@@ -146,7 +148,7 @@
 ### `azure_devops_capabilities`
 
 - This run's Azure DevOps capabilities on the per-person (Entra) lane, in place of the provider row's `default_profile`, so a saved policy works as a saved access profile.
-- Each entry must be a grantable capability (`code_read`, `work_read`, `code_write`, `pr`, `policy_admin`, …, one read per Azure DevOps area);
+- Each entry must be a grantable capability (`code_read`, `work_read`, `code_write`, `pr`, `pr_create`, `pr_vote`, `pr_complete`, `policy_admin`, …, one read per Azure DevOps area);
   - anything else, including the pre-0.8.2 `read`, is a `400` with reason `ado_capability_unknown`.
 - It chooses only **within** the row's `capability_ceiling`: a run naming a capability outside it is refused at launch, never silently granted, and the live ceiling is re-checked on every request.
 - For a member (including an admin in the user view) the list stands only where it is in the row's `default_profile` or in their governance profile's own `azure_devops_capabilities` (the default policy's when none is assigned),
@@ -163,7 +165,7 @@
 ### `github_capabilities`
 
 - The GitHub twin of `azure_devops_capabilities`: this run's GitHub capabilities in place of a GitHub provider row's `default_profile`, chosen only within the row's `capability_ceiling`.
-- Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`.
+- Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `pr_write`, `pr_review`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`. `pr` means `pr_write` and `pr_review` together. GitHub has no hold, so `pr_review` is granted or not.
 - A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused).
 - A profile's list bounds its members' runs, the GitHub CLI included: a member who names none gets the profile's list, and a list sharing none with it is refused.
 - Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. Entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall also narrows the GitHub CLI's capabilities ([Your walls](#your-walls)).
@@ -1041,6 +1043,11 @@ What the check does and does not settle:
 - The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
 - A member's policy that leaves `desktop` out gets its ceiling's controls; one that sets them can only block more, the defaults included.
 - What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
+- `download: review` (download only, opt in) holds each download for a person's yes on that file. The security tier
+  or a unit's `file_download` deciders see its name, size and SHA-256, never its content. Nobody who created the run or
+  asked decides it.
+- An approval releases those bytes once; a file changed since is refused. `allowed` < `review` < `blocked`, so a layer
+  below can only make it stricter.
 - The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
   under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
   port forward to the desktop's VNC port is outside the relay.
@@ -1052,8 +1059,41 @@ What the check does and does not settle:
 | `paste_in` | `string` | `allowed` | The browser's clipboard sent into the desktop (RFB `ClientCutText`). |
 | `copy_out` | `string` | `blocked` | The desktop's clipboard sent to the browser (RFB `ServerCutText`). |
 | `upload` | `string` | `allowed` | Files sent from the Files panel into `~/Transfers`. |
-| `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. |
+| `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. `review` holds each file for a person's yes (below). |
 
+
+## `data_out`
+
+- One rule for content leaving a run: `allowed`, `review` or `blocked`. Omitted is `allowed`, so nothing changes until a policy, a unit's walls, a restriction or the boundary sets it.
+- It is the stricter of every layer's value (`allowed` < `review` < `blocked`), frozen into the run at create and met again at each revive. A layer below can only make it stricter.
+- A member's policy, a unit's walls, a restriction and the boundary each set it as `data_out`.
+
+| Path content leaves by | `review` | `blocked` |
+|---|---|---|
+| Desktop copy out (Linux, VM and macOS desktops) | off | off |
+| Files panel download | each file waits for a person's yes | off |
+| SSH `sftp` and `scp` | off | off |
+| SSH commands (`ssh <run> <command>`, `wardyn run exec`) | off | off |
+| SSH `-L` port forwards | off | off |
+| `wardyn sync` down | off: sync only sends files to the run | off |
+| Run output | security admins only | security admins only |
+| Recording replay | super admins only | super admins only |
+| Web apps other than the desktop | off | off |
+| A computer folder that syncs back | off | off |
+| Git push | keeps its own `push_rules` | every push refused |
+| Drives, member drives and kept machines | as their own switches say | denied, when walls, a restriction or the boundary set `blocked` |
+
+- Paste in and upload are not covered: they bring content in.
+- On a run with no desktop, `review` opens the Files panel's folder `~/Transfers` for reviewed downloads only. Where the machine cannot move files through Wardyn, the panel answers `data_out_review_unavailable` and nothing leaves.
+- `review` can open a door the defaults keep shut. Desktop download is blocked by default, so on a run whose desktop rules leave download unset, `data_out: review` turns download into a held download: each file waits for a person's yes. An explicit `desktop.download: blocked` in the run's policy, a unit's walls, a restriction or the boundary still wins.
+- `review` does not hold every push. A push keeps its own push rules; `blocked` refuses them all.
+- `blocked` denies drives, member drives and kept machines through the same doors as `deny_user_drive`, `deny_member_drives` and `deny_kept_machines`, so it applies where those apply: to runs under a unit, and to a kept machine's governed callers. A member's own `data_out: blocked` denies pushes but not drives or kept machines, which are governance limits.
+- A rule that cannot be read keeps content in. SSH treats it as `blocked`, the recording replay and the automatic bring-back are refused, and run output, web apps and a computer folder's bring-back answer 503 `data_out_unreadable`.
+- A run with no recorded policy, whose audit rows were pruned, carries no rule: SSH still treats it as `blocked`, and the other paths read it as `allowed`.
+- Network egress is outside this rule. An agent can still send content to any host in `allowed_domains`, through MCP tool calls and the model lane. Narrow those with `allowed_domains`, `denied_domains` and tool rules.
+- Paths left open: the SSH shell, `GET /runs/{id}/attach` and watching the desktop show a person what is on screen, and the run's file list and event stream carry names, sizes and events, not file contents. Turn off interactive access (`deny_interactive`) and background desktop watching (`deny_background_desktop_watch`) to close them.
+- With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
+- Audit: each refusal on a path above writes `run.data_out.deny` with the `path` and the `rule`. A refused Files panel download keeps its `desktop.file.transfer` row.
 
 ## `tool_rules` — `[]ToolRule`
 
@@ -1120,6 +1160,18 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 - An interactive Claude Code run has no gate. Its managed settings carry the rule as `allow` for a remote server turned on for Claude Code, where the proxy asks, and as `deny` otherwise.
 
 
+### Try approve_each without an MCP server
+
+[`test/gatewayfake`](../test/gatewayfake) is a test binary, never built into an image or published. Its `/mcp` route is a stateless MCP server over streamable HTTP with one tool, `echo`, and no sign-in.
+
+1. Run it with `go run ./test/gatewayfake -addr :8080`.
+2. Put a TLS front before it. A remote MCP server's address must be `https://`, and wardynd must trust the front's certificate authority (`trustedCA`, or `WARDYN_TRUSTED_CA_FILE`).
+3. Add `https://<front>/mcp` as a remote MCP server and allow its host in the run's policy, with an `internal_hosts` entry when it names a private address ([setup](operations/ai-gateway.md#set-it-up)).
+4. Add the rule `{"tool": "mcp__<server>__echo", "effect": "approve_each"}`, where `<server>` is the server's key.
+5. Start a background Claude Code run, or a Codex CLI run, and ask it to call `echo`. The call waits for a person to approve it with its exact arguments.
+6. `GET /_seen` on the fake lists every request it received. `tool_calls` stays `0` until you approve and becomes `1` after.
+
+
 ## `recording`
 
 - `off` records no terminal or screen; the audit log still shows what happened. `terminal` records terminal sessions only, what every run got before the level existed. `screen_actions` also records a desktop's screen while someone watches it through Wardyn, on every machine kind, and an action log of what was opened, copied and transferred.
@@ -1173,6 +1225,7 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 
 - Content rules for this run's brokered git pushes — the counterpart to `git_push_any_branch`'s WHERE: this says WHAT a push may touch (issue #57).
 - `null`/omitted (every policy authored before this field existed) means **no content rules at all** — byte-identical to today's wire shape and behaviour.
+- To keep pushes from starting pipelines, see [ci-trigger-guard.md](operations/ci-trigger-guard.md).
 
 **What a run with content rules gets.** The broker buffers the receive-pack request up to the run's inspection ceiling, reads which paths the push would introduce. It answers one of three refusals, holds it for an admin's review, or forwards the buffered bytes unchanged:
 
@@ -1453,12 +1506,13 @@ So an entry a pattern matches is judged one of two ways:
 |---|---|---|---|
 | `mode` | `string` | `off` | `off`, `alert` (scan + audit, forward unchanged), or `block` (a qualifying finding refuses the request). When not off, at least one detector — a `detect_*`, a sidecar URL, or `classified_markers` — must be enabled. |
 | `workspace_secret_names` | `[]string` | `[]` | Operator-declared secret **names**, resolved against the at-rest secret store; a reserved platform-internal name is refused at write time. See [`workspace_secret_names`](#workspace_secret_names). |
-| `workspace_secret_values` | `[]string` | `[]` | **Not settable on a policy write** — populated internally by dispatch from `workspace_secret_names`, only in memory, only for the proxy sidecar. |
-| `detect_secrets` | `bool` | `false` | Exact match against the resolved `workspace_secret_names` corpus. |
+| `workspace_secret_values` | `[]string` | `[]` | **Not settable on a policy write** — populated internally by dispatch from `workspace_secret_names` and, with `detect_secrets` on, the placed `env_secret` and `file_secret` values, only in memory, only for the proxy sidecar. |
+| `detect_secrets` | `bool` | `false` | Exact match against the resolved `workspace_secret_names` corpus and every `env_secret` and `file_secret` value placed in the run. See [Placed secrets](#placed-secrets). |
 | `detect_secret_patterns` | `bool` | `false` | Regex catalog of well-known secret *formats* (AWS/GitHub/Slack/Google keys, PEM, JWTs, Stripe). Higher precision than entropy; false-positives on example keys in code. |
 | `detect_entropy` | `bool` | `false` | Shannon-entropy detector. High false-positive rate in code; emits medium severity so a strict `block_min_severity` can exclude it. |
 | `detect_pii` | `bool` | `false` | Regex/Luhn PII detector. Best-effort visibility signal, never a control. |
 | `detector_sidecar_url` | `string` | (unset) | Out-of-process detector URL the proxy POSTs each span to; its host must also be in this same policy's `allowed_domains` (or `allow_all_egress`). See [`detector_sidecar_url`](#detector_sidecar_url). |
+| `detector_sidecar_format` | `string` | (unset) | `presidio` makes `detector_sidecar_url` an unmodified Presidio analyzer's `/analyze`. Unset is Wardyn's own format. It needs `detector_sidecar_url`, and in `block` mode a `block_min_severity` of `medium` or higher. See [`detector_sidecar_url`](#detector_sidecar_url). |
 | `classified_markers` | `[]string` | `[]` | Literal markers (`INTERNAL ONLY`, `CONFIDENTIAL//NOFORN`) whose presence flags a classified-content leak. Case-insensitive substring match. |
 | `scan_attachments` | `bool` | `false` | Decode and scan base64 image/document attachment bytes. Off by default: binary, large, high-FP. |
 | `inspect_forward_egress` | `bool` | `false` | Extend inspection from the LLM routes to the generic plaintext-HTTP forward path. HTTPS connectors tunnel via opaque CONNECT and stay uninspected unless MITM'd. |
@@ -1481,12 +1535,23 @@ So an entry a pattern matches is judged one of two ways:
 - A **reserved platform-internal name** (`wardyn-signing-key`, `wardyn-session-key`, the harness OAuth blobs, the resident AWS SigV4 secrets, every per-person model-provider credential `wardyn-provider-*`) is refused at write time and skipped at dispatch —
   - resolution puts the value in the proxy sidecar, so this field is a credential sink and takes the same reserved-name guard every other sink does.
 
+### Placed secrets
+
+- With `detect_secrets` on, the corpus also holds every `env_secret` and `file_secret` value placed in the run, a component's included.
+- It matches the whole value only: single-line values, and multi-line values only when pasted verbatim. A value under 8 bytes is not checked.
+- A non-secret value, such as a region or a public URL, does not belong in an `env_secret`: a `block`-mode policy would refuse a prompt that quotes it.
+- A finding carries no value and no name. The redacted count in `run.policy.resolve` leaves out `file_secret` values.
+
 ### `detector_sidecar_url`
 
-- Out-of-process detector the proxy POSTs each span to (e.g. Presidio, LLM-Guard).
+- Out-of-process detector the proxy POSTs each span to, such as a Presidio analyzer you run ([setup](operations/model-gateways.md#presidio-as-the-detector)).
 - Must be an `http(s)://` URL **whose host is also in this SAME policy's `allowed_domains`** (or `allow_all_egress`).
   - This is an operator allowlist, not a bare scheme check, since the sidecar is dialed proxy-side with span text on a surface the sandbox's own confinement class never bounds.
-- A sidecar error respects `on_scanner_error` like any other scanner error.
+- A sidecar error respects `on_scanner_error` like any other scanner error: with `pass` the request flows, so set `block` when an outage must block it.
+- `detector_sidecar_format: presidio` sends `{text, language: "en", score_threshold: 0.5}` to the URL as given (use the full `/analyze` address) and names no entities, so the analyzer's own recognizers decide.
+  - Names, locations, organisations, nationality, religious and political groups, dates, URLs, UUIDs, MAC and IP addresses and US driver licences are `low`. Other entities are `high` from a score of `0.85` and `medium` below it. A hit is category `pii`, detector `sidecar:<entity type>`.
+  - A reply that is not an array is a sidecar error.
+  - A layer cannot change the format its ceiling sets: `Clamp` keeps the ceiling's, and `Leq` refuses a different one.
 
 
 ## `resources` — `ResourceLimits`

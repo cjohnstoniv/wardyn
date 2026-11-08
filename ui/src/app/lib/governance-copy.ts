@@ -450,6 +450,7 @@ export const CHANGES = {
     governance_boundary: "Wardyn boundary",
     governance_restriction: "Restriction",
     workspace_owning_unit: "Workspace unit",
+    component_owning_unit: "Component unit",
     org_recording: "Recording level",
     governance_envelope: "Platform envelope",
   } as Record<string, string>,

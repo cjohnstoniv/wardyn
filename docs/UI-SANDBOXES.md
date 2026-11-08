@@ -38,6 +38,7 @@
 
 ### Signing in to websites inside the desktop (0.10, off by default)
 
+- A run whose `data_out` is `review` or `blocked` opens only its desktop; other web apps are refused.
 - With `WARDYN_DESKTOP_SIGNINS=on`, the creator of a run that declares `novnc`
   can sign in to a website in a browser of their own inside the desktop. The
   agent is stopped meanwhile, and the person can share one site's login with it.

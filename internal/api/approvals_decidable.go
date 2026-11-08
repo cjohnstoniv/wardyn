@@ -151,6 +151,9 @@ func (s *Server) projectDecidable(r *http.Request, rows []types.ApprovalRequest)
 		may := ap.Kind != types.ApprovalCredentialReauth && s.decidableKindAndOwner(r, ap, run)
 		rows[i].Decidable = &may
 		rows[i].Deciders = v.deciderList()
+		if v.rule != nil {
+			rows[i].MaxScope, rows[i].SecondHuman = v.rule.MaxScope, v.rule.SecondHuman
+		}
 	}
 }
 
@@ -217,7 +220,7 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 		return err == nil && v.decides()
 	}
 	_, isADO := adoEscalationScope(ap)
-	isMCP := isMCPCallRow(ap)
+	isMCP := isExactCallRow(ap) // an MCP call or a held kubectl write
 	if ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP {
 		return false
 	}
@@ -256,5 +259,5 @@ func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, ru
 		return false // requireSecondHuman's unconditional 503: unenforceable here
 	}
 	authored, err := s.runAuthoredBy(r.Context(), run, principal)
-	return err == nil && !authored
+	return err == nil && !authored && !askedForDownload(ap, principal)
 }

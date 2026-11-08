@@ -99,7 +99,7 @@ func governanceControlWarnings(ceiling, deployment types.RunPolicySpec, limits t
 		{"paste_in", own.PasteIn, dep.PasteIn}, {"copy_out", own.CopyOut, dep.CopyOut},
 		{"upload", own.Upload, dep.Upload}, {"download", own.Download, dep.Download},
 	} {
-		if d.own == types.TransferAllowed && d.dep == types.TransferBlocked {
+		if types.TransferStrictness(d.own) < types.TransferStrictness(d.dep) {
 			opened = append(opened, d.name)
 		}
 	}
@@ -174,7 +174,7 @@ func (s *Server) governanceADOCeilingWarnings(ctx context.Context, res *Resolved
 		if row.Kind != types.GitProviderAzureDevOps || row.Entra == nil {
 			continue
 		}
-		outside := adoCapsOutside(res.Ceiling.AzureDevOpsCapabilities, row.Entra.CapabilityCeiling)
+		outside := adoCapsOutside(res.Ceiling.AzureDevOpsCapabilities, row.Entra.Ceiling())
 		if len(outside) == 0 {
 			continue
 		}
@@ -185,7 +185,7 @@ func (s *Server) governanceADOCeilingWarnings(ctx context.Context, res *Resolved
 		warns = append(warns, fmt.Sprintf(
 			"this profile lists %d Azure DevOps capability(ies) above the capability_ceiling of provider row %q (%s) — "+
 				"a member who launches with one of them is refused; the row allows %d",
-			len(outside), row.ID, strings.Join(labels, ", "), len(row.Entra.CapabilityCeiling)))
+			len(outside), row.ID, strings.Join(labels, ", "), len(row.Entra.Ceiling())))
 	}
 	return warns
 }

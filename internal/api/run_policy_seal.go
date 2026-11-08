@@ -6,10 +6,13 @@ package api
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -22,8 +25,9 @@ import (
 // fails on a new one, or on a widening that runs after the seal.
 
 // sealLayer is one outer limit on a run's egress, and the record a knob it
-// decides carries in the run's provenance. egress holds only the three egress
-// knobs, each nil when the layer does not bound it: AllowedDomains is an
+// decides carries in the run's provenance. egress holds the three egress
+// knobs, each nil when the layer does not bound it (a restriction's layer also
+// carries its tool, push and recording rules, which sealPolicy meets): AllowedDomains is an
 // allowlist (an empty one allows nothing), AllowAllEgress false turns open
 // egress off and keeps the run's own allowlist, and DeniedDomains is added. A
 // layer that only denies leaves the first two nil. grants is the credential
@@ -35,11 +39,21 @@ type sealLayer struct {
 	egress  types.CeilingOverlay
 	grants  *[]types.GrantSpec
 	desktop *types.DesktopControls
+	// dataOut is the least strict data_out rule the layer allows a run, nil when it names none.
+	dataOut *types.TransferRule
 	// withheldGrants is the credentials the layer keeps from a run (a restriction's withheld_grants).
 	withheldGrants []types.GrantSpec
 	// denyAllPushes is the layer's refusal of every push (push_rules.deny_all): a person's walls or a
 	// wall preset that set it. The seal never reads it; a revive re-asserts it (reassertDenyAllPushes).
 	denyAllPushes bool
+	// adoCap and githubCap are the Azure DevOps and GitHub capabilities the layer lets a run hold, nil for no
+	// cap; the seal never reads them, the cap helpers do (vcs_capability_cap.go).
+	adoCap    *[]adoscope.Capability
+	githubCap *[]ghscope.Capability
+	// unread marks the layer standing in for a boundary or restriction that could not be read. Its caps list
+	// nothing, so a dispatch fails closed; a credential resolve reads it as an unreadable run instead
+	// (runADOCap), so a transient read error is retried and revokes nothing.
+	unread bool
 }
 
 // sealDecision is one knob a layer narrowed.
@@ -63,16 +77,25 @@ func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLaye
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		off := false
 		none := types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
+		held := types.TransferBlocked
 		return []sealLayer{{rec: boundaryProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}, desktop: &none}}
+			grants: &[]types.GrantSpec{}, desktop: &none, dataOut: &held, denyAllPushes: true,
+			adoCap: &[]adoscope.Capability{}, githubCap: &[]ghscope.Capability{}, unread: true}}
 	}
 	var layers []sealLayer
 	if b.HardLimits() {
-		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop})
+		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop,
+			dataOut: b.Spec.DataOut, denyAllPushes: dataOutBlocks(b.Spec.DataOut),
+			adoCap: b.Spec.AzureDevOpsCapabilities, githubCap: b.Spec.GitHubCapabilities})
 	}
 	layers = append(layers, s.restrictionSealLayers(ctx, run)...)
 	layers = append(layers, s.personalWallsSealLayer(ctx, run)...)
 	return append(layers, wallPresetSealLayer(run)...)
+}
+
+// dataOutBlocks reports whether rule is blocked, which refuses every push too.
+func dataOutBlocks(rule *types.TransferRule) bool {
+	return rule != nil && *rule == types.TransferBlocked
 }
 
 // reassertDenyAllPushes sets push_rules.deny_all on a revived run's proxy config when an outer layer
@@ -156,18 +179,23 @@ func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *
 
 // sealPolicy meets spec with each layer in order, by the governance meet
 // (composer.ApplyOverlay): the allowlist is intersected, allow_all_egress
-// survives only where every layer allows it, and the deny lists are merged.
-// The desktop directions a layer blocks are blocked (types.DesktopControls.Meet).
-// Only those four knobs are read, so nothing else in spec can change. With no
-// layers spec is untouched.
+// survives only where every layer allows it, and the deny lists are merged. A
+// layer that carries tool, push or recording rules (a restriction's) meets those
+// too, and each is written back only when it narrows, so a policy the layer
+// already holds keeps its spelling. The desktop directions a layer blocks are
+// blocked (types.DesktopControls.Meet), and its data_out rule is the stricter value. Only those knobs are read, so nothing
+// else in spec can change. With no layers spec is untouched.
 func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 	var decided []sealDecision
 	for _, l := range layers {
-		in := types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains, AllowAllEgress: spec.AllowAllEgress}
+		in := types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains, AllowAllEgress: spec.AllowAllEgress,
+			ToolRules: spec.ToolRules, PushRules: spec.PushRules, Recording: spec.Recording}
 		met, _, err := composer.ApplyOverlay(composer.Authority{Ceiling: in}, composer.Overlay{Ceiling: l.egress})
 		if err != nil {
-			// The egress knobs alone have no unsatisfiable meet; should one appear, nothing is reachable.
-			met.Ceiling = types.RunPolicySpec{AllowedDomains: []string{}, DeniedDomains: spec.DeniedDomains}
+			// The egress knobs alone have no unsatisfiable meet; should one appear, nothing is reachable and
+			// the rules stay as they were.
+			met.Ceiling = in
+			met.Ceiling.AllowedDomains, met.Ceiling.AllowAllEgress = []string{}, false
 		}
 		out := met.Ceiling
 		// Compared canonical, as the provenance record compares, so a re-spelling decides nothing.
@@ -182,11 +210,29 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 			decided = append(decided, sealDecision{"denied_domains", l.rec})
 		}
 		spec.AllowedDomains, spec.DeniedDomains, spec.AllowAllEgress = out.AllowedDomains, out.DeniedDomains, out.AllowAllEgress
+		if !slices.Equal(before.ToolRules, after.ToolRules) {
+			spec.ToolRules = out.ToolRules
+			decided = append(decided, sealDecision{"tool_rules", l.rec})
+		}
+		if !reflect.DeepEqual(before.PushRules, after.PushRules) {
+			spec.PushRules = out.PushRules
+			decided = append(decided, sealDecision{"push_rules", l.rec})
+		}
+		if before.Recording != after.Recording {
+			spec.Recording = out.Recording
+			decided = append(decided, sealDecision{"recording", l.rec})
+		}
 		if l.desktop != nil {
 			// Written only when it narrows, so a run the layer already holds keeps its spelling.
 			if d := spec.Desktop.Meet(l.desktop); d != spec.Desktop.Effective() {
 				spec.Desktop = &d
 				decided = append(decided, sealDecision{"desktop", l.rec})
+			}
+		}
+		if l.dataOut != nil {
+			if v := types.StricterTransfer(spec.DataOut.DataOut(), l.dataOut.DataOut()); v != spec.DataOut.DataOut() {
+				spec.DataOut = v
+				decided = append(decided, sealDecision{"data_out", l.rec})
 			}
 		}
 	}

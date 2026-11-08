@@ -100,7 +100,7 @@ var backgroundDoors = []backgroundDoor{
 		// POST .../desktop/watch-ticket is the contract's first exception, asked in uiEnterCommon and uiSessionStillAuthorized.
 		// POST .../desktop/window is the contract's second exception, asked in macWindowRefusal.
 		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "POST /runs/{id}/desktop/window", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
-			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
+			"POST /runs/{id}/desktop/files/{name}/review", "POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }
 

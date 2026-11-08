@@ -122,6 +122,11 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
+	// The boundary's or a restriction's cap, read now (see resolveADOInjection).
+	vcsCap, status, reason, body := s.adoCapAtResolve(ctx, claims.RunID, snapshot)
+	if status != 0 {
+		return fail(status, reason, body, map[string]any{"owner": snapshot.OwnerSubject})
+	}
 	if !slices.ContainsFunc(hosts, func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
 		return fail(http.StatusForbidden, reasonHostNotOrganisation, adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
@@ -140,7 +145,7 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 			map[string]any{"capability": c})
 	}
 	if r.URL.Query().Get("capability") != "" {
-		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, fail); !ok {
+		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, vcsCap, fail); !ok {
 			return true
 		}
 		responseCaps = capAsk.standing

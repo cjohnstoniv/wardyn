@@ -209,7 +209,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	// record that no time was left.
 	rctx, cancel := teardownCtx(ctx)
 	folder, seed, err := st.RunLocalFolderSeed(rctx, runID)
-	if err != nil || folder == nil || folder.RunnerID == nil || folder.Direction != types.ComputerFolderBoth || seed.SeededAt == nil {
+	if err != nil || folder == nil || folder.RunnerID == nil || folder.Direction != types.ComputerFolderBoth || seed.SeededAt == nil || !s.runDataOutAllowed(rctx, runID) {
 		cancel()
 		return false
 	}

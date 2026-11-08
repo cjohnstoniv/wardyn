@@ -1,3 +1,4 @@
+activity_ignore_hosts
 ado_grant
 ado_grant.capabilities
 ado_grant.hosts
@@ -97,6 +98,7 @@ internal_hosts.baseline
 internal_hosts.cidrs
 internal_hosts.host_suffix
 kube_api
+kube_api.approve_each
 kube_api.ca_pem
 kube_api.host
 kube_api.namespaces
@@ -142,6 +144,7 @@ policy.allowed_domains
 policy.allowed_methods
 policy.auto_stop_after_sec
 policy.azure_devops_capabilities
+policy.data_out
 policy.denied_domains
 policy.desktop
 policy.desktop.copy_out

@@ -91,6 +91,8 @@ type AccessCredential struct {
 	// account (kind kube_api) may reach; absent for every other kind.
 	Namespaces []string `json:"namespaces,omitempty"`
 	Access     string   `json:"access,omitempty"`
+	// ApproveEach says a person approves each of the account's writes, one exact request at a time.
+	ApproveEach bool `json:"approve_each,omitempty"`
 }
 
 // AccessUnlisted is the line for a host nothing lists: the effective

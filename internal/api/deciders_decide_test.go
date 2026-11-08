@@ -334,13 +334,14 @@ func TestGetApprovalsProjectsDeciders(t *testing.T) {
 	}
 }
 
-// TestDecidersKindsWithoutARunHoldGovernNone: kube_call, image, file_download and elevation name requests that
-// are not run holds in this build, so a rule for one of them gives nobody a run hold: a unit admin and a group
-// member it names still get the plain 404 on every run hold.
+// TestDecidersKindsWithoutARunHoldGovernNone: image and elevation name requests that are not run holds
+// in this build, and file_download governs a reviewed download only (desktop_review_decide_test.go), so a rule
+// for one of them gives nobody another kind's run hold: a unit admin and a group member it names still get the
+// plain 404 on every run hold below.
 func TestDecidersKindsWithoutARunHoldGovernNone(t *testing.T) {
 	f := newDCFix(t)
 	var rules []types.DeciderRule
-	for _, k := range []string{types.DeciderKindKubeCall, types.DeciderKindImage, types.DeciderKindFileDownload, types.DeciderKindElevation} {
+	for _, k := range []string{types.DeciderKindImage, types.DeciderKindFileDownload, types.DeciderKindElevation} {
 		rules = append(rules, types.DeciderRule{Kinds: []string{k}, Who: []string{types.DeciderUnitAdmins, types.DeciderGroupPrefix + dcGroup}})
 	}
 	f.st.setRules(f.root.ID, rules...)

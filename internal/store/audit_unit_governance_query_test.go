@@ -11,18 +11,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// The export's query is the one the unit feed had before it read governance rows, byte for byte.
-func TestUnitAuditQueryExportUnchanged(t *testing.T) {
+// Without the governance arm (an actor-filtered feed) the query is the one the unit feed had before it read
+// governance rows, byte for byte.
+func TestUnitAuditQueryRunRowsUnchanged(t *testing.T) {
 	units := []uuid.UUID{uuid.New()}
-	q, args := unitAuditQuery(auditCols, units, AuditFilter{}, 0, false)
+	q, args := unitAuditQuery(units, AuditFilter{}, false)
 	want := "\n\t\tSELECT " + auditCols + "\n\t\tFROM audit_events\n\t\tWHERE run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1))\n\t\tORDER BY seq DESC"
 	if q != want || len(args) != 1 {
-		t.Errorf("export query = %q with %d args, want %q with 1", q, len(args), want)
-	}
-	q, args = unitAuditQuery(auditCols+", seq", units, AuditFilter{}, 7, false)
-	want = "\n\t\tSELECT " + auditCols + ", seq\n\t\tFROM audit_events\n\t\tWHERE run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1)) AND seq < $2\n\t\tORDER BY seq DESC"
-	if q != want || len(args) != 2 {
-		t.Errorf("keyset export query = %q with %d args, want %q with 2", q, len(args), want)
+		t.Errorf("run-row query = %q with %d args, want %q with 1", q, len(args), want)
 	}
 }
 
@@ -30,7 +26,7 @@ func TestUnitAuditQueryExportUnchanged(t *testing.T) {
 // follow the arm's.
 func TestUnitAuditQueryFeedReadsGovernanceArm(t *testing.T) {
 	units := []uuid.UUID{uuid.New(), uuid.New()}
-	q, args := unitAuditQuery(auditCols, units, AuditFilter{Action: "governance.unit.write"}, 0, true)
+	q, args := unitAuditQuery(units, AuditFilter{Action: "governance.unit.write"}, true)
 	if len(args) != 4 {
 		t.Fatalf("feed query has %d args, want units, actions, unit ids and the action filter", len(args))
 	}

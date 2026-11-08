@@ -16,7 +16,7 @@ import (
 // none is set (siteConfigSeedCheck).
 func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool, seed *SiteConfigSeed) []SetupCheck {
 	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
-	for _, conditional := range []func(types.SiteConfig) (SetupCheck, bool){internalHostsCheck, signInHelpHTTPCheck, adoEntraRowsCheck, adoRowsOffCheck} {
+	for _, conditional := range []func(types.SiteConfig) (SetupCheck, bool){internalHostsCheck, signInHelpHTTPCheck, adoEntraRowsCheck, adoRowsOffCheck, imageAdmissionScopeCheck} {
 		if chk, ok := conditional(sc); ok {
 			checks = append(checks, chk)
 		}
@@ -80,4 +80,23 @@ func adoRowsOffCheck(sc types.SiteConfig) (SetupCheck, bool) {
 		}
 	}
 	return SetupCheck{}, false
+}
+
+// imageAdmissionScopeCheck tells an admin whose image checks are on that they cover only the images a person
+// names. images.admission.scope "all" is what also checks the images a run gets from its agent or harness set,
+// and it is not the default, so a site that turned admission on without it has a gap it may not know about.
+// Informational: a site that wants member-only checks is not misconfigured. Absent when admission is off or the
+// scope is already all.
+func imageAdmissionScopeCheck(sc types.SiteConfig) (SetupCheck, bool) {
+	var adm *types.SiteImageAdmission
+	if sc.Images != nil {
+		adm = sc.Images.Admission
+	}
+	if adm.EffectiveMode() == types.ImageAdmissionOff || adm.EffectiveScope() != types.ImageAdmissionScopeMember {
+		return SetupCheck{}, false
+	}
+	return SetupCheck{
+		ID: "image_admission_scope", Label: "Image checks", Status: "info",
+		Detail: `Image checks are on only for images a person names. The images runs get from their agent or harness set are not checked. Set images.admission.scope to "all" to check them when a run starts.`,
+	}, true
 }

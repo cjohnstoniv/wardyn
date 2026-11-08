@@ -29,6 +29,22 @@ type generationStore struct {
 	state types.RunPolicyState
 	// failAdvance is how many more AdvanceRunPolicyGeneration calls fail, as a database blip would.
 	failAdvance int
+	// recorded is the run's audit log as the recorded-policy read sees it (the dispatch envelope); readErr fails that read.
+	recorded []types.AuditEvent
+	readErr  error
+}
+
+func (s *generationStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	var out []types.AuditEvent
+	for _, ev := range s.recorded {
+		if ev.RunID != nil && *ev.RunID == runID {
+			out = append(out, ev)
+		}
+	}
+	return out, nil
 }
 
 var _ store.RunPolicyGenerations = (*generationStore)(nil)

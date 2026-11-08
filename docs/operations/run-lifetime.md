@@ -50,6 +50,29 @@ A run's lease ends it, or someone ends it now.
 - A kept run's token is refused all the same: every `/internal/*` door refuses it (ended, or lost to a reboot or an outage) with `403` and an `authz.denied` row, reason `run_kept`. Nothing can mint a credential, resolve an injection or decide an approval with it.
 - Only the three tail uploads are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
 
+### At the lifetime cap
+
+The cap (`lifetime_cap_at`) is a run's hard end. An extension never passes it, and a run launched under an elevation is capped at the elevation's end.
+
+- From the cap, every request the run's sandbox makes to the organisation is refused (`authz.denied`, `run_terminal`, with `lifetime_cap_at`), its token is not renewed, and its pending approvals cannot be decided (`409 approval_run_past_lifetime`).
+- Within a minute the lease sweep kills it (`run.kill`, `max_lifetime_reached`).
+- The three tail uploads are still accepted for five minutes from the cap.
+
+At the kill:
+
+| What | Outcome |
+| --- | --- |
+| The sandbox and its network | Gone |
+| Pending approvals | Cancelled |
+| Azure DevOps run tokens and broker credentials | Revoked |
+| An Azure DevOps credential on the Entra lane, and a cluster token | Live only in the run's proxy and cut with it, not revoked; a cluster token lasts at most 10 minutes |
+
+- A queued run whose cap passed while it waited ends without starting.
+- A kept run past its cap cannot be revived.
+- A run in a unit its owner has left, an elevation's unit after the elevation ends for instance, cannot be revived or restarted from the queue.
+- An elevation revoked early does not end runs already started under it: they still end at the elevation's end.
+- Not recalled: env and file secrets already handed to the sandbox (they go with it) and anything a person copied out of the run.
+
 ### Where the proxy config lives while kept
 
 No container holds the proxy's rendered configuration at rest: its per-run TLS-MITM CA private key, its run token and any authenticated upstream-proxy URL.

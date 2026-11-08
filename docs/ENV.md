@@ -1426,6 +1426,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The shape was verified against kubectl v0.32.2. A kubectl that shapes the patch differently is refused.
 - The cluster's RBAC still scopes verbs and resources: grant the account `get`, `list`, `watch` and `patch` on `deployments` in the row's namespaces, and nothing wider.
 - Update the proxy image before using `restart`. An older proxy refuses to start on a config that carries it.
+- `approve_each: true` (off by default; with `restart` or `write` only) holds each write the door admits until a person approves that exact request: its method, path, query, media type and body. The run's owner decides it, once, as for one MCP call.
+- A unit's [deciders](operations/deciders.md) rule for `kube_call` changes who decides (owner, unit admins or a group), may require a second person and caps the scope; an owner the rule leaves out gets 403 `not_a_decider`.
+- A held write waits 90 seconds, then kubectl prints a `403` naming the approval. Run the same command again once it is approved; it is sent once, with the query and body that were shown. A body must be JSON, not encoded, at most 32 KiB.
+- A restart is approved by what it restarts, so the next `kubectl rollout restart` of that deployment spends the yes. Update the proxy image before using `approve_each`.
 - A cluster on a private address also needs the admin's internal-hosts lift, as any private host does.
 - Off, a kubectl row is refused at save and at launch with the unknown-kind error, the New Run card stays `coming_soon`, the token route answers `404`, and a running run's next token refresh is refused.
 - `GET /api/v1/setup/status` reports it as `features.kubectl_cli`.
@@ -1568,6 +1572,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A deployment that wants this gate to bind must treat the admin token accordingly (SSO configured, token held out of band).
 - Scoped to `egress_domain` only (Azure DevOps capability escalations have their own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`, below).
 - A value that is not a bool exits 2 at boot in every mode (`#202`; before that it was silently read as unset).
+- A unit's [deciders](operations/deciders.md) can turn the same rule on for its kind with `second_human`; it is never weaker than this switch, and the bypass row's `switch` then reads `unit deciders (<unit id>)`.
 - See [`docs/OPERATIONS.md`](OPERATIONS.md) and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.
 
 ### `WARDYN_CAPABILITY_SECOND_HUMAN`
@@ -1909,6 +1914,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Wardyn keeps no IdP token, so re-login is the only way to refresh a stamp.
 - Turning it on makes every token holder sign in once, because migration `0115` dated existing stamps at `created_at`.
 - Unset or `0` changes nothing.
+- Set it when a `group:<name>` entry in a unit's [deciders](operations/deciders.md) decides credentials, pushes or wide scopes: a group is read from the session's or token's snapshot, which this bounds.
+- A `group:` deciders entry matches an API token only when this is set.
 
 ### `WARDYN_OIDC_SESSION_TTL`
 

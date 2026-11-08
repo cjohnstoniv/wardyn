@@ -42,10 +42,13 @@ const (
 	GovernanceTargetUnitAdmin              = "governance_unit_admin"
 	GovernanceTargetRestriction            = "governance_restriction"
 	GovernanceTargetWorkspaceOwningUnit    = "workspace_owning_unit"
+	GovernanceTargetComponentOwningUnit    = "component_owning_unit"
 	GovernanceTargetApprovalRule           = "approval_rule"
 	GovernanceTargetRecording              = "org_recording"
 	GovernanceTargetUnitDeciders           = "governance_unit_deciders"
 	GovernanceTargetEnvelope               = "governance_envelope"
+	GovernanceTargetElevation              = "governance_elevation"
+	GovernanceTargetImageRequest           = "governance_image_request"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

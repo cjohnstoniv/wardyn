@@ -13,7 +13,17 @@
 // see PushContentScope below and internal/types/push_content.go.
 // human_takeover (#2963, "Needs you"): the run's agent asked a person to take over its desktop or
 // terminal. Answered with take-over / hand-back / decline, never approve/deny.
-export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content" | "human_takeover";
+// file_download: a person asked to download one file from a run whose desktop.download is review. Its scope
+// is FileDownloadScope below (name, size, hash, who asked), never the content (internal/types/file_download.go).
+export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content" | "human_takeover" | "file_download";
+
+// Mirrors Go's types.FileDownloadScope: the requested_scope of a file_download row.
+export interface FileDownloadScope {
+  name: string;
+  bytes: number;
+  sha256: string;
+  requested_by: string;
+}
 
 // CANCELLED is the terminal state a run's own end writes: the run reached
 // COMPLETED/FAILED/STOPPED/KILLED while this approval was still PENDING, so
@@ -96,6 +106,18 @@ export interface ApprovalRequest {
   // deciders: who may decide this PENDING row under the unit deciders rule that governs it (owner, unit_admins,
   // group:<name>, then security). Absent when no rule governs the row.
   deciders?: string[];
+  // max_scope, second_human: that rule's own cap on how far one decision reaches and whether a second person must
+  // decide, beside deciders on the same PENDING rows. Absent when no rule governs the row or the rule sets neither.
+  max_scope?: ApprovalScope;
+  second_human?: boolean;
+  // requested_by: the run's creator, on a PENDING row served to a decider who is not that creator
+  // (GET /approvals?decidable_by=me). Absent on the creator's own row.
+  requested_by?: string;
+  // decision_basis: how a DECIDED row was decided under the unit deciders rule that governed it (owner,
+  // unit_admin:<unit id>, group:<name>, security, policy or admin_token), and decision_rule_unit the unit id holding
+  // that rule. Absent when no rule governed the decision, and on rows decided by an older server.
+  decision_basis?: string;
+  decision_rule_unit?: string;
 }
 
 // canDecideApproval mirrors the ROLE and KIND checks of internal/api/approvals.go's decide(): an
@@ -110,7 +132,7 @@ export interface ApprovalRequest {
 // at all, not something this predicate needs to re-check. It does NOT know the
 // egress_host capability: when an admin withholds that grant the server refuses
 // a member's egress_domain decision with capability_egress_host, and the strip
-// turns the row's buttons off on that first refusal. One MCP call is the one tool_call a member may decide (pass the row).
+// turns the row's buttons off on that first refusal. One MCP call or held kubectl write is the one tool_call a member may decide (pass the row).
 export function canDecideApproval(
   operator: boolean,
   kind: ApprovalKind,
@@ -124,9 +146,10 @@ export function canDecideApproval(
   // door for this kind instead of an Approve/Deny pair.
   if (kind === "credential_reauth") return false;
   if (operator) return true;
-  // One MCP call: its run's owner decides it too (the list is owner-scoped, so a row on screen is the viewer's own),
-  // and the server's per-row verdict leads when it sent one. This is the only tool_call a member may decide.
-  if (row && isMCPCallRequest({ kind, ...row })) return row.decidable ?? true;
+  // One MCP call or one held kubectl write (the server's isExactCallRow): its run's owner decides it too (the list
+  // is owner-scoped, so a row on screen is the viewer's own), and the server's per-row verdict leads when it sent
+  // one. These are the only tool_calls a member may decide.
+  if (row && isExactCallRequest({ kind, ...row })) return row.decidable ?? true;
   return kind === "egress_domain";
 }
 
@@ -260,12 +283,41 @@ export interface MCPCallText {
   extra?: string;
 }
 
-// Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256.
+// KubeCallScope mirrors internal/types.KubeCallScope: one kubectl write a person approves with its exact
+// request. body is the canonical JSON the request sends.
+export interface KubeCallScope {
+  cluster: string;
+  namespace: string;
+  method: string;
+  path: string;
+  query?: string;
+  media_type?: string;
+  body?: unknown;
+  call_sha256: string;
+  hold_seconds?: number;
+}
+
+// Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256
+// and no cluster (a scope with a cluster is a kubectl write, isKubeCallRequest).
 export function isMCPCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
   a: T,
 ): a is T & { requested_scope: MCPCallScope } {
   const key = a.requested_scope?.call_sha256;
-  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "";
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster === undefined;
+}
+
+// Structural, like the server's isKubeCallRow: a tool_call with no grant whose scope carries a call_sha256
+// and a cluster.
+export function isKubeCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
+  a: T,
+): a is T & { requested_scope: KubeCallScope } {
+  const key = a.requested_scope?.call_sha256;
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster !== undefined;
+}
+
+// Structural, like the server's isExactCallRow: one MCP call or one held kubectl write.
+export function isExactCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(a: T): boolean {
+  return isMCPCallRequest(a) || isKubeCallRequest(a);
 }
 
 export function isAdoConsentRequest(

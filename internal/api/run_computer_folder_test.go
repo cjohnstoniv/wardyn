@@ -155,6 +155,11 @@ type computerFolderStore struct {
 	status types.RunLocalFolderStatus
 }
 
+// QueryAuditEvents answers no policy envelope: these runs carry no data_out rule, which reads as allowed.
+func (s *computerFolderStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return nil, nil
+}
+
 func (s *computerFolderStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
 	if id != s.runner.ID {
 		return types.Runner{}, store.ErrNotFound

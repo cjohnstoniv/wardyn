@@ -91,6 +91,7 @@ const (
 	reasonInvalidRunIDParam            = "invalid_run_id_param"            // ?run_id= does not parse as a UUID
 	reasonListingUnscopedBackend       = "listing_unscoped_backend"        // the store backend cannot scope this listing to the caller's own runs (approvals AND runs listings — same missing capability)
 	reasonApprovalRunEnded             = "approval_run_ended"              // the run ended before the approval was decided; it was auto-cancelled
+	reasonApprovalRunPastLifetime      = "approval_run_past_lifetime"      // the run reached its lifetime cap before the approval was decided; the sweep that ends it cancels the approval
 	reasonCredentialReauthNotDecidable = "credential_reauth_not_decidable" // a credential-reauth approval is resolved by signing in again, not Approve/Deny
 	reasonDecisionScopeInvalidForKind  = "decision_scope_invalid_for_kind" // decision_scope was sent on an approval kind that does not accept one
 	reasonTakeoverNotDecidable         = "takeover_not_decidable"          // a takeover request is answered by taking over or declining, not Approve/Deny
@@ -362,6 +363,10 @@ const (
 	reasonGrantWithheld              = "credential_withheld"           // a mint or redeem of a grant the run's profile, the Wardyn boundary or the owner's walls now withhold
 	reasonGrantWithheldUnread        = "credential_withheld_unread"    // the run, its grants, its profile or the boundary could not be read to check the mint
 	reasonBreakGlassReasonRequired   = "break_glass_reason_required"   // an admin-token break-glass run without a usable reason
+
+	// PUT /components/{id}/owning-unit, and the strict switch of PUT /workspaces/{id}/owning-unit.
+	reasonComponentOwningUnitDefault         = "component_owning_unit_default"           // the Default unit cannot pin a component: unpin it with null instead
+	reasonWorkspaceOwningUnitStrictNeedsUnit = "workspace_owning_unit_strict_needs_unit" // a strict workspace pin needs a unit
 
 	// GET/PUT/DELETE /me/walls (personal_walls.go), and the walls' refusals at an approval.
 	reasonWallsInvalid      = "walls_invalid"       // the walls name a knob wider than no limit, a site that is not a DNS name or wildcard, or a list over its cap
@@ -855,6 +860,8 @@ const (
 	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid"
 	// 400: an MCP call larger than a person can be shown (arguments over 32 KiB, or a scope over 64 KiB)
 	reasonMCPCallTooLarge = "mcp_call_too_large"
+	// 400: a requested_scope naming cluster that is not exactly one kubectl write's scope, on tool_call, hashing to its own call_sha256 (approvals_kube_call.go)
+	reasonKubeCallScopeInvalid = "kube_call_scope_invalid"
 )
 
 // The signed audit receipt, checkpoint and key routes (audit_receipt.go).

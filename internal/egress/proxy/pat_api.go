@@ -203,6 +203,8 @@ type apiDoor struct {
 	// gateway, when set, is the identity route the request goes out on (aws_sigv4_gateway.go): the
 	// run's token is attached before sign runs, and the answer always comes back scrubbed.
 	gateway *GatewayIdentityRoute
+	// approvalID, when set, is the approval a person gave this exact request (kube_api_hold.go).
+	approvalID *uuid.UUID
 }
 
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
@@ -324,6 +326,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, d.allow)
 	allow.Scan = scanSummary
 	allow.GatewayCallID = callID
+	allow.ApprovalID = d.approvalID
 	p.emitDialledAllow(allow, host)
 	if d.sign != nil && bedrockServiceLabel(p.sigv4.scopes[hostKey(host)].service) {
 		p.meterUsage(r, host, port, resp, callID) // a re-signed Bedrock call, direct or at a gateway

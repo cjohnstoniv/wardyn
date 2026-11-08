@@ -58,9 +58,11 @@ type queryIDRoute struct {
 // routeMatrix key unless the row is pinnedBy-only (the UI gateway enter lane is
 // served beside the chi router, not on it).
 var queryIDMatrix = map[string]queryIDRoute{
-	// The F4 row: never run for a member before this class existed.
+	// The F4 row: never run for a member before this class existed. With ?decidable_by=me the run is only a
+	// filter on what the caller decides (listDecidableByMe), so a foreign run is the same empty 200 an
+	// unknown one gets (TestDecidersNonDecider404Identical).
 	"GET /api/v1/approvals?run_id": {
-		entity: entityRun, readers: []string{"handleListApprovals"},
+		entity: entityRun, readers: []string{"handleListApprovals", "listDecidableByMe"},
 		foreign: 404, ownAdmitted: true, pinnedBy: "TestMemberApprovalListByRun",
 	},
 	// A collection endpoint: a foreign run collapses to the same empty 200 an
@@ -126,6 +128,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 	"GET /api/v1/internal/injection/{grantID}?approval": {
 		entity: entityApproval, readers: []string{"answerADOCapability"},
 		pinnedBy: "TestADOCapability_AnotherRunsApprovalIsRefused",
+	},
+	// A reviewed download releases only an approval of the run in the path: another run's approval, or one for
+	// another file or kind, is refused with nothing sent and nothing spent.
+	"GET /api/v1/runs/{id}/desktop/files/{name}?approval": {
+		entity: entityApproval, readers: []string{"serveReviewedDownload"},
+		pinnedBy: "TestDesktopReviewReleaseBoundToFileAndKind",
 	},
 	"GET /__wardyn/enter?run": {
 		entity: entityRun, readers: []string{"handleUIEnter"},
@@ -249,6 +257,7 @@ var queryParamNotAnID = map[string]string{
 	// workspace or namespace — each is a closed enum or a value filter that
 	// only narrows what ?owner=/?view= (queryIDMatrix's own "GET
 	// /api/v1/runs?owner" row) already scoped the listing to.
+	"decidable_by":   "GET /approvals: only \"me\" is accepted, which lists the PENDING approvals the caller may decide now (mayDecide over the caller's own runs and the runs of units a deciders rule governs); a hold the caller may not decide is left out whether it exists or not, so it names no entity and tells no one of a request they cannot decide (TestDecidableByMeOnlyDecidable, TestDecidersNonDecider404Identical)",
 	"view":           "run/approval list scope switch (user|admin); the owner it resolves to is scoped separately (queryIDMatrix's ?owner row)",
 	"status":         "run list state filter (active|ended|failed|killed|needs), a closed enum; narrows an already-scoped listing",
 	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",

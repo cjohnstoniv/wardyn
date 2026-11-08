@@ -17,7 +17,7 @@ import (
 
 // The unit feed reads a listed governance row with no run when it names one of the units: by its target,
 // by data.unit_id, or inside data.units. An unlisted action, a unit outside the set and a row with a run
-// of its own never match that way. The export reads run rows only. The test logs the plan of the arm's
+// of its own never match that way. An actor filter reads run rows only. The test logs the plan of the arm's
 // query so its cost on a large log can be read.
 func TestAuditUnitGovernanceArmQueryPG(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
@@ -83,11 +83,6 @@ func TestAuditUnitGovernanceArmQueryPG(t *testing.T) {
 	byActor, err := pg.QueryAuditEventsForUnits(ctx, units, store.AuditFilter{Actor: "carol@corp.example"}, store.Page{Limit: 1000})
 	if err != nil || len(byActor) != 1 || byActor[0].ID != byRun {
 		t.Errorf("the feed filtered by actor = %d rows (%v), want the run's row alone", len(byActor), err)
-	}
-
-	export, _, err := pg.QueryAuditEventsForUnitsAfter(ctx, units, store.AuditFilter{}, 0, 1000)
-	if err != nil || len(export) != 1 || export[0].ID != byRun {
-		t.Errorf("the export = %d rows (%v), want the run's row alone", len(export), err)
 	}
 
 	q, args := store.UnitAuditQueryForTest(units, store.AuditFilter{}, true)

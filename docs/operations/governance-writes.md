@@ -38,7 +38,7 @@ an operator follows to turn one on and run the queue.
   - Lowering it below the deepest path: `400` `site_config_invalid`, naming that path.
 - Unit admins govern their units and the units below them; [unit admins](unit-admins.md) has the full rule.
   - A security admin's unit-admin grant follows `WARDYN_GOVERNANCE_SECOND_HUMAN`, so a single-admin install can create unit admins.
-  - A unit admin's widening, a grant of a unit admin below included, is always held, whatever the switch says.
+  - A unit admin's widening, a grant of a unit admin below included, is always held, whatever the switch says. A held change to a unit itself is decided by a security admin or an admin of a unit above it ([unit admins](unit-admins.md#four-eyes)).
 - `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
 - A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`).
 - The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`.
@@ -48,7 +48,14 @@ an operator follows to turn one on and run the queue.
 
 **Restrictions.**
 
-- A restriction (`/governance/restrictions`) is a deny-only list (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+- A restriction (`/governance/restrictions`) is a list of narrowing rules (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit` (`strict: true` drops the parent-unit mapping: only people whose own unit is the pin or below it run on the workspace), and an organisation component's is `PUT /components/{id}/owning-unit`.
+- A restriction can carry `denied_domains`, `allowed_domains`, `allow_all_egress: false`, first-use approval, `max_holds`, a confinement floor, `auto_stop_after_sec`, `git_push_any_branch: false`, `push_rules`, `desktop`, `recording` (a floor), `data_out`, `tool_rules`, `withheld_grants`, and `azure_devops_capabilities` / `github_capabilities`, capability caps that follow its members, and in its limits the `deny_*` switches, `allowed_models` and the caps. Each only narrows, by the same rule a unit's walls use, in every unit its people run in.
+- A restriction that names `allowed_domains` and not `allow_all_egress` turns open egress off for its people.
+- A restriction binds a run that is already running: a revive meets it again, a credential for a host outside its `allowed_domains` is withheld at the next mint, and an approval cannot admit such a host.
+- Keeping the strictest floor:
+  - Key a floor restriction on a group, not a user type. Restrictions on groups combine over every group a person holds, so a person in both a restrictive and a permissive group keeps the restrictive floor.
+  - A person has one user type: the highest-priority type their sign-in matches. Two types tied at the top refuse sign-in. Where a user type must carry the floor, give the restrictive type the higher priority.
+  - A floor keyed only on a user type is lost when a higher-priority type also matches.
 
 **Optional: four-eyes on governance writes.**
 
@@ -165,7 +172,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
 | The recording level (`PUT /governance/recording`) | always | security admin or super admin |
 | A platform envelope (`PUT` or `DELETE /governance/units/{id}/envelope`) | always | security admin or super admin |
-| A restriction delete or loosening; a unit pin moved off its branch | always | security admin or super admin |
+| A restriction delete or loosening; a unit pin moved off its branch (a workspace's or a component's), or a strict workspace pin made plain | always | security admin or super admin |
 | An approval rule (`PUT /governance/approval-rules/{name}`, see [approval-rules.md](approval-rules.md)); a `DELETE` is never held | always, an edit included | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |
@@ -271,3 +278,30 @@ Profiles and their assignments live in Postgres, so `make reset` / `make reset-a
 - A person's membership of one unit and of another are two memberships. Moving a person by editing the unit in the file adds the new membership and leaves the old one; removing it takes an explicit delete or a reviewed `--prune`.
 - A profile the file does not mention is left alone. One present server-side but absent from the file is removed only with `--prune`, which also removes an omitted membership. It removes assignments before profiles, so a still-referenced profile never trips the delete-while-assigned refusal (`governance_unit_in_use`).
 - `wardyn governance get > f && wardyn governance set f` is a no-op: unchanged rows are skipped rather than re-written, so a repeat `set` issues no writes and adds no audit rows.
+
+## One file per platform
+
+A platform can keep its part of governance in a repository file: its unit, the units below it, and their memberships, unit admins and deciders rules.
+
+```
+wardyn governance get --under platform > platform.json            # that unit and every unit below it
+wardyn governance plan platform.json --under platform --prune     # the steps, deletes listed
+wardyn governance set platform.json --under platform --prune --reason "team leads decide egress" --ticket CHG-1234
+```
+
+- `--under` takes a unit name or id. `set --under` writes through the same routes as the API, so a write held for a second approver is held exactly as a direct call is, and `--reason` and `--ticket` are written on each held change.
+- The document must include the unit `--under` names. These are refused before anything is written, all in one error:
+  - a unit outside the subtree, or a new unit whose parent is outside it,
+  - a membership, an `admins` entry or a `deciders` entry on a unit outside it,
+  - any restriction: restrictions are organisation-wide, so write them without `--under`.
+- `--prune` compares against the subtree only, so it never deletes or clears anything outside it.
+- A unit admin's `get --under` followed by `set --under` of that file writes nothing.
+- `set --under` prints the subtree after the apply, the same shape `get --under` prints.
+
+The `deciders` section is each unit's own rules by unit name, in the form `wardyn governance deciders set` takes. Rules a unit inherits are not in it.
+
+- A document with no `deciders` key leaves every unit's rules alone, under `--prune` too, so a file written before the section existed never clears a rule.
+- A present section, even `{}`, is authoritative: `set` puts each listed unit's rules, and `--prune` clears the rules of every unit it omits.
+- Rules are compared in the server's stored form (`240m` equals `4h`), so an unchanged rule is no write.
+- Parents are written before children. When a parent's rule change is held, a child's rule that widens with it waits: the server refuses it as wider than the stored parent, and `set` lists it as deferred. Run `set` again after the parent's change is approved.
+- Elevations (memberships with an end) are granted through requests and are not part of a document: `set` never writes or prunes them.

@@ -51,16 +51,17 @@ func (e *ErrProfileHasChildren) Error() string {
 	return "store: governance profile is the base of: " + strings.Join(e.Names, ", ")
 }
 
-// ErrUnitPinned is DeleteGovernanceUnit's refusal when workspaces are pinned to the unit
-// (workspaces.owning_unit_id): Workspaces are their names, sorted. Deleting the unit would drop their
-// walls, so they are unpinned first.
-type ErrUnitPinned struct{ Workspaces []string }
+// ErrUnitPinned is DeleteGovernanceUnit's refusal when workspaces or organisation components are pinned
+// to the unit (workspaces.owning_unit_id, components.owning_unit_id): Workspaces and Components are
+// their names, sorted. Deleting the unit would drop their walls, so they are unpinned first.
+type ErrUnitPinned struct{ Workspaces, Components []string }
 
 func (e *ErrUnitPinned) Error() string {
-	return "store: governance unit is pinned by workspaces: " + strings.Join(e.Workspaces, ", ")
+	return "store: governance unit is pinned by workspaces: " + strings.Join(e.Workspaces, ", ") +
+		"; components: " + strings.Join(e.Components, ", ")
 }
 
-const governanceMembershipCols = `id, subject_type, subject, unit_id, priority, created_at, created_by, home, legacy`
+const governanceMembershipCols = `id, subject_type, subject, unit_id, priority, created_at, created_by, home, legacy, expires_at`
 
 // UpsertGovernanceUnit writes one profile exactly as given. It is WriteGovernanceUnit with
 // nothing to decide, so it takes the same graph lock and a write can never skip it.
@@ -376,14 +377,22 @@ func DeleteGovernanceUnitQ(ctx context.Context, q Querier, id uuid.UUID) error {
 	if names, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
 		return fmt.Errorf("store: list workspaces pinned to a governance unit: %w", err)
 	}
-	if len(names) > 0 {
-		return &ErrUnitPinned{Workspaces: names}
+	rows, err = q.Query(ctx, `SELECT name FROM components WHERE owning_unit_id = $1 ORDER BY name`, id)
+	if err != nil {
+		return fmt.Errorf("store: list components pinned to a governance unit: %w", err)
+	}
+	comps, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("store: list components pinned to a governance unit: %w", err)
+	}
+	if len(names) > 0 || len(comps) > 0 {
+		return &ErrUnitPinned{Workspaces: names, Components: comps}
 	}
 	tag, err := q.Exec(ctx, `DELETE FROM governance_units WHERE id = $1`, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			if pgErr.ConstraintName == "workspaces_owning_unit_id_fkey" {
+			if pgErr.ConstraintName == "workspaces_owning_unit_id_fkey" || pgErr.ConstraintName == "components_owning_unit_id_fkey" {
 				return &ErrUnitPinned{} // pinned since the read above
 			}
 			return ErrConflict
@@ -447,7 +456,8 @@ func LockGovernanceMembershipKey(ctx context.Context, q Querier, subjectType, su
 	return nil
 }
 
-// UpsertGovernanceMembershipQ is UpsertGovernanceMembership's statement on q.
+// UpsertGovernanceMembershipQ is UpsertGovernanceMembership's statement on q. A write over an elevation
+// makes it permanent: an admin who writes the membership means it to stay.
 func UpsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.GovernanceMembership) (types.GovernanceMembership, error) {
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
@@ -456,7 +466,7 @@ func UpsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.Governa
 		INSERT INTO governance_memberships (id, subject_type, subject, unit_id, priority, created_by, home)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (unit_id, subject_type, subject) DO UPDATE
-			SET priority = EXCLUDED.priority, home = EXCLUDED.home
+			SET priority = EXCLUDED.priority, home = EXCLUDED.home, expires_at = NULL
 		RETURNING ` + governanceMembershipCols
 	out, err := scanGovernanceMembership(q.QueryRow(ctx, stmt,
 		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedBy, a.Home))
@@ -489,12 +499,12 @@ func (s PG) DeleteGovernanceMembership(ctx context.Context, id uuid.UUID) (types
 	return a, tx.Commit(ctx)
 }
 
-// InsertGovernanceMembershipQ writes a on q with every column as given, its id and legacy flag
+// InsertGovernanceMembershipQ writes a on q with every column as given, its id, legacy flag and end
 // included: how a rolled-back read puts back a row a committed delete removed, to read the precedence
-// as it stood before.
+// as it stood before, and how an approved elevation is written.
 func InsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.GovernanceMembership) error {
-	if _, err := q.Exec(ctx, `INSERT INTO governance_memberships (`+governanceMembershipCols+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedAt, a.CreatedBy, a.Home, a.Legacy); err != nil {
+	if _, err := q.Exec(ctx, `INSERT INTO governance_memberships (`+governanceMembershipCols+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedAt, a.CreatedBy, a.Home, a.Legacy, a.ExpiresAt); err != nil {
 		return fmt.Errorf("store: put back governance assignment: %w", err)
 	}
 	return nil
@@ -542,7 +552,9 @@ func lockSuffix(forUpdate bool) string {
 
 // ListGovernanceMemberships returns every assignment in the order the
 // resolver itself would rank them (tier, then priority, then subject), so
-// the console's table reads top-down as the precedence rule.
+// the console's table reads top-down as the precedence rule. An elevation
+// past its end is left out: it no longer counts, whether or not the sweep
+// has deleted it.
 func (s PG) ListGovernanceMemberships(ctx context.Context) ([]types.GovernanceMembership, error) {
 	return ListGovernanceMembershipsQ(ctx, s.Pool)
 }
@@ -550,6 +562,7 @@ func (s PG) ListGovernanceMemberships(ctx context.Context) ([]types.GovernanceMe
 // ListGovernanceMembershipsQ is ListGovernanceMemberships on q.
 func ListGovernanceMembershipsQ(ctx context.Context, q Querier) ([]types.GovernanceMembership, error) {
 	const stmt = `SELECT ` + governanceMembershipCols + ` FROM governance_memberships
+		WHERE expires_at IS NULL OR expires_at > now()
 		ORDER BY ` + subjectTierOrder + `, priority DESC, subject`
 	return collect(ctx, q, "list", "governance assignments", stmt, nil, scanGovernanceMembership)
 }
@@ -562,7 +575,7 @@ type MembershipMatch struct {
 
 // ListMembershipsFor returns EVERY membership that matches a caller, each joined to its unit, in
 // precedence order (the ORDER BY is the whole rule: tier, then sub over email, then priority, then
-// unit name, then subject). No LIMIT: which of them are contexts is the resolver's (legacy rows past
+// unit name, then subject). An elevation past its end is left out. No LIMIT: which of them are contexts is the resolver's (legacy rows past
 // the first are dormant). subjectMatch and subjectPrecedence are the same fragments ResolveUserDrive
 // splices, so the ceiling and the drive can't disagree about "most specific".
 //
@@ -586,10 +599,10 @@ func ListMembershipsForQ(ctx context.Context, q Querier, userSubjects, groups []
 	if groups == nil {
 		groups = []string{}
 	}
-	stmt := `SELECT m.id, m.subject_type, m.subject, m.unit_id, m.priority, m.created_at, m.created_by, m.home, m.legacy, ` + governanceUnitColsP + `
+	stmt := `SELECT m.id, m.subject_type, m.subject, m.unit_id, m.priority, m.created_at, m.created_by, m.home, m.legacy, m.expires_at, ` + governanceUnitColsP + `
 		FROM governance_memberships m
 		JOIN governance_units p ON p.id = m.unit_id
-		WHERE ` + subjectMatch("m") + `
+		WHERE ` + subjectMatch("m") + ` AND (m.expires_at IS NULL OR m.expires_at > now())
 		ORDER BY ` + subjectPrecedence("m", "p")
 	rows, err := q.Query(ctx, stmt, userSubjects, groups, userType)
 	if err != nil {
@@ -598,7 +611,7 @@ func ListMembershipsForQ(ctx context.Context, q Querier, userSubjects, groups []
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (MembershipMatch, error) {
 		var m MembershipMatch
 		a := &m.Membership
-		u, err := scanGovernanceUnitPrefixed(r, &a.ID, &a.SubjectType, &a.Subject, &a.UnitID, &a.Priority, &a.CreatedAt, &a.CreatedBy, &a.Home, &a.Legacy)
+		u, err := scanGovernanceUnitPrefixed(r, &a.ID, &a.SubjectType, &a.Subject, &a.UnitID, &a.Priority, &a.CreatedAt, &a.CreatedBy, &a.Home, &a.Legacy, &a.ExpiresAt)
 		m.Unit = u
 		return m, err
 	})
@@ -721,7 +734,7 @@ func scanGovernanceUnitPrefixed(row pgx.Row, prefix ...any) (types.GovernanceUni
 func scanGovernanceMembership(row pgx.Row) (types.GovernanceMembership, error) {
 	var a types.GovernanceMembership
 	err := row.Scan(&a.ID, &a.SubjectType, &a.Subject, &a.UnitID,
-		&a.Priority, &a.CreatedAt, &a.CreatedBy, &a.Home, &a.Legacy)
+		&a.Priority, &a.CreatedAt, &a.CreatedBy, &a.Home, &a.Legacy, &a.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.GovernanceMembership{}, ErrNotFound
 	}

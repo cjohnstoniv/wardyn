@@ -231,6 +231,8 @@ type RunPolicySpec struct {
 	// nothing, and the organisation's level applies (types.RecordingChoice). A ceiling's level is a
 	// minimum: a policy under it may record more, never less.
 	Recording RecordingLevel `json:"recording,omitempty"`
+	// DataOut is the run's rule for content leaving it (docs/POLICIES.md#data_out). "" is allowed.
+	DataOut TransferRule `json:"data_out,omitempty"`
 }
 
 // HarnessInnerWalls is a harness's own walls inside the sandbox. On a policy each field is a choice

@@ -158,6 +158,12 @@ func TestLocalReviveClassifiesOwnADOAndAzureLanesAsDispatchDoes(t *testing.T) {
 		{"delivery drift: the row now mints tokens", adoCfg, func(sc *types.SiteConfig, _, _ map[string][]byte) {
 			sc.WorkspaceProviders.Git[0].Entra.TokenMode = types.ADOTokenModeBearer
 		}, false},
+		// A grant stored before pr split names pr; the row's ceiling now reads as pr's parts.
+		{"pre-upgrade grant naming pr keeps its origin", func(id uuid.UUID) proxy.Config {
+			c := adoCfg(id)
+			c.ADOGrant.Capabilities = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}
+			return c
+		}, nil, true},
 		{"capability drift: the ceiling narrowed", adoCfg, func(sc *types.SiteConfig, _, _ map[string][]byte) {
 			sc.WorkspaceProviders.Git[0].Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapProjectRead}
 		}, false},

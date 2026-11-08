@@ -18,12 +18,12 @@
 //     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
 //     OpenMacWindow, GetMacWindow, GetRunMachine
-//   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
+//   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, ListApprovalsDecidable, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
-//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit
+//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit, SetWorkspaceOwningUnitStrict
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition, AuditReceipt, AuditCheckpoints, AuditReceiptKeys
@@ -48,10 +48,13 @@
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
 //     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable when its store holds no templates
 //   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
-//     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, CheckGovernance,
-//     GovernanceDryRun, SetEnvelope, ClearEnvelope, UnitModelUsage
+//     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, PutUnitDeciders, CheckGovernance,
+//     GovernanceDryRun, SetEnvelope, ClearEnvelope, GetGovernanceUnder, PlanGovernanceUnder, ApplyGovernanceResultUnder,
+//     UnitModelUsage
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
+//   - governance requests (/api/v1/governance/requests): ListGovernanceRequests, RequestElevation,
+//     RequestImage, ApproveGovernanceRequest, RejectGovernanceRequest
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
@@ -82,7 +85,8 @@
 //   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, PreviewWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
 //     WorkloadHistory, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
 //     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
-//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
+//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin),
+//     SetComponentOwningUnit (security tier) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
