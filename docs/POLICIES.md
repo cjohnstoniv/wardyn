@@ -1088,10 +1088,12 @@ What the check does and does not settle:
 - `review` can open a door the defaults keep shut. Desktop download is blocked by default, so on a run whose desktop rules leave download unset, `data_out: review` turns download into a held download: each file waits for a person's yes. An explicit `desktop.download: blocked` in the run's policy, a unit's walls, a restriction or the boundary still wins.
 - `review` does not hold every push. A push keeps its own push rules; `blocked` refuses them all.
 - `blocked` denies drives, member drives and kept machines through the same doors as `deny_user_drive`, `deny_member_drives` and `deny_kept_machines`, so it applies where those apply: to runs under a unit, and to a kept machine's governed callers. A member's own `data_out: blocked` denies pushes but not drives or kept machines, which are governance limits.
-- A rule that cannot be read keeps content in: SSH treats it as `blocked`, and run output answers 503 `data_out_unreadable`.
+- A rule that cannot be read keeps content in. SSH treats it as `blocked`, the recording replay and the automatic bring-back are refused, and run output, web apps and a computer folder's bring-back answer 503 `data_out_unreadable`.
+- A run with no recorded policy, whose audit rows were pruned, carries no rule: SSH still treats it as `blocked`, and the other paths read it as `allowed`.
+- Network egress is outside this rule. An agent can still send content to any host in `allowed_domains`, through MCP tool calls and the model lane. Narrow those with `allowed_domains`, `denied_domains` and tool rules.
 - Paths left open: the SSH shell, `GET /runs/{id}/attach` and watching the desktop show a person what is on screen, and the run's file list and event stream carry names, sizes and events, not file contents. Turn off interactive access (`deny_interactive`) and background desktop watching (`deny_background_desktop_watch`) to close them.
 - With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
-- Audit: each refusal on a path above writes `run.data_out.denied` with the `path` and the `rule`. A refused Files panel download keeps its `desktop.file.transfer` row.
+- Audit: each refusal on a path above writes `run.data_out.deny` with the `path` and the `rule`. A refused Files panel download keeps its `desktop.file.transfer` row.
 
 ## `tool_rules` — `[]ToolRule`
 
