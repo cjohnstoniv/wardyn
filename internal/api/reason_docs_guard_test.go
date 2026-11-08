@@ -91,7 +91,7 @@ func placementWireReasons(t *testing.T) []placement.Reason {
 			return true
 		})
 	}
-	for _, file := range []string{"eligibility.go", "enforce.go"} {
+	for _, file := range []string{"eligibility.go", "enforce.go", "managed_device.go"} {
 		for _, f := range parse("../placement/" + file) {
 			ast.Inspect(f, func(n ast.Node) bool {
 				if call, ok := n.(*ast.CallExpr); ok && len(call.Args) > 0 {
