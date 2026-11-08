@@ -44,6 +44,7 @@ const (
 	GovernanceTargetWorkspaceOwningUnit    = "workspace_owning_unit"
 	GovernanceTargetApprovalRule           = "approval_rule"
 	GovernanceTargetRecording              = "org_recording"
+	GovernanceTargetUnitDeciders           = "governance_unit_deciders"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the
