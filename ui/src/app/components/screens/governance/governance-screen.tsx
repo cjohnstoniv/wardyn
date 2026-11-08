@@ -127,7 +127,7 @@ export function GovernanceScreen() {
           profiles: s.profiles
             .filter((p) => p.id !== DEFAULT_GOVERNANCE_UNIT_ID)
             .map((p) => (p.parent_id === DEFAULT_GOVERNANCE_UNIT_ID ? { ...p, parent_id: undefined } : p)),
-          unit_names: Object.fromEntries(s.profiles.map((p) => [p.id, p.name])),
+          unit_names: { ...s.unit_names, ...Object.fromEntries(s.profiles.map((p) => [p.id, p.name])) },
         });
         setStatus("ready");
       })

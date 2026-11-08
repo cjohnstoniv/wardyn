@@ -303,7 +303,8 @@ export interface GovernanceSnapshot {
   parent_walls?: GovernanceParentWalls[];
   // The deny-only lists that follow people, each with how many people it names.
   restrictions?: RestrictionView[];
-  // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
+  // Every unit's name by id, Default included, for a membership on a unit the list hides. A unit admin's read sends the
+  // names of the units above their subtrees; the console adds every listed unit's.
   unit_names?: Record<string, string>;
 }
 
@@ -506,6 +507,7 @@ export const governance = {
       restrictions?: unknown;
       unit_admins?: unknown;
       parent_walls?: unknown;
+      unit_names?: Record<string, string>;
     }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
@@ -514,6 +516,7 @@ export const governance = {
       max_depth: body.max_depth,
       unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
       parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),
+      unit_names: body.unit_names,
     };
   },
 
