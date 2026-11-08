@@ -333,6 +333,13 @@ describe("RunEndsControls: a run that ends with its elevation", () => {
     for (const name of extendNames) expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
   });
 
+  it("an operator viewing another person's run reads 'the elevation' in the menu", async () => {
+    renderRow(detail({ created_by: "someone-else", lifetime_cap_at: capAt(), lifetime_cap_source: "elevation" }), () => {}, { operator: true });
+    await openMenu("run-ends-pill");
+    const why = await screen.findByTestId("lock-reason");
+    expect(why).toHaveTextContent(/^This run ends when the elevation ends, .+\. It can't be extended\.$/);
+  });
+
   it("a viewer who cannot act sees the same pill as plain text", () => {
     const cap = capAt();
     renderRow(detail({ lifetime_cap_at: cap, lifetime_cap_source: "elevation" }), () => {}, { principal: "someone-else" });

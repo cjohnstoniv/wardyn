@@ -769,6 +769,22 @@ describe("RunLifetimeBanner: a run that ends with its elevation", () => {
     expect(screen.getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
   });
 
+  it("an operator viewing another person's run reads 'the elevation', never 'your elevation', on the ended banner", () => {
+    renderBanner(killed({ created_by: "someone-else" }), [], () => {}, { operator: true, principal: OWNER });
+    const banner = screen.getByTestId("run-lifetime-elevation-ended");
+    expect(banner).toHaveTextContent("This run ended when the elevation ended");
+    expect(banner).toHaveTextContent("To keep working, ask for elevation again and start a new run.");
+    expect(banner).not.toHaveTextContent("your elevation");
+  });
+
+  it("an operator viewing another person's run reads 'the elevation' in the warning", () => {
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ created_by: "someone-else", ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation" }), [], () => {}, { operator: true, principal: OWNER });
+    const banner = screen.getByTestId("run-lifetime-warning");
+    expect(banner).toHaveTextContent(`At ${weekdayClock(cap)} the run stops, because the elevation ends then. Push or save anything you need before then.`);
+    expect(banner).not.toHaveTextContent("your elevation");
+  });
+
   it("a viewer who cannot act sees the elevation-ended banner without the button", () => {
     renderBanner(killed(), [], () => {}, { operator: false, principal: "someone-else" });
     expect(screen.getByTestId("run-lifetime-elevation-ended")).toBeInTheDocument();
