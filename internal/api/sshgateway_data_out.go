@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -65,13 +66,29 @@ func (s *Server) sshDataOutRefused(g *sshSessionGate, path string) bool {
 
 // sshSyncReplyGuard wraps a sync session's sftp-server output so that the first file-content reply ends the
 // sync: a stock server started with -P read sends none, so this holds against an image's own sftp-server. The
-// reply is not passed on; the audit row and the client's message follow.
+// reply is not passed on. The audit row is written as soon as the guard sees it; the client's message and the
+// channel's close wait for the Read that returns sshsftp.ErrData, so the replies before it reach the client.
 func (s *Server) sshSyncReplyGuard(runID uuid.UUID, principal string, channel ssh.Channel, out io.Reader, rule types.TransferRule) io.Reader {
-	var once sync.Once
-	return &sshsftp.ReplyGuard{R: out, OnData: func() {
-		once.Do(func() {
-			s.auditDataOutDenied(s.cfg.BaseCtx, runID, types.ActorHuman, principal, "sync_down", rule)
-			sendChannelError(channel, "wardyn: this run's data_out rule keeps content in, so `wardyn sync` only sends files to the run")
-		})
+	guard := &sshsftp.ReplyGuard{R: out, OnData: func() {
+		s.auditDataOutDenied(s.cfg.BaseCtx, runID, types.ActorHuman, principal, "sync_down", rule)
 	}}
+	return &syncStopOnData{r: guard, stop: func() {
+		sendChannelError(channel, "wardyn: this run's data_out rule keeps content in, so `wardyn sync` only sends files to the run")
+	}}
+}
+
+// syncStopOnData calls stop once, at the first Read of r that returns sshsftp.ErrData. A ReplyGuard returns it
+// only once every byte before the DATA reply has been read, and the caller has written those on by then.
+type syncStopOnData struct {
+	r    io.Reader
+	stop func()
+	once sync.Once
+}
+
+func (d *syncStopOnData) Read(p []byte) (int, error) {
+	n, err := d.r.Read(p)
+	if errors.Is(err, sshsftp.ErrData) {
+		d.once.Do(d.stop)
+	}
+	return n, err
 }

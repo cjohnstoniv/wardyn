@@ -384,7 +384,9 @@ func TestDataOutNoRecordIsAllowedAndReadErrorIs503(t *testing.T) {
 // hands the new proxy leave the key off, so a previous release's proxy still loads them, and the caller's
 // policy keeps the rule for the generation the doors read.
 func TestDataOutRevivedProxyConfigCarriesNoRule(t *testing.T) {
-	cfg := &proxy.Config{RunToken: "tok", ControlPlaneURL: "https://wardynd:8443", ControlPlaneCAPEM: "ca"}
+	// The fields a proxy needs to load at all: encodeRevivedConfig loads the bytes before it answers.
+	cfg := &proxy.Config{RunID: uuid.New(), RunToken: "tok", ControlPlaneURL: "https://wardynd:8443",
+		ControlPlaneCAPEM: string(testHopCA(t).CertPEM)}
 	cfg.Policy.DataOut, cfg.Policy.Recording = types.TransferBlocked, types.RecordingTerminal
 	b, rerr := encodeRevivedConfig(context.Background(), cfg)
 	if rerr != nil {
