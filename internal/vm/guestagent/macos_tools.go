@@ -45,6 +45,7 @@ import (
 //	POST /v1/tools/admin_code           AdminCode -> AdminCodeResult (edit-base)
 //	GET  /v1/tools/posture              ToolsPosture (edit-base's recheck)
 //	POST /edit/admin-terminal|trust-cas|full-disk-access   the edit window's buttons (macos_edit_actions.go)
+//	POST /edit/install-rosetta          the edit window's Install Rosetta button (macos_edit_rosetta.go)
 const (
 	VsockToolsPort = 1026
 
@@ -129,6 +130,9 @@ type ToolsPosture struct {
 	// database in this boot answered; "" when that open failed some other way, and absent from an agent
 	// that predates the field. The host reads "" as unknown, never as allowed.
 	FullDiskAccess string `json:"full_disk_access,omitempty"`
+	// FileVault is FileVaultOn or FileVaultOff as `fdesetup status` printed it; "" when that read did not
+	// say, and absent from an agent that predates the field. The host reads "" as unknown.
+	FileVault string `json:"file_vault,omitempty"`
 }
 
 // GuestAccount is one local account, as `dscl . -list /Users UniqueID` lists it.
@@ -222,6 +226,7 @@ func (t *Tools) ToolsHandler() http.Handler {
 	mux.HandleFunc("POST /edit/admin-terminal", t.handleEditAdminTerminal)
 	mux.HandleFunc("POST /edit/trust-cas", t.handleEditTrustCAs)
 	mux.HandleFunc("POST /edit/full-disk-access", t.handleEditFullDiskAccess)
+	mux.HandleFunc("POST /edit/install-rosetta", t.handleEditInstallRosetta)
 	if t.Desktop != nil {
 		mux.HandleFunc("GET /v1/tools/pointer", t.Desktop.servePointer)
 		mux.HandleFunc("POST /v1/tools/desktop_password", t.handleDesktopPassword)
@@ -419,6 +424,7 @@ func (t *Tools) handlePosture(w http.ResponseWriter, r *http.Request) {
 		p.RemoteLogin = true
 	}
 	p.FullDiskAccess = t.fullDiskAccess()
+	p.FileVault = t.fileVault(r.Context())
 	writeJSONAny(w, p)
 }
 

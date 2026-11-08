@@ -32,6 +32,7 @@ var pinnedHosts = []string{
 	"updates.cdn-apple.com",
 	"mesu.apple.com",
 	"gdmf.apple.com",
+	"configuration.apple.com",
 }
 
 func shipped(t *testing.T) []byte {

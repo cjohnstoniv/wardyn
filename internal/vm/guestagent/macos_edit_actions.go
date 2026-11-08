@@ -57,6 +57,8 @@ type EditActionResult struct {
 	Opened       bool `json:"opened"`
 	Certificates int  `json:"certificates,omitempty"`
 	Revealed     bool `json:"revealed,omitempty"`
+	// Installed says install-rosetta ran to the end (macos_edit_rosetta.go).
+	Installed bool `json:"installed,omitempty"`
 }
 
 // ErrEditRefused is an edit action the guest refused with nothing done: nobody at the console, or no

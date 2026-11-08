@@ -17,7 +17,7 @@ import (
 
 // The boot hosts are the shipped list, read once.
 func TestMacOSBootHostsAreTheShippedList(t *testing.T) {
-	want := []string{"gdmf.apple.com", "mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com"}
+	want := []string{"gdmf.apple.com", "mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}
 	if got := macOSBootHosts(); !slices.Equal(got, want) {
 		t.Fatalf("macOSBootHosts() = %q, want %q", got, want)
 	}
@@ -57,11 +57,11 @@ func TestAppendMacOSBootDenials(t *testing.T) {
 	}{
 		{name: "no allow covers one", wantDenied: macOSBootHosts()},
 		{name: "an exact allow", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "mesu.apple.com") },
-			wantDenied: []string{"gdmf.apple.com", "gateway.icloud.com", "init-kt.apple.com"}, wantAllow: []string{"mesu.apple.com"}},
+			wantDenied: []string{"gdmf.apple.com", "gateway.icloud.com", "init-kt.apple.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}, wantAllow: []string{"mesu.apple.com"}},
 		{name: "a wildcard allow", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "*.apple.com") },
-			wantDenied: []string{"gateway.icloud.com"}, wantAllow: []string{"gdmf.apple.com", "mesu.apple.com", "init-kt.apple.com"}},
+			wantDenied: []string{"gateway.icloud.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}, wantAllow: []string{"gdmf.apple.com", "mesu.apple.com", "init-kt.apple.com"}},
 		{name: "a port-qualified allow", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "gdmf.apple.com:443") },
-			wantDenied: []string{"mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com"}, wantAllow: []string{"gdmf.apple.com"}},
+			wantDenied: []string{"mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com", "mask.icloud.com", "mask-h2.icloud.com", "proxy.safebrowsing.apple"}, wantAllow: []string{"gdmf.apple.com"}},
 		{name: "a wildcard of another domain", edit: func(p *types.RunPolicySpec) { p.AllowedDomains = append(p.AllowedDomains, "*.notapple.com") },
 			wantDenied: macOSBootHosts()},
 		{name: "already denied", edit: func(p *types.RunPolicySpec) { p.DeniedDomains = append(p.DeniedDomains, "GDMF.apple.com") },

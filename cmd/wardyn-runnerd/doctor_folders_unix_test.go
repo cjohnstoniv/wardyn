@@ -77,3 +77,18 @@ func TestMacOSVMDoctorFolderSharesReadsTheBaseRecords(t *testing.T) {
 		t.Fatalf("no base: %+v", st)
 	}
 }
+
+// A base whose guest FileVault was last read as on adds a file-vault skip beside folder-shares; off, unread
+// and no guest posture add nothing.
+func TestMacOSVMDoctorWarnsWhenFileVaultIsOn(t *testing.T) {
+	roots := []string{"/Users/a/Work"}
+	st := folderSharesFor(t, roots, macvm.ToolsRecord{Guest: &macvm.GuestPosture{FileVault: "on"}}, nil)
+	if len(st) != 2 || st[0].Name != "file-vault" || st[0].Status != doctor.StatusSkip || !strings.Contains(st[0].Detail, "Turn it off") || st[1].Name != "folder-shares" {
+		t.Fatalf("FileVault on: %+v", st)
+	}
+	for _, g := range []*macvm.GuestPosture{{FileVault: "off"}, {}, nil} {
+		if st := folderSharesFor(t, roots, macvm.ToolsRecord{Guest: g}, nil); len(st) != 1 || st[0].Name != "folder-shares" {
+			t.Errorf("guest %+v: %+v", g, st)
+		}
+	}
+}

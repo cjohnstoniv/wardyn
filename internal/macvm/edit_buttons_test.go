@@ -64,6 +64,7 @@ type buttonGuest struct {
 	refuse  bool
 	trusted map[string]bool
 	fda     string
+	fv      string // FileVault as the posture reads it
 	down    bool
 }
 
@@ -113,7 +114,7 @@ func (g *buttonGuest) Posture(ctx context.Context) (guestagent.ToolsPosture, err
 		return guestagent.ToolsPosture{}, errors.New("the tools session is down")
 	}
 	p, err := g.editGuest.Posture(ctx)
-	p.FullDiskAccess = g.fda
+	p.FullDiskAccess, p.FileVault = g.fda, g.fv
 	return p, err
 }
 
@@ -335,6 +336,7 @@ func TestEditWindowTypeCodeKeysAndButtons(t *testing.T) {
 		`add(wardynScreenTypeCode, @selector(typeCode:), 0);`,
 		`NSButton *trust = add(wardynScreenTrustCAs, @selector(act:), WARDYN_WINDOW_TRUST_CAS);`,
 		`add(wardynScreenFullDiskAccess, @selector(act:), WARDYN_WINDOW_FULL_DISK_ACCESS);`,
+		`add(wardynScreenInstallRosetta, @selector(act:), WARDYN_WINDOW_INSTALL_ROSETTA);`,
 	}
 	at := 0
 	for _, want := range order {
@@ -346,16 +348,16 @@ func TestEditWindowTypeCodeKeysAndButtons(t *testing.T) {
 	}
 	for _, want := range []string{
 		`wardynScreenAdminTerminal = @"Open admin Terminal";`, `wardynScreenTypeCode = @"Type code";`,
-		`wardynScreenTrustCAs = @"Trust the list's CAs";`, `wardynScreenFullDiskAccess = @"Full Disk Access";`,
+		`wardynScreenTrustCAs = @"Trust the list's CAs";`, `wardynScreenFullDiskAccess = @"Full Disk Access";`, `wardynScreenInstallRosetta = @"Install Rosetta";`,
 		`wardynScreenNoCerts = @"The install list has no certificates.";`,
 		"if (!canTrust) {\n\t\t\ttrust.enabled = NO;\n\t\t\ttrust.toolTip = wardynScreenNoCerts;",
-		"#define WARDYN_WINDOW_ASK_STOP 0\n#define WARDYN_WINDOW_ADMIN_TERMINAL 1\n#define WARDYN_WINDOW_TRUST_CAS 2\n#define WARDYN_WINDOW_FULL_DISK_ACCESS 3\n",
+		"#define WARDYN_WINDOW_ASK_STOP 0\n#define WARDYN_WINDOW_ADMIN_TERMINAL 1\n#define WARDYN_WINDOW_TRUST_CAS 2\n#define WARDYN_WINDOW_FULL_DISK_ACCESS 3\n#define WARDYN_WINDOW_INSTALL_ROSETTA 4\n",
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("screen_darwin.m lost:\n%s", want)
 		}
 	}
-	if want := "\twindowActionAskStop = iota\n\twindowActionAdminTerminal\n\twindowActionTrustCAs\n\twindowActionFullDiskAccess\n"; !strings.Contains(g, want) {
+	if want := "\twindowActionAskStop = iota\n\twindowActionAdminTerminal\n\twindowActionTrustCAs\n\twindowActionFullDiskAccess\n\twindowActionInstallRosetta\n"; !strings.Contains(g, want) {
 		t.Errorf("screen_darwin.go's action numbers are not\n%s", want)
 	}
 }

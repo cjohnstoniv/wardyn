@@ -224,6 +224,7 @@ const (
 	windowActionAdminTerminal
 	windowActionTrustCAs
 	windowActionFullDiskAccess
+	windowActionInstallRosetta
 )
 
 // wardynWindowAction runs the callback of the open edit window's control n. The window calls it off the
@@ -240,6 +241,7 @@ func wardynWindowAction(n C.int) {
 		windowActionAdminTerminal:  t.AdminTerminal,
 		windowActionTrustCAs:       t.TrustCAs,
 		windowActionFullDiskAccess: t.FullDiskAccess,
+		windowActionInstallRosetta: t.InstallRosetta,
 	}[int(n)]
 	if f != nil {
 		f()

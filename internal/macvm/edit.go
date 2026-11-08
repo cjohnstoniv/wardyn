@@ -473,6 +473,7 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest,
 		if p.RemoteLogin {
 			return &EditDiscardedError{Recheck: EditRecheckRemoteLogin}
 		}
+		o.warnFileVault(p.FileVault)
 		if err := ReadBackItems(ctx, g, staging); err != nil {
 			return fmt.Errorf("macvm: the edited base's items read-back: %w", err)
 		}
