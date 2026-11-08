@@ -81,6 +81,18 @@ describe("toggleKind", () => {
     const next = toggleKind(rule({ kinds: ["credential"], second_human: true, max_scope: "once" }), "push_content", true);
     expect(next).toEqual(rule({ kinds: ["credential", "push_content"], second_human: true, max_scope: "once" }));
   });
+  it("drops the elevation-only fields when another kind goes on", () => {
+    const was = elevation({ renew_after: "1h", ticket_pattern: "T-\\d+" });
+    for (const k of ["image", "mcp_call"] as const) {
+      const next = toggleKind({ ...was, kinds: [] }, k, true);
+      expect(next.kinds).toEqual([k]);
+      expect(next.max_elevation).toBeUndefined();
+      expect(next.eligible_requesters).toBeUndefined();
+      expect(next.renew_after).toBeUndefined();
+      expect(next.ticket_pattern).toBeUndefined();
+    }
+    expect(toggleKind({ ...was, kinds: [] }, "elevation", true)).toEqual(was);
+  });
   it("removes a kind that goes off", () => {
     expect(toggleKind(rule({ kinds: ["mcp_call", "kube_call"] }), "mcp_call", false).kinds).toEqual(["kube_call"]);
   });

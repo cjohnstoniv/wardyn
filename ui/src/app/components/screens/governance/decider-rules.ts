@@ -44,11 +44,14 @@ export function kindBlock(
   return null;
 }
 
-// Checking an own-rule kind clears the others; checking any other kind leaves the rest.
+// Checking an own-rule kind clears the others; checking any other kind leaves the rest. A rule that stops
+// being an elevation rule drops the elevation-only fields (the server refuses them on any other kind).
 export function toggleKind(rule: DeciderRule, kind: DeciderKind, on: boolean): DeciderRule {
   if (!on) return { ...rule, kinds: rule.kinds.filter((k) => k !== kind) };
-  if (!isOwn(kind)) return rule.kinds.includes(kind) ? rule : { ...rule, kinds: [...rule.kinds, kind] };
-  const { max_scope: _scope, second_human: _second, ...rest } = rule;
+  const { max_elevation: _me, eligible_requesters: _er, renew_after: _ra, ticket_pattern: _tp, ...plain } = rule;
+  const base = kind === "elevation" ? rule : plain;
+  if (!isOwn(kind)) return base.kinds.includes(kind) ? base : { ...base, kinds: [...base.kinds, kind] };
+  const { max_scope: _scope, second_human: _second, ...rest } = base;
   return kind === "file_download" ? { ...rest, kinds: [kind], second_human: true } : { ...rest, kinds: [kind] };
 }
 
