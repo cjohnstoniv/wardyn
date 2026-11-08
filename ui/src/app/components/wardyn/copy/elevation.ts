@@ -10,6 +10,8 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // A phrase made of one decider reads with "decides", more than one (or the admins of a unit) with "decide".
 const ONE_DECIDER = /^(a security admin|the .+ group)$/;
+// "Payments' limits", "Platform's limits".
+const possessive = (name: string) => (name.endsWith("s") ? `${name}'` : `${name}'s`);
 const singular = (who: string) => ONE_DECIDER.test(who) && !who.includes(" or ") && !who.includes(", ");
 
 export const ELEV = {
@@ -81,5 +83,5 @@ export const ELEV = {
   F_WHAT: (p: string, u: string, l: string) => `${p} becomes a member of ${u} for ${l}, starting when you approve.`,
   F_BLAST_LABEL: "Blast radius:",
   F_BLAST: (u: string) =>
-    `They can start runs under ${u}'s limits until then, and each run they start ends when the elevation ends. Ending the elevation early doesn't stop a run that has already started.`,
+    `They can start runs under ${possessive(u)} limits until then, and each run they start ends when the elevation ends. Ending the elevation early doesn't stop a run that has already started.`,
 } as const;
