@@ -199,42 +199,15 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 			return err
 		}
 	}
-	tokenID := apiTokenIDFromContext(ctx)
-	if tokenID == uuid.Nil {
+	t, err := s.recheckLiveToken(ctx, q)
+	if err != nil {
+		return err
+	}
+	if t == nil {
 		if !kind.approver.allowed(s, r.WithContext(withUnitScopeTx(ctx, q))) {
 			return s.denyApprover(kind)
 		}
 		return nil
-	}
-	t, err := store.GetLiveAPITokenQ(ctx, q, tokenID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return &govRefusal{why: "approver token revoked or expired", write: func(w http.ResponseWriter, r *http.Request) {
-			s.auditAuthFailed(r, "invalid_admin_token")
-			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
-		}}
-	case err != nil:
-		return err
-	}
-	if s.cfg.SessionRevocations != nil {
-		status, rerr := s.approverSessionStatus(ctx, q, t)
-		if rerr != nil {
-			return &govRefusal{why: "session revocation unreadable", write: func(w http.ResponseWriter, r *http.Request) {
-				s.metrics.authStoreErrorInc()
-				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
-			}}
-		}
-		if status != oidc.SessionLive {
-			return &govRefusal{why: "approver session revoked", write: func(w http.ResponseWriter, r *http.Request) {
-				s.auditAuthFailed(r, "invalid_admin_token")
-				writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
-			}}
-		}
-	}
-	if s.cfg.RoleStampTTL > 0 && !sshRoleFresh(t.IdentityStampedAt, s.cfg.Now().UTC(), s.cfg.RoleStampTTL) {
-		return &govRefusal{why: "approver role stamp stale", write: func(w http.ResponseWriter, r *http.Request) {
-			s.refuseStaleRoleStamp(w, r, t)
-		}}
 	}
 	// A cli_access token publishes the role user whatever the row holds, as apiTokenAuth clamps it.
 	role := t.Role
@@ -246,6 +219,48 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 		return s.denyApprover(kind)
 	}
 	return nil
+}
+
+// recheckLiveToken re-reads a token caller's token on q: revoked or expired, a revoked session and a
+// stale role stamp each refuse as the auth lane does. A session caller (no token) gets nil, nil. A
+// proposer's withdraw takes this check too, so a token revoked after the request was authenticated
+// cannot withdraw.
+func (s *Server) recheckLiveToken(ctx context.Context, q store.Querier) (*types.APIToken, error) {
+	tokenID := apiTokenIDFromContext(ctx)
+	if tokenID == uuid.Nil {
+		return nil, nil
+	}
+	t, err := store.GetLiveAPITokenQ(ctx, q, tokenID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, &govRefusal{why: "approver token revoked or expired", write: func(w http.ResponseWriter, r *http.Request) {
+			s.auditAuthFailed(r, "invalid_admin_token")
+			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
+		}}
+	case err != nil:
+		return nil, err
+	}
+	if s.cfg.SessionRevocations != nil {
+		status, rerr := s.approverSessionStatus(ctx, q, t)
+		if rerr != nil {
+			return nil, &govRefusal{why: "session revocation unreadable", write: func(w http.ResponseWriter, r *http.Request) {
+				s.metrics.authStoreErrorInc()
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
+			}}
+		}
+		if status != oidc.SessionLive {
+			return nil, &govRefusal{why: "approver session revoked", write: func(w http.ResponseWriter, r *http.Request) {
+				s.auditAuthFailed(r, "invalid_admin_token")
+				writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")
+			}}
+		}
+	}
+	if s.cfg.RoleStampTTL > 0 && !sshRoleFresh(t.IdentityStampedAt, s.cfg.Now().UTC(), s.cfg.RoleStampTTL) {
+		return nil, &govRefusal{why: "approver role stamp stale", write: func(w http.ResponseWriter, r *http.Request) {
+			s.refuseStaleRoleStamp(w, r, t)
+		}}
+	}
+	return &t, nil
 }
 
 // A database-backed revocation check must share the decision's connection.
@@ -261,13 +276,18 @@ func (s *Server) approverSessionStatus(ctx context.Context, q store.Querier, t t
 // denyApprover is the refusal a caller whose tier does not pass the kind's approver predicate gets.
 func (s *Server) denyApprover(kind govKind) *govRefusal {
 	return &govRefusal{why: "approver tier", write: func(w http.ResponseWriter, r *http.Request) {
+		kind := kind // this refusal's own copy: refusal may name the reason
+		if kind.approver.refusal != nil {
+			kind.approver.reason = kind.approver.refusal(s, r)
+		}
 		s.refuse(w, r, authz.Deny(kind.approver.reason, govChangeTarget, ""))
 	}}
 }
 
 // decideGovernanceChange is approve (apply the held write) and reject (apply nothing) in one body,
 // since the two differ only in the apply and the distinct-human rule: the proposer may reject their
-// own change, which applies nothing.
+// own change, which applies nothing. That reject is a withdrawal, allowed to the proposer even outside
+// the change's approvers; approving stays the approvers' alone.
 func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "governance change")
 	if !ok {
@@ -299,7 +319,11 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	kind = kind.forChange(head)
-	if !bypass && !kind.approver.allowed(s, r) {
+	actorType, principal := actorFromRequest(r)
+	email := oidcEmailFromContext(ctx)
+	allowed := bypass || kind.approver.allowed(s, r)
+	withdraw := !allowed && !approve && sameGovernanceHuman(head, principal, email)
+	if !allowed && !withdraw {
 		s.denyApprover(kind).write(w, r)
 		return
 	}
@@ -313,8 +337,6 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		defer unlock()
 		ctx = r.Context()
 	}
-	actorType, principal := actorFromRequest(r)
-	email := oidcEmailFromContext(ctx)
 
 	decision := store.GovernanceDecision{To: types.GovernanceChangeApplied, By: principal, ByEmail: email}
 	if !approve {
@@ -322,6 +344,15 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 	}
 	var applied govApplied
 	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, decision, func(q store.Querier, ch types.GovernanceChange) error {
+		if withdraw {
+			if _, err := s.recheckLiveToken(ctx, q); err != nil {
+				return err
+			}
+			if !sameGovernanceHuman(ch, principal, email) {
+				return s.denyApprover(kind)
+			}
+			return nil
+		}
 		if !bypass {
 			if err := s.recheckApprover(ctx, r, q, kind); err != nil {
 				return err
@@ -373,6 +404,9 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 	} else {
 		if reason != "" {
 			data["reason"] = reason
+		}
+		if sameGovernanceHuman(out, principal, email) {
+			data["withdrawn"] = true // the proposer rejected their own change
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.reject", out.ID.String(), "success", mustJSON(data)))
 	}

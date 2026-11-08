@@ -21,7 +21,7 @@
 
 | Route | Scope |
 |---|---|
-| `GET /governance` | the units of their subtrees, the memberships and grants on them, and `parent_walls` |
+| `GET /governance` | the units of their subtrees, the memberships and grants on them, `parent_walls`, and `unit_names`: the names of the units above |
 | `POST /governance/units` | `parent_id` in their units |
 | `PUT /governance/units/{id}` | the unit and any new parent in their units |
 | `DELETE /governance/units/{id}` | an empty unit strictly below their own; its grants go with it |

@@ -121,6 +121,9 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 		}
 		touched = func(before, after treeSnapshot) []uuid.UUID {
 			was, existed := unitsByID(before.units)[id]
+			if existed && s.securityOnlyRoot(r.Context(), id) { // as changeApprovers: an envelope's root is security's
+				return nil
+			}
 			now := unitsByID(after.units)[id]
 			units := []uuid.UUID{}
 			if existed {

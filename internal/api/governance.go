@@ -106,6 +106,8 @@ type governanceResponse struct {
 	// Envelopes are the platform envelopes (governance_envelope.go): every one for the security tier,
 	// for a unit admin those on or above their subtrees' roots and those inside them.
 	Envelopes []types.GovernanceEnvelope `json:"envelopes"`
+	// UnitNames is, for a unit admin, the name of every unit above their subtrees, by id (ancestorNames).
+	UnitNames map[uuid.UUID]string `json:"unit_names,omitempty"`
 }
 
 // handleGetGovernance returns the whole governance picture to a security caller, and a unit admin's

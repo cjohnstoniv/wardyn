@@ -92,13 +92,14 @@ type heldUnitWrite struct {
 }
 
 // unitWriteExempt reports whether a human's profile update applies without a second human. Only an
-// UPDATE of an existing profile can be exempt, and only by one of two proofs:
+// UPDATE of an existing profile can be exempt, and only by one of three proofs:
 //
 //   - metadata only: every stored field other than the name is equal to the current row, including the
 //     base, the overlay and the overlay limits;
 //   - narrowing: the new effective profile is Leq the current effective one (composer.Leq, which
 //     carries the full git_pat dominance contract), and its member CPU and memory cap is no higher
-//     (memberCapOf).
+//     (memberCapOf);
+//   - envelope: a unit admin's edit strictly inside an envelope, within its root's walls (envelopeExempt).
 //
 // A re-parent that takes the unit out from under a lock its old parents hold is held too (a lock
 // removed from above, reparentDropsLocks), whichever proof would otherwise admit it.
@@ -121,6 +122,9 @@ func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit
 	}
 	if sameJSON(cur.Ceiling, p.Ceiling) && sameJSON(cur.Limits, p.Limits) && sameJSON(cur.ParentID, p.ParentID) &&
 		sameJSON(cur.Overlay, p.Overlay) && sameJSON(cur.OverlayLimits, p.OverlayLimits) {
+		return true
+	}
+	if s.envelopeExempt(ctx, all, p, res) {
 		return true
 	}
 	chain, err := chainFromRows(byID, p.ID, store.MaxUnitDepthCap)

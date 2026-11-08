@@ -81,7 +81,7 @@ an operator follows to turn one on and run the queue.
   - The predicate is evaluated again inside the approval transaction: a token revoked since it authenticated, cut off by a session revocation, or whose role no longer passes is refused, and the change stays pending.
 - **Distinct human.**
   - An approval is refused (`403`, `authz.denied`, reason `second_human_required`, target `governance.change`) when the approver's principal equals the proposer's, or when both emails are non-empty and equal once case-folded.
-  - The proposer may reject their own change.
+  - The proposer may reject their own change, even when they could not approve it. That withdraws it, and the reject row carries `withdrawn: true`.
 - **What applies.**
   - One transaction locks the change, requires it pending and unexpired, compares the target (and, for an assignment, the profile it points at) and the deployment default with what the proposal reviewed, applies the write and moves the change to `applied`.
   - A write to the target in between (the break-glass included), a rename or ceiling change of the profile an assignment points at, or a changed deployment default makes the change `stale` (`409` `governance_change_stale`): it never overwrites.

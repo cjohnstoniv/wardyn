@@ -35,6 +35,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you downgrade
 
 - An older binary ignores `deny_components` and `deny_model_providers` on unit limits, so denied components and providers attach again.
+- An older version ignores platform envelopes, so a held change of an envelope's unit, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs that unit. Changes below the envelope's unit and adds of its approved groups are held again, as before.
 
 ### Added
 
@@ -54,11 +55,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Platform envelopes: `PUT` and `DELETE /api/v1/governance/units/{id}/envelope` (and `SetEnvelope`, `ClearEnvelope` in the SDK) name the IdP groups the security tier approves for the unit that roots a platform. Security tier only, held under `WARDYN_GOVERNANCE_SECOND_HUMAN`; the Default unit, a unit on the path of another envelope, and a group already on another envelope are refused. `GET /governance` lists `envelopes`; a unit admin reads each one's setter as `security`, not the security admin's name. By itself an envelope changes no run: none exists until security sets one.
 - A portal can be pinned to one governance unit when it is registered (`run_in_under`, a unit id or exact name): a run it launches must resolve to that unit or one below it, or `POST /runs` answers `403` `portal_unit_scope`. The check reads the context the run resolved to, so a default context outside the unit is refused too, and the person's restrictions still apply after the pick. Default: no pin, which changes nothing. The pin is set at registration only and is not checked against any other setting.
 - Unit deciders now decide holds: the nearest unit with a rule for the kind, from the run's unit up, says who decides. `owner` is the run's creator, with the `egress_host` grant for an egress host; `unit_admins` and `group:<name>` never match the run's creator, its service identity's sponsor or its recorded author. A rule's `second_human` and `max_scope` bind every decider, security admins included (the admin token passes `second_human` and is audited), and `always` is refused under any rule. An owner a rule leaves out gets `403 not_a_decider`; a wider scope gets `403 decision_scope_above_rule`; rules that cannot be read refuse with `503 deciders_unreadable`, while a security admin still decides. `approval.decide` records `basis` and `rule`, and pending approvals list their `deciders`. With no rules, decisions and their audit rows are as before.
+- A unit admin's `GET /governance` carries `unit_names`: the name of each unit above their subtrees, by id, such as an envelope's root. Nothing else about those units is served.
+- With a platform envelope set on a unit, a unit admin's change to a unit below it applies directly when the new walls stay within the envelope unit's walls and the change stays below that unit. A unit admin's add of a group on the envelope's approved list to that unit or one below it, or a move of the group's membership between two such units, also applies directly. A change that removes a lock, changes a contact, or changes which legacy membership a person is selected by is still held. Every held change of the envelope's unit itself, and every unit admin grant or revoke on it, is decided by a security admin only. People, groups not on the list, and membership deletes keep their present rules. An envelope that cannot be read gives no direct write and leaves the envelope's unit to security admins. With no envelope, nothing changes.
 
 ### Changed
 
 - The desktop viewer and the run page no longer show the line about a macOS login window. The macOS VM docs note that the macOS 27 prepare flow creates only the setup account and that nothing beyond macOS 26 is promised as tested.
 - A Codex Model stored on a custom endpoint or OpenAI key provider now takes effect: runs with the Codex CLI use it. With none stored, Codex keeps its own default.
+- The proposer of a held governance change may withdraw it with `POST /governance/changes/{id}/reject`, even when only others may approve it, such as a unit admin's change held for the security tier. The `governance.change.reject` row then carries `withdrawn: true`.
 
 ### Fixed
 
