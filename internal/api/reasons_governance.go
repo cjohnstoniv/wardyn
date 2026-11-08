@@ -31,6 +31,11 @@ const (
 	// reasonGovernanceChangeNoteInvalid: the note's reason or ticket is out of bounds or malformed.
 	reasonGovernanceChangeNoteProposerOnly = "governance_change_note_proposer_only"
 	reasonGovernanceChangeNoteInvalid      = "governance_change_note_invalid"
+	// reasonComponentDenied and reasonModelProviderDenied: a run that attaches a component, or would use
+	// a model provider, its governance profile's deny_components or deny_model_providers lists
+	// (run_deny_lists.go); a hard wall, operators included.
+	reasonComponentDenied     = "component_denied"
+	reasonModelProviderDenied = "model_provider_denied"
 )
 
 // reasonDecidersUnreadable: the unit deciders rules, or the unit tree they are walked on, could not be read, so a

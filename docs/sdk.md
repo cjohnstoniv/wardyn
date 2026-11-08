@@ -835,6 +835,7 @@ start.
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
+| `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
 | `kept_machine_not_your_mac` | `403`: the caller is not a person, or has no Mac of their own outside other people's pools. |
 | `kept_machine_person_limit` | The caller already keeps `macos_vm.max_kept_machines_per_person` machines. |

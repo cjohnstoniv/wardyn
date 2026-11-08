@@ -72,6 +72,8 @@ type RestrictionLimits struct {
 	DenyMemberDrives           *bool        `json:"deny_member_drives,omitempty"`
 	DenyKeptMachines           *bool        `json:"deny_kept_machines,omitempty"`
 	DenyScheduledRuns          *bool        `json:"deny_scheduled_runs,omitempty"`
+	DenyComponents             *[]string    `json:"deny_components,omitempty"`
+	DenyModelProviders         *[]string    `json:"deny_model_providers,omitempty"`
 	DenyPlacements             *[]Placement `json:"deny_placements,omitempty"`
 	AllowedMacOSBases          *[]string    `json:"allowed_macos_bases,omitempty"`
 	RequiredImageSigners       *[]string    `json:"required_image_signers,omitempty"`
@@ -129,7 +131,7 @@ func (l RestrictionLimits) Overlay() LimitsOverlay {
 	return LimitsOverlay{
 		LocalSelfDefinedComponents: l.LocalSelfDefinedComponents, DenyTaskModeExec: l.DenyTaskModeExec,
 		DenyInteractive: l.DenyInteractive, DenyUIApps: l.DenyUIApps, DenyBackgroundDesktopWatch: l.DenyBackgroundDesktopWatch,
-		DenyUserDrive: l.DenyUserDrive, DenyMemberDrives: l.DenyMemberDrives, DenyKeptMachines: l.DenyKeptMachines, DenyScheduledRuns: l.DenyScheduledRuns, DenyPlacements: l.DenyPlacements, AllowedMacOSBases: l.AllowedMacOSBases, RequiredImageSigners: l.RequiredImageSigners,
+		DenyUserDrive: l.DenyUserDrive, DenyMemberDrives: l.DenyMemberDrives, DenyKeptMachines: l.DenyKeptMachines, DenyScheduledRuns: l.DenyScheduledRuns, DenyComponents: l.DenyComponents, DenyModelProviders: l.DenyModelProviders, DenyPlacements: l.DenyPlacements, AllowedMacOSBases: l.AllowedMacOSBases, RequiredImageSigners: l.RequiredImageSigners,
 		MaxConcurrentRuns: l.MaxConcurrentRuns, MaxCPUMillis: l.MaxCPUMillis, MaxMemoryMiB: l.MaxMemoryMiB,
 		MaxEphemeralDiskMiB: l.MaxEphemeralDiskMiB, MaxDriveSizeMiB: l.MaxDriveSizeMiB,
 		MaxEndAheadSec: l.MaxEndAheadSec, MaxWaitSec: l.MaxWaitSec, PauseIdleAfterSec: l.PauseIdleAfterSec,

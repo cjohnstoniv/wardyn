@@ -134,6 +134,7 @@ derives its role.
 | `GovernanceLimits` field | Unset means | Meet |
 |---|---|---|
 | `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives`, `deny_kept_machines`, `deny_scheduled_runs`, `deny_background_desktop_watch` | false | OR |
+| [`deny_components`, `deny_model_providers`](../POLICIES.md#deny_components-and-deny_model_providers) | empty | union |
 | `local_self_defined_components` | false | AND |
 | `deny_placements` | none denied: every placement is permitted | union of the denied placements |
 | `allowed_models` | none listed: no limit | intersection; an empty list on one side yields the other; disjoint is unsatisfiable |

@@ -151,6 +151,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepPlacementCapability", foldCreate | foldPreflight | foldPreview},
 	{"stepMainDrive", foldCreate | foldPreflight | foldPreview},
 	{"stepModelProvider", foldCreate | foldPreflight | foldPreview},
+	{"stepDenyLists", foldCreate | foldPreflight | foldPreview},
 	{"stepAWSCLIProfile", foldCreate | foldPreflight | foldPreview},
 	{"stepAllowedModelsChecked", foldCreate | foldPreflight | foldPreview},
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},

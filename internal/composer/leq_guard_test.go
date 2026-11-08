@@ -93,6 +93,9 @@ var leqRules = map[string]string{
 	"pause_idle_after_sec":                  "a is no looser bound than b",
 
 	"autonomy_rubric.self_defined_component": "b caps nothing: any a; else a caps at a level <= b's",
+
+	"deny_components":      "a names every component id b names (a is a superset of b)",
+	"deny_model_providers": "a names every provider uid b names (a is a superset of b)",
 }
 
 // unleqedFields reports each leaf of spec that has no row in rules, or whose Go

@@ -47,6 +47,7 @@ func withoutLimitRules(l types.GovernanceLimits) types.GovernanceLimits {
 	l.DenyTaskModeExec, l.DenyInteractive, l.DenyUIApps, l.DenyUserDrive, l.DenyMemberDrives = false, false, false, false, false
 	l.DenyBackgroundDesktopWatch, l.DenyKeptMachines, l.DenyScheduledRuns = false, false, false
 	l.DenyPlacements, l.AllowedMacOSBases, l.AllowedModels, l.RequiredImageSigners = nil, nil, nil, nil
+	l.DenyComponents, l.DenyModelProviders = nil, nil
 	l.MaxConcurrentRuns, l.MaxCPUMillis, l.MaxMemoryMiB = 0, 0, 0
 	l.MaxEphemeralDiskMiB, l.MaxDriveSizeMiB, l.AutonomyRubric = 0, 0, nil
 	l.MaxEndAheadSec, l.DefaultEndSec, l.AllowNoEnd = 0, 0, false

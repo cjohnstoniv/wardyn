@@ -36,6 +36,8 @@ export interface RestrictionLimits {
   deny_member_drives?: boolean;
   deny_kept_machines?: boolean;
   deny_scheduled_runs?: boolean;
+  deny_components?: string[];
+  deny_model_providers?: string[];
   deny_placements?: PlacementValue[];
   allowed_macos_bases?: string[];
   required_image_signers?: string[];
