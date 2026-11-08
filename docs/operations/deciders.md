@@ -56,10 +56,11 @@
 | `push_content` | a held push | `owner` | required |
 | `kube_call` | nothing in this build | none | optional |
 | `elevation` | a person's request to be a member of the unit for a while ([elevations](#elevations)) | `owner` | refused |
-| `image`, `file_download` | nothing in this build | `owner` | `image` refuses it; `file_download` stores it as true |
+| `image` | a person's request for one image by digest ([image requests](#image-requests)) | `owner` | refused |
+| `file_download` | nothing in this build | `owner` | stored as true |
 
 - `elevation`, `image` and `file_download` are each their own rule and take no `max_scope`. An `elevation` rule also needs `max_elevation` and `eligible_requesters`.
-- The last row's kinds are stored and shown, but no hold in this build maps to them, so a rule for one decides nothing.
+- The last row's kind is stored and shown, but no hold in this build maps to it, so a rule for it decides nothing.
 - A plain tool call is no kind here and is decided as before.
 - The rule for one kind never binds another: an Azure DevOps rule leaves MCP calls alone.
 
@@ -149,6 +150,24 @@ An elevation is membership of a unit for a while, asked for by the person and gi
 - **Ending it early** is a membership delete. Runs already started under it still end at the elevation's end.
 - A unit admin's membership write for the same person in the unit makes the membership permanent.
 - For standing access that follows a group at the identity provider, a membership for the group (or JIT group assignment at the provider) is the alternative to elevations.
+
+## Image requests
+
+An image request is one image, by digest, for the person who asks, given by the deciders of their default unit. A person is offered it when an `image` rule is on their default unit or above it.
+
+```json
+{"rules": [{"kinds": ["image"], "who": ["unit_admins", "group:platform-leads"]}]}
+```
+
+- **Who may ask.** A signed-in person whose default unit, the one a run lands in when it names none, has an `image` rule on it or above it. The rule is the meet of every `image` rule from that unit up. A unit the person could pick with `run_in` is never asked, and Default offers nothing.
+- A stale or truncated group snapshot is not offered. The admin token, a service identity, a device and a portal cannot ask.
+- **Asking.** `POST /api/v1/governance/requests` with `kind` `image`, the `image` as `<name>@sha256:<64 hex>`, a required `reason` and an optional `ticket`. It takes no `unit_id` or `duration`.
+- It is held as a governance change, one pending per person and digest, so the same digest under another name is the same request. An image the person already holds exactly answers `409`.
+- `GET /api/v1/governance/requests` sets `image_offered` when the caller may ask, and a launch refused for an image the person does not hold says "request it in Approvals" only then.
+- **Deciding.** As for an elevation: the met rule's `who` at the unit the offer was read on, and a security admin always, never the requester. The rule is read again inside the decision; one removed since the request, or an equal grant written meanwhile, answers stale.
+- **The grant.** An approval writes one allow grant of `image` for the person, of exactly the ref asked for, created by the decider. It is a user grant, so it holds in any unit the person runs in.
+- **What still binds.** Nothing is checked ahead of a launch. The digest rule, a deny of the image, the `image` kind's switch and image admission ([capabilities](capabilities.md)) apply at every launch, as for any grant. Deleting the grant ends it.
+- An `image` rule takes none of the elevation fields: `eligible_requesters`, `renew_after` or `ticket_pattern` on one answers `400` `invalid_deciders`.
 
 ## Group deciders and sign-in age
 

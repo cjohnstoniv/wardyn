@@ -574,6 +574,12 @@ func TestImageRequestStaleGroupsNotOffered(t *testing.T) {
 	if after := denied(); after != before {
 		t.Errorf("the offer read recorded %d groups-stale refusal rows, want none", after-before)
 	}
+	// A person a user row places in the rule's chain is not offered on a truncated snapshot either.
+	member := elevPersonCtx(imgReqSub, []string{}, true)
+	e.wantReason("a member on a truncated snapshot", e.createAs(member, imgBody(imgRef, "need it", "")), http.StatusBadRequest, reasonImageRequestNotOffered)
+	if l := e.listAs(member); l.ImageOffered {
+		t.Error("image_offered to a member on a truncated group snapshot")
+	}
 }
 
 func TestImageRequestOfferedReadErrorIs503(t *testing.T) {

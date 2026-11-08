@@ -79,6 +79,8 @@ var sealFields = map[string][]SealField{
 	"governance.change.note": {{Path: "reason", Subject: SubjectActor}},
 	// An elevation request's reason is the requester's (the row's actor); its ticket is not sealed.
 	"governance.elevation.request": {{Path: "reason", Subject: SubjectActor}},
+	// An image request's reason is the requester's (the row's actor); its ticket is not sealed.
+	"governance.image_request.request": {{Path: "reason", Subject: SubjectActor}},
 	// The person whose sessions were revoked: the target column's own name, repeated in data.
 	"session.revoke": {{Path: "sub", Subject: SubjectTarget}},
 	// The person a token mint was asked for, repeated from the target column.

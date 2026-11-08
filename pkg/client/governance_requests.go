@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// GovernanceRequest is a held request (an elevation today) as GET and POST /api/v1/governance/requests
+// GovernanceRequest is a held request (an elevation or an image) as GET and POST /api/v1/governance/requests
 // answer it: the held change, the kind's fields and who decides it.
 type GovernanceRequest struct {
 	GovernanceChange
@@ -45,6 +45,9 @@ type ElevationOffer struct {
 type GovernanceRequestList struct {
 	Requests []GovernanceRequest `json:"requests"`
 	Offered  []ElevationOffer    `json:"offered"`
+	// ImageOffered is whether the caller may ask for an image (RequestImage): their default unit has an
+	// image rule on it or above it. An older server leaves it false.
+	ImageOffered bool `json:"image_offered"`
 }
 
 // ListGovernanceRequests lists the requests the caller may see and the elevations offered to them. GET
@@ -72,6 +75,55 @@ func (c *Client) RequestElevation(ctx context.Context, unitID uuid.UUID, duratio
 	}
 	// Not c.do: every request's 202 carries its pending_change, which do reads as a held write; the answer
 	// here is the request beside it.
+	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/governance/requests", bytes.NewReader(b), true)
+	if err != nil {
+		return GovernanceRequest{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return GovernanceRequest{}, fmt.Errorf("http: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxPendingErrBody))
+	if err != nil {
+		return GovernanceRequest{}, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		apiErr := NewAPIError(resp.StatusCode, raw)
+		if len(apiErr.Body) > maxErrBody {
+			apiErr.Body = apiErr.Body[:maxErrBody]
+		}
+		return GovernanceRequest{}, apiErr
+	}
+	var out struct {
+		Request GovernanceRequest `json:"request"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return GovernanceRequest{}, fmt.Errorf("decode response: %w", err)
+	}
+	return out.Request, nil
+}
+
+// RequestImage asks for one image by digest (<name>@sha256:<64 hex>), with a reason and an optional ticket
+// ("" omits it). The request is held until a decider of the caller's default unit approves it, and the
+// approval grants exactly that image to the caller. POST /api/v1/governance/requests, kind image.
+func (c *Client) RequestImage(ctx context.Context, image, reason, ticket string) (GovernanceRequest, error) {
+	return c.postGovernanceRequest(ctx, struct {
+		Kind   string `json:"kind"`
+		Image  string `json:"image"`
+		Reason string `json:"reason"`
+		Ticket string `json:"ticket,omitempty"`
+	}{"image", image, reason, ticket})
+}
+
+// postGovernanceRequest posts body to /api/v1/governance/requests and returns the request from the 202.
+// Not c.do: the 202 carries its pending_change, which do reads as a held write.
+func (c *Client) postGovernanceRequest(ctx context.Context, body any) (GovernanceRequest, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return GovernanceRequest{}, fmt.Errorf("marshal request body: %w", err)
+	}
 	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/governance/requests", bytes.NewReader(b), true)
 	if err != nil {
 		return GovernanceRequest{}, err

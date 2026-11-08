@@ -97,6 +97,11 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 			return governanceCeiling{}, runServerError("resolve capability", err)
 		}
 		if !granted {
+			if s.imageRequestOfferedQuiet(r) { // read only on this refusal, never on a granted launch
+				return governanceCeiling{}, runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image",
+					"image "+req.Image+" is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, "+
+						"or launch with the agent's convention image or an onboarded workspace's base image"))
+			}
 			return governanceCeiling{}, runDenied(authz.Deny(authz.ReasonBYOIUser, "runs.image",
 				"image "+req.Image+" is not granted to you — ask an admin for an image grant that covers it, "+
 					"or launch with the agent's convention image or an onboarded workspace's base image"))

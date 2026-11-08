@@ -46,6 +46,7 @@ func TestRequestImageWire(t *testing.T) {
 	if req.ID != change || req.Kind != "image" || req.Image != ref || req.UnitID == nil || *req.UnitID != unit || !req.Mine {
 		t.Errorf("request = %+v, want the 202's request", req)
 	}
+	got = nil
 	if _, err := c.RequestImage(context.Background(), ref, "again", ""); err != nil {
 		t.Fatal(err)
 	}
