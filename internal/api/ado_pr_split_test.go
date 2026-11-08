@@ -85,10 +85,10 @@ func TestADOPRVoteAboveCeilingRefused(t *testing.T) {
 		t.Errorf("rows raised = %d, want none", len(f.approvals.requested))
 	}
 	rowID := f.st.site.WorkspaceProviders.Git[0].ID
-	if f.srv.adoEscalationWithinCeiling(context.Background(), adoCapabilityScope{ProviderID: rowID, Capability: string(adoVote)}) {
+	if f.srv.adoEscalationWithinCeiling(context.Background(), f.runID, adoCapabilityScope{ProviderID: rowID, Capability: string(adoVote)}) {
 		t.Error("the decide door admits pr_vote outside the ceiling")
 	}
-	if !f.srv.adoEscalationWithinCeiling(context.Background(), adoCapabilityScope{ProviderID: rowID, Capability: string(adoCreate)}) {
+	if !f.srv.adoEscalationWithinCeiling(context.Background(), f.runID, adoCapabilityScope{ProviderID: rowID, Capability: string(adoCreate)}) {
 		t.Error("the decide door refuses pr_create inside the ceiling")
 	}
 }
