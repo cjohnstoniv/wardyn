@@ -109,6 +109,8 @@ export function RunLifetimeBanner({
   // server (run_revive.go, run_pause.go, run_end_wait.go) — a security admin
   // looking at a foreign run must not be offered a button that always 403s.
   const canAct = operator || run.created_by === principal;
+  // A request for elevation is made for whoever sends it, so only the run's owner is offered one for this run.
+  const isOwner = run.created_by === principal;
   // R2-3 (PR #1317 round-2 review): the SAME formula run-ends-row.tsx's own
   // Change…/Set an end… gate uses — Change end… (and its dialog's No end
   // option) needs the captured user_changes_limits gate too, not just
@@ -438,7 +440,7 @@ export function RunLifetimeBanner({
     return (
       <>
         <Banner data-testid="run-lifetime-elevation-ended" tone="plain" title={RL.ELEVATION_ENDED_TITLE} body={RL.ELEVATION_ENDED_BODY}>
-          {canAct && (
+          {isOwner && (
             <div className="mt-2.5">
               <Button size="sm" onClick={() => setRequestOpen(true)}>
                 {RL.REQUEST_ELEVATION}
@@ -446,7 +448,7 @@ export function RunLifetimeBanner({
             </div>
           )}
         </Banner>
-        {canAct && <ElevationRequestDialog open={requestOpen} onOpenChange={setRequestOpen} unitId={run.unit_id} />}
+        {isOwner && <ElevationRequestDialog open={requestOpen} onOpenChange={setRequestOpen} unitId={run.unit_id} />}
       </>
     );
   }
