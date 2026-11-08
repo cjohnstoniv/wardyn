@@ -21,7 +21,6 @@ async function seedRun(page: Page): Promise<string> {
   const created = await consoleAPI(page, "POST", "/api/v1/runs", {
     agent: "claude-code",
     task: "data-out run e2e " + randomUUID().slice(0, 8),
-    min_confinement_class: "CC3",
   });
   expect(created.status, created.text).toBe(201);
   return JSON.parse(created.text).id as string;

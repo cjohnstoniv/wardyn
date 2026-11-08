@@ -72,15 +72,16 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   // and so does one the units could not be read to confirm.
   const runIn = useRunIn(deps?.runIn);
   const homeName = runIn.choices?.home?.name ?? list?.allowance?.unit_name;
+  const lastPicked = draft.guided.runInPicked;
   React.useEffect(() => {
     if (!intent.run_in) return;
     if (runIn.status === "failed") return dispatch({ type: "edit", apply: withoutRunIn });
     if (runIn.status !== "ready" || !runIn.choices) return;
-    const verdict = reconcileRunIn(intent.run_in, runIn.choices, runIn.list, homeName ?? "");
+    const verdict = reconcileRunIn(intent.run_in, runIn.choices, runIn.list, homeName ?? "", lastPicked);
     if (verdict.keep) return;
     dispatch({ type: "edit", apply: withoutRunIn });
     dispatch({ type: "guided", patch: { runInCleared: verdict.notice } });
-  }, [intent.run_in, runIn.status, runIn.choices, runIn.list, homeName, dispatch]);
+  }, [intent.run_in, runIn.status, runIn.choices, runIn.list, homeName, lastPicked, dispatch]);
   const picked = itemFor(runIn.choices, intent.run_in);
   const runInName = picked && !(picked.group === "yours" && picked.home) ? picked.name : undefined;
   // A VM is its own barrier: the container barriers give way to the VM's fixed line.

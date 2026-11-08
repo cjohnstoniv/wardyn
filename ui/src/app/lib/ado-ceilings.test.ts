@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { orgCeilings, refusedBy, unionCeiling } from "./ado-ceilings";
+import { adoAllows, orgCeilings, refusedBy, unionCeiling } from "./ado-ceilings";
 import type { SCMAccess } from "./types";
 
 const row = (org: string, capability_ceiling?: string[]): SCMAccess => ({ state: "live", org: `https://dev.azure.com/${org}`, capability_ceiling });
@@ -41,5 +41,23 @@ describe("the Azure DevOps ceiling across organisations (#2146)", () => {
     const one = orgCeilings([row("acme", ["code_read"])]);
     expect(unionCeiling(one)).toEqual(["code_read"]);
     expect(refusedBy(one, "code_read")).toEqual([]);
+  });
+});
+
+describe("pr on a ceiling stands for its three parts (adoscope.Has)", () => {
+  it("allows each part under pr, and pr only under pr or all three parts", () => {
+    for (const part of ["pr_create", "pr_vote", "pr_complete"]) expect(adoAllows(["code_read", "pr"], part), part).toBe(true);
+    expect(adoAllows(["pr"], "pr")).toBe(true);
+    expect(adoAllows(["pr_create", "pr_vote", "pr_complete"], "pr")).toBe(true);
+    expect(adoAllows(["pr_create", "pr_vote"], "pr")).toBe(false);
+    expect(adoAllows(["pr_create"], "pr_vote")).toBe(false);
+    expect(adoAllows(["code_read"], "code_read")).toBe(true);
+    expect(adoAllows(["code_read"], "code_write")).toBe(false);
+  });
+
+  it("does not name an organisation whose pr allows the part asked about", () => {
+    const cs = orgCeilings([row("acme", ["pr"]), row("beta", ["pr_create"])]);
+    expect(refusedBy(cs, "pr_create")).toEqual([]);
+    expect(refusedBy(cs, "pr_vote")).toEqual(["beta"]);
   });
 });

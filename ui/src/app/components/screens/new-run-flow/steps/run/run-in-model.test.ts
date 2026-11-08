@@ -125,6 +125,12 @@ describe("run in reconcile", () => {
     expect(NR_RUN_IN.NO_LONGER_IN("Data science", "Platform")).toBe("You're no longer in Data science, so this run goes to your home unit, Platform.");
   });
 
+  it("names a unit the person picked by the name it had then, and only that unit", () => {
+    const picked = { unitId: "u-gone", name: "Research" };
+    expect(reconcileRunIn("u-gone", c, listOf([]), "Platform", picked)).toEqual({ keep: false, notice: NR_RUN_IN.NO_LONGER_IN("Research", "Platform") });
+    expect(reconcileRunIn("u-other", c, listOf([]), "Platform", picked)).toEqual({ keep: false, notice: NR_RUN_IN.NO_LONGER_IN("u-other", "Platform") });
+  });
+
   it("does not take another person's request for the person's elevation", () => {
     const list = listOf([request({ mine: false })]);
     expect(reconcileRunIn("u-pay", c, list, "Platform")).toMatchObject({ keep: false, notice: NR_RUN_IN.NO_LONGER_IN("u-pay", "Platform") });

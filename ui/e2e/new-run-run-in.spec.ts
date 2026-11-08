@@ -161,7 +161,8 @@ test.describe("New Run, Run in", () => {
     const asked = page.waitForRequest((r) => r.url().endsWith("/runs/preflight") && (r.postDataJSON() as { run_in?: string }).run_in === "u-pay");
     await toReview(page);
     await asked;
-    expect(seen.preflight.at(-1)).toMatchObject({ run_in: "u-pay" });
+    // The request event comes before the route records the body.
+    await expect.poll(() => seen.preflight.at(-1)).toMatchObject({ run_in: "u-pay" });
     await expect(page.getByText(NR_RUN_IN.REVIEW_ROW("Payments"))).toBeVisible();
   });
 

@@ -177,6 +177,13 @@ describe("Run in field: choosing", () => {
     expect(edited({}).run_in).toBe("u-bill");
   });
 
+  it("keeps the picked unit's name, so a notice can name it once the units stop listing it", async () => {
+    const { dispatch } = setup();
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole("option", { name: /^Data science/ }));
+    expect(dispatch).toHaveBeenCalledWith({ type: "guided", patch: { runInPicked: { unitId: "u-data", name: "Data science" } } });
+  });
+
   it("ends the notice when the person picks a unit", async () => {
     const { dispatch } = setup({ notice: NR_RUN_IN.ENDED("Payments", "Platform") });
     await userEvent.click(trigger());

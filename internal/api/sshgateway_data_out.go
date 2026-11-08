@@ -23,12 +23,13 @@ import (
 const sftpServerDeny = "read,readlink"
 
 // sshDataOut is the run's data_out rule for one SSH connection, read once when it opens. A rule that cannot
-// be read, or a run with no recorded policy, is blocked, and says so once in the log.
+// be read is blocked, and says so once in the log; a run with no recorded policy carries no rule, so it is
+// allowed, as runDataOutRule reads it for every other path.
 func (s *Server) sshDataOut(ctx context.Context, runID uuid.UUID) types.TransferRule {
-	rule, found, err := s.runDataOutRule(ctx, runID)
-	if err != nil || !found {
+	rule, _, err := s.runDataOutRule(ctx, runID)
+	if err != nil {
 		slog.WarnContext(ctx, "wardynd: a run's data_out rule is unreadable; its SSH file transfer, commands and port forwards are refused",
-			"run_id", runID, "found", found, "err", err)
+			"run_id", runID, "err", err)
 		return types.TransferBlocked
 	}
 	return rule

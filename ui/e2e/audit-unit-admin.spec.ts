@@ -53,7 +53,7 @@ test("a unit admin sees the unit description, a note naming their unit, and the 
   await page.goto("/admin/audit");
 
   await expect(page.getByText(DESCRIPTION)).toBeVisible();
-  await expect(page.getByText("Runs in your units")).toBeVisible();
+  await expect(page.getByText("Runs in your units", { exact: true })).toBeVisible();
   await expect(page.getByText("e2e-unit", { exact: true })).toBeVisible();
   await expect(page.getByText("Allowed egress to api.github.com:443")).toBeVisible();
   await expect(page.getByText("Denied egress to pastebin.example:443")).toBeVisible();

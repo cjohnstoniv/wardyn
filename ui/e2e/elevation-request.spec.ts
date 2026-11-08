@@ -133,7 +133,7 @@ test.describe("Approvals: elevation requests", () => {
       ],
     });
     await openApprovals(page);
-    const card = page.locator("div.rounded-xl", { has: page.getByText(ELEV.LIST_TITLE) }).first();
+    const card = page.locator("section").filter({ has: page.getByRole("heading", { name: ELEV.LIST_TITLE, exact: true }) });
     for (const chip of [ELEV.STATE_WAITING, ELEV.STATE_APPROVED, ELEV.STATE_DENIED, ELEV.STATE_EXPIRED, ELEV.STATE_ENDED]) {
       await expect(card.getByText(chip, { exact: true })).toHaveCount(1);
     }

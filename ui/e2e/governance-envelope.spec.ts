@@ -51,9 +51,9 @@ test.describe("governance — platform envelopes", () => {
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
-    await expect(page.getByRole("heading", { name: ENVELOPE.TITLE })).toBeVisible();
+    await expect(page.getByRole("heading", { name: ENVELOPE.TITLE, exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: ENVELOPE.SET, exact: true }).first().click();
+    await page.getByRole("button", { name: ENVELOPE.SET, exact: true }).click();
     await page.getByRole("combobox", { name: ENVELOPE.ROOT_LABEL }).click();
     await page.getByRole("option", { name: NAME_R, exact: true }).click();
     await page.getByLabel(ENVELOPE.GROUPS_LABEL).fill(GROUP_A);
@@ -83,7 +83,7 @@ test.describe("governance — platform envelopes", () => {
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
-    await page.getByRole("button", { name: ENVELOPE.SET, exact: true }).first().click();
+    await page.getByRole("button", { name: ENVELOPE.SET, exact: true }).click();
     await page.getByRole("combobox", { name: ENVELOPE.ROOT_LABEL }).click();
     await page.getByRole("option", { name: NAME_S, exact: true }).click();
     await page.getByLabel(ENVELOPE.GROUPS_LABEL).fill(GROUP_A);

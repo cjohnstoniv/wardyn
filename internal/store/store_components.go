@@ -20,9 +20,10 @@ import (
 )
 
 // componentCols is every read's columns: the row, its unit pin (owning_unit_id) and the pinned unit's
-// name. The INSERT and UPDATE lists never name the pin: only SetComponentOwningUnitQ writes it.
+// name, aliased so that ORDER BY name means the component's. The INSERT and UPDATE lists never name the pin:
+// only SetComponentOwningUnitQ writes it.
 const componentCols = `id, owner, name, definition, version, created_by, created_at, updated_at, ` +
-	`owning_unit_id, (SELECT u.name FROM governance_units u WHERE u.id = components.owning_unit_id)`
+	`owning_unit_id, (SELECT u.name FROM governance_units u WHERE u.id = components.owning_unit_id) AS owning_unit_name`
 
 // CreateComponent — see ComponentStore.
 func (s PG) CreateComponent(ctx context.Context, c types.Component) (types.Component, error) {

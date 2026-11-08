@@ -72,6 +72,7 @@ test.describe("governance — a unit admin in the console", () => {
 
   test("a unit admin opens a profile read only", async ({ page }) => {
     await asRealUnitAdmin(page);
+    await gotoConsole(page);
     await navToRoute(page, "/admin/governance");
     await expect(page.getByText(NAME).first()).toBeVisible();
 

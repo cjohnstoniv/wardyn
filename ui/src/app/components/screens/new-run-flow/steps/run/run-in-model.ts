@@ -63,13 +63,17 @@ export function shown(c: RunInChoices | undefined): boolean {
   return !!c && (c.items.filter((i) => i.group === "yours").length > 1 || c.items.some((i) => i.group !== "yours"));
 }
 
-/** A `run_in` the units still list stays; otherwise the run goes home, with the sentence that says why. */
+/**
+ * A `run_in` the units still list stays; otherwise the run goes home, with the sentence that says why. The unit is
+ * named by its request, else by the name it had when the person picked it, else by the draft's value.
+ */
 export function reconcileRunIn(
   runIn: string | undefined, c: RunInChoices, list: GovernanceRequestList | null | undefined, homeName: string,
+  picked?: { unitId: string; name: string },
 ): { keep: true } | { keep: false; notice: string } {
   if (!runIn || itemFor(c, runIn)) return { keep: true };
   const had = list?.requests.find((r) => mineElevation(r) && r.state === "applied" && forUnit(r, runIn));
-  const name = had?.unit_name ?? runIn;
+  const name = had?.unit_name ?? (picked?.unitId === runIn ? picked.name : runIn);
   return { keep: false, notice: had ? NR_RUN_IN.ENDED(name, homeName) : NR_RUN_IN.NO_LONGER_IN(name, homeName) };
 }
 
