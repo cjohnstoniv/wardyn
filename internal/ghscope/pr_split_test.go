@@ -74,7 +74,7 @@ func TestGitHubPermitsPRAlias(t *testing.T) {
 }
 
 func TestPermissionsForPRSplit(t *testing.T) {
-	want := map[string]string{"pull_requests": "write"}
+	want := map[string]string{"metadata": "read", "pull_requests": "write"}
 	for _, caps := range [][]Capability{{CapPRWrite}, {CapPRReview}, {CapPRWrite, CapPRReview}, {CapPR}} {
 		got, err := PermissionsFor(caps)
 		if err != nil || !maps.Equal(got, want) {

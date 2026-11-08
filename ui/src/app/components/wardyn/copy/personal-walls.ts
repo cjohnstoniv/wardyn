@@ -121,6 +121,8 @@ export const GITHUB_CAPABILITY_GROUPS: { name: string; caps: { cap: string; labe
     name: "Pull requests and issues",
     caps: [
       { cap: "pr", label: "Open, update and review pull requests" },
+      { cap: "pr_write", label: "Open, update and comment on pull requests, and request reviewers" },
+      { cap: "pr_review", label: "Submit, approve, request changes on and dismiss pull request reviews" },
       { cap: "issues_read", label: "Read issues, comments, labels and milestones" },
       { cap: "issues_write", label: "Create and change issues, comments, labels and milestones" },
     ],

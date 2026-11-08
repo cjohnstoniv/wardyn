@@ -61,7 +61,8 @@ func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spe
 // reads as the default, so it is refused rather than run. The clamp then bounds a list that does
 // share something (composer.ClampMember).
 func githubCapabilitiesDisjoint(picked, profile []ghscope.Capability) *runRefusal {
-	if len(picked) == 0 || len(profile) == 0 || slices.ContainsFunc(picked, func(c ghscope.Capability) bool { return slices.Contains(profile, c) }) {
+	picked, profile = ghscope.ExpandPR(picked), ghscope.ExpandPR(profile)
+	if len(picked) == 0 || len(profile) == 0 || slices.ContainsFunc(picked, func(c ghscope.Capability) bool { return ghscope.Has(profile, c) }) {
 		return nil
 	}
 	return runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,

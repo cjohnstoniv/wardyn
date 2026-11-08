@@ -497,7 +497,7 @@ func (sn adoEntraScopeSnapshot) driftFrom(sc types.SiteConfig) string {
 		return "token_mode"
 	case !rowServesOrganisation(row, sn.Organisation):
 		return "organisation"
-	case !subsetOf(sn.Capabilities, row.Entra.CapabilityCeiling):
+	case !subsetOf(adoscope.ExpandPR(sn.Capabilities), row.Entra.Ceiling()):
 		return "capability_ceiling"
 	}
 	return ""

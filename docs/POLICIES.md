@@ -146,7 +146,7 @@
 ### `azure_devops_capabilities`
 
 - This run's Azure DevOps capabilities on the per-person (Entra) lane, in place of the provider row's `default_profile`, so a saved policy works as a saved access profile.
-- Each entry must be a grantable capability (`code_read`, `work_read`, `code_write`, `pr`, `policy_admin`, …, one read per Azure DevOps area);
+- Each entry must be a grantable capability (`code_read`, `work_read`, `code_write`, `pr`, `pr_create`, `pr_vote`, `pr_complete`, `policy_admin`, …, one read per Azure DevOps area);
   - anything else, including the pre-0.8.2 `read`, is a `400` with reason `ado_capability_unknown`.
 - It chooses only **within** the row's `capability_ceiling`: a run naming a capability outside it is refused at launch, never silently granted, and the live ceiling is re-checked on every request.
 - For a member (including an admin in the user view) the list stands only where it is in the row's `default_profile` or in their governance profile's own `azure_devops_capabilities` (the default policy's when none is assigned),
@@ -163,7 +163,7 @@
 ### `github_capabilities`
 
 - The GitHub twin of `azure_devops_capabilities`: this run's GitHub capabilities in place of a GitHub provider row's `default_profile`, chosen only within the row's `capability_ceiling`.
-- Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`.
+- Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `pr_write`, `pr_review`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`. `pr` means `pr_write` and `pr_review` together. GitHub has no hold, so `pr_review` is granted or not.
 - A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused).
 - A profile's list bounds its members' runs, the GitHub CLI included: a member who names none gets the profile's list, and a list sharing none with it is refused.
 - Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. Entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall also narrows the GitHub CLI's capabilities ([Your walls](#your-walls)).

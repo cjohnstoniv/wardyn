@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -23,13 +24,11 @@ func TestADOHoldResolveNamingPRAdmitsVote(t *testing.T) {
 		cp := newCapControlPlane(t)
 		h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
 		h.p.adoGrants[adoHost] = ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}}
-		h.do(t, http.MethodPut, adoVotePath, `{"vote":10}`, nil)
+		rec := h.do(t, http.MethodPut, adoVotePath, `{"vote":10}`, nil)
 		if asks, _ := cp.snapshot(); len(asks) != 0 {
 			t.Errorf("a vote under a pr grant was asked for: %v", asks)
 		}
-		if n := len(h.fake.Requests()); n != 1 {
-			t.Errorf("upstream saw %d requests, want the vote forwarded", n)
-		}
+		wantForwarded(t, rec)
 	})
 	for _, tc := range []struct {
 		name   string
@@ -62,13 +61,19 @@ func TestADOHoldResolveNamingPRAdmitsVote(t *testing.T) {
 			}))
 			t.Cleanup(cp.srv.Close)
 			h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
-			rec := h.do(t, http.MethodPut, adoVotePath, `{"vote":10}`, nil)
-			if n := len(h.fake.Requests()); n != 1 {
-				t.Fatalf("upstream saw %d requests (status %d body %s), want the vote forwarded", n, rec.Code, rec.Body.String())
-			}
+			wantForwarded(t, h.do(t, http.MethodPut, adoVotePath, `{"vote":10}`, nil))
 			if !h.p.inject.reauth.holds(adoscope.CapPRVote) {
 				t.Error("the run was not widened to pr_vote")
 			}
 		})
+	}
+}
+
+// wantForwarded holds rec to the upstream's answer: the fake serves no reviewer route, so a forwarded
+// vote is its 404, never the proxy's 403 refusal.
+func wantForwarded(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "404 page not found") {
+		t.Fatalf("status %d body %s, want the vote forwarded to the upstream", rec.Code, rec.Body.String())
 	}
 }

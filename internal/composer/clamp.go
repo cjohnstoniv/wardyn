@@ -196,8 +196,8 @@ func clampGitHubCapabilities(out *types.RunPolicySpec, ceiling types.RunPolicySp
 		return warns
 	}
 	var kept, dropped []ghscope.Capability
-	for _, c := range out.GitHubCapabilities {
-		if slices.Contains(ceiling.GitHubCapabilities, c) {
+	for _, c := range ghscope.ExpandPR(out.GitHubCapabilities) {
+		if ghscope.Has(ceiling.GitHubCapabilities, c) {
 			kept = append(kept, c)
 		} else {
 			dropped = append(dropped, c)

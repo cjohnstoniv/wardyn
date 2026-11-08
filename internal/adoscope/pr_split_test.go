@@ -205,3 +205,13 @@ func TestScopesForPRSplit(t *testing.T) {
 		}
 	}
 }
+
+// The server's enum parser also reads a status spelled as a string of digits.
+func TestClassifyPRSplitEnumAsDigits(t *testing.T) {
+	pr := "/acme/proj/_apis/git/repositories/r1/pullrequests/7"
+	runCases(t, []caseT{
+		{name: "complete as a digit string", req: adoReq(http.MethodPatch, pr, `{"status":"3"}`), want: CapPRComplete},
+		{name: "thread active as a digit string", req: adoReq(http.MethodPatch, pr+"/threads/9", `{"status":"1"}`), want: CapPRCreate},
+		{name: "thread fixed as a digit string", req: adoReq(http.MethodPatch, pr+"/threads/9", `{"status":"2"}`), want: CapPRVote},
+	})
+}

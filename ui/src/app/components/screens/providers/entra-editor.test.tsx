@@ -65,10 +65,10 @@ describe("EntraEditor", () => {
   it("draws the seven areas in the per-area mock's order, High-risk rows inside their area", () => {
     render(<Harness initial={entraRow()} />);
     const names = ceiling().getAllByRole("checkbox").map((b) => b.getAttribute("aria-label"));
-    expect(names.slice(0, 9)).toEqual(
-      ["code_read", "code_write", "pr", "policy_admin", "policy_bypass", "repo_admin", "work_read", "work_write", "work_admin"].map(name),
+    expect(names.slice(0, 12)).toEqual(
+      ["code_read", "code_write", "pr", "pr_create", "pr_vote", "pr_complete", "policy_admin", "policy_bypass", "repo_admin", "work_read", "work_write", "work_admin"].map(name),
     );
-    expect(names).toHaveLength(28);
+    expect(names).toHaveLength(31);
     expect(screen.getByTestId("entra-ceiling-policy_admin")).toHaveClass("border-l-danger");
     expect(screen.getByTestId("entra-ceiling-code_read")).not.toHaveClass("border-l-danger");
   });

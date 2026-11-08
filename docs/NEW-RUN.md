@@ -85,7 +85,7 @@ A harness is an agent tool the sandbox holds, such as a coding CLI.
 | Environment or Application sandbox | Optional. They are available inside the sandbox and start nothing |
 
 - A harness you cannot pick is disabled with its reason, such as not installed in this server's images or **Not enabled by your admin**.
-- An Autonomous agent task on an Azure DevOps repository that must push its work and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr`; nobody is there to approve either later. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
+- An Autonomous agent task on an Azure DevOps repository that must push its work and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr_create` (and `pr_complete` if it completes its own pull request). Nobody is there to approve either later. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
 - **Start the run in this harness** marks the one that starts. The last harness of an Agent task cannot be removed.
 
 ### Step 4: Files
