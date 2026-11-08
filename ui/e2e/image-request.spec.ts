@@ -313,7 +313,7 @@ test.describe("governance: image requests on the Changes tab", () => {
       [IMG.ROW_ASKED_UNDER, IMG.ASKED_UNDER("Payments")],
       [IMG.ROW_WRITES, IMG.WRITES],
     ]) {
-      await expect(drawer.getByRole("row").filter({ hasText: name })).toContainText(value);
+      await expect(drawer.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) })).toContainText(value);
     }
     await expect(drawer.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();
     await drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true }).click();
