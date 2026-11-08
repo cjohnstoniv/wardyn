@@ -79,7 +79,7 @@ test.describe("Settings — gateway presets on a new provider", () => {
     await expect(dialog.getByLabel("Base URL")).toHaveValue("https://openrouter.ai/api");
     await expect(dialog.getByPlaceholder("openai/…")).toHaveCount(1);
     await expect(dialog.getByText(PROVIDER_EDITOR.OPENROUTER_MODEL_HINT)).toBeVisible();
-    await expect(dialog.getByText(PROVIDER_EDITOR.PORTKEY_SLUG_HINT)).toHaveCount(0);
+    await expect(dialog.getByText(PROVIDER_EDITOR.PORTKEY_SLUG_HINT)).toBeVisible();
 
     await chip(dialog, "Other").click();
     await expect(dialog.getByPlaceholder("openai/…")).toHaveCount(0);

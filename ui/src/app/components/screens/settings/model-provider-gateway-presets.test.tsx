@@ -144,7 +144,7 @@ describe("a press fills", () => {
     expect(headerNames()).toHaveLength(1);
   });
 
-  it("Portkey hosted sets the auth header and format, adds the empty row, and shows the slug hint only while pressed", async () => {
+  it("Portkey hosted sets the auth header and format, adds the empty row, and keeps the slug hint while the row still shows @<slug>", async () => {
     const user = await startEndpoint();
     await press(user, "Portkey hosted");
     expect(screen.getByLabelText(E.AUTH_HEADER)).toHaveValue("x-portkey-api-key");
@@ -154,9 +154,13 @@ describe("a press fills", () => {
     const slug = screen.getByPlaceholderText(E.PORTKEY_SLUG_PLACEHOLDER);
     expect(slug).toHaveValue("");
     expect(screen.getByText(E.PORTKEY_SLUG_HINT)).toBeInTheDocument();
+    // The row is a kept fill, so its guidance stays while the row still shows @<slug>.
     await press(user, "Other");
-    expect(screen.queryByText(E.PORTKEY_SLUG_HINT)).toBeNull();
+    expect(screen.getByText(E.PORTKEY_SLUG_HINT)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(E.PORTKEY_SLUG_PLACEHOLDER)).toBeInTheDocument();
     expect(headerNames()).toHaveLength(1);
+    setField(slug, "@team");
+    expect(screen.queryByText(E.PORTKEY_SLUG_HINT)).toBeNull();
   });
 
   it("OpenRouter fills the base URL and paths, and gives the Codex CLI Model its placeholder and hint, only while pressed", async () => {
