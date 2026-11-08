@@ -64,7 +64,7 @@ describe("Unit deciders wire (GET /governance deciders, PUT /governance/units/{i
     const goKinds = [...types.matchAll(/\bDeciderKind\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1]);
     const union = /export type DeciderKind =([^;]+);/.exec(stripComments(ts))?.[1] ?? "";
     const tsKinds = [...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goKinds.length).toBe(6);
+    expect(goKinds.length).toBe(9);
     expect(tsKinds.sort()).toEqual(goKinds.sort());
   });
 

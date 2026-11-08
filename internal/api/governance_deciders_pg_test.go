@@ -422,3 +422,63 @@ func TestDecidersGovernanceRead(t *testing.T) {
 		t.Errorf("ua-a1's admin sees %v, want ua-a1's entry only", seen)
 	}
 }
+
+// TestDecidersReparentUnderLockRefused: a unit write that moves a unit, or one with units below it, whose
+// rules are set under a unit that locks the deciders knob is a 409 naming them: the rules would otherwise
+// freeze under the lock. Once they are cleared the move applies.
+func TestDecidersReparentUnderLockRefused(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	lock := e.restate(e.a, map[string]any{"locked_knobs": []string{"deciders"}})
+	if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.a.ID.String(), lock); w.Code != http.StatusOK {
+		t.Fatalf("lock = %d %s", w.Code, w.Body)
+	}
+	bc := e.child(e.b)
+	for _, u := range []types.GovernanceUnit{e.b, bc} {
+		if w := e.call(e.alice, http.MethodPut, decidersPath(u), decidersBody(egressOwnerRule())); w.Code != http.StatusOK {
+			t.Fatalf("rules for %s = %d %s", u.Name, w.Code, w.Body)
+		}
+	}
+	move := uaUnitBody("ua-b", e.a.ID, uaDomains("pypi.org"), nil)
+	path := "/api/v1/governance/units/" + e.b.ID.String()
+	w := e.admin(http.MethodPut, path, move)
+	if w.Code != http.StatusConflict || wireReason(t, w) != "unit_knob_locked" || !strings.Contains(w.Body.String(), "ua-b") || !strings.Contains(w.Body.String(), bc.Name) {
+		t.Fatalf("moving units with rules under the lock = %d %s, want 409 unit_knob_locked naming ua-b and %s", w.Code, w.Body, bc.Name)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.b), decidersBody()); w.Code != http.StatusOK {
+		t.Fatal(w.Body)
+	}
+	w = e.admin(http.MethodPut, path, move)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), bc.Name) || strings.Contains(w.Body.String(), "ua-b,") {
+		t.Fatalf("moving a unit with rules below it = %d %s, want 409 naming only %s", w.Code, w.Body, bc.Name)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(bc), decidersBody()); w.Code != http.StatusOK {
+		t.Fatal(w.Body)
+	}
+	if w := e.admin(http.MethodPut, path, move); w.Code != http.StatusOK {
+		t.Errorf("moving with every rule cleared = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
+// TestDecidersBoundaryLockOverRulesRefused: a boundary write that newly locks the deciders knob while a
+// unit states rules is a 409 naming the unit, as a unit's own lock is; with the rules cleared it applies,
+// and the held form is refused at approval alike.
+func TestDecidersBoundaryLockOverRulesRefused(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a1), decidersBody(egressOwnerRule())); w.Code != http.StatusOK {
+		t.Fatal(w.Body)
+	}
+	body := `{"mode":"hard_limits","spec":{},"limits":{},"locked_knobs":["deciders"]}`
+	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/boundary", body)
+	if w.Code != http.StatusConflict || wireReason(t, w) != "unit_knob_locked" || !strings.Contains(w.Body.String(), "ua-a1") {
+		t.Fatalf("boundary lock over rules = %d %s, want 409 unit_knob_locked naming ua-a1", w.Code, w.Body)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a1), decidersBody()); w.Code != http.StatusOK {
+		t.Fatal(w.Body)
+	}
+	if w := e.call(e.alice, http.MethodPut, "/api/v1/governance/boundary", body); w.Code != http.StatusOK {
+		t.Errorf("boundary lock with no rules = %d %s, want 200", w.Code, w.Body)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a1), decidersBody(egressOwnerRule())); w.Code != http.StatusConflict {
+		t.Errorf("rules under the boundary's lock = %d %s, want 409", w.Code, w.Body)
+	}
+}

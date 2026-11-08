@@ -8,10 +8,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeciderKindsAreTheClosedSet(t *testing.T) {
-	want := []string{"egress_domain", "ado_escalation", "mcp_call", "credential", "push_content", "elevation"}
+	want := []string{"egress_domain", "ado_escalation", "mcp_call", "kube_call", "credential", "push_content", "elevation", "image", "file_download"}
 	if !slices.Equal(DeciderKinds, want) {
 		t.Fatalf("DeciderKinds = %v, want %v", DeciderKinds, want)
 	}
@@ -30,10 +31,18 @@ func TestValidateDeciderRulesAccepts(t *testing.T) {
 		"empty who means security only":  {{Kinds: []string{"egress_domain"}, Who: nil}},
 		"elevation":                      {{Kinds: []string{"elevation"}, Who: []string{"unit_admins", "group:support-leads"}, MaxElevation: "4h"}},
 		"elevation bounds":               {{Kinds: []string{"elevation"}, MaxElevation: "15m"}, {Kinds: []string{"egress_domain"}, Who: []string{"owner"}, MaxScope: ScopeUntil}},
+		"kube_call like mcp_call":        {{Kinds: []string{"kube_call", "mcp_call"}, Who: []string{"owner", "group:sre"}, MaxScope: ScopeOnce}},
+		"kube_call second human":         {{Kinds: []string{"kube_call"}, Who: []string{"unit_admins"}, SecondHuman: true}},
+		"image":                          {{Kinds: []string{"image"}, Who: []string{"unit_admins", "group:platform"}}},
+		"file_download":                  {{Kinds: []string{"file_download"}, Who: []string{"group:dlp"}, SecondHuman: true}},
+		"file_download forced":           {{Kinds: []string{"file_download"}, Who: []string{"unit_admins"}}},
 		"every kind once": {
 			{Kinds: []string{"egress_domain", "ado_escalation", "mcp_call"}, Who: []string{"group:a"}},
 			{Kinds: []string{"credential", "push_content"}, Who: []string{"unit_admins"}, SecondHuman: true},
 			{Kinds: []string{"elevation"}, MaxElevation: "24h"},
+			{Kinds: []string{"kube_call"}, Who: []string{"group:b"}},
+			{Kinds: []string{"image"}, Who: []string{"unit_admins"}},
+			{Kinds: []string{"file_download"}, Who: []string{"unit_admins"}},
 		},
 	} {
 		got, err := ValidateDeciderRules(rules)
@@ -95,6 +104,14 @@ func TestValidateDeciderRulesRefuses(t *testing.T) {
 		"cap under 15m":             {[]DeciderRule{{Kinds: []string{"elevation"}, MaxElevation: "14m"}}, 0, "max_elevation"},
 		"cap over 24h":              {[]DeciderRule{{Kinds: []string{"elevation"}, MaxElevation: "25h"}}, 0, "max_elevation"},
 		"cap on another kind":       {[]DeciderRule{{Kinds: []string{"egress_domain"}, MaxElevation: "1h"}}, 0, "max_elevation"},
+		"owner on image":            {[]DeciderRule{{Kinds: []string{"image"}, Who: []string{"owner"}}}, 0, "owner"},
+		"owner on file_download":    {[]DeciderRule{{Kinds: []string{"file_download"}, Who: []string{"owner"}}}, 0, "owner"},
+		"second human on image":     {[]DeciderRule{{Kinds: []string{"image"}, SecondHuman: true}}, 0, "second_human"},
+		"scope on image":            {[]DeciderRule{{Kinds: []string{"image"}, MaxScope: ScopeOnce}}, 0, "max_scope"},
+		"scope on file_download":    {[]DeciderRule{{Kinds: []string{"file_download"}, MaxScope: ScopeOnce}}, 0, "max_scope"},
+		"cap on image":              {[]DeciderRule{{Kinds: []string{"image"}, MaxElevation: "1h"}}, 0, "max_elevation"},
+		"image mixed":               {[]DeciderRule{{Kinds: []string{"image", "mcp_call"}}}, 0, "image"},
+		"file_download mixed":       {[]DeciderRule{{Kinds: []string{"file_download", "credential"}, SecondHuman: true}}, 0, "file_download"},
 		"elevation mixed":           {[]DeciderRule{{Kinds: []string{"elevation", "egress_domain"}, MaxElevation: "1h"}}, 0, "elevation"},
 	} {
 		_, err := ValidateDeciderRules(tc.rules)
@@ -134,4 +151,37 @@ func TestDeciderGroupOf(t *testing.T) {
 			t.Errorf("%q is not a group decider", w)
 		}
 	}
+}
+
+func TestValidateDeciderRulesForcesFileDownloadSecondHuman(t *testing.T) {
+	got, err := ValidateDeciderRules([]DeciderRule{{Kinds: []string{"file_download"}, Who: []string{"unit_admins"}}})
+	if err != nil || !got[0].SecondHuman {
+		t.Fatalf("file_download = %+v, %v, want second_human stored as true", got, err)
+	}
+}
+
+// "240m" and "4h" are one cap: the stored and hashed form is one canonical duration string.
+func TestValidateDeciderRulesCanonicalMaxElevation(t *testing.T) {
+	for in, want := range map[string]string{"240m": "4h", "4h": "4h", "4h0m0s": "4h", "15m": "15m", "900s": "15m", "90m": "1h30m", "24h": "24h", "1440m": "24h"} {
+		got, err := ValidateDeciderRules([]DeciderRule{{Kinds: []string{"elevation"}, MaxElevation: in}})
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if got[0].MaxElevation != want {
+			t.Errorf("%q stored as %q, want %q", in, got[0].MaxElevation, want)
+		}
+		if d := got[0].MaxElevationDuration(); d != mustParse(t, in) {
+			t.Errorf("%q: duration %v changed by normalizing", in, d)
+		}
+	}
+}
+
+func mustParse(t *testing.T, s string) time.Duration {
+	t.Helper()
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
