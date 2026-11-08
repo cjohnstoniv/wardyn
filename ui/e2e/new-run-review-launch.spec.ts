@@ -153,6 +153,14 @@ test.describe("New Run, Review: blockers and Check again", () => {
     await expect(launch(page)).toBeDisabled();
   });
 
+  test("a personal computer refused by the managed-device rule is a blocker in the server's sentence", async ({ page }) => {
+    const sentence = "this runner is not marked as company-managed; ask a security admin to mark it as a managed device";
+    await stub(page, { preflight: { status: 422, body: { error: sentence, reason: "runner_trust_required", field: "trust_class" } } });
+    await openReview(page);
+    await expect(page.locator("#nr-blockers").getByText(sentence)).toBeVisible();
+    await expect(launch(page)).toBeDisabled();
+  });
+
   test("a document edited after it was accepted holds Launch with a sentence of its own (FR-0099, doc_invalid)", async ({ page }) => {
     await stub(page, { preflight: CLEAR });
     await openReview(page);
