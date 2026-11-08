@@ -146,7 +146,8 @@ docs/operations/user-drives.md=4984 share=35 # unchanged, measured: the mac_disk
 docs/operations/capabilities.md=5172 share=35 # 5172 measured (+9 over 5163, measured): image signature checks, pointer and field rows; earlier: kind table rows folded, release tags cut, one profile-limits bullet moved in from integrations.md (-2)
 # docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
-docs/operations/custom-components.md=1269 share=35
+# docs/operations/custom-components.md 1283 adds 14 over 1269, measured: a line links the brokered operations recipes.
+docs/operations/custom-components.md=1283 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
 # docs/operations/api-tokens.md 5475 adds 9 over 5466 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.

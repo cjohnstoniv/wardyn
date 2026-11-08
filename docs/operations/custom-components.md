@@ -22,6 +22,7 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - Variable and file delivery put the value where any code in the sandbox can read it. [CREDENTIALS.md](../CREDENTIALS.md) states what each leaves readable and what bounds it.
 - A `header` delivery names a bare host with no port, and the header goes to that host's standard TLS port only.
 - The proxy terminates TLS for each such host, because it can add a header only to a request it can read.
+- Recipes that use these pieces for ops commands, read-only databases and kubectl: [Brokered operations](brokered-operations.md).
 
 **The `components` settings.**
 

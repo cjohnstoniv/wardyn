@@ -18,6 +18,7 @@
 - A pool never claims or transfers a runner, and a user pool never makes another person's runner a candidate (`stepPlacement`, [`internal/api/run_fold_steps.go`](../../internal/api/run_fold_steps.go)).
 - A remote-hosted runner joins a person's user pool only while its "Available to people's pools" setting admits them: off (the default), everyone, or listed people, groups and roles (`wardyn runner remote people set`).
 - A use policy and a people policy are held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`; see [admin-only writes](admin-only-writes.md).
+- To keep a pool of runners that reach a cluster or a jump host to one unit's runs: [A pool for one unit](brokered-operations.md#a-pool-for-one-unit).
 - An organization runner on Kubernetes serves a pool in one runs namespace, fixed when you add it and listed as `runs_namespace` on the pool's members. It serves each named namespace for one pool only: [Several runs namespaces](k8s-runners.md#several-runs-namespaces).
 - With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, removing an organization runner from a pool that carries a use policy is held for a super admin, as for a remote-hosted runner.
 - On its first boot with pools, a deployment gets one organization pool, named "Organization", that holds its remote-hosted runners and is the organization's default.
