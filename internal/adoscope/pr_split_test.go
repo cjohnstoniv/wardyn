@@ -215,3 +215,25 @@ func TestClassifyPRSplitEnumAsDigits(t *testing.T) {
 		{name: "thread fixed as a digit string", req: adoReq(http.MethodPatch, pr+"/threads/9", `{"status":"2"}`), want: CapPRVote},
 	})
 }
+
+// TestClassifyPRStatusFailsClosed: the server's enum parser ORs a comma-joined list, so active|abandoned
+// is completed. A status completes unless it is exactly notSet, active or abandoned, by name or number.
+func TestClassifyPRStatusFailsClosed(t *testing.T) {
+	pr := "/acme/proj/_apis/git/repositories/r1/pullrequests/7"
+	runCases(t, []caseT{
+		{name: "active,completed", req: adoReq(http.MethodPatch, pr, `{"status":"active,completed"}`), want: CapPRComplete},
+		{name: "completed, active", req: adoReq(http.MethodPatch, pr, `{"status":"completed, active"}`), want: CapPRComplete},
+		{name: "active,abandoned ORs to completed", req: adoReq(http.MethodPatch, pr, `{"status":"active,abandoned"}`), want: CapPRComplete},
+		{name: "3 as a digit string", req: adoReq(http.MethodPatch, pr, `{"status":"3"}`), want: CapPRComplete},
+		{name: "3 as a number", req: adoReq(http.MethodPatch, pr, `{"status":3}`), want: CapPRComplete},
+		{name: "an unknown name", req: adoReq(http.MethodPatch, pr, `{"status":"merged"}`), want: CapPRComplete},
+		{name: "a signed digit string", req: adoReq(http.MethodPatch, pr, `{"status":"+1"}`), want: CapPRComplete},
+		{name: "abandoned", req: adoReq(http.MethodPatch, pr, `{"status":"abandoned"}`), want: CapPRCreate},
+		{name: "Active in another case", req: adoReq(http.MethodPatch, pr, `{"status":"Active"}`), want: CapPRCreate},
+		{name: "notSet", req: adoReq(http.MethodPatch, pr, `{"status":"notSet"}`), want: CapPRCreate},
+		{name: "2 as a digit string", req: adoReq(http.MethodPatch, pr, `{"status":"2"}`), want: CapPRCreate},
+		{name: "0 as a number", req: adoReq(http.MethodPatch, pr, `{"status":0}`), want: CapPRCreate},
+		{name: "a null status", req: adoReq(http.MethodPatch, pr, `{"status":null,"title":"t"}`), want: CapPRCreate},
+		{name: "a thread status list", req: adoReq(http.MethodPatch, pr+"/threads/9", `{"status":"active,fixed"}`), want: CapPRVote},
+	})
+}
