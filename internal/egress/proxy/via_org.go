@@ -140,6 +140,9 @@ func (p *Proxy) forwardViaOrg(w http.ResponseWriter, r *http.Request, route ViaO
 	out.ContentLength = r.ContentLength
 	out.Header = r.Header.Clone()
 	p.stripGatewayHeaders(out.Header)
+	// The organisation attaches the credential, so no sandbox routing header may ride to a gateway's
+	// host; the proxy does not know which header the organisation owns, so none is kept.
+	p.stripGatewayRoutingHeaders(out.Header, route.Host, "")
 	removeHopByHop(out.Header)
 	out.Header.Del(ViaOrgAuthorizationHeader)
 	for _, v := range r.Header.Values("Authorization") {

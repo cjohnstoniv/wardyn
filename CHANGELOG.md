@@ -29,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - The desktop viewer and the run page no longer show the line about a macOS login window. The macOS VM docs note that the macOS 27 prepare flow creates only the setup account and that nothing beyond macOS 26 is promised as tested.
+- A Codex Model stored on a custom endpoint or OpenAI key provider now takes effect: runs with the Codex CLI use it. With none stored, Codex keeps its own default.
 
 ### Fixed
 
@@ -37,6 +38,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Security
 
 - A model call can no longer name another model through a gateway's rerouting keys while the allowed-models list is set. Under content inspection the keys are refused in `block` mode and logged in `alert` mode, including on the Responses routes the scan cannot read. A body that cannot be read for the keys is refused in `block` and logged as `unparsable` in `alert`.
+- On a configured model gateway's host, the proxy now drops every `x-portkey-*` header the sandbox sends, except the header the stored credential rule owns. Before this, a sandbox could set `x-portkey-custom-host` and send the stored key to a host it chose, through a gateway that honours it.
 
 ## [0.10.0-rc.14] — 2026-11-07
 

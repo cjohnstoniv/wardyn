@@ -510,6 +510,13 @@ func (p *Proxy) applyInjection(req *http.Request, host string, port int) {
 	if req.URL == nil || !p.injectableTransport(req.URL.Scheme, host, port) {
 		return
 	}
+	// The same routing-header strip the brokered and terminated-tunnel lanes run, before the
+	// rule's credential attaches: the rule's own header is the one it keeps.
+	owned := ""
+	if h, ok, err := p.inject.resolve(host); err == nil && ok {
+		owned = h.name
+	}
+	p.stripGatewayRoutingHeaders(req.Header, host, owned)
 	p.inject.apply(req, host, port)
 }
 
