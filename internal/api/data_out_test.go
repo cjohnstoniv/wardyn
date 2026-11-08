@@ -264,7 +264,7 @@ func TestDataOutWebAppRefusedDesktopOpen(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{DataOut: types.TransferReview})
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session")
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session", nil)
 	if h.srv.refuseAppDataOut(w, r, h.run, "code") != true || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonDataOutBlocked) {
 		t.Fatalf("a web app under review: refused %d %s", w.Code, w.Body.String())
 	}
@@ -295,7 +295,7 @@ func TestDataOutComputerFolderBothRefused(t *testing.T) {
 		{types.TransferAllowed, types.ComputerFolderBoth, false},
 	} {
 		w := httptest.NewRecorder()
-		f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs"), spec: types.RunPolicySpec{DataOut: tc.rule},
+		f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), spec: types.RunPolicySpec{DataOut: tc.rule},
 			req: &createRunRequest{LocalFolder: &types.RunLocalFolder{RunnerID: &runner, Direction: tc.direction}}}
 		got := !(&Server{}).stepComputerFolderDataOut(f, nil)
 		if got != tc.refused || (got && (w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonComputerFolderDataOut))) {
@@ -358,7 +358,7 @@ func TestDataOutNoRecordIsAllowedAndReadErrorIs503(t *testing.T) {
 
 	h := newUIHarness(t, okBackend())
 	h.srv.cfg.Store = &envelopeStore{Store: h.srv.cfg.Store, noEnvelope: true}
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session")
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session", nil)
 	if w := httptest.NewRecorder(); h.srv.refuseAppDataOut(w, r, h.run, "code") {
 		t.Errorf("a web app with no recorded policy was refused: %d %s", w.Code, w.Body.String())
 	}
