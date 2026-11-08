@@ -79,6 +79,12 @@ func (s *syncStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit
 	return nil, nil
 }
 
+// QueryAuditEvents answers the run's recorded policy, which sets no data_out rule: the gateway reads it once
+// per connection.
+func (s *syncStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: json.RawMessage(`{}`)}}, nil
+}
+
 type syncAudit struct {
 	mu sync.Mutex
 	ev []types.AuditEvent
