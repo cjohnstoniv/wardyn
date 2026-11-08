@@ -66,7 +66,7 @@ The mint and redeem doors check the same rules live, before anything is minted: 
 - Azure DevOps requests: one for a capability the cap leaves out is refused (`capability_capped`) and raises no approval. A held request for one cannot be approved. A `minted_pat` run's tokens are minted inside the capped ceiling.
 - A cap saved while a run is going applies at its next credential resolve. If it leaves out a capability the run holds, the resolve is refused (`capability_capped`) and a `minted_pat` run's tokens are revoked. The run needs a new launch to get Azure DevOps access back.
 - GitHub: the cap bounds the GitHub CLI at launch and refuses the launch when it leaves none (`github_capabilities_capped`). A cap without `code_write` keeps git pushes from that forge, GitHub or Azure DevOps.
-- A boundary or restriction that cannot be read is a cap that lists nothing.
+- At launch, a boundary or restriction that cannot be read is a cap that lists nothing. At a credential resolve it is a retryable `503` (`run_unreadable`) and nothing is revoked.
 - The dry run lists `provider_rows`: per Azure DevOps provider row, the ceiling and default profile entries the drafted cap removes (`pr` as its parts). It lists no GitHub rows, since those lists live on components and policies.
 - Break-glass never lifts the boundary's cap. A restriction's cap follows its people and is lifted for an admin-token run, which captures no restriction. The provider row's ceiling stays the super admin's.
 
