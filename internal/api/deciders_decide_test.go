@@ -22,16 +22,6 @@ import (
 // The second-human, approval-rule, scope-cap, projection and no-rule pins of unit deciders, on the fixture of
 // deciders_resolve_test.go.
 
-// auditData is ev's data as a map.
-func auditData(t *testing.T, ev types.AuditEvent) map[string]any {
-	t.Helper()
-	var m map[string]any
-	if err := json.Unmarshal(ev.Data, &m); err != nil {
-		t.Fatalf("audit data %s: %v", ev.Data, err)
-	}
-	return m
-}
-
 // actionRows is every row of action the harness recorded for target.
 func (f *dcFix) actionRows(action, target string) []types.AuditEvent {
 	var out []types.AuditEvent
@@ -53,8 +43,8 @@ func TestDecidersSecondHumanRefusesAuthor(t *testing.T) {
 		run  func(*dcFix)
 	}{
 		{"owner in the group", createdBy(dcLead)},
-		{"sponsor", serviceRun(dcLead, "sub-dc-someone")},
-		{"human author", serviceRun("sub-dc-someone", dcLead)},
+		{"sponsor", dcServiceRun(dcLead, "sub-dc-someone")},
+		{"human author", dcServiceRun("sub-dc-someone", dcLead)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newDCFix(t, tc.run)

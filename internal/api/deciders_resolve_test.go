@@ -187,9 +187,9 @@ func newDCFix(t *testing.T, configure ...func(*dcFix)) *dcFix {
 // createdBy sets the run's creator before the server is built.
 func createdBy(who string) func(*dcFix) { return func(f *dcFix) { f.run.CreatedBy = who } }
 
-// serviceRun makes the run a service identity's (service:ci), sponsored by sponsor, with author as its
+// dcServiceRun makes the run a service identity's (service:ci), sponsored by sponsor, with author as its
 // recorded human author.
-func serviceRun(sponsor, author string) func(*dcFix) {
+func dcServiceRun(sponsor, author string) func(*dcFix) {
 	return func(f *dcFix) {
 		f.svc = &types.ServiceIdentity{Name: "ci", Sponsor: sponsor, UserType: types.UserTypeStandard}
 		f.run.CreatedBy, f.run.HumanAuthor = types.ServicePrincipalPrefix+"ci", author
@@ -312,8 +312,8 @@ func TestDecidersNonOwnerTypesNeverMatchAuthor(t *testing.T) {
 					run  func(*dcFix)
 				}{
 					{"creator", createdBy(tc.author)},
-					{"sponsor", serviceRun(tc.author, "sub-dc-someone")},
-					{"human author", serviceRun("sub-dc-someone", tc.author)},
+					{"sponsor", dcServiceRun(tc.author, "sub-dc-someone")},
+					{"human author", dcServiceRun("sub-dc-someone", tc.author)},
 				} {
 					f := newDCFix(t, people.run)
 					f.st.setRules(f.root.ID, dcRule(kind, tc.typ))
@@ -392,7 +392,7 @@ func TestDecidersUnknownStoredWhoMatchesNone(t *testing.T) {
 // token and a device match no decider type, owner included, even on a run that is theirs.
 func TestDecidersServicePortalDeviceNeverMatch(t *testing.T) {
 	who := []string{types.DeciderOwner, types.DeciderUnitAdmins, types.DeciderGroupPrefix + dcGroup}
-	svc := newDCFix(t, serviceRun("sub-dc-someone", "sub-dc-someone"))
+	svc := newDCFix(t, dcServiceRun("sub-dc-someone", "sub-dc-someone"))
 	svc.st.setRules(svc.root.ID, dcRule(types.DeciderKindEgressDomain, who...))
 	if svc.mayDecideAs(withServiceIdentity(context.Background(), "ci", "sub-dc-someone"), svc.hold(types.DeciderKindEgressDomain)) {
 		t.Error("a service identity decides egress on its own run under a rule")
