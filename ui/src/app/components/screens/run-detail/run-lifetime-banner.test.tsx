@@ -17,6 +17,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 import { weekdayClock } from "./run-ends-row";
 import { shortTime } from "../../../lib/format";
+import { ELEV } from "../../wardyn/copy/elevation";
 
 const reviveRunMock = vi.fn();
 const setRunEndAndWaitMock = vi.fn();
@@ -35,6 +36,10 @@ const listAuditMock = vi.fn();
 vi.mock("../../../lib/api/audit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/api/audit")>()),
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
+}));
+const listRequestsMock = vi.fn();
+vi.mock("../../../lib/api/governance-requests", () => ({
+  requests: { list: (...a: unknown[]) => listRequestsMock(...a), create: vi.fn() },
 }));
 const toastInfoMock = vi.fn();
 const toastErrorMock = vi.fn();
@@ -740,6 +745,19 @@ describe("RunLifetimeBanner: a run that ends with its elevation", () => {
     expect(banner).toHaveTextContent("To keep working, ask for elevation again and start a new run.");
     expect(within(banner).getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
     for (const name of ["Revive", "Extend", "End run"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  });
+
+  it("Request elevation opens the request dialog for the run's unit and reads the offers once", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    let resolve!: (v: unknown) => void;
+    listRequestsMock.mockReturnValue(new Promise((r) => (resolve = r)));
+    renderBanner(killed({ unit_id: "u1" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Request elevation" }));
+    expect(await screen.findByRole("dialog", { name: ELEV.TITLE })).toBeInTheDocument();
+    expect(listRequestsMock).toHaveBeenCalledTimes(1);
+    resolve({ offered: [{ unit_id: "u1", unit_name: "Payments", max_elevation: "4h" }] });
+    expect(await screen.findByText("Payments")).toBeInTheDocument();
   });
 
   it("a viewer who cannot act sees the elevation-ended banner without the button", () => {
