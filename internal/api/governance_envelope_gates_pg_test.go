@@ -104,6 +104,14 @@ func (e *unitAdminEnv) dryRunApprovers(c *http.Cookie, u types.GovernanceUnit, b
 	return rep.Approvers
 }
 
+// reject has a security admin reject change ch, so its target takes another proposal.
+func (e *unitAdminEnv) reject(ch types.GovernanceChange) {
+	e.t.Helper()
+	if w := e.call(e.bob, http.MethodPost, rejectPath(ch.ID), ""); w.Code != http.StatusOK {
+		e.t.Fatalf("rejecting %s = %d %s, want 200", ch.ID, w.Code, w.Body)
+	}
+}
+
 func securityOnlyList(a []changeApprover) bool { return len(a) == 1 && a[0].Kind == "security" }
 
 func listsUnitAdmin(a []changeApprover, sub string) bool {
@@ -139,10 +147,11 @@ func TestEnvelopeDescendantWideningApplies(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	c, g := e.envTree()
 	wide := envUnitBody(g, c.ID, uaDomains("pypi.org", "github.com"))
-	e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(g), wide)) // no envelope yet: held
+	held := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(g), wide)) // no envelope yet: held
 	if got := e.domainsOf(g); len(got) != 1 {
 		t.Fatalf("a held widening changed %s to %v", g.Name, got)
 	}
+	e.reject(held)
 
 	e.seedEnvelope(e.a1)
 	before := e.pendingCount()
@@ -153,8 +162,8 @@ func TestEnvelopeDescendantWideningApplies(t *testing.T) {
 		t.Errorf("%s allows %v with %d pending (was %d), want both domains and no new change", g.Name, got, e.pendingCount(), before)
 	}
 
-	outside := e.envBelow(e.a2, uaDomains())
-	e.pending(e.call(e.adminA, http.MethodPut, envUnitPath(outside), envUnitBody(outside, e.a2.ID, map[string]any{})))
+	outside := e.envBelow(e.a, uaDomains("pypi.org"))
+	e.pending(e.call(e.adminA, http.MethodPut, envUnitPath(outside), envUnitBody(outside, e.a.ID, uaDomains("pypi.org", "github.com"))))
 }
 
 // TestEnvelopeReparentWithinApplies: moving a unit from a narrower parent to a wider one, both below the
@@ -164,7 +173,7 @@ func TestEnvelopeReparentWithinApplies(t *testing.T) {
 	narrow := e.envBelow(e.a1, uaDomains("pypi.org"))
 	wide := e.envBelow(e.a1, uaDomains("pypi.org", "github.com"))
 	g := e.envBelow(narrow, map[string]any{})
-	e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(g), envUnitBody(g, wide.ID, map[string]any{})))
+	e.reject(e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(g), envUnitBody(g, wide.ID, map[string]any{}))))
 
 	e.seedEnvelope(e.a1)
 	if w := e.call(e.adminA1, http.MethodPut, envUnitPath(g), envUnitBody(g, wide.ID, map[string]any{})); w.Code != http.StatusOK {
@@ -286,7 +295,7 @@ func TestEnvelopeSecurityWriteFollowsSwitch(t *testing.T) {
 	c, g := e.envTree()
 	e.seedEnvelope(e.a1)
 	wide := envUnitBody(g, c.ID, uaDomains("pypi.org", "github.com"))
-	e.pending(e.call(e.alice, http.MethodPut, envUnitPath(g), wide))
+	e.reject(e.pending(e.call(e.alice, http.MethodPut, envUnitPath(g), wide)))
 	if w := e.call(e.adminA1, http.MethodPut, envUnitPath(g), wide); w.Code != http.StatusOK {
 		t.Fatalf("the unit admin's widening = %d %s, want 200", w.Code, w.Body)
 	}
@@ -413,7 +422,7 @@ func TestEnvelopeApprovedGroupMoveWithinApplies(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	narrow := e.envBelow(e.a1, uaDomains("pypi.org"))
 	m := treeMember(t, e.govEnv, narrow, types.CapabilitySubjectGroup, envGroup, 1, false)
-	e.pending(e.call(e.adminA1, http.MethodPut, envMove(m), envMoveBody(e.a1.ID)))
+	e.reject(e.pending(e.call(e.adminA1, http.MethodPut, envMove(m), envMoveBody(e.a1.ID))))
 
 	e.seedEnvelope(e.a1, envGroup)
 	if w := e.call(e.adminA1, http.MethodPut, envMove(m), envMoveBody(e.a1.ID)); w.Code != http.StatusOK {
