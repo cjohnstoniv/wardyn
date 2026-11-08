@@ -24,14 +24,16 @@ import { Button } from "../../ui/button";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import * as RL from "../../wardyn/copy/run-lifetime";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
-import { keptUntilText, weekdayClock } from "./run-ends-row";
+import { elevationCapAt, keptUntilText, weekdayClock } from "./run-ends-row";
 import { ChangeEndDialog } from "./change-end-dialog";
 import { reviveWithToasts } from "../runs/revive-run";
+import { ElevationRequestDialog } from "../elevation/elevation-request-dialog";
 
 // Same three thresholds the board row's own chip warns at (runs-model.ts).
 function endsWarningStageNow(run: RunDetail): RL.EndsWarningStage | null {
-  const approxLeaseMs = run.ends_at ? Date.parse(run.ends_at) - Date.parse(run.created_at) : 0;
-  return RL.endsWarningStage(run.ends_at, Date.now(), approxLeaseMs);
+  const end = elevationCapAt(run) ?? run.ends_at;
+  const approxLeaseMs = end ? Date.parse(end) - Date.parse(run.created_at) : 0;
+  return RL.endsWarningStage(end, Date.now(), approxLeaseMs);
 }
 
 // Claude Code continues its conversation on revive; every other harness
@@ -100,12 +102,15 @@ export function RunLifetimeBanner({
   const [changeOpen, setChangeOpen] = React.useState(false);
   // UXR-15: End run asks first, through the same confirm as the header's Kill.
   const [confirmEnd, setConfirmEnd] = React.useState(false);
+  const [requestOpen, setRequestOpen] = React.useState(false);
   const operator = useOperator();
   const principal = usePrincipal();
   // F16 (PR #1317 review): every action here is owner-or-super-admin on the
   // server (run_revive.go, run_pause.go, run_end_wait.go) — a security admin
   // looking at a foreign run must not be offered a button that always 403s.
   const canAct = operator || run.created_by === principal;
+  // A request for elevation is made for whoever sends it, so only the run's owner is offered one for this run.
+  const isOwner = run.created_by === principal;
   // R2-3 (PR #1317 round-2 review): the SAME formula run-ends-row.tsx's own
   // Change…/Set an end… gate uses — Change end… (and its dialog's No end
   // option) needs the captured user_changes_limits gate too, not just
@@ -381,7 +386,21 @@ export function RunLifetimeBanner({
 
     // ---- Ending soon: the 24h/1h/10m warning (design.md §2.3) ----
     const stage = endsWarningStageNow(run);
-    if (stage && dismissed !== `${stage}@${run.ends_at}`) {
+    const cap = elevationCapAt(run);
+    const end = cap ?? run.ends_at;
+    if (stage && dismissed !== `${stage}@${end}`) {
+      // An elevation's end cannot be moved, so its warning offers Dismiss alone.
+      if (cap) {
+        return (
+          <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={RL.warnBodyElevation(weekdayClock(cap), isOwner)}>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDismissed(`${stage}@${cap}`)}>
+                {RL.WARN_DISMISS}
+              </Button>
+            </div>
+          </Banner>
+        );
+      }
       return (
         <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={run.ends_at ? RL.warnBody(weekdayClock(run.ends_at)) : undefined}>
           <div className="mt-2.5 flex flex-wrap gap-2">
@@ -416,6 +435,23 @@ export function RunLifetimeBanner({
   // Without this guard, a KILLED run that was lost or lease-ended kept
   // showing Revive/Extend/End run forever after End run, and every
   // lease-ended run the grace eventually stops did the same.
+  // The one terminal run that still speaks: the server killed it at its elevation's end, so a new request is the way on.
+  if (run.state === "KILLED" && run.status_reason === "max_lifetime_reached" && run.lifetime_cap_source === "elevation") {
+    return (
+      <>
+        <Banner data-testid="run-lifetime-elevation-ended" tone="plain" title={isOwner ? RL.ELEVATION_ENDED_TITLE : RL.ELEVATION_ENDED_TITLE_OTHER} body={RL.ELEVATION_ENDED_BODY}>
+          {isOwner && (
+            <div className="mt-2.5">
+              <Button size="sm" onClick={() => setRequestOpen(true)}>
+                {RL.REQUEST_ELEVATION}
+              </Button>
+            </div>
+          )}
+        </Banner>
+        {isOwner && <ElevationRequestDialog open={requestOpen} onOpenChange={setRequestOpen} unitId={run.unit_id} />}
+      </>
+    );
+  }
   if (isTerminalRunState(run.state)) return null;
 
   return (
