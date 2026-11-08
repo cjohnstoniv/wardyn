@@ -440,5 +440,6 @@ describe("ELEV copy", () => {
       "They can start runs under Payments' limits until then, and each run they start ends when the elevation ends. Ending the elevation early doesn't stop a run that has already started.",
     );
     expect(ELEV.F_BLAST("Platform")).toContain("under Platform's limits until then");
+    expect(ELEV.F_BLAST("NEWS")).toContain("under NEWS' limits until then");
   });
 });
