@@ -92,17 +92,17 @@
 ```
 
 - The URL is the full `/analyze` address. Wardyn sends `{text, language: "en", score_threshold: 0.5}` and names no entities, so your recognizers decide what is found.
-- `block` mode needs `block_min_severity` of at least `medium`. Names, locations, dates, URLs, UUIDs, MAC and IP addresses and US driver licences are `low`; other entities are `high` from a score of `0.85` and `medium` below it.
+- `block` mode needs `block_min_severity` of at least `medium`. Names, locations, organisations, nationality, religious and political groups, dates, URLs, UUIDs, MAC and IP addresses and US driver licences are `low`; other entities are `high` from a score of `0.85` and `medium` below it.
 - A Presidio outage lets the request through. Set `on_scanner_error: block` when an outage must block it.
 - Every hit is category `pii` with detector `sidecar:<entity type>`. A finding carries no content and no name of the secret.
 
-## Tested versions
+## Pinned versions
 
-| Component | Version | Checked by |
+| Component | Version | Pinned and asserted by |
 |---|---|---|
 | LiteLLM | `v1.83.10-stable` | `TestGatewayRecipes_Live` in [`gateway_recipes_docker_test.go`](../../internal/egress/proxy/gateway_recipes_docker_test.go) |
-| Portkey | `1.15.2`, and `1.14.0` or later for `TRUSTED_CUSTOM_HOSTS` | the same test |
+| Portkey | `1.15.2` | the same test |
 | Presidio analyzer | `2.2.363` | the same test |
 
-- The test runs in the `docker-tagged-live` nightly against [`test/gatewayfake`](../../test/gatewayfake), with the images pinned by digest. It asserts the credential swap, the Portkey headers, metered streaming usage, the rerouting refusal, and a Presidio hit and a code-like prompt it does not block.
+- The test pins and asserts these versions; its first green run is pending. It runs in the `docker-tagged-live` nightly against [`test/gatewayfake`](../../test/gatewayfake), with the images pinned by digest. It asserts the credential swap, the Portkey headers, metered streaming usage, the rerouting refusal, and a Presidio hit and a code-like prompt it does not block.
 - Hosted Portkey's header contract is covered by [`gateway_portkey_strip_test.go`](../../internal/egress/proxy/gateway_portkey_strip_test.go). OpenRouter and Codex CLI through Portkey or OpenRouter are not tested.

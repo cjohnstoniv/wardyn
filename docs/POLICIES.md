@@ -1468,7 +1468,7 @@ So an entry a pattern matches is judged one of two ways:
   - This is an operator allowlist, not a bare scheme check, since the sidecar is dialed proxy-side with span text on a surface the sandbox's own confinement class never bounds.
 - A sidecar error respects `on_scanner_error` like any other scanner error: with `pass` the request flows, so set `block` when an outage must block it.
 - `detector_sidecar_format: presidio` sends `{text, language: "en", score_threshold: 0.5}` to the URL as given (use the full `/analyze` address) and names no entities, so the analyzer's own recognizers decide.
-  - Names, locations, dates, URLs, UUIDs, MAC and IP addresses and US driver licences are `low`. Other entities are `high` from a score of `0.85` and `medium` below it. A hit is category `pii`, detector `sidecar:<entity type>`.
+  - Names, locations, organisations, nationality, religious and political groups, dates, URLs, UUIDs, MAC and IP addresses and US driver licences are `low`. Other entities are `high` from a score of `0.85` and `medium` below it. A hit is category `pii`, detector `sidecar:<entity type>`.
   - A reply that is not an array is a sidecar error.
   - A layer cannot change the format its ceiling sets: `Clamp` keeps the ceiling's, and `Leq` refuses a different one.
 
