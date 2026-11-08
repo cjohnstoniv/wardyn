@@ -121,7 +121,7 @@ describe("an image request's drawer", () => {
   it("someone else's request keeps Reject and Approve and the decider's reason", async () => {
     renderTab([image()]);
     const dialog = await open();
-    expect(within(dialog).getByLabelText("Reason (optional)")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Reason for your decision (optional)")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Reject" })).toBeEnabled();
     expect(within(dialog).getByRole("button", { name: "Approve" })).toBeEnabled();
     expect(within(dialog).queryByRole("button", { name: "Withdraw request" })).toBeNull();
@@ -132,7 +132,7 @@ describe("an image request's drawer", () => {
     const dialog = await open();
     expect(within(dialog).getByRole("button", { name: "Withdraw request" })).toBeEnabled();
     expect(within(dialog).getByText("You asked for this, so someone else must approve it. You can withdraw it.")).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText("Reason (optional)")).toBeNull();
+    expect(within(dialog).queryByLabelText("Reason for your decision (optional)")).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "Reject" })).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Approve" })).toBeDisabled();
   });

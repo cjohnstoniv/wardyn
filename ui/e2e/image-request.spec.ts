@@ -76,7 +76,7 @@ async function openApprovals(page: Page) {
 }
 
 const dialog = (page: Page) => page.getByRole("dialog");
-const imageField = (page: Page) => dialog(page).locator("input.font-mono").first();
+const imageField = (page: Page) => dialog(page).locator("textarea.font-mono");
 const reasonField = (page: Page) => page.getByLabel(ELEV.REASON_LABEL);
 const sendButton = (page: Page) => dialog(page).getByRole("button", { name: IMG.SEND });
 const card = (page: Page) => page.locator("section", { has: page.getByText(ELEV.LIST_TITLE, { exact: true }) }).first();

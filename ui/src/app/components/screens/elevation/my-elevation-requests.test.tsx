@@ -241,7 +241,7 @@ describe("MyElevationRequests: loading and error", () => {
   it("draws the header over a skeleton while loading", () => {
     setup("loading");
     expect(screen.getByText("Your requests")).toBeInTheDocument();
-    expect(screen.getByText(ELEV.LIST_LEAD)).toBeInTheDocument();
+    expect(screen.queryByText(ELEV.LIST_LEAD)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Request elevation" })).not.toBeInTheDocument();
   });
 

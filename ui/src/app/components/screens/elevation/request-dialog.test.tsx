@@ -24,7 +24,7 @@ function setup(props: Props = {}) {
     <RequestDialog open onOpenChange={onOpenChange} initialKind="image" offers={[payments]} imageOffered onSent={onSent} {...p} />
   );
   const utils = render(el(props));
-  return { onOpenChange, onSent, rerender: (p: Props) => utils.rerender(el(p)), ...utils };
+  return { ...utils, onOpenChange, onSent, rerender: (p: Props) => utils.rerender(el(p)) };
 }
 
 const kind = (name: string) => screen.getByRole("radio", { name });
@@ -57,7 +57,7 @@ describe("RequestDialog: both kinds offered", () => {
     expect(kind("Elevation")).toBeChecked();
     await userEvent.click(kind("Image"));
     expect(screen.getByText("New image request")).toBeInTheDocument();
-    expect(screen.getByLabelText("Image", { selector: "input[type=text], input:not([type])" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Image", { selector: "textarea" })).toBeInTheDocument();
   });
 
   it("what was typed does not carry over to the other kind", async () => {
@@ -80,7 +80,7 @@ describe("RequestDialog: both kinds offered", () => {
     const { onSent } = setup({ initialKind: "image" });
     const r = { id: "c1", kind: "image", deciders: [], expires_at: new Date().toISOString() } as unknown as GovernanceRequest;
     createMock.mockResolvedValueOnce(r);
-    await userEvent.type(screen.getByLabelText("Image", { selector: "input[type=text], input:not([type])" }), `x@sha256:${"a".repeat(64)}`);
+    await userEvent.type(screen.getByLabelText("Image", { selector: "textarea" }), `x@sha256:${"a".repeat(64)}`);
     await userEvent.type(screen.getByLabelText("Why do you need it?"), "for the build");
     await userEvent.click(screen.getByRole("button", { name: "Request image" }));
     await screen.findByText("Request sent");
@@ -98,7 +98,7 @@ describe("RequestDialog: one kind offered", () => {
   it("elevation only: the elevation dialog and no choice", () => {
     setup({ offers: [payments], imageOffered: false, initialKind: "elevation" });
     expect(screen.getByText("New elevation request")).toBeInTheDocument();
-    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "What do you need?" })).toBeNull();
   });
 
   it("closed draws neither dialog", () => {

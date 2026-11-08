@@ -455,7 +455,7 @@ export const CHANGES = {
     governance_envelope: "Platform envelope",
     governance_unit_deciders: "Deciders",
     governance_elevation: "Elevation",
-    governance_image_request: "Image request",
+    governance_image_request: "Image",
     governance_unit_admin: "Unit admin",
     approval_rule: "Approval rule",
   } as Record<string, string>,
