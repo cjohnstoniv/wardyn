@@ -52,7 +52,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.AzureARMGrant]():        strings.Fields("TenantID Subscriptions Write"),
 	reflect.TypeFor[proxy.AWSSigV4Config]():       strings.Fields("GrantID PortalHost AccountID RoleName Hosts Gateways"),
 	reflect.TypeFor[proxy.AWSSigV4Gateway]():      strings.Fields("Host Port PathPrefix SigningHost"),
-	reflect.TypeFor[proxy.KubeAPIGrant]():         strings.Fields("Host Port CAPEM Namespaces Write"),
+	reflect.TypeFor[proxy.KubeAPIGrant]():         strings.Fields("Host Port CAPEM Namespaces Write Restart"),
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned WipeAfterRead Content"),
