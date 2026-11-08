@@ -15,8 +15,9 @@ import (
 
 // TestGovernanceProposerWithdrawsOutsideApproverSet: the unit admin who proposed a change of an envelope's
 // root, which only the security tier decides, may still reject it, and the reject row says the proposer
-// withdrew it. Approving it stays refused with the security surface reason, and a peer admin of the same root,
-// who did not propose it, is refused a reject too. A security admin's reject of a later proposal is no
+// withdrew it. Approving it stays refused with the security surface reason. A peer admin of the same root,
+// who did not propose it, is refused a reject on scope (only an admin above a unit decides its own change), and
+// an admin above it is refused one by the envelope. A security admin's reject of a later proposal is no
 // withdrawal.
 func TestGovernanceProposerWithdrawsOutsideApproverSet(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
@@ -27,11 +28,14 @@ func TestGovernanceProposerWithdrawsOutsideApproverSet(t *testing.T) {
 	if w := e.call(e.adminA1, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
 		t.Errorf("the proposer approving = %d %s, want 403 security_admin_surface", w.Code, w.Body)
 	}
-	if w := e.call(e.peerA1, http.MethodPost, rejectPath(ch.ID), ""); !securitySurfaceRefused(t, w) {
-		t.Errorf("a peer admin rejecting = %d %s, want 403 security_admin_surface", w.Code, w.Body)
+	if w := e.call(e.peerA1, http.MethodPost, rejectPath(ch.ID), ""); !scopeRefused(t, w) {
+		t.Errorf("a peer admin rejecting = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+	}
+	if w := e.call(e.adminA, http.MethodPost, rejectPath(ch.ID), ""); !securitySurfaceRefused(t, w) {
+		t.Errorf("an admin above the root rejecting = %d %s, want 403 security_admin_surface", w.Code, w.Body)
 	}
 	if got := e.changeState(ch.ID); got != types.GovernanceChangePending {
-		t.Fatalf("after two refusals the change is %s, want pending", got)
+		t.Fatalf("after the refusals the change is %s, want pending", got)
 	}
 
 	if w := e.call(e.adminA1, http.MethodPost, rejectPath(ch.ID), `{"reason":"proposed by mistake"}`); w.Code != http.StatusOK {
