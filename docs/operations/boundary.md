@@ -22,6 +22,8 @@
 | `spec.min_confinement_class` | Every run's confinement floor is raised to at least this class. |
 | `spec.eligible_grants` | A credential grant the boundary's grants do not cover is dropped from the run's eligible grants. |
 | `spec.desktop` | Each direction it blocks (`paste_in`, `copy_out`, `upload`, `download`) is blocked for every run, at resolve and at the seal. An unset direction keeps its default: copy out and download blocked. |
+| `spec.azure_devops_capabilities` | The only Azure DevOps capabilities a run may hold, checked at launch, at each request and approval, and at each credential resolve. `pr` means its three parts. A capability added later stays out until you list it. |
+| `spec.github_capabilities` | The only GitHub capabilities the GitHub CLI and git pushes may use, checked at launch. |
 | `limits.max_end_ahead_sec` | No run's end may be set further ahead than this, at create or by a later change, including a run created in `no_limits`. |
 
 A knob the boundary does not name is left as the layers below set it. `contact` names who owns the boundary and how to ask for a change.
@@ -56,6 +58,17 @@ A revive whose git broker or Azure CLI the boundary no longer allows is refused 
 A captured AWS SSO session held in the sandbox (`WARDYN_AWS_SSO_PROXY_INJECT` off) is judged as the `api_key` grant the proxy-injected session gets: its portal host, `x-amz-sso_bearer_token` and `aws-sso-access-token`. So a boundary admits or withholds it alike under either setting. A withheld session's Bedrock lane is dropped.
 
 The mint and redeem doors check the same rules live, before anything is minted: a grant the boundary or the run's profile now withholds is refused with `403 credential_withheld` and a `credential.mint` denied row. If the run, its grants, its profile or the boundary cannot be read, the answer is `503` (`credential_withheld_unread` at mint; at redeem `run_unreadable` or `store_unavailable`, with a `secret.read` failure row); retry. The AWS SSO renewer skips a grant it withholds.
+
+## Source-control capabilities
+
+- The two caps are allowlists. A run holds only what they list, whatever a provider row's `capability_ceiling`, a default profile, a policy, your walls or an approval would give. Omit a field for no cap; an empty list is refused at write.
+- Azure DevOps launch: a policy that names a capability the cap leaves out is refused (`ado_capabilities_capped`). A default profile, or access an admin granted a person, is cut to the cap. A cap that leaves nothing refuses the launch.
+- Azure DevOps requests: one for a capability the cap leaves out is refused (`capability_capped`) and raises no approval. A held request for one cannot be approved. A `minted_pat` run's tokens are minted inside the capped ceiling.
+- A cap saved while a run is going applies at its next credential resolve. If it leaves out a capability the run holds, the resolve is refused (`capability_capped`) and a `minted_pat` run's tokens are revoked. The run needs a new launch to get Azure DevOps access back.
+- GitHub: the cap bounds the GitHub CLI at launch and refuses the launch when it leaves none (`github_capabilities_capped`). A cap without `code_write` keeps git pushes from that forge, GitHub or Azure DevOps.
+- At launch, a boundary or restriction that cannot be read is a cap that lists nothing. At a credential resolve it is a retryable `503` (`run_unreadable`) and nothing is revoked.
+- The dry run lists `provider_rows`: per Azure DevOps provider row, the ceiling and default profile entries the drafted cap removes (`pr` as its parts). It lists no GitHub rows, since those lists live on components and policies.
+- Break-glass never lifts the boundary's cap. A restriction's cap follows its people and is lifted for an admin-token run, which captures no restriction. The provider row's ceiling stays the super admin's.
 
 ## Changing it
 

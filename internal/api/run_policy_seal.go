@@ -9,8 +9,10 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -42,6 +44,14 @@ type sealLayer struct {
 	// denyAllPushes is the layer's refusal of every push (push_rules.deny_all): a person's walls or a
 	// wall preset that set it. The seal never reads it; a revive re-asserts it (reassertDenyAllPushes).
 	denyAllPushes bool
+	// adoCap and githubCap are the Azure DevOps and GitHub capabilities the layer lets a run hold, nil for no
+	// cap; the seal never reads them, the cap helpers do (vcs_capability_cap.go).
+	adoCap    *[]adoscope.Capability
+	githubCap *[]ghscope.Capability
+	// unread marks the layer standing in for a boundary or restriction that could not be read. Its caps list
+	// nothing, so a dispatch fails closed; a credential resolve reads it as an unreadable run instead
+	// (runADOCap), so a transient read error is retried and revokes nothing.
+	unread bool
 }
 
 // sealDecision is one knob a layer narrowed.
@@ -66,11 +76,12 @@ func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLaye
 		off := false
 		none := types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
 		return []sealLayer{{rec: boundaryProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}, desktop: &none}}
+			grants: &[]types.GrantSpec{}, desktop: &none, adoCap: &[]adoscope.Capability{}, githubCap: &[]ghscope.Capability{}, unread: true}}
 	}
 	var layers []sealLayer
 	if b.HardLimits() {
-		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop})
+		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop,
+			adoCap: b.Spec.AzureDevOpsCapabilities, githubCap: b.Spec.GitHubCapabilities})
 	}
 	layers = append(layers, s.restrictionSealLayers(ctx, run)...)
 	layers = append(layers, s.personalWallsSealLayer(ctx, run)...)

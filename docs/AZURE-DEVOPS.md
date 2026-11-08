@@ -535,6 +535,7 @@ That has two consequences:
 
 - The capability ceiling is expressed in Azure DevOps' own terms — one read per area, then that area's write and admin rows, following Azure DevOps' read → write → manage ladder — not raw `vso.*` scopes.
 - The row above grants some subset of these, and a run can never be handed one the ceiling does not list.
+- The Wardyn boundary, and a restriction, can cap these for every run they bind ([boundary.md](operations/boundary.md#source-control-capabilities)).
 - **High risk** marks a capability that reaches past the one run: the organisation's rules, other people's work, identities, or credentials.
 
 | Area | Capability | What it allows |

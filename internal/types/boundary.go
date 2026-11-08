@@ -6,6 +6,8 @@ package types
 import (
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
@@ -54,6 +56,15 @@ type BoundarySpec struct {
 	// Desktop blocks desktop directions for every run (#2967). It only blocks more: a direction it
 	// allows is left to the layers below, and one it leaves unset is that direction's default.
 	Desktop *DesktopControls `json:"desktop,omitempty"`
+	// AzureDevOpsCapabilities caps every run's Azure DevOps capabilities in hard_limits: a capability it
+	// does not list is refused at dispatch, at each request, at each approval and at each credential
+	// resolve, whatever a provider row allows. pr reads as its parts. nil is no cap; an empty list is
+	// refused at write. It never reaches Overlay(): a list meet keeps a run on the provider's default
+	// profile as it is, so the cap is met with the row's ceiling instead.
+	AzureDevOpsCapabilities *[]adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
+	// GitHubCapabilities is AzureDevOpsCapabilities' GitHub twin, applied to the GitHub CLI's
+	// capabilities and to git pushes (code_write) at launch.
+	GitHubCapabilities *[]ghscope.Capability `json:"github_capabilities,omitempty"`
 }
 
 // BoundaryLimits is the GovernanceLimits subset the boundary bounds. MaxEndAheadSec is also the cap

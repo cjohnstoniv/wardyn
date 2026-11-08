@@ -30,6 +30,10 @@ export interface RestrictionSpec {
   recording?: RecordingLevel;
   /** Credentials the run is not given: a scope-less entry names every grant of its kind. */
   withheld_grants?: GrantSpec[];
+  /** The Azure DevOps capabilities its people's runs may hold. pr means its parts; absent is no cap. */
+  azure_devops_capabilities?: string[];
+  /** The GitHub capabilities its people's GitHub CLI and git pushes may use, at launch. Absent is no cap. */
+  github_capabilities?: string[];
 }
 
 /** types.RestrictionLimits: the deny_* switches only turn on; the other bools can only be false. */
