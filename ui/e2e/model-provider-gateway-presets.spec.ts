@@ -77,6 +77,10 @@ test.describe("Settings — gateway presets on a new provider", () => {
 
     await chip(dialog, "OpenRouter").click();
     await expect(dialog.getByLabel("Base URL")).toHaveValue("https://openrouter.ai/api");
+    // Portkey self-hosted's untick stays, as every earlier fill does; the Codex CLI Model shows once it is ticked.
+    const codex = dialog.getByRole("checkbox", { name: "Codex CLI" });
+    await expect(codex).not.toBeChecked();
+    await codex.check();
     await expect(dialog.getByPlaceholder("openai/…")).toHaveCount(1);
     await expect(dialog.getByText(PROVIDER_EDITOR.OPENROUTER_MODEL_HINT)).toBeVisible();
     await expect(dialog.getByText(PROVIDER_EDITOR.PORTKEY_SLUG_HINT)).toBeVisible();

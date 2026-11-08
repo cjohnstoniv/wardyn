@@ -5,7 +5,7 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
-import { RUNNERS } from "../src/app/components/wardyn/copy/runners";
+import { RUNNER, RUNNERS } from "../src/app/components/wardyn/copy/runners";
 
 // Settings > Runners: the "Require a managed device" switch. The harness has runners settings of its own, so the
 // route is answered here: GET gives the stored value, PUT records the body and stores what it names. What is
@@ -72,6 +72,9 @@ test.describe("Settings: Require a managed device", () => {
     await dialog.getByRole("button", { name: RUNNERS.MANAGED_CONFIRM }).click();
     await expect(dialog.getByText(RUNNERS.MANAGED_REFUSED_TITLE)).toBeVisible();
     await expect(dialog.getByText(RUNNERS.MANAGED_NOT_SUPER)).toBeVisible();
+    // The open dialog hides the page from the accessibility tree, so the switch is read once it closes.
+    await dialog.getByRole("button", { name: RUNNER.CANCEL, exact: true }).click();
+    await expect(dialog).toHaveCount(0);
     await expect(card.getByRole("switch", { name: RUNNERS.MANAGED_LABEL })).toHaveAttribute("aria-checked", "false");
   });
 
