@@ -92,3 +92,38 @@ func TestApplyOverlayRestrictionKnobsNarrowOnly(t *testing.T) {
 		t.Errorf("tool_rules = %v, want the held rule kept", g2.Ceiling.ToolRules)
 	}
 }
+
+// A restriction's allowlist meets an open run as that allowlist, not as nothing (ApplyRestrictionOverlay):
+// open with no list of its own, or with a wider one, the run is closed to the restriction's list; a closed
+// run keeps only what both lists name; a restriction naming no allowlist leaves open egress open. A unit's
+// overlay keeps ApplyOverlay's rule, where open egress covers no entry, so there the open run is closed to
+// nothing.
+func TestApplyRestrictionOverlayOpenEgressMeetsTheAllowlist(t *testing.T) {
+	list := []string{"b.example"}
+	closing := Overlay{Ceiling: types.RestrictionSpec{AllowedDomains: &list}.Overlay()}
+	denyOnly := Overlay{Ceiling: types.RestrictionSpec{DeniedDomains: &[]string{"c.example"}}.Overlay()}
+	for _, tc := range []struct {
+		name string
+		base types.RunPolicySpec
+		ov   Overlay
+		open bool
+		want []string
+	}{
+		{"open with no list", types.RunPolicySpec{AllowAllEgress: true}, closing, false, []string{"b.example"}},
+		{"open with a wider list", types.RunPolicySpec{AllowAllEgress: true, AllowedDomains: []string{"a.example", "b.example"}}, closing, false, []string{"b.example"}},
+		{"closed to another host", types.RunPolicySpec{AllowedDomains: []string{"a.example"}}, closing, false, []string{}},
+		{"open under a deny-only restriction", types.RunPolicySpec{AllowAllEgress: true}, denyOnly, true, nil},
+	} {
+		got, _, err := ApplyRestrictionOverlay(Authority{Ceiling: tc.base}, tc.ov)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got.Ceiling.AllowAllEgress != tc.open || !slices.Equal(got.Ceiling.AllowedDomains, tc.want) {
+			t.Errorf("%s: open %v allowed %v, want open %v allowed %v", tc.name, got.Ceiling.AllowAllEgress, got.Ceiling.AllowedDomains, tc.open, tc.want)
+		}
+	}
+	unit := mustApply(t, Authority{Ceiling: types.RunPolicySpec{AllowAllEgress: true}}, closing)
+	if unit.Ceiling.AllowAllEgress || len(unit.Ceiling.AllowedDomains) != 0 {
+		t.Errorf("ApplyOverlay over open egress = open %v allowed %v, want closed to nothing (a unit overlay's rule)", unit.Ceiling.AllowAllEgress, unit.Ceiling.AllowedDomains)
+	}
+}

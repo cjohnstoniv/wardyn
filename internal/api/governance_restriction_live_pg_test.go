@@ -82,22 +82,52 @@ func TestRestrictionKnobsSealRunningRun(t *testing.T) {
 	}
 }
 
-// TestRestrictionAllowlistClosesOpenEgressAtSeal: a run that was open when it was frozen is closed by the
-// restriction's allowlist, met as a create meets it (composer.ApplyOverlay): open egress covers none of the
-// restriction's entries, so the run keeps only the hosts its own list and the restriction's both name.
+// TestRestrictionAllowlistClosesOpenEgressAtSeal: a run that was open when it was frozen is closed to the
+// restriction's allowlist, whatever list of its own it carried; a closed run keeps only what both lists name.
 func TestRestrictionAllowlistClosesOpenEgressAtSeal(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	r := seedRestriction(t, e, "rl-open", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionLimits{}, userMember("sub-rl-open"))
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-rl-open", RestrictionIDs: []uuid.UUID{r.ID}}
-	for _, tc := range []struct{ own, want []string }{
-		{nil, nil},
-		{[]string{"a.example", "b.example"}, []string{"b.example"}},
+	for _, tc := range []struct {
+		open      bool
+		own, want []string
+	}{
+		{true, nil, []string{"b.example"}},
+		{true, []string{"a.example", "b.example"}, []string{"b.example"}},
+		{false, []string{"a.example"}, []string{}},
 	} {
-		policy := types.RunPolicySpec{AllowAllEgress: true, AllowedDomains: tc.own, MinConfinementClass: types.CC2}
+		policy := types.RunPolicySpec{AllowAllEgress: tc.open, AllowedDomains: tc.own, MinConfinementClass: types.CC2}
 		e.srv.sealRunPolicy(context.Background(), run, &policy, knobProvenance{})
 		if policy.AllowAllEgress || !slices.Equal(policy.AllowedDomains, tc.want) {
-			t.Errorf("open with %v: sealed egress = %v %v, want closed with %v", tc.own, policy.AllowAllEgress, policy.AllowedDomains, tc.want)
+			t.Errorf("open %v with %v: sealed egress = %v %v, want closed with %v", tc.open, tc.own, policy.AllowAllEgress, policy.AllowedDomains, tc.want)
 		}
+	}
+}
+
+// TestRestrictionAllowlistClosesOpenEgressAtCreate: a create meets a restriction's allowlist into an open
+// ceiling as the seal does, so a person under the restriction in a unit that allows all egress is closed
+// to the restriction's list, not to nothing.
+func TestRestrictionAllowlistClosesOpenEgressAtCreate(t *testing.T) {
+	open := governanceCeiling{Unit: &ResolvedUnit{ID: uuid.New(), Name: "open"}, Spec: types.RunPolicySpec{AllowAllEgress: true}}
+	r := types.Restriction{ID: uuid.New(), Name: "rl-create", Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}}
+	c, err := (&Server{}).withRestrictions(context.Background(), open, []types.Restriction{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.AllowAllEgress || !slices.Equal(c.Spec.AllowedDomains, []string{"b.example"}) {
+		t.Errorf("ceiling egress = %v %v, want closed with [b.example]", c.Spec.AllowAllEgress, c.Spec.AllowedDomains)
+	}
+}
+
+// TestRestrictionAllowlistSwapIsNotAtLeastAsStrict: replacing a restriction's allowlist by one naming another
+// host loosens it, so the replacement is held for a second human; dropping a host from the list is not.
+func TestRestrictionAllowlistSwapIsNotAtLeastAsStrict(t *testing.T) {
+	old := types.Restriction{Spec: types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}}
+	if restrictionAtLeastAsStrict(old, types.RestrictionWrite{Spec: types.RestrictionSpec{AllowedDomains: strs("evil.example")}}) {
+		t.Error("an allowlist swapped to another host is judged at least as strict")
+	}
+	if !restrictionAtLeastAsStrict(old, types.RestrictionWrite{Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}}) {
+		t.Error("an allowlist with a host dropped is not judged at least as strict")
 	}
 }
 
