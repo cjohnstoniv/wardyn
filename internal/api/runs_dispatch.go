@@ -361,7 +361,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
 	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
-	secretEnvKeys, resident, placedEnv := s.resolveEnvSecretPlacements(ctx, run, policy, grantRows, sandboxEnv)
+	secretEnvKeys, resident, placedEnv := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
 	addPlacedSecrets(&policy, placedEnv...) // before the sidecar policy and the audited snapshot copy it
 
 	// Split the composed environment into its non-secret and credential-bearing

@@ -64,7 +64,7 @@ func TestDispatch_ResidentEnvSecretValuesReachTheRunner(t *testing.T) {
 	}
 	policy := policyOf(a, b, own)
 	env := map[string]string{}
-	names, values := f.srv.resolveEnvSecretValues(ctx, run, policy, rows, env)
+	names, values, _ := f.srv.resolveEnvSecretValues(ctx, run, policy, rows, env)
 	slices.Sort(names)
 	if !slices.Equal(names, []string{"A_TOKEN", "B_TOKEN", "OWN_TOKEN"}) {
 		t.Fatalf("resolved names %v, want all three", names)

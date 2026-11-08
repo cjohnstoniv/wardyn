@@ -74,7 +74,7 @@ func (f *knownSecretFixture) dispatch(t *testing.T, policy types.RunPolicySpec) 
 	t.Helper()
 	dispatchOf(f.srv, f.run, policy)
 	if f.rn.createCalls != 1 {
-		t.Fatalf("the sandbox was not created; events: %s", auditDump(f.audit.events, f.run.ID))
+		t.Fatalf("the sandbox was not created; events: %s", auditDump(f.audit.snapshot(), f.run.ID))
 	}
 }
 
@@ -227,8 +227,9 @@ func TestKnownSecrets_AuditCountsExcludeFileValuesAndCarryNoValue(t *testing.T) 
 	f := newKnownSecretFixture(t)
 	f.dispatch(t, detectingPolicy(fileSecretGrant("api-token", "deploy-token", true)))
 	var resolved *types.AuditEvent
-	for i := range f.audit.events {
-		ev := &f.audit.events[i]
+	evs := f.audit.snapshot()
+	for i := range evs {
+		ev := &evs[i]
 		if ev.Action == "run.policy.resolve" {
 			resolved = ev
 		}

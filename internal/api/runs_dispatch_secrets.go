@@ -183,7 +183,7 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_USER_ENV_SECRET"
 // splitSecretEnv moves them onto SandboxSpec.SecretEnv, which the k8s driver
 // delivers via secretKeyRef rather than inline in the agent Pod spec.
 func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) []string {
-	names, _ := s.resolveEnvSecretValues(ctx, run, policy, nil, sandboxEnv)
+	names, _, _ := s.resolveEnvSecretValues(ctx, run, policy, nil, sandboxEnv)
 	return names
 }
 
@@ -191,17 +191,10 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 // rows. A grant whose row is runner_resident is read from the namespace its
 // origin was proved in (readResidentValue), and its variable is set to the
 // grant's placeholder, which the runner fills from its keystore; the value is
-// returned, in grant-id order, for deliverResident and nothing else.
+// returned, in grant-id order, for deliverResident and nothing else. placed is the
+// values it wrote into sandboxEnv (never a runner_resident one), for the known-secret
+// check (addPlacedSecrets).
 func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
-	sandboxEnv map[string]string) ([]string, []residentValue) {
-	names, resident, _ := s.resolveEnvSecretPlacements(ctx, run, policy, rows, sandboxEnv)
-	return names, resident
-}
-
-// resolveEnvSecretPlacements is resolveEnvSecretValues that also returns the values it
-// wrote into sandboxEnv (never a runner_resident one), for the known-secret check
-// (addPlacedSecrets).
-func (s *Server) resolveEnvSecretPlacements(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
 	sandboxEnv map[string]string) (resolvedNames []string, resident []residentValue, placed [][]byte) {
 	for _, g := range policy.EligibleGrants {
 		if g.Kind != types.GrantEnvSecret {
