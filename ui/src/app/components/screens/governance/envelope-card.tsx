@@ -181,9 +181,12 @@ export function EnvelopeCard({
             <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{ENVELOPE.LEAD}</p>
             <p className="mt-1 text-xs text-muted-foreground">{ENVELOPE.HELP}</p>
           </div>
-          <Button variant="outline" size="sm" onClick={openSet}>
-            {ENVELOPE.SET}
-          </Button>
+          {/* With none, the empty state carries the one Set an envelope. */}
+          {envelopes.length > 0 && (
+            <Button variant="outline" size="sm" onClick={openSet}>
+              {ENVELOPE.SET}
+            </Button>
+          )}
         </div>
         {submitted && <SubmittedNote />}
       </div>
