@@ -45,6 +45,7 @@ const (
 	GovernanceTargetApprovalRule           = "approval_rule"
 	GovernanceTargetRecording              = "org_recording"
 	GovernanceTargetUnitDeciders           = "governance_unit_deciders"
+	GovernanceTargetEnvelope               = "governance_envelope"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

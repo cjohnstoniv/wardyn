@@ -25,6 +25,7 @@ import type { PlacementValue } from "../types/new-run-contract";
 import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
 import type { GovernanceChangeApprover } from "../types/governance-change";
+import type { GovernanceEnvelope } from "../types/governance-envelope";
 import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
 import type { GovernanceDeciders } from "./deciders";
 import { USER_TYPE_STANDARD } from "../types/user-types";
@@ -316,6 +317,8 @@ export interface GovernanceSnapshot {
   restrictions?: RestrictionView[];
   // Each unit's hold-deciding rules and the unit whose rule governs each kind; absent when no unit has any.
   deciders?: GovernanceDeciders[];
+  // The platform envelopes (a unit admin sees those on or above their units, and inside them).
+  envelopes?: GovernanceEnvelope[];
   // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
   unit_names?: Record<string, string>;
 }
@@ -520,6 +523,7 @@ export const governance = {
       unit_admins?: unknown;
       parent_walls?: unknown;
       deciders?: unknown;
+      envelopes?: unknown;
     }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
@@ -529,6 +533,7 @@ export const governance = {
       unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
       parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),
       deciders: unwrapList<GovernanceDeciders>(body.deciders),
+      envelopes: unwrapList<GovernanceEnvelope>(body.envelopes),
     };
   },
 

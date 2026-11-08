@@ -58,6 +58,7 @@ func (s *Server) scopeGovernanceRead(ctx context.Context, resp governanceRespons
 			out.UnitAdmins = append(out.UnitAdmins, a)
 		}
 	}
+	out.Envelopes = envelopesInScope(resp.Envelopes, rows, in, roots)
 	byID := map[uuid.UUID]unitResolution{}
 	for _, u := range resolved {
 		byID[u.Row.ID] = u

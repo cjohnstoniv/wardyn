@@ -536,6 +536,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/governance/boundary":        {class: classSecurity},
 	"GET /api/v1/governance/recording":       {class: classSecurity},
 	"PUT /api/v1/governance/recording":       {class: classSecurity},
+	// A platform envelope names the groups a unit admin's group adds may apply for without a second
+	// person, so it is security's to set; a unit admin gets security_admin_surface.
+	"PUT /api/v1/governance/units/{id}/envelope":    {class: classSecurity},
+	"DELETE /api/v1/governance/units/{id}/envelope": {class: classSecurity},
 	// The dry run answers a unit admin for a unit or membership target in their units; the boundary
 	// target stays the security tier's, inside the handler.
 	"POST /api/v1/governance/dry-run": {class: classUnit},

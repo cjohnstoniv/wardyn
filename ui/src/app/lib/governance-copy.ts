@@ -451,6 +451,7 @@ export const CHANGES = {
     governance_restriction: "Restriction",
     workspace_owning_unit: "Workspace unit",
     org_recording: "Recording level",
+    governance_envelope: "Platform envelope",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {
