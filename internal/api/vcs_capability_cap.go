@@ -59,14 +59,14 @@ func validateCapList[C interface {
 
 // capOf is the capabilities every layer that names a list lets a run hold (pr expanded), in the first
 // naming layer's order, or nil when no layer names one.
-func capOf[C comparable](layers []sealLayer, of func(sealLayer) *[]C, expand func([]C) []C) *[]C {
+func capOf[C comparable](layers []sealLayer, of func(sealLayer) *[]C, expandCaps func([]C) []C) *[]C {
 	out, named := []C{}, false
 	for _, l := range layers {
 		p := of(l)
 		if p == nil {
 			continue
 		}
-		list := expand(*p)
+		list := expandCaps(*p)
 		if !named {
 			out, named = slices.Clone(list), true
 			continue
