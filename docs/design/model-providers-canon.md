@@ -126,6 +126,32 @@ as every other row below.
 | `PROVIDER_EDITOR.MODEL_HINT_BEDROCK` | E3, under a ticked agent | An inference profile id. |
 | `PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING` | kind step (disabled reason) and E4 | Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image. |
 
+## Frozen strings — gateway presets
+
+Approved design: gateway presets, rc.17. A preset prefills the fields it names on a new Your own endpoint
+provider; nothing records which one was pressed.
+
+| Key | Renders at | Frozen string |
+|---|---|---|
+| `PROVIDER_EDITOR.PRESET_LABEL` | new Your own endpoint, preset row label | Start from a gateway |
+| `PROVIDER_EDITOR.PRESET.litellm` | preset row, chip | LiteLLM |
+| `PROVIDER_EDITOR.PRESET.portkey_self_hosted` | preset row, chip | Portkey self-hosted |
+| `PROVIDER_EDITOR.PRESET.portkey_hosted` | preset row, chip | Portkey hosted |
+| `PROVIDER_EDITOR.PRESET.openrouter` | preset row, chip | OpenRouter |
+| `PROVIDER_EDITOR.PRESET.other` | preset row, chip | Other |
+| `PROVIDER_EDITOR.PRESET_HINT` | preset row, under the chips | Fills in the fields below for that gateway and keeps what an earlier one filled. Change any of them; nothing records which one you picked. |
+| `PROVIDER_EDITOR.HEADERS_LABEL` | Your own endpoint, extra headers label | Extra headers (optional) |
+| `PROVIDER_EDITOR.HEADER_NAME_PLACEHOLDER` | extra headers, name input | Name |
+| `PROVIDER_EDITOR.HEADER_VALUE_PLACEHOLDER` | extra headers, value input | Value |
+| `PROVIDER_EDITOR.HEADERS_ADD` | extra headers, button | Add header |
+| `PROVIDER_EDITOR.HEADERS_REMOVE` | extra headers, icon button `aria-label` | Remove |
+| `PROVIDER_EDITOR.HEADERS_HINT` | extra headers, under the rows | Sent to your gateway on every request, for a gateway that routes on a header. Stored in clear, so never a credential: that goes in the auth header. |
+| `PROVIDER_EDITOR.HEADERS_CAP` | extra headers, beside the disabled Add header | At most 8 headers. |
+| `PROVIDER_EDITOR.PORTKEY_SLUG_PLACEHOLDER` | Portkey hosted, value of the x-portkey-provider row | @<slug> |
+| `PROVIDER_EDITOR.PORTKEY_SLUG_HINT` | Portkey hosted, under the rows | Your Portkey provider's slug, starting with @. |
+| `PROVIDER_EDITOR.OPENROUTER_MODEL_PLACEHOLDER` | OpenRouter, Codex CLI Model | openai/… |
+| `PROVIDER_EDITOR.OPENROUTER_MODEL_HINT` | OpenRouter, Codex CLI Model hint | OpenRouter names a model vendor first, for example openai/… |
+
 ## Owner decisions (packet MP-C) — the Agents tab default (#539)
 
 Packet MP-C ("Choosing at Launch", approved 2026-09-28, recommended on every question). Its

@@ -42,6 +42,30 @@ export const PROVIDER_EDITOR = {
   MODEL_HINT_BEDROCK: "An inference profile id.",
   CLAUDE_IMAGE_MISSING:
     "Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image.",
+  // Gateway presets and extra headers on a new Your own endpoint provider. A preset prefills fields and is
+  // never recorded.
+  PRESET_LABEL: "Start from a gateway",
+  PRESET: {
+    litellm: "LiteLLM",
+    portkey_self_hosted: "Portkey self-hosted",
+    portkey_hosted: "Portkey hosted",
+    openrouter: "OpenRouter",
+    other: "Other",
+  },
+  PRESET_HINT:
+    "Fills in the fields below for that gateway and keeps what an earlier one filled. Change any of them; nothing records which one you picked.",
+  HEADERS_LABEL: "Extra headers (optional)",
+  HEADER_NAME_PLACEHOLDER: "Name",
+  HEADER_VALUE_PLACEHOLDER: "Value",
+  HEADERS_ADD: "Add header",
+  HEADERS_REMOVE: "Remove",
+  HEADERS_HINT:
+    "Sent to your gateway on every request, for a gateway that routes on a header. Stored in clear, so never a credential: that goes in the auth header.",
+  HEADERS_CAP: "At most 8 headers.",
+  PORTKEY_SLUG_PLACEHOLDER: "@<slug>",
+  PORTKEY_SLUG_HINT: "Your Portkey provider's slug, starting with @.",
+  OPENROUTER_MODEL_PLACEHOLDER: "openai/…",
+  OPENROUTER_MODEL_HINT: "OpenRouter names a model vendor first, for example openai/…",
   NAME: "Name",
   NAME_HINT: "What people see when they choose it.",
   ROUTE_THROUGH: "Route through a gateway (optional)",
