@@ -148,7 +148,8 @@ func (l RestrictionLimits) Overlay() LimitsOverlay {
 	return LimitsOverlay{
 		LocalSelfDefinedComponents: l.LocalSelfDefinedComponents, DenyTaskModeExec: l.DenyTaskModeExec,
 		DenyInteractive: l.DenyInteractive, DenyUIApps: l.DenyUIApps, DenyBackgroundDesktopWatch: l.DenyBackgroundDesktopWatch,
-		DenyUserDrive: l.DenyUserDrive, DenyMemberDrives: l.DenyMemberDrives, DenyKeptMachines: l.DenyKeptMachines, DenyScheduledRuns: l.DenyScheduledRuns, DenyComponents: l.DenyComponents, DenyModelProviders: l.DenyModelProviders, DenyPlacements: l.DenyPlacements, AllowedMacOSBases: l.AllowedMacOSBases, RequiredImageSigners: l.RequiredImageSigners, AllowedModels: l.AllowedModels,
+		DenyUserDrive: l.DenyUserDrive, DenyMemberDrives: l.DenyMemberDrives, DenyKeptMachines: l.DenyKeptMachines, DenyScheduledRuns: l.DenyScheduledRuns, DenyComponents: l.DenyComponents, DenyModelProviders: l.DenyModelProviders,
+		DenyPlacements: l.DenyPlacements, AllowedMacOSBases: l.AllowedMacOSBases, RequiredImageSigners: l.RequiredImageSigners, AllowedModels: l.AllowedModels,
 		MaxConcurrentRuns: l.MaxConcurrentRuns, MaxCPUMillis: l.MaxCPUMillis, MaxMemoryMiB: l.MaxMemoryMiB,
 		MaxEphemeralDiskMiB: l.MaxEphemeralDiskMiB, MaxDriveSizeMiB: l.MaxDriveSizeMiB,
 		MaxEndAheadSec: l.MaxEndAheadSec, MaxWaitSec: l.MaxWaitSec, PauseIdleAfterSec: l.PauseIdleAfterSec,
