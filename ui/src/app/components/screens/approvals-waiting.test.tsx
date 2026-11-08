@@ -403,7 +403,7 @@ const adoRow = (id: string, extra: Partial<ApprovalRequest> = {}): ApprovalReque
   ...extra,
 });
 const enabledApproves = () =>
-  screen.queryAllByRole("button", { name: /^approve$/i }).filter((b) => !(b as HTMLButtonElement).disabled);
+  screen.queryAllByRole("button", { name: /^approve/i }).filter((b) => !(b as HTMLButtonElement).disabled);
 
 describe("The other cards' decide gate", () => {
   const kinds: [string, (id: string, extra?: Partial<ApprovalRequest>) => ApprovalRequest, string][] = [
@@ -417,8 +417,9 @@ describe("The other cards' decide gate", () => {
     await waitFor(() => expect(waitingTab()).toBeInTheDocument());
     await userEvent.click(waitingTab()!);
     const card = await screen.findByTestId(testId);
-    expect(within(card).getByRole("button", { name: /^approve$/i })).toBeEnabled();
-    expect(within(card).getByRole("button", { name: /^deny$/i })).toBeEnabled();
+    // The MCP card's button reads "Approve once": one call, decided once.
+    expect(within(card).getByRole("button", { name: /^approve/i })).toBeEnabled();
+    expect(within(card).getByRole("button", { name: /^deny/i })).toBeEnabled();
     expect(getRun).not.toHaveBeenCalled();
   });
 
@@ -428,7 +429,7 @@ describe("The other cards' decide gate", () => {
     renderScreen();
     const card = await screen.findByTestId(testId);
     await act(async () => {});
-    expect(within(card).queryAllByRole("button", { name: /^approve$/i }).filter((b) => !(b as HTMLButtonElement).disabled)).toHaveLength(0);
+    expect(within(card).queryAllByRole("button", { name: /^approve/i }).filter((b) => !(b as HTMLButtonElement).disabled)).toHaveLength(0);
     expect(enabledApproves()).toHaveLength(0);
   });
 });

@@ -164,6 +164,7 @@ export type AdoCardRun = Pick<AgentRun, "created_by" | "state" | "model_provider
 export function AdoCapabilityCard({
   item,
   securityOperator,
+  listed = false,
   viewerPrincipal,
   run,
   ownershipScopedList = false,
@@ -174,6 +175,9 @@ export function AdoCapabilityCard({
 }: {
   item: ApprovalRequest;
   securityOperator: boolean;
+  // The server listed this row as one the viewer may decide now (the Waiting on you read): a unit's deciders rule
+  // names them, so ownership of the run is not asked and the run is never waited on.
+  listed?: boolean;
   // The signed-in viewer's own subject — decides who the consent door is for
   // (adoConsentScopeBody.Owner) and, alongside run.created_by, who "yours"
   // means for an escalation.
@@ -239,7 +243,7 @@ export function AdoCapabilityCard({
     return <AdoConsentCard item={item} viewerPrincipal={viewerPrincipal} />;
   }
 
-  const trusted = ownershipScopedList && (run === null || run === undefined);
+  const trusted = (ownershipScopedList || listed) && (run === null || run === undefined);
 
   if (!securityOperator && !trusted && run === undefined) {
     return (
@@ -274,7 +278,7 @@ export function AdoCapabilityCard({
   const destructive = DESTRUCTIVE_CAPABILITIES.has(scopeData.capability);
   const runOwner = run?.created_by;
   const isOwner = !!runOwner && runOwner === viewerPrincipal;
-  const decidable = trusted || canDecideAdoCapability(securityOperator, isOwner);
+  const decidable = listed || trusted || canDecideAdoCapability(securityOperator, isOwner);
   const where = scopeData.repo ? `${scopeData.org}/${scopeData.repo}` : scopeData.org;
   const source = ADO.REQ_SOURCE(relativeAbsolute(item.requested_at));
 

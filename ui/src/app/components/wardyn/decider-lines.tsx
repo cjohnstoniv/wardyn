@@ -6,6 +6,7 @@
 import { User } from "lucide-react";
 import type { ApprovalRequest } from "../../lib/types";
 import { DECIDERS_INBOX as C } from "./copy/deciders-inbox";
+import { useSecurityOperator } from "./operator-context";
 
 // "a", "a or b", "a, b or c": the join the server's own refusal sentences use, with no Oxford comma.
 export function joinOr(list: string[]): string {
@@ -40,10 +41,12 @@ export function basisSentence(basis: string | undefined, unitNames?: Record<stri
 
 type Row = Pick<ApprovalRequest, "deciders" | "requested_by" | "second_human">;
 
-// Who may decide a pending request, in the server's order. Nothing when no rule governs the row.
+// Who may decide a pending request, in the server's order. Nothing when no rule governs the row. "you" is only the
+// run's owner reading their own card: a security operator's Pending list carries other people's runs too.
 export function DecidedByLine({ item }: { item: Row }) {
+  const securityOperator = useSecurityOperator();
   if (!item.deciders || item.deciders.length === 0) return null;
-  const own = !item.requested_by;
+  const own = !item.requested_by && !securityOperator;
   return (
     <p className="mt-1 text-xs text-muted-foreground">
       <span className="font-medium text-foreground">{C.DECIDED_BY_LABEL}</span>{" "}

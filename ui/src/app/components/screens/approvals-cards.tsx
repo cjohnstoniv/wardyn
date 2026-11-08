@@ -237,6 +237,7 @@ export function ApprovalCard({
         <AdoCapabilityCard
           item={item}
           securityOperator={securityOperator}
+          listed={waiting}
           viewerPrincipal={principal}
           run={run}
           tokenWidens={tokenWidens}
@@ -289,7 +290,7 @@ export function ApprovalCard({
         {runRow}
         <McpCallCard
           item={item}
-          canDecide={kindDecidable && !runEnded}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
           run={run}
           busy={pushBusy}
           onApprove={async () => {
@@ -314,6 +315,7 @@ export function ApprovalCard({
         <PushContentCard
           item={item}
           securityOperator={securityOperator}
+          listed={waiting}
           run={run}
           busy={pushBusy}
           onApprove={async () => {
