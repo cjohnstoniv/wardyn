@@ -19,6 +19,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_deciders`. Without it `GET /governance` fails and a unit's deciders cannot be set.
 
+### Before you downgrade
+
+- An older build ignores the `governance_unit_deciders` table, so unit deciders rules stop binding and every hold is decided as before. A unit whose rule left out `owner` has its run's owner deciding egress, Azure DevOps and MCP holds again. Clear the rules you rely on first.
+
 ### Added
 
 - `PUT /api/v1/governance/units/{id}/deciders` sets a unit's deciders: who besides the security tier may decide each kind of hold (`egress_domain`, `ado_escalation`, `mcp_call`, `kube_call`, `credential`, `push_content`, `elevation`, `image`, `file_download`) for runs launched in that unit. A rule lists `owner`, `unit_admins` or `group:<name>`, and may require a second person (`second_human`) and cap one decision's reach (`max_scope`). `GET /governance` shows each unit's rules and which unit's rule governs each kind. With no rules anywhere, holds are decided as before. A security admin's write follows `WARDYN_GOVERNANCE_SECOND_HUMAN`; a unit admin may set them only for a unit strictly below one they govern, and the write is always held for a second person. A new lock knob, `deciders`, stops units below the locker from setting them; a unit, a move or a boundary write that would put rules under that lock is refused until the rules are cleared. `max_elevation` is stored in one canonical form (`4h` for `240m`).
@@ -30,6 +34,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).
 - macOS VM bases now mark Setup Assistant's panes as seen for the agent account, stop the Fn key raising Dictation, turn Spotlight indexing and diagnostics upload off, and kill Terminal and remove its saved state, so a run's first desktop is clean. On by default. Prepare writes them and every tools update writes them again, through a new guest-agent route that takes no input and adds no allowed exec. Rows that fail or cannot be applied are listed in `tools.json` as `base_settings_skipped` and never fail an update. edit-base's finish also cleans Terminal.
 - `wardyn-runnerd doctor` on a macOS VM runner has a `guest-agent` stage: it fails when the guest agent went in signed ad hoc, quoting why each signer failed, and passes when this Mac's cert signed it. `macos-vm status` shows the signer and the signing errors, and the base's `tools.json` records them as `agent_signer` and `agent_sign_errors`, with no paths.
+- Operations guide "Who decides a hold" covers unit deciders: the rules, who may write them, how a hold is resolved and the audit fields `basis` and `rule`. The threat model lists five residuals, among them that a security admin decides without the rule while the rules cannot be read.
 
 ### Changed
 
