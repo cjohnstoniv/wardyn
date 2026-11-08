@@ -65,7 +65,6 @@ export const DESKTOP = {
   backgroundWatchTile: "You can watch this desktop. Typing, clicking, pasting and clipboard copy are disabled.",
   backgroundWatchExposure: "A screen can show what the run keeps out of its logs, such as an app's secrets, open documents or anything else it puts on screen.",
   backgroundWatchBody: "This is a background run. Typing, clicking, pasting and clipboard copy are disabled.",
-  loginWindowNote: "You may see a macOS login window instead of the agent's screen. The run keeps going either way.",
   // The gateway's own close code: a re-check ended a watch of a background run. Never the hour's words.
   watchEndedBody: "Watching this run's desktop is no longer allowed, so this view closed. Closing this view does not stop the run.",
   diskRemoving: "Removing the macOS VM's disk from this Mac…", // MV-D10
