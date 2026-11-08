@@ -78,6 +78,13 @@ func TestAuditUnitGovernanceArmQueryPG(t *testing.T) {
 		t.Errorf("the feed filtered by action = %d rows (%v), want the one unit_id row", len(filtered), err)
 	}
 
+	// An actor filter must not reach the governance arm: the view masks a governance row's actor, so a
+	// non-empty answer to ?actor=<name> would confirm who wrote about the reader's units.
+	byActor, err := pg.QueryAuditEventsForUnits(ctx, units, store.AuditFilter{Actor: "carol@corp.example"}, store.Page{Limit: 1000})
+	if err != nil || len(byActor) != 1 || byActor[0].ID != byRun {
+		t.Errorf("the feed filtered by actor = %d rows (%v), want the run's row alone", len(byActor), err)
+	}
+
 	export, _, err := pg.QueryAuditEventsForUnitsAfter(ctx, units, store.AuditFilter{}, 0, 1000)
 	if err != nil || len(export) != 1 || export[0].ID != byRun {
 		t.Errorf("the export = %d rows (%v), want the run's row alone", len(export), err)
