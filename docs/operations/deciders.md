@@ -54,13 +54,12 @@
 | `mcp_call` | one MCP call a person approves with its arguments | none | optional |
 | `credential` | a credential hold | `owner` | required |
 | `push_content` | a held push | `owner` | required |
-| `kube_call` | nothing in this build | none | optional |
+| `kube_call` | one Kubernetes call a person approves | none | optional |
 | `elevation` | a person's request to be a member of the unit for a while ([elevations](#elevations)) | `owner` | refused |
 | `image` | a person's request for one image by digest ([image requests](#image-requests)) | `owner` | refused |
-| `file_download` | nothing in this build | `owner` | stored as true |
+| `file_download` | a person's request to download one file from a run's desktop, where `desktop.download` is `review` ([data_out](../POLICIES.md#data_out)) | `owner` | stored as true |
 
 - `elevation`, `image` and `file_download` are each their own rule and take no `max_scope`. An `elevation` rule also needs `max_elevation` and `eligible_requesters`.
-- The last row's kind is stored and shown, but no hold in this build maps to it, so a rule for it decides nothing.
 - A plain tool call is no kind here and is decided as before.
 - The rule for one kind never binds another: an Azure DevOps rule leaves MCP calls alone.
 
@@ -128,6 +127,16 @@ Set a unit's rules with `PUT /api/v1/governance/units/{id}/deciders` or `wardyn 
 - A decider sees the host, the tool call, the push paths and who asked. They never see the run, its output or a terminal.
 - `approval.decide` gains `data.basis` and, under a rule, `data.rule` ([audit actions](../AUDIT-ACTIONS.md)).
 
+## In the console
+
+- **Approvals › Waiting on you** lists the pending holds you may decide under a unit's rules, on other people's runs too. A card says who asked and "You can't open this run." where the run is not yours. A decided row says on what basis it was decided.
+  - A security admin does not get the tab: their **Pending** lists every hold, and they decide elevation and image requests under **Governance › Changes**.
+- **Approvals › Your requests** is for a person a unit offers elevation. **Request elevation** asks for one, and the card follows the request and offers **Withdraw**. A group decider approves or denies it under **Waiting on you**.
+- **Approvals › Your requests › Request an image** is for a person whose default unit offers [image requests](#image-requests). Ask for one image by digest, then follow and withdraw it in the same card. A group decider decides it under **Waiting on you**.
+- **New run › Run in**, on the Run step, is drawn for a person with more than one unit, a live elevation, or an elevation they may ask for. It defaults to the home unit, never to an elevation. For a unit they can only ask for, Review offers **Request elevation**.
+- **Governance › Profiles ›** a profile **› Deciders** shows the profile's rules, the rules above it that bind them, and a lock. A security admin sets it, and a unit admin sets it for a unit strictly below theirs ([who may write rules](#who-may-write-rules)).
+- **Governance › Changes** lists held deciders, platform envelope, elevation and image changes. A person's own request has **Withdraw request** where a decider has Reject.
+
 ## Elevations
 
 An elevation is membership of a unit for a while, asked for by the person and given by the unit's deciders. A unit offers one when an `elevation` rule is on it or above it.
@@ -168,6 +177,7 @@ An image request is one image, by digest, for the person who asks, given by the 
 - **The grant.** An approval writes one allow grant of `image` for the person, of exactly the ref asked for, created by the decider. It is a user grant, so it holds in any unit the person runs in.
 - **What still binds.** Nothing is checked ahead of a launch. The digest rule, a deny of the image and image admission ([capabilities](capabilities.md)) apply at every launch, as for any grant. Deleting the grant ends it.
 - With the `image` kind's switch off, nothing is offered: an approved grant would not launch.
+- For a platform that wants images through requests, see [platform tenancy](platform-tenancy.md#recipes).
 - An `image` rule takes none of the elevation fields: `eligible_requesters`, `renew_after` or `ticket_pattern` on one answers `400` `invalid_deciders`.
 
 ## Group deciders and sign-in age

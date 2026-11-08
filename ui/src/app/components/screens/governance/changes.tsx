@@ -35,6 +35,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { cn } from "../../ui/utils";
 import { Mono } from "../../wardyn/code-block";
 import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
+import { IMG } from "../../wardyn/copy/image-request";
+import { changeTargetRef, splitImageRef } from "../elevation/image-ref";
 import { Field } from "../../wardyn/form-primitives";
 import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState } from "../../wardyn/states";
@@ -125,6 +127,16 @@ function elevationOf(c: GovernanceChange): { person: string; unit: string; lengt
   if (!a.unit_name || !a.subject) return null;
   const ms = goDurationMs(a.duration);
   return Number.isFinite(ms) ? { person: a.subject, unit: a.unit_name, length: formatDuration(ms, "words") } : null;
+}
+
+// An image request's person, the reference and the unit it was asked under, read from the server's diff (`after`).
+// Null when a field is missing or the reference has no digest, so the row and drawer fall back to the generic ones.
+function imageOf(c: GovernanceChange): { person: string; ref: string; unit: string } | null {
+  if (c.target_kind !== "governance_image_request") return null;
+  const a = c.diff.after as { image?: unknown; unit_name?: unknown; subject?: unknown } | undefined;
+  if (typeof a?.image !== "string" || typeof a.unit_name !== "string" || typeof a.subject !== "string") return null;
+  if (!a.unit_name || !a.subject || !splitImageRef(a.image).digest) return null;
+  return { person: a.subject, ref: a.image, unit: a.unit_name };
 }
 
 // A person asking for something, not proposing a change: the kinds whose proposer's Reject is a withdrawal.
@@ -292,6 +304,7 @@ export function ChangesTab({
               {shown.map((c) => {
                 const gone = removedOrgRunner(c);
                 const elevation = elevationOf(c);
+                const img = imageOf(c);
                 return (
                   <TableRow key={c.id} className="cursor-pointer" onClick={() => setOpen(c)}>
                     <TableCell className="font-medium">
@@ -307,6 +320,8 @@ export function ChangesTab({
                         <p className="text-xs font-normal text-muted-foreground">
                           {CHANGE_NOTE.ELEVATION_LINE(elevation.length, c.note?.ticket)}
                         </p>
+                      ) : img ? (
+                        <p className="text-xs font-normal text-muted-foreground">{IMG.CHANGE_LINE(c.note?.ticket)}</p>
                       ) : (
                         c.note && <NoteLine note={c.note} />
                       )}
@@ -314,6 +329,8 @@ export function ChangesTab({
                     <TableCell>
                       {elevation ? (
                         CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
+                      ) : img ? (
+                        <Mono className="text-foreground">{IMG.CHANGE_TARGET(img.person, changeTargetRef(img.ref))}</Mono>
                       ) : (
                         <Mono className="text-foreground">{changeTarget(c)}</Mono>
                       )}
@@ -366,6 +383,7 @@ export function ChangeDrawer({
   const shown = noted ?? change;
   const profile = shown ? assignedProfile(shown) : null;
   const elevation = shown ? elevationOf(shown) : null;
+  const img = shown ? imageOf(shown) : null;
   const withdrawal = own && !!shown && isRequest(shown);
   const hasNote = !!(shown?.note?.reason || shown?.note?.ticket);
   const id = change?.id;
@@ -411,7 +429,11 @@ export function ChangeDrawer({
               <SheetTitle className="flex flex-wrap items-baseline gap-x-2">
                 {changeLabel(change)}
                 <Mono className="text-foreground">
-                  {elevation ? CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit) : changeTarget(change)}
+                  {elevation
+                    ? CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
+                    : img
+                      ? IMG.CHANGE_TARGET(img.person, changeTargetRef(img.ref))
+                      : changeTarget(change)}
                 </Mono>
               </SheetTitle>
               <SheetDescription>
@@ -431,6 +453,23 @@ export function ChangeDrawer({
                     ].map(([label, value]) => (
                       <TableRow key={label}>
                         <TableCell className="text-muted-foreground">{label}</TableCell>
+                        <TableCell>{value}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : img ? (
+                <Table>
+                  <TableBody>
+                    {[
+                      [IMG.ROW_PERSON, img.person],
+                      [IMG.ROW_IMAGE, <Mono key="n" className="text-foreground">{splitImageRef(img.ref).name}</Mono>],
+                      [IMG.ROW_DIGEST, <Mono key="d" className="break-all text-foreground">{splitImageRef(img.ref).digest}</Mono>],
+                      [IMG.ROW_ASKED_UNDER, IMG.ASKED_UNDER(img.unit)],
+                      [IMG.ROW_WRITES, IMG.WRITES],
+                    ].map(([label, value]) => (
+                      <TableRow key={String(label)}>
+                        <TableCell className="align-top text-muted-foreground">{label}</TableCell>
                         <TableCell>{value}</TableCell>
                       </TableRow>
                     ))}
