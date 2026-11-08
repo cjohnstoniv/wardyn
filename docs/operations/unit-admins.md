@@ -43,9 +43,8 @@ Unit admins read the audit rows of runs in their subtrees. It is on at upgrade; 
 
 - Rows with no run, such as sign-ins and governance writes, are not served.
 - A row keeps its time, action, actor, outcome and run, and its target on `run.*`, `egress.*` and `approval.*` rows.
-- Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class` and `exit_code`, each a number, a code or a list of them. A value with a space in it, such as an error's text, is left out. Personal walls, restriction names, secret names and error text are never served.
-- The export does not inline a held push's path list.
-- A `target` filter needs an `action` or `action_prefix` in `run.`, `egress.` or `approval.`; otherwise it is refused `400` `audit_unit_target_filter`.
+- Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class` and `exit_code`. Each is a number, a code or a list of them; a value with a space, such as an error, is left out. Personal walls, restriction names, secret names, error text and a held push's paths are never served.
+- A `target` filter needs a `run.`, `egress.` or `approval.` `action` or `action_prefix`, else `400` `audit_unit_target_filter`.
 - Their own runs' rows read as any owner's do. A run outside their subtrees answers a member's empty `200`.
 
 ## Four-eyes
