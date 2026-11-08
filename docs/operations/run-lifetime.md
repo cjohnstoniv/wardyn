@@ -52,7 +52,7 @@ A run's lease ends it, or someone ends it now.
 
 ### At the lifetime cap
 
-The cap (`lifetime_cap_at`) is a run's hard end. An extension never passes it, and a run launched under an elevation is capped at the elevation's end.
+The cap (`lifetime_cap_at`) is a run's hard end. An extension never passes it.
 
 - From the cap, every request the run's sandbox makes to the organisation is refused (`authz.denied`, `run_terminal`, with `lifetime_cap_at`), its token is not renewed, and its pending approvals cannot be decided (`409 approval_run_past_lifetime`).
 - Within a minute the lease sweep kills it (`run.kill`, `max_lifetime_reached`).
@@ -69,9 +69,8 @@ At the kill:
 
 - A queued run whose cap passed while it waited ends without starting.
 - A kept run past its cap cannot be revived.
-- A run in a unit its owner has left, an elevation's unit after the elevation ends for instance, cannot be revived or restarted from the queue.
+- A run in a unit its owner has left cannot be revived or restarted from the queue.
 - Not recalled: env and file secrets already handed to the sandbox (they go with it) and anything a person copied out of the run.
-- An elevation revoked early does not end runs already started under it: they still end at the elevation's end.
 
 ### Where the proxy config lives while kept
 
