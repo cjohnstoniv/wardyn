@@ -98,6 +98,8 @@ type governanceResponse struct {
 	UnitAdmins []types.GovernanceUnitAdmin `json:"unit_admins"`
 	// ParentWalls is, for a unit admin, the walls each of their subtrees hangs from (scopeGovernanceRead).
 	ParentWalls []unitParentWalls `json:"parent_walls,omitempty"`
+	// UnitNames is, for a unit admin, the name of every unit above their subtrees, by id (ancestorNames).
+	UnitNames map[uuid.UUID]string `json:"unit_names,omitempty"`
 }
 
 // handleGetGovernance returns the whole governance picture to a security caller, and a unit admin's
