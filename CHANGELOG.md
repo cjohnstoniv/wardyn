@@ -40,6 +40,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you downgrade
 
 - An older server ignores `governance_memberships.expires_at`: an elevation approved before the downgrade becomes a permanent membership, and pending elevation requests are shown to nobody. Delete elevated memberships (`expires_at IS NOT NULL`) before downgrading.
+- An older server shows pending image requests to nobody. Grants already approved stay.
 - Replace `pr_create`, `pr_vote` and `pr_complete` (Azure DevOps) and `pr_write` and `pr_review` (GitHub) with `pr` in every provider row, policy, unit wall, person's walls, wall preset and GitHub CLI component first. An older release refuses the new Azure DevOps names, and grants nothing for `pr_write` or `pr_review` in a GitHub list, without an error.
 - An older binary ignores `deny_components` and `deny_model_providers` on unit limits, so denied components and providers attach again.
 - An older version ignores platform envelopes, so a held change of an envelope's unit, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs that unit. Changes below the envelope's unit and adds of its approved groups are held again, as before.
@@ -55,6 +56,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A new page, Keep run branches from starting pipelines ([docs/operations/ci-trigger-guard.md](docs/operations/ci-trigger-guard.md)): what to set in Azure DevOps and GitHub so a run's pushes and pull requests cannot start a pipeline unreviewed, and the Wardyn settings that hold or refuse them.
 - Elevation requests: a person asks for a time-boxed membership in a unit whose deciders rule offers `elevation` (`POST /governance/requests`, kind `elevation`, with a required reason and an optional ticket). The rule's deciders approve it, never the requester; the membership ends at the approved duration, a run launched in the unit has its lifetime cap at that end, and the end is audited as `governance.elevation.expire`. Who may ask is set per rule, by group; a rule can require a ticket matching a pattern and a wait between elevations.
+- Image requests: a person whose default unit offers it (an `image` deciders rule) requests one image by digest (`POST /governance/requests`, kind `image`, with a reason). The rule's deciders approve it, never the requester, and approval adds an exact allow grant of that image for that person. The digest rule, restrictions and image admission still apply at every launch.
 - `data_out` (`allowed`, `review` or `blocked`) on a run policy, a unit's walls, a restriction and the Wardyn boundary: one rule for content leaving a run.
   - `review` and `blocked` both turn off desktop copy-out, SSH file transfer (sftp and scp), SSH commands and port forwards, `wardyn sync` down, web apps other than the desktop, and a computer folder that syncs back. They also limit run output to security admins, and recording replay to super admins.
   - `review` lets files out one at a time through the Files panel, on any running run, each with a person's yes.

@@ -135,6 +135,11 @@
     "sentence": "\"image \" + req.Image + \" is not granted to you — ask an admin for an image grant that covers it, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
   },
   {
+    "reason": "byoi_user",
+    "target": "\"runs.image\"",
+    "sentence": "\"image \" + req.Image + \" is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
+  },
+  {
     "reason": "capKinds[capAgent].reason",
     "target": "\"runs.agent\"",
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""

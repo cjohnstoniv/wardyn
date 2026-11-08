@@ -135,7 +135,7 @@ func routeFamilies() map[string][]string {
 			"MoveGovernanceMembership", "PromoteGovernanceMembership", "GrantUnitAdmin", "RevokeUnitAdmin", "PutUnitDeciders", "CheckGovernance", "GovernanceDryRun", "SetEnvelope", "ClearEnvelope",
 			"GetGovernanceUnder", "PlanGovernanceUnder", "ApplyGovernanceResultUnder"},
 		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange", "NoteGovernanceChange"},
-		"gov.requests":    {"ListGovernanceRequests", "RequestElevation", "ApproveGovernanceRequest", "RejectGovernanceRequest"},
+		"gov.requests":    {"ListGovernanceRequests", "RequestElevation", "RequestImage", "ApproveGovernanceRequest", "RejectGovernanceRequest"},
 		"setup":           {"SetupStatus"},
 		"identity":        {"Me"},
 		"health":          {"Healthz"},

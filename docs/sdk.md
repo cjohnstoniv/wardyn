@@ -1040,6 +1040,9 @@ start.
 | `elevation_ticket_required` | `POST /governance/requests`, or `PUT /governance/changes/{id}/note` on an elevation (400): a rule on the unit or above it has a `ticket_pattern`, and no ticket was given. |
 | `elevation_ticket_invalid` | `POST /governance/requests`, or `PUT /governance/changes/{id}/note` on an elevation (400): the ticket does not match a `ticket_pattern` on the unit or above it; the message shows the pattern. |
 | `elevation_cooldown` | `POST /governance/requests` (409): the caller's last elevation in the unit ended less than the rule's `renew_after` ago. `retry_after` (RFC 3339) is when they may ask again. |
+| `image_request_not_pinned` | `POST /governance/requests`, kind `image` (400): the image is not `<name>@sha256:<64 hex>`, or its path has an empty, `.` or `..` segment. |
+| `image_request_not_offered` | `POST /governance/requests`, kind `image` (400): the caller's default unit offers no image requests: no `image` rule on it or above it, the unit is Default, or the group list is out of date (one answer for all of them), or image grants are off in this deployment. |
+| `image_already_granted` | `POST /governance/requests`, kind `image` (409): the caller already holds a grant of exactly this image. |
 | `boundary_invalid` | `PUT /governance/boundary` and `POST /governance/dry-run` (400): the `PUT` names no `mode` or an unknown one, or the document sets `allow_all_egress` beside `allowed_domains`, a `max_end_ahead_sec` below 1, a bad `contact`, or a value a run policy would refuse; `501` on a store that keeps no boundary. |
 | `boundary_stale` | `PUT /governance/boundary` (412): `If-Match` names a boundary that has since changed. |
 | `unit_knob_locked` | `POST/PUT /governance/units`, `PUT /governance/boundary`, an approval of either, and `POST /governance/dry-run` (409): the write changes a knob that the boundary or a unit above locks, a narrowing included ("`<knob>` is locked by `<locker>`; ask `<contact>`"). Or it locks a knob that a unit below sets to another value: the body lists those units, and clearing their values would widen them. |
@@ -1356,7 +1359,8 @@ applied only once another approver approves it. The SDK never reads it as a save
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
 - `ListGovernanceRequests` (`GET /api/v1/governance/requests`), `RequestElevation(ctx, unit, duration, reason, ticket)`
-  (`POST /api/v1/governance/requests`, kind `elevation`), `ApproveGovernanceRequest` and
+  (`POST /api/v1/governance/requests`, kind `elevation`), `RequestImage(ctx, image, reason, ticket)` (kind `image`, one
+  image by digest; `ImageOffered` on the list says whether the caller may ask), `ApproveGovernanceRequest` and
   `RejectGovernanceRequest(ctx, id, reason)` (`POST /api/v1/governance/requests/{id}/approve` and `/reject`) are the
   held requests. Any signed-in person reaches them; the list holds the requests the caller asked or may decide
   (pending, and decided in the last day) and `offered`, the units the caller may ask an elevation in. The

@@ -43,6 +43,7 @@ type governanceRequestKind struct {
 
 var governanceRequestKinds = map[string]governanceRequestKind{
 	"elevation": {target: types.GovernanceTargetElevation, decider: types.DeciderKindElevation, propose: proposeElevation, view: elevationView},
+	"image":     {target: types.GovernanceTargetImageRequest, decider: types.DeciderKindImage, propose: proposeImageRequest, view: imageRequestView},
 }
 
 // requestKindOf is the request kind stored as targetKind; false for a change that is not a request.
@@ -103,6 +104,10 @@ type ElevationOffer struct {
 type governanceRequestList struct {
 	Requests []GovernanceRequestView `json:"requests"`
 	Offered  []ElevationOffer        `json:"offered"`
+	// ImageOffered is whether the caller may ask for an image: a person whose default unit has an image
+	// rule on it or above it (imageRequestOffered). Rule-based only: with no ref to ask about, it does not
+	// read the image kind's switch, which create checks.
+	ImageOffered bool `json:"image_offered"`
 }
 
 func (s *Server) mountGovernanceRequestRoutes(member chi.Router) {
@@ -189,6 +194,7 @@ func (s *Server) handleListGovernanceRequests(w http.ResponseWriter, r *http.Req
 		}
 		out.Offered = offers
 	}
+	out.ImageOffered = s.imageRequestOfferedQuiet(r)
 	writeJSON(w, http.StatusOK, out)
 }
 

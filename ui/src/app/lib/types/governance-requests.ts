@@ -38,6 +38,8 @@ export interface ElevationOffer {
 export interface GovernanceRequestList {
   requests: GovernanceRequest[];
   offered: ElevationOffer[];
+  // Whether the caller may ask for an image: their default unit has an image rule on it or above it.
+  image_offered: boolean;
 }
 
 // POST /governance/requests' body.

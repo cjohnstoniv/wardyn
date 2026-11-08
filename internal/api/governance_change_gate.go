@@ -219,6 +219,8 @@ var governanceChangeKinds = map[string]govKind{
 	govKindEnvelope:            {approver: securityApprover, apply: applyEnvelopeChange},
 	// An elevation's approver is its unit's rule (forChange, requestApprover).
 	types.GovernanceTargetElevation: {apply: applyElevationChange, rejectAction: "governance.elevation.reject"},
+	// An image request's approver is the met image rule at its unit (forChange, requestApprover).
+	types.GovernanceTargetImageRequest: {apply: applyImageRequestChange, rejectAction: "governance.image_request.reject"},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
@@ -245,6 +247,8 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 		k.approver = unitChangeApprover(ch)
 	case types.GovernanceTargetElevation:
 		k.approver = requestApprover(ch, types.DeciderKindElevation)
+	case types.GovernanceTargetImageRequest:
+		k.approver = requestApprover(ch, types.DeciderKindImage)
 	}
 	return k
 }

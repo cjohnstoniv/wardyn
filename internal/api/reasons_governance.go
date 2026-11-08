@@ -92,3 +92,15 @@ const (
 	// renew_after ago; retry_after says when they may ask again (409).
 	reasonElevationCooldown = "elevation_cooldown"
 )
+
+// The image request reasons (governance_image_request.go).
+const (
+	// reasonImageRequestNotPinned: the image is not <name>@sha256:<64 hex>, or its path has an empty, "." or
+	// ".." segment (400).
+	reasonImageRequestNotPinned = "image_request_not_pinned"
+	// reasonImageRequestNotOffered: the caller's default unit offers no image requests: no image rule on it or
+	// above it, Default, or a stale or truncated group snapshot, all one answer (400).
+	reasonImageRequestNotOffered = "image_request_not_offered"
+	// reasonImageAlreadyGranted: the caller already holds the image exactly (409).
+	reasonImageAlreadyGranted = "image_already_granted"
+)
