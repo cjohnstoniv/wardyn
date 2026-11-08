@@ -58,6 +58,9 @@ type decisionSink struct {
 	// atomic at the OS level, so concurrent mirror() calls could interleave
 	// into a corrupted record without it.
 	outMu sync.Mutex
+
+	// activityIgnore is Config.ActivityIgnoreHosts: an allowed request to one of these does not move the marker.
+	activityIgnore []string
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {

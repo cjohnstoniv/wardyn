@@ -269,12 +269,9 @@ func TestNonOwnerKillDeletesTheKeptMachine(t *testing.T) {
 	k := newKeptFixture(t)
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
 	k.kill(t, k.run, types.ActorHuman, "sub-admin")
-	d := k.requireDeletedBy(t, m, keptMachineByNonOwnerKill, runnerwire.KeptMachineDeleted)
+	d := k.requireKillDeleted(t, m)
 	if d["killer"] != "sub-admin" {
 		t.Errorf("killer = %v, want sub-admin", d["killer"])
-	}
-	if got := k.mac.asked(); len(got) != 1 || got[0] != m.ID.String() {
-		t.Errorf("Mac asked to delete %v, want [%s]", got, m.ID)
 	}
 }
 
@@ -284,7 +281,42 @@ func TestServiceIdentityKillDeletesTheKeptMachine(t *testing.T) {
 	k := newKeptFixture(t)
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
 	k.kill(t, k.run, serviceActorType, types.ServicePrincipalPrefix+"ci-bot")
-	k.requireDeletedBy(t, m, keptMachineByNonOwnerKill, runnerwire.KeptMachineDeleted)
+	k.requireKillDeleted(t, m)
+}
+
+// requireKillDeleted: a kill's delete, once the background work it started has finished. The kill
+// kicks the runner's resident erase, whose kept-machine sweep settles the same kill intent; whichever
+// reaches the Mac first deletes and the other finds the machine already absent. So: the machine is
+// gone, the Mac was asked about this machine only, every machine.delete row is the kill's, and exactly
+// one of them deleted it. It returns that row.
+func (k *keptFixture) requireKillDeleted(t *testing.T, m types.KeptMachine) map[string]any {
+	t.Helper()
+	k.srv.bg.Wait()
+	if _, ok := k.row(t, m.ID); ok {
+		t.Fatalf("machine %s is still recorded", m.Name)
+	}
+	for _, id := range k.mac.asked() {
+		if id != m.ID.String() {
+			t.Errorf("Mac asked to delete %s, want only %s", id, m.ID)
+		}
+	}
+	var deleted []map[string]any
+	for _, r := range k.rows(t, "machine.delete", m.ID) {
+		if r["by"] != keptMachineByNonOwnerKill || r["_outcome"] != "success" {
+			t.Errorf("machine.delete = %v, want by %s success", r, keptMachineByNonOwnerKill)
+		}
+		switch r["outcome"] {
+		case runnerwire.KeptMachineDeleted:
+			deleted = append(deleted, r)
+		case runnerwire.KeptMachineAlreadyAbsent:
+		default:
+			t.Errorf("machine.delete outcome %v, want deleted or already_absent", r["outcome"])
+		}
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("%d machine.delete rows deleted %s, want exactly 1", len(deleted), m.Name)
+	}
+	return deleted[0]
 }
 
 // requireKept: the machine is still recorded, with no delete started or intended, and its Mac was never

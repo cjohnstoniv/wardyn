@@ -832,8 +832,13 @@ func (s *Server) releaseUnstartedKeptMachine(ctx context.Context, run types.Agen
 	}
 	ctx = context.WithoutCancel(ctx)
 	if k.plan.mode == keptModeNew {
-		if err := st.DropUnstartedKeptMachine(ctx, k.machine.ID, run.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		err := st.DropUnstartedKeptMachine(ctx, k.machine.ID, run.ID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			slog.WarnContext(ctx, "wardynd: drop the kept machine of a run that never started", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
+		if err == nil { // insertKeptMachine audited machine.create as a success: say the machine never existed
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "machine.create", k.machine.ID.String(), "failure",
+				mustJSON(map[string]any{"reason": "sandbox_not_created", "machine_id": k.machine.ID, "run_id": run.ID})))
 		}
 		if rs, ok := s.cfg.Store.(runKeptMachineStore); ok {
 			_ = rs.SetRunKeptMachine(ctx, run.ID, nil, "")

@@ -22,7 +22,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants GitPushWithheld PATGrants " +
 		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 KubeAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
 		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMHeaders LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir " +
-		"PushRuleSets PushRuleBase ForgeHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach DisableModelUsage " +
+		"PushRuleSets PushRuleBase ForgeHosts ActivityIgnoreHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach DisableModelUsage " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		"VM PortRule SigninListen"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),

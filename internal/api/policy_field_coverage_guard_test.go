@@ -99,7 +99,12 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 	// The fields the write-time validators bound, read off the syntax tree: a
 	// substring match over the whole file is satisfied by a field mentioned only
 	// in a comment, or only READ by a validator for another field's sake.
+	// validateLLMInspection lives in its own file (the file-size cap); its validator is part of
+	// the same write-time bound, so both files are read.
 	validated := writeBoundedFields(t, readRepoFile(t, "internal", "api", "policy.go"))
+	for f := range writeBoundedFields(t, readRepoFile(t, "internal", "api", "policy_llm_inspection.go")) {
+		validated[f] = true
+	}
 	// cloneProposal is the clamp's OWNERSHIP copy (it reallocates the caller's
 	// slices and pointees so the clamped spec aliases nothing). It names EVERY
 	// reference-semantics field by construction and bounds none of them, so
@@ -122,7 +127,7 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 			t.Errorf("RunPolicySpec.%s: the row needs a reason, not just two booleans", f.Name)
 		}
 		if got := validated[f.Name]; got != row.validated {
-			t.Errorf("RunPolicySpec.%s: validated=%v in the table, but internal/api/policy.go %s reference it",
+			t.Errorf("RunPolicySpec.%s: validated=%v in the table, but internal/api/policy.go and policy_llm_inspection.go %s reference it",
 				f.Name, row.validated, saysOrNot(got))
 		}
 		if got := strings.Contains(clampSrc, "."+f.Name); got != row.clamped {

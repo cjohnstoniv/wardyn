@@ -207,6 +207,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "ModelLimit", Class: ClassExempt, Rule: RuleExempt, Variant: "the run's governed model list and its Bedrock gateway routes; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "ViaOrgRoutes", Class: ClassExempt, Rule: RuleExempt, Variant: "grant id and destination host of each via_org grant; no credential, and the organisation re-checks both"},
 	{Struct: StructProxyConfig, Field: "MCPServers", Class: ClassExempt, Rule: RuleExempt, Variant: "key, URL and the grant id of each MCP server's header credential; no credential, which the broker resolves from the control plane per request"},
+	{Struct: StructProxyConfig, Field: "ActivityIgnoreHosts", Class: ClassExempt, Rule: RuleExempt, Variant: "the macOS boot hosts whose allowed requests are not idle activity; it only narrows what counts, no credential"},
 	{Struct: StructProxyConfig, Field: "MCPApproveEach", Class: ClassExempt, Rule: RuleExempt, Variant: "the approve_each marker and its wait windows; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "MCPBindings", Class: ClassExempt, Rule: RuleExempt, Variant: "SHA-256 of each harness's MCP token and its server keys; a digest, never the token"},
 

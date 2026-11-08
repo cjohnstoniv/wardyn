@@ -47,7 +47,7 @@ const (
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
 	ruleSourceMint        = "brokered:mint"
-	ruleSourceApprovals   = "brokered:approvals"
+	ruleSourceApprovals   = egress.RuleSourceApprovals
 	ruleSourceRecordings  = "brokered:recording"
 	ruleSourceScanResults = "brokered:scan-result"
 	// A tool call decided by the run's own tool_rules, with no human asked.

@@ -171,3 +171,29 @@ func TestDispatchDeniesBootHostsOnlyOnMacOSVM(t *testing.T) {
 		}
 	}
 }
+
+// Dispatch gives a macOS VM run's proxy the boot hosts as the hosts whose allowed traffic is not activity, and
+// every other kind none, so the key is absent from a container run's config. The list is a copy.
+func TestDispatchSetsActivityIgnoreHostsOnlyOnMacOSVM(t *testing.T) {
+	src, err := os.ReadFile("runs_dispatch.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const field = "ActivityIgnoreHosts: activityIgnoreHosts(run.MachineKind)"
+	if strings.Count(string(src), "activityIgnoreHosts(") != 1 || !strings.Contains(string(src), field) {
+		t.Fatal("dispatchRun must set the proxy config's ActivityIgnoreHosts once, from the run's kind")
+	}
+	if got := activityIgnoreHosts(types.MachineMacOSVM); !slices.Equal(got, macOSBootHosts()) || len(got) == 0 {
+		t.Errorf("macOS VM: %v, want the boot hosts %v", got, macOSBootHosts())
+	}
+	got := activityIgnoreHosts(types.MachineMacOSVM)
+	got[0] = "changed.example"
+	if macOSBootHosts()[0] == "changed.example" {
+		t.Error("the returned list aliases the boot-host list")
+	}
+	for _, kind := range []types.MachineKind{types.MachineContainer, types.MachineLinuxVM, ""} {
+		if got := activityIgnoreHosts(kind); got != nil {
+			t.Errorf("%q: %v, want none", kind, got)
+		}
+	}
+}
