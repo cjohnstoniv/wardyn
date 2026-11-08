@@ -26,19 +26,19 @@ func headerRow(hs ...types.ProviderHeader) types.ModelProvider {
 	return p
 }
 
-func hdr(name, value string) types.ProviderHeader {
+func provHdr(name, value string) types.ProviderHeader {
 	return types.ProviderHeader{Name: name, Value: value}
 }
 
 func TestExtraHeaders_ValidationTable(t *testing.T) {
 	with := func(edit func(*types.ModelProvider)) *types.ModelProviders {
-		p := headerRow(hdr("X-Portkey-Provider", "@openai-prod"))
+		p := headerRow(provHdr("X-Portkey-Provider", "@openai-prod"))
 		edit(&p)
 		return providerBlock(p)
 	}
 	eight := make([]types.ProviderHeader, 8)
 	for i := range eight {
-		eight[i] = hdr(fmt.Sprintf("X-Team-%d", i), "v")
+		eight[i] = provHdr(fmt.Sprintf("X-Team-%d", i), "v")
 	}
 	for _, tc := range []struct {
 		name  string
@@ -52,21 +52,21 @@ func TestExtraHeaders_ValidationTable(t *testing.T) {
 		{"a name in another case", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Name = "x-portkey-provider" }), ""},
 		{"on a key kind", providerBlock(func() types.ModelProvider {
 			p := keyProvider("a", "claude-code")
-			p.ExtraHeaders = []types.ProviderHeader{hdr("X-Team", "t")}
+			p.ExtraHeaders = []types.ProviderHeader{provHdr("X-Team", "t")}
 			return p
 		}()), "extra_headers applies only to a custom_endpoint"},
 		{"on a local model", providerBlock(func() types.ModelProvider {
 			p := localModelProvider()
-			p.ExtraHeaders = []types.ProviderHeader{hdr("X-Team", "t")}
+			p.ExtraHeaders = []types.ProviderHeader{provHdr("X-Team", "t")}
 			return p
 		}()), "extra_headers applies only to a custom_endpoint"},
 		{"nine headers", with(func(p *types.ModelProvider) {
-			p.ExtraHeaders = append(slices.Clone(eight), hdr("X-Ninth", "v"))
+			p.ExtraHeaders = append(slices.Clone(eight), provHdr("X-Ninth", "v"))
 		}), "at most 8"},
 		{"a name that is not a header name", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Name = "X Team" }), "not a valid HTTP header name"},
 		{"an empty name", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Name = "" }), "not a valid HTTP header name"},
 		{"the same name twice", with(func(p *types.ModelProvider) {
-			p.ExtraHeaders = []types.ProviderHeader{hdr("X-Team", "a"), hdr("x-team", "b")}
+			p.ExtraHeaders = []types.ProviderHeader{provHdr("X-Team", "a"), provHdr("x-team", "b")}
 		}), "listed twice"},
 		{"Authorization", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Name = "Authorization" }), "Authorization"},
 		{"a credential-looking name", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Name = "X-Portkey-Api-Key" }), "X-Portkey-Api-Key"},
@@ -78,9 +78,9 @@ func TestExtraHeaders_ValidationTable(t *testing.T) {
 			p.ExtraHeaders[0].Name = "x-gateway-pass"
 		}), "X-Gateway-Pass"},
 		{"a harness's auth header", with(func(p *types.ModelProvider) {
-			p.Harnesses[1].AuthHeader = "X-Codex-Pass"
-			p.ExtraHeaders[0].Name = "X-Codex-Pass"
-		}), "X-Codex-Pass"},
+			p.Harnesses[1].AuthHeader = "X-Second-Pass"
+			p.ExtraHeaders[0].Name = "X-Second-Pass"
+		}), "X-Second-Pass"},
 		{"an empty value", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Value = "" }), "value"},
 		{"a value over 2048 bytes", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Value = strings.Repeat("a", 2049) }), "2048"},
 		{"a value with a line break", with(func(p *types.ModelProvider) { p.ExtraHeaders[0].Value = "a\r\nX-Injected: 1" }), "value"},
@@ -107,9 +107,9 @@ func TestExtraHeaders_ValidationTable(t *testing.T) {
 
 // Names are stored in their canonical case and values trimmed, so "the same header" is one spelling.
 func TestExtraHeaders_Normalize(t *testing.T) {
-	got := normalizeModelProviders(providerBlock(headerRow(hdr("x-portkey-provider", "  @openai-prod  "), hdr(" X-TEAM ", "platform"))))
+	got := normalizeModelProviders(providerBlock(headerRow(provHdr("x-portkey-provider", "  @openai-prod  "), provHdr(" X-TEAM ", "platform"))))
 	hs := got.Providers[0].ExtraHeaders
-	if len(hs) != 2 || hs[0] != hdr("X-Portkey-Provider", "@openai-prod") || hs[1] != hdr("X-Team", "platform") {
+	if len(hs) != 2 || hs[0] != provHdr("X-Portkey-Provider", "@openai-prod") || hs[1] != provHdr("X-Team", "platform") {
 		t.Errorf("ExtraHeaders = %+v, want canonical names and trimmed values in the order given", hs)
 	}
 	if none := normalizeModelProviders(providerBlock(endpointProvider())); none.Providers[0].ExtraHeaders != nil {
@@ -120,15 +120,15 @@ func TestExtraHeaders_Normalize(t *testing.T) {
 // A header edit is an address change: it purges people's stored credentials, as a base_url edit does,
 // because the credential was given to a destination that carried other headers.
 func TestExtraHeaders_AreAPartOfTheAddress(t *testing.T) {
-	base := headerRow(hdr("X-Portkey-Provider", "@openai-prod"), hdr("X-Team", "platform"))
+	base := headerRow(provHdr("X-Portkey-Provider", "@openai-prod"), provHdr("X-Team", "platform"))
 	for name, edit := range map[string]func(*types.ModelProvider){
 		"a value changes": func(p *types.ModelProvider) { p.ExtraHeaders[0].Value = "@anthropic-prod" },
 		"a name changes":  func(p *types.ModelProvider) { p.ExtraHeaders[1].Name = "X-Squad" },
-		"one is added":    func(p *types.ModelProvider) { p.ExtraHeaders = append(p.ExtraHeaders, hdr("X-Env", "prod")) },
+		"one is added":    func(p *types.ModelProvider) { p.ExtraHeaders = append(p.ExtraHeaders, provHdr("X-Env", "prod")) },
 		"one is removed":  func(p *types.ModelProvider) { p.ExtraHeaders = p.ExtraHeaders[:1] },
 		"all are removed": func(p *types.ModelProvider) { p.ExtraHeaders = nil },
 	} {
-		next := headerRow(hdr("X-Portkey-Provider", "@openai-prod"), hdr("X-Team", "platform"))
+		next := headerRow(provHdr("X-Portkey-Provider", "@openai-prod"), provHdr("X-Team", "platform"))
 		edit(&next)
 		if !providerAddressChanged(base, next) {
 			t.Errorf("%s: providerAddressChanged = false, want the credentials purged", name)
@@ -141,7 +141,7 @@ func TestExtraHeaders_AreAPartOfTheAddress(t *testing.T) {
 		}
 	}
 
-	reordered := headerRow(hdr("X-Team", "platform"), hdr("X-Portkey-Provider", "@openai-prod"))
+	reordered := headerRow(provHdr("X-Team", "platform"), provHdr("X-Portkey-Provider", "@openai-prod"))
 	if providerAddressChanged(base, reordered) || providerAddressDigest(base) == "" || providerAddressDigest(base) != providerAddressDigest(reordered) {
 		t.Error("the same headers in another order purged people's credentials")
 	}
@@ -161,7 +161,7 @@ func TestExtraHeaders_AreAPartOfTheAddress(t *testing.T) {
 // model_provider.write names which providers carry headers, by header name only: the audit log is read by
 // more people than the providers page is, and a value is the admin's gateway configuration.
 func TestExtraHeaders_AuditCarriesNamesOnly(t *testing.T) {
-	row := headerRow(hdr("X-Portkey-Provider", "@openai-prod-SENTINEL"), hdr("X-Team", "platform"))
+	row := headerRow(provHdr("X-Portkey-Provider", "@openai-prod-SENTINEL"), provHdr("X-Team", "platform"))
 	data := modelProviderAuditData(types.ModelProviders{}, types.ModelProviders{Providers: []types.ModelProvider{row}})
 	got, ok := data["extra_headers"].(map[string][]string)
 	if !ok || len(got) != 1 || !slices.Equal(got[row.ID], []string{"X-Portkey-Provider", "X-Team"}) {
@@ -174,8 +174,8 @@ func TestExtraHeaders_AuditCarriesNamesOnly(t *testing.T) {
 	if _, named := plain["extra_headers"]; named {
 		t.Error("a provider with no headers names extra_headers: the row must read as it always has")
 	}
-	changed := modelProviderAuditData(types.ModelProviders{Providers: []types.ModelProvider{headerRow(hdr("X-Team", "a"))}},
-		types.ModelProviders{Providers: []types.ModelProvider{headerRow(hdr("X-Team", "b"))}})
+	changed := modelProviderAuditData(types.ModelProviders{Providers: []types.ModelProvider{headerRow(provHdr("X-Team", "a"))}},
+		types.ModelProviders{Providers: []types.ModelProvider{headerRow(provHdr("X-Team", "b"))}})
 	if ids, _ := changed["base_url_changed"].([]string); !slices.Equal(ids, []string{"corp-gateway"}) {
 		t.Errorf("base_url_changed = %v, want a header edit named like any address change", changed["base_url_changed"])
 	}
@@ -192,7 +192,7 @@ func headerLane(t *testing.T, p types.ModelProvider, harness string) providerKey
 
 // Dispatch hands the proxy the headers of a custom_endpoint provider only, keyed by the gateway's host.
 func TestExtraHeaders_DispatchFillsTheMapForACustomEndpointOnly(t *testing.T) {
-	p := headerRow(hdr("X-Portkey-Provider", "@openai-prod"), hdr("X-Team", "platform"))
+	p := headerRow(provHdr("X-Portkey-Provider", "@openai-prod"), provHdr("X-Team", "platform"))
 	var d providerDispatch
 	d.addExtraHeaders(headerLane(t, p, "claude-code"))
 	d.addExtraHeaders(headerLane(t, p, "codex-cli")) // the same provider on a second harness: same host, same headers
@@ -204,7 +204,7 @@ func TestExtraHeaders_DispatchFillsTheMapForACustomEndpointOnly(t *testing.T) {
 	// A key kind routed through a gateway never carries any, whatever its stored row says.
 	key := keyProvider("a", "claude-code")
 	key.BaseURL = "https://llm.corp.example/anthropic"
-	key.ExtraHeaders = []types.ProviderHeader{hdr("X-Team", "t")}
+	key.ExtraHeaders = []types.ProviderHeader{provHdr("X-Team", "t")}
 	var k providerDispatch
 	k.addExtraHeaders(headerLane(t, key, "claude-code"))
 	if k.extraHeaders != nil {
@@ -221,7 +221,7 @@ func TestExtraHeaders_DispatchFillsTheMapForACustomEndpointOnly(t *testing.T) {
 
 // Two providers cannot share one gateway host in a run, so one host never carries two header sets.
 func TestExtraHeaders_TwoProvidersOnOneHostConflict(t *testing.T) {
-	a, b := headerRow(hdr("X-Team", "a")), headerRow(hdr("X-Team", "b"))
+	a, b := headerRow(provHdr("X-Team", "a")), headerRow(provHdr("X-Team", "b"))
 	a.ID, a.UID, b.ID, b.UID = "gw-a", "uid-a", "gw-b", "uid-b"
 	pairs := []types.RunHarness{{Harness: "claude-code", ModelProviderID: a.ID}, {Harness: "codex-cli", ModelProviderID: b.ID}}
 	lanes := make([]providerLane, len(pairs))

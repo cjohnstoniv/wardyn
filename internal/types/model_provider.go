@@ -128,11 +128,22 @@ type ModelProvider struct {
 	// OIDC makes each person sign in to the endpoint's own authority instead of pasting a token;
 	// custom_endpoint only. Absent keeps the pasted token.
 	OIDC *ProviderOIDC `json:"oidc,omitempty"`
+	// ExtraHeaders are non-secret headers the run proxy sets on every request to this provider's gateway, after
+	// the credential (custom_endpoint only; none by default). For a gateway that routes on a header, such as
+	// Portkey's x-portkey-provider. The name and value rules refuse anything that could carry a credential or
+	// change the request's framing; a change removes every person's stored credential, as a base_url change does.
+	ExtraHeaders []ProviderHeader `json:"extra_headers,omitempty"`
 	// GatewayIdentity turns on a signed token, naming the person, the run and the runner, on each model call
 	// to this provider's gateway. Absent is off, and off changes nothing a run sends.
 	GatewayIdentity *ModelProviderGatewayIdentity `json:"gateway_identity,omitempty"`
 	// Harnesses are the harnesses this provider serves, with per-pairing settings.
 	Harnesses []ProviderHarness `json:"harnesses,omitempty"`
+}
+
+// ProviderHeader is one extra header of a custom_endpoint provider.
+type ProviderHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // Serves reports whether harness is enabled for this provider; says nothing about Disabled.

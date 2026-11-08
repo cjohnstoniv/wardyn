@@ -73,7 +73,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.IntegrationDelivery](): strings.Fields("Mode Header Format Path Var"),
 	reflect.TypeFor[types.IntegrationSecret]():   strings.Fields("Role SecretName Delivery"),
 	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
-	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses OIDC"),
+	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses OIDC ExtraHeaders"),
 	reflect.TypeFor[types.ProviderOIDC]():        strings.Fields("Issuer AuthorizeURL TokenURL ClientID ClientSecretRef Scopes IdentityBinding"), // ClientSecretRef names an operator secret, never its value
 	reflect.TypeFor[types.SiteImages]():          strings.Fields("RequireDigest Admission"),
 	reflect.TypeFor[types.SiteImageAdmission]():  strings.Fields("Mode Scope TrustedRoots Signers"),
@@ -83,6 +83,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.LocalModelSettings]():  strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
+	reflect.TypeFor[types.ProviderHeader]():      strings.Fields("Name Value"), // non-secret by validation (proxy.ReservedExtraHeader, ExtraHeaderValueRefusal): a secret-shaped value is refused
 	reflect.TypeFor[types.ProviderHarness]():     strings.Fields("Harness Model FastModel Path AuthHeader AuthFormat"),
 	reflect.TypeFor[types.RunHarness]():          strings.Fields("Harness ModelProviderID Starts Task"),
 	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
