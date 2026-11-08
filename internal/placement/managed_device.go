@@ -15,5 +15,5 @@ func managedDeviceRefusal(p LocalPlan) *Refusal {
 		return nil
 	}
 	return refuse(ReasonRunnerTrustRequired, "trust_class",
-		"this runner is not marked as company-managed (trust class personal); ask a security operator to mark it managed_device")
+		"this runner is not marked as company-managed; ask a security admin to mark it as a managed device")
 }
