@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- A runner pool's use policy can name a unit (`{"subject_type":"unit","subject":"<unit id>"}`, set through the API). It admits a run launched under that unit or a unit below it, judged by the run's own unit: a new run's, a queued start's and a revive's frozen one. A run in no unit and a unit that no longer exists match nothing. No existing policy changes; an older binary matches a unit row to nobody, so it narrows.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).

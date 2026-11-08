@@ -223,3 +223,37 @@ func TestPoolUnitReviveUsesFrozenUnit(t *testing.T) {
 		t.Error("a run frozen in no unit was admitted")
 	}
 }
+
+// The list reads the subjects the other places do (poolSubjects), so a row it marks usable is one
+// the create, the catalogue and the drives catalogue admit.
+func TestPoolListSubjectsAgreeUnit(t *testing.T) {
+	f := newUnitPools(t)
+	for _, tc := range []struct {
+		name  string
+		names func() uuid.UUID
+		want  bool
+	}{
+		{"the unit above", func() uuid.UUID { return f.platform.ID }, true},
+		{"a unit below", func() uuid.UUID { return f.desk.ID }, false},
+		{"an unrelated unit", func() uuid.UUID { return f.other.ID }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.memberOf(&f.team, poolUnitSubject(tc.names()))
+			ctx := govMemberCtx([]string{"eng"}, false)
+			subj, err := f.srv.poolSubjects(ctx, f.st.rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := subj.permits(f.st.rows[0], poolOwner(ctx)); got != tc.want {
+				t.Errorf("list marks the pool usable = %v, want %v", got, tc.want)
+			}
+			rows, refusal := f.srv.permittedPools(ctx, f.st, true)
+			if refusal != nil {
+				t.Fatal(refusal.err)
+			}
+			if _, usable := catalogueRow(rows, f.pool); usable != tc.want {
+				t.Errorf("catalogue admits = %v, want %v", usable, tc.want)
+			}
+		})
+	}
+}

@@ -41,6 +41,9 @@ func oidcUserTypeFromContext(ctx context.Context) string {
 type callerSubjects struct {
 	users, groups []string
 	userType      string
+	// units are the caller's run's unit and the units above it (poolSubjects), set only where a pool's
+	// use policy names a unit; empty matches no unit row.
+	units []string
 	// stale is capabilitySubjects' bit: the group half is unanswerable.
 	stale bool
 	// unverifiedEmail is the email among users when sign-in does not vouch for

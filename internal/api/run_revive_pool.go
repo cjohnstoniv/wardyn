@@ -35,6 +35,10 @@ func (s *Server) ownerPoolRefusal(ctx context.Context, run types.AgentRun) (*own
 	if err != nil {
 		return nil, err
 	}
+	if rowsNameUnit(rows) {
+		// The run's frozen unit, not the owner's now: a revive restores the run that was launched.
+		subj.units = s.unitLineage(ctx, run.UnitID)
+	}
 	row, found := catalogueRow(rows, *run.RunnerPoolID)
 	if !found || !subj.permits(row, owner) {
 		return &ownerRefusal{status: runnerpool.ReasonNotFound.Status(), reason: string(runnerpool.ReasonNotFound), msg: runnerpool.NotFoundMsg()}, nil

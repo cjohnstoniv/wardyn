@@ -176,7 +176,7 @@ func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
 	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
-	st.ctx = withPromotedStart(bindAuthority(st.prep, a, choice), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	st.ctx = withPromotedStart(withFrozenPoolUnit(bindAuthority(st.prep, a, choice), st.launch.UnitID), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
