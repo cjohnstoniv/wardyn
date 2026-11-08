@@ -20,7 +20,7 @@ import (
 // A gateway that honours x-portkey-* routing headers (Portkey's open-source gateway reads
 // x-portkey-custom-host and sends the request, with the credential, to that host) would let a
 // sandbox's own header redirect the stored key. The proxy drops every sandbox x-portkey-* header on
-// a configured gateway host, on both the brokered route and the terminated-tunnel lane, and keeps
+// a configured gateway host, on both the brokered route, the terminated-tunnel lane and the plain forward lane, and keeps
 // the one header the rule owns.
 
 const portkeyGatewayHost = "portkey.corp.test"
@@ -43,6 +43,14 @@ var portkeyLanes = []portkeyLane{
 		req := httptest.NewRequest(http.MethodPost, "https://"+host+"/v1/messages", strings.NewReader(`{"hi":1}`))
 		req.Header = h
 		p.serveMITMRequest(rec, req, host, 443)
+		return rec
+	}},
+	// The plain forward lane: an absolute-form https request with no CONNECT.
+	{"plain", func(t *testing.T, p *Proxy, host string, h http.Header) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := mustAbsReq(t, http.MethodPost, "https://"+host+"/v1/messages", `{"hi":1}`)
+		req.Header = h
+		p.ServeHTTP(rec, req)
 		return rec
 	}},
 }
