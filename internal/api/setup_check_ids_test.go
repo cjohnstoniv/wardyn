@@ -120,6 +120,15 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			}},
 		})),
 
+		// Image checks on for member-named images only (scope left at its default): surfaces the
+		// image_admission_scope row, absent on every other fixture.
+		"with_image_admission_scope": setupCheckIds(t, New(Config{
+			AdminToken: adminToken,
+			Store: setupCheckIdsStore{sc: types.SiteConfig{
+				Images: &types.SiteImages{Admission: &types.SiteImageAdmission{Mode: types.ImageAdmissionAudit}},
+			}},
+		})),
+
 		"with_github_app_secrets": setupCheckIds(t, New(Config{
 			AdminToken: adminToken,
 			Secrets: &memSecrets{m: map[string][]byte{

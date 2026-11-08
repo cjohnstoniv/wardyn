@@ -4,6 +4,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -127,6 +128,42 @@ func TestSetupCheck_ADORowsOff(t *testing.T) {
 			const sentence = "Azure DevOps no longer uses one shared token. Choose how people connect."
 			if ok && c.Detail != sentence {
 				t.Errorf("detail = %q, want the approved mock's 12a sentence", c.Detail)
+			}
+		})
+	}
+}
+
+// The image_admission_scope row appears only when image checks are on (audit or enforce) and the scope is
+// still member; off, or scope all, says nothing. It is informational, never blocking.
+func TestImageAdmissionScopeCheck(t *testing.T) {
+	adm := func(mode, scope string) types.SiteConfig {
+		return types.SiteConfig{Images: &types.SiteImages{Admission: &types.SiteImageAdmission{Mode: mode, Scope: scope}}}
+	}
+	for _, tc := range []struct {
+		name string
+		sc   types.SiteConfig
+		want bool
+	}{
+		{"no images block", types.SiteConfig{}, false},
+		{"no admission block", types.SiteConfig{Images: &types.SiteImages{RequireDigest: true}}, false},
+		{"off, member scope", adm(types.ImageAdmissionOff, ""), false},
+		{"mode unset", adm("", types.ImageAdmissionScopeMember), false},
+		{"audit, scope unset", adm(types.ImageAdmissionAudit, ""), true},
+		{"audit, member scope", adm(types.ImageAdmissionAudit, types.ImageAdmissionScopeMember), true},
+		{"enforce, member scope", adm(types.ImageAdmissionEnforce, types.ImageAdmissionScopeMember), true},
+		{"audit, scope all", adm(types.ImageAdmissionAudit, types.ImageAdmissionScopeAll), false},
+		{"enforce, scope all", adm(types.ImageAdmissionEnforce, types.ImageAdmissionScopeAll), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, ok := statusCheck(tc.sc, "image_admission_scope")
+			if ok != tc.want {
+				t.Fatalf("image_admission_scope row present = %v, want %v (%+v)", ok, tc.want, c)
+			}
+			if !ok {
+				return
+			}
+			if c.Status != "info" || c.Blocking || c.Label != "Image checks" || !strings.Contains(c.Detail, `Set images.admission.scope to "all"`) {
+				t.Errorf("row = %+v, want a non-blocking info row that names images.admission.scope", c)
 			}
 		})
 	}

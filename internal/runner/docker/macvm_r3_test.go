@@ -208,7 +208,7 @@ func TestMacPrepNetIsTheAllowlistProxyOnly(t *testing.T) {
 	if len(cfg.AllowedPeers) != 1 || cfg.AllowedPeers[0] != subnet {
 		t.Fatalf("allowed peers %v, want exactly the prep subnet %v", cfg.AllowedPeers, subnet)
 	}
-	if !slices.Contains(cfg.Policy.AllowedDomains, "swscan.apple.com:443") || len(cfg.Policy.AllowedDomains) != 7 {
+	if !slices.Contains(cfg.Policy.AllowedDomains, "swscan.apple.com:443") || len(cfg.Policy.AllowedDomains) != 8 {
 		t.Fatalf("allowed %v", cfg.Policy.AllowedDomains)
 	}
 	want := []string{"-stdio", "-proxy", "wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)}

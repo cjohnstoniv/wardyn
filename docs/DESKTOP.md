@@ -326,7 +326,7 @@ Three more the tier inherits rather than introduces:
 ### Posture switches are env vars, never site-config
 
 - Anything that changes the *security posture* of this deployment belongs in `wardyn.env`, not in `site-config.json`.
-- Site-config is applied as a **full-document replace**, so a partial write silently drops whatever the previous document held.
+- `PUT /site-config` keeps most blocks a write leaves out ([OPERATIONS.md](OPERATIONS.md#network-upstream-proxy-and-egress-redirects)), but every other key is replaced, so a partial write can still drop a setting.
 - Keep it to corporate network facts — proxy, mirrors, SCM hosts — and the org's provider policy.
 - Keep posture in the env file, where a missing line is a missing line and not a reverted setting.
 

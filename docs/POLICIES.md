@@ -123,11 +123,12 @@
   - The `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30.
 - `0` = never reaped;
 - `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle).
-- Idleness is `updated_at` age — an attach or an egress call resets it.
+- Idleness is `updated_at` age — an attach or an allowed egress request resets it.
   - So does CPU use above 10% of one core read from the substrate (a metrics-server read on Kubernetes, the daemon's container stats on Docker; never an exec into the sandbox),
   - while file writes do not (`internal/lifecycle`, [`internal/api/run_activity.go`](../internal/api/run_activity.go)).
 - Without metrics-server the CPU signal is off, `/setup/status` says so (the Idle detection row), and idleness is the attach and egress clock alone;
-  - the one egress decision that does not reset it is `credential:reauth-timeout`, which reports that nobody answered a re-auth hold.
+  - a refused or held request does not reset it, on any kind of run;
+  - nor do the approvals poll and `credential:reauth-timeout`, which reports that nobody answered a re-auth hold.
 - The reaper never stops a run that has a PENDING request still inside its own wait, min(`requested_at` + `wait_budget_sec`, `ends_at`) (`store.openHoldSQL`);
   - with no wait and no end set, that means until the approval-expiry ceiling (`WARDYN_APPROVAL_EXPIRY_AFTER`, 24h by default) is swept by `approval.ExpireStale`,
   - so a run parked on a request can outlive this threshold and keep its quota slot that long.

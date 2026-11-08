@@ -252,6 +252,18 @@ func TestBuildProxyConfig_ForgeHosts(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_ActivityIgnoreHosts: the hosts whose allowed traffic is not activity reach the sidecar's
+// config, and a run without them writes no key an older proxy refuses.
+func TestBuildProxyConfig_ActivityIgnoreHosts(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ActivityIgnoreHosts: []string{"mask.icloud.com"}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"activity_ignore_hosts":["mask.icloud.com"]`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "activity_ignore_hosts") {
+		t.Fatalf("a run without them names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_LocalModels: a local_model run's allowlist reaches the
 // sidecar's config, and a run without one writes no key an older proxy refuses.
 func TestBuildProxyConfig_LocalModels(t *testing.T) {
