@@ -38,6 +38,9 @@ vi.mock("../../../lib/api/health", () => ({
   },
 }));
 
+// The Runners card reads its own settings.
+vi.mock("../../../lib/api/runners", () => ({ runners: { settings: () => Promise.resolve({ enabled: true }) } }));
+
 const getDrivesMock = vi.fn();
 vi.mock("../../../lib/api/drives", () => ({
   drives: { getDrives: (...a: unknown[]) => getDrivesMock(...a) },
@@ -165,6 +168,7 @@ describe("AdminSettingsScreen", () => {
     expect(groupOf("host-card")).toBe(labels.HOST);
     expect(groupOf("model-providers-list")).toBe(labels.CONNECTIONS);
     expect(groupOf("user-drives-card")).toBe(labels.CONNECTIONS);
+    expect(groupOf("runners-settings-card")).toBe(labels.CONNECTIONS);
     expect(groupOf("approval-notify-card")).toBe(labels.PEOPLE);
     expect(groupOf("scim-card")).toBe(labels.PEOPLE);
   });
@@ -203,6 +207,11 @@ describe("AdminSettingsScreen", () => {
     expect(before(drivesCard, sshCard)).toBe(true);
     expect(before(sshCard, card)).toBe(true);
     expect(before(card, scimCard)).toBe(true);
+    // Runners (rc.17) follows the macOS virtual machines card, the last card in Connections.
+    const macCard = await screen.findByTestId("macos-vm-settings-card");
+    const runnersCard = await screen.findByTestId("runners-settings-card");
+    expect(macCard.nextElementSibling).toBe(runnersCard);
+    expect(before(macCard, runnersCard)).toBe(true);
     // SCIM is the last card on the page.
     expect(card.parentElement?.lastElementChild).toBe(scimCard);
     // Custom components sits between the providers and the drives (0.8.9).

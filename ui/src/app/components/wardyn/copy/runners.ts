@@ -79,6 +79,20 @@ export const RUNNERS = {
   FILTER_EMPTY_ACTIVE: "No active runners.",
   FILTER_EMPTY_REVOKED: "No revoked runners.",
   SEARCH_EMPTY: (q: string) => `No runner matches "${q}".`,
+  // Settings > Runners: the "Require a managed device" switch.
+  MANAGED_CARD_TITLE: "Runners",
+  MANAGED_LABEL: "Require a managed device",
+  MANAGED_HINT:
+    "A new run on a computer marked Personal is refused. Computers marked Managed device, and your organization's own clusters, still take runs. Runs already started keep their computer.",
+  MANAGED_HONEST: "Wardyn goes by the trust class a security admin sets on each runner. It can't check the device itself.",
+  MANAGED_RUNNERS_OFF: "Runners are off, so this has no effect yet.",
+  MANAGED_NOT_SUPER: "Only a super admin can change this.",
+  MANAGED_CONFIRM_TITLE: "Require a managed device?",
+  MANAGED_CONFIRM_BODY: "New runs on a computer marked Personal will be refused until a security admin marks it Managed device. Runs already started are not affected.",
+  MANAGED_CONFIRM: "Require a managed device",
+  MANAGED_REFUSED_TITLE: "Couldn't change this",
+  MANAGED_LOAD_FAILED: "Couldn't load right now.",
+  MANAGED_RETRY: "Try again",
 } as const;
 
 export const RUNNER = {
