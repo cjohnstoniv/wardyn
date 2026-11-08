@@ -318,6 +318,30 @@ func (s *Server) approvalResolved(ctx context.Context, approved bool, runID uuid
 	s.approvalClosed(ctx, runID)
 }
 
+// decisionScopeForKind is rule 4 for one approval. The kinds with a scope rule of their own settle the scope in
+// this order; every other kind must fit decisionScopeFitsKind. It writes the refusal and reports false.
+func (s *Server) decisionScopeForKind(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest,
+	scope types.ApprovalScope, approve bool,
+) (types.ApprovalScope, bool) {
+	var isADO, isMCP, isFD, isKube, ok bool
+	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok { // an Azure DevOps escalation
+		return scope, false
+	}
+	if scope, isMCP, ok = mcpCallDecisionRule(w, ap, scope); !ok { // one MCP call is decided once (approvals_mcp_call.go)
+		return scope, false
+	}
+	if scope, isFD, ok = fileDownloadDecisionRule(w, ap, scope); !ok { // a reviewed download is decided once (desktop_review.go)
+		return scope, false
+	}
+	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok { // one kubectl write is decided once (approvals_kube_call.go)
+		return scope, false
+	}
+	if !isADO && !isMCP && !isKube && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
+		return scope, false
+	}
+	return scope, true
+}
+
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
@@ -452,23 +476,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// checking the kind would cost a load on the approval's grant_id for a rule
 	// the broker already enforces at the only place a lease can be spent. A `run`
 	// scope on another credential kind is recorded and simply leases nothing.
-	var isADO bool // an Azure DevOps escalation has its own scope rule
-	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok {
-		return
-	}
-	var isMCP bool // one MCP call is decided once (approvals_mcp_call.go)
-	if scope, isMCP, ok = mcpCallDecisionRule(w, ap, scope); !ok {
-		return
-	}
-	var isFD bool // a reviewed download is decided once (desktop_review.go)
-	if scope, isFD, ok = fileDownloadDecisionRule(w, ap, scope); !ok {
-		return
-	}
-	var isKube bool // one kubectl write is decided once (approvals_kube_call.go)
-	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok {
-		return
-	}
-	if !isADO && !isMCP && !isKube && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
+	if scope, ok = s.decisionScopeForKind(w, r, ap, scope, approve); !ok {
 		return
 	}
 	// The unit deciders rule that governs this request, how this caller decides under it, and its max_scope
