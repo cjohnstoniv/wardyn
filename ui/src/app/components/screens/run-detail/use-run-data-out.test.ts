@@ -17,15 +17,15 @@ const view = (over: Partial<RunPolicyView>): RunPolicyView =>
 
 function deferred() {
   let resolve!: (v: RunPolicyView) => void;
-  let reject!: (e: unknown) => void;
-  const promise = new Promise<RunPolicyView>((ok, no) => {
+  const promise = new Promise<RunPolicyView>((ok) => {
     resolve = ok;
-    reject = no;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
-beforeEach(() => getPolicy.mockReset());
+beforeEach(() => {
+  getPolicy.mockReset();
+});
 afterEach(cleanup);
 
 describe("useRunDataOut", () => {
@@ -65,13 +65,10 @@ describe("useRunDataOut", () => {
   });
 
   it("is unknown when the read fails", async () => {
-    const read = deferred();
-    getPolicy.mockReturnValue(read.promise);
+    getPolicy.mockImplementation(() => Promise.reject(new Error("boom")));
     const { result } = renderHook(() => useRunDataOut("run-1"));
-    read.reject(new Error("boom"));
-    await act(async () => {
-      await read.promise.catch(() => {});
-    });
+    await act(async () => {});
+    expect(getPolicy).toHaveBeenCalledTimes(1);
     expect(result.current).toBeUndefined();
   });
 

@@ -115,7 +115,7 @@ function RunDetailPage({ id }: { id: string }) {
 
   const {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
-    recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
+    recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
   const workload = useRunWorkload(run?.id);
@@ -433,6 +433,7 @@ function RunDetailPage({ id }: { id: string }) {
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
             <RecordingTab
               state={recState}
+              refusal={recRefusal}
               recording={recording}
               recordingDisabled={recordingDisabled}
               runId={id}

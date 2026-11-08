@@ -5,7 +5,7 @@
 
 // RecordingTab — run-detail.tsx's Recording tab, split out under that file's
 // line cap (scripts/check-file-size.sh). Verbatim move: no behaviour change.
-import { Loader2, SquareTerminal } from "lucide-react";
+import { Loader2, RotateCw, SquareTerminal } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { AuditEvent, Recording, RecordingLevel, RunNotRecorded } from "../../../lib/types";
 import {
@@ -15,7 +15,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../ui/select";
+import { Button } from "../../ui/button";
+import { Notice } from "../../wardyn/notice";
 import { EmptyState, ErrorState } from "../../wardyn/states";
+import { DATA_OUT_RUN } from "../../wardyn/copy/data-out-run";
 import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { useOperator } from "../../wardyn/operator-context";
 import {
@@ -75,6 +78,7 @@ export function RecordingTab({
   ended = false,
   recordingAudit = [],
   onGoAudit,
+  refusal,
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
@@ -87,6 +91,8 @@ export function RecordingTab({
   selected: string;
   onSelect: (key: string) => void;
   onRetry: () => void;
+  /** The run's data_out rule refused the replay: its reason and the server's sentence, printed as sent. */
+  refusal?: { reason: string; message: string };
   /** The run's level and why it is not recorded (AgentRun.recording_level, not_recorded). */
   level?: RecordingLevel;
   notRecorded?: RunNotRecorded;
@@ -155,6 +161,21 @@ export function RecordingTab({
         <div className="flex h-[360px] items-center justify-center rounded-xl border border-border bg-card">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
+      ) : state === "error" && refusal?.reason === "data_out_blocked" ? (
+        <div data-testid="recording-data-out" className="rounded-xl border border-border bg-card">
+          <EmptyState icon={SquareTerminal} title={DATA_OUT_RUN.RECORDING_TITLE} description={refusal.message} />
+        </div>
+      ) : state === "error" && refusal?.reason === "data_out_unreadable" ? (
+        <Notice
+          tone="danger"
+          actions={
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              <RotateCw className="size-3.5" /> {DATA_OUT_RUN.RETRY}
+            </Button>
+          }
+        >
+          {refusal.message}
+        </Notice>
       ) : state === "error" ? (
         <div className="rounded-xl border border-border bg-card">
           <ErrorState message={RUN_COCKPIT.recordingError} onRetry={onRetry} />

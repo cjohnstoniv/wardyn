@@ -32,13 +32,15 @@ import (
 // may read it. runIDPrefix is the cast key's run-id portion (Handler has
 // already enforced it equals the outer mount {id} before this ever runs); a
 // prefix that doesn't parse as a run id, or names no real run, is denied
-// (fails closed) rather than erroring — recording.Handler turns any false
-// return into the SAME 404 "recording not found" a truly-missing cast gets,
-// so this never needs to shape its own response.
+// (fails closed) rather than erroring — recording.Handler turns a false
+// return that wrote nothing into the SAME 404 "recording not found" a
+// truly-missing cast gets. The one answer written here is the data_out refusal
+// to a reader who passed the ownership gate (403, or 503 for a rule that cannot
+// be read): it names the run's own rule to its own reader, so it leaks nothing.
 // auditRecordingRead is an operator's replay of a recording of a run someone else created.
 const auditRecordingRead = "recording.read"
 
-func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
+func (s *Server) recordingAuthorizer(w http.ResponseWriter, r *http.Request, runIDPrefix string) bool {
 	id, err := uuid.Parse(runIDPrefix)
 	if err != nil {
 		return false
@@ -57,13 +59,9 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 		return false
 	}
 	if s.recordingReader(r, run) {
-		// data_out review or blocked keeps a recording from its owner; a rule that cannot be read does too.
-		if rule, held := s.dataOutHolds(r.Context(), id); held {
-			at, actor := actorFromRequest(r)
-			s.auditDataOutDenied(r.Context(), id, at, actor, "recording", rule)
-			return false
-		}
-		return true
+		// data_out review or blocked keeps a recording from its owner, and says so; a rule that cannot be read
+		// answers 503. refuseDataOutReader writes the answer, so the handler does not add its 404.
+		return !s.refuseDataOutReader(w, r, run, "recording", dataOutRecordingMsg, false)
 	}
 	// Audited only once the run is confirmed to genuinely exist — a
 	// malformed prefix or an unknown run (both branches above) stays silent;
