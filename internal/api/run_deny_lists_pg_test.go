@@ -54,9 +54,13 @@ func TestDenyListRemovalIsHeld(t *testing.T) {
 			if l := got(e.profile(unit.ID)); len(l) != 2 {
 				t.Errorf("the added id did not apply: %v", l)
 			}
-			e.pending(e.call(e.alice, http.MethodPut, path, body(unit.Name, field, idA)))
+			removal := e.pending(e.call(e.alice, http.MethodPut, path, body(unit.Name, field, idA)))
 			if l := got(e.profile(unit.ID)); len(l) != 2 {
 				t.Errorf("a held removal was applied: %v", l)
+			}
+			// A unit holds one pending change at a time: the proposer withdraws the removal first.
+			if w := e.call(e.alice, http.MethodPost, rejectPath(removal.ID), ""); w.Code != http.StatusOK {
+				t.Fatalf("withdrawing the held removal = %d %s, want 200", w.Code, w.Body)
 			}
 			e.pending(e.call(e.alice, http.MethodPut, path, body(unit.Name, field)))
 			if l := got(e.profile(unit.ID)); len(l) != 2 {
