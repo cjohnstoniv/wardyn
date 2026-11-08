@@ -32,3 +32,7 @@ const (
 	reasonGovernanceChangeNoteProposerOnly = "governance_change_note_proposer_only"
 	reasonGovernanceChangeNoteInvalid      = "governance_change_note_invalid"
 )
+
+// reasonDecidersUnreadable: the unit deciders rules, or the unit tree they are walked on, could not be read, so a
+// decision that one of them may govern is refused rather than read as having no rule (503).
+const reasonDecidersUnreadable = "deciders_unreadable"

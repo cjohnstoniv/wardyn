@@ -123,6 +123,13 @@ const (
 	// ReasonUnitScopeDenied: a governance write or read a unit admin may make, asked by a caller who is
 	// neither a security admin nor a unit admin, or by a unit admin about a unit outside their subtree.
 	ReasonUnitScopeDenied Reason = "unit_scope_denied"
+	// ReasonNotADecider: the run's owner decided a hold their unit's deciders rule leaves them out of (an
+	// egress_domain, Azure DevOps or MCP call request the owner decides without a rule). The body names who
+	// decides.
+	ReasonNotADecider Reason = "not_a_decider"
+	// ReasonDecisionScopeAboveRule: a decision_scope that reaches further than the unit deciders rule allows
+	// (its max_scope, and never always under a rule), for every decider.
+	ReasonDecisionScopeAboveRule Reason = "decision_scope_above_rule"
 )
 
 // Refusal is one reason's registry row.
@@ -193,6 +200,8 @@ var refusals = map[Reason]Refusal{
 	ReasonAuditRetentionActorReserved:    {Effect: EffectDeny, Audit: true},
 	ReasonComponentAutonomy:              {Effect: EffectDeny, Audit: true},
 	ReasonUnitScopeDenied:                {Effect: EffectDeny, Audit: true, Sentence: "this is outside the units you administer"},
+	ReasonNotADecider:                    {Effect: EffectDeny, Audit: true},
+	ReasonDecisionScopeAboveRule:         {Effect: EffectDeny, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

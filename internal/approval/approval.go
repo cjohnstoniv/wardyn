@@ -189,6 +189,13 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 	if decision.Policy != nil {
 		data["policy"] = decision.Policy
 	}
+	// How the decider decided under a unit's deciders rule, and the rule. Absent with no rule.
+	if decision.Basis != "" {
+		data["basis"] = decision.Basis
+	}
+	if decision.Rule != nil {
+		data["rule"] = decision.Rule
+	}
 	auditData, _ := json.Marshal(data)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),

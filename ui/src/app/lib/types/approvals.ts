@@ -93,6 +93,9 @@ export interface ApprovalRequest {
   // walls_block: the requesting run owner's own walls deny this PENDING egress_domain row's host, so no approver
   // can admit it (personal_walls_host). Absent otherwise; the server never sends false.
   walls_block?: boolean;
+  // deciders: who may decide this PENDING row under the unit deciders rule that governs it (owner, unit_admins,
+  // group:<name>, then security). Absent when no rule governs the row.
+  deciders?: string[];
 }
 
 // canDecideApproval mirrors the ROLE and KIND checks of internal/api/approvals.go's decide(): an

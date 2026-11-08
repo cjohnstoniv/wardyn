@@ -200,7 +200,7 @@ docs/operations/api-tokens.md=6911 share=35 # 6911 measured (+128: the portal un
 # docs/operations/denials.md 5716 adds 14 over 5702 (rc.12): the governance_unit row's runs.desktop_window cause, the macOS window.
 # docs/operations/denials.md 5717 adds 1 over 5716, measured (rc.12): git_push_withheld in the runner proxy-setting list.
 # docs/operations/denials.md 5718 adds 1 over 5717, measured (rc.12): forge_hosts in the runner proxy settings list.
-docs/operations/denials.md=5456 share=35 # 5456 measured (+16: the scheduled_runs_denied refusal); earlier: release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
+docs/operations/denials.md=5500 share=35 # 5500 measured (+60: the not_a_decider and decision_scope_above_rule rows); earlier: release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

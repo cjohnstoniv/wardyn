@@ -353,6 +353,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if s.refuseUndecidableKind(w, r, id) {
 		return
 	}
+	r = withDeciderMemo(r) // the unit deciders are read once for this decision
 	ap, run, loaded, ok := s.authorizeUserDecision(w, r, id)
 	if !ok {
 		return
@@ -459,6 +460,12 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if !isADO && !isMCP && !decisionScopeFitsKind(w, ap.Kind, scope) {
 		return
 	}
+	// The unit deciders rule that governs this request, how this caller decides under it, and its max_scope
+	// over the scope (deciders_resolve.go).
+	dv, scope, ok := s.deciderForDecide(w, r, id, ap, &run, &haveRun, scope)
+	if !ok {
+		return
+	}
 
 	// target is the workspace an `always` decision persists to — resolved by
 	// rules 5–7 (resolveAlwaysTarget), consumed by the write-back after Decide().
@@ -480,7 +487,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// success on the decided path, failure on the error path — so every bypass
 	// leaves a row (docs/ENV.md's promise) and no row claims a decision that
 	// did not happen (the repair that moved the emit down here).
-	bypassSwitch, ok := s.requireSecondHuman(w, r, id, ap, run, haveAP, haveRun)
+	bypassSwitch, ok := s.requireSecondHumanUnder(w, r, id, ap, run, haveAP, haveRun, dv)
 	if !ok {
 		return
 	}
@@ -514,6 +521,8 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		Scope:     scope,
 		ExpiresAt: body.ExpiresAt,
 		Policy:    policyMatchFrom(r.Context()),
+		Basis:     dv.basis,
+		Rule:      dv.ruleRef(),
 	})
 	if err != nil {
 		// The break-glass leaves a row even when the decision fails, because
@@ -677,6 +686,11 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 	}
 	var err error
 	ap, err = s.cfg.Approvals.Get(r.Context(), id)
+	if err == nil { // a unit's deciders may name this caller, or leave the owner out (deciders_resolve.go)
+		if run, handled, ok := s.deciderMemberGate(w, r, id, ap); handled {
+			return ap, run, ok, ok
+		}
+	}
 	// The one tool_call a member may decide: an Azure DevOps escalation, known
 	// STRUCTURALLY by its grant_id (adoEscalationScope), never by its scope.
 	// One MCP call is the other, known by call_sha256 with no grant (isMCPCallRow).

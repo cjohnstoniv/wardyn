@@ -516,6 +516,10 @@ type ApprovalRequest struct {
 	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
 	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
 	Decidable *bool `json:"decidable,omitempty"`
+	// Deciders is who may decide this PENDING row under the unit deciders rule that governs it (owner,
+	// unit_admins, group:<name>, then security), projected at response time and never stored. Nil when no rule
+	// governs the row.
+	Deciders []string `json:"deciders,omitempty"`
 	// CallText is the exact text of an MCP call row's arguments and extra params (MCPCallText), projected at
 	// response time and never stored. The console and the CLI show and copy it as it is, never through a JSON
 	// number. Nil on every other row.
@@ -557,6 +561,17 @@ type ApprovalDecision struct {
 	Scope     ApprovalScope // meaningful only for an egress_domain approval; others leave the zero value
 	ExpiresAt *time.Time
 	Policy    *ApprovalPolicyMatch // the approval rule that decided, nil for a person or the admin token
+	// Basis is how the decider decides under a unit's deciders rule: owner, unit_admin:<unit>, group:<name>,
+	// security, policy or admin_token. Rule is that rule. Both are empty when no rule governs the request, so
+	// the decision is recorded as it is without deciders.
+	Basis string
+	Rule  *DeciderRuleRef
+}
+
+// DeciderRuleRef names the unit deciders rule a decision was made under: the unit that holds it and the kind.
+type DeciderRuleRef struct {
+	Unit uuid.UUID `json:"unit"`
+	Kind string    `json:"kind"`
 }
 
 // AuditEvent is one append-only audit record. Every credential mint/revoke, approval decision,
