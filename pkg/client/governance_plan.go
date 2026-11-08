@@ -126,6 +126,13 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 	steps, unchanged := planUnitAdmins(admins, doc.Admins, prune)
 	plan.Steps = append(plan.Steps, steps...)
 	plan.Unchanged += unchanged
+	// The deciders after the admins, as an apply issues them: updates parents first, then the clears.
+	steps, unchanged, err = planUnitDeciders(current, doc, admins.unitID, prune)
+	if err != nil {
+		return GovernancePlan{}, err
+	}
+	plan.Steps = append(plan.Steps, steps...)
+	plan.Unchanged += unchanged
 
 	if prune {
 		keepAssignment := make(map[string]bool, len(doc.Memberships))

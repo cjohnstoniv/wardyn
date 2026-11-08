@@ -72,18 +72,45 @@ func governanceCmd(client clientFn) *cobra.Command {
 }
 
 func governanceGetCmd(client clientFn) *cobra.Command {
-	return &cobra.Command{
+	var under string
+	cmd := &cobra.Command{
 		Use:   "get",
 		Short: "Print every governance profile and assignment as JSON",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			doc, err := client().GetGovernance(cmd.Context())
+			doc, err := governanceDocFor(cmd, client(), under)
 			if err != nil {
 				return err
 			}
 			return emitJSON(cmd.OutOrStdout(), doc)
 		},
 	}
+	cmd.Flags().StringVar(&under, "under", "", "only this unit (a name or an id) and the units below it; refuses document entries outside them, and --prune never reaches past them")
+	return cmd
+}
+
+// governanceDocFor is the document `get` prints: all of it, or with under set, that unit's subtree.
+func governanceDocFor(cmd *cobra.Command, c *sdk.Client, under string) (sdk.GovernanceDocument, error) {
+	if under != "" {
+		return c.GetGovernanceUnder(cmd.Context(), under)
+	}
+	return c.GetGovernance(cmd.Context())
+}
+
+// planFor and applyFor are the plan and the apply of doc: the whole document, or with under set, that
+// unit's subtree.
+func planFor(cmd *cobra.Command, c *sdk.Client, doc sdk.GovernanceDocument, under string, prune bool) (sdk.GovernancePlan, error) {
+	if under != "" {
+		return c.PlanGovernanceUnder(cmd.Context(), doc, under, prune)
+	}
+	return c.PlanGovernance(cmd.Context(), doc, prune)
+}
+
+func applyFor(cmd *cobra.Command, c *sdk.Client, doc sdk.GovernanceDocument, under string, prune bool) (sdk.GovernanceApplyResult, error) {
+	if under != "" {
+		return c.ApplyGovernanceResultUnder(cmd.Context(), doc, under, prune)
+	}
+	return c.ApplyGovernanceResult(cmd.Context(), doc, prune)
 }
 
 // readGovernanceDocument reads the document args names (stdin for "-" or no
@@ -115,6 +142,7 @@ func readGovernanceDocument(cmd *cobra.Command, args []string) (sdk.GovernanceDo
 
 func governancePlanCmd(client clientFn) *cobra.Command {
 	var prune bool
+	var under string
 	cmd := &cobra.Command{
 		Use:   "plan [file]",
 		Short: "Print the creates, updates and deletes a set would make, without writing",
@@ -124,7 +152,7 @@ func governancePlanCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			plan, err := client().PlanGovernance(cmd.Context(), doc, prune)
+			plan, err := planFor(cmd, client(), doc, under, prune)
 			if err != nil {
 				return err
 			}
@@ -134,6 +162,7 @@ func governancePlanCmd(client clientFn) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&prune, "prune", false,
 		"also delete every server-side profile and assignment the file omits (default: leave them alone)")
+	cmd.Flags().StringVar(&under, "under", "", "only this unit (a name or an id) and the units below it; refuses document entries outside them, and --prune never reaches past them")
 	return cmd
 }
 
@@ -165,6 +194,8 @@ func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
 			fmt.Fprintf(w, "  profile %q\n", s.Name)
 		case "unit_admin":
 			fmt.Fprintf(w, "  unit admin %s %q on %q\n", s.SubjectType, s.Subject, s.Unit)
+		case "deciders":
+			fmt.Fprintf(w, "  deciders of %q\n", s.Name)
 		default:
 			fmt.Fprintf(w, "  assignment %s %q\n", s.SubjectType, s.Subject)
 		}
@@ -173,7 +204,7 @@ func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
 
 func governanceSetCmd(client clientFn) *cobra.Command {
 	var prune bool
-	var reason, ticket string
+	var reason, ticket, under string
 	cmd := &cobra.Command{
 		Use:   "set [file]",
 		Short: "Upsert the governance profiles and assignments in a JSON file (or stdin with '-')",
@@ -183,7 +214,7 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := client().ApplyGovernanceResult(cmd.Context(), doc, prune)
+			res, err := applyFor(cmd, client(), doc, under, prune)
 			printApplyWarnings(cmd.ErrOrStderr(), res.Steps)
 			if err != nil {
 				if len(res.Steps) > 0 {
@@ -202,6 +233,7 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 		"also delete every server-side profile and assignment the file omits (default: leave them alone)")
 	cmd.Flags().StringVar(&reason, "reason", "", "why the change is wanted, written on every change `set` holds (at most 500 characters)")
 	cmd.Flags().StringVar(&ticket, "ticket", "", "a ticket reference, written on every change `set` holds (one line, at most 128 characters)")
+	cmd.Flags().StringVar(&under, "under", "", "only this unit (a name or an id) and the units below it; refuses document entries outside them, and --prune never reaches past them")
 	return cmd
 }
 

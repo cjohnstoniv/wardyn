@@ -278,3 +278,29 @@ Profiles and their assignments live in Postgres, so `make reset` / `make reset-a
 - A person's membership of one unit and of another are two memberships. Moving a person by editing the unit in the file adds the new membership and leaves the old one; removing it takes an explicit delete or a reviewed `--prune`.
 - A profile the file does not mention is left alone. One present server-side but absent from the file is removed only with `--prune`, which also removes an omitted membership. It removes assignments before profiles, so a still-referenced profile never trips the delete-while-assigned refusal (`governance_unit_in_use`).
 - `wardyn governance get > f && wardyn governance set f` is a no-op: unchanged rows are skipped rather than re-written, so a repeat `set` issues no writes and adds no audit rows.
+
+## One file per platform
+
+A platform can keep its part of governance in a repository file: its unit, the units below it, and their memberships, unit admins and deciders rules.
+
+```
+wardyn governance get --under platform > platform.json            # that unit and every unit below it
+wardyn governance plan platform.json --under platform --prune     # the steps, deletes listed
+wardyn governance set platform.json --under platform --prune --reason "team leads decide egress" --ticket CHG-1234
+```
+
+- `--under` takes a unit name or id. `set --under` writes through the same routes as the API, so a write held for a second approver is held exactly as a direct call is, and `--reason` and `--ticket` are written on each held change.
+- The document must include the unit `--under` names. These are refused before anything is written, all in one error:
+  - a unit outside the subtree, or a new unit whose parent is outside it,
+  - a membership, an `admins` entry or a `deciders` entry on a unit outside it,
+  - any restriction: restrictions are organisation-wide, so write them without `--under`.
+- `--prune` compares against the subtree only, so it never deletes or clears anything outside it.
+- A unit admin's `get --under` followed by `set --under` of that file writes nothing.
+
+The `deciders` section is each unit's own rules by unit name, in the form `wardyn governance deciders set` takes. Rules a unit inherits are not in it.
+
+- A document with no `deciders` key leaves every unit's rules alone, under `--prune` too, so a file written before the section existed never clears a rule.
+- A present section, even `{}`, is authoritative: `set` puts each listed unit's rules, and `--prune` clears the rules of every unit it omits.
+- Rules are compared in the server's stored form (`240m` equals `4h`), so an unchanged rule is no write.
+- Parents are written before children. When a parent's rule change is held, a child's rule that widens with it waits: the server refuses it as wider than the stored parent, and `set` lists it as deferred. Run `set` again after the parent's change is approved.
+- Elevations (memberships with an end) are granted through requests and are not part of a document: `set` never writes or prunes them.

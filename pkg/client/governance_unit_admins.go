@@ -57,6 +57,8 @@ func (c *Client) RevokeUnitAdmin(ctx context.Context, unitID, adminID uuid.UUID)
 type governanceRead struct {
 	GovernanceDocument
 	UnitAdmins []GovernanceUnitAdmin `json:"unit_admins"`
+	// Deciders shadows the document's map: the wire is a list (governanceDecidersView), folded by GetGovernance.
+	Deciders []unitDecidersRead `json:"deciders"`
 }
 
 // adminsByUnitName is grants as a document's admins: by unit name (the unit id when no unit of units
