@@ -1751,6 +1751,7 @@ at tier 0. With `routes` set, the first route that matches an approval chooses i
     expires before that tier can send.
 - `notify` fills `recipients[]` (`{role, email}`) in the body: `run_owner` is the run owner's address,
   `profile_contact` is the leaf profile's contact email after the same re-validation the console applies.
+  `unit_admins` is each person with a user-subject unit-admin grant on the run's unit or above. A group grant is never expanded, and no one outside that chain is read.
   A target with no address is skipped.
 - A channel with `"redact_requester": true` omits `requester` from its body.
 - Boot refuses a route that names an unknown channel or kind,
