@@ -58,6 +58,9 @@ import {
 } from "./profile-overlay";
 import { ProfileCeilingPolicy } from "./profile-ceiling-policy";
 import { ProfileRubric } from "./profile-rubric";
+import { UnitDeciders } from "./unit-deciders";
+import { DECIDERS } from "../../wardyn/copy/deciders";
+import type { GovernanceDeciders } from "../../../lib/api/deciders";
 
 // A number field renders blank at 0/undefined — 0 IS "unlimited" for all three
 // rows below, not a value worth spelling out in the input (storage-tab.tsx's
@@ -89,6 +92,7 @@ export function ProfileEditor({
   onCancel,
   onSaved,
   onSubmitted,
+  deciders, decidersSupported, unitNames, onDecidersChanged,
 }: {
   /** The profile being edited, or null for a new one. */
   profile: GovernanceUnit | null;
@@ -102,6 +106,10 @@ export function ProfileEditor({
   /** The write was held for a second person (202): nothing is saved yet. */
   /** The notes the held change carries, for the screen to show beside the submitted note. */
   onSubmitted: (notes: string[], change: GovernanceChange) => void;
+  deciders?: GovernanceDeciders[];
+  decidersSupported?: boolean;
+  unitNames?: Record<string, string>;
+  onDecidersChanged?: () => void;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
@@ -290,6 +298,7 @@ export function ProfileEditor({
         items={[
           { id: "governance-section-ceiling", label: GOV.CEILING_TITLE },
           { id: "governance-section-limits", label: GOV.LIMITS_TITLE },
+          { id: "governance-section-deciders", label: DECIDERS.TITLE },
           { id: "governance-section-contact", label: GOV.CONTACT_TITLE },
         ]}
       />
@@ -598,6 +607,7 @@ export function ProfileEditor({
       {/* Read-only, as of the last save: a composed profile's binding policy is its base, narrowed. */}
       {profile?.overlay && composed && <EffectiveView profile={profile} />}
 
+      <UnitDeciders profile={profile} profiles={profiles} deciders={deciders} supported={decidersSupported} unitNames={unitNames} disabled={disabled} onChanged={onDecidersChanged} />
       <section id="governance-section-contact" className="mt-6 scroll-mt-4" data-testid="governance-profile-contact">
         <h4 className="text-body font-medium text-foreground">{GOV.CONTACT_TITLE}</h4>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{GOV.CONTACT_LEAD}</p>
