@@ -42,7 +42,7 @@ type envelopeChangePayload struct {
 }
 
 // envelopeView is the part of an envelope a write replaces and an approval compares; who set it and
-// when are not part of what a reviewer decides.
+// when are not part of what an approval compares.
 type envelopeView struct {
 	UnitID         uuid.UUID `json:"unit_id"`
 	ApprovedGroups []string  `json:"approved_groups"`
