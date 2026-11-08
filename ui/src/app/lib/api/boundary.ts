@@ -22,6 +22,10 @@ export interface BoundarySpec {
   eligible_grants?: GrantSpec[];
   // The desktop directions every run is held to (#2967); a direction left unset is its default.
   desktop?: DesktopControls;
+  /** The Azure DevOps capabilities a run may hold, at launch, at each request and at each credential resolve. pr means its parts; absent is no cap. */
+  azure_devops_capabilities?: string[];
+  /** The GitHub capabilities the GitHub CLI and git pushes may use, at launch. Absent is no cap. */
+  github_capabilities?: string[];
 }
 
 export interface BoundaryLimits {
@@ -76,6 +80,13 @@ export interface BoundaryReportAssign {
   changes: BoundaryChange[];
 }
 
+/** boundaryProviderCap: one Azure DevOps provider row the drafted cap narrows (the entries it removes, pr expanded). */
+export interface BoundaryProviderCap {
+  id: string;
+  ceiling_removed: string[];
+  default_profile_removed?: string[];
+}
+
 /** boundaryReport: only the rows the drafted boundary would narrow are listed. */
 export interface BoundaryReport {
   target: "boundary";
@@ -83,6 +94,7 @@ export interface BoundaryReport {
   units: BoundaryReportRow[];
   stored_policies: BoundaryReportRow[];
   memberships: BoundaryReportAssign[];
+  provider_rows: BoundaryProviderCap[];
 }
 
 const withEtag = async (res: Response): Promise<BoundarySnapshot> => ({ ...(await asJson<Boundary>(res)), etag: res.headers.get("ETag") });
@@ -108,6 +120,6 @@ export const boundary = {
   async dryRun(body: Pick<BoundaryWrite, "spec" | "limits">): Promise<BoundaryReport> {
     const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(body) });
     const r = await asJson<Partial<BoundaryReport>>(res);
-    return { target: "boundary", deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
+    return { target: "boundary", deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [], provider_rows: r.provider_rows ?? [] };
   },
 };

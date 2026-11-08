@@ -728,6 +728,10 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	} else if kept != nil {
 		ado.caps, policy.AzureDevOpsCapabilities = kept, slices.Clone(kept)
 	}
+	ado, capRefused := s.capADOLane(ctx, run, ado, policy)
+	if capRefused != nil {
+		return adoEntraLane{injections: injections}, s.refuseADOEntraDispatch(ctx, run, capRefused.reason, capRefused.detail)
+	}
 	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
 	if !ok {
 		return adoEntraLane{injections: injections}, false

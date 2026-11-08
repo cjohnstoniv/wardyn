@@ -77,6 +77,7 @@ const (
 const (
 	adoCapNotGrantableRefusal  = "Wardyn refused this Azure DevOps request: no run can be granted that access."
 	adoCapAboveCeilingRefusal  = "Wardyn refused this Azure DevOps request: it needs %q, which is outside what an administrator allows for this organisation."
+	adoCapCappedRefusal        = "Wardyn refused this Azure DevOps request: it needs %q, which the Wardyn boundary or a restriction does not allow."
 	adoCapAlwaysDenyRefusal    = "Wardyn refused this Azure DevOps request: it needs %q, and this run's policy refuses more access without asking."
 	adoCapReviewRefusal        = "Wardyn refused this Azure DevOps request and asked a person to approve %q (approval %s). Retry once it is approved."
 	adoCapDeniedRefusal        = "Wardyn refused this Azure DevOps request: a person denied the access it needs."
@@ -161,7 +162,7 @@ type adoCapabilityGrant struct {
 // answerADOCapability decides a capability ask. ok=false means a response has
 // been written.
 func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
-	sn adoEntraScopeSnapshot, sc types.SiteConfig, grantID uuid.UUID, fail adoFail,
+	sn adoEntraScopeSnapshot, sc types.SiteConfig, grantID uuid.UUID, vcsCap *[]adoscope.Capability, fail adoFail,
 ) (adoCapabilityGrant, bool) {
 	q := r.URL.Query()
 	c := adoscope.Capability(q.Get("capability"))
@@ -171,14 +172,20 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 	}
 	// driftFrom has proved the row exists, is live and carries Entra.
 	row, _ := gitProviderRowByID(sc, sn.ProviderRowID)
-	ceiling := row.Entra.Ceiling()
+	ceiling := effectiveADOCeiling(row.Entra, vcsCap)
 	rows, err := s.runApprovals(r.Context(), claims.RunID, "")
 	if err != nil {
 		return adoCapabilityGrant{}, !fail(http.StatusServiceUnavailable, reasonApprovalsUnreadable, adoCapApprovalsUnreadable, nil)
 	}
-	g := adoCapabilityGrant{capability: c, standing: adoStanding(sn, ceiling, rows)}
+	g := adoCapabilityGrant{capability: c, standing: withinADOCap(adoStanding(sn, ceiling, rows), vcsCap)}
 	if adoscope.Has(g.standing, c) {
 		return g, true
+	}
+	// NEVER ABOVE THE CAP either: a capability the row allows and the boundary's or a restriction's cap
+	// leaves out is refused before any approval is honoured or raised.
+	if adoscope.Has(row.Entra.Ceiling(), c) && !adoscope.Has(ceiling, c) {
+		return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonCapabilityCapped,
+			fmt.Sprintf(adoCapCappedRefusal, adoscope.Label(c)), map[string]any{"capability": c})
 	}
 	// NEVER ABOVE THE CEILING, whoever approved what: checked against the live
 	// row on every ask, before any approval is honoured or raised.
@@ -473,8 +480,9 @@ type approvalOnceSpender interface {
 }
 
 // adoEscalationWithinCeiling reports whether the escalation's capability is
-// inside its provider row's LIVE ceiling. A read that fails is outside.
-func (s *Server) adoEscalationWithinCeiling(ctx context.Context, sc adoCapabilityScope) bool {
+// inside its provider row's LIVE ceiling, less what the boundary's or a restriction's cap
+// leaves out for the run (runID). A read that fails is outside.
+func (s *Server) adoEscalationWithinCeiling(ctx context.Context, runID uuid.UUID, sc adoCapabilityScope) bool {
 	if s.cfg.Store == nil {
 		return false
 	}
@@ -482,9 +490,13 @@ func (s *Server) adoEscalationWithinCeiling(ctx context.Context, sc adoCapabilit
 	if err != nil {
 		return false
 	}
+	vcsCap, err := s.runADOCap(ctx, runID)
+	if err != nil {
+		return false
+	}
 	row, found := gitProviderRowByID(site, sc.ProviderID)
 	return found && !row.Disabled && row.Entra != nil &&
-		adoscope.Has(row.Entra.Ceiling(), adoscope.Capability(sc.Capability))
+		adoscope.Has(effectiveADOCeiling(row.Entra, vcsCap), adoscope.Capability(sc.Capability))
 }
 
 // adoDecisionRule is decide()'s rule 4 for an Azure DevOps escalation — the
@@ -513,7 +525,7 @@ func (s *Server) adoDecisionRule(w http.ResponseWriter, r *http.Request, ap type
 		writeErrorReason(w, http.StatusBadRequest, reasonADODecisionScopeInvalid, `an Azure DevOps access request is decided "once" or for this "run"`)
 		return scope, true, false
 	}
-	if approve && !s.adoEscalationWithinCeiling(r.Context(), sc) {
+	if approve && !s.adoEscalationWithinCeiling(r.Context(), ap.RunID, sc) {
 		writeErrorReason(w, http.StatusForbidden, reasonADOAccessAboveCeiling, "this Azure DevOps access is outside what an administrator allows for the organisation")
 		return scope, true, false
 	}

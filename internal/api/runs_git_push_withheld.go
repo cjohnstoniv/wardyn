@@ -29,7 +29,13 @@ func (s *Server) gitPushWithheldFor(ctx context.Context, run types.AgentRun, spe
 		return gitPushWithheld{}, runError(http.StatusServiceUnavailable, reasonGrantWithheldUnread,
 			"Your walls could not be read, so whether this run may push cannot be decided. Walls that cannot be read refuse the run; try again.")
 	}
-	return gitPushWithheldBy(spec, walls, run.WallPreset), nil
+	w := gitPushWithheldBy(spec, walls, run.WallPreset)
+	// The boundary's and the run's restrictions' caps: a cap that leaves out code_write keeps pushes from
+	// the forge it names, whatever the policy or the walls list.
+	layers := s.outerLayers(ctx, run)
+	w.github = w.github || capLacks(githubCapOf(layers), ghscope.CapCodeWrite)
+	w.ado = w.ado || capLacks(adoCapOf(layers), adoscope.CapCodeWrite)
+	return w, nil
 }
 
 // gitPushWithheldBy is the decision on spec, the person's walls and the run's wall preset (nil for

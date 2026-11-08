@@ -282,6 +282,15 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
+	// The boundary's or a restriction's cap, read now: a cap saved after dispatch that leaves out a
+	// capability this run holds ends its Azure DevOps access here, and a minted_pat run's tokens with it.
+	vcsCap, status, reason, body := s.adoCapAtResolve(ctx, claims.RunID, snapshot)
+	if status != 0 {
+		if reason == reasonCapabilityCapped {
+			s.revokeRunPATs(ctx, claims.RunID, adoPATRevokeDrift)
+		}
+		return fail(status, reason, body, map[string]any{"owner": snapshot.OwnerSubject})
+	}
 	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
 		return fail(http.StatusForbidden, reasonHostNotOrganisation, adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
@@ -306,7 +315,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	var need []string
 	if r.URL.Query().Get("capability") != "" {
 		var ok bool
-		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, fail); !ok {
+		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, vcsCap, fail); !ok {
 			return true
 		}
 		// Cannot fail: answerADOCapability admits grantable capabilities only.
