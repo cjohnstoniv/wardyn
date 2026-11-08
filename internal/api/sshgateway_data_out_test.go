@@ -216,10 +216,6 @@ func sftpDataThenName() *runner.ExecSession {
 	}
 }
 
-type nopWriteCloser struct{ io.Writer }
-
-func (nopWriteCloser) Close() error { return nil }
-
 // TestDataOutSyncClosesOnData: the first file-content reply ends the sync, none of its bytes reach the client,
 // and the denial is audited as sync_down.
 func TestDataOutSyncClosesOnData(t *testing.T) {
