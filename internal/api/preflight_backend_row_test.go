@@ -37,7 +37,7 @@ func foldedBackendRow(t *testing.T, s *Server, req createRunRequest, place runPl
 		t.Fatalf("stepConfinement refused: %s", f.w.(*httptest.ResponseRecorder).Body.String())
 	}
 	run := composer.RunInput{ConfinementClass: string(final)}
-	items := s.deriveRunSetupItems(capsCtx, "", run, f.spec, secretsWith(), nil, nil, f.backendPlacement())
+	items := s.deriveRunSetupItems(capsCtx, "", run, f.spec, secretsWith(), nil, nil, &f.placed)
 	it, ok := findItem(items, "backend:"+string(final))
 	if !ok {
 		t.Fatalf("no backend:%s row in %+v", final, items)

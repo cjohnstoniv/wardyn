@@ -394,7 +394,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		llmAccess = runLLMAccess(req, mpChoice)
 	}
 
-	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs, f.backendPlacement())
+	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs, &f.placed)
 	if e := f.source.edits; e != nil {
 		items = overrideSecretItems(items, e.missingSecrets)
 	}

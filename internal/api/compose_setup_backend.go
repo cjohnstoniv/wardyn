@@ -20,11 +20,6 @@ type backendPlacement struct {
 	read    bool
 }
 
-// backendPlacement is the placement the fold read, for deriveRunSetupItems.
-func (f *runFold) backendPlacement() *backendPlacement {
-	return &backendPlacement{classes: f.placedClasses, read: f.placedRead}
-}
-
 // advertisedConfinementRead is advertisedConfinement that also says whether the placement could be read:
 // an offline runner, or no executor to ask, is read=false.
 func (s *Server) advertisedConfinementRead(ctx context.Context, req createRunRequest) ([]types.ConfinementClass, bool) {
