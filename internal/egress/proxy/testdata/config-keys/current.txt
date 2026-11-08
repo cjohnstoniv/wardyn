@@ -101,6 +101,7 @@ kube_api.ca_pem
 kube_api.host
 kube_api.namespaces
 kube_api.port
+kube_api.restart
 kube_api.write
 listen
 llm_channel_hosts

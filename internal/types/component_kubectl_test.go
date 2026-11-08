@@ -115,3 +115,16 @@ func TestComponentCLI_KubectlOffIsToday(t *testing.T) {
 		t.Fatalf("switch on: %v", err)
 	}
 }
+
+// A kubectl row may say restart: reads, plus the one patch kubectl rollout
+// restart sends. Any other word is still refused.
+func TestCLIKubectlAccessRestartValid(t *testing.T) {
+	t.Setenv(types.EnvKubectlCLI, "on")
+	for access, ok := range map[string]bool{"read": true, "write": true, "restart": true, "": false, "Restart": false, "restart ": false, "admin": false} {
+		def := cliDef(&types.ComponentCLI{Kind: "kubectl", Kubectl: &types.CLIKubectl{Server: "https://k8s.example.com:6443",
+			ServiceAccount: types.CLIServiceAccount{Namespace: "wardyn", Name: "runs"}, Namespaces: []string{"team-a"}, Access: access}})
+		if err := def.Validate(proxy.ValidDomainEntry, false); (err == nil) != ok {
+			t.Errorf("access %q: err = %v, want accepted = %v", access, err, ok)
+		}
+	}
+}
