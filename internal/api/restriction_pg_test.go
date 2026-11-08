@@ -21,8 +21,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The restriction PG pins (the RESTRICT-PIN lane): deny-only lists that follow people, applied at
-// DESIGN-TREE §4.1 step 8 on the governed arm only, and re-read by every live path.
+// The restriction PG pins: narrowing rules that follow people, applied on the governed arm only, and
+// re-read by every live path.
 
 func strs(v ...string) *[]string { return &v }
 
