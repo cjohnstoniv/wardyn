@@ -8,6 +8,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
 import { DECIDERS_INBOX } from "./copy/deciders-inbox";
+import { OperatorProvider } from "./operator-context";
 
 const getRun = vi.fn();
 vi.mock("../../lib/api/runs", () => ({ runs: { getRun: (...a: unknown[]) => getRun(...a) } }));
@@ -57,10 +58,18 @@ describe("deciderPhrase", () => {
   });
 });
 
+const asViewer = (item: ApprovalRequest, securityOperator: boolean) =>
+  render(
+    <OperatorProvider operator={false} securityOperator={securityOperator}>
+      <DecidedByLine item={item} />
+    </OperatorProvider>,
+  );
+
 describe("DecidedByLine", () => {
   it("reads the entries in the server's order on a decider's card", () => {
-    render(
-      <DecidedByLine item={row({ requested_by: "dana@acme.example", deciders: ["owner", "unit_admins", "group:eng-leads", "security"] })} />,
+    asViewer(
+      row({ requested_by: "dana@acme.example", deciders: ["owner", "unit_admins", "group:eng-leads", "security"] }),
+      false,
     );
     const line = screen.getByText(DECIDERS_INBOX.DECIDED_BY_LABEL).closest("p");
     expect(line).toHaveTextContent(
@@ -68,11 +77,17 @@ describe("DecidedByLine", () => {
     );
   });
   it("reads you for the owner entry on an own card", () => {
-    render(<DecidedByLine item={row({ deciders: ["owner", "security"] })} />);
+    asViewer(row({ deciders: ["owner", "security"] }), false);
     expect(screen.getByText(DECIDERS_INBOX.DECIDED_BY_LABEL).closest("p")).toHaveTextContent("Decided by: you or a security admin");
   });
+  it("reads the run's owner for a security operator, whose Pending list carries other people's runs", () => {
+    asViewer(row({ deciders: ["owner", "security"] }), true);
+    expect(screen.getByText(DECIDERS_INBOX.DECIDED_BY_LABEL).closest("p")).toHaveTextContent(
+      "Decided by: the run's owner or a security admin",
+    );
+  });
   it("draws nothing without deciders", () => {
-    const { container } = render(<DecidedByLine item={row({})} />);
+    const { container } = asViewer(row({}), false);
     expect(container).toBeEmptyDOMElement();
   });
 });

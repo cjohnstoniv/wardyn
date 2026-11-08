@@ -335,6 +335,104 @@ describe("Pending cards — who decides", () => {
   });
 });
 
+describe("Pending cards — a security operator", () => {
+  it("reads the run's owner, not you, for the owner entry", async () => {
+    mockPending = [egress("p1", { deciders: ["owner", "security"] })];
+    renderScreen({ security: true });
+    await screen.findByText("Reach p1.example.com");
+    expect(screen.getByText(DECIDERS_INBOX.DECIDED_BY_LABEL).closest("p")).toHaveTextContent(
+      "Decided by: the run's owner or a security admin",
+    );
+  });
+});
+
+const KEY = "0123456789abcdef".repeat(4);
+const mcpRow = (id: string, extra: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+  id,
+  run_id: "4f2a91c0-1111-2222-3333-444455556666",
+  kind: "tool_call",
+  requested_scope: {
+    tool: "mcp__jira__delete_issue",
+    mcp_server: "jira",
+    mcp_host: "jira.example.com",
+    arguments: { id: 1 },
+    call_sha256: KEY,
+  },
+  call_text: { arguments: '{\n  "id": 1\n}' },
+  state: "PENDING",
+  requested_at: NOW,
+  ...extra,
+});
+const pushRow = (id: string, extra: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+  id,
+  run_id: "4f2a91c0-1111-2222-3333-444455556666",
+  kind: "push_content",
+  requested_scope: {
+    repo: "github.com/acme/widgets",
+    branch: "refs/heads/feature/x",
+    acts_as: "github_token:11111111-1111-1111-1111-111111111111",
+    paths: ["a.txt"],
+    paths_total: 1,
+    commits: ["deadbeef".repeat(5)],
+    paths_digest: "a".repeat(64),
+    acts_as_kind: "github_app",
+    acts_as_label: "dana@acme.example",
+  },
+  state: "PENDING",
+  requested_at: NOW,
+  ...extra,
+});
+const adoRow = (id: string, extra: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+  id,
+  run_id: "4f2a91c0-1111-2222-3333-444455556666",
+  grant_id: "grant_1",
+  kind: "tool_call",
+  requested_scope: {
+    lane: "azure_devops",
+    provider_id: "row_1",
+    org: "acme",
+    grant_id: "grant_1",
+    capability: "code_write",
+    repo: "payments-api",
+    ref_class: "",
+    tool: "Azure DevOps",
+    cmd: "Push commits (code_write) in acme/payments-api",
+  },
+  state: "PENDING",
+  requested_at: NOW,
+  ...extra,
+});
+const enabledApproves = () =>
+  screen.queryAllByRole("button", { name: /^approve$/i }).filter((b) => !(b as HTMLButtonElement).disabled);
+
+describe("The other cards' decide gate", () => {
+  const kinds: [string, (id: string, extra?: Partial<ApprovalRequest>) => ApprovalRequest, string][] = [
+    ["MCP call", mcpRow, "mcp-call-card"],
+    ["push", pushRow, "push-content-card"],
+    ["Azure DevOps", adoRow, "ado-capability-card"],
+  ];
+  it.each(kinds)("a non-security decider on the Waiting tab can approve a %s card", async (_name, make, testId) => {
+    mockWaiting = [make("w1", { requested_by: "dana.reyes@acme.example", deciders: ["group:eng-leads"] })];
+    renderScreen();
+    await waitFor(() => expect(waitingTab()).toBeInTheDocument());
+    await userEvent.click(waitingTab()!);
+    const card = await screen.findByTestId(testId);
+    expect(within(card).getByRole("button", { name: /^approve$/i })).toBeEnabled();
+    expect(within(card).getByRole("button", { name: /^deny$/i })).toBeEnabled();
+    expect(getRun).not.toHaveBeenCalled();
+  });
+
+  it.each(kinds)("a Pending-tab non-owner is still disabled on a %s card", async (_name, make, testId) => {
+    mockKnows = false;
+    mockPending = [make("p1", { decidable: false })];
+    renderScreen();
+    const card = await screen.findByTestId(testId);
+    await act(async () => {});
+    expect(within(card).queryAllByRole("button", { name: /^approve$/i }).filter((b) => !(b as HTMLButtonElement).disabled)).toHaveLength(0);
+    expect(enabledApproves()).toHaveLength(0);
+  });
+});
+
 describe("Decided rows — the basis line", () => {
   const decided = (id: string, basis?: string): ApprovalRequest => ({
     ...egress(id),
