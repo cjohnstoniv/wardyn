@@ -25,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/ackcursor"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/filelock"
+	"github.com/cjohnstoniv/wardyn/internal/runneractivity"
 	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 )
 
@@ -165,24 +166,10 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 	if runID == uuid.Nil {
 		return nil, errors.New("spool requires a run id")
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
-	}
-	st, err := os.Lstat(dir)
+	_, lerr := os.Lstat(dir)
+	root, lock, err := openLock(dir, errors.Is(lerr, os.ErrNotExist))
 	if err != nil {
 		return nil, err
-	}
-	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("spool directory must be private and not a symlink")
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
-	lock, err := root.OpenFile("lock", os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		root.Close()
-		return nil, inDir(dir, err)
 	}
 	st, statErr := lock.Stat()
 	link, linkErr := root.Lstat("lock")
@@ -212,7 +199,8 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 				return e
 			}
 			// A crash inside the first manifest write leaves its temporary file, which writeBytes replaces.
-			names = slices.DeleteFunc(names, func(n string) bool { return n == "write.tmp" })
+			// A live-activity marker the daemon wrote into this directory before the manifest is not existing data.
+			names = slices.DeleteFunc(names, func(n string) bool { return n == "write.tmp" || runneractivity.IsMarker(n) })
 			if len(names) != 1 || names[0] != "lock" {
 				return errors.New("spool metadata missing beside existing data")
 			}
@@ -228,6 +216,59 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// afterOpenRoot runs between opening the spool directory and creating its lock; a test removes the
+// directory there, as a sync or backup tool would.
+var afterOpenRoot = func() {}
+
+// openLock opens the spool directory and its lock file. When this call made the directory and it is gone
+// before the lock is created, it makes the directory again, once: a stream that existed before this call
+// is never recreated, so erased evidence stays erased.
+func openLock(dir string, madeDir bool) (*os.Root, *os.File, error) {
+	for attempt := 0; ; attempt++ {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return nil, nil, err
+		}
+		st, err := os.Lstat(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm()&0077 != 0 {
+			return nil, nil, errors.New("spool directory must be private and not a symlink")
+		}
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		afterOpenRoot()
+		lock, err := root.OpenFile("lock", os.O_CREATE|os.O_RDWR, 0600)
+		gone := dirChanged(root, dir)
+		if err == nil && !gone {
+			return root, lock, nil
+		}
+		if lock != nil {
+			lock.Close()
+		}
+		root.Close()
+		if err != nil && errors.Is(err, os.ErrNotExist) && madeDir && attempt == 0 {
+			continue
+		}
+		if gone {
+			return nil, nil, fmt.Errorf("spool directory %s was removed or replaced while it was opened", dir)
+		}
+		return nil, nil, inDir(dir, err)
+	}
+}
+
+// dirChanged reports whether dir no longer names the directory root holds.
+func dirChanged(root *os.Root, dir string) bool {
+	held, err := root.Stat(".")
+	if err != nil {
+		return true
+	}
+	now, err := os.Lstat(dir)
+	return err != nil || !os.SameFile(held, now)
 }
 
 // inDir puts dir in front of the name an os.Root error carries, which is relative to the spool, so the
