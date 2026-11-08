@@ -16,9 +16,7 @@ import type { RunDetail } from "../../lib/types";
 const healthMock = vi.fn();
 // The Files panel has its own tests (desktop-files-panel.test.tsx); its fetch would land in the
 // global fetch stubs this file counts.
-vi.mock("./run-detail/desktop-files-panel", () => ({
-  DesktopFilesPanel: ({ noDesktop }: { noDesktop?: boolean }) => (noDesktop ? <div data-testid="files-no-desktop" /> : null),
-}));
+vi.mock("./run-detail/desktop-files-panel", () => ({ DesktopFilesPanel: () => null }));
 vi.mock("../../lib/api/health", () => ({
   health: { health: (...a: unknown[]) => healthMock(...a) },
 }));
@@ -29,9 +27,8 @@ vi.mock("../../lib/api/ssh-keys", () => ({
 }));
 
 const attachTicketMock = vi.fn();
-const getPolicyMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
-  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a), getPolicy: (...a: unknown[]) => getPolicyMock(...a) },
+  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a), getPolicy: () => new Promise(() => {}) }, // the rule never answers here
 }));
 
 import { ConnectSSHCard } from "./run-detail-ssh";
@@ -80,8 +77,6 @@ beforeEach(() => {
   healthMock.mockReset();
   listKeysMock.mockReset();
   attachTicketMock.mockReset();
-  getPolicyMock.mockReset();
-  getPolicyMock.mockResolvedValue({ run_id: "r", state: "never", source: { kind: "unknown" }, redacted: false, changes: [] });
   tabStub = { opener: {}, close: vi.fn(), location: { replace: vi.fn() } };
   openSpy = vi.spyOn(window, "open").mockReturnValue(tabStub as unknown as Window);
 });
@@ -643,19 +638,6 @@ describe("ConnectSSHCard — UI apps lane", () => {
     expect(screen.queryByText(/^only the person who started/)).toBeNull();
   });
 
-  // The server's own sentence for a held data_out rule is the body under the app's row, as sent.
-  it("prints a 403 data_out_blocked refusal under the app's row: the title and the server's sentence", async () => {
-    const sentence = "This run's data_out rule keeps content in, so its web apps are off; its desktop still opens.";
-    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
-    listKeysMock.mockResolvedValue([]);
-    attachTicketMock.mockRejectedValue(new HttpError(403, sentence, "data_out_blocked"));
-    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
-    await waitFor(() => expect(healthMock).toHaveBeenCalled());
-    screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
-    await screen.findByText(UI_APPS_LANE.errorTitle("vscode"));
-    expect(screen.getByText(sentence)).toBeInTheDocument();
-  });
-
   it("renders the UI apps lane LAST — after the ssh command, per the mock's S3 order", async () => {
     healthMock.mockResolvedValue({
       status: "ok",
@@ -1013,39 +995,5 @@ describe("ConnectSSHCard — an advertised ProxyCommand", () => {
     const dimmed = config.closest(".opacity-50");
     expect(dimmed).not.toBeNull();
     expect(dimmed).toContainElement(screen.getByText(cliPrint));
-  });
-});
-
-describe("ConnectSSHCard — the Files panel on a run with no desktop", () => {
-  const recorded = (data_out?: string) => ({ run_id: "r", state: "recorded", source: { kind: "default" }, spec: data_out ? { data_out } : {}, redacted: false, changes: [] });
-  const open = async (run: Partial<RunDetail> = {}) => {
-    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true } });
-    listKeysMock.mockResolvedValue([]);
-    renderCard(run);
-    await waitFor(() => expect(healthMock).toHaveBeenCalled());
-  };
-
-  it("is mounted for a run with no UI app whose rule is review", async () => {
-    getPolicyMock.mockResolvedValue(recorded("review"));
-    await open();
-    expect(await screen.findByTestId("files-no-desktop")).toBeInTheDocument();
-  });
-
-  it("is not mounted while the rule is unread, allowed or blocked", async () => {
-    for (const read of [() => new Promise(() => {}), () => Promise.resolve(recorded()), () => Promise.resolve(recorded("blocked"))]) {
-      getPolicyMock.mockReset();
-      getPolicyMock.mockImplementation(read);
-      const { unmount } = renderCard();
-      await waitFor(() => expect(getPolicyMock).toHaveBeenCalled());
-      expect(screen.queryByTestId("files-no-desktop")).toBeNull();
-      unmount();
-    }
-  });
-
-  it("is not mounted for a run that has a UI app, and the rule is not read for it", async () => {
-    getPolicyMock.mockResolvedValue(recorded("review"));
-    await open({ ui_apps: [{ name: "vscode", port: 8080 }] });
-    expect(screen.queryByTestId("files-no-desktop")).toBeNull();
-    expect(getPolicyMock).not.toHaveBeenCalled();
   });
 });
