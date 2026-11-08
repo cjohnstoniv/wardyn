@@ -69,6 +69,7 @@ func (s *Server) mountGovernanceRoutes(operatorOnly, member chi.Router) {
 	unit.Post("/governance/units/{id}/admins", s.handleGrantUnitAdmin)
 	unit.Delete("/governance/units/{id}/admins/{admin}", s.handleRevokeUnitAdmin)
 	unit.Put("/governance/units/{id}/deciders", s.handlePutUnitDeciders)
+	unit.Get("/governance/units/{id}/model-usage", s.handleUnitModelUsage)
 	unit.Post("/governance/memberships", s.handleUpsertGovernanceMembership)
 	unit.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
 	unit.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)

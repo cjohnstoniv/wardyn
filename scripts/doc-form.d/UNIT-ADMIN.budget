@@ -15,4 +15,7 @@
 # docs/operations/unit-admins.md 1105 adds 16 over 1089, measured: the audit export serves a unit admin only runs they created.
 # docs/operations/unit-admins.md 1152 adds 47 over 1105, measured: a unit's own held changes are decided strictly from above it.
 # docs/operations/unit-admins.md 1171 adds 19 over 1152, measured: the elevation requests row.
-docs/operations/unit-admins.md=1171 share=35
+# docs/operations/unit-admins.md 1179 adds 172 over 1007, measured: the governance rows in the unit view of audit rows (who the actor is, what is left out), the model-usage route row and the actor-filter rule.
+# docs/operations/unit-admins.md 1336 measured with both sides merged: the export, strictly-from-above and elevation requests rows (1171) and the governance rows in the unit view, the model-usage route row and the actor-filter rule (+165).
+# docs/operations/unit-admins.md 1340 adds 4 over 1336, measured: a person's withdrawal of their own request shows them as the actor.
+docs/operations/unit-admins.md=1340 share=35

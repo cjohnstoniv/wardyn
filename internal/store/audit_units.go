@@ -13,8 +13,9 @@ import (
 )
 
 // UnitAuditReader reads the audit rows of the runs frozen to a set of governance units, newest first: a
-// unit admin's audit feed. A row with no run, and a run with no unit, never match. Optional like Pager;
-// the api serves no unit-scoped read from a store without it.
+// unit admin's audit feed. A run with no unit never matches. The feed also matches a row with no run when
+// it is a listed governance row naming one of the units. Optional like Pager; the api serves no
+// unit-scoped read from a store without it.
 //
 // The unit set is not an AuditFilter field: IsZero compares the filter with ==, which a slice cannot be.
 type UnitAuditReader interface {
@@ -25,16 +26,17 @@ type UnitAuditReader interface {
 var _ UnitAuditReader = PG{}
 
 // QueryAuditEventsForUnits reads through agent_runs_unit_idx for the runs and audit_events' run_id index
-// for their rows.
+// for their rows, and the governance arm (unitGovernanceActions) for the rows with no run. An actor filter
+// reads the run rows alone: the view masks a governance row's actor, so matching on it would confirm a name.
 func (s PG) QueryAuditEventsForUnits(ctx context.Context, units []uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
-	q, args := unitAuditQuery(units, f)
+	q, args := unitAuditQuery(units, f, f.Actor == "" && f.ActorAlt == "")
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "query", "unit audit events", q, args, scanAuditEvent)
 }
 
-func unitAuditQuery(units []uuid.UUID, f AuditFilter) (string, []any) {
-	args := []any{units}
-	clauses := []string{"run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1))"}
+func unitAuditQuery(units []uuid.UUID, f AuditFilter, withGovernance bool) (string, []any) {
+	first, args := unitAuditFirstClause(units, withGovernance)
+	clauses := []string{first}
 	extra, args := f.where(args)
 	clauses = append(clauses, extra...)
 	return `

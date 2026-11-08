@@ -40,3 +40,15 @@ export interface ModelUsage {
   opaque_tunnels: number;
   updated_at?: string;
 }
+
+// GET /governance/units/{id}/model-usage (internal/api/governance_unit_usage.go).
+export interface UnitModelUsage extends ModelUsage {
+  unit_id: string;
+  unit_name: string;
+}
+
+export interface UnitModelUsageResponse {
+  since: string;
+  until: string;
+  units: UnitModelUsage[];
+}

@@ -97,7 +97,9 @@ docs/operations/who-gets-in.md=2044 share=35 # +92, measured: the Admin runs sub
 # docs/operations/admin-only-writes.md=3933 adds 59 over 3874, measured (rc.8 workloads): the /workload-bindings row.
 # docs/operations/admin-only-writes.md 3940 = ours 3933 + theirs 3923 - base 3916 at the 0.10 W7 merge of the 0.10 W7 merge of lane/016-runner-trust into the rc.16 w3 batch D train.
 # docs/operations/admin-only-writes.md 3946 adds 2 over 3944, measured: the component unit pin route beside the workspace one.
-docs/operations/admin-only-writes.md=3946 share=35 # 3933 measured (+17, platform envelopes: the envelope routes row); earlier: +6 (rc.14, measured 3916: the three audit receipt routes in the security tier row); release tags and the documented-gaps history cut (-90)
+# docs/operations/admin-only-writes.md 3935 measured (+2, the unit-admin routes row names the model-usage read); earlier: 3933 measured (+17, platform envelopes: the envelope routes row); earlier: +6 (rc.14, measured 3916: the three audit receipt routes in the security tier row); release tags and the documented-gaps history cut (-90)
+# docs/operations/admin-only-writes.md 3948 measured with both sides merged: the component unit pin route (3946) and the unit-admin routes row naming the model-usage read (+2).
+docs/operations/admin-only-writes.md=3948 share=35 # 3933 measured (+17, platform envelopes: the envelope routes row); earlier: +6 (rc.14, measured 3916: the three audit receipt routes in the security tier row); release tags and the documented-gaps history cut (-90)
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
 # docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
 # docs/operations/admin-only-writes.md 3760 adds 29 over 3731, measured (0.10 unit admins): the unit-admin tier row, and the promotion named in the security row.

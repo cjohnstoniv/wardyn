@@ -1097,6 +1097,11 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - The actions withheld whole, but for `site_config.write`, serve an allow-list, so a field added later is withheld until listed.
 - `TestAuditHostDetailCensus` ([`internal/api/audit_host_census_test.go`](../internal/api/audit_host_census_test.go)) fails on a host-shaped field (by name or name part, a spec or before/after image) that no projection withholds and no review keeps with a reason.
 
+## Governance rows for a unit admin
+
+- `GET /audit` also serves a unit admin the unit, membership, unit-admin, deciders, envelope, elevation and image-request rows that name one of their units; the export and `governance.change.*` rows are not served ([unit admins](operations/unit-admins.md#the-unit-view-of-audit-rows)).
+- Data keys served: `unit_id`, `from_unit_id`, `parent_id`, `units`, `subject_type`, `subject`, `priority`, `home`, `unit_scope`, `changed`, `added`, `removed`, `duration`, `expires_at`, `expired_at`, `change_id`, `withdrawn`, `image` and `grant_id`. The view is `Server.unitAuditRows` in [`internal/api/audit_unit_governance_view.go`](../internal/api/audit_unit_governance_view.go).
+
 ## Notes on completeness
 
 - `Data` field lists were read from the `mustJSON(map[string]any{...})` or `Data:` literal at the cited call site; a field marked here can still be `omitempty`'d away on a given event (e.g. `error` only appears on a `failure` outcome).

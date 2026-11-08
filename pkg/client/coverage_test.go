@@ -133,7 +133,7 @@ func routeFamilies() map[string][]string {
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",
 			"MoveGovernanceMembership", "PromoteGovernanceMembership", "GrantUnitAdmin", "RevokeUnitAdmin", "PutUnitDeciders", "CheckGovernance", "GovernanceDryRun", "SetEnvelope", "ClearEnvelope",
-			"GetGovernanceUnder", "PlanGovernanceUnder", "ApplyGovernanceResultUnder"},
+			"GetGovernanceUnder", "PlanGovernanceUnder", "ApplyGovernanceResultUnder", "UnitModelUsage"},
 		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange", "NoteGovernanceChange"},
 		"gov.requests":    {"ListGovernanceRequests", "RequestElevation", "RequestImage", "ApproveGovernanceRequest", "RejectGovernanceRequest"},
 		"setup":           {"SetupStatus"},

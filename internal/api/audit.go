@@ -145,7 +145,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	served := s.auditRowsFor(r, scope)
 	if unit != nil {
-		served = s.unitAuditRows(r)
+		served = s.unitAuditRows(r, unit)
 	}
 	// The historical caps differ by shape: a run's whole trail is worth more
 	// rows than the org-wide feed's first screen.

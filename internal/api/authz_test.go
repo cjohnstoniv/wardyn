@@ -612,6 +612,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/units/{id}/admins":           {class: classUnit},
 	"DELETE /api/v1/governance/units/{id}/admins/{admin}": {class: classUnit},
 	"PUT /api/v1/governance/units/{id}/deciders":          {class: classUnit},
+	"GET /api/v1/governance/units/{id}/model-usage":       {class: classUnit},
 	"POST /api/v1/governance/memberships":                 {class: classUnit},
 	"DELETE /api/v1/governance/memberships/{id}":          {class: classUnit},
 	"PUT /api/v1/governance/memberships/{id}":             {class: classUnit},
@@ -1893,8 +1894,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	})
 
 	// The unit-admin tier admits a security admin on every route (unitScope passes a security caller)
-	// and refuses a member at the door. 17 routes: GET /governance, the three unit writes, the two
-	// grant routes and the deciders write, the three membership writes, check, the dry run and the five change routes.
+	// and refuses a member at the door. 18 routes: GET /governance, the three unit writes, the two
+	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the five change routes.
 	var unit int
 	for key, rc := range routeMatrix {
 		if rc.class != classUnit {
@@ -1913,8 +1914,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 17 {
-		t.Errorf("probed %d classUnit routes, want 17", unit)
+	if unit != 18 {
+		t.Errorf("probed %d classUnit routes, want 18", unit)
 	}
 
 	var sec, super int

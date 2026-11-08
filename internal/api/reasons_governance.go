@@ -39,6 +39,9 @@ const (
 	// (run_deny_lists.go); a hard wall, operators included.
 	reasonComponentDenied     = "component_denied"
 	reasonModelProviderDenied = "model_provider_denied"
+	// reasonModelUsageWindowInvalid: a unit usage read whose since or until does not parse, whose window is not
+	// forward, or that spans more than 92 days (governance_unit_usage.go).
+	reasonModelUsageWindowInvalid = "model_usage_window_invalid"
 	// The source-control capability cap (vcs_capability_cap.go), set by the boundary in hard_limits or a
 	// restriction: reasonADOCapabilitiesCapped refuses a dispatch whose cap leaves the run's Azure DevOps
 	// lane nothing, or a policy list past it; reasonGitHubCapabilitiesCapped refuses a launch whose cap
