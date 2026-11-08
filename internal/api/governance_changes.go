@@ -343,7 +343,23 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		decision.To, decision.Reason = types.GovernanceChangeRejected, reason
 	}
 	var applied govApplied
-	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, decision, func(q store.Querier, ch types.GovernanceChange) error {
+	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, decision, s.decideInTx(ctx, r, kind, approve, bypass, withdraw, principal, email, &applied))
+	if err != nil {
+		s.answerFailedDecision(w, r, head, approve, bypass, actorType, principal, err)
+		return
+	}
+
+	s.auditDecision(r, out, applied, approve, bypass, actorType, principal, email, reason)
+	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
+}
+
+// decideInTx is the decision transaction's body: a proposer's withdraw re-reads their token and
+// re-matches the proposer on the locked row and applies nothing; an approver decision re-checks the
+// approver (and the distinct-human rule on approve) unless the admin token bypasses, then an approval
+// applies the held write into *applied.
+func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, approve, bypass, withdraw bool,
+	principal, email string, applied *govApplied) store.GovernanceDecideFunc {
+	return func(q store.Querier, ch types.GovernanceChange) error {
 		if withdraw {
 			if _, err := s.recheckLiveToken(ctx, q); err != nil {
 				return err
@@ -370,14 +386,17 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 			return store.ErrGovernanceChangeStale
 		}
 		var err error
-		applied, err = kind.apply(s, r, q, ch)
+		*applied, err = kind.apply(s, r, q, ch)
 		return err
-	})
-	if err != nil {
-		s.answerFailedDecision(w, r, head, approve, bypass, actorType, principal, err)
-		return
 	}
+}
 
+// auditDecision records a committed decision: an approval writes the target's own row, as a direct
+// write would have, plus governance.change.approve (and the bypass row when the admin token spent
+// one); a reject writes governance.change.reject, marked withdrawn when the proposer made it.
+func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, applied govApplied, approve, bypass bool,
+	actorType types.ActorType, principal, email, reason string) {
+	ctx := r.Context()
 	data := map[string]any{"target_kind": out.TargetKind, "target_key": out.TargetKey, "proposed_by": out.ProposedBy}
 	if approve {
 		// The target's own row, as a direct write would have written it, with the actor the approver
@@ -410,7 +429,6 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.reject", out.ID.String(), "success", mustJSON(data)))
 	}
-	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
 }
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit
