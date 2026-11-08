@@ -1019,6 +1019,8 @@ start.
 | `governance_change_stale` | `POST /governance/changes/{id}/approve` (409): the target (or, for an assignment, the profile it points at) or the deployment default changed since the change was proposed, so approving would apply something other than what the reviewer saw. Nothing was applied and the change is now `stale`; propose it again. |
 | `governance_change_not_pending` | `POST /governance/changes/{id}/approve` or `/reject` (409): the change was already applied, rejected, expired or marked stale. A change past its expiry is moved to `expired` by the request that finds it. |
 | `governance_change_not_found` | `GET /governance/changes/{id}` and the approve and reject routes (404): no such change, or one of a kind the caller may not approve. |
+| `governance_change_note_proposer_only` | `PUT /governance/changes/{id}/note` (403): the caller did not propose the change. Only its proposer writes the note. |
+| `governance_change_note_invalid` | `PUT /governance/changes/{id}/note` (400): the reason is over 500 characters or holds a control character, or the ticket is over 128 characters or is not one line. |
 | `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
 | `boundary_invalid` | `PUT /governance/boundary` and `POST /governance/dry-run` (400): the `PUT` names no `mode` or an unknown one, or the document sets `allow_all_egress` beside `allowed_domains`, a `max_end_ahead_sec` below 1, a bad `contact`, or a value a run policy would refuse; `501` on a store that keeps no boundary. |
 | `boundary_stale` | `PUT /governance/boundary` (412): `If-Match` names a boundary that has since changed. |

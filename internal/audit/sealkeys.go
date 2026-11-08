@@ -75,6 +75,8 @@ var sealFields = map[string][]SealField{
 	"approval.decide": {{Path: "reason", Subject: SubjectActor}},
 	// The free text the rejecting admin typed with the decision (gov4).
 	"governance.change.reject": {{Path: "reason", Subject: SubjectActor}},
+	// The free text the proposer typed on a held change.
+	"governance.change.note": {{Path: "reason", Subject: SubjectActor}},
 	// The person whose sessions were revoked: the target column's own name, repeated in data.
 	"session.revoke": {{Path: "sub", Subject: SubjectTarget}},
 	// The person a token mint was asked for, repeated from the target column.

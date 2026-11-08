@@ -623,6 +623,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/governance/changes/{id}":          {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
+	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
 	// User types (migration 0071_user_types): defining a type is the security
 	// tier's duty, like a profile. Who IS a type is the /access routes'
 	// (classAdmin). A member reads their own type from /me, never this list.
@@ -1884,8 +1885,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	})
 
 	// The unit-admin tier admits a security admin on every route (unitScope passes a security caller)
-	// and refuses a member at the door. 16 routes: GET /governance, the three unit writes, the two
-	// grant routes and the deciders write, the three membership writes, check, the dry run and the four change routes.
+	// and refuses a member at the door. 17 routes: GET /governance, the three unit writes, the two
+	// grant routes and the deciders write, the three membership writes, check, the dry run and the five change routes.
 	var unit int
 	for key, rc := range routeMatrix {
 		if rc.class != classUnit {
@@ -1904,8 +1905,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 16 {
-		t.Errorf("probed %d classUnit routes, want 16", unit)
+	if unit != 17 {
+		t.Errorf("probed %d classUnit routes, want 17", unit)
 	}
 
 	var sec, super int

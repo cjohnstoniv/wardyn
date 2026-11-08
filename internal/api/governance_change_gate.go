@@ -310,8 +310,15 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.expire", e.ID.String(), "success",
 			mustJSON(map[string]any{"target_kind": p.kind, "target_key": e.TargetKey})))
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success",
-		mustJSON(map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt})))
+	changed := p.changed
+	if changed == nil {
+		changed = []string{}
+	}
+	proposed := map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt, "changed": changed}
+	if units, _, scoped := unitChangeScope(saved); scoped {
+		proposed["units"] = unitIDStrings(units)
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success", mustJSON(proposed)))
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
 	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": s.changeForRead(r, saved)})
 }

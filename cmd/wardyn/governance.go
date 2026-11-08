@@ -173,6 +173,7 @@ func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
 
 func governanceSetCmd(client clientFn) *cobra.Command {
 	var prune bool
+	var reason, ticket string
 	cmd := &cobra.Command{
 		Use:   "set [file]",
 		Short: "Upsert the governance profiles and assignments in a JSON file (or stdin with '-')",
@@ -191,12 +192,37 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			printGovernancePending(cmd.ErrOrStderr(), res)
+			if noteErr := noteHeldChanges(cmd, client(), res.Pending, reason, ticket); noteErr != nil {
+				return noteErr
+			}
 			return emitJSON(cmd.OutOrStdout(), res.Document)
 		},
 	}
 	cmd.Flags().BoolVar(&prune, "prune", false,
 		"also delete every server-side profile and assignment the file omits (default: leave them alone)")
+	cmd.Flags().StringVar(&reason, "reason", "", "why the change is wanted, written on every change `set` holds (at most 500 characters)")
+	cmd.Flags().StringVar(&ticket, "ticket", "", "a ticket reference, written on every change `set` holds (one line, at most 128 characters)")
 	return cmd
+}
+
+// noteHeldChanges writes the --reason and --ticket of `governance set` on each change the apply held,
+// so the people who decide read why. Nothing is sent when neither flag is set; when the apply held
+// nothing, a line on stderr says the flags went unused.
+func noteHeldChanges(cmd *cobra.Command, c *sdk.Client, held []sdk.GovernanceChange, reason, ticket string) error {
+	if reason == "" && ticket == "" {
+		return nil
+	}
+	if len(held) == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "no change was held for approval, so --reason and --ticket were not sent")
+		return nil
+	}
+	for _, ch := range held {
+		if _, err := c.NoteGovernanceChange(cmd.Context(), ch.ID, reason, ticket); err != nil {
+			return fmt.Errorf("write the note on change %s: %w", ch.ID, err)
+		}
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "note written on %d held change(s)\n", len(held))
+	return nil
 }
 
 // printGovernancePending writes what an apply held for approval to w, nothing

@@ -31,6 +31,7 @@
 | `DELETE /governance/memberships/{id}` | when the person keeps another membership in their units |
 | `POST /governance/check`, `POST /governance/dry-run` | a target in their units; the boundary target stays the security tier's |
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
+| `PUT /governance/changes/{id}/note` | the note on a change they proposed, while it is pending |
 
 - Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
   - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.

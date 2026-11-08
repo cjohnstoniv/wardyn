@@ -40,7 +40,7 @@ var governanceChangeStates = []string{
 	types.GovernanceChangeExpired, types.GovernanceChangeStale,
 }
 
-// mountGovernanceChangeRoutes registers the four /governance/changes routes on the unit-admin tier
+// mountGovernanceChangeRoutes registers the five /governance/changes routes on the unit-admin tier
 // (governance.go): a unit admin lists, reads and decides the changes inside their units, and the
 // per-change approver below decides which those are. The group a mount function receives is decided
 // at the call site, and authz_test.go's chi.Walk matrix is what enforces it.
@@ -49,10 +49,12 @@ func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
 	unit.Get("/governance/changes/{id}", s.handleGetGovernanceChange)
 	unit.Post("/governance/changes/{id}/approve", s.handleApproveGovernanceChange)
 	unit.Post("/governance/changes/{id}/reject", s.handleRejectGovernanceChange)
+	unit.Put("/governance/changes/{id}/note", s.handlePutGovernanceChangeNote)
 }
 
 // handleListGovernanceChanges lists changes newest first. ?state= narrows to one state and defaults to
-// pending, the queue an approver works. A change of a kind the caller may not approve is not listed.
+// pending, the queue an approver works. ?approver=security narrows to the changes only a security admin
+// may decide. A change of a kind the caller may not approve is not listed.
 func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	if state == "" {
@@ -61,6 +63,11 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	if !slices.Contains(governanceChangeStates, state) {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceChangeStateInvalid,
 			"state must be one of "+strings.Join(governanceChangeStates, ", "))
+		return
+	}
+	approver := r.URL.Query().Get("approver")
+	if approver != "" && approver != governanceApproverSecurity {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "approver must be "+governanceApproverSecurity)
 		return
 	}
 	all, err := s.cfg.Store.ListGovernanceChanges(r.Context(), state)
@@ -77,7 +84,7 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	}
 	out := make([]types.GovernanceChange, 0, len(all))
 	for _, ch := range all {
-		if s.canSeeGovernanceChange(r, ch) {
+		if s.canSeeGovernanceChange(r, ch) && (approver == "" || s.securityOnlyChange(r, ch)) {
 			out = append(out, s.changeForRead(r, ch))
 		}
 	}

@@ -27,4 +27,8 @@ const (
 	// reasonScheduledRunsDenied: start_at on a launch whose governance profile turns off scheduled runs
 	// (run_schedule_door.go); the deployment switch stays reasonScheduledRunsOff.
 	reasonScheduledRunsDenied = "scheduled_runs_denied"
+	// reasonGovernanceChangeNoteProposerOnly: someone other than the proposer wrote a change's note;
+	// reasonGovernanceChangeNoteInvalid: the note's reason or ticket is out of bounds or malformed.
+	reasonGovernanceChangeNoteProposerOnly = "governance_change_note_proposer_only"
+	reasonGovernanceChangeNoteInvalid      = "governance_change_note_invalid"
 )

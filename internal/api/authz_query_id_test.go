@@ -198,6 +198,7 @@ var queryParamNotAnID = map[string]string{
 	"component":                 "GET /components-entra/signin: the organisation's Azure CLI component the sign-in is for, a deployment record and not a principal's entity; a row the caller may not attach answers as the run doors answer it, and the capture is bound to the caller's own session subject and stored in their own namespace",
 	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
 	"cut_in_flight":             "DELETE /admin/delegates/{id} (security tier): true or false, whether the revoke also cuts the gateway access of the runs the portal launched; names no row",
+	"approver":                  "GET /governance/changes: the word security narrows the list the caller may already read to the changes only a security admin may decide; it names no entity",
 	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"event":                     "GET /audit/receipt (security tier): an audit event id to receipt; a session below the security tier is refused before it is read, and an audit row is not one principal's entity",
