@@ -385,13 +385,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
-	declared, found := types.UIApp{}, false
-	for _, a := range apps {
-		if a.Name == app {
-			declared, found = a, true
-			break
-		}
-	}
+	declared, found := uiDeclaredApp(apps, app)
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))
@@ -409,6 +403,16 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		data["inbound"], data["caller"] = true, sess.Caller // the entry that admitted them, as their inbound.allow rows name it
 	}
 	s.startUISession(w, r, run, ta, sess, data, declared.PathOrRoot(), redirectStatus)
+}
+
+// uiDeclaredApp finds the run's declared UI app named app.
+func uiDeclaredApp(apps []types.UIApp, app string) (types.UIApp, bool) {
+	for _, a := range apps {
+		if a.Name == app {
+			return a, true
+		}
+	}
+	return types.UIApp{}, false
 }
 
 // relay

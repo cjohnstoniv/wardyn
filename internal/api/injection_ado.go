@@ -376,22 +376,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(access.AccessToken), []byte(value)) {
 		return true
 	}
-	data := map[string]any{
-		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,
-		"owner": snapshot.OwnerSubject, "provider_row": snapshot.ProviderRowID,
-		"organisation": snapshot.Organisation, "capabilities": responseCaps,
-		// What the AUTHORITY said the token carries — not what was asked
-		// for, and not a claim read out of the token.
-		"granted_scope": strings.Join(access.Scopes, " "),
-	}
-	if capAsk.capability != "" {
-		data["capability"] = capAsk.capability
-		if capAsk.once != nil {
-			// The join "approval X let request Z through": Z's jti is now
-			// the approval row's minted_jti.
-			data["approval_id"] = capAsk.once.ID
-		}
-	}
+	data := adoResolveSuccessAudit(grantID, minted.JTI, snapshot, responseCaps, access, capAsk)
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
 	// ExpiresAt is the token's own expiry or the stored-key lease, whichever is
@@ -410,6 +395,30 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true
+}
+
+// adoResolveSuccessAudit is the data of the secret.read success row
+// resolveADOInjection records for an injected Entra access token.
+func adoResolveSuccessAudit(grantID uuid.UUID, jti string, snapshot adoEntraScopeSnapshot,
+	responseCaps []adoscope.Capability, access ADOEntraAccess, capAsk adoCapabilityGrant,
+) map[string]any {
+	data := map[string]any{
+		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": jti,
+		"owner": snapshot.OwnerSubject, "provider_row": snapshot.ProviderRowID,
+		"organisation": snapshot.Organisation, "capabilities": responseCaps,
+		// What the AUTHORITY said the token carries — not what was asked
+		// for, and not a claim read out of the token.
+		"granted_scope": strings.Join(access.Scopes, " "),
+	}
+	if capAsk.capability != "" {
+		data["capability"] = capAsk.capability
+		if capAsk.once != nil {
+			// The join "approval X let request Z through": Z's jti is now
+			// the approval row's minted_jti.
+			data["approval_id"] = capAsk.once.ID
+		}
+	}
+	return data
 }
 
 // adoResolveFailureAnswer maps a redemption failure class onto its answer. Each
