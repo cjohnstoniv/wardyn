@@ -189,7 +189,7 @@ func restrictionEffective(sp types.RestrictionSpec, l types.RestrictionLimits) (
 		Limits: types.GovernanceLimits{LocalSelfDefinedComponents: true,
 			RunLimits: types.RunLimits{AllowNoEnd: true, UserChangesLimits: true}},
 	}
-	out, _, err := composer.ApplyOverlay(top, composer.Overlay{Ceiling: sp.Overlay(), Limits: l.Overlay()})
+	out, _, err := composer.ApplyRestrictionOverlay(top, composer.Overlay{Ceiling: sp.Overlay(), Limits: l.Overlay()})
 	return out, err
 }
 

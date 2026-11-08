@@ -5,6 +5,7 @@ package composer
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -74,6 +75,19 @@ func ApplyOverlay(base Authority, ov Overlay) (Authority, []string, error) {
 		return Authority{}, nil, m.err
 	}
 	return m.out, m.warns, nil
+}
+
+// ApplyRestrictionOverlay is ApplyOverlay for a restriction's overlay. A restriction's allowlist that
+// turns open egress off (types.RestrictionSpec.Overlay) meets a policy that allows all egress as that
+// allowlist, not as nothing, as the boundary's meet and MeetWalls read an allowlist over open egress: the
+// list is added to the policy's own before the meet, so no entry is dropped as uncovered. A unit's
+// overlay keeps ApplyOverlay's rule, where open egress covers no entry.
+func ApplyRestrictionOverlay(base Authority, ov Overlay) (Authority, []string, error) {
+	closes := ov.Ceiling.AllowAllEgress != nil && !*ov.Ceiling.AllowAllEgress
+	if base.Ceiling.AllowAllEgress && closes && ov.Ceiling.AllowedDomains != nil {
+		base.Ceiling.AllowedDomains = slices.Concat(base.Ceiling.AllowedDomains, *ov.Ceiling.AllowedDomains)
+	}
+	return ApplyOverlay(base, ov)
 }
 
 // ValidateOverlay is the write-time reading of the same meet: it refuses an
