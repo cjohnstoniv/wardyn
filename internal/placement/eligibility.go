@@ -65,6 +65,9 @@ type LocalPlan struct {
 	// token is runner_resident only on a person's own runner. "" (unknown)
 	// refuses it.
 	OwnerKind types.RunnerOwnerKind
+	// RequireManagedDevice is the organisation's runners.require_managed_device: a plan judged at a
+	// personal runner is refused (managedDeviceRefusal). Off by default.
+	RequireManagedDevice bool
 }
 
 // Refusal names the actual field that makes local execution ineligible.
@@ -85,6 +88,9 @@ func refuse(reason Reason, field, detail string) *Refusal { return &Refusal{reas
 func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 	if fields := Unclassified(); len(fields) != 0 {
 		return runner.SandboxSpec{}, refuse(ReasonPlacementCredential, fields[0], "unclassified dispatch field")
+	}
+	if r := managedDeviceRefusal(p); r != nil {
+		return runner.SandboxSpec{}, r
 	}
 	if p.TrustedOutput {
 		return runner.SandboxSpec{}, refuse(ReasonPlacementTrustedOutput, "trusted_output", "this operation requires the organisation's substrate")
