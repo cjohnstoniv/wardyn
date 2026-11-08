@@ -102,6 +102,14 @@ describe("EnvelopeChip", () => {
     expect(screen.getByText(ENVELOPE.CHIP_IN("Platform A"))).toBeInTheDocument();
   });
 
+  it("draws nothing for a profile under an unlisted unit when the one served envelope's root is itself listed", () => {
+    // A unit admin over two subtrees: the root A is listed, so every unit under it is listed too, and a walk
+    // that leaves the list was never under A.
+    const E2 = unit("e2", "Sandbox lab 2", "m");
+    const { container } = chip(E2, [ENV_A], [A, E2]);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("draws nothing for such a profile when several envelopes are served, as it cannot say which", () => {
     const { container } = chip(C, [ENV_A, ENV_D], [C]);
     expect(container).toBeEmptyDOMElement();
