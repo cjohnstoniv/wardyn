@@ -48,7 +48,7 @@ Unit admins read the audit rows of runs in their subtrees. It is on at upgrade; 
 
 - `GET /audit` also serves governance rows about their units, through a separate view.
   - The rows are unit, membership, unit-admin, deciders, envelope and request writes that name one of their units. `units` keeps only theirs. Sign-ins, other rows with no run and `governance.change.*` rows are not served.
-  - `actor` is the person for a unit admin acting in their units, a person's own request and the system. It is `security` for a security admin, `group` for a group decider, `unit_admin` for an admin of a unit above them, and empty when the grant was gone at approval.
+  - `actor` is the person for a unit admin acting in their units, a person's own request or withdrawal of it, and the system. It is `security` for a security admin, `group` for a group decider, `unit_admin` for an admin of a unit above them, and empty when the grant was gone at approval.
   - For a held change a peer unit admin approved, `actor` is the approver; the proposer's name is absent. `approver` and `proposed_by` are never served.
 - A row keeps its time, action, actor, outcome and run, and its target on `run.*`, `egress.*` and `approval.*` rows.
 - Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class`, `exit_code` and `decision`. Each is a number, a code or a list of them; a value with a space is left out. Personal walls, restriction names, secret names, error text and a held push's paths are never served.

@@ -17,7 +17,7 @@ import (
 
 // The governance view is how a unit admin is served the governance rows about their units: the unit,
 // membership, unit-admin, deciders, envelope and request rows that carry no run (store.unitGovernanceActions
-// lists them, and only the feed reads them; the export serves run rows only). Like the run view it is an
+// lists them, and only the feed reads them: a unit admin has no export). Like the run view it is an
 // allow list. It also shows less than the row holds: a security admin appears as a kind, never by name, and
 // so does a group decider, because who they are is not a unit admin's to read.
 
@@ -59,6 +59,14 @@ func unitGovernanceRequest(action string) bool {
 	return action == "governance.elevation.request" || action == "governance.image_request.request"
 }
 
+// unitGovernanceWithdrawn is whether the row is a person withdrawing their own request: the writer marks a
+// withdrawal and gives it no unit_scope, so without this it would read as a security admin's.
+func unitGovernanceWithdrawn(data map[string]json.RawMessage) bool {
+	var b bool
+	raw, ok := data["withdrawn"]
+	return ok && json.Unmarshal(raw, &b) == nil && b
+}
+
 // unitGovernanceView is ev as a unit admin whose units are in reads it: its id and envelope, a target and an
 // actor only as the rules below allow, and its allow-listed data. The source address, the forwarding device
 // and the chain hashes are left out, as the run view leaves them.
@@ -72,14 +80,14 @@ func unitGovernanceView(ev types.AuditEvent, in map[uuid.UUID]bool) types.AuditE
 }
 
 // unitGovernanceActor is who the row says acted, for a reader whose units are in:
-//   - the person, for a unit admin acting under a grant in the reader's scope, for a person's own request,
-//     and for the system;
+//   - the person, for a unit admin acting under a grant in the reader's scope, for a person's own request
+//     or their withdrawal of it, and for the system;
 //   - "group" for a decision by a group decider, never the person's name;
 //   - "unit_admin" for an admin of a unit above the reader;
 //   - "security" when the scope is security or the row has none (a security admin's write);
 //   - "" for a scope the row holds empty (a re-read found the grant gone) or in a shape no writer uses.
 func unitGovernanceActor(ev types.AuditEvent, data map[string]json.RawMessage, in map[uuid.UUID]bool) string {
-	if ev.ActorType == types.ActorSystem || unitGovernanceRequest(ev.Action) {
+	if ev.ActorType == types.ActorSystem || unitGovernanceRequest(ev.Action) || unitGovernanceWithdrawn(data) {
 		return ev.Actor
 	}
 	raw, present := data["unit_scope"]

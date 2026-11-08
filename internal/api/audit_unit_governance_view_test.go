@@ -102,6 +102,8 @@ func TestAuditUnitGovernanceActorMasking(t *testing.T) {
 		{"a re-read that found the grant gone", "governance.unit_admin.grant", types.ActorHuman, map[string]any{"unit_scope": ""}, ""},
 		{"an elevation request", "governance.elevation.request", types.ActorHuman, nil, person},
 		{"an image request", "governance.image_request.request", types.ActorHuman, nil, person},
+		{"a person withdraws their elevation request", "governance.elevation.reject", types.ActorHuman, map[string]any{"unit_id": ugIn1.String(), "withdrawn": true}, person},
+		{"a person withdraws their image request", "governance.image_request.reject", types.ActorHuman, map[string]any{"unit_id": ugIn1.String(), "withdrawn": true}, person},
 		{"the system", "governance.elevation.expire", types.ActorSystem, nil, person},
 		{"an envelope write", "governance.envelope.set", types.ActorHuman, map[string]any{"unit_id": ugIn1.String(), "added": []string{"eng"}}, "security"},
 	}
