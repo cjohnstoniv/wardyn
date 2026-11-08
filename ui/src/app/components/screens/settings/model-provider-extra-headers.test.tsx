@@ -8,6 +8,7 @@ import * as React from "react";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { setField } from "../../../../test/set-field";
 import { PROVIDER_EDITOR as E } from "../../../lib/model-providers-copy";
 import type { HeaderDraft } from "./model-provider-draft";
 import { ExtraHeaders } from "./model-provider-extra-headers";
@@ -38,8 +39,8 @@ describe("ExtraHeaders", () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: E.HEADERS_ADD }));
-    await user.type(screen.getByPlaceholderText(E.HEADER_NAME_PLACEHOLDER), "x-team");
-    await user.type(screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER), "blue");
+    setField(screen.getByPlaceholderText(E.HEADER_NAME_PLACEHOLDER), "x-team");
+    setField(screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER), "blue");
     expect(rows()).toEqual([{ name: "x-team", value: "blue" }]);
 
     await user.click(screen.getByRole("button", { name: E.HEADERS_ADD }));
@@ -59,12 +60,11 @@ describe("ExtraHeaders", () => {
     expect(screen.queryByText(E.HEADERS_CAP)).toBeNull();
   });
 
-  it("a row's own value placeholder shows in place of Value, and is never part of what typing changes", async () => {
-    const user = userEvent.setup();
+  it("a row's own value placeholder shows in place of Value, and is never part of what typing changes", () => {
     render(<Harness start={[{ name: "x-portkey-provider", value: "", placeholder: E.PORTKEY_SLUG_PLACEHOLDER }, { name: "x-b", value: "" }]} />);
     expect(screen.getByPlaceholderText("@<slug>")).toHaveValue("");
     expect(screen.getAllByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER)).toHaveLength(1);
-    await user.type(screen.getByPlaceholderText("@<slug>"), "@team");
+    setField(screen.getByPlaceholderText("@<slug>"), "@team");
     expect(rows()[0]).toEqual({ name: "x-portkey-provider", value: "@team", placeholder: E.PORTKEY_SLUG_PLACEHOLDER });
   });
 

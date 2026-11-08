@@ -28,11 +28,16 @@ export function HarnessBlock({
   draft,
   refused,
   onChange,
+  modelPlaceholder,
+  modelFieldHint,
 }: {
   harness: HarnessRow;
   draft: ProviderDraft;
   refused: string | null;
   onChange: (patch: Partial<ProviderDraft["harnesses"][string]>) => void;
+  // A preset's own placeholder and hint for the Model field; each falls back to the usual when absent.
+  modelPlaceholder?: string;
+  modelFieldHint?: string;
 }) {
   const row = draft.harnesses[harness.id];
   const endpoint = isEndpoint(draft.kind);
@@ -113,11 +118,12 @@ export function HarnessBlock({
               </select>
             </Field>
           ) : (
-            <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={modelHint} required={bedrock}>
+            <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={modelFieldHint ?? modelHint} required={bedrock}>
               <Input
                 id={`${base}-model`}
                 required={bedrock}
                 className="font-mono"
+                placeholder={modelPlaceholder}
                 value={row.model}
                 onChange={(e) => onChange({ model: e.target.value })}
               />

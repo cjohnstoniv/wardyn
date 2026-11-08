@@ -61,8 +61,11 @@ import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { ModelChips } from "./model-chips";
 import { LaptopRunnersSwitch } from "./model-provider-laptop";
 import { GatewayInspection } from "./model-provider-gateway-inspection";
+import { ExtraHeaders } from "./model-provider-extra-headers";
+import { GatewayPresets } from "./model-provider-gateway-presets";
 import { HarnessBlock } from "./model-provider-harness";
 import { OidcChoice, OidcFields } from "./model-provider-oidc";
+import { applyPreset, type PresetId } from "./model-provider-presets";
 import {
   EDITOR_KINDS,
   addressChanged,
@@ -446,6 +449,8 @@ function ProviderFields({
   ssoGateway: boolean;
 }) {
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
+  // The gateway preset last pressed: only decides which placeholders and hints show, and is never saved.
+  const [preset, setPreset] = React.useState<PresetId | null>(null);
   // A new address needs its audience entered again (the server refuses a kept one), so an edit that
   // leaves the saved address clears it, and one that returns to it restores it.
   const setBaseUrl = (value: string) => {
@@ -514,6 +519,16 @@ function ProviderFields({
             </Button>
           </div>
         </Field>
+      )}
+
+      {endpoint && !editing && (
+        <GatewayPresets
+          value={preset}
+          onPick={(id) => {
+            setPreset(id);
+            setDraft((d) => d && applyPreset(d, id));
+          }}
+        />
       )}
 
       <Field label={PROVIDER_EDITOR.NAME} htmlFor="mp-name" hint={PROVIDER_EDITOR.NAME_HINT}>
@@ -672,6 +687,11 @@ function ProviderFields({
               <Input id="mp-auth-format" className="font-mono" value={draft.authFormat} onChange={(e) => set({ authFormat: e.target.value })} />
             </Field>
           </div>
+          <ExtraHeaders
+            rows={draft.headers}
+            onChange={(headers) => set({ headers })}
+            valueHint={preset === "portkey_hosted" && draft.headers.some((h) => h.placeholder) ? PROVIDER_EDITOR.PORTKEY_SLUG_HINT : undefined}
+          />
         </>
       ) : (
         routeThrough && (
@@ -716,6 +736,8 @@ function ProviderFields({
             harness={h}
             draft={draft}
             refused={refused}
+            modelPlaceholder={preset === "openrouter" && h.id === "codex-cli" ? PROVIDER_EDITOR.OPENROUTER_MODEL_PLACEHOLDER : undefined}
+            modelFieldHint={preset === "openrouter" && h.id === "codex-cli" ? PROVIDER_EDITOR.OPENROUTER_MODEL_HINT : undefined}
             onChange={(patch) =>
               setDraft((d) => d && { ...d, harnesses: { ...d.harnesses, [h.id]: { ...d.harnesses[h.id], ...patch } } })
             }
