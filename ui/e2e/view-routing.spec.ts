@@ -4,7 +4,7 @@
  */
 
 import type { Page } from "@playwright/test";
-import { test, expect, mockMemberRole } from "./fixtures";
+import { test, expect, mockMemberRole, ADMIN_TOKEN, asRealUnitAdmin, grantUnitAdmin } from "./fixtures";
 import {
   VIEW_ADMIN_TOKEN,
   VIEW_REFUSAL,
@@ -53,6 +53,7 @@ function auditRequests(page: Page): string[] {
 
 test.describe("view routing", () => {
   test("a user who opens an Admin-view page is refused, and nothing behind it is fetched", async ({ page }) => {
+    // The admin token's /me carries unit_admin_of: [], so this is a user with no grant, who is still refused.
     await mockMemberRole(page);
     const audit = auditRequests(page);
     await page.goto("/admin/audit");
@@ -70,6 +71,30 @@ test.describe("view routing", () => {
 
     await page.getByRole("button", { name: VIEW_REFUSAL.CTA }).click();
     await expect(page).toHaveURL(/\/runs$/);
+  });
+
+  test("a unit admin is let into /admin/audit, and only that admin page beside Governance", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const made = await page.request.post("/api/v1/governance/units", {
+      headers: auth,
+      data: { name: "view-routing-unit", ceiling: { allowed_domains: ["api.anthropic.com"] }, limits: {} },
+    });
+    expect(made.status(), await made.text()).toBe(201);
+    const unitId = (await made.json()).unit.id;
+    try {
+      await grantUnitAdmin(page, unitId);
+      await asRealUnitAdmin(page);
+      const audit = auditRequests(page);
+      await page.goto("/admin/audit");
+
+      await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
+      await expect.poll(() => audit.length).toBeGreaterThan(0);
+
+      await page.goto("/admin/runs");
+      await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    } finally {
+      await page.request.delete(`/api/v1/governance/units/${unitId}`, { headers: auth });
+    }
   });
 
   test("an admin in the User view is asked before entering the Admin view, never redirected", async ({ page }) => {
