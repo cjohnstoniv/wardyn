@@ -363,7 +363,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.refuseDataOutReader(w, r, run, "output", s.isSecurityOperator(r.Context())) {
+	if s.refuseDataOutReader(w, r, run, "output", dataOutKeepsOutputMsg, s.isSecurityOperator(r.Context())) {
 		return
 	}
 	limit := s.cfg.RunOutputTailBytes

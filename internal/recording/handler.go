@@ -20,9 +20,30 @@ import (
 // key names runIDPrefix (the run id, up to an optional "~<suffix>" session
 // marker; see CastKey). It is Handler's ONLY authorization check — route auth
 // middleware proves SOME authenticated human/admin, not WHICH run's
-// recordings they may read. False collapses to the SAME 404 an absent
-// recording gets: no existence oracle for "not yours" vs "never recorded".
-type Authorizer func(r *http.Request, runIDPrefix string) bool
+// recordings they may read. False means not served. An authorizer may write its own refusal to w; when it
+// writes nothing, Handler answers the same 404 an absent recording gets: no existence oracle for "not yours"
+// vs "never recorded".
+type Authorizer func(w http.ResponseWriter, r *http.Request, runIDPrefix string) bool
+
+// writeWatch records whether anything was written to the response, so Handler can tell an authorizer that
+// answered from one that said nothing.
+type writeWatch struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *writeWatch) WriteHeader(code int) {
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *writeWatch) Write(p []byte) (int, error) {
+	w.wrote = true
+	return w.ResponseWriter.Write(p)
+}
+
+// Unwrap lets http.NewResponseController reach the underlying writer.
+func (w *writeWatch) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // Handler returns an http.Handler serving GET /{runID} as an asciicast
 // stream (Content-Type: application/x-asciicast); mount it under
@@ -47,8 +68,20 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		key := chi.URLParam(req, "runID")
 		outerID := chi.URLParam(req, "id")
 		prefix, _, _ := strings.Cut(key, castSep)
-		if !servableKey(key) || !canonicalRunID(prefix) || !strings.EqualFold(prefix, outerID) || !authorize(req, prefix) {
+		if !servableKey(key) || !canonicalRunID(prefix) || !strings.EqualFold(prefix, outerID) {
 			http.Error(w, "recording not found", http.StatusNotFound)
+			return
+		}
+		watched := &writeWatch{ResponseWriter: w}
+		allowed := authorize(watched, req, prefix)
+		if !allowed {
+			if !watched.wrote {
+				http.Error(w, "recording not found", http.StatusNotFound)
+			}
+			return
+		}
+		if watched.wrote {
+			slog.ErrorContext(req.Context(), "recording: authorizer wrote and allowed", "run", prefix)
 			return
 		}
 		open := store.OpenCast

@@ -12,7 +12,7 @@ import type { MacOSRunFacts } from "./run-detail/macos-run-facts";
 
 const healthMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => healthMock(...a) } }));
-vi.mock("../../lib/api/runs", () => ({ runs: { attachTicket: vi.fn() } }));
+vi.mock("../../lib/api/runs", () => ({ runs: { getPolicy: () => new Promise(() => {}), attachTicket: vi.fn() } }));
 const signInsGet = vi.fn();
 const signInsPause = vi.fn();
 vi.mock("../../lib/api/desktop-sign-ins", () => ({

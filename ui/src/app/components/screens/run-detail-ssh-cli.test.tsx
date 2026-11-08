@@ -18,7 +18,7 @@ vi.mock("../../lib/api/ssh-keys", () => ({
   sshKeys: { listKeys: () => Promise.resolve([{ fingerprint: "SHA256:x", principal: "alice@example.com", name: "k", public_key: "", created_at: "" }]) },
 }));
 vi.mock("../../lib/api/runs", () => ({
-  runs: { attachTicket: vi.fn() },
+  runs: { getPolicy: () => new Promise(() => {}), attachTicket: vi.fn() },
 }));
 
 import { ConnectSSHCard } from "./run-detail-ssh";

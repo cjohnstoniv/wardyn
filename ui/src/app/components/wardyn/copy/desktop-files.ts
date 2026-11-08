@@ -39,4 +39,21 @@ export const DESKTOP_FILES = {
   notSent: "Not sent",
   downloadFailed: "Download failed",
   emptyFolder: "Nothing in the transfer folder yet.",
+  // Downloads held for a person's yes (desktop.download: review).
+  requestDownload: "Request download",
+  asking: "Asking…",
+  downloadApproved: "Download approved",
+  stateWaiting: "Waiting for approval",
+  stateApproved: "Approved",
+  stateDenied: "Denied",
+  stateExpired: "Expired",
+  askedLine: (at: string, sha: string) => `Asked ${at} · sha256 ${sha.slice(0, 4)}…${sha.slice(-4)}`,
+  approvedLine: (by: string, at: string) => `Approved by ${by} · ${at}`,
+  deniedLine: (by: string, reason: string, at: string) => (reason ? `${by}: “${reason}” · ${at}` : `${by} · ${at}`),
+  expiredLine: (at: string) => `Nobody decided it in time · ${at}`,
+  reviewFooter:
+    "Downloads from this run wait for a person's yes, and each yes releases the file once. Every download is logged by size and hash.",
+  notAsked: "Not asked",
+  requestsUnreadable: "Couldn't check this run's download requests.",
+  retry: "Try again",
 } as const;

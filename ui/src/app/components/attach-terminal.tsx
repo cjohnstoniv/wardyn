@@ -66,6 +66,7 @@ import { RUN_COCKPIT, TERMINAL, TERMINAL_COPY } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { entryErrorMessage, mayEnterRunOrUnknown, RUN_OWNER_ONLY } from "../lib/run-entry";
 import { OPERATOR_ONLY_REASON } from "./wardyn/copy";
+import { DATA_OUT_RUN } from "./wardyn/copy/data-out-run";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
 import { useAttachSession, realFit, MAX_RECONNECT_ATTEMPTS, type ConnState } from "./use-attach-session";
 import { useSignedOut } from "../lib/use-signed-out";
@@ -143,6 +144,8 @@ export interface AttachTerminalProps {
   /** The run's own policy (GET /runs/{id}), for the Request access remedy
    *  beside a refusal. Never an error envelope. */
   policy?: PolicyRef;
+  /** The run's data_out rule keeps its content in: no copy offer, the terminal's own copy is swallowed, and one line says so. */
+  keepsIn?: boolean;
 }
 
 export interface AttachTerminalHandle {
@@ -151,7 +154,7 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, barAction, createdBy, operatorOwned, policy },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, barAction, createdBy, operatorOwned, policy, keepsIn },
   ref,
 ) {
   // Attach is owner-or-admin, not operator-only: the WS's cookie lane is
@@ -211,6 +214,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const offerCopyRef = React.useRef<(() => void) | null>(null);
   const selectHint =TERMINAL_COPY.SELECT_HINT(TERMINAL_COPY.NATIVE_CHORD(isMacPlatform()));
   const copyGateRef = React.useRef<CopyGate | null>(null);
+  const keepsInRef = React.useRef(!!keepsIn);
+  keepsInRef.current = !!keepsIn;
   // A clicked terminal link awaiting the confirm dialog.
   const [linkTarget, setLinkTarget] = React.useState<URL | null>(null);
   // Renderer: the per-browser choice, the live control, and what is actually drawing.
@@ -373,6 +378,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    keepsInRef,
     offerCopyRef,
     setLinkTarget,
     rendererRef,
@@ -555,6 +561,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           </button>
         </div>
       </div>
+
+      {keepsIn && (
+        <p data-testid="terminal-keeps-in" className="border-b border-border bg-muted/40 px-3 py-1.5 text-meta text-muted-foreground">
+          {DATA_OUT_RUN.TERMINAL}
+        </p>
+      )}
 
       {/* error state (before xterm renders) */}
       {connState === "error" && (

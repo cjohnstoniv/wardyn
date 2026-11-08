@@ -22,6 +22,7 @@ import (
 
 const (
 	dataOutKeepsOutputMsg = "This run's data_out rule keeps its content in: only a security admin can read its output."
+	dataOutRecordingMsg   = "This run's data_out rule keeps its content in: only a super admin can replay its recording."
 	dataOutAppsMsg        = "This run's data_out rule keeps content in, so its web apps are off; its desktop still opens."
 	dataOutUnreadableMsg  = "This run's data_out rule could not be read. Try again."
 	dataOutFolderMsg      = "This run's data_out rule keeps content in, so its computer folder cannot come back."
@@ -81,8 +82,9 @@ func refuseDataOutUnreadable(ctx context.Context, w http.ResponseWriter, runID u
 }
 
 // refuseDataOutReader keeps a run's content from a reader who is not a security admin when its rule is review
-// or blocked. path names the door in the audit row. It answers and returns true on a refusal.
-func (s *Server) refuseDataOutReader(w http.ResponseWriter, r *http.Request, run types.AgentRun, path string, security bool) bool {
+// or blocked. path names the door in the audit row and msg is the sentence a held rule answers with. It answers
+// and returns true on a refusal.
+func (s *Server) refuseDataOutReader(w http.ResponseWriter, r *http.Request, run types.AgentRun, path, msg string, security bool) bool {
 	if security {
 		return false
 	}
@@ -96,7 +98,7 @@ func (s *Server) refuseDataOutReader(w http.ResponseWriter, r *http.Request, run
 	}
 	at, actor := actorFromRequest(r)
 	s.auditDataOutDenied(r.Context(), run.ID, at, actor, path, rule)
-	writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutKeepsOutputMsg)
+	writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, msg)
 	return true
 }
 

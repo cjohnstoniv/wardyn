@@ -154,31 +154,84 @@ func TestDataOutRunOutputSecurityOnly(t *testing.T) {
 	}
 }
 
-// TestDataOutRecordingOwnerRefused: the owner's replay is a 404 with the audit row; a super admin's replay is
-// served and audited as recording.read.
-func TestDataOutRecordingOwnerRefused(t *testing.T) {
+// dataOutRecording is a stopped run owned by owner, with a stored cast and an envelope store that carries
+// rule (or fails to read with readErr), and the path of its replay.
+func dataOutRecording(t *testing.T, owner string, rule types.TransferRule, readErr error) (*Server, uuid.UUID, string) {
+	t.Helper()
 	srv, ast, _, rs := newAuthzMatrixServer(t)
-	srv.cfg.Store = &envelopeStore{Store: srv.cfg.Store, spec: types.RunPolicySpec{DataOut: types.TransferReview}}
-	rec := srv.cfg.Audit.(*recRecorder)
+	srv.cfg.Store = &envelopeStore{Store: srv.cfg.Store, spec: types.RunPolicySpec{DataOut: rule}, readErr: readErr}
 	id := uuid.New()
 	ast.mu.Lock()
-	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: "sub-member", State: types.RunStopped, Agent: "claude-code"}
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunStopped, Agent: "claude-code"}
 	ast.mu.Unlock()
 	if err := rs.SaveCast(context.Background(), id.String(), strings.NewReader(`{"version":2}`+"\n")); err != nil {
 		t.Fatal(err)
 	}
-	path := "/api/v1/runs/" + id.String() + "/recording/" + id.String()
-	if w := doSSO(t, srv, http.MethodGet, path, outputOwnerCookie(t), ""); w.Code != http.StatusNotFound {
-		t.Fatalf("owner replay under review = %d %s, want 404", w.Code, w.Body.String())
+	return srv, id, "/api/v1/runs/" + id.String() + "/recording/" + id.String()
+}
+
+func dataOutRefusal(t *testing.T, w *httptest.ResponseRecorder) errorBody {
+	t.Helper()
+	var refusal errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("decode %d body %q: %v", w.Code, w.Body, err)
 	}
-	if ev := findAudit(rec.snapshot(), id, "run.data_out.deny", "denied"); ev == nil || !strings.Contains(string(ev.Data), `"path":"recording"`) {
-		t.Errorf("no run.data_out.deny row for the recording: %+v", ev)
+	return refusal
+}
+
+// TestDataOutRecordingOwnerRefused: the owner's replay is a 403 data_out_blocked with the recording's sentence
+// and the audit row; a super admin's replay is served and audited as recording.read.
+func TestDataOutRecordingOwnerRefused(t *testing.T) {
+	for _, rule := range []types.TransferRule{types.TransferReview, types.TransferBlocked} {
+		srv, id, path := dataOutRecording(t, "sub-member", rule, nil)
+		rec := srv.cfg.Audit.(*recRecorder)
+		w := doSSO(t, srv, http.MethodGet, path, outputOwnerCookie(t), "")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("%s: owner replay = %d %s, want 403", rule, w.Code, w.Body.String())
+		}
+		if refusal := dataOutRefusal(t, w); refusal.Reason != reasonDataOutBlocked || refusal.Error != dataOutRecordingMsg {
+			t.Errorf("%s: owner replay = %q %q, want %s and %q", rule, refusal.Reason, refusal.Error, reasonDataOutBlocked, dataOutRecordingMsg)
+		}
+		if ev := findAudit(rec.snapshot(), id, "run.data_out.deny", "denied"); ev == nil || !strings.Contains(string(ev.Data), `"path":"recording"`) {
+			t.Errorf("%s: no run.data_out.deny row for the recording: %+v", rule, ev)
+		}
+		if w := doSSO(t, srv, http.MethodGet, path, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), ""); w.Code != http.StatusOK {
+			t.Fatalf("%s: super admin replay = %d %s, want 200", rule, w.Code, w.Body.String())
+		}
+		if ev := findAudit(rec.snapshot(), id, auditRecordingRead, "success"); ev == nil {
+			t.Errorf("%s: the operator's replay was not audited as recording.read", rule)
+		}
 	}
-	if w := doSSO(t, srv, http.MethodGet, path, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), ""); w.Code != http.StatusOK {
-		t.Fatalf("super admin replay under review = %d %s, want 200", w.Code, w.Body.String())
+}
+
+// TestDataOutRecordingUnreadable: a rule that cannot be read refuses the owner's replay with 503.
+func TestDataOutRecordingUnreadable(t *testing.T) {
+	srv, _, path := dataOutRecording(t, "sub-member", "", errors.New("audit store unavailable"))
+	w := doSSO(t, srv, http.MethodGet, path, outputOwnerCookie(t), "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("owner replay with an unreadable rule = %d %s, want 503", w.Code, w.Body.String())
 	}
-	if ev := findAudit(rec.snapshot(), id, auditRecordingRead, "success"); ev == nil {
-		t.Error("the operator's replay was not audited as recording.read")
+	if refusal := dataOutRefusal(t, w); refusal.Reason != reasonDataOutUnreadable || refusal.Error != dataOutUnreadableMsg {
+		t.Errorf("owner replay = %q %q, want %s and %q", refusal.Reason, refusal.Error, reasonDataOutUnreadable, dataOutUnreadableMsg)
+	}
+}
+
+// TestDataOutRecordingForeignStill404: another member's run answers the plain 404 under every rule, with no
+// reason and no data_out audit row, so the refusal tells nobody the run exists.
+func TestDataOutRecordingForeignStill404(t *testing.T) {
+	for _, rule := range []types.TransferRule{"", types.TransferReview, types.TransferBlocked} {
+		srv, id, path := dataOutRecording(t, "sub-other", rule, nil)
+		rec := srv.cfg.Audit.(*recRecorder)
+		w := doSSO(t, srv, http.MethodGet, path, outputOwnerCookie(t), "")
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%q: foreign replay = %d %s, want 404", rule, w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "data_out") {
+			t.Errorf("%q: foreign replay body %q names data_out", rule, w.Body.String())
+		}
+		if ev := findAudit(rec.snapshot(), id, "run.data_out.deny", "denied"); ev != nil {
+			t.Errorf("%q: a foreign replay wrote a data_out row: %+v", rule, ev)
+		}
 	}
 }
 
