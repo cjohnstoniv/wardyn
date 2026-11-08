@@ -177,34 +177,55 @@ func (f *fake) serveResponses(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		model = "fake-model"
 	}
+	// The object carries the fields a client library reads, so a gateway that parses it into a typed
+	// response has what it expects.
 	response := func(status string, usage any) map[string]any {
 		return map[string]any{
-			"id": "resp_gatewayfake", "object": "response", "status": status, "model": model, "usage": usage,
-			"output": []map[string]any{{"type": "message", "id": "msg_1", "role": "assistant", "status": status,
-				"content": []map[string]string{{"type": "output_text", "text": replyText}}}},
+			"id": "resp_gatewayfake", "object": "response", "created_at": 1700000000, "status": status, "model": model,
+			"error": nil, "incomplete_details": nil, "instructions": nil, "metadata": map[string]string{},
+			"parallel_tool_calls": true, "temperature": 1.0, "top_p": 1.0, "tool_choice": "auto", "tools": []any{},
+			"text": map[string]any{"format": map[string]string{"type": "text"}}, "truncation": "disabled", "store": false,
+			"output": []any{messageItem(status)}, "usage": usage,
 		}
 	}
-	usage := map[string]any{"input_tokens": 3, "output_tokens": 5, "total_tokens": 8}
+	usage := map[string]any{
+		"input_tokens": 3, "input_tokens_details": map[string]int{"cached_tokens": 0},
+		"output_tokens": 5, "output_tokens_details": map[string]int{"reasoning_tokens": 0}, "total_tokens": 8,
+	}
 	if !req.Stream {
 		writeJSON(w, http.StatusOK, response("completed", usage))
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	part := map[string]any{"type": "output_text", "text": replyText, "annotations": []any{}}
 	events := []struct {
 		name string
 		data map[string]any
 	}{
 		{"response.created", map[string]any{"type": "response.created", "response": response("in_progress", nil)}},
+		{"response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": 0, "item": messageItem("in_progress")}},
 		{"response.output_text.delta", map[string]any{"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": replyText}},
+		{"response.output_text.done", map[string]any{"type": "response.output_text.done", "item_id": "msg_1", "output_index": 0, "content_index": 0, "text": replyText}},
+		{"response.content_part.done", map[string]any{"type": "response.content_part.done", "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": part}},
+		{"response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": messageItem("completed")}},
 		{"response.completed", map[string]any{"type": "response.completed", "response": response("completed", usage)}},
 	}
-	for _, e := range events {
+	for i, e := range events {
+		e.data["sequence_number"] = i
 		b, _ := json.Marshal(e.data)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, b)
 		if fl, ok := w.(http.Flusher); ok {
 			fl.Flush()
 		}
+	}
+}
+
+// messageItem is the one assistant message item a Responses answer holds.
+func messageItem(status string) map[string]any {
+	return map[string]any{
+		"type": "message", "id": "msg_1", "role": "assistant", "status": status,
+		"content": []any{map[string]any{"type": "output_text", "text": replyText, "annotations": []any{}}},
 	}
 }
 
