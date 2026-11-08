@@ -520,6 +520,9 @@ type ApprovalRequest struct {
 	// unit_admins, group:<name>, then security), projected at response time and never stored. Nil when no rule
 	// governs the row.
 	Deciders []string `json:"deciders,omitempty"`
+	// RequestedBy is the run's creator, projected at response time and never stored, on a PENDING row served to
+	// a decider who is not that creator (GET /approvals?decidable_by=me). Absent on the creator's own row.
+	RequestedBy string `json:"requested_by,omitempty"`
 	// CallText is the exact text of an MCP call row's arguments and extra params (MCPCallText), projected at
 	// response time and never stored. The console and the CLI show and copy it as it is, never through a JSON
 	// number. Nil on every other row.

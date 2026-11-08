@@ -340,3 +340,15 @@ func TestDelegatedTokenCannotDecideOrListDecidable(t *testing.T) {
 		}
 	}
 }
+
+// TestDecidableByMeSkipsRequestsAnsweredByTakingOver: a human_takeover request is answered by taking over or
+// declining, never decided (approve and deny answer 409), so it is not in the list even for a security admin.
+func TestDecidableByMeSkipsRequestsAnsweredByTakingOver(t *testing.T) {
+	f := newDCFix(t)
+	ap := types.ApprovalRequest{ID: uuid.New(), RunID: f.run.ID, Kind: types.ApprovalHumanTakeover, State: types.ApprovalPending,
+		RequestedScope: json.RawMessage(`{}`), RequestedAt: time.Now().UTC()}
+	f.aps.mu.Lock()
+	f.aps.byID[ap.ID] = ap
+	f.aps.mu.Unlock()
+	wantIDs(t, "security admin", f.inboxIDs(dcSecurity(t, dcSec)), []string{})
+}

@@ -18,7 +18,7 @@
 //     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
 //     OpenMacWindow, GetMacWindow, GetRunMachine
-//   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
+//   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, ListApprovalsDecidable, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,

@@ -78,6 +78,9 @@ const maxDecisionUntil = 30 * 24 * time.Hour
 // runs they created (store.ApprovalsByRunCreatorPager) — fail CLOSED, never an
 // unscoped fallback, when the backend does not implement it.
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
+	if s.listDecidableByMe(w, r) {
+		return
+	}
 	state := types.ApprovalState(r.URL.Query().Get("state"))
 	switch state {
 	case "", types.ApprovalPending, types.ApprovalApproved, types.ApprovalDenied, types.ApprovalExpired,

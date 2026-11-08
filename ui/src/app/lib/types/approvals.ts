@@ -96,6 +96,9 @@ export interface ApprovalRequest {
   // deciders: who may decide this PENDING row under the unit deciders rule that governs it (owner, unit_admins,
   // group:<name>, then security). Absent when no rule governs the row.
   deciders?: string[];
+  // requested_by: the run's creator, on a PENDING row served to a decider who is not that creator
+  // (GET /approvals?decidable_by=me). Absent on the creator's own row.
+  requested_by?: string;
 }
 
 // canDecideApproval mirrors the ROLE and KIND checks of internal/api/approvals.go's decide(): an
