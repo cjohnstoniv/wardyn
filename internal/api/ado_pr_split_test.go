@@ -212,10 +212,10 @@ func TestApprovalRuleCapabilitiesWithinPRAlias(t *testing.T) {
 
 // The GitHub CLI: a policy naming pr over a row granting pr_write keeps pr_write.
 func TestGitHubCLIPolicyPRAlias(t *testing.T) {
-	f, ref := githubCLIWallsFixtureWith(t, nil, func(p *types.RunPolicySpec) {
+	f, _ := githubCLIWallsFixtureWith(t, nil, func(p *types.RunPolicySpec) {
 		p.GitHubCapabilities = []ghscope.Capability{ghscope.CapPR}
 	})
-	ref = f.org("6f0c1d2e-0000-4000-8000-0000000c05a6", types.ComponentDefinition{CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub,
+	ref := f.org("6f0c1d2e-0000-4000-8000-0000000c05a6", types.ComponentDefinition{CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub,
 		GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapPRWrite}}}})
 	fr := f.srv.cfg.Runner.(*fakeRunner)
 	body := componentBody(ref)
