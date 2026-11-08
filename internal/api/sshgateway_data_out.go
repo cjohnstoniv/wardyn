@@ -22,9 +22,6 @@ import (
 // sync client's RealPath check needs it.
 const sftpServerDeny = "read,readlink"
 
-// syncDownMsg is what the person sees when the gateway ends a sync at the first file-content reply.
-const syncDownMsg = "wardyn: this run's data_out rule keeps content in, so `wardyn sync` only sends files to the run"
-
 // sshDataOut is the run's data_out rule for one SSH connection, read once when it opens. A rule that cannot
 // be read, or a run with no recorded policy, is blocked, and says so once in the log.
 func (s *Server) sshDataOut(ctx context.Context, runID uuid.UUID) types.TransferRule {
@@ -73,7 +70,7 @@ func (s *Server) sshSyncReplyGuard(runID uuid.UUID, principal string, channel ss
 	return &sshsftp.ReplyGuard{R: out, OnData: func() {
 		once.Do(func() {
 			s.auditDataOutDenied(s.cfg.BaseCtx, runID, types.ActorHuman, principal, "sync_down", rule)
-			sendChannelError(channel, syncDownMsg)
+			sendChannelError(channel, "wardyn: this run's data_out rule keeps content in, so `wardyn sync` only sends files to the run")
 		})
 	}}
 }
