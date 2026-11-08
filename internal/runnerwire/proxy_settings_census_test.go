@@ -61,6 +61,9 @@ var proxySettingOfField = map[string]string{
 	// governance profile limits.
 	"ModelLimit":     ProxySettingAllowedModels,
 	"MCPApproveEach": ProxySettingMCPApproveEach,
+	// Dropped, the gateway gets the request without the headers its admin set to route it, and may
+	// route it somewhere the admin did not choose: an older remote executor must refuse the run.
+	"LLMHeaders": ProxySettingLLMHeaders,
 }
 
 // proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.

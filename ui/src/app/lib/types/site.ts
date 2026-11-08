@@ -343,6 +343,10 @@ export interface ModelProvider {
   auth?: ProviderAuth;
   // custom_endpoint only: each person signs in at the endpoint's own authority instead of pasting a token.
   oidc?: ProviderOIDC;
+  // custom_endpoint only: non-secret headers the run proxy sets on every request to the gateway, for one that
+  // routes on a header (Portkey's x-portkey-provider). Absent is none. Changing them removes everyone's stored
+  // credential, as changing base_url does.
+  extra_headers?: ProviderHeader[];
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
   // local_model only: the model allowlist and the caps on each request.
@@ -380,6 +384,12 @@ export interface BedrockSettings {
   sso_start_url?: string;
   sso_account_id?: string;
   sso_role_name?: string;
+}
+
+// Go's types.ProviderHeader (internal/types/model_provider.go).
+export interface ProviderHeader {
+  name: string;
+  value: string;
 }
 
 export interface ProviderHarness {

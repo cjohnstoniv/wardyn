@@ -228,6 +228,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("build injector: %w", err)
 	}
+	inj.setLLMHeaders(cfg.LLMHeaders)
 
 	scanner, deferred, err := buildScanners(ctx, cfg, hooks.maskKey)
 	if err != nil {

@@ -352,7 +352,7 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	cfg.KubeAPI = nil
 	cfg.ResidentMints = nil // the runner answers these; the organisation holds none of their values
 	cfg.MITMHosts, cfg.MITMLLM, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM = slices.Compact(slices.Sorted(slices.Values(hosts))), false, "", ""
-	cfg.DecisionSpoolDir, cfg.LLMUpstreams, cfg.LocalModels = "", nil, nil
+	cfg.DecisionSpoolDir, cfg.LLMUpstreams, cfg.LLMHeaders, cfg.LocalModels = "", nil, nil, nil
 	cfg.GatewayIdentity = nil // a person's runner never carries one; the org side never sends one
 	// The k8s runner's own sidecar settings: the org engine never lapses with a runner's renew,
 	// streams no decision to runnerd, and is not inside the runner's cluster. No writer stores them on

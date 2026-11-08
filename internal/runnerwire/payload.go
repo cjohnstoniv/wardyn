@@ -197,6 +197,9 @@ const (
 	ProxySettingGitPushWithheld = "git_push_withheld"
 	ProxySettingForgeHosts      = "forge_hosts"
 	ProxySettingAllowedModels   = "allowed_models"
+	// ProxySettingLLMHeaders is llm_headers: the headers a provider's gateway is given. Dropped, the gateway
+	// gets the request without them and may route it where its admin did not choose.
+	ProxySettingLLMHeaders = "llm_headers"
 	// ProxySettingAWSSigV4Gateways is aws_sigv4.gateways, a field inside aws_sigv4: a runner that
 	// predates it decodes the grant without it, and its proxy then sends the gateway calls unsigned
 	// for AWS, so such a runner is refused a run that carries one.
@@ -227,6 +230,7 @@ var ProxySettings = []string{
 	ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels,
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
+	ProxySettingLLMHeaders,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -235,7 +239,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
 	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0, pc.ModelLimit != nil,
 		pc.AWSSigV4 != nil && len(pc.AWSSigV4.Gateways) != 0,
-		pc.MCPApproveEach != nil} {
+		pc.MCPApproveEach != nil,
+		len(pc.LLMHeaders) != 0} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

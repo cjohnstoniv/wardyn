@@ -306,6 +306,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		p.stripGatewayHeaders(outReq.Header)
 		p.stripGatewayRoutingHeaders(outReq.Header, host, ownedHeader)
 		applyCredential(outReq.Header, ownedHeader, hdr)
+		p.applyExtraHeaders(outReq.Header, host, ownedHeader)
 		if gatewayRoute != nil && !p.attachGatewayIdentity(w, r, outReq.Header, gatewayRoute, host, port, ruleSource, callID) {
 			return nil, false
 		}
