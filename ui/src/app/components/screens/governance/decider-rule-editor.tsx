@@ -46,8 +46,7 @@ type DurationUnit = keyof typeof MS_PER_UNIT;
 
 type Patch = Partial<Record<keyof DeciderRule, unknown>>;
 
-// What a change to the kinds leaves true: the second person and the owner follow the kinds, and the
-// elevation-only fields go when elevation does.
+// What a change to the kinds leaves true: the second person and the owner follow the kinds.
 function settle(rule: DeciderRule): DeciderRule {
   const next: DeciderRule = { ...rule };
   const second = secondHumanState(next);
@@ -55,12 +54,6 @@ function settle(rule: DeciderRule): DeciderRule {
   else if (second === "forced" || second === "forced_download") next.second_human = true;
   const owner = ownerAllowed(next);
   if (!owner.allowed && owner.reason !== "second") next.who = next.who.filter((w) => w !== "owner");
-  if (!next.kinds.includes("elevation")) {
-    delete next.max_elevation;
-    delete next.eligible_requesters;
-    delete next.renew_after;
-    delete next.ticket_pattern;
-  }
   return next;
 }
 
