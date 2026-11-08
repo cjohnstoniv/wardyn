@@ -29,6 +29,7 @@ import { DENY_LISTS } from "../../wardyn/copy/deny-lists";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
+import { DENY_KEYS, DenyListStrip } from "./deny-list-strip";
 import { ALLOWED_MODELS_KEY, ModelHintText, ModelReadsNote, NarrowEmptyError, ProviderModelStrip } from "./allowed-models";
 import { limitChips, limitsBoundNothing } from "./limit-chips";
 
@@ -170,8 +171,8 @@ export const LIMIT_FIELDS: Field[] = [
   { key: "deny_kept_machines", kind: "true", label: KEEP_POLICY.LABEL, mono: false, hint: KEEP_POLICY.HINT },
   { key: "deny_scheduled_runs", kind: "true", label: SCHEDULE_DOOR.LABEL, mono: false, hint: SCHEDULE_DOOR.HINT },
   ceilingField("deny_placements", "list"),
-  { key: "deny_components", kind: "list", label: DENY_LISTS.COMPONENTS_LABEL, mono: false, hint: DENY_LISTS.COMPONENTS_HINT },
-  { key: "deny_model_providers", kind: "list", label: DENY_LISTS.PROVIDERS_LABEL, mono: false, hint: DENY_LISTS.PROVIDERS_HINT },
+  { key: "deny_components", kind: "list", label: DENY_LISTS.COMPONENTS_LABEL, mono: false, hint: DENY_LISTS.COMPONENTS_HINT_COMPOSED },
+  { key: "deny_model_providers", kind: "list", label: DENY_LISTS.PROVIDERS_LABEL, mono: false, hint: DENY_LISTS.PROVIDERS_HINT_COMPOSED },
   { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
   // The hint under this row is chosen by what the base lists (modelsHint), so it carries none here.
   { key: ALLOWED_MODELS_KEY, kind: "list", label: ALLOWED_MODELS.LABEL, mono: false },
@@ -225,9 +226,11 @@ function shown(kind: Kind, v: unknown): string {
 
 // What a row holds the moment Narrow is switched on: the inherited value for a
 // list, number or barrier (so the admin edits down from it), and the narrowing
-// direction for a boolean. Methods fall back to GET, since an empty list is refused. A models list
+// direction for a boolean. A deny list opens empty: composition unions it with the base's, so the box holds only
+// what this profile adds. Methods fall back to GET, since an empty list is refused. A models list
 // opens empty where the base lists none; the editor never sends that empty list (see profile-editor.tsx).
 function seed(f: Field, inherited: unknown): unknown {
+  if (DENY_KEYS.includes(f.key)) return [];
   switch (f.kind) {
     case "false":
       return false;
@@ -346,6 +349,7 @@ function OverlayValue({
   // Narrow on with nothing listed narrows nothing, and the editor cannot save it.
   const models = field.key === ALLOWED_MODELS_KEY;
   const emptyId = `${id}-empty`;
+  const deny = DENY_KEYS.includes(field.key);
   return (
     <>
       <ListValue
@@ -354,11 +358,14 @@ function OverlayValue({
         value={list}
         disabled={disabled}
         onChange={onChange}
-        placeholder={models ? ALLOWED_MODELS.PLACEHOLDER : undefined}
+        placeholder={models ? ALLOWED_MODELS.PLACEHOLDER : deny ? DENY_LISTS.PLACEHOLDER : undefined}
         invalid={models && list.length === 0}
         describedBy={models && list.length === 0 ? emptyId : undefined}
       />
       {models && list.length === 0 && <NarrowEmptyError id={emptyId} />}
+      {deny && (
+        <DenyListStrip list={field.key === "deny_components" ? "components" : "providers"} listed={list} disabled={disabled} onAdd={(i) => onChange([...list, i])} />
+      )}
       {models && <ProviderModelStrip listed={list} disabled={disabled} onAdd={(m) => onChange([...list, m])} />}
     </>
   );
@@ -461,7 +468,12 @@ export const asOverlay = (b: Bag): CeilingOverlay => b as CeilingOverlay;
 
 // The refusal heading for a server reason, or undefined when the console has
 // none for it. The server's own sentence renders under it, verbatim.
-export function composeRefusalTitle(reason: string): string | undefined {
+// A refused deny list has its own heading: the server's sentence names the list (the composed write's
+// governance_overlay_invalid, or the standalone write's governance_unit_request_invalid).
+export function composeRefusalTitle(reason: string, message = ""): string | undefined {
+  if ((reason === "governance_overlay_invalid" || reason === "governance_unit_request_invalid") && /\bdeny_(components|model_providers):/.test(message)) {
+    return DENY_LISTS.REFUSED_LIST;
+  }
   switch (reason) {
     case "governance_overlay_invalid":
       return GOV.REFUSED_OVERLAY_INVALID;
