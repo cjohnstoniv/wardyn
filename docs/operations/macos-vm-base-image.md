@@ -125,7 +125,7 @@
   - `status` also says how the base's guest agent is signed: on this Mac, or ad hoc, which loses Full Disk Access at each tools update. A signing certificate the base does not trust yet is named, with the instruction to run `edit-base`.
   - After a tools update, `status` can say Full Disk Access is unknown. Recheck it in `edit-base`.
   - `doctor` shows a `file-vault` line when the base last read FileVault as on. It is never a failure.
-  - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signing_cert` (`trusted` or `not_trusted`) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
+  - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signing_cert` (`trusted` or `not_trusted`), `agent_signer` (`wardyn`, `codesign` or `ad_hoc`), `agent_sign_errors` (path-free) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
 
 ## The prep proxy
 

@@ -220,6 +220,7 @@ type ToolsResult struct {
 	AgentSigningCertSHA256           string
 	// BaseSettingsSkipped are the base settings that did not apply, with why.
 	BaseSettingsSkipped []basesettings.Skipped
+	AgentSignRecord
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -425,7 +426,7 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
-		path, signed := agentToPush(ctx, o)
+		path, signed, signRec := agentToPush(ctx, o)
 		if signed != nil {
 			defer signed.Done()
 		}
@@ -437,7 +438,7 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		if err := pushAgent(ctx, g, path, guestagent.MacAgentRunPath); err != nil {
 			return res, fmt.Errorf("macvm: installing the run launcher: %w", err)
 		}
-		res.AgentRun, res.AgentSignature = true, AgentSignedAdHoc
+		res.AgentRun, res.AgentSignature, res.AgentSignRecord = true, AgentSignedAdHoc, signRec
 		if signed != nil {
 			sum := sha256.Sum256(signed.Cert)
 			res.AgentSignature, res.AgentSigningCertSHA256 = AgentSignedThisMac, hex.EncodeToString(sum[:])
@@ -755,6 +756,7 @@ type ToolsRecord struct {
 	AgentSigningCertSHA256 string `json:"agent_signing_cert_sha256,omitempty"`
 	// BaseSettingsSkipped are the base settings the last prepare or tools update could not apply.
 	BaseSettingsSkipped []basesettings.Skipped `json:"base_settings_skipped,omitempty"`
+	AgentSignRecord
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -770,7 +772,7 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
 		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature, AgentSigningCert: r.AgentSigningCert,
-		AgentSigningCertSHA256: r.AgentSigningCertSHA256}
+		AgentSigningCertSHA256: r.AgentSigningCertSHA256, AgentSignRecord: r.AgentSignRecord}
 	rec.BaseSettingsSkipped = r.BaseSettingsSkipped
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {

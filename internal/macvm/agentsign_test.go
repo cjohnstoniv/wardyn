@@ -159,9 +159,10 @@ func match(argv, want []string) bool {
 	return true
 }
 
-// The host signer runs exactly the openssl, security and codesign commands the identity needs, in a
-// temporary keychain it deletes, signs with the certificate's SHA-1 and the agent's identifier, and reads
-// the designated requirement back. A requirement that is not the exact one makes the tools update push
+// The codesign fallback runs exactly the openssl, security and codesign commands the identity needs, in a
+// temporary keychain it puts on the login's search list for the call and deletes, signs with the certificate's
+// SHA-1, the agent's identifier and the designated requirement, and the copy is verified and its designated
+// requirement read back. (A build that is not Mach-O is refused by Wardyn's own signer first.) A requirement that is not the exact one makes the tools update push
 // the ad hoc build and log a WARN; the record says ad_hoc.
 func TestAgentSignArgvAndRequirementCheck(t *testing.T) {
 	signDir := filepath.Join(t.TempDir(), "agent-signing")
@@ -197,12 +198,16 @@ func TestAgentSignArgvAndRequirementCheck(t *testing.T) {
 	want := [][]string{
 		{"/usr/bin/openssl", "pkcs12", "-export", "-inkey", filepath.Join(signDir, "key.pem"), "-in", filepath.Join(signDir, "cert.pem"), "-out", "*", "-passout", "*"},
 		{"/usr/bin/security", "create-keychain", "-p", "*", "*"},
+		{"/usr/bin/security", "list-keychains", "-d", "user"},
+		{"/usr/bin/security", "list-keychains", "-d", "user", "-s", "*"},
 		{"/usr/bin/security", "unlock-keychain", "-p", "*", "*"},
 		{"/usr/bin/security", "import", "*", "-k", "*", "-P", "*", "-T", "/usr/bin/codesign"},
 		{"/usr/bin/security", "set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", "*", "*"},
-		{"/usr/bin/codesign", "--force", "--keychain", "*", "--identifier", "com.wardyn.guest-agent", "--sign", sha, sa.Path},
-		{"/usr/bin/codesign", "-d", "-r-", sa.Path},
+		{"/usr/bin/codesign", "--force", "--keychain", "*", "--identifier", "com.wardyn.guest-agent", "--sign", sha, "-r=designated => " + macvm.AgentRequirement(cert), sa.Path},
+		{"/usr/bin/security", "list-keychains", "-d", "user", "-s"},
 		{"/usr/bin/security", "delete-keychain", "*"},
+		{"/usr/bin/codesign", "--verify", "--strict", sa.Path},
+		{"/usr/bin/codesign", "-d", "-r-", sa.Path},
 	}
 	if len(fx.runs) != len(want) {
 		t.Fatalf("ran %d commands, want %d:\n%q", len(fx.runs), len(want), fx.runs)
@@ -213,13 +218,13 @@ func TestAgentSignArgvAndRequirementCheck(t *testing.T) {
 		}
 	}
 	kc := fx.runs[1][4]
-	if fx.runs[3][4] != kc || fx.runs[4][7] != kc || fx.runs[5][3] != kc || fx.runs[7][2] != kc {
+	if fx.runs[3][5] != kc || fx.runs[5][4] != kc || fx.runs[6][7] != kc || fx.runs[7][3] != kc || fx.runs[9][2] != kc {
 		t.Fatalf("the commands name different keychains: %q", fx.runs)
 	}
-	if fx.runs[1][3] != fx.runs[2][3] || fx.runs[2][3] != fx.runs[4][6] || len(fx.runs[1][3]) < 32 {
+	if fx.runs[1][3] != fx.runs[4][3] || fx.runs[4][3] != fx.runs[6][6] || len(fx.runs[1][3]) < 32 {
 		t.Fatalf("keychain password not one random value of 32 or more: %q", fx.runs)
 	}
-	if !strings.HasPrefix(fx.runs[0][10], "pass:") || fx.runs[0][10][len("pass:"):] != fx.runs[3][6] || len(fx.runs[3][6]) < 32 {
+	if !strings.HasPrefix(fx.runs[0][10], "pass:") || fx.runs[0][10][len("pass:"):] != fx.runs[5][6] || len(fx.runs[5][6]) < 32 {
 		t.Fatalf("the PKCS#12 password is not one random value of 32 or more: %q", fx.runs)
 	}
 	sa.Done()
@@ -233,7 +238,7 @@ func TestAgentSignArgvAndRequirementCheck(t *testing.T) {
 		if _, err := (&macvm.HostAgentSigner{Dir: signDir, Exec: fx.exec}).SignAgent(context.Background(), bin); err == nil {
 			t.Fatalf("dr %q fail %q signed", fx.dr, fx.fail)
 		}
-		if fx.fail == "" && fx.runs[len(fx.runs)-1][1] != "delete-keychain" {
+		if fx.fail == "" && !slices.ContainsFunc(fx.runs, func(a []string) bool { return a[1] == "delete-keychain" }) {
 			t.Fatalf("the keychain was not deleted: %q", fx.runs)
 		}
 	}
@@ -249,7 +254,7 @@ func TestAgentSignArgvAndRequirementCheck(t *testing.T) {
 	if string(g.files[guestagent.MacAgentBinaryPath]) != "new agent" || string(g.files[guestagent.MacAgentRunPath]) != "new agent" {
 		t.Fatal("a failed signing did not push the ad hoc build")
 	}
-	if res.AgentSignature != macvm.AgentSignedAdHoc || !strings.Contains(logs.String(), "level=WARN") {
+	if res.AgentSignature != macvm.AgentSignedAdHoc || res.AgentSigner != macvm.AgentSignerAdHoc || len(res.AgentSignErrors) != 2 || !strings.Contains(logs.String(), "level=WARN") {
 		t.Fatalf("signature %q, log:\n%s", res.AgentSignature, logs.String())
 	}
 }

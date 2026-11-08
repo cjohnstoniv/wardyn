@@ -468,8 +468,9 @@ func editsCode(root string) bool {
 }
 
 // macOSVMDoctorStages is doctor's macOS VM stages. While macOS waits for setup by hand, not during an edit
-// (editsCode), one names the file that holds the one-time code, never the code. With a base, folder-shares
-// says whether a folder can be shared into a run (roots and their source are the drive roots in effect).
+// (editsCode), one names the file that holds the one-time code, never the code. With a base, guest-agent says
+// how the last tools update signed the guest agent, and folder-shares whether a folder can be shared into a
+// run (roots and their source are the drive roots in effect).
 func macOSVMDoctorStages(roots []string, rootsSource string) []doctor.Stage {
 	root, err := macvm.DefaultRoot()
 	if err != nil {
@@ -496,6 +497,7 @@ func macOSVMDoctorStages(roots []string, rootsSource string) []doctor.Stage {
 	if rec, ok := macvm.ReadEditRecord(base, man); ok && rec.FullDiskAccess == fda {
 		readAt = rec.ReadAt
 	}
+	stages = append(stages, guestAgentStage(tools, guestAgentWarnings(tools)))
 	return append(stages, folderSharesStage(roots, rootsSource, fda, tools.AgentSignature == macvm.AgentSignedAdHoc, readAt, tools.TriedAt))
 }
 

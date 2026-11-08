@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +18,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
 
-// folderSharesFor is doctor's macOS VM stages against fake records in a temporary home: the base's
-// manifest, its tools.json and, when edit is not nil, its edit record.
+// folderSharesFor is doctor's folder-shares stage among macOSVMStagesFor's.
 func folderSharesFor(t *testing.T, roots []string, tools macvm.ToolsRecord, edit *macvm.EditRecord) []doctor.Stage {
+	t.Helper()
+	return slices.DeleteFunc(macOSVMStagesFor(t, roots, tools, edit), func(s doctor.Stage) bool { return s.Name != "folder-shares" })
+}
+
+// macOSVMStagesFor is doctor's macOS VM stages against fake records in a temporary home: the base's
+// manifest, its tools.json and, when edit is not nil, its edit record.
+func macOSVMStagesFor(t *testing.T, roots []string, tools macvm.ToolsRecord, edit *macvm.EditRecord) []doctor.Stage {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	root, err := macvm.DefaultRoot()
