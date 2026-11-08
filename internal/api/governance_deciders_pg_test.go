@@ -460,8 +460,8 @@ func TestDecidersReparentUnderLockRefused(t *testing.T) {
 }
 
 // TestDecidersBoundaryLockOverRulesRefused: a boundary write that newly locks the deciders knob while a
-// unit states rules is a 409 naming the unit, as a unit's own lock is; with the rules cleared it applies,
-// and the held form is refused at approval alike.
+// unit states rules is a 409 naming the unit, as a unit's own lock is; with the rules cleared it applies.
+// The held form is TestDecidersBoundaryLockHeldRefusedAtApproval.
 func TestDecidersBoundaryLockOverRulesRefused(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a1), decidersBody(egressOwnerRule())); w.Code != http.StatusOK {
@@ -480,5 +480,23 @@ func TestDecidersBoundaryLockOverRulesRefused(t *testing.T) {
 	}
 	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a1), decidersBody(egressOwnerRule())); w.Code != http.StatusConflict {
 		t.Errorf("rules under the boundary's lock = %d %s, want 409", w.Code, w.Body)
+	}
+}
+
+// TestDecidersBoundaryLockHeldRefusedAtApproval: with the second-human switch on, a boundary lock held
+// while no unit has rules is refused at approval once a unit has gained rules, and nothing is applied.
+func TestDecidersBoundaryLockHeldRefusedAtApproval(t *testing.T) {
+	e := newUnitAdminEnv(t, true)
+	body := `{"mode":"hard_limits","spec":{},"limits":{},"locked_knobs":["deciders"]}`
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/boundary", body))
+	if w := e.admin(http.MethodPut, decidersPath(e.a1), decidersBody(egressOwnerRule())); w.Code != http.StatusOK {
+		t.Fatalf("rules by the admin token = %d %s", w.Code, w.Body)
+	}
+	w := e.call(e.bob, http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusConflict || wireReason(t, w) != "unit_knob_locked" || !strings.Contains(w.Body.String(), "ua-a1") {
+		t.Fatalf("approving the lock over rules = %d %s, want 409 unit_knob_locked naming ua-a1", w.Code, w.Body)
+	}
+	if e.changeState(ch.ID) != types.GovernanceChangePending {
+		t.Errorf("change is %s after the refusal, want still pending", e.changeState(ch.ID))
 	}
 }
