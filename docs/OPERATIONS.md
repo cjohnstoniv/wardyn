@@ -4043,7 +4043,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0262` (`0262_agent_runs_image_admission`) adds `agent_runs.image_admission` (`0001`'s table): the image admission verdict a run's create recorded for its member image; NULL on every existing row; no grant changes.
 - `0263` (`0263_agent_runs_policy_generations`) adds `agent_runs.policy_generations` (`0001`'s table): the run's policy generations, one per revive after dispatch's, each with its digest and its proxy's run token ids; `[]` on every existing row; no grant changes.
 - `0264` (`0264_run_model_usage`) creates `run_model_usage`: one row per metered model call, keyed by the call id the proxy made (a retry or a replay stores it once), with the provider-reported token counts, the call's state and reason; rows go with their run. A split-role install grants the app role `SELECT, INSERT` on `run_model_usage`.
-- `0265` (`0265_governance_envelopes`) creates `governance_envelopes`: one row per platform envelope, the unit that is a platform's root and the IdP groups the security tier approved for it; a row goes with its unit. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_envelopes`.
+- `0266` (`0266_governance_envelopes`) creates `governance_envelopes`: one row per platform envelope, the unit that is a platform's root and the IdP groups the security tier approved for it; a row goes with its unit. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_envelopes`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
