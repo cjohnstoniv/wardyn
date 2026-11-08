@@ -451,16 +451,12 @@ A service identity is automation that runs under its own name. It is not a perso
 
 - The portal acts only for people in its `group`, matched against the group claim of the person's own token (canonicalized the way a sign-in snapshot is).
 - `idp_client_id` cannot be Wardyn's own client id.
-- **Pin a portal to one unit** with `"run_in_under":"<unit id or exact name>"` on the registration. The default is no pin, which changes nothing.
-  - A run launched through a pinned portal must resolve to that unit or one below it. Otherwise `POST /runs` and `POST /runs/preflight` answer `403` `portal_unit_scope` and create nothing.
-  - The check reads the context the run resolved to, so a person whose default context is another unit is refused as well as one who names it in `run_in`.
-  - The person's restrictions still apply after the context is picked, and still clamp a run the pin admits.
-  - Set it at registration only. To change it, register a new portal: it gets a new credential, and you revoke the old one.
-  - The unit must exist when you register. If it is deleted later, the portal keeps refusing every launch; it does not become unpinned.
-  - A portal's record that cannot be read refuses the launch with `503` `portal_unit_unavailable`.
-  - A queued run's later start does not ask again: it runs on the unit its create was admitted in.
-  - The pin is not checked against any other setting. A super admin may pin any unit.
-  - A platform's tools can travel on the portal's own `POST /runs` as inline `components`, so they need no organisation component. Anything that names a secret stays an organisation component.
+- **Pin a portal to one unit** with `"run_in_under":"<unit id or exact name>"` at registration. The default is no pin.
+  - A run through a pinned portal must resolve to that unit or one below it, or `POST /runs` and `POST /runs/preflight` answer `403` `portal_unit_scope`. A default context outside the unit is refused too.
+  - The person's restrictions still apply after the pick.
+  - The pin is set at registration only; register a new portal to change it. A deleted unit leaves a portal that refuses every launch. An unreadable portal record answers `503` `portal_unit_unavailable`.
+  - The pin is not checked against any other setting: a super admin may pin any unit.
+  - A platform's tools can travel as inline `components` on the portal's `POST /runs`. Anything naming a secret stays an organisation component.
 
 - **Exchange.**
   - `POST /api/v1/token`, form-encoded, the portal's id and credential as HTTP Basic:
