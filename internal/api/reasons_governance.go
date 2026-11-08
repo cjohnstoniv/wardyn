@@ -36,6 +36,9 @@ const (
 	// (run_deny_lists.go); a hard wall, operators included.
 	reasonComponentDenied     = "component_denied"
 	reasonModelProviderDenied = "model_provider_denied"
+	// reasonModelUsageWindowInvalid: a unit usage read whose since or until does not parse, whose window is not
+	// forward, or that spans more than 92 days (governance_unit_usage.go).
+	reasonModelUsageWindowInvalid = "model_usage_window_invalid"
 )
 
 // reasonDecidersUnreadable: the unit deciders rules, or the unit tree they are walked on, could not be read, so a

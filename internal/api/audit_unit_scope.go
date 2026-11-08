@@ -96,7 +96,7 @@ func (s *Server) serveUnitAuditFeed(w http.ResponseWriter, r *http.Request, scop
 	read := func(p store.Page) ([]types.AuditEvent, error) {
 		return scope.reader.QueryAuditEventsForUnits(r.Context(), scope.units, filter, p)
 	}
-	servePage(w, r, page, servedPage(s.unitAuditRows(r), read), func() ([]types.AuditEvent, error) {
+	servePage(w, r, page, servedPage(s.unitAuditRows(r, scope), read), func() ([]types.AuditEvent, error) {
 		return nil, errUnitAuditNoFallback
 	})
 }

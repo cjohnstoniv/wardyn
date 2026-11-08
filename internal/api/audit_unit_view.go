@@ -122,9 +122,14 @@ func unitViewScalar(key string, v json.RawMessage) bool {
 // and host stripping, then the unit view, except for a row of a run the caller created, which keeps the
 // member view auditRowsFor gives its owner, in its order: its shared-secret references checked against
 // that run's grants, then the same stripping. Run owners are read once per run for the request; a store
-// that cannot list runs by id serves every row in the unit view.
-func (s *Server) unitAuditRows(r *http.Request) func([]types.AuditEvent, error) ([]types.AuditEvent, error) {
+// that cannot list runs by id serves every row in the unit view. A row with no run is a governance row the
+// feed read for scope's units, and is served through the governance view (audit_unit_governance_view.go).
+func (s *Server) unitAuditRows(r *http.Request, scope *unitAuditScope) func([]types.AuditEvent, error) ([]types.AuditEvent, error) {
 	ctx, me := r.Context(), principalFromRequest(r)
+	in := map[uuid.UUID]bool{}
+	for _, u := range scope.units {
+		in[u] = true
+	}
 	own := map[uuid.UUID]*sharedRefs{} // runs read so far; nil for a run that is not the caller's
 	return func(evs []types.AuditEvent, err error) ([]types.AuditEvent, error) {
 		if evs, err = s.unsealed(ctx, evs, err); err != nil {
@@ -135,10 +140,11 @@ func (s *Server) unitAuditRows(r *http.Request) func([]types.AuditEvent, error) 
 		}
 		out := make([]types.AuditEvent, len(evs))
 		for i, ev := range evs {
-			var refs *sharedRefs
-			if ev.RunID != nil {
-				refs = own[*ev.RunID]
+			if ev.RunID == nil {
+				out[i] = unitGovernanceView(ev, in)
+				continue
 			}
+			refs := own[*ev.RunID]
 			row := evs[i : i+1]
 			if refs != nil {
 				if row, err = refs.events(row); err != nil {

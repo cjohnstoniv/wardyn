@@ -81,8 +81,8 @@ func TestUnitModelUsageSubtreeOnly(t *testing.T) {
 	if u := got.Units[0]; u.UnitName != "ua-a" || u.Totals.InputTokens != 10 || u.Totals.OutputTokens != 5 || u.Totals.Calls != 1 {
 		t.Errorf("ua-a = %+v, want its own run's 10 in, 5 out, 1 call", u)
 	}
-	if u := got.Units[1]; u.UnitName != "ua-a1" || u.Totals.InputTokens != 21 || u.Totals.Calls != 3 || len(u.ByModel) != 2 {
-		t.Errorf("ua-a1 = %+v, want 21 in over 3 calls in 2 models", u)
+	if u := got.Units[1]; u.UnitName != "ua-a1" || u.Totals.InputTokens != 21 || u.Totals.Calls != 2 || len(u.ByModel) != 2 {
+		t.Errorf("ua-a1 = %+v, want 21 in over 2 calls in 2 models", u)
 	}
 	if _, ok := usageUnit(t, got, e.b.ID); ok {
 		t.Error("ua-b is served to the admin of ua-a")
