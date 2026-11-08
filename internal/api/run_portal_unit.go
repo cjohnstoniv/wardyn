@@ -26,7 +26,7 @@ import (
 const (
 	portalUnitScopeMsg       = "This portal starts runs only in %s and the units below it. Choose a context there."
 	portalUnitUnavailableMsg = "This portal's unit could not be checked right now. Try again shortly."
-	portalUnitInvalidMsg     = "run_in_under: must name an existing governance unit, by id or exact name"
+	portalUnitInvalidMsg     = "The run_in_under field must name an existing governance unit, by id or exact name."
 )
 
 // stepPortalUnit refuses a delegated launch whose resolved context is outside its portal's pinned unit.
