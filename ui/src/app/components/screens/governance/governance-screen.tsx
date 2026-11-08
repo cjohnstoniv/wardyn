@@ -96,7 +96,7 @@ export function GovernanceScreen() {
   const [changes, setChanges] = React.useState<GovernanceChange[]>([]);
   const [changesError, setChangesError] = React.useState<string | null>(null);
   // A profile write the server held for a second person (202): the note stands until the next write.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   // Runner credentials and Baseline hosts are the security operators' tabs: anyone else is on Profiles,
   // whatever the URL says.
@@ -150,7 +150,7 @@ export function GovernanceScreen() {
     const profile = snap.profiles.find((p) => p.id === askedProfile);
     if (profile) {
       setOmission([]);
-      setSubmitted(false);
+      setSubmitted(null);
       setEditing({ profile });
     }
     setSearchParams(
@@ -169,13 +169,13 @@ export function GovernanceScreen() {
 
   const openEditor = (profile: GovernanceUnit | null) => {
     setOmission([]);
-    setSubmitted(false);
+    setSubmitted(null);
     setEditing({ profile });
   };
 
   const openDelete = (p: GovernanceUnit) => {
     setDeleteError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     setToDelete(p);
   };
 
@@ -189,7 +189,7 @@ export function GovernanceScreen() {
       if (e instanceof PendingChangeError) {
         // Held for a second person: the profile is still there.
         setToDelete(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -324,7 +324,7 @@ export function GovernanceScreen() {
 
             {submitted && (
               <div className="px-6">
-                <SubmittedNote />
+                <SubmittedNote change={submitted} />
               </div>
             )}
 
@@ -439,13 +439,13 @@ export function GovernanceScreen() {
                 onSaved={(warnings) => {
                   setEditing(null);
                   setOmission(warnings);
-                  setSubmitted(false);
+                  setSubmitted(null);
                   load();
                 }}
-                onSubmitted={(notes) => {
+                onSubmitted={(notes, change) => {
                   setEditing(null);
                   setOmission(notes);
-                  setSubmitted(true);
+                  setSubmitted(change);
                   load();
                 }}
               />

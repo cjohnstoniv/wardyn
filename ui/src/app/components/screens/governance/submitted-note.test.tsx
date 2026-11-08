@@ -36,7 +36,9 @@ const CHANGE: GovernanceChange = {
   diff: { changed: [] },
 };
 
-beforeEach(() => noteMock.mockReset());
+beforeEach(() => {
+  noteMock.mockReset();
+});
 
 describe("SubmittedNote", () => {
   it("without a change renders as it always did, with no note action", () => {

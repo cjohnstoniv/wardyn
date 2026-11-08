@@ -46,6 +46,7 @@ import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { Chip } from "../../wardyn/primitives";
 import { TRUST_LABEL } from "../runners/runner-trust";
 import type { RunnerTrustClass } from "../../../lib/types/runners";
+import type { GovernanceChange } from "../../../lib/types";
 import { Ban } from "lucide-react";
 import { Note } from "./display";
 import { SubmittedNote } from "./submitted-note";
@@ -175,7 +176,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   // GET's buildable_modes: the modes the server can build per class. Null on a server that does not send it.
   const [buildable, setBuildable] = React.useState<CredentialDeliverySnapshot["buildable_modes"] | null>(null);
   const [runnersOn, setRunnersOn] = React.useState<boolean | null>(null);
-  const [outcome, setOutcome] = React.useState<{ kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null>(null);
+  const [outcome, setOutcome] = React.useState<{ kind: "saved" } | { kind: "submitted"; change: GovernanceChange } | { kind: "refused"; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
   // The draft as it stood when a save met a 412 (someone saved first): shown in the shared saved-elsewhere banner so
   // the person can copy it, while the screen itself is reloaded to the stored document and its ETag.
@@ -236,7 +237,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
         load();
       } else if (e instanceof PendingChangeError) {
         setSubmittedJson(JSON.stringify(policy));
-        setOutcome({ kind: "submitted" });
+        setOutcome({ kind: "submitted", change: e.change });
         onSubmitted?.();
       } else {
         setOutcome({ kind: "refused", message: e instanceof HttpError ? e.message : getErrorMessage(e) });
@@ -306,7 +307,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
           <div className="flex flex-col gap-2 px-6 py-4">
             {savedElsewhere !== null && <SavedElsewhereBanner reloaded documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
             {outcome?.kind === "saved" && <Note role="status">{DELIVERY.SAVED}</Note>}
-            {outcome?.kind === "submitted" && <SubmittedNote />}
+            {outcome?.kind === "submitted" && <SubmittedNote change={outcome.change} />}
             {outcome?.kind === "refused" && (
               <Note tone="red" role="alert">
                 <h3 ref={refusedRef} tabIndex={-1} className="font-semibold outline-none">

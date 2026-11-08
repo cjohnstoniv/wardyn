@@ -48,7 +48,9 @@ function renderForm(c: GovernanceChange = change()) {
 const why = () => screen.getByLabelText(CHANGE_NOTE.WHY_LABEL) as HTMLTextAreaElement;
 const ticket = () => screen.getByLabelText(CHANGE_NOTE.TICKET_LABEL) as HTMLInputElement;
 
-beforeEach(() => noteMock.mockReset());
+beforeEach(() => {
+  noteMock.mockReset();
+});
 
 describe("ChangeNoteForm", () => {
   it("opens empty with Save off when the change has no note", () => {
@@ -69,12 +71,13 @@ describe("ChangeNoteForm", () => {
 
   it("reads Remove note once a stored note is emptied, and sends two empty strings", async () => {
     const { onSaved } = renderForm(change({ note: { reason: "Raise the cap", ticket: "SUP-1" } }));
-    noteMock.mockResolvedValue(change());
+    const cleared = change();
+    noteMock.mockResolvedValue(cleared);
     await userEvent.clear(why());
     await userEvent.clear(ticket());
     await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.REMOVE }));
     expect(noteMock).toHaveBeenCalledWith("c1", { reason: "", ticket: "" });
-    expect(onSaved).toHaveBeenCalledWith(change());
+    expect(onSaved).toHaveBeenCalledWith(cleared);
   });
 
   it("caps the fields at 500 and 128 characters", () => {
