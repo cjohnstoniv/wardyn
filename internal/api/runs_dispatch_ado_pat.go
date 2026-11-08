@@ -318,7 +318,7 @@ func (s *Server) resolveADORunPAT(w http.ResponseWriter, r *http.Request, claims
 	capAsk adoCapabilityGrant, responseCaps []adoscope.Capability, fail adoFail,
 ) bool {
 	want := slices.Clone(responseCaps)
-	if capAsk.capability != "" && !slices.Contains(want, capAsk.capability) {
+	if capAsk.capability != "" && !adoscope.Has(want, capAsk.capability) {
 		want = append(want, capAsk.capability)
 	}
 	pat, err := s.runPATFor(r.Context(), claims.RunID, sn, cfg, sc, want, r.URL.Query().Get("stale_jti"))
@@ -395,7 +395,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		if e.paused {
 			reason = adoPATMintResume
 		}
-		want = s.adoRunPATStanding(ctx, runID, sn, row.Entra.CapabilityCeiling, want)
+		want = s.adoRunPATStanding(ctx, runID, sn, row.Entra.Ceiling(), want)
 	case staleJTI != "" && staleJTI == e.cur.AuthorizationID && now.Sub(e.forcedAt) >= adoRunPATForcedEvery:
 		reason = adoPATMintUpstream401
 		e.forcedAt = now
@@ -410,7 +410,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 	// live ceiling no longer allows.
 	var caps []adoscope.Capability
 	for _, c := range append(slices.Clone(e.caps), want...) {
-		if slices.Contains(row.Entra.CapabilityCeiling, c) && !slices.Contains(caps, c) {
+		if adoscope.Has(row.Entra.Ceiling(), c) && !adoscope.Has(caps, c) {
 			caps = append(caps, c)
 		}
 	}
@@ -483,7 +483,7 @@ func (s *Server) adoRunPATStanding(ctx context.Context, runID uuid.UUID, sn adoE
 	}
 	out := slices.Clone(want)
 	for _, c := range adoStanding(sn, ceiling, rows) {
-		if !slices.Contains(out, c) {
+		if !adoscope.Has(out, c) {
 			out = append(out, c)
 		}
 	}

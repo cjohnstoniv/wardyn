@@ -38,6 +38,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you downgrade
 
+- Replace `pr_create`, `pr_vote` and `pr_complete` (Azure DevOps) and `pr_write` and `pr_review` (GitHub) with `pr` in every provider row, policy, unit wall, person's walls, wall preset and GitHub CLI component first: an older release refuses the new names.
 - An older binary ignores `deny_components` and `deny_model_providers` on unit limits, so denied components and providers attach again.
 - An older version ignores platform envelopes, so a held change of an envelope's unit, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs that unit. Changes below the envelope's unit and adds of its approved groups are held again, as before.
 - An older wardynd loads a kubectl row with `approve_each` but drops that field without an error, so after a downgrade the row's writes are sent without a person's yes. Turn `approve_each` off and narrow the row's access, or its service account's RBAC, first. Rows with `access: restart` fail to validate on an older binary.
@@ -89,6 +90,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Docs: OPERATIONS says Codex CLI on a `custom_endpoint` calls the OpenAI Responses API, and AZURE-DEVOPS says a member's run under a unit's `deny_with_review` cannot loosen it to `wait_for_review`.
 - A unit admin no longer decides a held change to the unit they are granted on: a unit's own walls, locks, mode, name and parent are decided from above it.
+- Azure DevOps `pr` is now three capabilities: `pr_create` (open, update, comment on, label and abandon a pull request), `pr_vote` (vote, add or remove reviewers, post pull-request statuses, resolve comment threads) and `pr_complete` (complete or set auto-complete, without bypassing a policy). GitHub `pr` is now two: `pr_write` (open, update and comment on a pull request, request reviewers) and `pr_review` (submit, approve, request changes on or dismiss a review). `pr` still means all of them, so nothing changes at upgrade and a list that says `pr` still lets an agent approve. To stop that, name `pr_create` (Azure DevOps) or `pr_write` (GitHub) in its place; on Azure DevOps a vote inside the provider's ceiling is then held for the person.
 - The desktop viewer and the run page no longer show the line about a macOS login window. The macOS VM docs note that the macOS 27 prepare flow creates only the setup account and that nothing beyond macOS 26 is promised as tested.
 - A Codex Model stored on a custom endpoint or OpenAI key provider now takes effect: runs with the Codex CLI use it. With none stored, Codex keeps its own default.
 - The proposer of a held governance change may withdraw it with `POST /governance/changes/{id}/reject`, even when only others may approve it, such as a unit admin's change held for the security tier. The `governance.change.reject` row then carries `withdrawn: true`.

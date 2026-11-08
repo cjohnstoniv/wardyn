@@ -63,7 +63,7 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 		c.GitPushAnyBranch = c.GitPushAnyBranch && *o.GitPushAnyBranch
 	}
 	if o.AzureDevOpsCapabilities != nil {
-		if both, ok := m.meetCapabilities("azure_devops_capabilities", capStrings(c.AzureDevOpsCapabilities), capStrings(*o.AzureDevOpsCapabilities)); ok {
+		if both, ok := m.meetCapabilities("azure_devops_capabilities", capStrings(adoscope.ExpandPR(c.AzureDevOpsCapabilities)), capStrings(adoscope.ExpandPR(*o.AzureDevOpsCapabilities))); ok {
 			c.AzureDevOpsCapabilities = toCaps[adoscope.Capability](both)
 		}
 	}
@@ -85,7 +85,7 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 		c.Recording = c.Recording.AtLeast(*o.Recording)
 	}
 	if o.GitHubCapabilities != nil {
-		if both, ok := m.meetCapabilities("github_capabilities", capStrings(c.GitHubCapabilities), capStrings(*o.GitHubCapabilities)); ok {
+		if both, ok := m.meetCapabilities("github_capabilities", capStrings(ghscope.ExpandPR(c.GitHubCapabilities)), capStrings(ghscope.ExpandPR(*o.GitHubCapabilities))); ok {
 			c.GitHubCapabilities = toCaps[ghscope.Capability](both)
 		}
 	}

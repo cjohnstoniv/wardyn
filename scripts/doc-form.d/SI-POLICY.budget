@@ -4,4 +4,5 @@
 # docs/operations/approval-rules.md 753 adds 41 over 712, measured (0.10 rc.11 wave 2): which allow undoes a person's deny, and that a new run starts without it.
 # docs/operations/approval-rules.md 779 adds 26 over 753, measured (0.10 rc.11 wave 2): when a rule edit and a policy deny each reach a run.
 # docs/operations/approval-rules.md 826 adds 47 over 779, measured (0.10 rc.11 wave 2): which denies reach a standing run's replaced proxy, and that a rule's run approval is not recalled.
-docs/operations/approval-rules.md=826 share=35
+# docs/operations/approval-rules.md 852 = 826 + 26, measured: pr in capabilities_within means its parts.
+docs/operations/approval-rules.md=852 share=35
