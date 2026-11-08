@@ -7,13 +7,17 @@
 // desktop under the run's desktop rules, and the clipboard strip says which way the desktop relay
 // lets the clipboard through (M7-Phone). The server decides every rule; this panel only shows it.
 import * as React from "react";
+import { RotateCw } from "lucide-react";
 import { desktopFiles, type DesktopFilesView } from "../../../lib/api/desktop-files";
+import { approvals as approvalsApi } from "../../../lib/api/approvals";
 import { HttpError } from "../../../lib/api/core";
+import type { ApprovalRequest, FileDownloadScope } from "../../../lib/types/approvals";
 import { usePoll } from "../../../lib/use-poll";
 import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { Mono } from "../../wardyn/code-block";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
+import { DesktopReviewRow } from "./desktop-review-row";
 
 type UploadRow = {
   key: number;
@@ -54,14 +58,29 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
   const [paused, setPaused] = React.useState<string | null>(null);
   const [uploads, setUploads] = React.useState<UploadRow[]>([]);
   const [marks, setMarks] = React.useState<Record<string, DownloadMark>>({});
+  // This run's file_download requests, newest first. null until read; `requestsFailed` when the read was refused.
+  const [requests, setRequests] = React.useState<ApprovalRequest[] | null>(null);
+  const [requestsFailed, setRequestsFailed] = React.useState(false);
   const nextKey = React.useRef(0);
   const input = React.useRef<HTMLInputElement>(null);
 
+  const loadRequests = React.useCallback(async () => {
+    try {
+      const rows = await approvalsApi.listApprovals("", runId);
+      setRequests(rows.filter((r) => r.kind === "file_download").sort((a, b) => b.requested_at.localeCompare(a.requested_at)));
+      setRequestsFailed(false);
+    } catch {
+      setRequestsFailed(true);
+    }
+  }, [runId]);
+
   const load = React.useCallback(async () => {
     try {
-      setView(await desktopFiles.list(runId));
+      const next = await desktopFiles.list(runId);
+      setView(next);
       setLoadError(null);
       setPaused(null);
+      if (next.rules.download === "review") void loadRequests();
     } catch (e) {
       if (e instanceof HttpError && e.status === 409 && e.reason === "run_inspect_paused") {
         // Not a failure: the rules already on screen still hold, and an upload they allow wakes the run.
@@ -72,7 +91,7 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
         setPaused(null);
       }
     }
-  }, [runId]);
+  }, [runId, loadRequests]);
   React.useEffect(() => {
     void load();
   }, [load]);
@@ -194,11 +213,42 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
           <p className="mt-2 text-meta text-muted-foreground">{C.everyFile}</p>
         </TabsContent>
         <TabsContent value="from">
-          {rules.download !== "allowed" ? (
+          {rules.download !== "allowed" && rules.download !== "review" ? (
             <>
               <Blocked title={C.downloadBlocked} />
               <p className="mt-2 text-meta text-muted-foreground">{C.blockedEmpty}</p>
               <p className="mt-1 text-meta text-muted-foreground">{C.refusedLogged}</p>
+            </>
+          ) : rules.download === "review" ? (
+            <>
+              {paused !== null && (
+                <p data-testid="desktop-files-paused" className="mt-2 text-meta text-muted-foreground">
+                  {paused}
+                </p>
+              )}
+              {paused === null && view.files.length === 0 && <p className="mt-2 text-meta text-muted-foreground">{C.emptyFolder}</p>}
+              <ul className="mt-2 space-y-1.5">
+                {view.files.map((f) => (
+                  <DesktopReviewRow
+                    key={f.name}
+                    runId={runId}
+                    file={f}
+                    latest={requests?.find((r) => (r.requested_scope as Partial<FileDownloadScope>).name === f.name)}
+                    onAsked={(r) => setRequests((rows) => [r, ...(rows ?? [])])}
+                    onRefused={() => void loadRequests()}
+                  />
+                ))}
+              </ul>
+              {requestsFailed && (
+                <div className="mt-2 border-t border-border pt-2">
+                  <p className="text-meta text-muted-foreground">{C.requestsUnreadable}</p>
+                  <Button size="sm" variant="outline" className="mt-1.5" onClick={() => void loadRequests()}>
+                    <RotateCw aria-hidden="true" />
+                    {C.retry}
+                  </Button>
+                </div>
+              )}
+              <p className="mt-2 text-meta text-muted-foreground">{C.reviewFooter}</p>
             </>
           ) : (
             <>

@@ -161,7 +161,7 @@ describe("DesktopFilesPanel", () => {
   });
 });
 
-// Under desktop.download: review (the Files review board): the From tab lists the files, one row each.
+// Under desktop.download: review, the From tab lists the files, one row each.
 const reviewing = { ...defaults, download: "review" };
 const SHA = "9f2c" + "0".repeat(56) + "41ab";
 const fileRow = (o: Parameters<typeof makeApproval>[0]) =>
@@ -256,10 +256,11 @@ describe("DesktopFilesPanel under review", () => {
   it("a 409 already-waiting refusal re-reads the requests and shows Waiting", async () => {
     const sentence = "a review of this file is already waiting; it is released once a person approves it";
     reviewMock.mockRejectedValue(new HttpError(409, sentence, "desktop_review_pending"));
+    // The server already holds the waiting request: every read after the refused ask returns it.
+    listApprovalsMock.mockImplementation(async () => (reviewMock.mock.calls.length > 0 ? [fileRow({})] : []));
     const panel = await openFrom();
     await userEvent.click(await within(panel).findByRole("button", { name: C.requestDownload }));
     await within(panel).findByText(`${C.notAsked}: ${sentence}`);
-    listApprovalsMock.mockResolvedValue([fileRow({})]);
     expect(await within(panel).findByText(C.stateWaiting)).toBeTruthy();
   });
 

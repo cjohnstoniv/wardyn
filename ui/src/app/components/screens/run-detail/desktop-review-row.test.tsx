@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// One Files row under desktop.download: review, one case per state of the board's first frame.
+// One Files row under desktop.download: review, one case per state the row can show.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -26,7 +26,6 @@ const file = { name: "build-logs.tar.gz", bytes: 19_293_184 };
 const scope = { name: file.name, bytes: file.bytes, sha256: SHA, requested_by: "dana@acme.example" };
 const row = (o: Parameters<typeof makeApproval>[0]) =>
   makeApproval({ id: "ap_1", kind: "file_download", requested_scope: scope, ...o });
-const HHMM = /\d\d:\d\d/;
 
 function renderRow(latest?: ReturnType<typeof makeApproval>) {
   const onAsked = vi.fn();
