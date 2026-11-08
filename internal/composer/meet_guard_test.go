@@ -113,6 +113,9 @@ var meetRules = map[string]meetRule{
 	"pause_idle_after_sec":                  {"0 pauses only runs waiting for a decision", "smaller positive (TightenRunLimits)"},
 
 	"autonomy_rubric.self_defined_component": {"caps nothing", "the lower level"},
+
+	"deny_components":      {"none; every component may attach", "union; the base's order, then the overlay's new ids"},
+	"deny_model_providers": {"none; every provider may serve", "union; the base's order, then the overlay's new ids"},
 }
 
 // atomicMeetTypes are the struct types a meet rule treats as one value (compared
