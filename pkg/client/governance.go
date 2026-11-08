@@ -530,10 +530,12 @@ func (c *Client) writeChangedUnit(ctx context.Context, p, existing GovernanceUni
 // PruneSkipped says so.
 func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocument, prune bool) (GovernanceApplyResult, error) {
 	var res GovernanceApplyResult
+	doc = withoutExpiring(doc) // elevations are granted through requests, never written or pruned here
 	current, err := c.GetGovernance(ctx)
 	if err != nil {
 		return res, fmt.Errorf("read current governance state: %w", err)
 	}
+	current = withoutExpiring(current)
 	profileByName := make(map[string]GovernanceUnit, len(current.Units))
 	currentIDToName := make(map[uuid.UUID]string, len(current.Units))
 	for _, p := range current.Units {

@@ -23,7 +23,7 @@ func TestGovernanceMembershipExpiresAtWire(t *testing.T) {
 	if strings.Contains(string(b), "expires_at") {
 		t.Errorf("a permanent membership = %s, want no expires_at", b)
 	}
-	end := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	end := time.Now().UTC().Add(time.Hour)
 	m.ExpiresAt = &end
 	if b, err = json.Marshal(m); err != nil {
 		t.Fatal(err)

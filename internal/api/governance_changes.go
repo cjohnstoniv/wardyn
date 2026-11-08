@@ -393,7 +393,8 @@ func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, 
 
 // auditDecision records a committed decision: an approval writes the target's own row, as a direct
 // write would have, plus governance.change.approve (and the bypass row when the admin token spent
-// one); a reject writes governance.change.reject, marked withdrawn when the proposer made it.
+// one); a reject writes governance.change.reject, marked withdrawn when the proposer made it, and a
+// request kind's own reject row after it.
 func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, applied govApplied, approve, bypass bool,
 	actorType types.ActorType, principal, email, reason string) {
 	ctx := r.Context()
@@ -424,10 +425,14 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 		if reason != "" {
 			data["reason"] = reason
 		}
-		if sameGovernanceHuman(out, principal, email) {
+		withdrawn := sameGovernanceHuman(out, principal, email)
+		if withdrawn {
 			data["withdrawn"] = true // the proposer rejected their own change
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.reject", out.ID.String(), "success", mustJSON(data)))
+		if kind := governanceChangeKinds[out.TargetKind]; kind.rejectAction != "" {
+			s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, kind.rejectAction, out.ID.String(), "success", mustJSON(s.requestRejectData(ctx, out, withdrawn))))
+		}
 	}
 }
 

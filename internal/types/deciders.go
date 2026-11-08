@@ -5,9 +5,11 @@ package types
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -66,6 +68,9 @@ const (
 	// MinMaxElevation and MaxMaxElevation bound a rule's max_elevation.
 	MinMaxElevation = 15 * time.Minute
 	MaxMaxElevation = 24 * time.Hour
+	// MaxRenewAfter bounds an elevation rule's renew_after; MaxTicketPatternLen its ticket_pattern.
+	MaxRenewAfter       = 168 * time.Hour
+	MaxTicketPatternLen = 256
 	// DeciderLockKnob is the locked_knobs name that stops a unit below the locker from setting its rules.
 	DeciderLockKnob = "deciders"
 )
@@ -85,6 +90,15 @@ type DeciderRule struct {
 	// MaxElevation is an elevation rule's longest grant, from 15m to 24h, stored as one canonical
 	// duration string ("4h" for "240m").
 	MaxElevation string `json:"max_elevation,omitempty"`
+	// EligibleRequesters is who may ask for an elevation under the rule: group:<name> entries, at most
+	// MaxDeciderWho, canonical as who's groups are. Required on an elevation rule, refused on any other.
+	EligibleRequesters []string `json:"eligible_requesters,omitempty"`
+	// RenewAfter is the least time from one elevation's end to the next request, for one person in one
+	// unit: 0s to 168h, stored canonical. Elevation only.
+	RenewAfter string `json:"renew_after,omitempty"`
+	// TicketPattern makes a ticket required and is the RE2 pattern it must match whole: at most 256
+	// characters, compiled as ^(?:p)$ at write. Elevation only.
+	TicketPattern string `json:"ticket_pattern,omitempty"`
 }
 
 // UnitDeciders is the stored rules of one unit.
@@ -112,6 +126,28 @@ func (r DeciderRule) MaxElevationDuration() time.Duration {
 		return 0
 	}
 	return d
+}
+
+// RenewAfterDuration is the rule's renew_after, zero when it names none or does not parse.
+func (r DeciderRule) RenewAfterDuration() time.Duration {
+	d, err := time.ParseDuration(r.RenewAfter)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+// TicketRegexp is the rule's ticket_pattern compiled to match a whole ticket, nil when it names none or
+// does not compile (a valid rule always compiles: the write checks it).
+func (r DeciderRule) TicketRegexp() *regexp.Regexp {
+	if r.TicketPattern == "" {
+		return nil
+	}
+	re, err := regexp.Compile("^(?:" + r.TicketPattern + ")$")
+	if err != nil {
+		return nil
+	}
+	return re
 }
 
 // Names reports whether the rule governs kind.
@@ -161,7 +197,8 @@ func ValidateDeciderRules(rules []DeciderRule) ([]DeciderRule, error) {
 
 // validateDeciderRule is one rule's checks; msg is empty when it holds.
 func validateDeciderRule(in DeciderRule) (r DeciderRule, msg string) {
-	r = DeciderRule{Kinds: []string{}, Who: []string{}, SecondHuman: in.SecondHuman, MaxScope: in.MaxScope, MaxElevation: in.MaxElevation}
+	r = DeciderRule{Kinds: []string{}, Who: []string{}, SecondHuman: in.SecondHuman, MaxScope: in.MaxScope, MaxElevation: in.MaxElevation,
+		EligibleRequesters: in.EligibleRequesters, RenewAfter: in.RenewAfter, TicketPattern: in.TicketPattern}
 	if len(in.Kinds) == 0 {
 		return r, "kinds: name at least one kind"
 	}
@@ -235,8 +272,8 @@ func validateDeciderWho(r *DeciderRule, who []string) string {
 	return ""
 }
 
-// validateDeciderLimits checks max_scope and max_elevation and returns the rule with max_elevation
-// canonical. scopeless kinds (elevation, image, file_download) take no max_scope.
+// validateDeciderLimits checks max_scope, max_elevation and the elevation-only fields and returns the
+// rule with its durations canonical. scopeless kinds (elevation, image, file_download) take no max_scope.
 func validateDeciderLimits(r DeciderRule, elevation, scopeless bool) (DeciderRule, string) {
 	switch r.MaxScope {
 	case "", ScopeOnce, ScopeUntil, ScopeRun:
@@ -249,8 +286,15 @@ func validateDeciderLimits(r DeciderRule, elevation, scopeless bool) (DeciderRul
 		return r, "max_scope: does not apply to elevation, image or file_download"
 	}
 	if !elevation {
-		if r.MaxElevation != "" {
+		switch {
+		case r.MaxElevation != "":
 			return r, "max_elevation: only an elevation rule has one"
+		case len(r.EligibleRequesters) > 0:
+			return r, "eligible_requesters: only for elevation"
+		case r.RenewAfter != "":
+			return r, "renew_after: only for elevation"
+		case r.TicketPattern != "":
+			return r, "ticket_pattern: only for elevation"
 		}
 		return r, ""
 	}
@@ -258,13 +302,53 @@ func validateDeciderLimits(r DeciderRule, elevation, scopeless bool) (DeciderRul
 	if err != nil || d < MinMaxElevation || d > MaxMaxElevation {
 		return r, fmt.Sprintf("max_elevation: required, a duration from %s to %s (got %q)", MinMaxElevation, MaxMaxElevation, r.MaxElevation)
 	}
-	r.MaxElevation = canonicalDuration(d)
+	r.MaxElevation = CanonicalDuration(d)
+	return validateElevationFields(r)
+}
+
+// validateElevationFields checks an elevation rule's eligible_requesters, renew_after and ticket_pattern
+// and returns the rule with the groups folded and renew_after canonical.
+func validateElevationFields(r DeciderRule) (DeciderRule, string) {
+	if len(r.EligibleRequesters) == 0 {
+		return r, "eligible_requesters: required, at least one group:<name>"
+	}
+	if len(r.EligibleRequesters) > MaxDeciderWho {
+		return r, fmt.Sprintf("eligible_requesters: at most %d entries", MaxDeciderWho)
+	}
+	groups := make([]string, 0, len(r.EligibleRequesters))
+	for _, e := range r.EligibleRequesters {
+		name, ok := DeciderGroupOf(strings.TrimSpace(e))
+		g, canonical := CanonicalGroupSubject(name)
+		if !ok || !canonical {
+			return r, fmt.Sprintf("eligible_requesters: %q is not group:<name>", e)
+		}
+		if slices.Contains(groups, DeciderGroupPrefix+g) {
+			return r, fmt.Sprintf("eligible_requesters: %s is listed twice", DeciderGroupPrefix+g)
+		}
+		groups = append(groups, DeciderGroupPrefix+g)
+	}
+	r.EligibleRequesters = groups
+	if r.RenewAfter != "" {
+		d, err := time.ParseDuration(r.RenewAfter)
+		if err != nil || d < 0 || d > MaxRenewAfter {
+			return r, fmt.Sprintf("renew_after: a duration from 0s to %s (got %q)", CanonicalDuration(MaxRenewAfter), r.RenewAfter)
+		}
+		r.RenewAfter = CanonicalDuration(d)
+	}
+	if r.TicketPattern != "" {
+		if utf8.RuneCountInString(r.TicketPattern) > MaxTicketPatternLen {
+			return r, fmt.Sprintf("ticket_pattern: at most %d characters", MaxTicketPatternLen)
+		}
+		if _, err := regexp.Compile("^(?:" + r.TicketPattern + ")$"); err != nil {
+			return r, "ticket_pattern: not a valid RE2 pattern: " + err.Error()
+		}
+	}
 	return r, ""
 }
 
-// canonicalDuration is d as the shortest Go duration string that parses back to it: "4h" for 240m,
+// CanonicalDuration is d as the shortest Go duration string that parses back to it: "4h" for 240m,
 // "1h30m" for 90m, never "4h0m0s".
-func canonicalDuration(d time.Duration) string {
+func CanonicalDuration(d time.Duration) string {
 	s := d.String()
 	if strings.HasSuffix(s, "m0s") {
 		s = strings.TrimSuffix(s, "0s")

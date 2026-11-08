@@ -171,6 +171,8 @@ func endSourceLabel(src types.LimitSource, pool string) string {
 		return "your pool"
 	case types.LimitSourceGovernance:
 		return "your admin"
+	case types.LimitSourceElevation:
+		return "your elevation"
 	}
 	return "this deployment"
 }

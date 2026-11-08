@@ -1014,8 +1014,8 @@ start.
 | `governance_unit_depth` | `PUT/POST /governance/units` (409): the write would put a unit or one below it deeper than `governance_max_depth` (16 unset or `0`; `null` keeps it). |
 | `governance_unit_default_readonly` | `PUT` or `DELETE /governance/units/{id}` on the Default unit, or approving a change held against it (409): its walls are `WARDYN_DEFAULT_POLICY`. |
 | `governance_unit_admin_invalid` / `governance_unit_admin_not_found` | `POST /governance/units/{id}/admins` and `DELETE /governance/units/{id}/admins/{admin}`: the grant names a `subject_type` other than `user` or `group`, or an empty subject (400), or a subject that already administers the unit (409); no such grant on that unit (404). |
-| `invalid_deciders` | `PUT /governance/units/{id}/deciders` (400), or approving a held write of it: a rule names an unknown kind or decider type, lists `security`, `manager` or `delegate`, repeats a kind, or breaks a kind's rule (`second_human` is required for `credential` and `push_content`, `owner` is refused for those and for `elevation`, `max_scope` is never `always`, an `elevation` rule needs `max_elevation` of 15m to 24h). The message names the rule, for example `rules[1]`. |
-| `decider_rule_wider_than_parent` | `PUT /governance/units/{id}/deciders` (422), or proposing or approving a held write of it: a rule names a decider the rules above the unit do not, or a wider `max_scope` or `max_elevation`, or leaves off a `second_human` one sets. The message names the rule and the field. |
+| `invalid_deciders` | `PUT /governance/units/{id}/deciders` (400), or approving a held write of it: a rule names an unknown kind or decider type, lists `security`, `manager` or `delegate`, repeats a kind, or breaks a kind's rule (`second_human` is required for `credential` and `push_content`, `owner` is refused for those and for `elevation`, `max_scope` is never `always`, an `elevation` rule needs `max_elevation` of 15m to 24h and one to eight `group:<name>` `eligible_requesters`, its `renew_after` is 0s to 168h and its `ticket_pattern` at most 256 characters that compile; those three fields are refused on any other kind). The message names the rule, for example `rules[1]`. |
+| `decider_rule_wider_than_parent` | `PUT /governance/units/{id}/deciders` (422), or proposing or approving a held write of it: a rule names a decider the rules above the unit do not, or a wider `max_scope` or `max_elevation`, an `eligible_requesters` group they do not name or a shorter `renew_after`, or leaves off a `second_human` one sets. The message names the rule and the field. |
 | `governance_membership_default_unit` | Adding or moving a membership into the Default unit, by write, dry run or approval (409). |
 | `unit_not_a_context` | `POST /runs`, preflight and the policy preview (403): the unit asked for is not one of the caller's. |
 | `workspace_unit_not_yours` | `POST /runs`, preflight and the policy preview (403): an attached workspace's unit is on no path of the caller's units; `policy` names it. |
@@ -1029,6 +1029,17 @@ start.
 | `governance_change_note_proposer_only` | `PUT /governance/changes/{id}/note` (403): the caller did not propose the change. Only its proposer writes the note. |
 | `governance_change_note_invalid` | `PUT /governance/changes/{id}/note` (400): the reason is over 500 characters or holds a control character, or the ticket is over 128 characters or is not one line. |
 | `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
+| `governance_request_needs_person` | `POST /governance/requests` (403): the caller is not a signed-in person (the admin token, a service, a device, local mode). Only a person can ask. |
+| `governance_request_kind_invalid` | `POST /governance/requests` (400): `kind` is not one this server takes; the message lists them. |
+| `elevation_not_offered` | `POST /governance/requests` (400): the unit offers the caller no elevation: no `elevation` rule on it or above it, the caller is in none of its `eligible_requesters` groups (or their group list is out of date), or the unit is Default or unknown. One answer for all of them. |
+| `elevation_duration_invalid` | `POST /governance/requests` (400): `duration` is not a duration such as `4h`, or is under `15m`. |
+| `elevation_too_long` | `POST /governance/requests` (400): `duration` is over the unit's `max_elevation`; the message names the unit and its limit. |
+| `request_reason_required` | `POST /governance/requests` (400): the request has no reason. |
+| `request_reason_too_long` | `POST /governance/requests` (400): the reason is over 500 characters. |
+| `elevation_already_member` | `POST /governance/requests` (409): a membership (of the person, a group of theirs or their user type) already places the caller in the unit. |
+| `elevation_ticket_required` | `POST /governance/requests`, or `PUT /governance/changes/{id}/note` on an elevation (400): a rule on the unit or above it has a `ticket_pattern`, and no ticket was given. |
+| `elevation_ticket_invalid` | `POST /governance/requests`, or `PUT /governance/changes/{id}/note` on an elevation (400): the ticket does not match a `ticket_pattern` on the unit or above it; the message shows the pattern. |
+| `elevation_cooldown` | `POST /governance/requests` (409): the caller's last elevation in the unit ended less than the rule's `renew_after` ago. `retry_after` (RFC 3339) is when they may ask again. |
 | `boundary_invalid` | `PUT /governance/boundary` and `POST /governance/dry-run` (400): the `PUT` names no `mode` or an unknown one, or the document sets `allow_all_egress` beside `allowed_domains`, a `max_end_ahead_sec` below 1, a bad `contact`, or a value a run policy would refuse; `501` on a store that keeps no boundary. |
 | `boundary_stale` | `PUT /governance/boundary` (412): `If-Match` names a boundary that has since changed. |
 | `unit_knob_locked` | `POST/PUT /governance/units`, `PUT /governance/boundary`, an approval of either, and `POST /governance/dry-run` (409): the write changes a knob that the boundary or a unit above locks, a narrowing included ("`<knob>` is locked by `<locker>`; ask `<contact>`"). Or it locks a knob that a unit below sets to another value: the body lists those units, and clearing their values would widen them. |
@@ -1344,6 +1355,14 @@ applied only once another approver approves it. The SDK never reads it as a save
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
+- `ListGovernanceRequests` (`GET /api/v1/governance/requests`), `RequestElevation(ctx, unit, duration, reason, ticket)`
+  (`POST /api/v1/governance/requests`, kind `elevation`), `ApproveGovernanceRequest` and
+  `RejectGovernanceRequest(ctx, id, reason)` (`POST /api/v1/governance/requests/{id}/approve` and `/reject`) are the
+  held requests. Any signed-in person reaches them; the list holds the requests the caller asked or may decide
+  (pending, and decided in the last day) and `offered`, the units the caller may ask an elevation in. The
+  requester's own reject withdraws. A server without requests answers `404`, returned as the `*APIError`.
+  `PlanGovernance` and `ApplyGovernanceResult` leave memberships with an `expires_at` (elevations) out of both
+  sides, so a saved document never writes one back as permanent or prunes it.
 
 ```go
 res, err := c.ApplyGovernanceResult(ctx, doc, false)

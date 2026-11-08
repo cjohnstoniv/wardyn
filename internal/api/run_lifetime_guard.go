@@ -20,5 +20,9 @@ func lifetimePassedEnd(anchor types.AgentRun, now time.Time) *queueEnd {
 	if !pastLifetimeCap(anchor, now) {
 		return nil
 	}
-	return &queueEnd{token: string(types.RunEndMaxLifetimeReached), hint: types.RunEndMaxLifetimeReached.Sentence()}
+	hint := types.RunEndMaxLifetimeReached.Sentence()
+	if anchor.LifetimeCapSource == types.LimitSourceElevation {
+		hint = "the elevation it was launched under has ended"
+	}
+	return &queueEnd{token: string(types.RunEndMaxLifetimeReached), hint: hint}
 }

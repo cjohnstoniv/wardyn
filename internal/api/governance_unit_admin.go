@@ -463,8 +463,9 @@ func (s *Server) approversFor(ctx context.Context, units []uuid.UUID, strict boo
 	return out
 }
 
-// changeApprovers is approversFor a held change: unit kinds by the units they touch, every other kind
-// a security admin decides (or, for an operator-tier kind, a super admin: none is listed then).
+// changeApprovers is approversFor a held change: unit kinds by the units they touch, a request kind by
+// its unit's rule (requestApprovers), every other kind a security admin decides (or, for an
+// operator-tier kind, a super admin: none is listed then).
 func (s *Server) changeApprovers(ctx context.Context, ch types.GovernanceChange) []changeApprover {
 	kind, ok := governanceChangeKinds[ch.TargetKind]
 	if !ok {
@@ -475,6 +476,9 @@ func (s *Server) changeApprovers(ctx context.Context, ch types.GovernanceChange)
 			return []changeApprover{{Kind: "security"}}
 		}
 		return s.approversFor(ctx, units, strict, ch.ProposedBy, ch.ProposedByEmail)
+	}
+	if name, ok := requestKindOf(ch.TargetKind); ok {
+		return s.requestApprovers(ctx, ch, governanceRequestKinds[name].decider)
 	}
 	if kind.forChange(ch).approver.reason == securityApprover.reason {
 		return []changeApprover{{Kind: "security"}}

@@ -61,7 +61,7 @@ func elevationRule(f func(*types.DeciderRule)) types.DeciderRule {
 	return r
 }
 
-// setRules stores u's rules as a write that passed the model would.
+// setRules stores u's rules as a write that passed validation would.
 func (e *elevEnv) setRules(u types.GovernanceUnit, rules ...types.DeciderRule) {
 	e.t.Helper()
 	valid, err := types.ValidateDeciderRules(rules)
@@ -198,8 +198,8 @@ func (e *elevEnv) listAs(ctx context.Context) elevList {
 	return out
 }
 
-// personCtx is a signed-in person with a group snapshot, as the auth lane publishes one.
-func personCtx(sub string, groups []string, truncated bool) context.Context {
+// elevPersonCtx is a signed-in person with a group snapshot, as sign-in publishes one.
+func elevPersonCtx(sub string, groups []string, truncated bool) context.Context {
 	return withHumanIdentity(context.Background(), sub, sub+"@corp.example", oidc.RoleUser, types.UserTypeStandard, groups, truncated)
 }
 
@@ -359,7 +359,7 @@ func TestElevationGroupDeciderRecheckedInTx(t *testing.T) {
 	}
 	e.setRules(e.a1, elevationRule(func(r *types.DeciderRule) { r.Who = []string{types.DeciderUnitAdmins} }))
 	// The decision's recheck reads the rule on its own transaction: the group, removed after the list, is refused.
-	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(personCtx(elevDecider, []string{elevDeciders}, false))
+	r := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(elevPersonCtx(elevDecider, []string{elevDeciders}, false))
 	kind := governanceChangeKinds[types.GovernanceTargetElevation].forChange(got.Pending)
 	err := e.pg.DryRunGovernance(r.Context(), func(q store.Querier) error { return e.srv.recheckApprover(r.Context(), r, q, kind) })
 	var refused *govRefusal
@@ -582,9 +582,9 @@ func TestGovernanceRequestNeedsPerson(t *testing.T) {
 	e := newElevEnv(t)
 	body := elevBody(e.a1.ID, "1h", "need it", "")
 	e.wantReason("the admin token", e.admin(http.MethodPost, requestsPath, body), http.StatusForbidden, reasonGovernanceRequestNeedsPerson)
-	service := withServiceIdentity(personCtx("sub-el-svc", []string{elevRequesters}, false), "deploy-bot", elevReqSub)
+	service := withServiceIdentity(elevPersonCtx("sub-el-svc", []string{elevRequesters}, false), "deploy-bot", elevReqSub)
 	e.wantReason("a service token", e.createAs(service, body), http.StatusForbidden, reasonGovernanceRequestNeedsPerson)
-	device := context.WithValue(personCtx("sub-el-dev", []string{elevRequesters}, false), deviceCtxKey{}, types.Device{ID: uuid.New(), Name: "laptop"})
+	device := context.WithValue(elevPersonCtx("sub-el-dev", []string{elevRequesters}, false), deviceCtxKey{}, types.Device{ID: uuid.New(), Name: "laptop"})
 	e.wantReason("a device", e.createAs(device, body), http.StatusForbidden, reasonGovernanceRequestNeedsPerson)
 	if l := e.listAs(service); len(l.Offered) != 0 {
 		t.Errorf("offered to a service = %v, want none", l.Offered)
@@ -616,8 +616,8 @@ func TestElevationUnitAdminDecidesAndGroupDecides(t *testing.T) {
 	as := func(ctx context.Context) bool {
 		return approver.allowed(e.srv, httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx))
 	}
-	token := withAPITokenID(personCtx(elevDecider, []string{elevDeciders}, false), uuid.New())
-	cli := withCLISessionID(withAPITokenID(personCtx(elevDecider, []string{elevDeciders}, false), uuid.New()), uuid.New())
+	token := withAPITokenID(elevPersonCtx(elevDecider, []string{elevDeciders}, false), uuid.New())
+	cli := withCLISessionID(withAPITokenID(elevPersonCtx(elevDecider, []string{elevDeciders}, false), uuid.New()), uuid.New())
 	if as(token) {
 		t.Error("TTL off: a bare API token in the deciders group decides")
 	}
@@ -646,12 +646,12 @@ func TestElevationEligibleRequesters(t *testing.T) {
 		ctx  context.Context
 		code int
 	}{
-		"in the group":           {personCtx("sub-el-in", []string{elevRequesters}, false), http.StatusAccepted},
-		"out of the group":       {personCtx("sub-el-out", []string{"other"}, false), http.StatusBadRequest},
-		"a stale snapshot":       {personCtx("sub-el-stale", nil, false), http.StatusBadRequest},
-		"a truncated snapshot":   {personCtx("sub-el-trunc", []string{elevRequesters}, true), http.StatusBadRequest},
-		"a bare token, TTL off":  {withAPITokenID(personCtx("sub-el-token", []string{elevRequesters}, false), uuid.New()), http.StatusBadRequest},
-		"a CLI session, TTL off": {withCLISessionID(withAPITokenID(personCtx("sub-el-cli", []string{elevRequesters}, false), uuid.New()), uuid.New()), http.StatusAccepted},
+		"in the group":           {elevPersonCtx("sub-el-in", []string{elevRequesters}, false), http.StatusAccepted},
+		"out of the group":       {elevPersonCtx("sub-el-out", []string{"other"}, false), http.StatusBadRequest},
+		"a stale snapshot":       {elevPersonCtx("sub-el-stale", nil, false), http.StatusBadRequest},
+		"a truncated snapshot":   {elevPersonCtx("sub-el-trunc", []string{elevRequesters}, true), http.StatusBadRequest},
+		"a bare token, TTL off":  {withAPITokenID(elevPersonCtx("sub-el-token", []string{elevRequesters}, false), uuid.New()), http.StatusBadRequest},
+		"a CLI session, TTL off": {withCLISessionID(withAPITokenID(elevPersonCtx("sub-el-cli", []string{elevRequesters}, false), uuid.New()), uuid.New()), http.StatusAccepted},
 	} {
 		w := e.createAs(tc.ctx, body)
 		if w.Code != tc.code || (tc.code == http.StatusBadRequest && wireReason(t, w) != reasonElevationNotOffered) {
@@ -662,7 +662,7 @@ func TestElevationEligibleRequesters(t *testing.T) {
 		}
 	}
 	e.srv.cfg.RoleStampTTL = time.Hour
-	if w := e.createAs(withAPITokenID(personCtx("sub-el-token-ttl", []string{elevRequesters}, false), uuid.New()), body); w.Code != http.StatusAccepted {
+	if w := e.createAs(withAPITokenID(elevPersonCtx("sub-el-token-ttl", []string{elevRequesters}, false), uuid.New()), body); w.Code != http.StatusAccepted {
 		t.Errorf("a bare token, TTL on: %d %s, want 202", w.Code, w.Body)
 	}
 }

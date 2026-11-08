@@ -42,10 +42,10 @@ export interface GovernanceChangeNote {
   ticket?: string;
 }
 
-// One who could decide a held change: any security admin, or a unit-admin grant (a person or a group)
-// on unit_name that governs every unit the change touches.
+// One who could decide a held change: any security admin, a unit-admin grant (a person or a group)
+// on unit_name that governs every unit the change touches, or, for a request, anyone in the group name names.
 export interface GovernanceChangeApprover {
-  kind: "security" | "unit_admin";
+  kind: "security" | "unit_admin" | "group";
   name?: string;
   unit_name?: string;
   subject_type?: "user" | "group";

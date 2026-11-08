@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- A migration (`0273_governance_elevation`) adds `governance_memberships.expires_at` and allows `elevation` as a run's lifetime-cap source. No existing row changes.
 - Before a downgrade, set any `desktop.download: review` to `blocked`: an older server can resolve `review` to allowed when it meets a unit's rules, so its Files panel could send files with no one's yes.
 - A refused egress request no longer counts as activity for idle auto-stop or idle pause, on every kind of run, with no switch: a run that is only being refused now idles out. Only an allowed request restarts the idle clock. On a macOS VM run the guest's Apple boot hosts never count, allowed or refused, on the control plane and in a runner's proxy (`activity_ignore_hosts`). A runner's proxy keeps the old behaviour until the runner is upgraded.
 - A run with an allowed-models list, or with content inspection in `alert` or `block` mode, now treats a model call whose body carries `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` as a refusal (`block`, and always under the allowed-models list) or a logged alert (`alert`). Claude Code and the Codex CLI send none of these keys. In `block` mode, a model call whose body is over the 32 MiB scan limit, has a `Content-Encoding`, or is not one JSON object is now refused where an oversize body used to pass with `on_scanner_error: pass`. A run with neither feature is unchanged, and so is a route set to `inspection: gateway`.
@@ -38,6 +39,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you downgrade
 
+- An older server ignores `governance_memberships.expires_at`: an elevation approved before the downgrade becomes a permanent membership, and pending elevation requests are shown to nobody. Delete elevated memberships (`expires_at IS NOT NULL`) before downgrading.
 - Replace `pr_create`, `pr_vote` and `pr_complete` (Azure DevOps) and `pr_write` and `pr_review` (GitHub) with `pr` in every provider row, policy, unit wall, person's walls, wall preset and GitHub CLI component first. An older release refuses the new Azure DevOps names, and grants nothing for `pr_write` or `pr_review` in a GitHub list, without an error.
 - An older binary ignores `deny_components` and `deny_model_providers` on unit limits, so denied components and providers attach again.
 - An older version ignores platform envelopes, so a held change of an envelope's unit, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs that unit. Changes below the envelope's unit and adds of its approved groups are held again, as before.
@@ -51,6 +53,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Elevation requests: a person asks for a time-boxed membership in a unit whose deciders rule offers `elevation` (`POST /governance/requests`, kind `elevation`, with a required reason and an optional ticket). The rule's deciders approve it, never the requester; the membership ends at the approved duration, a run launched in the unit has its lifetime cap at that end, and the end is audited as `governance.elevation.expire`. Who may ask is set per rule, by group; a rule can require a ticket matching a pattern and a wait between elevations.
 - `data_out` (`allowed`, `review` or `blocked`) on a run policy, a unit's walls, a restriction and the Wardyn boundary: one rule for content leaving a run.
   - `review` and `blocked` both turn off desktop copy-out, SSH file transfer (sftp and scp), SSH commands and port forwards, `wardyn sync` down, web apps other than the desktop, and a computer folder that syncs back. They also limit run output to security admins, and recording replay to super admins.
   - `review` lets files out one at a time through the Files panel, on any running run, each with a person's yes.
