@@ -178,31 +178,31 @@ describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
   });
 
   it("says Loading run, never Run not found, while a unit drill's trail is still on its way", async () => {
-    listAuditMock.mockImplementation(
-      () =>
-        new Promise((resolve) =>
-          setTimeout(
-            () => resolve([ev({ id: "e1", run_id: "run_abcdef12", action: "egress.allow", target: "api.github.com:443" })]),
-            80,
-          ),
-        ),
-    );
-    getRunMock.mockResolvedValue(undefined);
+    // Both reads are held by the test: the run answers 404 first, the trail answers after.
+    let answerRun: (run: undefined) => void = () => {};
+    let answerTrail: (rows: AuditEvent[]) => void = () => {};
+    getRunMock.mockReturnValue(new Promise((resolve) => (answerRun = resolve)));
+    listAuditMock.mockReturnValue(new Promise((resolve) => (answerTrail = resolve)));
     await mount({ me: unitsOf("payments"), url: "/admin/audit?run_id=run_abcdef12" });
 
     expect(await screen.findByText("Loading run…")).toBeInTheDocument();
-    await waitFor(() => expect(getRunMock).toHaveBeenCalled());
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
+    await act(async () => answerRun(undefined));
+    expect(screen.getByText("Loading run…")).toBeInTheDocument();
     expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
+
+    await act(async () =>
+      answerTrail([ev({ id: "e1", run_id: "run_abcdef12", action: "egress.allow", target: "api.github.com:443" })]),
+    );
     expect(await screen.findByText("This run is in your unit")).toBeInTheDocument();
     expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
   });
 
   it("shows neither empty state while /me has not answered, then the unit one", async () => {
-    let answer: (me: unknown) => void = () => {};
-    whoamiMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    // The feed answers (empty) while /me is still held: the page must not speak for either empty state yet.
+    let answerMe: (me: unknown) => void = () => {};
+    let answerFeed: (rows: AuditEvent[]) => void = () => {};
+    whoamiMock.mockReturnValue(new Promise((resolve) => (answerMe = resolve)));
+    listAuditMock.mockReturnValue(new Promise((resolve) => (answerFeed = resolve)));
     const { OperatorProvider } = await import("../wardyn/operator-context");
     render(
       <MemoryRouter initialEntries={["/admin/audit"]}>
@@ -213,13 +213,12 @@ describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
     );
 
     await waitFor(() => expect(listAuditMock).toHaveBeenCalled());
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 30));
-    });
+    await act(async () => answerFeed([]));
     expect(screen.queryByText(AUDIT.MEMBER_FEED_TITLE)).not.toBeInTheDocument();
     expect(screen.queryByText(AUDIT.UNIT_EMPTY_TITLE)).not.toBeInTheDocument();
 
-    await act(async () => answer(unitsOf("payments")));
+    await act(async () => answerMe(unitsOf("payments")));
     expect(await screen.findByText(AUDIT.UNIT_EMPTY_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(AUDIT.MEMBER_FEED_TITLE)).not.toBeInTheDocument();
   });
 });
