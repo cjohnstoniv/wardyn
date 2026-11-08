@@ -187,14 +187,14 @@ export const FIELD_HELP = {
   azure_devops_capabilities: {
     what: "This run's Azure DevOps capabilities on the per-person lane, in place of the provider's default profile — a saved policy becomes a saved access profile.",
     values:
-      "A list of grantable capabilities: code_read, code_write, pr, policy_admin, policy_bypass, repo_admin, … — anything else is refused on write. Only within the provider's capability_ceiling: a run naming anything outside it is refused at launch. Opening a pull request needs pr, not code_write. A member stands only what the provider's default profile or their governance profile grants. Omitted keeps the provider's default.",
+      "A list of grantable capabilities: code_read, code_write, pr, policy_admin, policy_bypass, repo_admin, … — anything else is refused on write. Only within the provider's capability_ceiling: a run naming anything outside it is refused at launch. Opening a pull request needs pr_create, not code_write; pr still covers pr_create, pr_vote and pr_complete. A member stands only what the provider's default profile or their governance profile grants. Omitted keeps the provider's default.",
     doc: "top-level",
     snippet: ["code_read", "code_write", "pr_create", "project_read"],
   },
   github_capabilities: {
     what: "This run's GitHub capabilities on the per-person lane, in place of the provider's default profile — a saved policy becomes a saved access profile.",
     values:
-      "A list of grantable capabilities: code_read, code_write, workflows_write, pr, pr_write, pr_review, issues_read, issues_write, repo_admin, … Only within the provider's capability_ceiling. Changing files, branches or tags through the API is never granted — push with git. Omitted keeps the provider's default. A run whose list leaves out code_write can't push with git.",
+      "A list of grantable capabilities: code_read, code_write, workflows_write, pr, pr_write, pr_review, issues_read, issues_write, repo_admin, … Only within the provider's capability_ceiling. Opening a pull request needs pr_write; pr still covers pr_write and pr_review. Changing files, branches or tags through the API is never granted — push with git. Omitted keeps the provider's default. A run whose list leaves out code_write can't push with git.",
     doc: "top-level",
     snippet: ["code_read", "code_write", "pr_write"],
   },
