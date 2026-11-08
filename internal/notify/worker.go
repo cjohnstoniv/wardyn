@@ -175,13 +175,24 @@ func (w *Worker) loadFacts(ctx context.Context, approvalID uuid.UUID, tier int16
 // from the approval's kind and leaf profile, which the boot config fixes, so it is the route Plan
 // used. A target with no address is skipped. profile_contact takes policyref.Project's Email, which
 // re-validates the stored contact and drops a field that no longer passes.
-func (w *Worker) recipients(c claimed, f approvalFacts, contact []byte) []recipient {
+//
+// unitAdmins is the unit_admins target's addresses, read by the caller; only user-subject grants on
+// the run's unit chain are in it.
+func (w *Worker) recipients(c claimed, f approvalFacts, contact []byte, unitAdmins []string) []recipient {
 	r := w.cfg.route(f.Kind, f.UnitID)
 	if r == nil || int(c.tier) >= len(r.Tiers) || !slices.Contains(r.Tiers[c.tier].Channels, c.channel) {
 		return nil
 	}
 	var out []recipient
 	for _, target := range r.Tiers[c.tier].Notify {
+		if target == TargetUnitAdmins {
+			for _, e := range unitAdmins {
+				if e != "" {
+					out = append(out, recipient{Role: target, Email: e})
+				}
+			}
+			continue
+		}
 		var email string
 		switch target {
 		case TargetRunOwner:
@@ -229,7 +240,14 @@ func (w *Worker) process(ctx context.Context, c claimed) {
 		w.finalize(ctx, c, &facts, outcome{state: types.NotifyDead, class: classUnknownChannel})
 		return
 	}
-	facts.Recipients = w.recipients(c, facts, contact)
+	var admins []string
+	if r := w.cfg.route(facts.Kind, facts.UnitID); r != nil && int(c.tier) < len(r.Tiers) && slices.Contains(r.Tiers[c.tier].Notify, TargetUnitAdmins) {
+		if admins, err = w.unitAdminEmails(ctx, facts.UnitID); err != nil {
+			w.finalize(ctx, c, &facts, w.failed(c, result{class: classStore, retryable: true}))
+			return
+		}
+	}
+	facts.Recipients = w.recipients(c, facts, contact, admins)
 	facts.RedactRequester = ch.RedactRequester
 	body, err := ch.render(c.id, c.tier, facts, w.console, w.masks.Masker(facts.RunID))
 	if errors.Is(err, errNoRecipient) {
