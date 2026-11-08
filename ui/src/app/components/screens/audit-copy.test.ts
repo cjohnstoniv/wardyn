@@ -222,7 +222,7 @@ describe("the unit admin's Audit copy", () => {
 
   it("names three of five units and counts the other two", () => {
     expect(AUDIT.unitNoteBody(["a", "b", "c", "d", "e"])).toBe(
-      `Showing runs in \`a\`, \`b\`, \`c\` and 2 more and the units below them${TAIL}`,
+      `Showing runs in \`a\`, \`b\`, \`c\` and 2 more, and the units below them${TAIL}`,
     );
   });
 

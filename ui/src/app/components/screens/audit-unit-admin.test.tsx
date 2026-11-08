@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
@@ -122,7 +122,7 @@ describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
 
     const note = (await screen.findByText("Runs in your units")).parentElement!;
     expect(note).toHaveTextContent(
-      "Showing runs in alpha, beta, gamma and 1 more and the units below them, and the changes made to those units.",
+      "Showing runs in alpha, beta, gamma and 1 more, and the units below them, and the changes made to those units.",
     );
     expect(screen.queryByText("delta")).not.toBeInTheDocument();
   });
@@ -175,5 +175,51 @@ describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
 
     expect(await screen.findByText(AUDIT.MEMBER_FEED_TITLE)).toBeInTheDocument();
     expect(screen.queryByText("Runs in your units")).not.toBeInTheDocument();
+  });
+
+  it("says Loading run, never Run not found, while a unit drill's trail is still on its way", async () => {
+    listAuditMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve([ev({ id: "e1", run_id: "run_abcdef12", action: "egress.allow", target: "api.github.com:443" })]),
+            80,
+          ),
+        ),
+    );
+    getRunMock.mockResolvedValue(undefined);
+    await mount({ me: unitsOf("payments"), url: "/admin/audit?run_id=run_abcdef12" });
+
+    expect(await screen.findByText("Loading run…")).toBeInTheDocument();
+    await waitFor(() => expect(getRunMock).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
+    expect(await screen.findByText("This run is in your unit")).toBeInTheDocument();
+    expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
+  });
+
+  it("shows neither empty state while /me has not answered, then the unit one", async () => {
+    let answer: (me: unknown) => void = () => {};
+    whoamiMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const { OperatorProvider } = await import("../wardyn/operator-context");
+    render(
+      <MemoryRouter initialEntries={["/admin/audit"]}>
+        <OperatorProvider operator={false} securityOperator={false}>
+          <AuditScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(screen.queryByText(AUDIT.MEMBER_FEED_TITLE)).not.toBeInTheDocument();
+    expect(screen.queryByText(AUDIT.UNIT_EMPTY_TITLE)).not.toBeInTheDocument();
+
+    await act(async () => answer(unitsOf("payments")));
+    expect(await screen.findByText(AUDIT.UNIT_EMPTY_TITLE)).toBeInTheDocument();
   });
 });
