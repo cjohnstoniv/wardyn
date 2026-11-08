@@ -143,7 +143,8 @@ describe("ElevationDeciderCard: deciding", () => {
     await userEvent.click(screen.getByRole("button", { name: /Approve/ }));
     await vi.waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
     expect(toastError).toHaveBeenCalledWith("Couldn't approve this request", { description: "That request was already decided." });
-    expect(onDone).not.toHaveBeenCalled();
+    // Refused or decided, the next read says whether the card stays.
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   it("a failed deny is a toast with the server's sentence", async () => {

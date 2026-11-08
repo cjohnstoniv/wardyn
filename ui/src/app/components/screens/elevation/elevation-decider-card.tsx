@@ -31,12 +31,13 @@ export function ElevationDeciderCard({ request, onDone }: { request: GovernanceR
       if (approve) await requests.approve(request.id);
       else await requests.reject(request.id, "");
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      onDone();
     } catch (err) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     } finally {
       setBusy(false);
     }
+    // Decided or refused, the next read says whether the card stays.
+    onDone();
   };
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
