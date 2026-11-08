@@ -43,7 +43,8 @@ function rootOf(id: string | undefined, profiles: GovernanceUnit[], envelopes: G
     const p = byId.get(cur);
     // The walk left the listed profiles at a unit that is not a root: the server lists only envelopes at or
     // above a listed subtree, so one served envelope is this profile's; with several, the chip cannot say which.
-    if (!p) return envelopes.length === 1 ? envelopes[0].unit_id : null;
+    // A listed envelope root has every unit under it listed too, so a walk that left the list was never under it.
+    if (!p) return envelopes.length === 1 && !byId.has(envelopes[0].unit_id) ? envelopes[0].unit_id : null;
     cur = p.parent_id;
   }
   return null;
