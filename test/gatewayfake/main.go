@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command gatewayfake stands behind an AI gateway in the nightly gateway job
-// (scripts/kind-gateway-run.sh): a canned Anthropic Messages endpoint, a
-// one-tool MCP server, and a /_seen listing of what reached it. It holds no
-// provider key and calls nothing; the only credential it ever sees is the
-// throwaway value the job makes up.
+// (scripts/kind-gateway-run.sh) and in the gateway recipe test
+// (internal/egress/proxy/gateway_recipes_docker_test.go): a canned Anthropic Messages and OpenAI Responses
+// endpoint, a one-tool MCP server, and a /_seen listing of what reached it. It holds no provider key and
+// calls nothing; the only credential it ever sees is the throwaway value the job makes up.
 //
 // A TEST BINARY, never built by `make agent-images` and never published.
 package main
@@ -70,6 +70,7 @@ func (f *fake) handler() http.Handler {
 	mux.HandleFunc("/_seen", f.serveSeen)
 	mux.HandleFunc("/v1/messages", f.serveMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", f.serveCountTokens)
+	mux.HandleFunc("/v1/responses", f.serveResponses)
 	mux.HandleFunc("/mcp", f.serveMCP)
 	// Any other path the gateway forwards is recorded and refused, so /_seen
 	// names every path a harness reached beyond the two routes above.
@@ -153,6 +154,78 @@ func (f *fake) serveMessages(w http.ResponseWriter, r *http.Request) {
 		if fl, ok := w.(http.Flusher); ok {
 			fl.Flush()
 		}
+	}
+}
+
+// serveResponses answers POST /v1/responses. A "stream": true request gets the server-sent events the
+// Responses API sends, ending in response.completed with the usage; a plain one gets the response object.
+func (f *fake) serveResponses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	_ = readJSON(r, &req)
+	f.record(r, "model", "")
+	f.mu.Lock()
+	f.seen.ModelCalls++
+	f.mu.Unlock()
+	model := req.Model
+	if model == "" {
+		model = "fake-model"
+	}
+	// The object carries the fields a client library reads, so a gateway that parses it into a typed
+	// response has what it expects.
+	response := func(status string, usage any) map[string]any {
+		return map[string]any{
+			"id": "resp_gatewayfake", "object": "response", "created_at": 1700000000, "status": status, "model": model,
+			"error": nil, "incomplete_details": nil, "instructions": nil, "metadata": map[string]string{},
+			"parallel_tool_calls": true, "temperature": 1.0, "top_p": 1.0, "tool_choice": "auto", "tools": []any{},
+			"text": map[string]any{"format": map[string]string{"type": "text"}}, "truncation": "disabled", "store": false,
+			"output": []any{messageItem(status)}, "usage": usage,
+		}
+	}
+	usage := map[string]any{
+		"input_tokens": 3, "input_tokens_details": map[string]int{"cached_tokens": 0},
+		"output_tokens": 5, "output_tokens_details": map[string]int{"reasoning_tokens": 0}, "total_tokens": 8,
+	}
+	if !req.Stream {
+		writeJSON(w, http.StatusOK, response("completed", usage))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	part := map[string]any{"type": "output_text", "text": replyText, "annotations": []any{}}
+	events := []struct {
+		name string
+		data map[string]any
+	}{
+		{"response.created", map[string]any{"type": "response.created", "response": response("in_progress", nil)}},
+		{"response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": 0, "item": messageItem("in_progress")}},
+		{"response.output_text.delta", map[string]any{"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": replyText}},
+		{"response.output_text.done", map[string]any{"type": "response.output_text.done", "item_id": "msg_1", "output_index": 0, "content_index": 0, "text": replyText}},
+		{"response.content_part.done", map[string]any{"type": "response.content_part.done", "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": part}},
+		{"response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": messageItem("completed")}},
+		{"response.completed", map[string]any{"type": "response.completed", "response": response("completed", usage)}},
+	}
+	for i, e := range events {
+		e.data["sequence_number"] = i
+		b, _ := json.Marshal(e.data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, b)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
+}
+
+// messageItem is the one assistant message item a Responses answer holds.
+func messageItem(status string) map[string]any {
+	return map[string]any{
+		"type": "message", "id": "msg_1", "role": "assistant", "status": status,
+		"content": []any{map[string]any{"type": "output_text", "text": replyText, "annotations": []any{}}},
 	}
 }
 
