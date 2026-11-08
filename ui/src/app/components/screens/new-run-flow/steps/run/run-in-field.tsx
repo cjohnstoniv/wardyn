@@ -77,6 +77,7 @@ export function RunInField({ run, runIn, notice, homeFallbackName, dispatch }: {
     const next = choices?.items.find((i) => i.unitId === unitId);
     if (!next) return;
     if (notice) dispatch({ type: "guided", patch: { runInCleared: undefined } });
+    if (!isHome(next)) dispatch({ type: "guided", patch: { runInPicked: { unitId: next.unitId, name: next.name } } });
     dispatch({ type: "edit", apply: (i) => (isHome(next) ? withoutRunIn(i) : withRunIn(i, next.unitId)) });
   };
   return (

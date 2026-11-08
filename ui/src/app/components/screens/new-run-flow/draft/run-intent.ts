@@ -72,6 +72,8 @@ export interface GuidedFacts {
   machineCleared?: string;
   /** A Run in choice the units no longer offer: the notice saying where the run goes instead. */
   runInCleared?: string;
+  /** The unit last picked under Run in, by id and the name it had then, so that notice can name it. */
+  runInPicked?: { unitId: string; name: string };
 }
 
 export interface DocDiagnostic {
