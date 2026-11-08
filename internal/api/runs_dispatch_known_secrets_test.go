@@ -224,30 +224,45 @@ func TestKnownSecrets_ResolvingNamesCopiesTheBlockBeforeAppending(t *testing.T) 
 // The policy.resolve row keeps a count, taken before the files join, so it
 // counts the env values and not the file's; no row carries a value.
 func TestKnownSecrets_AuditCountsExcludeFileValuesAndCarryNoValue(t *testing.T) {
-	f := newKnownSecretFixture(t)
-	f.dispatch(t, detectingPolicy(fileSecretGrant("api-token", "deploy-token", true)))
-	var resolved *types.AuditEvent
-	evs := f.audit.snapshot()
-	for i := range evs {
-		ev := &evs[i]
-		if ev.Action == "run.policy.resolve" {
-			resolved = ev
-		}
-		if strings.Contains(string(ev.Data), fileOwnValue) {
-			t.Errorf("audit row %s carries a placed secret's value", ev.Action)
-		}
-	}
-	if resolved == nil {
-		t.Fatal("no run.policy.resolve row")
-	}
-	var datum struct {
-		LLMInspection *types.LLMInspectionSpec `json:"llm_inspection"`
-	}
-	if err := json.Unmarshal(resolved.Data, &datum); err != nil || datum.LLMInspection == nil {
-		t.Fatalf("policy.resolve datum: %v, %s", err, resolved.Data)
-	}
-	if got := datum.LLMInspection.WorkspaceSecretValues; len(got) != 0 {
-		t.Errorf("policy.resolve counts %v for a run whose only placed secret is a file; the count is taken before files join", got)
+	for _, c := range []struct {
+		name   string
+		grants []types.GrantSpec
+		want   []string
+	}{
+		{"file only", []types.GrantSpec{fileSecretGrant("api-token", "deploy-token", true)}, nil},
+		// The env value has two forms (as stored, without its line break); the file's adds none to the count.
+		{"env and file", []types.GrantSpec{envSecretGrant("CORP_TOKEN", knownEnvTokenSecret), fileSecretGrant("api-token", "deploy-token", true)},
+			[]string{"<2 value(s) redacted>"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newKnownSecretFixture(t)
+			f.dispatch(t, detectingPolicy(c.grants...))
+			var resolved *types.AuditEvent
+			evs := f.audit.snapshot()
+			for i := range evs {
+				ev := &evs[i]
+				if ev.Action == "run.policy.resolve" {
+					resolved = ev
+				}
+				for _, v := range []string{fileOwnValue, knownEnvTrimmed} {
+					if strings.Contains(string(ev.Data), v) {
+						t.Errorf("audit row %s carries a placed secret's value", ev.Action)
+					}
+				}
+			}
+			if resolved == nil {
+				t.Fatal("no run.policy.resolve row")
+			}
+			var datum struct {
+				LLMInspection *types.LLMInspectionSpec `json:"llm_inspection"`
+			}
+			if err := json.Unmarshal(resolved.Data, &datum); err != nil || datum.LLMInspection == nil {
+				t.Fatalf("policy.resolve datum: %v, %s", err, resolved.Data)
+			}
+			if got := datum.LLMInspection.WorkspaceSecretValues; !slices.Equal(got, c.want) {
+				t.Errorf("policy.resolve counts %v, want %v: the count is taken before files join", got, c.want)
+			}
+		})
 	}
 }
 
