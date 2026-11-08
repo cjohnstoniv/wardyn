@@ -129,7 +129,8 @@ func capLacks[C comparable](cap *[]C, c C) bool {
 }
 
 // runADOCap reads the run and its outer layers now; an error is the run's row unread. A boundary or a
-// restriction that cannot be read is a cap that lists nothing, never no cap.
+// restriction that cannot be read is an error here, so a resolve is retried rather than answered from a guess;
+// a dispatch reads the same layer as a cap that lists nothing (adoCapOf), never no cap.
 func (s *Server) runADOCap(ctx context.Context, runID uuid.UUID) (*[]adoscope.Capability, error) {
 	if s.cfg.Store == nil {
 		return nil, errors.New("api: no store to read the run from")
@@ -138,12 +139,16 @@ func (s *Server) runADOCap(ctx context.Context, runID uuid.UUID) (*[]adoscope.Ca
 	if err != nil {
 		return nil, fmt.Errorf("api: read the run for its Azure DevOps cap: %w", err)
 	}
-	return adoCapOf(s.outerLayers(ctx, run)), nil
+	layers := s.outerLayers(ctx, run)
+	if slices.ContainsFunc(layers, func(l sealLayer) bool { return l.unread }) {
+		return nil, errors.New("api: the run's boundary or restrictions could not be read")
+	}
+	return adoCapOf(layers), nil
 }
 
 const (
 	adoCapAtResolveRefusal   = "Wardyn stopped this run's Azure DevOps access: the Wardyn boundary or a restriction no longer allows %s. Start a new run."
-	adoCapRunUnreadableBody  = "This run could not be read, so its Azure DevOps access cannot be checked against the Wardyn boundary and its restrictions"
+	adoCapRunUnreadableBody  = "This run, the Wardyn boundary or its restrictions could not be read, so its Azure DevOps access cannot be checked; try again"
 	adoCapLaneNothingDetail  = "Can't launch: the Wardyn boundary or a restriction allows none of this run's Azure DevOps capabilities. Ask a security admin to change the cap."
 	adoCapLanePolicyDetail   = "Can't launch with this policy. It asks for %s on Azure DevOps, which the Wardyn boundary or a restriction does not allow. Ask a security admin to change the cap."
 	githubCapLaneNothingBody = "The Wardyn boundary or a restriction allows none of the GitHub CLI's capabilities, so the GitHub CLI would hold none. " +
@@ -178,13 +183,14 @@ func (s *Server) capADOLane(ctx context.Context, run types.AgentRun, ado adoEntr
 	}
 	ado.ceiling = withinADOCap(ado.ceiling, cap)
 	kept := withinADOCap(ado.caps, cap)
-	if outside := adoCapsOutside(adoscope.ExpandPR(ado.caps), *cap); ado.capsFromPolicy && len(outside) > 0 {
+	outside := adoCapsOutside(adoscope.ExpandPR(ado.caps), *cap)
+	if ado.capsFromPolicy && len(outside) > 0 {
 		return refuse(fmt.Sprintf(adoCapLanePolicyDetail, adoShortLabels(outside)))
 	}
 	if len(kept) == 0 {
 		return refuse(adoCapLaneNothingDetail)
 	}
-	if len(kept) != len(ado.caps) {
+	if len(outside) > 0 {
 		ado.caps, policy.AzureDevOpsCapabilities = kept, slices.Clone(kept)
 	}
 	return ado, nil

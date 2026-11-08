@@ -48,6 +48,10 @@ type sealLayer struct {
 	// cap; the seal never reads them, the cap helpers do (vcs_capability_cap.go).
 	adoCap    *[]adoscope.Capability
 	githubCap *[]ghscope.Capability
+	// unread marks the layer standing in for a boundary or restriction that could not be read. Its caps list
+	// nothing, so a dispatch fails closed; a credential resolve reads it as an unreadable run instead
+	// (runADOCap), so a transient read error is retried and revokes nothing.
+	unread bool
 }
 
 // sealDecision is one knob a layer narrowed.
@@ -72,7 +76,7 @@ func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLaye
 		off := false
 		none := types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
 		return []sealLayer{{rec: boundaryProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}, desktop: &none, adoCap: &[]adoscope.Capability{}, githubCap: &[]ghscope.Capability{}}}
+			grants: &[]types.GrantSpec{}, desktop: &none, adoCap: &[]adoscope.Capability{}, githubCap: &[]ghscope.Capability{}, unread: true}}
 	}
 	var layers []sealLayer
 	if b.HardLimits() {

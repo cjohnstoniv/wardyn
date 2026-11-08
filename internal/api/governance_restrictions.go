@@ -169,7 +169,7 @@ func (s *Server) restrictionSealLayers(ctx context.Context, run types.AgentRun) 
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		off := false
 		return []sealLayer{{rec: policyref.Provenance{Layer: policyref.LayerRestriction}, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}, adoCap: &[]adoscope.Capability{}, githubCap: &[]ghscope.Capability{}}}
+			grants: &[]types.GrantSpec{}, adoCap: &[]adoscope.Capability{}, githubCap: &[]ghscope.Capability{}, unread: true}}
 	}
 	layers := make([]sealLayer, 0, len(list))
 	for _, r := range list {
