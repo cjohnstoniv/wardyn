@@ -1572,6 +1572,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A deployment that wants this gate to bind must treat the admin token accordingly (SSO configured, token held out of band).
 - Scoped to `egress_domain` only (Azure DevOps capability escalations have their own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`, below).
 - A value that is not a bool exits 2 at boot in every mode (`#202`; before that it was silently read as unset).
+- A unit's [deciders](operations/deciders.md) can turn the same rule on for its kind with `second_human`; it is never weaker than this switch, and the bypass row's `switch` then reads `unit deciders (<unit id>)`.
 - See [`docs/OPERATIONS.md`](OPERATIONS.md) and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.
 
 ### `WARDYN_CAPABILITY_SECOND_HUMAN`
@@ -1913,6 +1914,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Wardyn keeps no IdP token, so re-login is the only way to refresh a stamp.
 - Turning it on makes every token holder sign in once, because migration `0115` dated existing stamps at `created_at`.
 - Unset or `0` changes nothing.
+- Set it when a `group:<name>` entry in a unit's [deciders](operations/deciders.md) decides credentials, pushes or wide scopes: a group is read from the session's or token's snapshot, which this bounds.
 
 ### `WARDYN_OIDC_SESSION_TTL`
 

@@ -3728,6 +3728,27 @@ has four-eyes.**
      capability grants directly, without a pending change: the identity provider is the single
      authority for that write.
 
+### Unit deciders: who may decide a hold, and five residuals
+
+- A unit's [deciders](../docs/operations/deciders.md) name who besides the security tier decides each kind of hold for runs launched in it. Without rules nothing changes.
+- `resolveDecider` in [`internal/api/deciders_resolve.go`](../internal/api/deciders_resolve.go) reads the rules, the grants and the caller's groups when a decision arrives, never when the hold is raised.
+- `unit_admins` and `group:<name>` never match the run's creator, the sponsor of a service identity that created it, or its recorded author. A read that cannot tell counts as a match and refuses.
+- A rule's `second_human` and `max_scope` bind security admins too. The admin token stays the audited break-glass for `second_human`.
+- It is published here because of what it leaves open.
+
+**Residuals:**
+
+1. **While the rules are unreadable, a security admin decides with no rule.**
+   - If the deciders table or the unit tree cannot be read, `deciderForDecide` in [`internal/api/deciders_resolve.go`](../internal/api/deciders_resolve.go) lets a security admin decide as if no rule governed the hold.
+   - That rule's `second_human` and `max_scope` do not bind them for the length of the outage: an `always` egress decision would pass.
+   - `WARDYN_EGRESS_SECOND_HUMAN` and `WARDYN_CAPABILITY_SECOND_HUMAN` still bind.
+   - Everyone else is refused: the run's owner gets `503` `deciders_unreadable`, and any other member the usual `404`.
+   - It is the availability trade: security must always be able to decide.
+2. **A revoke that lands during a decision does not undo it.** A decision reads the rule and the caller's grants, then commits through `decide` in [`internal/api/approvals.go`](../internal/api/approvals.go). A grant or group removed between the two does not stop that one decision. The egress grant check has the same window.
+3. **Deciders see other people's holds.** A decider reads the host, the tool call, the push paths and who asked. They never see the run, its output or a terminal.
+4. **A group decider is as current as its snapshot.** A person who leaves a group at the identity provider keeps deciding until their session ends or SCIM removes them. A token's group snapshot can be as old as the token. `WARDYN_ROLE_STAMP_TTL` (off by default) bounds both, and is advised when a group decides credentials or pushes.
+5. **A downgrade widens.** A build without deciders ignores the `governance_unit_deciders` table, so a rule that left out `owner` stops binding and the run's owner decides again.
+
 ### Coalesced `auth.fail` rows: the peer address is not the bound
 
 - Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.fail` audit rows — same refusing boundary, same `reason`, same request path — into the first row plus one **new** summary row carrying `count`/`peers`/`first_seen`/`last_seen` (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off).

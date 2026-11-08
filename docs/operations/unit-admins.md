@@ -5,6 +5,7 @@
 - A unit admin is a person or an IdP group granted on one unit. They govern that unit and every unit below it, and nothing else.
 - It is a grant on a unit, not a fourth role: the session role stays `user`, `security_admin` or `admin` ([three roles](three-roles.md)).
 - A security admin is never narrowed by a grant. Super and security admins reach every unit, as before.
+- A grant does not let anyone decide a run's holds. That takes a rule in the unit's [deciders](deciders.md) naming `unit_admins`.
 - The audit contract is [`docs/AUDIT-ACTIONS.md`](../AUDIT-ACTIONS.md)'s `governance.unit_admin.grant` and `governance.unit_admin.revoke` rows.
 
 ## Who holds a grant
@@ -33,6 +34,7 @@
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
 | `PUT /governance/changes/{id}/note` | the note on a change they proposed, while it is pending |
 | `GET /audit`, `GET /audit/export` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows) |
+| `PUT /governance/units/{id}/deciders` | a unit strictly below one of theirs; always held ([deciders](deciders.md)) |
 
 - Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
   - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.
@@ -61,16 +63,18 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 | moving a membership | the destination path narrows the source path, and the move activates or vacates no other legacy context | otherwise, for an approver who governs every unit involved |
 | renaming a unit | the rename changes no person's legacy context, and the unit ties in priority with no other group's unit | otherwise, for an approver who governs every unit it activates or vacates |
 | granting or revoking a unit admin | — | always |
+| setting a unit's deciders | — | always |
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
 - A held change may be decided by a security admin, or by a unit admin who governs every unit it touches. For a grant that means strictly above the granted unit.
 - A held change is checked again when decided; if what let it in has changed since, it answers stale and changes nothing.
-- Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening.
+- Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening. Nobody sets deciders on their own unit either, for the same reason.
 - The change read and the dry-run report list `approvers`: who could decide it, the proposer left out.
 
 ## Locks
 
 - A unit's `locked_knobs`, and the boundary's, name knobs no unit below may change, a narrowing included.
+- `deciders` locks the unit's decider rules the same way: a write to a unit below the locker is `409`, and locking it over units that already state rules is `409`, listing them.
 - `desktop.paste_in`, `desktop.copy_out`, `desktop.upload` and `desktop.download` each lock one desktop direction at the locker's rule.
 - A write that changes a locked knob is `409` `unit_knob_locked`: "`<knob>` is locked by `<locker>`; ask `<contact>`".
 - Locking a knob a unit below sets to another value is the same `409`, listing those units. Their values are never cleared for you.

@@ -493,7 +493,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 
 - **What a delegated token can do.**
   - Exactly: `POST /runs`, `POST /runs/preflight`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events` (the lifecycle stream, at most 32 open per person across every portal and their own clients), `GET /runs/{id}/output` (command output only; nothing recovered from a recording), `PATCH /runs/{id}` (end and wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also `/attach/ticket`, and the UI-gateway ticket), and `GET /me`.
-  - Every other route answers `403` with reason `delegation_scope` and an `authz.denied` row — including secrets, API tokens, SSH keys, approving or denying the person's own held egress, revive, and every admin route.
+  - Every other route answers `403` with reason `delegation_scope` and an `authz.denied` row — including secrets, API tokens, SSH keys, approving or denying the person's own held egress, revive, and every admin route. A unit's [deciders](deciders.md) never change this: a delegated token decides nothing and lists nothing it could decide.
   - Setting a secret and adding an SSH key also refuse a delegated request in their own handlers, so a later change to the allow-list cannot open them.
   - The person is always treated at **user** reach, whatever their own role: an admin acting through a portal reaches only their own runs.
   - Ownership, secrets, drives and the governance ceiling all resolve on the person.
