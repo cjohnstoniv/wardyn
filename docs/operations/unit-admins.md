@@ -32,10 +32,21 @@
 | `POST /governance/check`, `POST /governance/dry-run` | a target in their units; the boundary target stays the security tier's |
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
 | `PUT /governance/changes/{id}/note` | the note on a change they proposed, while it is pending |
+| `GET /audit`, `GET /audit/export` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows) |
 
 - Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
   - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.
 - A caller with no grant at all is refused the same reason with "this needs a unit admin or a security admin".
+
+## The unit view of audit rows
+
+Unit admins read the audit rows of runs in their subtrees. It is on at upgrade; to keep a person out, remove their grant.
+
+- Rows with no run, such as sign-ins and governance writes, are not served.
+- A row keeps its time, action, actor, outcome and run, and its target on `run.*`, `egress.*` and `approval.*` rows.
+- Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class`, `exit_code` and `decision`. Each is a number, a code or a list of them; a value with a space is left out. Personal walls, restriction names, secret names, error text and a held push's paths are never served.
+- A `target` filter needs a `run.`, `egress.` or `approval.` `action` or `action_prefix`, else `400` `audit_unit_target_filter`.
+- Their own runs' rows read as any owner's do. A run outside their subtrees answers a member's empty `200`.
 
 ## Four-eyes
 
