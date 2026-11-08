@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, consoleAPI, gotoConsole, navTo, asRealSecurityAdmin } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, asRealSecurityAdmin, asRealUnitAdmin, consoleAPI, gotoConsole, grantUnitAdmin, navTo, navToRoute, sidebarLink } from "./fixtures";
 import { DECIDERS, DECIDER_KIND_LABEL } from "../src/app/components/wardyn/copy/deciders";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 
@@ -118,5 +118,28 @@ test.describe("governance — profile deciders", () => {
     await rule.getByLabel(DECIDERS.ELEV_MAX_LABEL, { exact: true }).fill("10");
     await expect(rule.getByText(DECIDERS.ELEV_MAX_ERROR, { exact: true })).toBeVisible();
     await expect(rule.getByRole("button", { name: DECIDERS.DONE, exact: true })).toBeDisabled();
+  });
+
+  test("a unit admin reads their own unit's deciders", async ({ page }) => {
+    await grantUnitAdmin(page, ids.p);
+    await asRealUnitAdmin(page);
+    await gotoConsole(page);
+    await sidebarLink(page, "Governance").click();
+    await page.getByRole("button", { name: `${GOV.EDIT} ${NAME_P}`, exact: true }).click();
+    await expect(page.getByRole("heading", { name: DECIDERS.TITLE, level: 4 })).toBeVisible();
+
+    const section = page.getByTestId("governance-profile-deciders");
+    await expect(section.getByText(DECIDERS.WHO_GROUP(LEADS), { exact: true })).toBeVisible();
+    await expect(section.getByRole("button", { name: DECIDERS.EDIT, exact: true })).toHaveCount(0);
+    await expect(section.getByRole("button", { name: DECIDERS.REMOVE, exact: true })).toHaveCount(0);
+    await expect(section.getByRole("button", { name: DECIDERS.ADD, exact: true })).toHaveCount(0);
+    await expect(section.getByText(DECIDERS.OWN_UNIT(NAME_P), { exact: true })).toBeVisible();
+
+    // The grant is on the parent profile, not on the child.
+    await navToRoute(page, "/admin/governance");
+    await page.getByRole("button", { name: `${GOV.EDIT} ${NAME_C}`, exact: true }).click();
+    await expect(page.getByTestId("governance-profile-deciders")).toBeVisible();
+    await expect(page.getByText(DECIDERS.OWN_UNIT(NAME_C), { exact: true })).toHaveCount(0);
+    await expect(page.getByText(DECIDERS.OWN_UNIT(NAME_P), { exact: true })).toHaveCount(0);
   });
 });

@@ -29,6 +29,7 @@ import { CHANGES, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { aheadByHours } from "../../../lib/test-clock";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { DECIDERS, DECIDER_KIND_LABEL } from "../../wardyn/copy/deciders";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { ProfileEditor } from "./profile-editor";
 import { whoPhrase } from "./decider-rules";
 import { UnitDeciders } from "./unit-deciders";
@@ -144,6 +145,36 @@ describe("UnitDeciders: inherited and locked", () => {
   });
 });
 
+describe("UnitDeciders: a unit admin's own unit", () => {
+  const withGrant = (grant: { unit_id: string; unit_name: string }[], disabled = true) =>
+    render(
+      <OperatorProvider operator={false} unitAdminOf={grant}>
+        <UnitDeciders profile={P} profiles={[P]} deciders={[ownEntry(FOUR)]} supported unitNames={{}} disabled={disabled} onChanged={vi.fn()} />
+      </OperatorProvider>,
+    );
+
+  it("says the viewer administers this profile, read only", () => {
+    withGrant([{ unit_id: "p1", unit_name: "Payments" }]);
+    expect(screen.getByText(DECIDERS.OWN_UNIT("Payments"))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: DECIDERS.EDIT })).toBeNull();
+  });
+
+  it("says nothing for another unit's grant", () => {
+    withGrant([{ unit_id: "other", unit_name: "Other" }]);
+    expect(screen.queryByText(DECIDERS.OWN_UNIT("Payments"))).toBeNull();
+  });
+
+  it("says nothing with no grant", () => {
+    withGrant([]);
+    expect(screen.queryByText(DECIDERS.OWN_UNIT("Payments"))).toBeNull();
+  });
+
+  it("says nothing when the section is editable", () => {
+    withGrant([{ unit_id: "p1", unit_name: "Payments" }], false);
+    expect(screen.queryByText(DECIDERS.OWN_UNIT("Payments"))).toBeNull();
+  });
+});
+
 describe("UnitDeciders: the states", () => {
   it("says an older server does not support deciders", () => {
     mount({ supported: false, deciders: undefined });
@@ -204,6 +235,13 @@ describe("UnitDeciders: what the rules above leave", () => {
 });
 
 describe("UnitDeciders: the rule editor", () => {
+  it("heads each rule with its number and kinds", async () => {
+    mount();
+    await userEvent.click(screen.getAllByRole("button", { name: DECIDERS.EDIT })[1]);
+    expect(within(editorBox(1)).getByText("Rule 2 · Azure DevOps escalation, MCP tool call and Kubernetes call")).toBeInTheDocument();
+    expect(within(editorBox(1)).getByText(DECIDERS.WHO_DECIDES)).toBeInTheDocument();
+  });
+
   it("disables a kind another rule names, with the rule's number", async () => {
     mount();
     await userEvent.click(screen.getAllByRole("button", { name: DECIDERS.EDIT })[0]);
