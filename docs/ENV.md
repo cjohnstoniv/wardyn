@@ -1426,7 +1426,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The shape was verified against kubectl v0.32.2. A kubectl that shapes the patch differently is refused.
 - The cluster's RBAC still scopes verbs and resources: grant the account `get`, `list`, `watch` and `patch` on `deployments` in the row's namespaces, and nothing wider.
 - Update the proxy image before using `restart`. An older proxy refuses to start on a config that carries it.
-- `approve_each: true` (off by default; with `restart` or `write` only) holds each write the door admits until a person approves that exact request: its method, path, query, media type and body. The run's owner decides it, once, as for one MCP call.
+- `approve_each: true` (off by default; with `restart` or `write` only) holds each write the door admits until a person approves that exact request: its method, path, query, media type and body. The run's owner decides it, once, as for one MCP call. A unit's deciders rule for `kube_call` changes who decides (owner, unit admins or a group), may require a second person and caps the scope; an owner the rule leaves out gets 403 `not_a_decider`.
 - A held write waits 90 seconds, then kubectl prints a `403` naming the approval. Run the same command again once it is approved; it is sent once, with the query and body that were shown. A body must be JSON, not encoded, at most 32 KiB.
 - A restart is approved by what it restarts, so the next `kubectl rollout restart` of that deployment spends the yes. Update the proxy image before using `approve_each`.
 - A cluster on a private address also needs the admin's internal-hosts lift, as any private host does.

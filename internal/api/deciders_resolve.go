@@ -72,11 +72,11 @@ func (v deciderVerdict) deciderList() []string {
 // break-glass audit row.
 func deciderSwitchName(unit uuid.UUID) string { return "unit deciders (" + unit.String() + ")" }
 
-// deciderKindOf is the kind a rule names for ap. Six of the nine kinds are run holds: egress_domain,
-// credential, push_content, a reviewed download (file_download), and the two tool_calls a person may decide, an
-// Azure DevOps escalation and one MCP call. kube_call, image and elevation name requests that are not run holds,
-// so no approval maps to them and a rule for one of them governs no run hold. Any other row (a plain tool_call, credential_reauth,
-// human_takeover) maps to none and is decided exactly as without deciders.
+// deciderKindOf is the kind a rule names for ap. Seven of the nine kinds are run holds: egress_domain,
+// credential, push_content, a reviewed download (file_download), and the three tool_calls a person may decide, an
+// Azure DevOps escalation, one MCP call and one kubectl write (kube_call). image and elevation name requests that
+// are not run holds, so no approval maps to them and a rule for one of them governs no run hold. Any other row (a
+// plain tool_call, credential_reauth, human_takeover) maps to none and is decided exactly as without deciders.
 func deciderKindOf(ap types.ApprovalRequest) string {
 	switch ap.Kind {
 	case types.ApprovalEgressDomain:
@@ -90,6 +90,9 @@ func deciderKindOf(ap types.ApprovalRequest) string {
 	case types.ApprovalToolCall:
 		if _, isADO := adoEscalationScope(ap); isADO {
 			return types.DeciderKindADOEscalation
+		}
+		if isKubeCallRow(ap) {
+			return types.DeciderKindKubeCall
 		}
 		if isMCPCallRow(ap) {
 			return types.DeciderKindMCPCall
