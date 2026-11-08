@@ -165,9 +165,9 @@ func (s *Server) restrictionSealLayers(ctx context.Context, run types.AgentRun) 
 	if !ok || err != nil {
 		slog.ErrorContext(ctx, "wardynd: read the run's restrictions at the seal; the run is sealed to no egress",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		off := false
+		off, held := false, types.TransferBlocked
 		return []sealLayer{{rec: policyref.Provenance{Layer: policyref.LayerRestriction}, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}}}
+			grants: &[]types.GrantSpec{}, dataOut: &held, denyAllPushes: true}}
 	}
 	layers := make([]sealLayer, 0, len(list))
 	for _, r := range list {
@@ -181,8 +181,8 @@ func (s *Server) restrictionSealLayers(ctx context.Context, run types.AgentRun) 
 // directions, and keeps its withheld credentials from the run.
 func restrictionSealLayer(r types.Restriction) sealLayer {
 	ov := r.Spec.Overlay()
-	return sealLayer{rec: restrictionProvenance(r), egress: ov, desktop: ov.Desktop, withheldGrants: r.Spec.WithheldGrants,
-		denyAllPushes: ov.PushRules != nil && ov.PushRules.DenyAll != nil && *ov.PushRules.DenyAll}
+	return sealLayer{rec: restrictionProvenance(r), egress: ov, desktop: ov.Desktop, dataOut: ov.DataOut, withheldGrants: r.Spec.WithheldGrants,
+		denyAllPushes: ov.PushRules != nil && ov.PushRules.DenyAll != nil && *ov.PushRules.DenyAll || dataOutBlocks(ov.DataOut)}
 }
 
 // foldRestrictionLimits is p with the current limits of run's captured restrictions met into it, so a

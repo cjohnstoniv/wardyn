@@ -208,9 +208,7 @@ func TestDataOutAbsentChangesNothing(t *testing.T) {
 // row, and the desktop is not.
 func TestDataOutWebAppRefusedDesktopOpen(t *testing.T) {
 	h := newUIHarness(t, okBackend())
-	h.store.sshMemStore.mu.Lock()
-	h.store.sshMemStore.policy = types.RunPolicySpec{DataOut: types.TransferReview}
-	h.store.sshMemStore.mu.Unlock()
+	h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{DataOut: types.TransferReview})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session")
 	if h.srv.refuseAppDataOut(w, r, h.run, "code") != true || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonDataOutBlocked) {

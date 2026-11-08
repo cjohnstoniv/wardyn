@@ -37,6 +37,8 @@ type sealLayer struct {
 	egress  types.CeilingOverlay
 	grants  *[]types.GrantSpec
 	desktop *types.DesktopControls
+	// dataOut is the least strict data_out rule the layer allows a run, nil when it names none.
+	dataOut *types.TransferRule
 	// withheldGrants is the credentials the layer keeps from a run (a restriction's withheld_grants).
 	withheldGrants []types.GrantSpec
 	// denyAllPushes is the layer's refusal of every push (push_rules.deny_all): a person's walls or a
@@ -65,16 +67,23 @@ func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLaye
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		off := false
 		none := types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
+		held := types.TransferBlocked
 		return []sealLayer{{rec: boundaryProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}, desktop: &none}}
+			grants: &[]types.GrantSpec{}, desktop: &none, dataOut: &held, denyAllPushes: true}}
 	}
 	var layers []sealLayer
 	if b.HardLimits() {
-		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop})
+		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop,
+			dataOut: b.Spec.DataOut, denyAllPushes: dataOutBlocks(b.Spec.DataOut)})
 	}
 	layers = append(layers, s.restrictionSealLayers(ctx, run)...)
 	layers = append(layers, s.personalWallsSealLayer(ctx, run)...)
 	return append(layers, wallPresetSealLayer(run)...)
+}
+
+// dataOutBlocks reports whether rule is blocked, which refuses every push too.
+func dataOutBlocks(rule *types.TransferRule) bool {
+	return rule != nil && *rule == types.TransferBlocked
 }
 
 // reassertDenyAllPushes sets push_rules.deny_all on a revived run's proxy config when an outer layer
@@ -162,7 +171,7 @@ func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *
 // layer that carries tool, push or recording rules (a restriction's) meets those
 // too, and each is written back only when it narrows, so a policy the layer
 // already holds keeps its spelling. The desktop directions a layer blocks are
-// blocked (types.DesktopControls.Meet). Only those knobs are read, so nothing
+// blocked (types.DesktopControls.Meet), and its data_out rule is the stricter value. Only those knobs are read, so nothing
 // else in spec can change. With no layers spec is untouched.
 func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 	var decided []sealDecision
@@ -206,6 +215,12 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 			if d := spec.Desktop.Meet(l.desktop); d != spec.Desktop.Effective() {
 				spec.Desktop = &d
 				decided = append(decided, sealDecision{"desktop", l.rec})
+			}
+		}
+		if l.dataOut != nil {
+			if v := types.StricterTransfer(spec.DataOut.DataOut(), l.dataOut.DataOut()); v != spec.DataOut.DataOut() {
+				spec.DataOut = v
+				decided = append(decided, sealDecision{"data_out", l.rec})
 			}
 		}
 	}

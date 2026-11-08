@@ -195,6 +195,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateRecordingLevel(spec.Recording); err != nil {
 		return err
 	}
+	if err := validateDataOut(spec.DataOut); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}

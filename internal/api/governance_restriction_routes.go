@@ -113,6 +113,11 @@ func validateRestriction(b *types.RestrictionWrite) error {
 	if err := types.RestrictionBoolsFalseOnly(b.Spec, b.Limits); err != nil {
 		return err
 	}
+	if b.Spec.DataOut != nil {
+		if err := validateDataOut(*b.Spec.DataOut); err != nil {
+			return err
+		}
+	}
 	if b.Contact != nil && b.Contact.IsZero() {
 		b.Contact = nil
 	}

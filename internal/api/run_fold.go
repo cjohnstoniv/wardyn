@@ -200,6 +200,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPortalUnit, foldAll},
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
+	{(*Server).stepComputerFolderDataOut, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepADOOverride, foldAll},
 	{(*Server).stepDrive, foldAll},

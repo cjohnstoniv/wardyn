@@ -111,7 +111,7 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonUIGatewayNoRunner, "no runner configured; the desktop's files are unavailable")
 		return run, types.DesktopControls{}, false
 	}
-	apps, rules, err := s.runDesktopPolicy(r.Context(), run.ID)
+	apps, rules, dataOut, err := s.runDesktopPolicy(r.Context(), run.ID)
 	if err != nil {
 		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the transfer is refused", "run_id", run.ID, "err", err)
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
@@ -119,8 +119,12 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	}
 	// A Linux VM run's built-in desktop is a desktop with no declared app: its files move under the same rules.
 	if len(apps) == 0 && run.MachineKind != types.MachineLinuxVM {
-		writeErrorReason(w, http.StatusConflict, reasonDesktopTransferUnavailable, "this run's policy declares no UI app, so it has no desktop to move files to")
-		return run, types.DesktopControls{}, false
+		if dataOut != types.TransferReview {
+			writeErrorReason(w, http.StatusConflict, reasonDesktopTransferUnavailable, "this run's policy declares no UI app, so it has no desktop to move files to")
+			return run, types.DesktopControls{}, false
+		}
+		// data_out review: ~/Transfers is open for reviewed downloads alone, on a run with no desktop.
+		rules = types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferReview}
 	}
 	return run, rules, true
 }
@@ -185,6 +189,9 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 			_, err := io.Copy(&listing, io.LimitReader(o, 64<<10))
 			return err
 		}, strconv.Itoa(maxDesktopListed)); err != nil || code != 0 {
+			if s.refuseReviewUnavailable(w, r, run, err) {
+				return
+			}
 			writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, fmt.Sprintf("could not list %s in the desktop (exit %d)", desktopTransferFolder, code))
 			return
 		}

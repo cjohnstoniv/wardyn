@@ -65,6 +65,11 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	actorType, principal := actorFromRequest(r)
+	if rule, held := s.dataOutHolds(r.Context(), id); held {
+		s.auditDataOutDenied(r.Context(), id, actorType, principal, "computer_folder", rule)
+		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutFolderMsg)
+		return
+	}
 	folder, refusal := s.bringBackRefusal(r.Context(), run)
 	if refusal.write(s, w, r) {
 		return

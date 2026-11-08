@@ -41,6 +41,14 @@ const (
 	reasonModelProviderDenied = "model_provider_denied"
 )
 
+// The data_out reasons (data_out.go).
+const (
+	reasonDataOutBlocked           = "data_out_blocked"            // the run's data_out rule keeps content in on this path
+	reasonDataOutUnreadable        = "data_out_unreadable"         // the run's data_out rule could not be read; the path is refused
+	reasonDataOutReviewUnavailable = "data_out_review_unavailable" // review needs a machine that can move files through Wardyn
+	reasonComputerFolderDataOut    = "computer_folder_data_out"    // a computer folder may only go in under the run's data_out rule
+)
+
 // reasonDecidersUnreadable: the unit deciders rules, or the unit tree they are walked on, could not be read, so a
 // decision that one of them may govern is refused rather than read as having no rule (503).
 const reasonDecidersUnreadable = "deciders_unreadable"
