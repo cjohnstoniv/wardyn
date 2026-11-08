@@ -275,9 +275,20 @@ func (req *governanceUnitRequest) parseComposition() string {
 	return ""
 }
 
-// writeUnit is store.WriteGovernanceUnit for a security caller, whose build is handed no transaction.
+// writeUnit is the write for a security caller. Its build is handed the write's transaction, so a read it
+// makes sees the graph lock's state and takes no second connection while this one is held; a store with no
+// governance transaction (a test double) writes through WriteGovernanceUnit with none. The build judges
+// "applies without a second human" by the caller's tier, not by whether it was handed a transaction.
 func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Querier) store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
-	return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+	var out types.GovernanceUnit
+	err := s.writeGovernance(ctx, func(q store.Querier) (err error) {
+		out, err = store.WriteGovernanceUnitQ(ctx, q, id, build(q))
+		return err
+	})
+	if errors.Is(err, errGovernanceTxUnsupported) {
+		return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+	}
+	return out, err
 }
 
 // unitWriteApplies reports whether a write build accepted applies without a second human: the
@@ -378,7 +389,11 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			if err != nil || mode != govQueue || (unitAdmin && newUnit) {
 				return p, err
 			}
-			applies, err := s.unitWriteApplies(r.Context(), q, all, assignments, p, res)
+			appliesQ := q // only a unit admin's write is judged for a rename that shifts whose legacy row wins
+			if !unitAdmin {
+				appliesQ = nil
+			}
+			applies, err := s.unitWriteApplies(r.Context(), appliesQ, all, assignments, p, res)
 			if err == nil && !applies {
 				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval
