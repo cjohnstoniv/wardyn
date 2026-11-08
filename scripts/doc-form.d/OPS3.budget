@@ -125,7 +125,7 @@ docs/operations/ownership-and-offboarding.md=2424 share=35 # -4 net, measured: s
 # docs/operations/governance-writes.md 3572 adds 8 over 3564, measured (#2967 DESK-LOCKS row 5): the recording level row in the covered-writes table.
 # docs/operations/governance-writes.md 3574 adds 2 over 3572, measured: the held-removal row covers an organization runner.
 # docs/operations/governance-writes.md 3588 adds 14 over 3574, measured (rc.8 E5): the super-admin tier names an organization runner's held removal.
-docs/operations/governance-writes.md=3753 share=35 # +8 (rc.14, measured 3753: the MCP call beside the Azure DevOps request); 3745 measured (restore matches memberships per unit); 3686 before; one exemption list instead of two, break-glass and single-human lists stated once, export and restore moved in from integrations.md (-5)
+docs/operations/governance-writes.md=3770 share=35 # +17 (measured 3770: the proposer withdraws their own change); +8 (rc.14, measured 3753: the MCP call beside the Azure DevOps request); 3745 measured (restore matches memberships per unit); 3686 before; one exemption list instead of two, break-glass and single-human lists stated once, export and restore moved in from integrations.md (-5)
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 # docs/operations/member-runs.md=1054 share=35
 # 0.10.0-rc.6: member-runs 1086 adds 32 over 1054, measured: a no-policy member run's default is the ceiling.
