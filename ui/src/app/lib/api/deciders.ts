@@ -39,9 +39,13 @@ export interface UnitDeciders {
   updated_at?: string;
 }
 
-/** governanceDecidersView: one unit's entry in GET /governance. `from` maps each kind to the unit whose rule governs it. */
+/** governanceDecidersView: one unit's entry in GET /governance. `from` maps each kind to the nearest unit with a rule;
+ *  `bounded_by` lists every unit on the chain with one, nearest first; `effective` is the rule they leave once met
+ *  (an empty `who` means the security tier alone). */
 export interface GovernanceDeciders {
   unit_id: string;
   rules: DeciderRule[];
   from?: Record<string, string>;
+  bounded_by?: Record<string, string[]>;
+  effective?: Record<string, DeciderRule>;
 }

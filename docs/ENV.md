@@ -1915,6 +1915,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Turning it on makes every token holder sign in once, because migration `0115` dated existing stamps at `created_at`.
 - Unset or `0` changes nothing.
 - Set it when a `group:<name>` entry in a unit's [deciders](operations/deciders.md) decides credentials, pushes or wide scopes: a group is read from the session's or token's snapshot, which this bounds.
+- A `group:` deciders entry matches an API token only when this is set.
 
 ### `WARDYN_OIDC_SESSION_TTL`
 

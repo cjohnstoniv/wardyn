@@ -25,6 +25,8 @@ const (
 	reasonGovernanceUnitAdminNotFound = "governance_unit_admin_not_found"
 	// reasonInvalidDeciders: a unit's deciders rules break the model (types.ValidateDeciderRules); the message names the rule.
 	reasonInvalidDeciders = "invalid_deciders"
+	// reasonDeciderRuleWiderThanParent: a unit's deciders rule names a decider, or a wider scope, second-person or duration setting, than the rules above it allow (422); the message names the rule and the field.
+	reasonDeciderRuleWiderThanParent = "decider_rule_wider_than_parent"
 	// reasonScheduledRunsDenied: start_at on a launch whose governance profile turns off scheduled runs
 	// (run_schedule_door.go); the deployment switch stays reasonScheduledRunsOff.
 	reasonScheduledRunsDenied = "scheduled_runs_denied"

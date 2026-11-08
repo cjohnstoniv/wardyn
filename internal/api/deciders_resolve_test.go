@@ -472,15 +472,17 @@ func TestDecidersGroupLeftWhilePendingRefused(t *testing.T) {
 	f.wantStatus("left the group", f.decide(dcMember(t, dcLead), second, "deny", ""), http.StatusNotFound, reasonApprovalNotFound, second)
 }
 
-// TestDecidersRuleEditedWhilePendingUsesCurrent: the rule is read when the decision is made, not when the
-// request was raised, and the nearest unit with a rule for the kind wins.
+// TestDecidersRuleEditedWhilePendingUsesCurrent: the rules are read when the decision is made, not when the
+// request was raised, and every rule for the kind from the run's unit up binds it.
 func TestDecidersRuleEditedWhilePendingUsesCurrent(t *testing.T) {
 	f := newDCFix(t)
 	f.st.setRules(f.root.ID, dcRule(types.DeciderKindEgressDomain, types.DeciderGroupPrefix+dcGroup))
 	ap := f.hold(types.DeciderKindEgressDomain)
 	f.wantStatus("owner under the group rule", f.decide(dcMember(t, dcOwner), ap, "deny", ""), http.StatusForbidden, "not_a_decider", ap)
 	f.st.setRules(f.team.ID, dcRule(types.DeciderKindEgressDomain, types.DeciderUnitAdmins))
-	f.wantStatus("group member under the nearer rule", f.decide(dcMember(t, dcLead, dcGroup), ap, "deny", ""), http.StatusNotFound, reasonApprovalNotFound, ap)
+	f.wantStatus("group member under a nearer rule naming nobody in common", f.decide(dcMember(t, dcLead, dcGroup), ap, "deny", ""), http.StatusNotFound, reasonApprovalNotFound, ap)
 	f.st.setRules(f.team.ID, dcRule(types.DeciderKindEgressDomain, types.DeciderOwner))
-	f.wantStatus("owner once the nearer rule lists owner", f.decide(dcMember(t, dcOwner), ap, "deny", ""), http.StatusOK, "", ap)
+	f.wantStatus("owner while the rule above leaves owner out", f.decide(dcMember(t, dcOwner), ap, "deny", ""), http.StatusForbidden, "not_a_decider", ap)
+	f.st.setRules(f.root.ID, dcRule(types.DeciderKindEgressDomain, types.DeciderOwner, types.DeciderGroupPrefix+dcGroup))
+	f.wantStatus("owner once both rules list owner", f.decide(dcMember(t, dcOwner), ap, "deny", ""), http.StatusOK, "", ap)
 }

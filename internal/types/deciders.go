@@ -13,9 +13,10 @@ import (
 )
 
 // Unit deciders: who besides the security tier may decide each kind of hold for runs launched in a
-// unit. One row per unit (governance_unit_deciders); the nearest unit up the tree with a rule for a
-// kind governs it, and with no rule anywhere the verdicts are the ones a deployment without deciders
-// gives. The security tier always decides and is never listed.
+// unit. One row per unit (governance_unit_deciders); every rule for a kind from the run's unit up the
+// tree binds it, met into one rule (MeetDeciderRules), and the nearest unit with a rule is only the
+// reference a decision records. With no rule anywhere the verdicts are the ones a deployment without
+// deciders gives. The security tier always decides and is never listed.
 
 // The kinds a rule names. tool_call is three kinds here, because a capability escalation, an MCP
 // approve-each call and a kubectl approve-each call are different decisions: a rule for one never

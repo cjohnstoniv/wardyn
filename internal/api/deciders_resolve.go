@@ -3,9 +3,9 @@
 
 // Who decides a run hold under a unit's deciders (types/deciders.go). One resolver answers every caller: the
 // decision itself (authorizeUserDecision's member arm, decide, requireSecondHuman) and its read-only mirror
-// (mayDecide, projectDecidable), so the two cannot drift. The rule is read at decide time, from the run's
-// frozen unit up its ancestors, and the nearest unit with a rule for the kind wins. With no rule anywhere it
-// answers "no rule", and every caller keeps the verdict it gives without deciders.
+// (mayDecide, projectDecidable), so the two cannot drift. The rules are read at decide time, and the rules for
+// the kind from the run's frozen unit up its ancestors are met (types.MeetDeciderRules). With no rule anywhere
+// it answers "no rule", and every caller keeps the verdict it gives without deciders.
 package api
 
 import (
@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -35,9 +34,9 @@ const (
 
 // deciderVerdict is the resolver's answer for one approval and one caller.
 type deciderVerdict struct {
-	// rule governs the approval's kind for the run's unit; nil when none does.
+	// rule governs the approval's kind for the run's unit: the rules on its chain, met; nil when none does.
 	rule *types.DeciderRule
-	// unit holds rule.
+	// unit is the nearest unit with a rule for the kind.
 	unit uuid.UUID
 	// kind is the approval's decider kind, "" for a request no rule names.
 	kind string
@@ -107,21 +106,16 @@ type deciderTree struct {
 	parents map[uuid.UUID]*uuid.UUID
 }
 
-// ruleFor walks unit and its ancestors; the nearest with a rule for kind wins. A unit the tree no longer holds
-// ends the walk with no rule, as a deleted unit leaves a run nothing to bind.
+// ruleFor walks unit and its ancestors (chain): the rules for the kind from the run's unit up are met, and the
+// unit it names is the nearest with a rule. A unit the tree no longer holds ends the walk, as a deleted unit
+// leaves a run nothing to bind.
 func (t *deciderTree) ruleFor(unit uuid.UUID, kind string) (types.DeciderRule, uuid.UUID, bool) {
-	cur := &unit
-	for n := 0; cur != nil && n < store.MaxUnitDepthCap; n++ {
-		parent, exists := t.parents[*cur]
-		if !exists {
-			break
-		}
-		if r, ok := types.DeciderRuleFor(t.rules[*cur], kind); ok {
-			return r, *cur, true
-		}
-		cur = parent
+	rules, units := t.chain(unit, kind)
+	r, ok := types.MeetDeciderRules(kind, rules)
+	if !ok {
+		return types.DeciderRule{}, uuid.Nil, false
 	}
-	return types.DeciderRule{}, uuid.Nil, false
+	return r, units[0], true
 }
 
 type deciderMemoKey struct{}
@@ -174,14 +168,7 @@ func (s *Server) readDeciderTree(ctx context.Context) (*deciderTree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read the unit tree: %w", err)
 	}
-	t := &deciderTree{rules: map[uuid.UUID][]types.DeciderRule{}, parents: map[uuid.UUID]*uuid.UUID{}}
-	for _, d := range rows {
-		t.rules[d.UnitID] = d.Rules
-	}
-	for _, u := range units {
-		t.parents[u.ID] = u.ParentID
-	}
-	return t, nil
+	return newDeciderTree(rows, units), nil
 }
 
 // governingRule is the rule that governs ap's kind for run's unit, with no caller in it. No rule: a request no
@@ -267,8 +254,14 @@ func (s *Server) resolveDecider(r *http.Request, ap types.ApprovalRequest, run t
 	return v, nil
 }
 
-// callerInGroup reports whether the caller's group snapshot, complete and from a person, holds g.
+// callerInGroup reports whether the caller's group snapshot, complete and from a person, holds g. An API
+// token's snapshot is as old as its owner's last sign-in, so a token matches a group only when
+// WARDYN_ROLE_STAMP_TTL bounds that age (refuseStaleRoleStamp has already refused an older one). A CLI
+// session's token is a person's session, like a console session, and matches as before.
 func (s *Server) callerInGroup(ctx context.Context, g string) bool {
+	if apiTokenIDFromContext(ctx) != uuid.Nil && cliSessionIDFromContext(ctx) == uuid.Nil && s.cfg.RoleStampTTL <= 0 {
+		return false
+	}
 	_, groups := s.unitAdminSubjects(ctx)
 	return slices.ContainsFunc(groups, func(have string) bool {
 		c, ok := types.CanonicalGroupSubject(have)
