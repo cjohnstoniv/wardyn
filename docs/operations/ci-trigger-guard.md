@@ -20,8 +20,9 @@ Wardyn reads no pipeline trigger and edits no pipeline, policy or service connec
 
 | Setting | What to do | Vendor page |
 |---|---|---|
-| YAML CI trigger | Add `wardyn/*` under `trigger:` › `branches:` › `exclude:` in every pipeline | [Build Azure Repos Git repositories](https://learn.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git) |
-| Trigger overrides | Check whether the pipeline's **Triggers** settings turn on **Override the YAML continuous Integration trigger from here**, which replaces the YAML trigger | the same page |
+| YAML CI trigger | Add `wardyn/*` under `trigger:` › `branches:` › `exclude:` in every pipeline. Azure Pipelines' `*` matches zero or more characters, `/` included, so one entry covers `wardyn/<run-id>/<name>`; `**` is for path filters only | [Build Azure Repos Git repositories](https://learn.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git) |
+| Trigger overrides | In the pipeline's **Triggers** settings, turn on **Override the YAML continuous Integration trigger from here** and exclude `wardyn/*` there. The YAML trigger is read from the pushed branch, so a run can rewrite any pipeline file `deny_paths` misses | [Troubleshoot pipeline triggers](https://learn.microsoft.com/en-us/azure/devops/pipelines/troubleshooting/troubleshoot-triggers) |
+| **Disable implied YAML CI trigger** | Turn it on in Organization settings › Pipelines › Settings, so a pipeline with no `trigger:` section does not run on every branch | [Troubleshoot pipeline triggers](https://learn.microsoft.com/en-us/azure/devops/pipelines/troubleshooting/troubleshoot-triggers) |
 | Build validation **Trigger** | Choose **Manual**, or keep production identities out of validation builds | [Set and manage branch policies](https://learn.microsoft.com/en-us/azure/devops/repos/git/branch-policies) |
 | **Branch control** check | Add it on production service connections, environments and variable groups, with an allowed-branches list; the vendor needs `refs/heads/`-qualified branch names | [Pipeline deployment approvals](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals) |
 | **Limit job authorization scope to current project for non-release pipelines** | Turn it on in Organization settings › Pipelines › Settings | [Understand job access tokens](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/access-tokens) |
@@ -110,7 +111,7 @@ These hold on brokered lanes. They do not hold for an `ssh_key` grant or a resid
 ## What Wardyn cannot guarantee
 
 - What the forge triggers on any push or pull request Wardyn lets through. In tier 1 that includes every push to `wardyn/<run-id>/…`, so the trigger exclusions above are load-bearing.
-- On GitHub, a run granted `pr_write` can open a pull request that starts `pull_request` workflows. The repository's workflow settings guard that, not Wardyn.
+- On GitHub, a run granted `pr_write` can open a pull request that starts `pull_request` workflows. The repository's workflow settings guard that, not Wardyn. GitHub's approval for fork pull request workflows is for forks; a run's pull request comes from a branch of the same repository.
 - That a pipeline's scripts, Makefiles, package scripts and tests are safe once a person lets them through. No path list can name them all.
 - The pipeline identity's own rights.
 - In tier 1, validation re-running when a later push to an open pull request's branch goes through. Tier 2 holds that push.
