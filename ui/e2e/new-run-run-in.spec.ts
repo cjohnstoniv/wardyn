@@ -136,7 +136,7 @@ test.describe("New Run, Run in", () => {
     await expect(trigger(page)).toHaveText(NR_RUN_IN.HOME_VALUE("Platform"));
     await expect(page.getByText(NR_RUN_IN.HINT)).toBeVisible();
     await trigger(page).click();
-    for (const g of [NR_RUN_IN.GROUP_YOURS, NR_RUN_IN.GROUP_ELEVATED, NR_RUN_IN.GROUP_ASK]) await expect(page.getByText(g, { exact: true })).toBeVisible();
+    await expect(page.locator('[data-slot="select-label"]')).toHaveText([NR_RUN_IN.GROUP_YOURS, NR_RUN_IN.GROUP_ELEVATED, NR_RUN_IN.GROUP_ASK]);
     const paid = page.getByRole("option", { name: /^Payments/ });
     await expect(paid.getByText(NR_RUN_IN.CHIP_ELEVATED)).toBeVisible();
     await expect(paid).toContainText(/Ends .+ \(in (2 h 5\d min|3 h)\)/);

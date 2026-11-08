@@ -19,8 +19,10 @@ const SELECT_CLASS =
   "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm aria-invalid:border-destructive";
 
 /** The pool field of "Where should it run?": the pools the person may use, each disabled one with its reason, and what the chosen pool offers. */
-export function PoolSection({ state, runType, intent, onChoose }: {
+export function PoolSection({ state, runType, intent, onChoose, runInName }: {
   state: PoolsState; runType: RunnerPoolRunType | undefined; intent: RunIntent; onChoose: (id: string) => void;
+  /** The unit a run is picked to run in when it is not the home unit: its limits are the ones the note names. */
+  runInName?: string;
 }) {
   const [flagged, setFlagged] = React.useState(false);
   const list = state.status === "ready" ? state.list : undefined;
@@ -54,7 +56,7 @@ export function PoolSection({ state, runType, intent, onChoose }: {
         <p id={`${POOL_ID}-help`} className="text-xs leading-snug text-muted-foreground">{NR_RUN.POOL_HELP}</p>
         {list && <PoolNotes pools={pools} chosen={chosen} runType={runType} />}
       </div>
-      {chosen && <PoolSummary pool={chosen} runType={runType} allowance={list?.allowance} />}
+      {chosen && <PoolSummary pool={chosen} runType={runType} allowance={list?.allowance} unitName={runInName} />}
     </div>
   );
 }

@@ -34,7 +34,7 @@ const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection reco
  */
 export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("shape", "shape"),
-  ...homes("run", "experience workload service runner_pool_id confinement_class"),
+  ...homes("run", "experience workload service runner_pool_id confinement_class run_in"),
   ...homes("harnesses", "tools startup"),
   ...homes("files", "workspaces drive drives start_folder no_repositories_or_drives"),
   ...homes("tools", "components overrides"),
@@ -42,7 +42,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base desktop_window run_in wall_preset"),
+  ...homes("excluded", "title description correlation_id mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base desktop_window wall_preset"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };

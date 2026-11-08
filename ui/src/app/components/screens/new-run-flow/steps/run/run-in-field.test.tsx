@@ -30,7 +30,7 @@ const BILLING: ElevationOffer = { unit_id: "u-bill", unit_name: "Billing", max_e
 const elevation = {
   id: "c1", state: "applied", kind: "elevation", unit_id: "u-pay", unit_name: "Payments", duration: "4h", ends_at: ENDS,
   mine: true, decidable: false, deciders: [], expires_at: ENDS,
-} as GovernanceRequest;
+} as unknown as GovernanceRequest;
 const LIST: GovernanceRequestList = { requests: [elevation], offered: [BILLING], image_offered: false };
 
 function read(over: Partial<RunInRead> = {}): RunInRead {
@@ -59,7 +59,9 @@ describe("Run in field: states", () => {
   it("opens on your units, the elevation with its end and time left, and the units you can ask for", async () => {
     setup();
     await userEvent.click(trigger());
-    for (const g of [NR_RUN_IN.GROUP_YOURS, NR_RUN_IN.GROUP_ELEVATED, NR_RUN_IN.GROUP_ASK]) expect(screen.getByText(g)).toBeInTheDocument();
+    // The Elevated group's heading and its chip read the same, so the headings are found by their own slot.
+    const headings = [...document.querySelectorAll('[data-slot="select-label"]')].map((h) => h.textContent);
+    expect(headings).toEqual([NR_RUN_IN.GROUP_YOURS, NR_RUN_IN.GROUP_ELEVATED, NR_RUN_IN.GROUP_ASK]);
     const home = screen.getByRole("option", { name: /^Platform/ });
     expect(within(home).getByText(NR_RUN_IN.CHIP_HOME)).toBeInTheDocument();
     const paid = screen.getByRole("option", { name: /^Payments/ });

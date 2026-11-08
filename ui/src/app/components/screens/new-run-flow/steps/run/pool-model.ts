@@ -83,7 +83,8 @@ export function ledeOf(list: RunnerPoolList | undefined): string {
 }
 
 /** Who bounds the limits: a named profile, an unnamed organisation, or nobody but the server (C3). */
-export function limitsNote(allowance: PersonAllowance | undefined): string {
+export function limitsNote(allowance: PersonAllowance | undefined, unitName?: string): string {
+  if (unitName) return NR_RUN.LIMITS_NOTE(unitName);
   if (!allowance) return NR_RUN.LIMITS_NOTE_UNGOVERNED;
   return allowance.unit_name ? NR_RUN.LIMITS_NOTE(allowance.unit_name) : NR_RUN.LIMITS_NOTE_ORG;
 }

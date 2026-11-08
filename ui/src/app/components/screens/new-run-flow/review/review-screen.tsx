@@ -7,6 +7,9 @@
 // ordered blocker list, and Launch only on a current, fresh, clean check.
 
 import { useKeptMachines } from "../steps/run/kept-machines-provider";
+import { runInBlocker } from "../steps/run/run-in-model";
+import { useRunIn } from "../steps/run/use-run-in";
+import { ElevationRequestDialog } from "../../elevation/elevation-request-dialog";
 import * as React from "react";
 import { Check, CircleAlert, MoreHorizontal } from "lucide-react";
 import { Button } from "../../../ui/button";
@@ -19,6 +22,7 @@ import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { useUIGateway } from "../../../../lib/hooks/use-ui-gateway";
+import type { ElevationOffer } from "../../../../lib/types/governance-requests";
 import type { PreflightResult, SetupItem } from "../../../../lib/types/preflight";
 import { cn } from "../../../ui/utils";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
@@ -155,8 +159,11 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const keepAsked = draft.intent.keep_work_folder === true;
   const keepDrives = useDriveCatalogue(pre?.runner_pool?.id ?? draft.intent.runner_pool_id, keepAsked);
   const create = keepDrives.catalogue?.create;
+  // The unit the run is picked to run in, read again at each check: an offer, a waiting request or an approval changes the blocker.
+  const runIn = useRunIn();
   const inputs = {
     issues,
+    runIn: runInBlocker(draft.intent.run_in, runIn.choices, runIn.list),
     keepLimit: keepAsked && create?.reason === "limit_reached" ? { text: NR_FILES.KEEP_LIMIT(create.count, create.limit), hint: NR_FILES.KEEP_LIMIT_HINT } : undefined,
     unsupported: wire.unsupported,
     combination,
@@ -193,9 +200,11 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     void checks.preview.retry();
     gateway.recheck();
     keepDrives.reload();
+    runIn.reload();
   };
 
   const [addingSecret, setAddingSecret] = React.useState<SetupItem | null>(null);
+  const [asking, setAsking] = React.useState<{ unitId: string; offer: ElevationOffer }>();
   const [saveKind, setSaveKind] = React.useState<TemplateKind | null>(null);
   const [publish, setPublish] = React.useState<TemplatePublish | null>(null);
   // Which host lists of the walls the Access group draws a leave-out line for; the warning of any other list stays a notice.
@@ -253,7 +262,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       }}
     >
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} warningContext={pre?.warning_context} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} wallsLeftOut={wallsLeftOut} ungoverned={checks.preview.result?.ungoverned} />
-      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} checking={checks.preflighting} />
+      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} onRequestElevation={setAsking} checking={checks.preflighting} />
+      <ElevationRequestDialog open={!!asking} onOpenChange={(o) => !o && setAsking(undefined)} unitId={asking?.unitId} offers={asking ? [asking.offer] : undefined} onSent={() => runIn.reload()} />
       {addingSecret && (
         <AddTokenDialog
           item={addingSecret}

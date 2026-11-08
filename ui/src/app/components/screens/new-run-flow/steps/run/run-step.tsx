@@ -36,6 +36,9 @@ import { ServiceSection } from "./service-section";
 import { useRunPreview } from "./use-run-preview";
 import { chooseWindowIn, useClearRefusedWindow } from "./window-choice";
 import { QuestionBlock } from "./question-block";
+import { RunInField } from "./run-in-field";
+import { itemFor, reconcileRunIn, withoutRunIn } from "./run-in-model";
+import { useRunIn, type LoadRunIn } from "./use-run-in";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
 
@@ -45,7 +48,7 @@ const STEP_LABELS = {
 const TITLES = { agent_task: NR_RUN.TITLE_AGENT, environment: NR_RUN.TITLE_ENV, application: NR_RUN.TITLE_APP } as const;
 const titleOf = (intent: RunIntent) => (isServer(intent) ? NR_RUN.TITLE_APP_SERVER : intent.shape ? TITLES[intent.shape] : NR_RUN.TITLE_AGENT);
 
-export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadPools } }) {
+export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadPools; runIn?: LoadRunIn } }) {
   const draft = useNewRunDraft();
   const { intent } = draft;
   const dispatch = useNewRunDispatch();
@@ -65,6 +68,21 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
   const chosen = list && usablePools(list).find((p) => p.id === selectedPoolId(intent, list));
+  // The unit the run runs in. A choice the units no longer offer (a template's or a rerun's) goes home with its notice,
+  // and so does one the units could not be read to confirm.
+  const runIn = useRunIn(deps?.runIn);
+  const homeName = runIn.choices?.home?.name ?? list?.allowance?.unit_name;
+  React.useEffect(() => {
+    if (!intent.run_in) return;
+    if (runIn.status === "failed") return dispatch({ type: "edit", apply: withoutRunIn });
+    if (runIn.status !== "ready" || !runIn.choices) return;
+    const verdict = reconcileRunIn(intent.run_in, runIn.choices, runIn.list, homeName ?? "");
+    if (verdict.keep) return;
+    dispatch({ type: "edit", apply: withoutRunIn });
+    dispatch({ type: "guided", patch: { runInCleared: verdict.notice } });
+  }, [intent.run_in, runIn.status, runIn.choices, runIn.list, homeName, dispatch]);
+  const picked = itemFor(runIn.choices, intent.run_in);
+  const runInName = picked && !(picked.group === "yours" && picked.home) ? picked.name : undefined;
   // A VM is its own barrier: the container barriers give way to the VM's fixed line.
   const vm = isVMKind(intent.machine_kind);
   // A macOS VM starts its CPU and memory ask at the base's minimum; leaving macOS takes that back.
@@ -134,6 +152,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
           )}
         </CommandSection>
       )}
+      <RunInField run={runIn} runIn={intent.run_in} notice={draft.guided.runInCleared} homeFallbackName={list?.allowance?.unit_name} dispatch={dispatch} />
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
         <MachineKindSection
           kind={intent.machine_kind ?? "container"}
@@ -154,7 +173,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
           onChoose={chooseKind}
           onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))}
         />
-        <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
+        <PoolSection state={pools} runType={runType} intent={intent} runInName={runInName} onChoose={(id) => edit((i) => choosePool(i, id))} />
         {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>
     </StepShell>

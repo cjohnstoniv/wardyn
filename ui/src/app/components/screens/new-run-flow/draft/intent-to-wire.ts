@@ -35,9 +35,10 @@ const carried = (rows: readonly TemplateFieldRule[]) =>
 /**
  * Fields chosen at each launch that the draft may still hold: sent, never saved (Save as skips their
  * `excluded` home). `local_folder` is the folder on the person's computer (M4, #2982);
- * `keep_work_folder` keeps the work folder as the person's drive (#1991); `wall_preset` is the wall preset chosen at this launch; `machine` keeps or resumes a macOS VM machine at this launch.
+ * `keep_work_folder` keeps the work folder as the person's drive (#1991); `wall_preset` is the wall preset chosen at this launch; `machine` keeps or resumes a macOS VM machine at this launch;
+ * `run_in` is the unit the run runs in, chosen at each launch (the registry row's `excluded: "launch"`).
  */
-const LAUNCH_CHOSEN = new Set(["local_folder", "keep_work_folder", "wall_preset", "machine"]);
+const LAUNCH_CHOSEN = new Set(["local_folder", "keep_work_folder", "wall_preset", "machine", "run_in"]);
 
 /**
  * A serializer over one registry. The overlay's row may be named either way

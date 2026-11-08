@@ -12,8 +12,10 @@ import { MAC_BASES } from "../../../../wardyn/copy/mac-bases";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
+import { NR_RUN_IN } from "../../../../wardyn/copy/new-run/run-in";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WINDOW } from "../../../../wardyn/copy/new-run/window";
+import { Chip } from "../../../../wardyn/primitives";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import type { ConfinementClass } from "../../../../../lib/types/runs";
 import { isVMKind } from "../../../../../lib/types/machine-kind";
@@ -21,6 +23,9 @@ import { chooseBarrier, choosePool } from "../../lenses/run-lens";
 import { barrierRows, poolChoices, selectedPoolId, usablePools } from "../../steps/run/pool-model";
 import { loadPools, usePools } from "../../steps/run/pool-source";
 import { useMacOSOffer } from "../../steps/run/macos-offer";
+import { itemFor } from "../../steps/run/run-in-model";
+import { useRunIn } from "../../steps/run/use-run-in";
+import { weekdayClock } from "../../../run-detail/run-ends-row";
 import { chooseWindowIn, macWindowOn } from "../../steps/run/window-choice";
 import { WindowCheckbox, WindowCleared } from "../../steps/run/window-option";
 import { BarrierChip } from "../barrier-chip";
@@ -123,9 +128,22 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
   const cleared = !draft.intent.desktop_window ? draft.guided.windowCleared : undefined;
   const keptLines = keptReviewLines(draft.intent, useKeptMachines(), runner);
   const keptCleared = !draft.intent.machine ? draft.guided.machineCleared : undefined;
-  const detail = !base && !windowLine && !cleared && !keptLines && !keptCleared ? poolDetail : (
+  // The unit the run runs in, first among the detail lines: its end too, for a unit the person holds an elevation in.
+  const unit = itemFor(useRunIn().choices, draft.intent.run_in);
+  const detail = !unit && !base && !windowLine && !cleared && !keptLines && !keptCleared ? poolDetail : (
     <>
-      {poolDetail}
+      {unit && (
+        <span className="flex flex-wrap items-center gap-2">
+          <span>{NR_RUN_IN.REVIEW_ROW(unit.name)}</span>
+          {unit.group === "elevated" && (
+            <>
+              <Chip tone="info">{NR_RUN_IN.CHIP_ELEVATED}</Chip>
+              <span>{NR_RUN_IN.REVIEW_ENDS(weekdayClock(unit.endsAt))}</span>
+            </>
+          )}
+        </span>
+      )}
+      {poolDetail && (unit ? <span className="block">{poolDetail}</span> : poolDetail)}
       {base && <span className="block">{MAC_BASES.B16(base)}</span>}
       {keptCleared && <span className="block">{keptCleared}</span>}
       {keptLines && (
