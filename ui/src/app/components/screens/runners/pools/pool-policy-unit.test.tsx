@@ -83,7 +83,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the pool policy's unit picker", () => {
-  it("offers Unit as a type, and swaps the name box for a Select of profiles without Default (frame E1)", async () => {
+  it("offers Unit as a type, and swaps the name box for a Select of profiles without Default", async () => {
     renderPolicy();
     await edit();
     expect(getGovernanceMock).not.toHaveBeenCalled();
@@ -98,7 +98,7 @@ describe("the pool policy's unit picker", () => {
     expect(getGovernanceMock).toHaveBeenCalledTimes(1);
   });
 
-  it("is loading, disabled, while the profiles are read (frame E3)", async () => {
+  it("is loading, disabled, while the profiles are read", async () => {
     const read = deferred<GovernanceSnapshot>();
     getGovernanceMock.mockReturnValue(read.promise);
     renderPolicy();
@@ -178,7 +178,7 @@ describe("the pool policy's unit picker", () => {
 });
 
 describe("a saved unit row", () => {
-  it("prints the profile's name and 'and the units below it' without editing (frame E2)", async () => {
+  it("prints the profile's name and 'and the units below it' without editing", async () => {
     usePolicyMock.mockResolvedValue(policy([{ subject_type: "unit", subject: PLATFORM }]));
     renderPolicy();
     expect(await screen.findByText("Platform A")).toBeInTheDocument();
@@ -200,7 +200,7 @@ describe("a saved unit row", () => {
     expect(screen.queryByText(PLATFORM)).toBeNull();
   });
 
-  it("prints the uuid in mono and says a deleted profile admits no one (frame E3)", async () => {
+  it("prints the uuid in mono and says a deleted profile admits no one", async () => {
     usePolicyMock.mockResolvedValue(policy([{ subject_type: "unit", subject: GONE }]));
     renderPolicy();
     expect(await screen.findByText("No longer a profile. It admits no one.")).toBeInTheDocument();

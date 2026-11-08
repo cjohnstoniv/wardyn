@@ -99,7 +99,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("composed deny-list rows", { timeout: 20_000 }, () => {
-  it("Narrow starts the box empty, with the base's ids on the Inherited line (frame B3)", async () => {
+  it("Narrow starts the box empty, with the base's ids on the Inherited line", async () => {
     renderEditor(null);
     fireEvent.change(screen.getByLabelText(GOV.FIELD_NAME), { target: { value: "Team A" } });
     await pickBase("Baseline");
@@ -138,7 +138,7 @@ describe("composed deny-list rows", { timeout: 20_000 }, () => {
     expect(screen.getByLabelText(DENY_LISTS.COMPONENTS_LABEL)).toHaveAttribute("placeholder", "One id per line");
   });
 
-  it("a bad list is refused under 'This list can't be saved', with the server's sentence under it (frame C)", async () => {
+  it("a bad list is refused under 'This list can't be saved', with the server's sentence under it", async () => {
     const sentence = 'governance_overlay_invalid: deny_components: entry 1 ("not-an-id") is not an id — use the lower-case id from the component or provider';
     createProfileMock.mockRejectedValue(new HttpError(400, sentence, "governance_overlay_invalid"));
     renderEditor(null);
