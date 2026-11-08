@@ -230,7 +230,7 @@ func (s *Server) componentPinnedOut(ctx context.Context, run types.AgentRun, com
 			continue
 		}
 		if byID == nil {
-			units, err := s.cfg.Store.ListGovernanceUnits(ctx)
+			units, err := s.unitOutlines(ctx)
 			if err != nil {
 				return "", err
 			}
