@@ -55,6 +55,11 @@ describe("field homes (U7)", () => {
     expect(REVIEW_GROUP_OF_FIELD.desktop_window).toBe("where");
   });
 
+  it("gives the unit a run runs in to the Run step, and shows it under Where it runs", () => {
+    expect(FIELD_HOME.run_in).toBe("run");
+    expect(REVIEW_GROUP_OF_FIELD.run_in).toBe("where");
+  });
+
   it("name subpath homes only under registry fields", () => {
     for (const path of Object.keys(FIELD_HOME_OVERRIDES)) expect(REGISTRY, path).toContain(path.split(/[.[]/)[0]);
   });

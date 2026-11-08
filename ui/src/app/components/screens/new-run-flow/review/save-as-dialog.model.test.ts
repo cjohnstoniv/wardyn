@@ -74,6 +74,12 @@ describe("savePartsOf", () => {
     const { parts, unassigned } = savePartsOf("template", stray);
     expect([...parts.flatMap((p) => p.fields), ...unassigned]).toEqual(["experience"]);
   });
+
+  it("never saves the unit a run was chosen to run in", () => {
+    const chosen = { run_in: "u-pay", experience: "background" } as unknown as RunIntent;
+    const { parts, unassigned } = savePartsOf("template", chosen);
+    expect([...parts.flatMap((p) => p.fields), ...unassigned]).toEqual(["experience"]);
+  });
 });
 
 describe("pickIntent", () => {
