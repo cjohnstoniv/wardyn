@@ -586,7 +586,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	if x.approvalID != nil {
 		allow.RuleSource, allow.ApprovalID = ruleSourceMCPApproved, x.approvalID
 	}
-	allow.GatewayCallID = callID
+	allow.GatewayCallID, allow.Cause = callID, mcpToolCause(body)
 	p.emitDialledAllow(allow, s.host)
 	if listActive && !x.filterToolLists(w, resp, callID) {
 		return

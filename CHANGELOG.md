@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- The audit row of a forwarded MCP `tools/call` (`brokered:mcp`) now names the tool in `cause` (`tool "<name>"`, or `tools` with the first 8 names of a batch), never its arguments or the answer.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).
