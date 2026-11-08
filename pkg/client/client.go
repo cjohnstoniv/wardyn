@@ -51,7 +51,7 @@
 //     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, CheckGovernance,
 //     GovernanceDryRun
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
-//     ApproveGovernanceChange, RejectGovernanceChange
+//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of

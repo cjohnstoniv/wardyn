@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Governance changes: the person who proposed a held change may write why it is wanted and a ticket reference with `PUT /governance/changes/{id}/note` (`wardyn governance set --reason --ticket` does it for every change it held). Both are optional free text, shown on the change as `note` and audited as `governance.change.note`. `GET /governance/changes?approver=security` lists the changes only a security admin may decide, and `governance.change.propose` now carries `units` and `changed`, so a relay on the acknowledged audit webhook can route a held change to the people who decide it. Nothing changes for a client that sends no note.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).

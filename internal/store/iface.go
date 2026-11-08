@@ -289,6 +289,7 @@ type Store interface {
 	ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error)
 	GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.GovernanceChange, error)
 	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)
+	SetGovernanceChangeNote(ctx context.Context, id uuid.UUID, note types.ChangeNote) (types.GovernanceChange, error)
 	// DryRunGovernance runs fn on a transaction that is always rolled back.
 	DryRunGovernance(ctx context.Context, fn func(q Querier) error) error
 	// ListMembershipsFor returns EVERY membership matching a caller, each joined to its unit, in

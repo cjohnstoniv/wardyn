@@ -133,9 +133,18 @@ type GovernanceChange struct {
 	DecidedAt  *time.Time           `json:"decided_at,omitempty"`
 	// Reason is a rejection's optional explanation.
 	Reason string `json:"reason,omitempty"`
+	// Note is the proposer's reason and ticket for the change; absent when none was written.
+	Note *GovernanceChangeNote `json:"note,omitempty"`
 	// Approvers is who could decide the change, the proposer left out (GET
 	// /governance/changes/{id} only).
 	Approvers []GovernanceChangeApprover `json:"approvers,omitempty"`
+}
+
+// GovernanceChangeNote is what the proposer wrote on a held change: why it is wanted, and an optional
+// ticket reference. Free text, shown as text.
+type GovernanceChangeNote struct {
+	Reason string `json:"reason,omitempty"`
+	Ticket string `json:"ticket,omitempty"`
 }
 
 // GovernanceDeferredWrite is a write ApplyGovernanceResult did not send because
@@ -834,6 +843,16 @@ func (c *Client) RejectGovernanceChange(ctx context.Context, id uuid.UUID, reaso
 		Reason string `json:"reason,omitempty"`
 	}{Reason: reason}
 	err := c.do(ctx, http.MethodPost, "/api/v1/governance/changes/"+id.String()+"/reject", body, &out)
+	return out, err
+}
+
+// NoteGovernanceChange sets the note on a pending change: reason (at most 500 characters) and ticket (one
+// line, at most 128), both optional. Only the person who proposed the change may, and a second call
+// replaces the first. PUT /api/v1/governance/changes/{id}/note.
+func (c *Client) NoteGovernanceChange(ctx context.Context, id uuid.UUID, reason, ticket string) (GovernanceChange, error) {
+	var out GovernanceChange
+	body := GovernanceChangeNote{Reason: reason, Ticket: ticket}
+	err := c.do(ctx, http.MethodPut, "/api/v1/governance/changes/"+id.String()+"/note", body, &out)
 	return out, err
 }
 

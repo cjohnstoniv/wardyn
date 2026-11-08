@@ -59,8 +59,18 @@ an operator follows to turn one on and run the queue.
   - for an assignment, `diff.after` embeds the profile it points at as it stood at the proposal.
 - A second human approves it with `POST /governance/changes/{id}/approve`, or any authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at most 512 characters, no control characters, recorded on the change and its audit row only).
 - `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and `GET /governance/changes/{id}` reads one.
+- `GET /governance/changes?approver=security` lists only the changes a security admin alone may decide: no unit admin governs every unit they touch.
+- The proposer may write why the change is wanted, and a ticket reference, with `PUT /governance/changes/{id}/note` (`{"reason","ticket"}`, both optional).
+  - Only the proposer may, and only while the change is pending. A second write replaces the first.
+  - The reason is at most 500 characters. The ticket is one line of at most 128. Neither holds a control character.
+  - Both are free text, never checked against a ticketing system. A change read shows them as `note: {reason, ticket}`, and the audit row `governance.change.note` records them.
+  - `wardyn governance set --reason ... --ticket ...` writes them on every change the apply held.
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`).
-- Nothing notifies anyone that a change waits: approvers find them with `wardyn governance changes list` or the API; name who looks, and how often, in your runbook.
+- Wardyn sends no message when a change waits. The acknowledged audit webhook ([ENV.md](../ENV.md#acknowledged-delivery-delivery-acknowledged)) carries every audit row, so a relay you run can notify the people who decide:
+  1. Keep the rows whose `action` is `governance.change.propose` or `governance.change.note`.
+  2. Route on `data.units`, the ids of the units the change touches. A row with no `units` is for security admins.
+  3. Fetch `GET /governance/changes/{id}` (the row's `target`) for the diff and the note.
+  4. Deduplicate on the row `id`: delivery is at-least-once.
 
 - **Who may approve.**
   - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.

@@ -22,4 +22,8 @@ const (
 	// group, or one already an admin of the unit; reasonGovernanceUnitAdminNotFound: no such grant.
 	reasonGovernanceUnitAdminInvalid  = "governance_unit_admin_invalid"
 	reasonGovernanceUnitAdminNotFound = "governance_unit_admin_not_found"
+	// reasonGovernanceChangeNoteProposerOnly: someone other than the proposer wrote a change's note;
+	// reasonGovernanceChangeNoteInvalid: the note's reason or ticket is out of bounds or malformed.
+	reasonGovernanceChangeNoteProposerOnly = "governance_change_note_proposer_only"
+	reasonGovernanceChangeNoteInvalid      = "governance_change_note_invalid"
 )
