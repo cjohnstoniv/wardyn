@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo, asRealSecurityAdmin } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, MEMBER_PRINCIPAL, asRealSecurityAdmin, asRealUnitAdmin, consoleAPI, gotoConsole, grantUnitAdmin, navTo, sidebarLink } from "./fixtures";
+import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { CHANGES } from "../src/app/lib/governance-copy";
 import { CHANGE_NOTE } from "../src/app/components/wardyn/copy/change-note";
@@ -65,5 +66,64 @@ test.describe("governance — requests on the Changes tab", () => {
   test("a deciders change reads Deciders · Set", async ({ page }) => {
     await openChanges(page, [{ ...elevation("alice"), target_kind: "governance_unit_deciders", op: "upsert", diff: { changed: [] }, note: undefined }]);
     await expect(page.getByRole("button", { name: `${CHANGES.KIND.governance_unit_deciders} · ${CHANGES.OP.upsert}`, exact: true })).toBeVisible();
+  });
+});
+
+// A unit admin's own change. Nothing is spliced: U has one unit admin, so their membership add is held, and with
+// nobody else to approve it only security can decide it. The proposer still sees it, and may note or withdraw it.
+test.describe("a unit admin's own change", () => {
+  test("they read that only security can decide it, and add a note", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const made = await page.request.post("/api/v1/governance/units", {
+      headers: auth,
+      data: {
+        name: `own-change-${randomUUID().slice(0, 8)}`,
+        ceiling: {
+          allowed_domains: ["api.anthropic.com"],
+          denied_domains: [],
+          first_use_approval: "deny_with_review",
+          min_confinement_class: "CC3",
+          auto_stop_after_sec: 3600,
+          eligible_grants: [],
+          tool_rules: [{ tool: "*", effect: "allow" }],
+        },
+        limits: {},
+      },
+    });
+    expect(made.status(), await made.text()).toBe(201);
+    const unitId = (await made.json()).unit.id as string;
+    let changeId = "";
+    try {
+      await grantUnitAdmin(page, unitId);
+      await asRealUnitAdmin(page);
+      // A unit admin's membership add is always held for a second person.
+      const held = await consoleAPI(page, "POST", "/api/v1/governance/memberships", {
+        subject_type: "user",
+        subject: MEMBER_PRINCIPAL,
+        unit_id: unitId,
+        priority: 0,
+      });
+      expect(held.status, held.text).toBe(202);
+      changeId = JSON.parse(held.text).pending_change.id;
+
+      await gotoConsole(page);
+      await sidebarLink(page, "Governance").click();
+      await page.getByRole("tab", { name: new RegExp(`^${CHANGES.TAB}`) }).click();
+      await page.getByRole("button", { name: new RegExp(`^${CHANGES.KIND.governance_membership} ·`) }).first().click();
+
+      const drawer = page.getByRole("dialog");
+      await expect(drawer.getByText(CHANGE_NOTE.OWN_SECURITY_TITLE, { exact: true })).toBeVisible();
+      await expect(drawer.getByText(CHANGE_NOTE.OWN_SECURITY_BODY, { exact: true })).toBeVisible();
+      await expect(drawer.getByText(CHANGES.OWN_NOTE, { exact: true })).toHaveCount(0);
+      await expect(drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
+
+      await drawer.getByRole("button", { name: CHANGE_NOTE.ADD, exact: true }).click();
+      await drawer.getByLabel(CHANGE_NOTE.WHY_LABEL, { exact: true }).fill("Give the member this profile");
+      await drawer.getByRole("button", { name: CHANGE_NOTE.SAVE, exact: true }).click();
+      await expect(page.getByText(CHANGE_NOTE.SAVED, { exact: true })).toBeVisible();
+    } finally {
+      if (changeId) await page.request.post(`/api/v1/governance/changes/${changeId}/reject`, { headers: auth, data: {} });
+      await page.request.delete(`/api/v1/governance/units/${unitId}`, { headers: auth });
+    }
   });
 });
