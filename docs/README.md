@@ -2,6 +2,18 @@
 
 - Start at the repo [README](../README.md); the console's Getting started page then walks a first run and the built-in demos.
 
+## Getting started
+
+| Video | Who it's for | Page |
+|---|---|---|
+| Install | Admin | [TRY-IT.md](TRY-IT.md), [DESKTOP.md](DESKTOP.md), [operations/k8s-runners.md](operations/k8s-runners.md) |
+| First governed run | Member | [NEW-RUN.md](NEW-RUN.md) |
+| Approvals | Member and approver | [operations/approval-rules.md](operations/approval-rules.md) |
+| A Mac inside your Mac | Developer | [operations/macos-vm-use.md](operations/macos-vm-use.md) |
+| A unit admin's day | Unit admin | [operations/unit-admins.md](operations/unit-admins.md), [operations/three-roles.md](operations/three-roles.md) |
+| Security admin setup | Security admin | [operations/security-admin-setup.md](operations/security-admin-setup.md) |
+| CI | Platform engineer | [CI.md](CI.md), [ci-jobs-as-runs.md](ci-jobs-as-runs.md) |
+
 ## Evaluate
 
 | If you want to… | Read |
@@ -50,6 +62,7 @@
 | Make a cluster refuse unsigned Wardyn images (policy-controller or Kyverno) | [operations/image-admission.md](operations/image-admission.md) |
 | Let an agent-sandbox controller make the agent pods (experimental) | [operations/kubernetes-agent-sandbox.md](operations/kubernetes-agent-sandbox.md) |
 | See which run and person a Kubernetes kernel-sensor alert belongs to | [operations/kubernetes-ground-truth.md](operations/kubernetes-ground-truth.md) |
+| Set up as a security admin: a first-setup checklist | [operations/security-admin-setup.md](operations/security-admin-setup.md) |
 | Monitor a deployment: metrics, health and audit sinks | [operations/monitoring.md](operations/monitoring.md) |
 | Rotate the age key, or use an external key store | [operations/secrets-and-keys.md](operations/secrets-and-keys.md) |
 | Know what the shared-mount recording fallback's read confinement covers | [RECORDING-ROOT-READ.md](RECORDING-ROOT-READ.md) |

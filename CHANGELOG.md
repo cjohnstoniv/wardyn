@@ -21,6 +21,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Docs: a new page, [security-admin-setup.md](docs/operations/security-admin-setup.md), is a first-setup checklist for a security admin, and the docs index has a Getting started table.
 - Docs: OPERATIONS has a section on how long an AWS sign-in lasts: the IAM Identity Center session duration, the identity provider's session for that application, and assigning the same people to both applications.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.
