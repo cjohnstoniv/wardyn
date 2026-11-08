@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -45,13 +46,13 @@ type AgentSignError struct {
 	full   []string
 }
 
-// add records why signer failed: err in full, and scrubbed of paths.
-func (e *AgentSignError) add(signer string, err error, scrub func(string) string) {
+// add records why signer failed: err in full, and path-free.
+func (e *AgentSignError) add(signer string, err error) {
 	prefix := ""
 	if signer != "" {
 		prefix = signer + ": "
 	}
-	e.Errors = append(e.Errors, prefix+scrub(err.Error()))
+	e.Errors = append(e.Errors, prefix+pathFree(err.Error()))
 	e.full = append(e.full, prefix+err.Error())
 }
 
@@ -127,23 +128,13 @@ func (s *HostAgentSigner) restoreKeychains(ctx context.Context, exec func(contex
 	}
 }
 
-// scrubber makes a signing error path-free for tools.json and doctor: the agent build's path, the signing's
-// temp directory, this Mac's signing directory and this login's home are named, not spelled out. The full
-// text stays in the update's log.
-func (s *HostAgentSigner) scrubber(agent, tmp string) func(string) string {
-	pairs := []string{agent, "<agent build>", tmp, "<temp dir>", s.Dir, "<agent signing dir>"}
-	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
-		pairs = append(pairs, home, "~")
-	}
-	var olds []string
-	for i := 0; i < len(pairs); i += 2 {
-		if pairs[i] != "" {
-			olds = append(olds, pairs[i], pairs[i+1])
-		}
-	}
-	r := strings.NewReplacer(olds...)
-	return func(msg string) string { return r.Replace(msg) }
-}
+// pathFree is a signing error as tools.json and doctor carry it: each absolute or home-relative path (the agent
+// build, the temp directory, this Mac's signing directory, a keychain that security names) reads "<path>". The
+// full text stays in the update's log.
+func pathFree(msg string) string { return pathToken.ReplaceAllString(msg, "${1}<path>") }
+
+// pathToken is a path at the start of a word: "/" or "~/" up to a space, quote, comma, semicolon, colon or ")".
+var pathToken = regexp.MustCompile(`(^|[\s"'(=])~?/[^\s"',;:)]*`)
 
 // agentToPush is the guest agent build stage 2 pushes: o.Signer's signed copy, or the build as it is
 // (signed ad hoc) when there is no signer or every signer failed, with the signer and its errors to record.

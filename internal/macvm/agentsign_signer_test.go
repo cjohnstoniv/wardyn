@@ -246,3 +246,56 @@ func TestAgentSignerOrderWardynCodesignAdHoc(t *testing.T) {
 		t.Fatalf("tools.json %s (%v)", rec, err)
 	}
 }
+
+// No path reaches tools.json's agent_sign_errors: not the temp directory a failed MkdirTemp names, and not a
+// keychain path that security prints, in full or under "~".
+func TestAgentSignErrorsArePathFree(t *testing.T) {
+	dir, bin, _ := signFixture(t, false)
+	home, _ := os.UserHomeDir()
+	pathFree := func(t *testing.T, err error) {
+		t.Helper()
+		var se *macvm.AgentSignError
+		if !errors.As(err, &se) || len(se.Errors) == 0 {
+			t.Fatalf("err %v, want an *AgentSignError", err)
+		}
+		for _, e := range se.Errors {
+			if strings.Contains(e, "/") || strings.Contains(e, "Keychains") || strings.Contains(e, "nowhere") {
+				t.Fatalf("a recorded error names a path: %q", e)
+			}
+		}
+	}
+	keychainOut := "security: SecKeychainCreate " + home + "/Library/Keychains/signing.keychain-db: A keychain with the same name already exists.\n" +
+		"search list: \"~/Library/Keychains/login.keychain-db\" (/Library/Keychains/System.keychain)"
+	exec := func(_ context.Context, argv []string) ([]byte, error) {
+		if slices.Contains(argv, "create-keychain") {
+			return []byte(keychainOut), errors.New("exit status 48")
+		}
+		return nil, nil
+	}
+	_, err := (&macvm.HostAgentSigner{Dir: dir, Exec: exec}).SignAgent(context.Background(), bin)
+	pathFree(t, err)
+	if !strings.Contains(err.Error(), home+"/Library/Keychains/signing.keychain-db") {
+		t.Fatalf("the log text lost the keychain path: %v", err)
+	}
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "nowhere", "tmp"))
+	_, err = (&macvm.HostAgentSigner{Dir: dir, Exec: exec}).SignAgent(context.Background(), bin)
+	pathFree(t, err)
+}
+
+// The read-back's identifier must match exactly, as macOS compares it; only the certificate hash's hex may
+// differ in case.
+func TestRequirementReadBackComparesTheIdentifierExactly(t *testing.T) {
+	dir, bin, req := signFixture(t, true)
+	pre, hash, _ := strings.Cut(req, `H"`)
+	upperHex := pre + `H"` + strings.ToUpper(hash)
+	sa, err := (&macvm.HostAgentSigner{Dir: dir, Exec: (&signerExec{dr: upperHex}).exec}).SignAgent(context.Background(), bin)
+	if err != nil || sa.Signer != macvm.AgentSignerWardyn {
+		t.Fatalf("upper-case hex: signer %q err %v", sa.Signer, err)
+	}
+	sa.Done()
+	wrongCase := strings.Replace(req, macvm.AgentSigningID, strings.ToUpper(macvm.AgentSigningID), 1)
+	if _, err := (&macvm.HostAgentSigner{Dir: dir, Exec: (&signerExec{dr: wrongCase}).exec}).SignAgent(context.Background(), bin); err == nil {
+		t.Fatalf("a read-back with the identifier %q in another case passed", strings.ToUpper(macvm.AgentSigningID))
+	}
+}

@@ -210,7 +210,7 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 	var se AgentSignError
 	tmp, err := os.MkdirTemp("", "wardyn-agent-sign-")
 	if err != nil {
-		se.add("", err, func(m string) string { return m })
+		se.add("", err)
 		return sa, &se
 	}
 	defer func() {
@@ -218,10 +218,9 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 			_ = os.RemoveAll(tmp)
 		}
 	}()
-	scrub := s.scrubber(path, tmp)
 	cert, err := AgentSigningIdentity(ctx, s.Dir)
 	if err != nil {
-		se.add("", err, scrub)
+		se.add("", err)
 		return sa, &se
 	}
 	exec := s.Exec
@@ -250,7 +249,7 @@ func (s *HostAgentSigner) SignAgent(ctx context.Context, path string) (sa Signed
 		if err == nil {
 			return SignedAgent{Path: cp, Cert: cert.Raw, Done: func() { _ = os.RemoveAll(tmp) }, Signer: sg.name, Errors: se.Errors}, nil
 		}
-		se.add(sg.name, err, scrub)
+		se.add(sg.name, err)
 		if ctx.Err() != nil {
 			break
 		}
@@ -313,6 +312,14 @@ func (s *HostAgentSigner) signCodesign(ctx context.Context, exec func(context.Co
 	return nil
 }
 
+// sameRequirement is whether requirement text got is want: everything up to the certificate hash exactly, as
+// macOS compares the identifier, and the hash's hex in either case.
+func sameRequirement(got, want string) bool {
+	gp, gh, ok := strings.Cut(got, `H"`)
+	wp, wh, _ := strings.Cut(want, `H"`)
+	return ok && gp == wp && strings.EqualFold(gh, wh)
+}
+
 // proveSigned is this Mac's own check of a signed copy: codesign --verify --strict passes, and the designated
 // requirement reads back as exactly AgentRequirement. Neither needs the certificate trusted.
 func proveSigned(run func(...string) (string, error), cp string, cert *x509.Certificate) error {
@@ -329,7 +336,7 @@ func proveSigned(run func(...string) (string, error), cp string, cert *x509.Cert
 			dr = v
 		}
 	}
-	if want := AgentRequirement(cert); !strings.EqualFold(dr, want) {
+	if want := AgentRequirement(cert); !sameRequirement(dr, want) {
 		return fmt.Errorf("macvm: signing the guest agent: its designated requirement reads %q, want %q", dr, want)
 	}
 	return nil
