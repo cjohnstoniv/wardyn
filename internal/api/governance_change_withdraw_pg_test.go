@@ -15,8 +15,8 @@ import (
 
 // TestGovernanceProposerWithdrawsOutsideApproverSet: the unit admin who proposed a change of an envelope's
 // root, which only the security tier decides, may still reject it, and the reject row says the proposer
-// withdrew it. Approving it stays refused with the security surface reason. A peer admin of the same root,
-// who did not propose it, is refused a reject on scope (only an admin above a unit decides its own change), and
+// withdrew it. Approving it is refused on scope, as it is for a peer admin of the same root, who did not
+// propose it and is refused a reject on scope too (only an admin above a unit decides its own change), and
 // an admin above it is refused one by the envelope. A security admin's reject of a later proposal is no
 // withdrawal.
 func TestGovernanceProposerWithdrawsOutsideApproverSet(t *testing.T) {
@@ -25,8 +25,8 @@ func TestGovernanceProposerWithdrawsOutsideApproverSet(t *testing.T) {
 	contact := e.restate(e.a1, map[string]any{"contact": map[string]any{"owner": "Platform A"}})
 	ch := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), contact))
 
-	if w := e.call(e.adminA1, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
-		t.Errorf("the proposer approving = %d %s, want 403 security_admin_surface", w.Code, w.Body)
+	if w := e.call(e.adminA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+		t.Errorf("the proposer approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
 	}
 	if w := e.call(e.peerA1, http.MethodPost, rejectPath(ch.ID), ""); !scopeRefused(t, w) {
 		t.Errorf("a peer admin rejecting = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
