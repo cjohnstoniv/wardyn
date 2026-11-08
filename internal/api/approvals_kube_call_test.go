@@ -76,8 +76,9 @@ func TestKubeCallRowIsNotMCPCallRow(t *testing.T) {
 	}
 	rows := []types.ApprovalRequest{{Kind: types.ApprovalToolCall, RequestedScope: kubeCallScopeJSON(t, "DELETE", "", "")}}
 	projectCallText(rows)
-	if rows[0].CallText != nil {
-		t.Fatal("a kubectl write got MCP call text")
+	// Its own call text, never the MCP arm's: a write with no body is the empty text, with no extra.
+	if ct := rows[0].CallText; ct == nil || ct.Arguments != "" || ct.Extra != "" {
+		t.Fatalf("a bodiless kubectl write's call text = %+v, want the empty body", ct)
 	}
 }
 
