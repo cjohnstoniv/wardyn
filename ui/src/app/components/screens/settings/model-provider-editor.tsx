@@ -690,7 +690,7 @@ function ProviderFields({
           <ExtraHeaders
             rows={draft.headers}
             onChange={(headers) => set({ headers })}
-            valueHint={preset === "portkey_hosted" && draft.headers.some((h) => h.placeholder) ? PROVIDER_EDITOR.PORTKEY_SLUG_HINT : undefined}
+            valueHint={draft.headers.some((h) => h.placeholder && !h.value) ? PROVIDER_EDITOR.PORTKEY_SLUG_HINT : undefined}
           />
         </>
       ) : (
