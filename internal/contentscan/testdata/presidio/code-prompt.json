@@ -1,0 +1,8 @@
+[
+  {"entity_type": "DATE_TIME", "start": 0, "end": 10, "score": 0.85},
+  {"entity_type": "PERSON", "start": 11, "end": 17, "score": 0.85},
+  {"entity_type": "URL", "start": 18, "end": 40, "score": 0.5},
+  {"entity_type": "UUID", "start": 41, "end": 77, "score": 0.85},
+  {"entity_type": "IP_ADDRESS", "start": 78, "end": 91, "score": 0.6},
+  {"entity_type": "US_DRIVER_LICENSE", "start": 92, "end": 106, "score": 0.65}
+]
