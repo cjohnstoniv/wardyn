@@ -37,7 +37,7 @@ export type RunnerPoolAvailability = "available" | "unavailable" | "unknown";
 export type RunnerPoolRunType = "background" | "interactive";
 
 /** Which bound an effective limit came from (Go: types.LimitSource). */
-export type LimitSource = "pool" | "governance" | "deployment" | "runner";
+export type LimitSource = "pool" | "governance" | "deployment" | "runner" | "elevation";
 
 /** Why the platform ended a run (Go: types.RunEndReason). */
 export type RunEndReason =
