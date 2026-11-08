@@ -15,6 +15,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 const getRunMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
   runs: {
+    getPolicy: () => new Promise(() => {}),
     getRun: (...a: unknown[]) => getRunMock(...a),
     getGrants: vi.fn().mockResolvedValue([]),
     killRun: vi.fn(),

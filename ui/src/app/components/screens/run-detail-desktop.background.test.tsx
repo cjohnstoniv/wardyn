@@ -16,7 +16,7 @@ vi.mock("../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => 
 const attachTicketMock = vi.fn();
 const watchTicketMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
-  runs: { attachTicket: (...a: unknown[]) => attachTicketMock(...a), watchTicket: (...a: unknown[]) => watchTicketMock(...a) },
+  runs: { getPolicy: () => new Promise(() => {}), attachTicket: (...a: unknown[]) => attachTicketMock(...a), watchTicket: (...a: unknown[]) => watchTicketMock(...a) },
 }));
 const signInsGet = vi.fn();
 vi.mock("../../lib/api/desktop-sign-ins", () => ({

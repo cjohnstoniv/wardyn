@@ -17,7 +17,9 @@ import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { Mono } from "../../wardyn/code-block";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
+import { DATA_OUT_RUN } from "../../wardyn/copy/data-out-run";
 import { DesktopReviewRow } from "./desktop-review-row";
+import { useRunDataOut } from "./use-run-data-out";
 
 type UploadRow = {
   key: number;
@@ -45,18 +47,23 @@ export const REVIEW_POLL_MS = 5000;
 const clock = () => new Date().toTimeString().slice(0, 5);
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-function Blocked({ title }: { title: string }) {
+function Blocked({ title, why }: { title: string; why?: string }) {
   return (
     <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
       <p className="text-xs font-medium text-foreground">{title}</p>
       <p className="mt-0.5 text-meta text-muted-foreground">{C.refused}</p>
+      {why && <p className="mt-0.5 text-meta text-muted-foreground">{why}</p>}
     </div>
   );
 }
 
-export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: boolean }) {
+// noDesktop: the run has no desktop (a plain sandbox), so only the reviewed way out is left: no clipboard strip,
+// no To tab, and the folder is "in the run".
+export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { runId: string; vm?: boolean; noDesktop?: boolean }) {
+  // The run's data_out rule; unknown (undefined) draws nothing new.
+  const dataOut = useRunDataOut(runId);
   const [view, setView] = React.useState<DesktopFilesView | null>(null);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [loadError, setLoadError] = React.useState<{ text: string; reason?: string } | null>(null);
   const [paused, setPaused] = React.useState<string | null>(null);
   const [uploads, setUploads] = React.useState<UploadRow[]>([]);
   const [marks, setMarks] = React.useState<Record<string, DownloadMark>>({});
@@ -89,7 +96,7 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
         setPaused(e.message);
         setLoadError(null);
       } else {
-        setLoadError(message(e));
+        setLoadError({ text: message(e), reason: e instanceof HttpError ? e.reason : undefined });
         setPaused(null);
       }
     }
@@ -99,7 +106,7 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
   }, [load]);
   usePoll(load, PAUSED_POLL_MS, paused === null);
   const [tab, setTab] = React.useState("to");
-  usePoll(loadRequests, REVIEW_POLL_MS, !(view?.rules.download === "review" && tab === "from"));
+  usePoll(loadRequests, REVIEW_POLL_MS, !(view?.rules.download === "review" && (tab === "from" || noDesktop)));
 
   const patch = (key: number, next: Partial<UploadRow>) =>
     setUploads((rows) => rows.map((r) => (r.key === key ? { ...r, ...next } : r)));
@@ -138,7 +145,13 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
     return (
       <section aria-label={C.title} data-testid="desktop-files" className="mt-4">
         <p className="text-xs font-medium text-foreground">{C.title}</p>
-        <p className="mt-1 font-mono text-meta text-muted-foreground">{loadError}</p>
+        <p className="mt-1 font-mono text-meta text-muted-foreground">{loadError.text}</p>
+        {loadError.reason === "data_out_unreadable" && (
+          <Button size="sm" variant="outline" className="mt-1.5" onClick={() => void load()}>
+            <RotateCw aria-hidden="true" />
+            {DATA_OUT_RUN.RETRY}
+          </Button>
+        )}
       </section>
     );
   }
@@ -159,7 +172,7 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
   return (
     <section aria-label={C.title} data-testid="desktop-files" className="mt-4">
       <p className="text-xs font-medium text-foreground">{C.title}</p>
-      {vm ? (
+      {noDesktop ? null : vm ? (
         <p data-testid="desktop-files-no-clipboard" className="mt-1.5 text-meta text-muted-foreground">{C.clipboardVM}</p>
       ) : (
         <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-meta">
@@ -171,20 +184,27 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
           ))}
         </dl>
       )}
-      <Tabs defaultValue="to" className="mt-2" onValueChange={(v) => {
+      <Tabs defaultValue={noDesktop ? "from" : "to"} className="mt-2" onValueChange={(v) => {
           setTab(v);
           if (v === "from") void load();
         }}>
-        <TabsList>
-          <TabsTrigger value="to">{C.toTab}</TabsTrigger>
-          <TabsTrigger value="from">{C.fromTab}</TabsTrigger>
-        </TabsList>
+        {!noDesktop && (
+          <TabsList>
+            <TabsTrigger value="to">{C.toTab}</TabsTrigger>
+            <TabsTrigger value="from">{C.fromTab}</TabsTrigger>
+          </TabsList>
+        )}
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-meta text-muted-foreground">
           {C.folderLabel}
           <Mono className="text-meta text-foreground">{view.folder}</Mono>
-          {C.folderWhere}
+          {noDesktop ? DATA_OUT_RUN.FOLDER_IN_RUN : C.folderWhere}
         </p>
-        <TabsContent value="to">
+        {noDesktop && (
+          <p data-testid="desktop-files-no-desktop" className="mt-1.5 text-meta text-muted-foreground">
+            {DATA_OUT_RUN.FILES_NO_DESKTOP}
+          </p>
+        )}
+        {!noDesktop && <TabsContent value="to">
           {rules.upload !== "allowed" ? (
             <Blocked title={C.uploadBlocked} />
           ) : (
@@ -218,11 +238,11 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
             ))}
           </ul>
           <p className="mt-2 text-meta text-muted-foreground">{C.everyFile}</p>
-        </TabsContent>
+        </TabsContent>}
         <TabsContent value="from">
           {rules.download !== "allowed" && rules.download !== "review" ? (
             <>
-              <Blocked title={C.downloadBlocked} />
+              <Blocked title={C.downloadBlocked} why={dataOut === "review" || dataOut === "blocked" ? DATA_OUT_RUN.FILES_BLOCKED : undefined} />
               <p className="mt-2 text-meta text-muted-foreground">{C.blockedEmpty}</p>
               <p className="mt-1 text-meta text-muted-foreground">{C.refusedLogged}</p>
             </>
