@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/setup"
@@ -21,9 +22,13 @@ type backendPlacement struct {
 }
 
 // advertisedConfinementRead is advertisedConfinement that also says whether the placement could be read:
-// an offline runner, or no executor to ask, is read=false.
+// an offline runner is read=false. A deployment with no executor at all is read, with no class: nothing will
+// answer at launch, so the row is missing, not left to a runner that does not exist.
 func (s *Server) advertisedConfinementRead(ctx context.Context, req createRunRequest) ([]types.ConfinementClass, bool) {
 	pc, err := s.requestCapabilities(ctx, req)
+	if errors.Is(err, errNoRemoteExecutor) {
+		return nil, true
+	}
 	if err != nil {
 		return nil, false
 	}
