@@ -17,6 +17,7 @@
 
 - A pool never claims or transfers a runner, and a user pool never makes another person's runner a candidate (`stepPlacement`, [`internal/api/run_fold_steps.go`](../../internal/api/run_fold_steps.go)).
 - A remote-hosted runner joins a person's user pool only while its "Available to people's pools" setting admits them: off (the default), everyone, or listed people, groups and roles (`wardyn runner remote people set`).
+- A use policy row can name a unit by id (`subject_type` `unit`, set with `PUT /api/v1/runner-pools/{id}/use-policy`). It admits runs launched in that unit or below it. A queued start and a revive use the unit the run froze. A run in no unit matches no unit row.
 - A use policy and a people policy are held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`; see [admin-only writes](admin-only-writes.md).
 - An organization runner on Kubernetes serves a pool in one runs namespace, fixed when you add it and listed as `runs_namespace` on the pool's members. It serves each named namespace for one pool only: [Several runs namespaces](k8s-runners.md#several-runs-namespaces).
 - With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, removing an organization runner from a pool that carries a use policy is held for a super admin, as for a remote-hosted runner.

@@ -119,6 +119,9 @@ describe("runner pool carriers", () => {
     expect(union("RunnerPoolState")).toEqual(consts(typesGo, '\\bRunnerPool\\w+\\s+RunnerPoolState = "([a-z_]+)"'));
     expect(union("RunnerPoolSelection")).toEqual(consts(typesGo, '\\bRunnerPoolSelected\\w+\\s+RunnerPoolSelection = "([a-z_]+)"'));
     expect(union("RunnerPoolAvailability")).toEqual(consts(clientGo, '\\bRunnerPool(?:Available|Unavailable|Unknown)\\s*=\\s*"([a-z_]+)"'));
+    const subjectTypes = new Set([...(/subject_type: ([^;]+);/.exec(stripComments(ts))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    expect(subjectTypes).toEqual(new Set(["user", "group", "user_type", ...consts(typesGo, '\\bRunnerPoolSubjectUnit\\s+CapabilitySubjectType = "([a-z_]+)"')]));
+    expect(subjectTypes.size).toBe(4);
     expect(union("RunnerPoolScope").size).toBe(2);
     expect(union("RunnerPoolState").size).toBe(3);
     expect(union("RunnerPoolSelection").size).toBe(3);

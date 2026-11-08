@@ -197,9 +197,9 @@ export interface ResolvedRunnerPool {
   selection: RunnerPoolSelection;
 }
 
-/** Go: types.RunnerPoolSubject (a role is a user_type; an identity provider's roles arrive as groups). */
+/** Go: types.RunnerPoolSubject (a role is a user_type; an identity provider's roles arrive as groups; a unit row names a unit by id and admits runs in it or below it). */
 export interface RunnerPoolSubject {
-  subject_type: "user" | "group" | "user_type";
+  subject_type: "user" | "group" | "user_type" | "unit";
   subject: string;
 }
 

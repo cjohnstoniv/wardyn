@@ -118,6 +118,8 @@ func (c callerSubjects) matchesPoolSubject(sub types.RunnerPoolSubject) bool {
 		return slices.Contains(c.groups, sub.Subject)
 	case types.CapabilitySubjectUserType:
 		return c.userType != "" && c.userType == sub.Subject
+	case types.RunnerPoolSubjectUnit:
+		return slices.Contains(c.units, sub.Subject)
 	}
 	return false
 }
@@ -157,7 +159,7 @@ func (s *Server) permittedPools(ctx context.Context, ps store.RunnerPoolStore, f
 	if oversight {
 		return rows, nil
 	}
-	subj, err := s.callerSubjects(ctx)
+	subj, err := s.poolSubjects(ctx, rows)
 	if err != nil {
 		return nil, ceilingRunRefusal(err)
 	}
@@ -308,7 +310,7 @@ func (s *Server) listRunnerPools(w http.ResponseWriter, r *http.Request, forUse 
 		rows = rows[:store.RunnerPoolsOversightMax]
 		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
-	subj, err := s.callerSubjects(r.Context())
+	subj, err := s.poolSubjects(r.Context(), rows)
 	if err != nil {
 		writeCeilingError(w, r, err)
 		return
