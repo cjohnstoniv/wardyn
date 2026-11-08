@@ -8,11 +8,10 @@
 import { formatDuration } from "../../../lib/format";
 import { goDurationMs } from "../../../lib/go-duration";
 import type { GovernanceChangeApprover } from "../../../lib/types/governance-change";
+import { joinOr } from "../../wardyn/decider-lines";
 
-// "a", "a or b", "a, b or c".
-export function joinOr(parts: string[]): string {
-  return parts.length < 2 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} or ${parts[parts.length - 1]}`;
-}
+// request-phrases.test.ts and the elevation screens read it from here.
+export { joinOr };
 
 function deciderPhrase(d: GovernanceChangeApprover): string {
   if (d.kind === "security") return "a security admin";

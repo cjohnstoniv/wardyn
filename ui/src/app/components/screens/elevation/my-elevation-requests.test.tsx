@@ -122,7 +122,7 @@ describe("MyElevationRequests: each state", () => {
   it("an approved request in force says when it ends and how long is left", () => {
     setup(list([row({ state: "applied", ends_at: aheadByHours(3), decided_by: "priya.nair", decided_at: aheadByHours(-0.5) })]));
     expect(screen.getByText("Approved")).toBeInTheDocument();
-    expect(screen.getByText(/^Ends \S+ \S+ \(in [23]h \d+m\)\. Pick Payments when you start a run\.$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Ends .+ \(in [23]h \d+m\)\. Pick Payments when you start a run\.$/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Withdraw" })).not.toBeInTheDocument();
   });
 

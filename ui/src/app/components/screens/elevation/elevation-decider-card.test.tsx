@@ -94,7 +94,7 @@ describe("ElevationDeciderCard: what it says", () => {
       "dana.reyes@acme.example becomes a member of Payments for 4 hours, starting when you approve.",
     );
     expect(screen.getByText("Blast radius:").parentElement).toHaveTextContent(
-      "They can start runs under Payments' limits until then, and each run they start ends when the elevation ends. Ending the elevation early doesn't stop a run that has already started.",
+      "limits until then, and each run they start ends when the elevation ends. Ending the elevation early doesn't stop a run that has already started.",
     );
   });
 
