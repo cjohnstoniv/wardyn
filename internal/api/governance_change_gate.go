@@ -147,6 +147,8 @@ func (s *Server) recordGovernanceBypass(r *http.Request, kind, target, outcome s
 type govApprover struct {
 	allowed func(s *Server, r *http.Request) bool
 	reason  authz.Reason
+	// refusal, when set, names the reason for the caller allowed refused, in place of reason.
+	refusal func(s *Server, r *http.Request) authz.Reason
 	scoped  bool
 }
 
@@ -238,11 +240,21 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 }
 
 // canSeeGovernanceChange reports whether the caller may list or read a change: the approver predicate,
-// so a change that only a super admin may decide is never shown to a security admin. A kind this
-// binary does not know (a row from a newer one) is shown to nobody: it cannot be decided here.
+// so a change that only a super admin may decide is never shown to a security admin, or the person who
+// proposed it, who keeps seeing their own change though a tier above theirs decides it (a unit admin's
+// change of an envelope's root). It widens list, read and the pending change a refused repeat names,
+// never a decision. A kind this binary does not know (a row from a newer one) is shown to nobody,
+// proposer included: it cannot be decided here.
 func (s *Server) canSeeGovernanceChange(r *http.Request, ch types.GovernanceChange) bool {
 	k, ok := governanceChangeKinds[ch.TargetKind]
-	return ok && k.forChange(ch).approver.allowed(s, r)
+	if !ok {
+		return false
+	}
+	if k.forChange(ch).approver.allowed(s, r) {
+		return true
+	}
+	_, principal := actorFromRequest(r)
+	return sameGovernanceHuman(ch, principal, oidcEmailFromContext(r.Context()))
 }
 
 // govProposal is a covered write to hold.

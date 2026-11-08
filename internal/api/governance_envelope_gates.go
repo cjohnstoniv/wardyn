@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -91,7 +92,8 @@ func envelopeGuardedUnit(ch types.GovernanceChange) (uuid.UUID, bool) {
 
 // envelopeRootApprover is inner, except that a change of an envelope's root (envelopeGuardedUnit) is
 // decided by a security caller only: the root's walls, locks, contact, parent and admins are the
-// security tier's once it sets the envelope. A unit admin inner admits is refused with inner's reason.
+// security tier's once it sets the envelope. A unit admin inner admits is refused with
+// security_admin_surface, the reason of a security-only surface; a caller inner refuses keeps inner's.
 func envelopeRootApprover(ch types.GovernanceChange, inner govApprover) govApprover {
 	unit, guarded := envelopeGuardedUnit(ch)
 	if !guarded {
@@ -105,6 +107,12 @@ func envelopeRootApprover(ch types.GovernanceChange, inner govApprover) govAppro
 			return s.isSecurityOperator(r.Context()) || !s.securityOnlyRoot(r.Context(), unit)
 		},
 		reason: inner.reason,
+		refusal: func(s *Server, r *http.Request) authz.Reason {
+			if inner.allowed(s, r) {
+				return securityApprover.reason
+			}
+			return inner.reason
+		},
 		scoped: inner.scoped,
 	}
 }

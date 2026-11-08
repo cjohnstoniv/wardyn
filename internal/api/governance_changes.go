@@ -254,6 +254,10 @@ func (s *Server) approverSessionStatus(ctx context.Context, q store.Querier, t t
 // denyApprover is the refusal a caller whose tier does not pass the kind's approver predicate gets.
 func (s *Server) denyApprover(kind govKind) *govRefusal {
 	return &govRefusal{why: "approver tier", write: func(w http.ResponseWriter, r *http.Request) {
+		kind := kind // this refusal's own copy: refusal may name the reason
+		if kind.approver.refusal != nil {
+			kind.approver.reason = kind.approver.refusal(s, r)
+		}
 		s.refuse(w, r, authz.Deny(kind.approver.reason, govChangeTarget, ""))
 	}}
 }
