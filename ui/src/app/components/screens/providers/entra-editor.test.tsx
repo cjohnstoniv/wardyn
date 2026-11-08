@@ -141,6 +141,35 @@ describe("EntraEditor", () => {
     expect(gitRowInvalid(latest!)).toBe(false);
   });
 
+  // The server reads pr on a ceiling as pr_create, pr_vote and pr_complete, and the three together as pr (adoscope.Has).
+  it("a pr ceiling leaves each pull-request part a default the row can save", () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow({ default_profile: ["pr_vote", "code_read"] })} onLatest={(r) => (latest = r)} />);
+    for (const cap of ["pr_create", "pr_vote", "pr_complete"]) {
+      expect(defaults().getByRole("checkbox", { name: name(cap) })).toBeEnabled();
+      expect(screen.getByTestId(`entra-default-${cap}`)).not.toHaveAttribute("title", E.DEFAULT_OFF_CEILING_TIP);
+    }
+    expect(defaults().getByRole("checkbox", { name: name("pr_vote") })).toBeChecked();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(gitRowInvalid(latest!)).toBe(false);
+  });
+
+  it("a ceiling of all three pull-request parts leaves pr a default the row can save", () => {
+    let latest: GitProvider | undefined;
+    const initial = entraRow({ capability_ceiling: ["code_read", "pr_create", "pr_vote", "pr_complete"], default_profile: ["pr", "code_read"] });
+    render(<Harness initial={initial} onLatest={(r) => (latest = r)} />);
+    expect(defaults().getByRole("checkbox", { name: name("pr") })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(gitRowInvalid(latest!)).toBe(false);
+  });
+
+  it("a pr default under a ceiling of one part is still off the ceiling", () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow({ capability_ceiling: ["code_read", "pr_create"], default_profile: ["pr", "code_read"] })} onLatest={(r) => (latest = r)} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(E.ERROR_DEFAULT_OFF_CEILING(name("pr")));
+    expect(gitRowInvalid(latest!)).toBe(true);
+  });
+
   it("edits land on the row's entra block only, in catalogue order", async () => {
     let latest: GitProvider | undefined;
     render(<Harness initial={entraRow()} onLatest={(r) => (latest = r)} />);
