@@ -642,10 +642,7 @@ func (c *Client) applyGovernanceTo(ctx context.Context, current, doc GovernanceD
 		p, ok := profileByName[name]
 		return p.ID, ok
 	}, pendingProfile)
-	if err := c.applyUnitAdmins(ctx, admins, doc.Admins, &res); err != nil {
-		return res, err
-	}
-	if err := c.applyUnitDeciders(ctx, deciders, admins.unitID, pendingProfile, &res); err != nil {
+	if err := c.applyUnitSections(ctx, admins, doc.Admins, deciders, pendingProfile, &res); err != nil {
 		return res, err
 	}
 
@@ -658,13 +655,10 @@ func (c *Client) applyGovernanceTo(ctx context.Context, current, doc GovernanceD
 		// final, so no delete is issued after one (ApplyGovernance's doc).
 		res.PruneSkipped = len(res.Pending) > 0
 		if !res.PruneSkipped {
-			res.PruneSkipped, err = c.pruneUnitAdmins(ctx, admins, doc.Admins, &res)
+			res.PruneSkipped, err = c.pruneUnitSections(ctx, admins, doc.Admins, deciders, &res)
 			if err != nil {
 				return res, err
 			}
-		}
-		if err := c.pruneUnitDeciders(ctx, deciders, &res); err != nil { // a unit about to be pruned is cleared first
-			return res, err
 		}
 		if !res.PruneSkipped {
 			res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, &res)

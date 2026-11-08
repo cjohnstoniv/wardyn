@@ -255,27 +255,45 @@ func widerThanParent(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity && apiErr.Reason == "decider_rule_wider_than_parent"
 }
 
-// pruneUnitDeciders clears the rules of every unit the section omits, children first, when prune has
-// not been skipped. It stops at the first clear the server holds and marks prune skipped.
-func (c *Client) pruneUnitDeciders(ctx context.Context, p deciderPlan, res *GovernanceApplyResult) error {
+// pruneUnitDeciders clears the rules of every unit the section omits, children first. It stops at the
+// first clear the server holds (recorded in res.Pending) and reports skipped.
+func (c *Client) pruneUnitDeciders(ctx context.Context, p deciderPlan, res *GovernanceApplyResult) (skipped bool, err error) {
 	for _, w := range p.clears {
-		if res.PruneSkipped {
-			return nil
-		}
 		_, pending, err := c.PutUnitDeciders(ctx, w.id, nil)
 		if err != nil {
 			err = fmt.Errorf("prune deciders of %q: %w", w.name, err)
 		}
 		res.Steps = append(res.Steps, w.step("delete", w.id).withOutcome(pending != nil, err))
 		if err != nil {
-			return err
+			return false, err
 		}
 		if pending != nil {
 			res.Pending = append(res.Pending, *pending)
-			res.PruneSkipped = true
+			return true, nil
 		}
 	}
-	return nil
+	return false, nil
+}
+
+// applyUnitSections is an apply's unit admins, then its deciders rules (after the unit and membership
+// writes, before the restrictions).
+func (c *Client) applyUnitSections(ctx context.Context, admins adminPlan, docAdmins map[string][]GovernanceAdminSubject, deciders deciderPlan,
+	pendingProfile map[string]bool, res *GovernanceApplyResult) error {
+	if err := c.applyUnitAdmins(ctx, admins, docAdmins, res); err != nil {
+		return err
+	}
+	return c.applyUnitDeciders(ctx, deciders, admins.unitID, pendingProfile, res)
+}
+
+// pruneUnitSections is a prune's revokes of the omitted unit admins, then its clears of the omitted
+// deciders rules, before any membership or unit delete, so a unit about to be pruned is cleared first. It
+// reports skipped at the first write the server holds, as pruneUnitAdmins does.
+func (c *Client) pruneUnitSections(ctx context.Context, admins adminPlan, docAdmins map[string][]GovernanceAdminSubject, deciders deciderPlan,
+	res *GovernanceApplyResult) (skipped bool, err error) {
+	if skipped, err = c.pruneUnitAdmins(ctx, admins, docAdmins, res); skipped || err != nil {
+		return skipped, err
+	}
+	return c.pruneUnitDeciders(ctx, deciders, res)
 }
 
 // PlanGovernanceUnder and ApplyGovernanceResultUnder are PlanGovernance and ApplyGovernanceResult narrowed to
