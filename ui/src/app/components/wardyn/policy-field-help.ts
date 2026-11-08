@@ -212,4 +212,11 @@ export const FIELD_HELP = {
     doc: "recording",
     snippet: "terminal",
   },
+  data_out: {
+    what: "The run's rule for content leaving it. A layer above can only make it stricter.",
+    values:
+      "allowed | review | blocked. Omitted: allowed. review lets files out one at a time through the Files panel, each with a person's yes; blocked also refuses every download and every git push.",
+    doc: "data_out",
+    snippet: "review",
+  },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;
