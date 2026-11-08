@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -110,6 +112,13 @@ func (e *unitAdminEnv) reject(ch types.GovernanceChange) {
 	if w := e.call(e.bob, http.MethodPost, rejectPath(ch.ID), ""); w.Code != http.StatusOK {
 		e.t.Fatalf("rejecting %s = %d %s, want 200", ch.ID, w.Code, w.Body)
 	}
+}
+
+// securitySurfaceRefused reports a 403 security_admin_surface: the refusal of a caller who governs the
+// unit but whose change is the security tier's alone to decide.
+func securitySurfaceRefused(t *testing.T, w *httptest.ResponseRecorder) bool {
+	t.Helper()
+	return w.Code == http.StatusForbidden && wireReason(t, w) == string(authz.ReasonSecurityAdminSurface)
 }
 
 func securityOnlyList(a []changeApprover) bool { return len(a) == 1 && a[0].Kind == "security" }
@@ -218,8 +227,8 @@ func TestEnvelopeRootWideningSecurityOnly(t *testing.T) {
 	}
 	ch = e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), wide))
 	for who, c := range map[string]*http.Cookie{"a peer admin of the root": e.peerA1, "an admin above the root": e.adminA} {
-		if w := e.call(c, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
-			t.Errorf("%s approving = %d %s, want 403 unit_scope_denied", who, w.Code, w.Body)
+		if w := e.call(c, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
+			t.Errorf("%s approving = %d %s, want 403 security_admin_surface", who, w.Code, w.Body)
 		}
 	}
 	if got := e.domainsOf(e.a1); len(got) != 1 || e.changeState(ch.ID) != types.GovernanceChangePending {
@@ -242,8 +251,8 @@ func TestEnvelopeRootLockRemovalSecurityOnly(t *testing.T) {
 	}
 	e.seedEnvelope(e.a1)
 	ch := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), e.restate(e.a1, map[string]any{"locked_knobs": []string{}})))
-	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
-		t.Errorf("the root's peer approving a lock removal = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
+		t.Errorf("the root's peer approving a lock removal = %d %s, want 403 security_admin_surface", w.Code, w.Body)
 	}
 	if !securityOnlyList(e.readApprovers(ch.ID)) {
 		t.Errorf("approvers %+v, want the security admins alone", e.readApprovers(ch.ID))
@@ -262,8 +271,8 @@ func TestEnvelopeRootContactSecurityOnly(t *testing.T) {
 	e.seedEnvelope(e.a1)
 	ch := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1),
 		e.restate(e.a1, map[string]any{"contact": map[string]any{"owner": "Platform A", "email": "plat-a@example.com"}})))
-	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
-		t.Errorf("the root's peer approving a contact = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
+		t.Errorf("the root's peer approving a contact = %d %s, want 403 security_admin_surface", w.Code, w.Body)
 	}
 	if w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
 		t.Fatalf("a security admin approving = %d %s, want 200", w.Code, w.Body)
@@ -326,6 +335,53 @@ func TestEnvelopeApproversListSecurityOnly(t *testing.T) {
 	}
 }
 
+// TestEnvelopeRootProposerSeesOwnChange: the unit admin who proposed a change of the root keeps seeing
+// it though they cannot decide it: it is in their list, readable by id, and named in the 409 a repeat
+// proposal gets. A peer admin of the same root, who proposed nothing, gets none of the three.
+func TestEnvelopeRootProposerSeesOwnChange(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	e.seedEnvelope(e.a1)
+	contact := e.restate(e.a1, map[string]any{"contact": map[string]any{"owner": "Platform A"}})
+	ch := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), contact))
+
+	listed := func(c *http.Cookie) bool {
+		w := e.call(c, http.MethodGet, "/api/v1/governance/changes", "")
+		var out []types.GovernanceChange
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("list = %d %s", w.Code, w.Body)
+		}
+		return slices.ContainsFunc(out, func(x types.GovernanceChange) bool { return x.ID == ch.ID })
+	}
+	if !listed(e.adminA1) {
+		t.Error("the proposer's list omits their own change of the root")
+	}
+	if listed(e.peerA1) {
+		t.Error("a peer admin's list shows a change they did not propose and cannot decide")
+	}
+
+	if w := e.call(e.adminA1, http.MethodGet, "/api/v1/governance/changes/"+ch.ID.String(), ""); w.Code != http.StatusOK {
+		t.Errorf("the proposer reading their change = %d %s, want 200", w.Code, w.Body)
+	}
+	if w := e.call(e.peerA1, http.MethodGet, "/api/v1/governance/changes/"+ch.ID.String(), ""); w.Code != http.StatusNotFound {
+		t.Errorf("a peer admin reading the change = %d %s, want 404", w.Code, w.Body)
+	}
+
+	repeat := func(c *http.Cookie) errorBody {
+		w := e.call(c, http.MethodPut, envUnitPath(e.a1), contact)
+		var body errorBody
+		if w.Code != http.StatusConflict || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatalf("a repeat proposal = %d %s, want 409", w.Code, w.Body)
+		}
+		return body
+	}
+	if body := repeat(e.adminA1); body.PendingChange == nil || body.PendingChange.ID != ch.ID {
+		t.Errorf("the proposer's 409 carries pending_change %+v, want change %s", body.PendingChange, ch.ID)
+	}
+	if body := repeat(e.peerA1); body.PendingChange != nil {
+		t.Errorf("a peer admin's 409 carries pending_change %+v, want none", body.PendingChange)
+	}
+}
+
 // TestEnvelopeDryRunMatchesWrite: the dry run lists exactly the approvers the held write then lists, for
 // the root with and without an envelope and for a unit below it.
 func TestEnvelopeDryRunMatchesWrite(t *testing.T) {
@@ -372,8 +428,8 @@ func TestEnvelopeRootUnitAdminGrantSecurityOnly(t *testing.T) {
 
 	e.seedEnvelope(e.a1)
 	ch = grant()
-	if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
-		t.Errorf("an admin above the root approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+	if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
+		t.Errorf("an admin above the root approving = %d %s, want 403 security_admin_surface", w.Code, w.Body)
 	}
 	if a := e.readApprovers(ch.ID); !securityOnlyList(a) {
 		t.Errorf("approvers %+v, want the security admins alone", a)
@@ -573,8 +629,8 @@ func TestEnvelopeUnreadableFailsClosed(t *testing.T) {
 	if a := e.readApprovers(ch.ID); !securityOnlyList(a) {
 		t.Errorf("approvers %+v, want the security admins alone", a)
 	}
-	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
-		t.Errorf("a peer approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
+		t.Errorf("a peer approving = %d %s, want 403 security_admin_surface", w.Code, w.Body)
 	}
 	if w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
 		t.Errorf("a security admin approving = %d %s, want 200", w.Code, w.Body)
