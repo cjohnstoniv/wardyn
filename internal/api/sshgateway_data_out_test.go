@@ -137,24 +137,65 @@ func TestDataOutDirectTCPIPRefused(t *testing.T) {
 	}
 }
 
-// TestDataOutSSHUnreadableFailsClosed: a rule that cannot be read, or a run with no recorded policy, refuses
-// exec and forwards, and the shell still opens.
+// TestDataOutSSHUnreadableFailsClosed: a rule that cannot be read refuses SSH file transfer, commands and port
+// forwards, each with its audit row.
 func TestDataOutSSHUnreadableFailsClosed(t *testing.T) {
-	for name, mutate := range map[string]func(*sshMemStore){
-		"read error":  func(s *sshMemStore) { s.policyErr = errors.New("audit store unavailable") },
-		"no envelope": func(s *sshMemStore) { s.noPolicy = true },
-	} {
-		d := newDataOutSSH(t, "", mutate)
-		sess, err := d.client.NewSession()
-		if err != nil {
-			t.Fatal(err)
+	d := newDataOutSSH(t, "", func(s *sshMemStore) { s.policyErr = errors.New("audit store unavailable") })
+	sess, err := d.client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Run("true"); err == nil {
+		t.Error("exec ran")
+	}
+	sftp, err := d.client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sftp.RequestSubsystem("sftp"); err == nil {
+		t.Error("the sftp subsystem was accepted")
+	}
+	if conn, err := d.client.Dial("tcp", "127.0.0.1:9999"); err == nil {
+		_ = conn.Close()
+		t.Error("a port forward opened")
+	}
+	if n := d.execs.Load(); n != 0 {
+		t.Errorf("%d execs reached the sandbox", n)
+	}
+	for _, path := range []string{"exec", "sftp", "port_forward"} {
+		if d.denied(t, path) == nil {
+			t.Errorf("no run.data_out.deny row for %s; events=%s", path, auditDump(d.h.audit.snapshot(), d.run.ID))
 		}
-		if err := sess.Run("true"); err == nil {
-			t.Errorf("%s: exec ran", name)
-		}
-		if conn, err := d.client.Dial("tcp", "127.0.0.1:9999"); err == nil {
-			_ = conn.Close()
-			t.Errorf("%s: a port forward opened", name)
+	}
+}
+
+// TestDataOutSSHNoRecordIsAllowed: a run with no recorded policy (its audit rows were pruned) carries no rule,
+// so SSH file transfer, commands and port forwards open as under allowed, and nothing is denied.
+func TestDataOutSSHNoRecordIsAllowed(t *testing.T) {
+	d := newDataOutSSH(t, "", func(s *sshMemStore) { s.noPolicy = true })
+	sess, err := d.client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Run("true"); err != nil {
+		t.Errorf("exec = %v, want it to run", err)
+	}
+	sftp, err := d.client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sftp.RequestSubsystem("sftp"); err != nil {
+		t.Errorf("sftp = %v, want the subsystem accepted", err)
+	}
+	_ = sftp.Close()
+	if conn, err := d.client.Dial("tcp", "127.0.0.1:9999"); err != nil {
+		t.Errorf("forward = %v, want it to open", err)
+	} else {
+		_ = conn.Close()
+	}
+	for _, ev := range d.h.audit.snapshot() {
+		if ev.Action == "run.data_out.deny" {
+			t.Errorf("a run with no recorded policy was denied: %s", ev.Data)
 		}
 	}
 }
