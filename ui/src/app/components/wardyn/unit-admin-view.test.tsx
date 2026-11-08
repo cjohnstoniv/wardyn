@@ -40,6 +40,7 @@ import { VIEW_REFUSAL } from "./copy/console-view";
 import { GOVERNANCE_NAV_TITLE } from "../../lib/nav-copy";
 import { GOVERNANCE as GOV } from "../../lib/governance-copy";
 import type { GovernanceSnapshot } from "../../lib/api/governance";
+import { aheadByHours } from "../../lib/test-clock";
 
 const UNITS = [{ unit_id: "u1", unit_name: "payments" }];
 
@@ -178,8 +179,8 @@ describe("GovernanceScreen — a unit admin", () => {
     name: "Payments",
     ceiling: { allowed_domains: ["api.anthropic.com"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
     limits: {},
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
   };
   const SNAPSHOT = { profiles: [PROFILE], assignments: [] } as unknown as GovernanceSnapshot;
 
