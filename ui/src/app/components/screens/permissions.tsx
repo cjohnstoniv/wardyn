@@ -31,6 +31,7 @@ import type {
   CapabilityEffect,
   CapabilityGrant,
   CapabilitySubjectType,
+  GovernanceChange,
   PermissionsSnapshot,
 } from "../../lib/types";
 import { Button } from "../ui/button";
@@ -228,7 +229,7 @@ export function PermissionsScreen() {
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing has changed yet.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -262,11 +263,11 @@ export function PermissionsScreen() {
       const saved = await api.putEnforcement(body);
       setSnap((s) => ({ grants: s?.grants ?? [], enforcement: saved }));
       setConfirm(null);
-      setSubmitted(false);
+      setSubmitted(null);
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setConfirm(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -282,11 +283,11 @@ export function PermissionsScreen() {
       await api.deleteGrant(g.id);
       setSnap((s) => (s ? { ...s, grants: s.grants.filter((x) => x.id !== g.id) } : s));
       setToRemove(null);
-      setSubmitted(false);
+      setSubmitted(null);
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setToRemove(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -302,7 +303,7 @@ export function PermissionsScreen() {
     <PageContainer width="list">
       <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
-      {submitted && <SubmittedNote />}
+      {submitted && <SubmittedNote change={submitted} />}
 
       {/* The upgrade-from-0.5 posture: every kind off and no grants at all. */}
       {status === "ready" && nothingEnforced && snap!.grants.length === 0 && (
@@ -348,10 +349,10 @@ export function PermissionsScreen() {
                 disabled={!securityOperator}
                 onGrants={(grants) => {
                   setSnap((s) => (s ? { ...s, grants } : s));
-                  setSubmitted(false);
+                  setSubmitted(null);
                 }}
-                onSubmitted={() => {
-                  setSubmitted(true);
+                onSubmitted={(change) => {
+                  setSubmitted(change);
                   load();
                 }}
               />
@@ -361,10 +362,10 @@ export function PermissionsScreen() {
                 disabled={!securityOperator}
                 onGrants={(grants) => {
                   setSnap((s) => (s ? { ...s, grants } : s));
-                  setSubmitted(false);
+                  setSubmitted(null);
                 }}
-                onSubmitted={() => {
-                  setSubmitted(true);
+                onSubmitted={(change) => {
+                  setSubmitted(change);
                   load();
                 }}
               />
@@ -479,7 +480,7 @@ export function PermissionsScreen() {
       <AddGrantForm
         disabled={!securityOperator}
         onAdded={() => {
-          setSubmitted(false);
+          setSubmitted(null);
           load();
         }}
         onSubmitted={load}
@@ -716,7 +717,7 @@ export function AddGrantForm({
   // are still looking at (the dialog itself never closes on a refusal).
   const [error, setError] = React.useState<string | null>(null);
   // The 202 branch: held for a second person, so not added, and said in the form the caller is looking at.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
 
   React.useEffect(() => {
     if (presetKind && !fixed) setKind(presetKind);
@@ -742,7 +743,7 @@ export function AddGrantForm({
     setSaving(true);
     setDuplicate(false);
     setError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     try {
       const res = await api.upsertGrant({
         subject_type: subjectType,
@@ -759,7 +760,7 @@ export function AddGrantForm({
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setValue("");
-        setSubmitted(true);
+        setSubmitted(e.change);
         onSubmitted?.();
         return;
       }
@@ -909,7 +910,7 @@ export function AddGrantForm({
           {error}
         </Note>
       )}
-      {submitted && <SubmittedNote />}
+      {submitted && <SubmittedNote change={submitted} />}
       <AlertDialog open={confirmWall} onOpenChange={setConfirmWall}>
         <AlertDialogContent>
           <AlertDialogHeader>

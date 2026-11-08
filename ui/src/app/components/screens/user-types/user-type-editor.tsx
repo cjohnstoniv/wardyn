@@ -20,7 +20,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
-import type { UserType } from "../../../lib/types";
+import type { GovernanceChange, UserType } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Input } from "../../ui/input";
@@ -62,7 +62,7 @@ export function UserTypeEditor({
   onCancel: () => void;
   onSaved: () => void;
   /** The write was held for a second person (202): nothing is saved yet. */
-  onSubmitted: () => void;
+  onSubmitted: (change: GovernanceChange) => void;
 }) {
   const [name, setName] = React.useState(type?.name ?? "");
   const [description, setDescription] = React.useState(type?.description ?? "");
@@ -96,7 +96,7 @@ export function UserTypeEditor({
       onSaved();
     } catch (e) {
       if (e instanceof PendingChangeError) {
-        onSubmitted();
+        onSubmitted(e.change);
         return;
       }
       setError(e instanceof HttpError ? e.message : getErrorMessage(e));

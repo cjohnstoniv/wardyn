@@ -16,7 +16,7 @@ import { permissions as api, type ExplainRow, type ExplainState } from "../../..
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { CAPABILITY_KINDS, KIND, PERM, type CapabilityKind } from "../../../lib/permissions-copy";
-import type { CapabilityGrant } from "../../../lib/types";
+import type { CapabilityGrant, GovernanceChange } from "../../../lib/types";
 import { useUserTypeName } from "../../../lib/use-user-types";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import {
@@ -73,7 +73,7 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
   const [busy, setBusy] = React.useState(false);
   const [removeError, setRemoveError] = React.useState<string | null>(null);
   // A remove the server held for a second person (202): the grant is still there.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   // G-7: which family's Add dialog is open, fixed to this subject and kind.
   const [addKind, setAddKind] = React.useState<CapabilityKind | null>(null);
   const typeName = useUserTypeName();
@@ -106,13 +106,13 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
   const remove = async (g: CapabilityGrant) => {
     setBusy(true);
     setRemoveError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     try {
       await api.deleteGrant(g.id);
       load();
     } catch (e) {
       if (e instanceof PendingChangeError) {
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -249,7 +249,7 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
           {removeError}
         </Note>
       )}
-      {submitted && <SubmittedNote />}
+      {submitted && <SubmittedNote change={submitted} />}
 
       {/* G-7: Permissions' own "Add a grant" dialog, Who and Capability fixed
           to this type and family. */}

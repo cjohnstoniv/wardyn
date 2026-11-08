@@ -17,6 +17,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { boundary as boundaryApi, type BoundaryChange, type BoundaryMode, type BoundaryReport, type BoundaryReportAssign, type BoundarySnapshot, type BoundaryWrite } from "../../../lib/api/boundary";
 import type { ConfinementClass } from "../../../lib/types/runs";
 import type { DesktopControls } from "../../../lib/types/policy";
+import type { GovernanceChange } from "../../../lib/types";
 import { BOUNDARY, BOUNDARY_DESKTOP, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
 import { BASELINE, CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -85,7 +86,7 @@ const bodyFrom = (d: Draft, stored: BoundaryWrite): BoundaryWrite => {
 const modeLabel = (m: BoundaryMode) => (m === "hard_limits" ? BOUNDARY.MODE_HARD : BOUNDARY.MODE_ORG);
 const floorLabel = (c: ConfinementClass | undefined) => CC_META[c ?? "CC1"].label;
 
-type Outcome = { kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null;
+type Outcome = { kind: "saved" } | { kind: "submitted"; change: GovernanceChange } | { kind: "refused"; message: string } | null;
 // principalChanged: the 412 that says the browser's session now belongs to someone else.
 type ReportState = { status: "loading" } | { status: "error"; principalChanged: boolean } | { status: "ready"; report: BoundaryReport };
 
@@ -181,7 +182,7 @@ export function BoundaryScreen() {
         load();
       } else if (e instanceof PendingChangeError) {
         setSubmittedJson(json);
-        setOutcome({ kind: "submitted" });
+        setOutcome({ kind: "submitted", change: e.change });
       } else {
         setOutcome({ kind: "refused", message: e instanceof HttpError ? e.message : getErrorMessage(e) });
       }
@@ -531,7 +532,7 @@ function DryRunReport({
       <p className="mt-4 text-xs text-muted-foreground">{BOUNDARY_DRY_RUN.COMPARED}</p>
 
       <div className="mt-3 flex flex-col gap-2">
-        {outcome?.kind === "submitted" && <SubmittedNote />}
+        {outcome?.kind === "submitted" && <SubmittedNote change={outcome.change} />}
         {outcome?.kind === "refused" && (
           <Note tone="red" role="alert">
             <h3 ref={refusedRef} tabIndex={-1} className="font-semibold outline-none">
