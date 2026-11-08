@@ -495,7 +495,7 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
 			s.mountSecretRoutes(r, operatorOnly, securityOps)
-			s.mountComponentRoutes(r, operatorOnly) // components_routes.go: saved components, the caller's and the organisation's
+			s.mountComponentRoutes(r, operatorOnly, securityOps) // components_routes.go: saved components, the caller's and the organisation's
 
 			// Site config: the operator-wide, admin-authored baseline every run
 			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry

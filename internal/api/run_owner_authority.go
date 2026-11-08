@@ -73,6 +73,9 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if ref, err := s.componentGoneRefusal(ctx, comps); ref != nil || err != nil {
 		return ref, err
 	}
+	if ref, err := s.componentPinRefusal(ctx, run, comps); ref != nil || err != nil {
+		return ref, err
+	}
 	if callerIsOwner && s.runUngoverned(ctx) {
 		return nil, nil
 	}
@@ -278,6 +281,18 @@ func (s *Server) componentGoneRefusal(ctx context.Context, comps []types.RunComp
 		}
 	}
 	return nil, nil
+}
+
+// componentPinRefusal refuses a run that carries an organisation component now pinned to a unit the
+// run is not in: a revive, restart or end extension would keep the component in use outside its unit.
+// Asked of every caller, the owner's own admin session included, as componentGoneRefusal is.
+func (s *Server) componentPinRefusal(ctx context.Context, run types.AgentRun, comps []types.RunComponent) (*ownerRefusal, error) {
+	name, err := s.componentPinnedOut(ctx, run, comps)
+	if err != nil || name == "" {
+		return nil, err
+	}
+	return &ownerRefusal{status: http.StatusConflict, reason: reasonComponentUnitPinned,
+		msg: "a component this run was launched with is now pinned to a unit this run is not in; start a new run in that unit"}, nil
 }
 
 // ownerProviderRows is the git provider rows repos resolve to, as the

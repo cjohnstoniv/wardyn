@@ -364,6 +364,10 @@ const (
 	reasonGrantWithheldUnread        = "credential_withheld_unread"    // the run, its grants, its profile or the boundary could not be read to check the mint
 	reasonBreakGlassReasonRequired   = "break_glass_reason_required"   // an admin-token break-glass run without a usable reason
 
+	// PUT /components/{id}/owning-unit, and the strict switch of PUT /workspaces/{id}/owning-unit.
+	reasonComponentOwningUnitDefault         = "component_owning_unit_default"           // the Default unit cannot pin a component: unpin it with null instead
+	reasonWorkspaceOwningUnitStrictNeedsUnit = "workspace_owning_unit_strict_needs_unit" // a strict workspace pin needs a unit
+
 	// GET/PUT/DELETE /me/walls (personal_walls.go), and the walls' refusals at an approval.
 	reasonWallsInvalid      = "walls_invalid"       // the walls name a knob wider than no limit, a site that is not a DNS name or wildcard, or a list over its cap
 	reasonWallsNeedPerson   = "walls_need_person"   // the caller is no signed-in person (the admin token, local mode, a service identity)

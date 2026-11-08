@@ -209,6 +209,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
+	govKindComponentOwningUnit: {approver: securityApprover, apply: applyComponentOwningUnitChange},
 	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 	govKindUnitDeciders:        {approver: securityApprover, apply: applyUnitDecidersChange},

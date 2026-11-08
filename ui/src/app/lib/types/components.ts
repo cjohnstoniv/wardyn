@@ -140,6 +140,10 @@ export interface Component {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  // The unit an org component is pinned to: only runs in that unit or below it may attach it. Set only by
+  // PUT /components/{id}/owning-unit; owning_unit_name is the unit's name.
+  owning_unit_id?: string;
+  owning_unit_name?: string;
 }
 
 /** Attaches one component to a run (`components[]` of create, preflight and preview): a stored one by `id`, a run-only `inline` definition, or a built-in Git provider (`builtin`, OD-4). */
@@ -199,6 +203,9 @@ export interface OrgComponentView {
   category: "cli" | "mcp" | "api";
   cli?: CLIView;
   mcp?: MCPView;
+  // The unit the component is pinned to, when it is: the console can offer "Run in <unit>".
+  owning_unit_id?: string;
+  owning_unit_name?: string;
 }
 
 /** The non-secret face of a CLI row: which kind and what it pins. */

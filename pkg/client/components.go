@@ -60,6 +60,10 @@ type OrgComponentView struct {
 	Category string   `json:"category"`
 	CLI      *CLIView `json:"cli,omitempty"`
 	MCP      *MCPView `json:"mcp,omitempty"`
+	// OwningUnitID is the unit the component is pinned to: only a run in that unit or a unit below it
+	// may attach it. OwningUnitName is the unit's name.
+	OwningUnitID   *uuid.UUID `json:"owning_unit_id,omitempty"`
+	OwningUnitName string     `json:"owning_unit_name,omitempty"`
 }
 
 // CLIView is the non-secret face of a CLI row: its kind and what it pins.

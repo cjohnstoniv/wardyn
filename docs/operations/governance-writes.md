@@ -48,7 +48,7 @@ an operator follows to turn one on and run the queue.
 
 **Restrictions.**
 
-- A restriction (`/governance/restrictions`) is a list of narrowing rules (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+- A restriction (`/governance/restrictions`) is a list of narrowing rules (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit` (`strict: true` drops the parent-unit mapping: only people whose own unit is the pin or below it run on the workspace), and an organisation component's is `PUT /components/{id}/owning-unit`.
 - A restriction can carry `denied_domains`, `allowed_domains`, `allow_all_egress: false`, first-use approval, `max_holds`, a confinement floor, `auto_stop_after_sec`, `git_push_any_branch: false`, `push_rules`, `desktop`, `recording` (a floor), `tool_rules` and `withheld_grants`, and in its limits the `deny_*` switches, `allowed_models` and the caps. Each only narrows, by the same rule a unit's walls use, in every unit its people run in.
 - A restriction that names `allowed_domains` and not `allow_all_egress` turns open egress off for its people.
 - A restriction binds a run that is already running: a revive meets it again, a credential for a host outside its `allowed_domains` is withheld at the next mint, and an approval cannot admit such a host.
@@ -172,7 +172,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
 | The recording level (`PUT /governance/recording`) | always | security admin or super admin |
 | A platform envelope (`PUT` or `DELETE /governance/units/{id}/envelope`) | always | security admin or super admin |
-| A restriction delete or loosening; a unit pin moved off its branch | always | security admin or super admin |
+| A restriction delete or loosening; a unit pin moved off its branch (a workspace's or a component's), or a strict workspace pin made plain | always | security admin or super admin |
 | An approval rule (`PUT /governance/approval-rules/{name}`, see [approval-rules.md](approval-rules.md)); a `DELETE` is never held | always, an edit included | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |
