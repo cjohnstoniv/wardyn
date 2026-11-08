@@ -128,6 +128,12 @@ func (s *Server) persistGitHubCLIGrants(ctx context.Context, w http.ResponseWrit
 	if kept != nil {
 		caps = kept
 	}
+	// The boundary's and the run's restrictions' GitHub cap bounds what is left, last, so nothing before it
+	// (the rows, the policy, the walls) widens past it.
+	caps, capRefused := s.cappedGitHubCLICapabilities(ctx, run, caps)
+	if capRefused != nil {
+		return !capRefused.write(s, w, r)
+	}
 	door := &proxy.GitHubAPIGrant{Capabilities: caps, Repos: slices.Sorted(maps.Keys(gw.gitGrants)), Grants: map[string]uuid.UUID{}}
 	byOwner := map[string][]string{}
 	for _, repo := range door.Repos {

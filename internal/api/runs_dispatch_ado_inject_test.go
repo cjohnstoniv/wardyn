@@ -70,6 +70,12 @@ func (s *adoTestStore) UpdateRunStateIf(_ context.Context, _ uuid.UUID, _, to ty
 	return false, nil
 }
 
+// GetRun answers a bare run, with no restrictions: a credential resolve reads the run for the
+// restrictions it captured (the capability cap), and these fixtures keep no run row.
+func (s *adoTestStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{ID: id}, nil
+}
+
 const (
 	adoTestTenant = "11111111-2222-3333-4444-555555555555"
 	adoTestClient = "66666666-7777-8888-9999-000000000000"

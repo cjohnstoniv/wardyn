@@ -385,6 +385,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		return adoPAT{}, errADOPATRunPaused
 	}
 	row, _ := gitProviderRowByID(sc, sn.ProviderRowID) // driftFrom proved it live with an Entra block
+	ceiling := effectiveADOCeiling(row.Entra, adoCapOf(s.outerLayers(ctx, run)))
 	now := s.cfg.Now()
 	validTo := adoRunPATValidTo(now, row.Entra.PATHours(), run.EndsAt)
 	stale := e.cur
@@ -395,7 +396,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		if e.paused {
 			reason = adoPATMintResume
 		}
-		want = s.adoRunPATStanding(ctx, runID, sn, row.Entra.Ceiling(), want)
+		want = s.adoRunPATStanding(ctx, runID, sn, ceiling, want)
 	case staleJTI != "" && staleJTI == e.cur.AuthorizationID && now.Sub(e.forcedAt) >= adoRunPATForcedEvery:
 		reason = adoPATMintUpstream401
 		e.forcedAt = now
@@ -410,7 +411,7 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 	// live ceiling no longer allows.
 	var caps []adoscope.Capability
 	for _, c := range append(slices.Clone(e.caps), want...) {
-		if adoscope.Has(row.Entra.Ceiling(), c) && !adoscope.Has(caps, c) {
+		if adoscope.Has(ceiling, c) && !adoscope.Has(caps, c) {
 			caps = append(caps, c)
 		}
 	}

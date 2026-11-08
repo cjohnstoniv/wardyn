@@ -6,6 +6,8 @@ package types
 import (
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
@@ -57,6 +59,15 @@ type BoundarySpec struct {
 	// DataOut is the least strict rule for content leaving any run (allowed, review or blocked): a run's own
 	// is at least this strict (docs/POLICIES.md#data_out).
 	DataOut *TransferRule `json:"data_out,omitempty"`
+	// AzureDevOpsCapabilities caps every run's Azure DevOps capabilities in hard_limits: a capability it
+	// does not list is refused at dispatch, at each request, at each approval and at each credential
+	// resolve, whatever a provider row allows. pr reads as its parts. nil is no cap; an empty list is
+	// refused at write. It never reaches Overlay(): a list meet keeps a run on the provider's default
+	// profile as it is, so the cap is met with the row's ceiling instead.
+	AzureDevOpsCapabilities *[]adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
+	// GitHubCapabilities is AzureDevOpsCapabilities' GitHub twin, applied to the GitHub CLI's
+	// capabilities and to git pushes (code_write) at launch.
+	GitHubCapabilities *[]ghscope.Capability `json:"github_capabilities,omitempty"`
 }
 
 // BoundaryLimits is the GovernanceLimits subset the boundary bounds. MaxEndAheadSec is also the cap

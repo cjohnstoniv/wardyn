@@ -46,6 +46,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An older release ignores a restriction's allowed domains, push rules, desktop rules, recording floor, tool rules and allowed models: remove them, or restate them as unit walls, first.
 - An older release ignores component pins and strict workspace pins: a pinned component is usable from any of a person's contexts again. It also refuses to delete a unit a component is pinned to, as still assigned: unpin components first.
 - An older release ignores `data_out`. SSH file transfer, commands and port forwards, `wardyn sync` down, run output, recording replay, web apps and computer folders open again on runs that set it, and its drive, kept-machine and push denies are lifted. Set `deny_interactive` and the matching walls first, or stay on this release.
+- An older release ignores the boundary's and restrictions' `azure_devops_capabilities` and `github_capabilities` caps: restate them in each provider row's capability ceiling and each policy first.
 
 
 ### Added
@@ -92,6 +93,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - [Brokered operations](docs/operations/brokered-operations.md), a page of recipes: ops commands through an organisation's MCP server with a checklist for the server, read-only database access, and kubectl with one RBAC Role per row, `access: restart` and `approve_each`, and a pool kept to one unit.
 - New setting `runners.require_managed_device` (`PUT /api/v1/runners/settings {"require_managed_device": true}`, super admin): a new local run is refused with `runner_trust_required` on a runner whose trust class is `personal`, so only a `managed_device` runner or an organisation's runner takes it. Off by default, so an upgrade changes nothing; runs already started are not affected. It trusts the security operator's `managed_device` mark and checks no device certificate; the new Device posture section in the hybrid-laptops page says what is and is not checked.
 - Setup status shows an "Image checks" row when image admission is `audit` or `enforce` and `scope` is `member` (the default), to say that the images runs get from their agent or harness set are not checked. Set `images.admission.scope` to `all` to check them. Nothing changes until you do.
+- The Wardyn boundary and a restriction can cap the Azure DevOps and GitHub capabilities of every run they bind (`azure_devops_capabilities`, `github_capabilities`). A capability the cap does not list is refused at launch, at every request and approval, and at every Azure DevOps credential resolve, whatever a provider row allows. A capability added in a later release is outside the cap until you list it. Absent means no cap, so nothing changes at upgrade.
 
 ### Changed
 

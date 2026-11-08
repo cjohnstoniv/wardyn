@@ -137,6 +137,9 @@ func validateRestriction(b *types.RestrictionWrite) error {
 	if err := validateAuthoredPolicySpec(spec); err != nil {
 		return err
 	}
+	if err := validateVCSCaps(b.Spec.AzureDevOpsCapabilities, b.Spec.GitHubCapabilities); err != nil {
+		return err
+	}
 	for i, g := range b.Spec.WithheldGrants {
 		if err := authoredGrantRefusal(fmt.Sprintf("withheld_grants[%d]", i), g); err != nil {
 			return err
@@ -209,6 +212,9 @@ func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWri
 		if !grantWithheldBy(g, next.Spec.WithheldGrants) {
 			return false
 		}
+	}
+	if !vcsCapsAtLeastAsStrict(old.Spec, next.Spec) {
+		return false
 	}
 	if slices.Contains(next.Members, types.RestrictionMember{SubjectType: types.CapabilitySubjectAll}) {
 		return true

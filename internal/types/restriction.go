@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
@@ -71,6 +73,15 @@ type RestrictionSpec struct {
 	// WithheldGrants names credentials the run is not given: a grant of the same kind (a scope-less
 	// entry) or the same pairing is kept from it at dispatch and mint. It never reaches Overlay().
 	WithheldGrants []GrantSpec `json:"withheld_grants,omitempty"`
+	// AzureDevOpsCapabilities caps a restriction's people's Azure DevOps capabilities: a capability it
+	// does not list is refused at dispatch, at each request, at each approval and at each credential
+	// resolve, whatever a provider row allows. pr reads as its parts. nil is no cap; an empty list is
+	// refused at write. Like WithheldGrants it never reaches Overlay(): a list meet keeps a run on the
+	// provider's default profile as it is, so the cap is met with the row's ceiling instead.
+	AzureDevOpsCapabilities *[]adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
+	// GitHubCapabilities is AzureDevOpsCapabilities' GitHub twin, applied to the GitHub CLI's
+	// capabilities and to git pushes (code_write) at launch.
+	GitHubCapabilities *[]ghscope.Capability `json:"github_capabilities,omitempty"`
 }
 
 // RestrictionLimits is the part of GovernanceLimits a restriction may carry. The six deny_* switches
