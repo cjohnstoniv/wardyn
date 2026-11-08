@@ -459,9 +459,8 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	// exactly like the decision-ingest and attach keepalives: a human reading
 	// code in an editor is not idle, and the reaper must not stop the run under
 	// them.
-	// "" is never ruleSourceCredentialReauthTimeout: a human relaying UI traffic
-	// is always real presence, so this touch is never excluded.
-	if s.shouldTouch(sess.Run, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
+	// A human relaying UI traffic is always real presence, so only the debounce applies.
+	if s.touchDue(sess.Run) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(r.Context(), sess.Run)
 	}
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)

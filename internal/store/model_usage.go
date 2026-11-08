@@ -26,8 +26,8 @@ type ModelUsageStore interface {
 	InsertModelUsage(ctx context.Context, runID uuid.UUID, u egress.ModelUsage, at time.Time, evidence string) (bool, error)
 	// RunModelUsage sums a run's usage rows by vendor, host and model.
 	RunModelUsage(ctx context.Context, runID uuid.UUID) (ModelUsageSummary, error)
-	// RunOpaqueTunnels counts a run's llm.scan.bypass audit rows: tunnels to a model host that could
-	// not be opened, whose calls are not counted.
+	// RunOpaqueTunnels counts a run's tunnels to a model host that could not be opened, whose calls are not
+	// counted: the egress.allow rows marked model_tunnel, or its llm.scan.bypass rows when there are more.
 	RunOpaqueTunnels(ctx context.Context, runID uuid.UUID) (int64, error)
 }
 
@@ -179,7 +179,12 @@ func (s PG) RunModelUsage(ctx context.Context, runID uuid.UUID) (ModelUsageSumma
 
 func (s PG) RunOpaqueTunnels(ctx context.Context, runID uuid.UUID) (int64, error) {
 	var n int64
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE run_id=$1 AND action='llm.scan.bypass'`, runID).Scan(&n); err != nil {
+	// Either row marks a tunnel: the allow the proxy marks model_tunnel, or the bypass row an older runner (or a
+	// run with content inspection on) writes. One tunnel can write both, so the larger count, not the sum.
+	if err := s.Pool.QueryRow(ctx, `SELECT GREATEST(
+		count(*) FILTER (WHERE action='egress.allow' AND data->>'model_tunnel'='true'),
+		count(*) FILTER (WHERE action='llm.scan.bypass'))
+		FROM audit_events WHERE run_id=$1 AND action IN ('egress.allow','llm.scan.bypass')`, runID).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count opaque tunnels: %w", err)
 	}
 	return n, nil

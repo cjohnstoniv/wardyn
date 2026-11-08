@@ -890,9 +890,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if p.refuseOpaqueModelTunnel(w, r, host, port) {
 			return
 		}
-		// Opaque tunnel (no CA, or Bedrock/SigV4). Record a one-time llm.scan.bypass
-		// ONLY when inspection was expected, so audit never implies coverage we
-		// don't have (an injection-only run with no scanner is not "blind").
+		// Opaque tunnel: mark its allow row whatever the scanner does; llm.scan.bypass only when inspection was expected.
+		log.MarkModelTunnel()
 		if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff {
 			p.emitLLMBlindOnce(host, port, http.MethodConnect)
 		}

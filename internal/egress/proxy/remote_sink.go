@@ -219,6 +219,8 @@ type remoteSink struct {
 	lapsed       *SinkFrame
 	closed       bool
 	conn         net.Conn
+	// activityIgnore is Config.ActivityIgnoreHosts: allowed requests to these hosts carry no Activity flag.
+	activityIgnore []string
 }
 
 func newRemoteSink(runID uuid.UUID, c DecisionSinkConfig) (*remoteSink, error) {
@@ -316,7 +318,7 @@ func (s *remoteSink) emit(log egress.DecisionLog) {
 		epoch = held.epoch
 	}
 	body, merr := json.Marshal(RecordBody{Admitted: admitted, Epoch: epoch, Decision: log,
-		Activity: admitted && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout"})
+		Activity: admitted && egress.CountsAsActivityFor(log, s.activityIgnore)})
 	switch {
 	case err != nil || merr != nil || s.closed || s.stopped:
 		// Never counted: an admitted record here is already in the drained

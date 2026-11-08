@@ -397,7 +397,7 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 			err = s.local.Append(ctx, log)
 		}
 	}
-	if err == nil && charged && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout" {
+	if err == nil && charged && egress.CountsAsActivityFor(log, s.activityIgnore) {
 		_ = runneractivity.Record(s.activityDir, held.epoch)
 	}
 	// A served request whose record did not land, for any reason, is an audit gap: it refuses all
@@ -417,13 +417,18 @@ func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client
 		if err != nil {
 			return nil, err
 		}
+		remote.activityIgnore = cfg.ActivityIgnoreHosts
 		return &decisionSink{remote: remote, out: out}, nil
 	}
 	if cfg.DecisionSpoolDir != "" {
 		if err := preparedSpool(cfg.DecisionSpoolDir); err != nil {
 			return nil, err
 		}
-		return newLocalDecisionSink(cfg.DecisionSpoolDir, cfg.RunID, out)
+		s, err := newLocalDecisionSink(cfg.DecisionSpoolDir, cfg.RunID, out)
+		if s != nil {
+			s.activityIgnore = cfg.ActivityIgnoreHosts
+		}
+		return s, err
 	}
 	return newDecisionSink(cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
 }

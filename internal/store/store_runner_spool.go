@@ -239,6 +239,9 @@ func runnerDecisionEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.U
 	if d.UpstreamFault != "" {
 		data["upstream_fault"] = d.UpstreamFault
 	}
+	if d.ModelTunnel {
+		data["model_tunnel"] = true
+	}
 	if d.GatewayCallID != "" {
 		data["gateway_call_id"] = d.GatewayCallID
 	}
