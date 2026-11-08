@@ -121,6 +121,9 @@ type DecisionLog struct {
 	// llm:usage), sent once the answer has been relayed. It is not an egress
 	// decision: the call's own allow row was sent before the answer.
 	Usage *ModelUsage `json:"usage,omitempty"`
+	// ModelTunnel marks the allow of a CONNECT the proxy tunnelled opaquely to a model host: a model call it
+	// could not read, whether or not content inspection is on. Absent on every other row.
+	ModelTunnel bool `json:"model_tunnel,omitempty"`
 }
 
 // ModelUsage is one model call's token counts, read from the provider's own

@@ -60,7 +60,7 @@
 
 | Not counted | Shown as |
 |---|---|
-| An encrypted connection to a model host that Wardyn did not open | `opaque_tunnels`: tunnels, not calls |
+| An encrypted connection to a model host that Wardyn did not open | `opaque_tunnels`: tunnels, not calls, counted whether or not content inspection is on |
 | A Chat Completions stream without `stream_options.include_usage` (Wardyn does not rewrite the request) | uncounted, `stream_without_usage` |
 | A stream cut before its final usage | partial, `stream_cut` |
 | An answer whose `usage` is missing, for example from a gateway that omits it | uncounted, `no_usage` |

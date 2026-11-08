@@ -2188,6 +2188,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 ## Network: upstream proxy and egress redirects
 
 - `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) is the operator-wide network config, kept in Postgres beside [State stores](#state-stores): the corporate upstream proxy and the outbound redirects every run's egress inherits. Unconfigured is a valid, common state.
+- `PUT /site-config` replaces the keys the body names. A top-level block the body leaves out keeps its stored value: `agent_providers`, `model_providers`, `workspace_providers`, `components`, `images`, `macos_vm`, `branding`, `policy_help`, `internal_hosts`, `upstream_proxy_no_proxy`, `governance_max_depth`, `sign_in_help_text` and `sign_in_help_url`. Inside `macos_vm`, each switch and limit left out is kept too. `runners`, `recording`, the egress baseline, `integrations` and `onboarding_completed_at` change only through their own routes. To turn something off, send it: `"allow_kept_machines": false`, or `"images": {"admission": {"mode": "off"}}`.
 - It lives in the database, so `make reset` and `make reset-all` take it with the volume. To keep it, run `wardyn site-config get > corp-baseline.json` before and `wardyn site-config set corp-baseline.json` after. The document carries secret **names**, never values, so it is safe to keep beside the repo.
 - Values never round-trip, so `set` re-attaches the names even when a named secret was never restored. It prints a warning for each dangling ref, and the setup checklist's "Site config" row grades `warn` while one remains.
 
@@ -2914,6 +2915,18 @@ The residuals an operator should plan for:
   - Revoking the session at the IdP ends it too.
   - IAM Identity Center is the system of record, so terminating their Identity Center session (or removing their assignment) stops the refresh token redeeming and their console reads *sign in again* — the offboarding step.
   - The session also dies with its OIDC client registration.
+
+#### How long an AWS sign-in lasts
+
+A `bedrock_sso` sign-in lasts as long as IAM Identity Center's session for it. Wardyn renews the session's access token by itself, but it cannot extend the session. When that session ends, AWS refuses the renewal, the run asks its owner to sign in again, and the message says how long after sign-in it happened. When people sign in to Wardyn and to IAM Identity Center through the same identity provider, three settings outside Wardyn decide how often that happens:
+
+1. **IAM Identity Center session duration.** IAM Identity Center console → Settings → Authentication → Session duration → User interactive sessions. The default is 8 hours; it can be 15 minutes to 90 days. A change applies to new sessions only.
+2. **Your identity provider's session for the IAM Identity Center application.** If the identity provider sends a session end time in its SAML assertion (`SessionNotOnOrAfter`), the shorter of the two applies. A sign-in-frequency or conditional-access policy on that application can also end it. Give it the same policy as the Wardyn console's application, so one doesn't end before the other.
+3. **The same people on both applications.** Assign the Wardyn console application and the IAM Identity Center application to the same groups, so anyone who can start a run can also renew its AWS session.
+
+None of these changes what a role may do, only how long a sign-in lasts.
+
+Wardyn does not turn its own sign-in into an IAM Identity Center token through a trusted token issuer. That AWS call is signed with AWS credentials, so Wardyn would have to hold a standing AWS credential of its own.
 
 ### One live sign-in sandbox per person
 

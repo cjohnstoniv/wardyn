@@ -349,13 +349,14 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 			return false
 		}
 		f.reqCC = reqCC
-		advertised = s.advertisedConfinement(f.r.Context(), *f.req)
+		advertised, f.placed.read = s.advertisedConfinementRead(f.r.Context(), *f.req)
 	}
 	// A pooled run's default class comes from its candidates at every door, the preview included, so the
 	// three doors promise one barrier.
 	if offered := f.place.offeredClasses(); offered != nil {
-		advertised = offered
+		advertised, f.placed.read = offered, true
 	}
+	f.placed.classes = advertised
 	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
@@ -441,7 +442,7 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 		w := f.w
 		// Every setup row but model access, which the refusal itself answers.
 		f.w = credentialSetupWriter{w, func() []SetupItem {
-			return s.deriveRunSetupItems(f.r.Context(), s.secretOwnerFromRequest(f.r), preflightRunInput(f.req, f.enforced, f.baseline), f.spec, f.present, nil, f.wsRefs)
+			return s.deriveRunSetupItems(f.r.Context(), s.secretOwnerFromRequest(f.r), preflightRunInput(f.req, f.enforced, f.baseline), f.spec, f.present, nil, f.wsRefs, &f.placed)
 		}}
 		defer func() { f.w = w }()
 	}

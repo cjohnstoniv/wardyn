@@ -73,6 +73,7 @@ var proxyNestedSettings = map[string]string{
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
 // dropping it fails closed.
 var proxyFieldExemptions = map[string]string{
+	"ActivityIgnoreHosts": "advisory: an older runner keeps counting boot-host traffic as activity",
 	"DesktopSignins": "the org sets it only when signinTarget holds, which is false for a run with a runner or a pool " +
 		"(internal/api run_desktop_signin.go signinTarget; remote.Substrate is no runner.SigninExecer either), so a " +
 		"wardyn-runnerd never receives it set; dropped, " +

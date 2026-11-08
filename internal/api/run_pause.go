@@ -408,18 +408,6 @@ func (p presenceReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// ruleSourceApprovalsPoll mirrors internal/egress/proxy's ruleSourceApprovals:
-// the toolgate's 2-second poll of the request it is blocked on.
-const ruleSourceApprovalsPoll = "brokered:approvals"
-
-// agentActivityDecision reports whether a decision with this rule_source is
-// the agent doing something. Two are not: the toolgate polling a request it is
-// blocked on (that is waiting, and would keep a waiting run from ever pausing),
-// and a re-auth hold timing out (nobody came; see shouldTouch).
-func agentActivityDecision(ruleSource string) bool {
-	return ruleSource != ruleSourceApprovalsPoll && ruleSource != ruleSourceCredentialReauthTimeout
-}
-
 // approvalClosed resumes a paused run once it has no open request left: the
 // agent has an answer to act on. Every writer that moves a request out of
 // PENDING calls it; the pause sweep's backstop catches a pause whose
