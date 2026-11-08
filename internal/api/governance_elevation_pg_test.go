@@ -810,22 +810,47 @@ func TestElevationRunInPrefersPermanentRow(t *testing.T) {
 	}
 }
 
-func TestElevationQueuedStartAfterExpiryEnds(t *testing.T) {
-	e := newQueueEnv(t)
-	unit := treeChild(t, e.govEnv, uaUnitBody("elev-queue", store.DefaultUnitID, map[string]any{}, nil))
-	end := time.Now().UTC().Add(time.Hour)
+// queuedUnderElevation queues a launch of the person's in a new unit whose only membership of theirs is an
+// elevation ending at end, behind an occupant of a one-run pool, and returns the waiting run, the occupant
+// and the membership.
+func queuedUnderElevation(e *queueEnv, name string, end time.Time) (types.AgentRun, types.AgentRun, types.GovernanceMembership) {
+	e.t.Helper()
+	unit := treeChild(e.t, e.govEnv, uaUnitBody(name, store.DefaultUnitID, map[string]any{}, nil))
 	m := types.GovernanceMembership{ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: types.CanonicalUserSubject(e.personP),
 		UnitID: unit.ID, CreatedAt: time.Now().UTC(), CreatedBy: "seed", ExpiresAt: &end}
 	if err := store.InsertGovernanceMembershipQ(context.Background(), e.pool, m); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
-	pool := e.cappedPool("Busy", 1)
-	// Queued under the elevation: run_in names a unit only the elevation makes the person's context. A queued
-	// row carries no lifetime cap yet; the start captures the limits, counted from admission.
-	waiting, occupant := e.waitingPerson(pool, `,"run_in":"`+unit.ID.String()+`"`)
+	waiting, occupant := e.waitingPerson(e.cappedPool(name+"-pool", 1), `,"run_in":"`+unit.ID.String()+`"`)
+	return waiting, occupant, m
+}
+
+// TestElevationQueuedStartAfterExpiryEnds: queued under the elevation (run_in names a unit only the
+// elevation makes the person's context), the row carries no lifetime cap, since the start captures the
+// limits, counted from admission. The elevation ends while it waits, so the start ends the run before
+// anything is minted: no run starts after the end under the elevation's context or cap.
+func TestElevationQueuedStartAfterExpiryEnds(t *testing.T) {
+	e := newQueueEnv(t)
+	waiting, occupant, m := queuedUnderElevation(e, "elev-queue", time.Now().UTC().Add(time.Hour))
+	if waiting.LifetimeCapAt != nil || waiting.LifetimeCapSource != "" {
+		t.Errorf("queued row's cap = %v %q, want none until the start", waiting.LifetimeCapAt, waiting.LifetimeCapSource)
+	}
 	e.exec(`UPDATE governance_memberships SET expires_at = now() - interval '1 second' WHERE id = $1`, m.ID)
 	e.free(occupant)
 	e.ended(waiting.ID, queueStartRecheck{reason: string(reasonUnitNotAContext)})
+}
+
+// TestElevationQueuedStartCapsAtTheElevation: a run queued under an elevation that is still live at its
+// start is capped at the elevation's end, read at the start from the membership as it stands.
+func TestElevationQueuedStartCapsAtTheElevation(t *testing.T) {
+	e := newQueueEnv(t)
+	end := time.Now().UTC().Add(30 * time.Minute).Truncate(time.Microsecond)
+	waiting, occupant, _ := queuedUnderElevation(e, "elev-queue-cap", end)
+	e.free(occupant)
+	got := e.waitStarted(waiting.ID)
+	if got.LifetimeCapSource != types.LimitSourceElevation || got.LifetimeCapAt == nil || !got.LifetimeCapAt.Equal(end) {
+		t.Errorf("started run's cap = %v %q, want %v from the elevation", got.LifetimeCapAt, got.LifetimeCapSource, end)
+	}
 }
 
 func TestElevationNoReviveAfterEnd(t *testing.T) {
