@@ -73,6 +73,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The proposer of a held governance change may withdraw it with `POST /governance/changes/{id}/reject`, even when only others may approve it, such as a unit admin's change held for the security tier. The `governance.change.reject` row then carries `withdrawn: true`.
 - With `detect_secrets` on, the known-secret check now covers every `env_secret` and `file_secret` value placed in the run, with a component's secrets, not only the secrets named in `workspace_secret_names`. A `block`-mode policy may therefore refuse a prompt that quotes such a value. It checks the whole value only (single-line values, and multi-line values only when pasted verbatim), at least 8 bytes long. Do not store non-secret values, such as a region or a public URL, as an `env_secret`. A revive now rebuilds the proxy with the `file_secret` placeholders as well. Nothing changes with `detect_secrets` off.
 
+### Fixed
+
+- A run's model token usage now counts a call to the OpenAI Responses API that went through a gateway such as LiteLLM: the gateway ends the stream with the chat stream's `data: [DONE]` line, which the meter read as a malformed answer and showed the call as not counted.
+
 ## [0.10.0-rc.15] — 2026-11-08
 
 ### Before you upgrade
