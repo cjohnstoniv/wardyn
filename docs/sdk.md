@@ -1480,6 +1480,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   out), newest first, at most 500; `X-Wardyn-Truncated: true` marks more. Requests answered by taking over or
   declining are not listed. `limit` and `offset` are not read, and `state`, if sent, must be `PENDING`. A security admin's list is every pending approval the switches let them
   decide; anyone else's is the holds on runs they created plus those their unit's deciders rule names them for.
+  `wardyn approval list --waiting-on-me` prints it.
   A row served to a decider who is not the run's creator carries `requested_by`. A hold the caller may not decide
   is left out whether it exists or not, so `run_id=` on it answers the same empty list for a run the caller
   may not decide on as for one that does not exist. A portal's delegated token gets `403 delegation_scope`.

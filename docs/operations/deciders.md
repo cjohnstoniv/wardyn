@@ -94,6 +94,8 @@
 
 ## Who may write rules
 
+Set a unit's rules with `PUT /api/v1/governance/units/{id}/deciders` or `wardyn governance deciders set <unit> --file <f>`, where the file is `{"rules": [...]}`.
+
 | Writer | What happens |
 |---|---|
 | Security admin | applies directly, or is held when `WARDYN_GOVERNANCE_SECOND_HUMAN` is on |
@@ -108,7 +110,7 @@
 ## What deciders see
 
 - A pending hold a rule governs carries `deciders`: who may decide it, with `security` last.
-- `GET /api/v1/approvals?decidable_by=me` lists the pending holds the caller may decide now, newest first, at most 500 (`X-Wardyn-Truncated: true` marks more). Rows served to someone other than the run's creator carry `requested_by`.
+- `GET /api/v1/approvals?decidable_by=me` lists the pending holds the caller may decide now, newest first, at most 500 (`X-Wardyn-Truncated: true` marks more). `wardyn approval list --waiting-on-me` prints it. Rows served to someone other than the run's creator carry `requested_by`.
 - A decider sees the host, the tool call, the push paths and who asked. They never see the run, its output or a terminal.
 - `approval.decide` gains `data.basis` and, under a rule, `data.rule` ([audit actions](../AUDIT-ACTIONS.md)).
 
