@@ -116,7 +116,7 @@ const wsCols = `id, name, sources, base_image, requirements, profile, image_ref,
 // wsReadCols is wsCols plus the pin a workspace carries (owning_unit_id), the pinned unit's name and
 // whether the pin is strict, read by every SELECT and RETURNING (scanWorkspace). The INSERT list stays
 // wsCols: a pin is written only by SetWorkspaceOwningUnit and SetWorkspaceOwningUnitQ.
-const wsReadCols = wsCols + `, owning_unit_id, (SELECT u.name FROM governance_units u WHERE u.id = workspaces.owning_unit_id), owning_unit_strict`
+const wsReadCols = wsCols + `, owning_unit_id, (SELECT u.name FROM governance_units u WHERE u.id = workspaces.owning_unit_id) AS owning_unit_name, owning_unit_strict`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted row.
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
