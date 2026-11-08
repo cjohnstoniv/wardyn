@@ -30,6 +30,10 @@ type Delegate struct {
 	// launched (DELETE /admin/delegates/{id}?cut_in_flight=true): from then on no run it
 	// launched gets a gateway token. nil, the default, leaves those runs their access.
 	CutInFlightAt *time.Time `json:"cut_in_flight_at,omitempty"`
+	// RunInUnder pins the portal to one governance unit, set at registration only: a run launched
+	// through it must resolve to this unit or one below it. nil, the default, is unpinned. Stored
+	// without a foreign key, so a deleted unit leaves a pin that refuses every launch.
+	RunInUnder *uuid.UUID `json:"run_in_under,omitempty"`
 	// Credential is the plaintext portal credential, on the register
 	// response ONLY; the row stores its hash.
 	Credential string `json:"credential,omitempty"`
