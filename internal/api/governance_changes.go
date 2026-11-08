@@ -204,8 +204,8 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 		return err
 	}
 	if t == nil {
-		if !kind.approver.allowed(s, r.WithContext(withUnitScopeTx(ctx, q))) {
-			return s.denyApprover(kind)
+		if tx := r.WithContext(withUnitScopeTx(ctx, q)); !kind.approver.allowed(s, tx) {
+			return s.denyApproverOn(kind, tx)
 		}
 		return nil
 	}
@@ -215,8 +215,8 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 		role = oidc.RoleUser
 	}
 	fresh := withUnitScopeTx(withHumanIdentity(ctx, t.Principal, t.Email, role, t.UserType, t.Groups, t.GroupsTruncated == nil || *t.GroupsTruncated), q)
-	if !kind.approver.allowed(s, r.WithContext(fresh)) {
-		return s.denyApprover(kind)
+	if tx := r.WithContext(fresh); !kind.approver.allowed(s, tx) {
+		return s.denyApproverOn(kind, tx)
 	}
 	return nil
 }
@@ -282,6 +282,17 @@ func (s *Server) denyApprover(kind govKind) *govRefusal {
 		}
 		s.refuse(w, r, authz.Deny(kind.approver.reason, govChangeTarget, ""))
 	}}
+}
+
+// denyApproverOn is denyApprover with the reason named on tx, the in-transaction request whose check
+// refused: the outer request's per-request scope memo still holds the pre-check's answer, so naming
+// the reason there would call a unit admin whose unit moved out a security-admin refusal.
+func (s *Server) denyApproverOn(kind govKind, tx *http.Request) *govRefusal {
+	if kind.approver.refusal != nil {
+		kind.approver.reason = kind.approver.refusal(s, tx)
+		kind.approver.refusal = nil
+	}
+	return s.denyApprover(kind)
 }
 
 // decideGovernanceChange is approve (apply the held write) and reject (apply nothing) in one body,
