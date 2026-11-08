@@ -26,6 +26,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
+import { ScheduledRunsDoorRow } from "./limits-schedule-autonomy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
@@ -435,6 +436,7 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_kept_machines: v }))}
         />
+        <ScheduledRunsDoorRow limits={limits} disabled={disabled} onChange={setLimits} />
         {/* The user-drive door (0.7 user drives, §5 #5). Its two strings live
             in governance-prompt.md §7.2 and governance-copy.ts, never in the
             drives module: the security admin's authority over drives is this

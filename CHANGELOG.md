@@ -20,6 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Governance: a profile can set `deny_scheduled_runs` to refuse a start time (`start_at`) for its people with `403` `scheduled_runs_denied`, and a run booked earlier ends `FAILED` `scheduled_runs_denied` at its start time. It is off by default, and `WARDYN_SCHEDULED_RUNS` stays the deployment's master switch, so nothing refuses more until a profile turns it on. Operators are exempt.
+- Governance: a profile's autonomy rubric has a tenth field, `self_defined_component`, that caps a run carrying a component its launcher defined. It is unset by default, so it caps nothing. It composes with `components.autonomy_cap` as the lower of the two, so a profile can tighten below the site cap and never loosen it.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).

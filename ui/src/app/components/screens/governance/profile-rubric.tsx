@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The profile editor's Rubric section (0.8 #93/#96) — three posture groups,
-// three rows each, one select per row. Split out of profile-editor.tsx so the
+// The profile editor's Rubric section (0.8 #93/#96) — three posture groups
+// of three rows and a fourth group for custom components, one select per row. Split out of profile-editor.tsx so the
 // rubric has its own unit test (issue #93's own ask) and a cleaner diff on a
 // file that already carries the ceiling + limits sections.
 //
@@ -20,13 +20,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 // control needs a sentinel to round-trip through.
 const NO_CAP = "none";
 
-// The three groups, in AUTONOMY_RUBRIC_ROW_KEYS' own fixed order — the same
+// The four groups, in AUTONOMY_RUBRIC_ROW_KEYS' own fixed order — the same
 // order the server folds tied causes in, so the editor's row order matches
 // the rail's bound_by sentence order.
 const GROUPS: { title: string; hint?: string; keys: AutonomyRubricRowKey[] }[] = [
   { title: RUBRIC.GROUP_EGRESS, keys: AUTONOMY_RUBRIC_ROW_KEYS.slice(0, 3) },
   { title: RUBRIC.GROUP_SECRETS, keys: AUTONOMY_RUBRIC_ROW_KEYS.slice(3, 6) },
   { title: RUBRIC.GROUP_BARRIER, hint: RUBRIC.GROUP_BARRIER_HINT, keys: AUTONOMY_RUBRIC_ROW_KEYS.slice(6, 9) },
+  { title: RUBRIC.GROUP_COMPONENTS, keys: AUTONOMY_RUBRIC_ROW_KEYS.slice(9, 10) },
 ];
 
 function RubricRow({

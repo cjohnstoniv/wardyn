@@ -21,4 +21,4 @@
 # docs/operations/runner-pools.md 2298 adds 17 over 2281 (0.10 FEAT-2SCHED review r2 L1): a renewal the provider did not answer ends the run.
 # docs/operations/runner-pools.md 2316 adds 18 over 2298 (0.10 FEAT-2SCHED review r3 L1): a stored sign-in already known spent ends the run at the start.
 # docs/operations/runner-pools.md 2386 adds 70 over 2316, measured (rc.8 E5): the runs namespace on an organization runner's membership and its held removal.
-docs/operations/runner-pools.md=2532 share=35 # +146 (rc.11, measured 2532: the wait sentence names the limit)
+docs/operations/runner-pools.md=2551 share=35 # 2551 measured (+19: the deny_scheduled_runs bullet); earlier: +146 (rc.11, measured 2532: the wait sentence names the limit)

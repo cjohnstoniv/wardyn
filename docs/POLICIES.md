@@ -625,6 +625,29 @@ What the check does and does not settle:
 | The list | `GET /me/machines` answers `allowed: false` with `reason` `governance_unit` |
 | Not affected | A machine already kept stays listed, and its owner can still delete it |
 
+## `deny_scheduled_runs`
+
+`deny_scheduled_runs` is a limit on a governance profile, not a field of a run's policy. When it is `true`, the profile's people cannot give a run a start time ([scheduled runs](operations/runner-pools.md)).
+
+| Part | Behaviour |
+|---|---|
+| Default | `false` or absent. [`WARDYN_SCHEDULED_RUNS`](ENV.md#wardyn_scheduled_runs) stays the master switch: unset, nobody can schedule. A profile that sets nothing changes nothing |
+| Where | A profile's limits, or a restriction or overlay that carries limits. It only turns on |
+| Composition | Any layer that sets it `true` wins. To let only team X schedule, deny it on each other top-level unit |
+| Effect | A create or Review with `start_at` is refused `403` `scheduled_runs_denied`, target `runs.schedule`, with an `authz.denied` row naming the knob. A run booked earlier ends `FAILED` `scheduled_runs_denied` at its start time |
+| Not affected | A run with no start time, and operators |
+
+## `autonomy_rubric.self_defined_component`
+
+`self_defined_component` is the tenth field of a profile's `limits.autonomy_rubric`: an autonomy level that caps a run carrying a component its launcher defined ([custom components](operations/custom-components.md)).
+
+| Part | Behaviour |
+|---|---|
+| Default | Absent. It caps nothing |
+| Composition | Like the other nine fields: the lower level wins |
+| With the site cap | `components.autonomy_cap` still applies and the lower of the two decides, so a profile can tighten below it and never loosen it |
+| Effect | The same rungs and refusals as the other fields. `bound_by` names `self_defined_component`, the site cap stays `custom_component`, and a tie names both. `posture.custom_component` is `true` on such a run |
+
 ## `required_image_signers`
 
 `required_image_signers` is a limit on a governance profile, not a field of a run's policy. It names image signers that every image a profile's people name must also pass ([image signature checks](operations/image-signature-checks.md)).

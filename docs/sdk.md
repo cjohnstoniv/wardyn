@@ -834,6 +834,7 @@ start.
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
+| `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
 | `kept_machine_not_your_mac` | `403`: the caller is not a person, or has no Mac of their own outside other people's pools. |
 | `kept_machine_person_limit` | The caller already keeps `macos_vm.max_kept_machines_per_person` machines. |

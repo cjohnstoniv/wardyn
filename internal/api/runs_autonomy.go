@@ -99,6 +99,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	grade := adoEntraGradedAs(adoRun, adoOn)
 	bedrock := bedrockCredGradedAs(modelCred)
 	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock, ceiling.Spec.AllowedDomains), enforced, baseline)
+	posture.CustomComponent = comps.selfDefined > 0 // selects the rubric's self_defined_component field
 	var level types.AutonomyLevel
 	var boundBy []string
 	if rubric {

@@ -175,7 +175,7 @@ func TestAutonomyComponentCapWithoutAProfile(t *testing.T) {
 					t.Errorf("resolution = %+v, want level %s bound by custom_component alone", got.res, capLevel)
 				}
 				// The posture is recorded although nothing graded the level on it.
-				if got.res.Posture != (types.AutonomyPosture{Egress: types.AutonomyEgressSealed, Secrets: types.AutonomySecretsNone, Confinement: types.CC2}) {
+				if got.res.Posture != (types.AutonomyPosture{Egress: types.AutonomyEgressSealed, Secrets: types.AutonomySecretsNone, Confinement: types.CC2, CustomComponent: true}) {
 					t.Errorf("posture = %+v, want the run's graded posture", got.res.Posture)
 				}
 				// No rubric graded this run, so dispatch is not held to a grade.

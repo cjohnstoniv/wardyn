@@ -57,6 +57,9 @@ export interface GovernanceLimits extends RunLimits {
   // types.GovernanceLimits.DenyKeptMachines — refuses keeping or resuming a macOS VM machine under this profile, on top of
   // the site switch macos_vm.allow_kept_machines. False/absent inherits the switch.
   deny_kept_machines?: boolean;
+  // types.GovernanceLimits.DenyScheduledRuns — refuses a start time (start_at) under this profile and ends a booked run at its
+  // start, on top of the deployment switch WARDYN_SCHEDULED_RUNS. False/absent inherits the switch; deny wins in composition.
+  deny_scheduled_runs?: boolean;
   // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
   // under this profile may not take. A deny list: absent means every placement
   // is permitted. The server refuses a profile denying both.
@@ -114,10 +117,11 @@ export interface RunLimits {
 // stay internal; the console renders plain labels (#93), not spelled here yet.
 export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
 
-// types.AutonomyRubric — nine closed level fields (three egress postures, three
-// secret postures, three confinement classes), each absent (caps nothing) or
-// one of the four levels, and one boolean, agent_guardrail_locks, that caps no
-// level. See internal/types/governance.go for what each
+// types.AutonomyRubric — ten closed level fields (three egress postures, three
+// secret postures, three confinement classes, and self_defined_component for
+// runs that carry a component their launcher defined), each absent (caps
+// nothing) or one of the four levels, and one boolean, agent_guardrail_locks,
+// that caps no level. See internal/types/governance.go for what each
 // posture means.
 export interface AutonomyRubric {
   egress_open?: AutonomyLevel;
@@ -129,11 +133,14 @@ export interface AutonomyRubric {
   confinement_cc1?: AutonomyLevel;
   confinement_cc2?: AutonomyLevel;
   confinement_cc3?: AutonomyLevel;
+  // Caps a run that carries a component its launcher defined. It can only tighten the deployment's own cap
+  // (components.autonomy_cap), never loosen it; the key is distinct from that cap's custom_component cause.
+  self_defined_component?: AutonomyLevel;
   // Selects the locked L2 managed-settings document for an L2 run; caps no level and is not a row.
   agent_guardrail_locks?: boolean;
 }
 
-// One of AutonomyRubric's nine level-capping field names — what internal/composer/
+// One of AutonomyRubric's ten level-capping field names — what internal/composer/
 // autonomy.go's applicableAutonomyCaps names a cap by, and what
 // AutonomyResolution.BoundBy (below) carries. keyof, not a hand-typed union,
 // so the two can never drift apart.
@@ -154,6 +161,7 @@ export const AUTONOMY_RUBRIC_ROW_KEYS: AutonomyRubricRowKey[] = [
   "confinement_cc1",
   "confinement_cc2",
   "confinement_cc3",
+  "self_defined_component",
 ];
 
 // AutonomyLevel's own weakest -> strongest ladder (internal/types/
@@ -174,6 +182,8 @@ export interface AutonomyPosture {
   egress: AutonomyEgressPosture;
   secrets: AutonomySecretsPosture;
   confinement: ConfinementClass;
+  // Set when the run carries a component its launcher defined; it selects the rubric's self_defined_component row.
+  custom_component?: boolean;
 }
 
 // What bound_by can name: a rubric row, or the organisation's cap on runs that

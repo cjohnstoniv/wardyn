@@ -143,6 +143,7 @@ With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can b
 - At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you, with the reason `owner_sign_in`, until you sign in again. Still waiting at its deadline, it ends `queue_sign_in_timeout`.
 - Two cases end the run at the start instead: a renewal the provider did not answer (`model_provider_unavailable`), and a stored sign-in Wardyn knows is spent (`model_credential`). For the second, sign in again and book a new run.
 - Cancel it like any waiting run. Switching scheduled runs off also binds runs already booked: at its time such a run ends `FAILED` `scheduled_runs_off`.
+- A profile's [`deny_scheduled_runs`](../POLICIES.md#deny_scheduled_runs) refuses a start time with `scheduled_runs_denied`, and ends a booked run with it at its time.
 
 ## Your own pools
 

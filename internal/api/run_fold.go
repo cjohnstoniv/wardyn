@@ -208,6 +208,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepComponents, foldAll},
 	{(*Server).stepPlacementDenied, foldAll},
 	{(*Server).stepPlacement, foldAll},
+	{(*Server).stepScheduleDoor, foldAll},
 	{(*Server).stepDriveEligibility, foldAll},
 	{(*Server).stepResources, foldAll},
 	{(*Server).stepLocalEligibility, foldAll},

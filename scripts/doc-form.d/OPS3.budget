@@ -107,7 +107,7 @@ docs/operations/admin-only-writes.md=3916 share=35 # +6 (rc.14, measured 3916: t
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
 # docs/operations/three-roles.md 4826 adds 38 over 4788, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/three-roles.md=5155 share=35 # +21, measured: rerouting keys under allowed models; earlier: +20, measured: the admin-runs cross-reference; earlier: -3 net, measured: a role table added; ids, version narration and repeated bullets removed
+docs/operations/three-roles.md=5157 share=35 # 5157 measured (+2: the scheduled-runs door and the tenth rubric field); earlier: +21, measured: rerouting keys under allowed models; earlier: +20, measured: the admin-runs cross-reference; earlier: -3 net, measured: a role table added; ids, version narration and repeated bullets removed
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1380 share=35 # -2, measured: the two-door grid first; version narration removed
@@ -199,7 +199,7 @@ docs/operations/api-tokens.md=6783 share=35 # 6783 measured on id-5 (+29: create
 # docs/operations/denials.md 5716 adds 14 over 5702 (rc.12): the governance_unit row's runs.desktop_window cause, the macOS window.
 # docs/operations/denials.md 5717 adds 1 over 5716, measured (rc.12): git_push_withheld in the runner proxy-setting list.
 # docs/operations/denials.md 5718 adds 1 over 5717, measured (rc.12): forge_hosts in the runner proxy settings list.
-docs/operations/denials.md=5440 share=35 # release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
+docs/operations/denials.md=5456 share=35 # 5456 measured (+16: the scheduled_runs_denied refusal); earlier: release tags cut, the SSH override and licence bullets replaced by a link, a run_quota row added (-301)
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

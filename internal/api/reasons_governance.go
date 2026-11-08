@@ -22,4 +22,7 @@ const (
 	// group, or one already an admin of the unit; reasonGovernanceUnitAdminNotFound: no such grant.
 	reasonGovernanceUnitAdminInvalid  = "governance_unit_admin_invalid"
 	reasonGovernanceUnitAdminNotFound = "governance_unit_admin_not_found"
+	// reasonScheduledRunsDenied: start_at on a launch whose governance profile turns off scheduled runs
+	// (run_schedule_door.go); the deployment switch stays reasonScheduledRunsOff.
+	reasonScheduledRunsDenied = "scheduled_runs_denied"
 )
