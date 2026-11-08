@@ -127,6 +127,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityApproval, readers: []string{"answerADOCapability"},
 		pinnedBy: "TestADOCapability_AnotherRunsApprovalIsRefused",
 	},
+	// A reviewed download releases only an approval of the run in the path: another run's approval, or one for
+	// another file or kind, is refused with nothing sent and nothing spent.
+	"GET /api/v1/runs/{id}/desktop/files/{name}?approval": {
+		entity: entityApproval, readers: []string{"serveReviewedDownload"},
+		pinnedBy: "TestDesktopReviewReleaseBoundToFileAndKind",
+	},
 	"GET /__wardyn/enter?run": {
 		entity: entityRun, readers: []string{"handleUIEnter"},
 		pinnedBy: "TestUIGateway_EnterRejectsNonOwnerTicket",
