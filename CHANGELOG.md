@@ -49,6 +49,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- On Approvals, a person whose unit offers elevation can request it (unit, how long, why, and an optional ticket), follow it under Your requests and withdraw it. A group decider can approve or deny elevation requests under Waiting on you.
 - Governance › profile has a Deciders section: who besides security admins decides each kind of hold for runs in that profile. The rules above it show, and a lock above it makes them read only.
 - The Approvals screen has a Waiting on you tab for people a unit's deciders rule lets decide other people's holds; pending cards say who decides, a decider's card says who asked, decided rows say on what basis, and the Approve dialog offers no scope wider than the rule allows.
 - A new page, Keep run branches from starting pipelines ([docs/operations/ci-trigger-guard.md](docs/operations/ci-trigger-guard.md)): what to set in Azure DevOps and GitHub so a run's pushes and pull requests cannot start a pipeline unreviewed, and the Wardyn settings that hold or refuse them.

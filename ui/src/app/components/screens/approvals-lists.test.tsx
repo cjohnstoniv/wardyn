@@ -9,6 +9,8 @@ import { MemoryRouter } from "react-router-dom";
 
 // #2486 and #2487: which lists the Approvals screen asks for, in which console view, and how often.
 
+// The held elevation requests are read with the lists; these tests are about the approvals, so the route answers as an older server does.
+vi.mock("../../lib/api/governance-requests", () => ({ requests: { list: () => Promise.resolve(null) } }));
 const listMock = vi.fn();
 vi.mock("../../lib/api/approvals", () => ({
   approvals: {

@@ -78,6 +78,7 @@ export const ELEV = {
 
   F_KIND: "Elevation",
   F_TITLE: (p: string, u: string, l: string) => `Elevate ${p} to ${u} for ${l}`,
+  F_REQUESTED: (when: string) => `requested ${when}`,
   F_REASON: "Their reason:",
   F_WHAT_LABEL: "What you're approving:",
   F_WHAT: (p: string, u: string, l: string) => `${p} becomes a member of ${u} for ${l}, starting when you approve.`,

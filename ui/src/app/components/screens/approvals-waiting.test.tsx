@@ -12,6 +12,8 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
+import type { GovernanceRequest, GovernanceRequestList } from "../../lib/types/governance-requests";
+import { aheadByHours } from "../../lib/test-clock";
 import { DECIDERS_INBOX } from "../wardyn/copy/deciders-inbox";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 
@@ -33,6 +35,18 @@ vi.mock("../../lib/api/approvals", () => ({
     listDecidableByMe: () => waitingMock(),
     approve: (...a: unknown[]) => approveMock(...a),
     deny: vi.fn(),
+  },
+}));
+const emptyElevation = (): GovernanceRequestList => ({ requests: [], offered: [], image_offered: false });
+let mockElevation: () => Promise<GovernanceRequestList | null> = () => Promise.resolve(emptyElevation());
+const elevationListMock = vi.fn(() => mockElevation());
+const elevationApproveMock = vi.fn();
+vi.mock("../../lib/api/governance-requests", () => ({
+  requests: {
+    list: () => elevationListMock(),
+    approve: (...a: unknown[]) => elevationApproveMock(...a),
+    reject: vi.fn(),
+    create: vi.fn(),
   },
 }));
 let mockCaps: MeCapabilities = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 };
@@ -101,6 +115,9 @@ beforeEach(() => {
   approveMock.mockReset();
   getRun.mockClear();
   governanceMock.mockClear();
+  mockElevation = () => Promise.resolve(emptyElevation());
+  elevationListMock.mockClear();
+  elevationApproveMock.mockReset();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -547,5 +564,160 @@ describe("Refusal toasts", () => {
     await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
     expect(toastError.mock.calls[0][0]).not.toBe(DECIDERS_INBOX.TOAST_NOT_A_DECIDER);
     expect(toastError.mock.calls[0][1]).toEqual({ description: "already decided" });
+  });
+});
+
+const elevationRequest = (id: string, extra: Partial<GovernanceRequest> = {}): GovernanceRequest =>
+  ({
+    id,
+    target_kind: "governance_elevation",
+    op: "create",
+    target_key: "u1",
+    state: "pending",
+    kind: "elevation",
+    unit_id: "u1",
+    unit_name: "Payments",
+    duration: "4h",
+    proposed_by: "dana.reyes@acme.example",
+    proposed_at: aheadByHours(-0.05),
+    expires_at: aheadByHours(24),
+    diff: { before: null, after: null, changed: [] },
+    note: { reason: "Production incident", ticket: "INC-2210" },
+    mine: false,
+    decidable: true,
+    deciders: [{ kind: "unit_admin" }, { kind: "security" }],
+    ...extra,
+  }) as GovernanceRequest;
+const serveElevation = (over: Partial<GovernanceRequestList>) => {
+  mockElevation = () => Promise.resolve({ ...emptyElevation(), ...over });
+};
+const ELEVATE_TITLE = "Elevate dana.reyes@acme.example to Payments for 4 hours";
+
+describe("Approvals: elevation requests", () => {
+  it("a decidable elevation request alone opens the Waiting on you tab, with badge 1", async () => {
+    serveElevation({ requests: [elevationRequest("e1")] });
+    renderScreen();
+    const tab = await waitFor(() => {
+      const t = waitingTab();
+      expect(t).toBeInTheDocument();
+      return t!;
+    });
+    expect(tab).toHaveTextContent(/Waiting on you\s*1$/);
+    await userEvent.click(tab);
+    expect(await screen.findByText(ELEVATE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(DECIDERS_INBOX.EMPTY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("the badge counts the decider cards and the approval cards together, cards first", async () => {
+    mockWaiting = [others("w1")];
+    serveElevation({ requests: [elevationRequest("e1")] });
+    renderScreen();
+    const tab = await waitFor(() => {
+      const t = waitingTab();
+      expect(t).toHaveTextContent(/Waiting on you\s*2$/);
+      return t!;
+    });
+    await userEvent.click(tab);
+    const title = await screen.findByText(ELEVATE_TITLE);
+    const approval = await screen.findByText("Reach w1.example.com");
+    expect(title.compareDocumentPosition(approval) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("a decider whose probe missed still gets the tab and the card", async () => {
+    mockKnows = false;
+    serveElevation({ requests: [elevationRequest("e1")] });
+    renderScreen();
+    const tab = await waitFor(() => {
+      const t = waitingTab();
+      expect(t).toBeInTheDocument();
+      return t!;
+    });
+    expect(tab).toHaveTextContent(/Waiting on you\s*1$/);
+    await userEvent.click(tab);
+    expect(await screen.findByText(ELEVATE_TITLE)).toBeInTheDocument();
+  });
+
+  it("only a pending, decidable elevation request is a decider card", async () => {
+    serveElevation({
+      requests: [
+        elevationRequest("e1", { decidable: false }),
+        elevationRequest("e2", { state: "applied" }),
+        elevationRequest("e3", { kind: "image", unit_name: undefined }),
+        elevationRequest("e4", { mine: true, decidable: false }),
+      ],
+    });
+    renderScreen();
+    await screen.findByRole("tab", { name: /^Pending/ });
+    await act(async () => {});
+    expect(waitingTab()).not.toBeInTheDocument();
+  });
+
+  it("a security operator gets no decider cards and no tab", async () => {
+    serveElevation({ requests: [elevationRequest("e1")] });
+    renderScreen({ security: true });
+    await screen.findByRole("tab", { name: /^Pending/ });
+    await act(async () => {});
+    expect(waitingTab()).not.toBeInTheDocument();
+    expect(screen.queryByText(ELEVATE_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("Approve on a decider card approves the request, with no dialog", async () => {
+    elevationApproveMock.mockResolvedValue({});
+    serveElevation({ requests: [elevationRequest("e1")] });
+    renderScreen();
+    await userEvent.click(await waitFor(() => {
+      const t = waitingTab();
+      expect(t).toBeInTheDocument();
+      return t!;
+    }));
+    await screen.findByText(ELEVATE_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: /Approve/ }));
+    expect(elevationApproveMock).toHaveBeenCalledWith("e1");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("Your requests is drawn above the tabs", async () => {
+    serveElevation({ offered: [{ unit_id: "u1", unit_name: "Payments", max_elevation: "4h" }] });
+    renderScreen();
+    const title = await screen.findByText("Your requests");
+    const pending = screen.getByRole("tab", { name: /^Pending/ });
+    expect(title.compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
+  });
+
+  it("Your requests is drawn for a security operator who may ask", async () => {
+    serveElevation({ offered: [{ unit_id: "u1", unit_name: "Payments", max_elevation: "4h" }] });
+    renderScreen({ security: true });
+    expect(await screen.findByText("Your requests")).toBeInTheDocument();
+  });
+
+  it("a 404 on the list (an older server) draws nothing", async () => {
+    mockElevation = () => Promise.resolve(null);
+    renderScreen();
+    await screen.findByRole("tab", { name: /^Pending/ });
+    await waitFor(() => expect(elevationListMock).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByText("Your requests")).not.toBeInTheDocument();
+  });
+
+  it("a failed first read draws the card's own error, and the rest of the screen still works", async () => {
+    mockElevation = () => Promise.reject(new Error("503"));
+    mockPending = [egress("p1")];
+    renderScreen();
+    expect(await screen.findByText("Your requests")).toBeInTheDocument();
+    expect(await screen.findByText("Reach p1.example.com")).toBeInTheDocument();
+  });
+
+  it("a failed poll after a good read keeps the last good list", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    serveElevation({ offered: [{ unit_id: "u1", unit_name: "Payments", max_elevation: "4h" }] });
+    renderScreen();
+    await screen.findByText("Your requests");
+    mockElevation = () => Promise.reject(new Error("503"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(elevationListMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
   });
 });

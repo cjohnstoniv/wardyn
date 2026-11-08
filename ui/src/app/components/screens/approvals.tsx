@@ -22,6 +22,8 @@ import {
   type DecisionOptions,
 } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
+import { requests as elevationApi } from "../../lib/api/governance-requests";
+import type { GovernanceRequestList } from "../../lib/types/governance-requests";
 import { anyCapabilityEnforced, useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
 import { HttpError, LIST_LIMIT } from "../../lib/api/core";
@@ -57,6 +59,8 @@ import {
   egressBlastRadius,
 } from "../wardyn/copy";
 import { ApprovalCard, DecidedRow } from "./approvals-cards";
+import { ElevationDeciderCard } from "./elevation/elevation-decider-card";
+import { MyElevationRequests } from "./elevation/my-elevation-requests";
 
 type Filter = "PENDING" | "waiting" | "decided";
 // The server cuts the Waiting on you list here (maxDecidableByMe) and says so with X-Wardyn-Truncated.
@@ -368,10 +372,17 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const [waitingTruncated, setWaitingTruncated] = React.useState(false);
   const [waitingStatus, setWaitingStatus] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
   const [latched, setLatched] = React.useState(false);
+  // The held elevation requests: the person's own ("Your requests") and the ones they may decide. A failed read
+  // after a good one keeps the last good list.
+  const [elevation, setElevation] = React.useState<GovernanceRequestList | null | "loading" | "error">("loading");
+  const deciderRequests =
+    !securityOperator && typeof elevation === "object" && elevation !== null
+      ? elevation.requests.filter((r) => r.kind === "elevation" && r.decidable && r.state === "pending")
+      : [];
   const waitingOn = !securityOperator && knows === true;
   const waitingOnRef = React.useRef(waitingOn);
   waitingOnRef.current = waitingOn;
-  const tabDrawn = waitingOn && latched;
+  const tabDrawn = (waitingOn && latched) || (!securityOperator && deciderRequests.length > 0);
   const shown: Filter = filter === "waiting" && !tabDrawn ? "PENDING" : filter;
   // Unit names for the basis line of a decision made as a unit admin, read once and only when such a row is on screen.
   const [unitNames, setUnitNames] = React.useState<Record<string, string> | undefined>(undefined);
@@ -395,6 +406,10 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         setWaitingStatus("ready");
         if (rows.some((r) => !!r.requested_by)) setLatched(true);
       }),
+    [],
+  );
+  const fetchElevation = React.useCallback(
+    () => elevationApi.list().then(setElevation),
     [],
   );
   const fetchDecided = React.useCallback(() => {
@@ -432,8 +447,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             }),
           ]).then(() => undefined)
         : fetchPending();
-    return Promise.all([main, waitingRead]).then(() => undefined);
-  }, [fetchPending, fetchDecided, fetchWaiting, view]);
+    const elevationRead = fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+    return Promise.all([main, waitingRead, elevationRead]).then(() => undefined);
+  }, [fetchPending, fetchDecided, fetchWaiting, fetchElevation, view]);
   const loadWaiting = React.useCallback(() => {
     setWaitingStatus((st) => (st === "ready" ? st : "loading"));
     fetchWaiting().catch(() => setWaitingStatus((st) => (st === "ready" ? st : "error")));
@@ -478,6 +494,14 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       .then((s) => setUnitNames({ ...s.unit_names, ...Object.fromEntries(s.profiles.map((p) => [p.id, p.name])) }))
       .catch(() => undefined);
   }, [wantsUnitNames]);
+
+  React.useEffect(() => {
+    void fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+  }, [fetchElevation]);
+  const reloadElevation = React.useCallback(() => {
+    setElevation((cur) => (cur === "error" ? "loading" : cur));
+    fetchElevation().catch(() => setElevation((cur) => (typeof cur === "object" ? cur : "error")));
+  }, [fetchElevation]);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -604,6 +628,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
   // One card for both lists; the Waiting on you tab passes waiting so the card trusts the server's verdict on it.
+  const elevationDecided = () => {
+    fetchAll().catch(() => {
+      /* transient refresh failure — the decision itself already succeeded */
+    });
+    onChanged?.();
+  };
   const approvalCard = (a: ApprovalRequest, waiting: boolean) => (
     <ApprovalCard
       key={a.id}
@@ -619,6 +649,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     />
   );
 
+  const waitingCount = (waitingStatus === "ready" ? waitingRows.length : 0) + deciderRequests.length;
   const anyToolCall = pendingItems.some((a) => a.kind === "tool_call") || decidedItems.some((a) => a.kind === "tool_call");
 
   return (
@@ -646,6 +677,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <p className="mb-4 text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
       )}
 
+      <MyElevationRequests list={elevation} onReload={reloadElevation} />
+
       <Tabs value={shown} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
         <TabsList>
           <TabsTrigger value="PENDING" className="gap-2">
@@ -659,9 +692,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           {tabDrawn && (
             <TabsTrigger value="waiting" className="gap-2">
               {APPROVALS_TAB.WAITING}
-              {waitingStatus === "ready" && waitingRows.length > 0 && (
+              {waitingCount > 0 && (
                 <span className="rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
-                  {waitingRows.length}
+                  {waitingCount}
                 </span>
               )}
             </TabsTrigger>
@@ -673,7 +706,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
 
       {/* The tab is drawn only after a read has succeeded, so this body never shows a first-read loading or error state. */}
       {shown === "waiting" ? (
-        waitingRows.length === 0 ? (
+        waitingRows.length === 0 && deciderRequests.length === 0 ? (
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
               icon={ShieldCheck}
@@ -693,7 +726,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                 {DECIDERS_INBOX.TRUNCATED}
               </TruncatedNote>
             )}
-            <div className="space-y-3.5">{waitingRows.map((a) => approvalCard(a, true))}</div>
+            <div className="space-y-3.5">
+              {deciderRequests.map((r) => (
+                <ElevationDeciderCard key={r.id} request={r} onDone={elevationDecided} />
+              ))}
+              {waitingRows.map((a) => approvalCard(a, true))}
+            </div>
           </>
         )
       ) : status === "loading" ? (

@@ -44,6 +44,8 @@ let mockFailAllLists = false;
 let mockListDeferred: Promise<void> | null = null;
 const denyMock = vi.fn();
 const approveMock = vi.fn();
+// The held elevation requests are read with the lists; these tests are about the approvals, so the route answers as an older server does.
+vi.mock("../../lib/api/governance-requests", () => ({ requests: { list: () => Promise.resolve(null) } }));
 vi.mock("../../lib/api/approvals", () => {
   return {
     approvals: {
