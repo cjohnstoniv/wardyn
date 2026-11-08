@@ -582,6 +582,9 @@ That has two consequences:
   - `deny_with_review`: this attempt is refused (`403`), a request is raised, and a retry passes once a person approves.
   - `wait_for_review`: held (`423` `capability_pending`) until a person answers.
   - Above the row's ceiling, in any mode: refused, `403` `capability_above_ceiling`.
+- A member's run takes the stricter of its own `first_use_approval` and its unit's.
+  - A run that asks for `wait_for_review` under a unit set to `deny_with_review` runs as `deny_with_review`, and Review lists the change.
+  - An admin's own run setting is honoured as given.
 - A person (or an admin) sees a raised request in the Wardyn UI and answers
   - **allow once** — this one request only —
   - or **allow for this run** — the capability joins what the rest of the run may do without asking again.

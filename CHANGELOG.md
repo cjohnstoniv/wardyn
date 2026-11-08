@@ -81,6 +81,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- Docs: OPERATIONS says Codex CLI on a `custom_endpoint` calls the OpenAI Responses API, and AZURE-DEVOPS says a member's run under a unit's `deny_with_review` cannot loosen it to `wait_for_review`.
 - The desktop viewer and the run page no longer show the line about a macOS login window. The macOS VM docs note that the macOS 27 prepare flow creates only the setup account and that nothing beyond macOS 26 is promised as tested.
 - A Codex Model stored on a custom endpoint or OpenAI key provider now takes effect: runs with the Codex CLI use it. With none stored, Codex keeps its own default.
 - The proposer of a held governance change may withdraw it with `POST /governance/changes/{id}/reject`, even when only others may approve it, such as a unit admin's change held for the security tier. The `governance.change.reject` row then carries `withdrawn: true`.
