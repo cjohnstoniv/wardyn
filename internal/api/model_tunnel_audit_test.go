@@ -26,7 +26,7 @@ func TestPostDecision_RecordsModelTunnel(t *testing.T) {
 			t.Fatalf("post decision: %d %s", w.Code, w.Body.String())
 		}
 		var data map[string]any
-		_ = json.Unmarshal(lastAuditEvent(t, h.audit.events, "egress.allow").Data, &data)
+		_ = json.Unmarshal(lastAuditEvent(t, h.audit.snapshot(), "egress.allow").Data, &data)
 		return data
 	}
 	if data := post(true); data["model_tunnel"] != true {
