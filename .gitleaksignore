@@ -169,3 +169,6 @@ c28f27ccc8088866e689b84819c52323a84559d9:internal/api/endpoint_oidc_test.go:gene
 # The MCP call console card test's stand-in for a call's sha256 hex digest (four 0-9a-f cycles). A digest,
 # never a credential.
 c2450be019d75f32f496890ed983465c3294528b:ui/src/app/components/screens/approvals-mcp-call.test.tsx:generic-api-key:49
+# The extra-header refusal test's sample JWT (the well-known example claims, a dummy signature),
+# committed as a literal before it was assembled from parts. A fixture, never a credential.
+41a0ea61912c2c6ebf61c9d4a28118a9b207ac48:internal/egress/proxy/extra_headers_test.go:jwt:73

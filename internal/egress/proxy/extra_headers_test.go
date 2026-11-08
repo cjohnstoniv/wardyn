@@ -70,7 +70,7 @@ func TestExtraHeaders_Values(t *testing.T) {
 		"control":          "a\x01b",
 		"github token":     "ghp_" + strings.Repeat("a", 36),
 		"aws key id":       "AKIA" + strings.Repeat("A", 16),
-		"jwt":              "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk",
+		"jwt":              "eyJ" + "hbGciOiJIUzI1NiJ9." + "eyJ" + "zdWIiOiIxMjM0NTY3ODkwIn0." + "abcdefghijk",
 		"sk- key":          "sk-" + strings.Repeat("a", 24),
 		"sk- key in text":  "provider sk-" + strings.Repeat("A1_-", 6),
 		"private key head": "-----BEGIN RSA PRIVATE KEY-----",
