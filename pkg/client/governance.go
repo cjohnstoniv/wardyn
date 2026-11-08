@@ -101,6 +101,10 @@ type GovernanceDocument struct {
 	// Admins is each unit's unit admins, by unit name (GET /governance's unit_admins). An apply
 	// grants the ones the server lacks; --prune also revokes the ones the document omits.
 	Admins map[string][]GovernanceAdminSubject `json:"admins,omitempty"`
+	// Deciders is each unit's own hold-deciding rules, by unit name (GET /governance's deciders, own rules
+	// only; inherited rules are the unit above's). Absent: not planned and never pruned. Present: an apply
+	// puts each listed unit's rules; --prune also clears the rules of every unit it omits.
+	Deciders map[string][]DeciderRule `json:"deciders,omitempty"`
 	// grants is the server's grants as GetGovernance read them, with their ids, for a plan or an
 	// apply against that state. Never encoded.
 	grants []GovernanceUnitAdmin
@@ -159,6 +163,8 @@ type GovernanceDeferredWrite struct {
 	// Base is set when the deferred write is a PROFILE rather than an assignment: Profile is the
 	// child that was not sent, Base the profile it composes on whose write is pending.
 	Base string `json:"base,omitempty"`
+	// Kind is "deciders" for a unit's rules write; "" for a profile or an assignment.
+	Kind string `json:"kind,omitempty"`
 }
 
 // PendingApprovalError is returned when a write was held for a second approver
@@ -201,6 +207,7 @@ func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) 
 	}
 	out := read.GovernanceDocument
 	out.Admins = adminsByUnitName(out.Units, read.UnitAdmins)
+	out.Deciders = decidersByUnitName(out.Units, read.Deciders)
 	if len(read.UnitAdmins) > 0 {
 		out.grants = read.UnitAdmins
 	}
@@ -529,13 +536,21 @@ func (c *Client) writeChangedUnit(ctx context.Context, p, existing GovernanceUni
 // no write in the apply is pending, and stops at the first pending delete;
 // PruneSkipped says so.
 func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocument, prune bool) (GovernanceApplyResult, error) {
-	var res GovernanceApplyResult
 	doc = withoutExpiring(doc) // elevations are granted through requests, never written or pruned here
 	current, err := c.GetGovernance(ctx)
 	if err != nil {
-		return res, fmt.Errorf("read current governance state: %w", err)
+		return GovernanceApplyResult{}, fmt.Errorf("read current governance state: %w", err)
 	}
 	current = withoutExpiring(current)
+	return c.applyGovernanceTo(ctx, current, doc, prune)
+}
+
+// applyGovernanceTo is ApplyGovernanceResult's apply over current as read (narrowed, for the Under variant).
+func (c *Client) applyGovernanceTo(ctx context.Context, current, doc GovernanceDocument, prune bool) (res GovernanceApplyResult, err error) {
+	deciders, err := newDeciderPlan(current, doc, prune) // refuses an unknown unit or an invalid rule before any write
+	if err != nil {
+		return res, err
+	}
 	profileByName := make(map[string]GovernanceUnit, len(current.Units))
 	currentIDToName := make(map[uuid.UUID]string, len(current.Units))
 	for _, p := range current.Units {
@@ -629,7 +644,7 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		p, ok := profileByName[name]
 		return p.ID, ok
 	}, pendingProfile)
-	if err := c.applyUnitAdmins(ctx, admins, doc.Admins, &res); err != nil {
+	if err := c.applyUnitSections(ctx, admins, doc.Admins, deciders, pendingProfile, &res); err != nil {
 		return res, err
 	}
 
@@ -642,7 +657,7 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		// final, so no delete is issued after one (ApplyGovernance's doc).
 		res.PruneSkipped = len(res.Pending) > 0
 		if !res.PruneSkipped {
-			res.PruneSkipped, err = c.pruneUnitAdmins(ctx, admins, doc.Admins, &res)
+			res.PruneSkipped, err = c.pruneUnitSections(ctx, admins, doc.Admins, deciders, &res)
 			if err != nil {
 				return res, err
 			}

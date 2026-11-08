@@ -49,7 +49,7 @@
 //     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable when its store holds no templates
 //   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
 //     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, PutUnitDeciders, CheckGovernance,
-//     GovernanceDryRun, SetEnvelope, ClearEnvelope
+//     GovernanceDryRun, SetEnvelope, ClearEnvelope, GetGovernanceUnder, PlanGovernanceUnder, ApplyGovernanceResultUnder
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
 //   - governance requests (/api/v1/governance/requests): ListGovernanceRequests, RequestElevation,
