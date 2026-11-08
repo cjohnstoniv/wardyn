@@ -84,6 +84,7 @@ var meetRules = map[string]meetRule{
 	"deny_user_drive":                       {"false", "OR"},
 	"deny_member_drives":                    {"false", "OR"},
 	"deny_kept_machines":                    {"false", "OR"},
+	"deny_scheduled_runs":                   {"false", "OR"},
 	"deny_background_desktop_watch":         {"false", "OR"},
 	"deny_placements":                       {"none; every placement permitted", "union"},
 	"allowed_macos_bases":                   {"none; any base a Mac offers", "intersection; empty on one side yields the other; disjoint is unsatisfiable"},
@@ -110,6 +111,8 @@ var meetRules = map[string]meetRule{
 	"default_wait_sec":                      {"0 is max_wait_sec", "smaller after normalising, clamped to the composed max"},
 	"user_changes_limits":                   {"false", "AND (TightenRunLimits)"},
 	"pause_idle_after_sec":                  {"0 pauses only runs waiting for a decision", "smaller positive (TightenRunLimits)"},
+
+	"autonomy_rubric.self_defined_component": {"caps nothing", "the lower level"},
 }
 
 // atomicMeetTypes are the struct types a meet rule treats as one value (compared
