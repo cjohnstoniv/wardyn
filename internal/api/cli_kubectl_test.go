@@ -537,6 +537,7 @@ func TestKubectlCLI_AccessCredentialScope(t *testing.T) {
 		id := uuid.New()
 		def := kubectlRowDef("https://k8s.example.com:6443", "", "team-a", "team-b")
 		def.CLI.Kubectl.Access = access
+		def.CLI.Kubectl.ApproveEach = access != types.ComponentAccessRead
 		comps := runComponents{attached: []attachedComponent{{source: componentSourceOrg, snapshot: types.RunComponent{
 			ComponentID: &id, Name: "Cluster", Definition: def}}}}
 		req := createRunRequest{Agent: "claude-code", Task: "t"}
@@ -551,7 +552,7 @@ func TestKubectlCLI_AccessCredentialScope(t *testing.T) {
 				cred = &got.Credentials[i]
 			}
 		}
-		if cred == nil || cred.Access != want || strings.Join(cred.Namespaces, ",") != "team-a,team-b" {
+		if cred == nil || cred.Access != want || strings.Join(cred.Namespaces, ",") != "team-a,team-b" || cred.ApproveEach != def.CLI.Kubectl.ApproveEach {
 			t.Errorf("%s: credential = %+v, want %s on team-a,team-b", access, cred, want)
 		}
 	}
@@ -630,5 +631,34 @@ func TestKubectlCLI_ResolveRefusesATokenPinnedElsewhere(t *testing.T) {
 	defer f.api.mu.Unlock()
 	if len(f.api.seen) != 0 {
 		t.Errorf("the API server saw %q", f.api.seen)
+	}
+}
+
+// An approve_each row dispatches a door that holds its writes, the snapshot records it, and
+// dropping it (or adding it) mid-run is a drift.
+func TestKubectlDriftApproveEachDropped(t *testing.T) {
+	f := newKubeFixture(t)
+	def := kubectlRowDef(f.api.srv.URL, f.api.caPEM(), "team-a", "team-b")
+	def.CLI.Kubectl.Access, def.CLI.Kubectl.ApproveEach = types.ComponentAccessWrite, true
+	f.setRow(t, def)
+	f.st.attached[0].Definition = def
+	f.register(t, kubeRegistered)
+	_, plan, _, _, ok := f.dispatch("run-ca-cert")
+	if !ok || plan.gate == nil || !plan.gate.ApproveEach || !plan.gate.Write {
+		t.Fatalf("door = %+v ok=%v, want ApproveEach and Write", plan.gate, ok)
+	}
+	var sc struct {
+		Snapshot kubectlGrantSnapshot `json:"snapshot"`
+	}
+	if len(f.st.grants) != 1 || json.Unmarshal(f.st.grants[0].Spec.Scope, &sc) != nil || !sc.Snapshot.ApproveEach {
+		t.Fatalf("grant = %+v", f.st.grants)
+	}
+	if why, _, err := f.srv.kubectlCLIDrift(context.Background(), f.st.run.ID, sc.Snapshot); err != nil || why != "" {
+		t.Fatalf("unchanged row: drift = %q, %v", why, err)
+	}
+	def.CLI.Kubectl.ApproveEach = false
+	f.setRow(t, def)
+	if why, _, err := f.srv.kubectlCLIDrift(context.Background(), f.st.run.ID, sc.Snapshot); err != nil || why != "approve_each" {
+		t.Errorf("approve_each dropped: drift = %q, %v, want approve_each", why, err)
 	}
 }

@@ -8,6 +8,8 @@ import {
   canDecideApproval,
   decisionArgs,
   isHeld,
+  isKubeCallRequest,
+  isMCPCallRequest,
   type ApprovalKind,
   type ApprovalRequest,
 } from "./approvals";
@@ -220,5 +222,20 @@ describe("canDecideApproval for one MCP call", () => {
     expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: { tool: "Bash", cmd: "ls" } })).toBe(false);
     expect(canDecideApproval(false, "tool_call", { grant_id: "g1", requested_scope: { lane: "azure_devops", call_sha256: "ab".repeat(32) } })).toBe(false);
     expect(canDecideApproval(false, "tool_call")).toBe(false);
+  });
+});
+
+// A held kubectl write carries call_sha256 like an MCP call, and a cluster: it is never read as one.
+describe("isKubeCallRequest", () => {
+  const key = "ab".repeat(32);
+  const kube = { kind: "tool_call" as const, grant_id: undefined,
+    requested_scope: { cluster: "k8s.example.com", namespace: "team-a", method: "PATCH", path: "/apis/apps/v1/namespaces/team-a/deployments/web", call_sha256: key } };
+  const mcp = { kind: "tool_call" as const, grant_id: undefined, requested_scope: { tool: "mcp__jira__x", mcp_server: "jira", call_sha256: key } };
+  it("tells the two apart", () => {
+    expect(isKubeCallRequest(kube)).toBe(true);
+    expect(isMCPCallRequest(kube)).toBe(false);
+    expect(isMCPCallRequest(mcp)).toBe(true);
+    expect(isKubeCallRequest(mcp)).toBe(false);
+    expect(isKubeCallRequest({ ...kube, grant_id: "g1" })).toBe(false);
   });
 });
