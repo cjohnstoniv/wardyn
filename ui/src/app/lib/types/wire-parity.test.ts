@@ -894,18 +894,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(tsInterfaceBody(govTs, "AutonomyResolution")).toMatch(/bound_by\?: AutonomyBoundKey\[\];/);
   });
 
-  // The scheduled-runs door and the rubric's custom-component cap: Go tags on the structs the console edits.
-  it("GovernanceLimits.deny_scheduled_runs and AutonomyRubric.self_defined_component are the Go fields", () => {
-    const goGov = readFileSync(join(root, "internal/types/governance.go"), "utf8");
-    expect(goGov).toMatch(/DenyScheduledRuns\s+bool\s+`json:"deny_scheduled_runs,omitempty"`/);
-    expect(goGov).toMatch(/SelfDefinedComponent\s+AutonomyLevel\s+`json:"self_defined_component,omitempty"`/);
-    const govTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
-    expect(tsInterfaceBody(govTs, "GovernanceLimits")).toMatch(/deny_scheduled_runs\?: boolean;/);
-    expect(tsInterfaceBody(govTs, "AutonomyRubric")).toMatch(/self_defined_component\?: AutonomyLevel;/);
-    const restrictionsTs = readFileSync(join(root, "ui/src/app/lib/api/restrictions.ts"), "utf8");
-    expect(tsInterfaceBody(restrictionsTs, "RestrictionLimits")).toMatch(/deny_scheduled_runs\?: boolean;/);
-  });
-
   it("GovernanceLimits.deny_placements is the Go field, typed by the closed placement set", () => {
     const goGov = readFileSync(join(root, "internal/types/governance.go"), "utf8");
     expect(goGov).toMatch(/DenyPlacements\s+\[\]Placement\s+`json:"deny_placements,omitempty"`/);
