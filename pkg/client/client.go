@@ -14,7 +14,7 @@
 // The SDK covers these wardynd public route families (the ones external tooling
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
-//   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
+//   - runs (/api/v1/runs):               CreateRun, CreateRunWith, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
 //     OpenMacWindow, GetMacWindow, GetRunMachine
@@ -26,7 +26,7 @@
 //     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
-//     ExportAuditPartition, AuditRetention, DropAuditPartition
+//     ExportAuditPartition, AuditRetention, DropAuditPartition, AuditReceipt, AuditCheckpoints, AuditReceiptKeys
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
 //     SetMySecret, DeleteMySecret
@@ -79,7 +79,7 @@
 //     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
 //     with MoveToken (POST /api/v1/tokens/{id}/move), and the caller's own tokens CreateAPIToken (a signed-in session only) and
 //     RevokeAPIToken (/api/v1/me/tokens)
-//   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
+//   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, PreviewWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
 //     WorkloadHistory, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
 //     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on

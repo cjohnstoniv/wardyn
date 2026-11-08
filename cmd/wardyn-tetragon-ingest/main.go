@@ -39,6 +39,12 @@
 // /healthz can report ebpf_groundtruth=healthy ONLY while events are arriving.
 // Host eBPF is blind inside CC3/Kata guests; for such runs a one-time
 // kernel.sensor.bypass event is emitted (data.reason=cc3-kata-host-ebpf-blind).
+//
+// On Kubernetes (WARDYN_GROUNDTRUTH_SOURCE=k8s) the sensor runs as a DaemonSet
+// and never touches docker: each event names its own pod, and podCorrelator
+// (correlator_k8s.go) maps only agent pods in the configured run namespaces.
+// The heartbeat carries the node (WARDYN_NODE_NAME). The default, docker, is
+// the Compose behaviour above, unchanged.
 package main
 
 import (
@@ -48,6 +54,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -98,6 +105,9 @@ func run() error {
 		statsFlag       = cliutil.FlagDuration("stats", "WARDYN_GROUNDTRUTH_STATS", 60*time.Second, "how often to log throughput/drop stats")
 		bufferSize      = flagIntEnv("buffer", "WARDYN_GROUNDTRUTH_BUFFER", 4096, "event buffer size before backpressure drops")
 		batchSize       = flagIntEnv("batch", "WARDYN_GROUNDTRUTH_BATCH", 64, "max events per POST batch")
+		source          = flagEnv("source", "WARDYN_GROUNDTRUTH_SOURCE", "docker", "where container->run correlation comes from: docker (the Compose sidecar, default) or k8s (a Kubernetes DaemonSet; events carry their pod)")
+		k8sNamespaces   = flagEnv("k8s-namespaces", "WARDYN_GROUNDTRUTH_K8S_NAMESPACES", "", "k8s source: comma-separated namespaces Wardyn runs agent pods in; events from any other namespace stay unmapped")
+		nodeName        = flagEnv("node-name", "WARDYN_NODE_NAME", "", "k8s source: this sensor's node (downward API spec.nodeName); carried on the heartbeat and on events whose export line has no node_name")
 	)
 	flag.Parse()
 	if err := checkTuning(*heartbeatFlag, *refreshFlag, *statsFlag, *bufferSize); err != nil {
@@ -108,11 +118,6 @@ func run() error {
 	if err := checkBootTokenSource(*token); err != nil {
 		return err
 	}
-	client, err := controlPlaneClient(*controlURL, *controlCAFile)
-	if err != nil {
-		return fmt.Errorf("refusing to start: %w", err)
-	}
-
 	// Env values were parsed strictly at flag registration (cliutil.FlagDuration:
 	// an unparseable WARDYN_GROUNDTRUTH_{HEARTBEAT,REFRESH,STATS} exits 2, matching
 	// docs/ENV.md's loud-read invariant; unset/empty keeps the default). A -flag
@@ -124,6 +129,17 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	client, err := waitForClient(ctx, func() (*http.Client, error) {
+		return controlPlaneClient(*controlURL, *controlCAFile)
+	}, caWaitBound, waitPause)
+	if stoppedDuringWait(ctx, err) {
+		slog.Info("wardyn-tetragon-ingest: shutdown before the control-plane CA appeared")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
+
 	sink := newEventSink(*controlURL, *token, *bufferSize, *batchSize, 2*time.Second, client)
 	defer func() {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -132,20 +148,28 @@ func run() error {
 	}()
 
 	// Container->run correlator. Throttle on-miss refreshes to half the ticker.
-	corr := newDockerCorrelator(nil, nil, refreshIval/2)
-	if err := corr.Refresh(ctx); err != nil {
-		// Non-fatal: the daemon may not be reachable yet (compose ordering).
-		// Everything correlates as unmapped until the first successful refresh —
-		// visible blindness, not a crash.
-		slog.WarnContext(ctx, "wardyn-tetragon-ingest: initial container index refresh failed (continuing; events correlate as unmapped until docker is reachable)",
-			slog.Any("err", err),
-		)
+	// In k8s mode no docker correlator exists: events carry their pod, so
+	// nothing here shells out to docker.
+	gtCorr, corr, err := correlatorFor(*source, splitCSV(*k8sNamespaces), nil, nil, refreshIval/2)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wardyn-tetragon-ingest:", err)
+		os.Exit(2)
+	}
+	if corr != nil {
+		if err := corr.Refresh(ctx); err != nil {
+			// Non-fatal: the daemon may not be reachable yet (compose ordering).
+			// Everything correlates as unmapped until the first successful refresh —
+			// visible blindness, not a crash.
+			slog.WarnContext(ctx, "wardyn-tetragon-ingest: initial container index refresh failed (continuing; events correlate as unmapped until docker is reachable)",
+				slog.Any("err", err),
+			)
+		}
 	}
 	// gatedMapper (correlator.go) drops correlation=unmapped exec/connect/write
 	// events by default (W24-S1-1) — see the package doc above and the type's
 	// own doc for why. *forwardUnmapped opts a deployment back into forwarding
 	// them (run_id NULL, visible) instead of dropping them before the sink.
-	mapper := &gatedMapper{inner: groundtruth.NewMapper(corr), allowUnmapped: *forwardUnmapped}
+	mapper := &gatedMapper{inner: groundtruth.NewMapper(gtCorr).WithNode(*nodeName), allowUnmapped: *forwardUnmapped}
 
 	// One-time blindness events for CC3/Kata runs the host sensor cannot see.
 	for _, rs := range splitCSV(*blindRuns) {
@@ -171,20 +195,22 @@ func run() error {
 		// size. Runs in its own goroutine so this initial beat never blocks
 		// startup on a control-plane POST.
 		beat := func() {
-			sink.emit(groundtruth.HeartbeatEventWithDropped(sink.droppedCount(), sink.observedCount(), mapper.droppedUnmappedCount(), sink.observedByKindSnapshot()))
+			sink.emit(heartbeatFor(*nodeName, sink.droppedCount(), sink.observedCount(), mapper.droppedUnmappedCount(), sink.observedByKindSnapshot()))
 		}
 		beat()
 		every(ctx, heartbeatIval, beat)
 	}()
-	go every(ctx, refreshIval, func() {
-		if err := corr.Refresh(ctx); err != nil {
-			slog.WarnContext(ctx, "wardyn-tetragon-ingest: container index refresh failed", slog.Any("err", err))
-		}
-	})
-	// Live container->run index off `docker events`: a snapshot alone cannot see
-	// a container that starts and exits between two polls, and its kernel events
-	// then correlate as unmapped (correlator.go's E1 finding).
-	go corr.Watch(ctx)
+	if corr != nil {
+		go every(ctx, refreshIval, func() {
+			if err := corr.Refresh(ctx); err != nil {
+				slog.WarnContext(ctx, "wardyn-tetragon-ingest: container index refresh failed", slog.Any("err", err))
+			}
+		})
+		// Live container->run index off `docker events`: a snapshot alone cannot see
+		// a container that starts and exits between two polls, and its kernel events
+		// then correlate as unmapped. The watch keeps the index current.
+		go corr.Watch(ctx)
+	}
 	go every(ctx, statsIval, func() {
 		slog.InfoContext(ctx, "wardyn-tetragon-ingest: stats",
 			slog.Uint64("posted", sink.postedCount()),

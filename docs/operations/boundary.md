@@ -28,8 +28,11 @@ A knob the boundary does not name is left as the layers below set it. `contact` 
 
 ## How it narrows
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="../img/nested-limits-dark.svg"><img src="../img/nested-limits.svg" alt="Nested limits, outermost first: the Wardyn boundary, deployment and unit profiles, restrictions, the run's policy, your walls and the wall preset, each only narrowing."></picture>
+
 - The boundary meets the result of the profile chain, the deployment default, a stored policy, an inline policy, an operator's own run and a Record Mode session. It only ever narrows.
 - A Record Mode session learns inside the boundary: its allow-all becomes the boundary's allowlist, the boundary's denies are added and its floor is raised. It is never a break-glass run.
+- Restrictions and the run's wall preset also only narrow it. The preset is met just after your walls. The policy record names each layer: `deployment`, `unit`, `restriction`, `member`, `operator` (a run no ceiling binds), `personal`, `wall_preset` and `boundary`.
 - A policy wider than the boundary is narrowed with a warning (`the Wardyn boundary narrowed <knob>`). A run is never refused for having been wider.
 - The run's policy record names the layer `boundary` for each knob the boundary decided.
 - At dispatch and revive the final seal meets the run's assembled egress with the boundary again, after every host a launch adds (workspace, clone, component, model and source-control hosts). A host outside its allowlist is cut and its denies are added. If the boundary cannot be read there, the run is sealed to no egress and no desktop direction.
@@ -78,3 +81,13 @@ The dry run calls the same function the resolve calls in `hard_limits`, so its r
 | --- | --- |
 | Runner placement, concurrent-run caps and door switches | Planned boundary knobs; not held by this document yet. |
 | A model credential the deployment holds, not a grant (a host-configured Bedrock key) | Withheld by its host only; `eligible_grants` cannot name it. |
+
+## No core dumps, no attaching
+
+On Linux, wardynd, wardyn-proxy and wardyn-runnerd hold credentials in memory, so each first sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0).
+
+- A crash writes no core file, and a `core_pattern` handler receives nothing.
+- A process of the same user cannot `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
+- This is intentional and not configurable.
+- On other platforms, such as `wardyn-runnerd` on macOS, the call does nothing and Wardyn applies no equivalent hardening.
+- Wardyn does not itself prevent core dumps or same-user debugger attachment there.

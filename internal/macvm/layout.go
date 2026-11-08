@@ -55,6 +55,10 @@ type Layout struct{ Root string }
 
 func (l Layout) BaseDir(slot int) string { return filepath.Join(l.Root, "bases", strconv.Itoa(slot)) }
 func (l Layout) CacheDir() string        { return filepath.Join(l.Root, "cache") }
+
+// AgentSigningDir holds this Mac's guest agent signing identity (AgentSigningIdentity): the helper reads it
+// to sign each guest agent build it pushes.
+func (l Layout) AgentSigningDir() string { return filepath.Join(l.Root, "agent-signing") }
 func (l Layout) RunsDir() string         { return filepath.Join(l.Root, "runs") }
 func (l Layout) RunDir(runID string) string {
 	return filepath.Join(l.RunsDir(), RunKey(runID))

@@ -143,6 +143,9 @@ var proxySidecarEnvKnobNames = []string{
 	"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
 	// The git broker's wait for a wait_for_review mint approval (docs/ENV.md).
 	"WARDYN_GIT_APPROVAL_TIMEOUT",
+	// The admin's opt-out from model token counting: off stops the proxy metering. A proxy older than
+	// the meter ignores it, so an older pinned proxy is never refused for it.
+	"WARDYN_MODEL_USAGE",
 }
 
 // ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the
@@ -232,6 +235,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		HarnessCredentials:   pc.HarnessCredentials,
 		MCPServers:           pc.MCPServers,
 		MCPBindings:          pc.MCPBindings,
+		MCPApproveEach:       pc.MCPApproveEach,
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
 	}

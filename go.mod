@@ -16,9 +16,10 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/containerd/errdefs v1.0.0
 	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/distribution/reference v0.6.0
 	github.com/go-chi/chi/v5 v5.5.0
-	github.com/go-jose/go-jose/v4 v4.1.6
+	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/certificate-transparency-go v1.4.0
 	github.com/google/go-cmp v0.7.0
@@ -78,7 +79,6 @@ require (
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
-	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
 	github.com/docker/go-connections v0.8.2 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect

@@ -148,6 +148,8 @@ func (it BaseItem) check() error {
 	switch {
 	case !guestagent.ItemNamePattern.MatchString(it.Name):
 		return errors.New("a name is lower-case letters, digits, '.', '_' and '-', at most 64")
+	case it.Name == guestagent.AgentSigningItem:
+		return fmt.Errorf("the name %q is Wardyn's own, for the guest agent's signing certificate", it.Name)
 	case !filepath.IsAbs(it.Path):
 		return errors.New("path must be an absolute path on this Mac")
 	case !sha256Hex.MatchString(it.SHA256):
@@ -304,6 +306,9 @@ type GuestPosture struct {
 	MDM string `json:"mdm,omitempty"`
 	// OrgCA is ItemTrusted when every ca item reads trusted, else ItemNotTrusted; empty with no ca item.
 	OrgCA string `json:"org_ca,omitempty"`
+	// FullDiskAccess is "allowed" or "refused" for the guest agent, as the agent read it; empty when that
+	// read did not say, or when the agent that read it was replaced by a build whose signature may differ.
+	FullDiskAccess string `json:"full_disk_access,omitempty"`
 }
 
 // GuestPosture values.
@@ -359,6 +364,13 @@ func readPosture(ctx context.Context, g ToolsGuest, items []ItemRecord) *GuestPo
 			}
 		}
 	}
+	if pg, ok := g.(interface {
+		Posture(ctx context.Context) (guestagent.ToolsPosture, error)
+	}); ok {
+		if tp, err := pg.Posture(ctx); err == nil && (tp.FullDiskAccess == "allowed" || tp.FullDiskAccess == "refused") {
+			p.FullDiskAccess = tp.FullDiskAccess
+		}
+	}
 	return p
 }
 
@@ -398,6 +410,9 @@ func ReadBackItems(ctx context.Context, g ToolsGuest, dir string) error {
 				return err
 			}
 		}
+	}
+	if rec.AgentSignature == AgentSignedThisMac {
+		rec.AgentSigningCert = verifyAgentCert(ctx, g)
 	}
 	rec.Guest = readPosture(ctx, g, rec.Items)
 	return writeJSONAtomic(filepath.Join(dir, ToolsRecordFile), rec, 0o600)
@@ -529,7 +544,7 @@ func removeRotatedCAs(ctx context.Context, g ToolsGuest, l BaseList, previous []
 	for _, r := range previous {
 		if r.Kind == ItemKindCA && r.SHA1 != "" && !pins[r.SHA256] {
 			if err := untrustCA(ctx, g, guestagent.ItemDir(r.Name)+"/"+guestagent.ItemCert, r.SHA1); err != nil {
-				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w; macOS 26 can refuse that without a person at the guest, and the base stays ready and still trusts the old CA: to drop it, run prepare --reprepare", r.Name, r.Fingerprint, err)
+				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w; macOS 26 can refuse that without a person at the guest, and the base stays ready and still trusts the old CA: to drop it, run wardyn-runnerd macos-vm prepare --new-image", r.Name, r.Fingerprint, err)
 			}
 		}
 		if !names[r.Name] && r.Kind != ItemKindFile {

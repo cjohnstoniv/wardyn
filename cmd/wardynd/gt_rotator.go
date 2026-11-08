@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,15 +22,37 @@ type gtMinter interface {
 	MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error)
 }
 
-// runGroundtruthTokenRotator keeps `path` populated with a FRESH host-sensor token
-// (aud=wardyn-groundtruth). The eBPF/Tetragon ingest sidecar re-reads that file on a
+// gtTokenWriter delivers one freshly minted sensor token: to the shared file on
+// Compose (fileTokenWriter) or into the named Secret on Kubernetes
+// (secretTokenWriter, gt_secret.go).
+type gtTokenWriter func(ctx context.Context, token string) error
+
+// fileTokenWriter writes the token to path atomically.
+func fileTokenWriter(path string) gtTokenWriter {
+	return func(_ context.Context, token string) error {
+		if err := writeTokenFileAtomic(path, token); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+		return nil
+	}
+}
+
+// gtRotateAfter is the rotator's wait, a seam so tests can see each delay.
+var gtRotateAfter = time.After
+
+// runGroundtruthTokenRotator keeps the sensor supplied with a FRESH host-sensor token
+// (aud=wardyn-groundtruth). The eBPF/Tetragon ingest re-reads its token file on a
 // 401, so with a live producer it recovers when its ~1h-TTL token expires instead of
 // going permanently blind — the static WARDYN_GROUNDTRUTH_TOKEN env deployment could
 // NOT refresh (a process env is fixed after exec), which is why the shipped stack went
-// blind ~1h into any run. A file on a shared volume is the only refreshable
-// wiring. Seeds immediately, then re-mints at ~half the remaining TTL (clamped
-// [1m,30m]) so a missed tick never leaves an expired token. Best-effort per tick.
-func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, path string) {
+// blind ~1h into any run. A file on a shared volume, or a Secret the sensor mounts,
+// is the only refreshable wiring. Seeds immediately, then re-mints at ~half the
+// remaining TTL (clamped [1m,30m]) so a missed tick never leaves an expired token.
+// A failed mint or write retries in 1m. Best-effort per tick.
+func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, write gtTokenWriter) {
+	// A write that keeps failing the same way (a Secret wardynd never creates and the chart left out) is
+	// logged on the first failure and again when the error changes or the write recovers, not every minute.
+	lastWriteErr := ""
 	for {
 		next := 30 * time.Minute
 		mctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -40,24 +63,33 @@ func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, path string) {
 			slog.ErrorContext(ctx, "wardynd: groundtruth token rotate: mint failed", slog.Any("err", err))
 			next = time.Minute // retry soon
 		default:
-			if werr := writeTokenFileAtomic(path, ri.Token); werr != nil {
-				slog.ErrorContext(ctx, "wardynd: groundtruth token rotate: write failed",
-					slog.String("path", path),
-					slog.Any("err", werr),
-				)
+			wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
+			werr := write(wctx, ri.Token)
+			wcancel()
+			if werr != nil {
+				if werr.Error() != lastWriteErr {
+					slog.ErrorContext(ctx, "wardynd: groundtruth token rotate: write failed (retrying every minute)", slog.Any("err", werr))
+				}
+				lastWriteErr = werr.Error()
 				next = time.Minute
-			} else if !ri.Expiry.IsZero() {
-				if half := time.Until(ri.Expiry) / 2; half < time.Minute {
-					next = time.Minute
-				} else if half < 30*time.Minute {
-					next = half
+			} else {
+				if lastWriteErr != "" {
+					slog.InfoContext(ctx, "wardynd: groundtruth token rotate: write recovered")
+					lastWriteErr = ""
+				}
+				if !ri.Expiry.IsZero() {
+					if half := time.Until(ri.Expiry) / 2; half < time.Minute {
+						next = time.Minute
+					} else if half < 30*time.Minute {
+						next = half
+					}
 				}
 			}
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(next):
+		case <-gtRotateAfter(next):
 		}
 	}
 }
@@ -70,10 +102,10 @@ func runGroundtruthTokenRotator(ctx context.Context, m gtMinter, path string) {
 const groundtruthRotatorLockBackoff = 30 * time.Second
 
 // runGroundtruthTokenRotatorLeader gates runGroundtruthTokenRotator behind a
-// cluster-wide leader election (S2). `path` lives on a volume SHARED across
-// every wardynd replica (see deploy/compose's `groundtruth_token` volume), so
-// every replica running the rotator unconditionally would all rewrite the
-// same file — harmless (tokens are stateless ES256 JWT-SVIDs, so the damage
+// cluster-wide leader election (S2). The token file lives on a volume SHARED
+// across every wardynd replica (see deploy/compose's `groundtruth_token`
+// volume), and the Secret is one object too, so every replica running the
+// rotator unconditionally would all rewrite the same target — harmless (tokens are stateless ES256 JWT-SVIDs, so the damage
 // is file thrash and duplicate mints, not invalidation) but wasteful. Only
 // the lock holder mints/writes; every other replica parks on
 // groundtruthRotatorLockBackoff and retries, taking over automatically once
@@ -100,7 +132,7 @@ const groundtruthRotatorLockBackoff = 30 * time.Second
 // the reaper's TickLock (try/release every tick), this acquires ONCE and holds
 // its own connection, outside the pool, for the process lifetime — the
 // accepted cost of acquire-once.
-func runGroundtruthTokenRotatorLeader(ctx context.Context, tryLock func(context.Context) (release func(), ok bool, err error), m gtMinter, path string) {
+func runGroundtruthTokenRotatorLeader(ctx context.Context, tryLock func(context.Context) (release func(), ok bool, err error), m gtMinter, write gtTokenWriter) {
 	// Non-leader outcomes are logged on TRANSITION only: this loop retries every
 	// 30s forever, so an unconditional line is 2,880/day/replica in the ordinary
 	// standby steady state and the same again per replica during a Postgres
@@ -119,7 +151,7 @@ func runGroundtruthTokenRotatorLeader(ctx context.Context, tryLock func(context.
 			}
 		case ok:
 			slog.InfoContext(ctx, "wardynd: groundtruth rotator: acquired leader lock")
-			runGroundtruthTokenRotator(ctx, m, path)
+			runGroundtruthTokenRotator(ctx, m, write)
 			release()
 			return
 		default:

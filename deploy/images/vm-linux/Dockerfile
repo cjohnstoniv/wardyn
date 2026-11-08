@@ -8,7 +8,7 @@
 # the agent user (uid 1000, home /home/agent), and /usr/lib/openssh/sftp-server for folder syncs.
 # No swap and no zram (#2972): the guest agent refuses to initialise a guest with any swap on, because
 # the desktop's sign-in store (keychain and browser profiles) is a tmpfs that must stay in memory.
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS builder
 WORKDIR /build
 ENV GOTOOLCHAIN=local
 ARG GOPROXY=

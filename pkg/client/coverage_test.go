@@ -116,13 +116,13 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "GetRunAllowedModels", "GetRunWallPreset", "RunContainment", "RecordRunNode", "OpenMacWindow", "GetMacWindow", "GetRunMachine"},
+		"runs":        {"CreateRun", "CreateRunWith", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "GetRunAllowedModels", "GetRunWallPreset", "RunContainment", "RecordRunNode", "OpenMacWindow", "GetMacWindow", "GetRunMachine"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace", "SetWorkspaceOwningUnit"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
-		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
+		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition", "AuditReceipt", "AuditCheckpoints", "AuditReceiptKeys"},
 		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
 		"drives":      {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
@@ -142,7 +142,7 @@ func routeFamilies() map[string][]string {
 		"people":          {"ListPeople", "ErasePerson"},
 		"invitations":     {"CreateInvitation", "ListInvitations", "ListPersonInvitations", "ListPersonInvitationsPage", "ListMyInvitations", "RevokeInvitation", "ClaimInvitation"},
 		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken", "CreateAPIToken", "RevokeAPIToken"},
-		"workloads":       {"ApplyWorkload", "ListWorkloads", "ListWorkloadsPage", "GetWorkload", "WorkloadHistory", "DeleteWorkload", "RestartWorkload", "CreateWorkloadBinding", "ListWorkloadBindings", "ListWorkloadBindingsPage", "DeleteWorkloadBinding"},
+		"workloads":       {"ApplyWorkload", "PreviewWorkload", "ListWorkloads", "ListWorkloadsPage", "GetWorkload", "WorkloadHistory", "DeleteWorkload", "RestartWorkload", "CreateWorkloadBinding", "ListWorkloadBindings", "ListWorkloadBindingsPage", "DeleteWorkloadBinding"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
 		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "ListMyRunnersPage", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeMyRunner", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust"},
 		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsPage", "ListRunnerPoolsFor", "ListMyRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "OwnRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "AddRunnerPoolRunner", "RemoveRunnerPoolRunner", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults", "AddRunnerPoolRemoteRunner", "RemoveRunnerPoolRemoteRunner", "AddMyPoolRemoteRunner", "RemoveMyPoolRemoteRunner", "ListRunnerPoolMembers", "GetRunnerPoolUsePolicy", "SetRunnerPoolUsePolicy", "ClearRunnerPoolUsePolicy"},

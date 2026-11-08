@@ -384,6 +384,13 @@ type Config struct {
 	// servers turned on for it. Digests only: the token is in that harness's
 	// configuration, never here.
 	MCPBindings []MCPBinding `json:"mcp_bindings,omitempty"`
+	// MCPApproveEach is set exactly when a dispatched tool rule is approve_each; see
+	// MCPApproveEachConfig. An older proxy refuses the key, so the run does not start on it.
+	MCPApproveEach *MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
+	// DisableModelUsage turns off the per-call model-token meter, which is on by
+	// default with nothing in the config. Only an admin's opt-out sets it, so a
+	// default config still loads on an older proxy, which refuses this key.
+	DisableModelUsage bool `json:"disable_model_usage,omitempty"`
 }
 
 // MCPServerConfig is one remote MCP server on the broker route.
@@ -504,6 +511,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	}
 	if err := types.ValidateHarnessCredentials(c.HarnessCredentials); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := c.checkMCPApproveEach(); err != nil {
+		return nil, err
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err

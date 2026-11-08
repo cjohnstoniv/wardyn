@@ -303,6 +303,20 @@ func TestBuildProxyConfig_GatewayIdentity(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_MCPApproveEach: the approve_each marker reaches the sidecar's config with
+// its windows, and a run without one names no key (an older proxy refuses the key).
+func TestBuildProxyConfig_MCPApproveEach(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		MCPApproveEach: &proxy.MCPApproveEachConfig{Windows: map[string]int{"codex-cli": 45}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"mcp_approve_each":{"windows":{"codex-cli":45}}`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the marker under mcp_approve_each", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "mcp_approve_each") {
+		t.Fatalf("a run with no approve_each rule names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_Attribution: the attribution round-trips through the
 // sidecar's own strict decoder, and an absent one leaves no key behind.
 func TestBuildProxyConfig_Attribution(t *testing.T) {

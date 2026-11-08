@@ -55,7 +55,7 @@ func (s *gapCovDelegateStore) CreateDelegate(context.Context, types.Delegate, st
 func (s *gapCovDelegateStore) ListDelegates(context.Context) ([]types.Delegate, error) {
 	panic("ListDelegates is not part of the exchange")
 }
-func (s *gapCovDelegateStore) RevokeDelegate(context.Context, uuid.UUID, time.Time) (types.Delegate, error) {
+func (s *gapCovDelegateStore) RevokeDelegate(context.Context, uuid.UUID, time.Time, bool) (types.Delegate, int, error) {
 	panic("RevokeDelegate is not part of the exchange")
 }
 func (s *gapCovDelegateStore) GetDelegatedTokenByRaw(context.Context, string, time.Time) (types.DelegatedToken, error) {
@@ -174,7 +174,6 @@ func TestGapCovTokenExchangeFormRefusals(t *testing.T) {
 		wantCode string
 	}{
 		{"another grant type", gapCovForm(url.Values{"grant_type": {"client_credentials"}}), "unsupported_grant_type"},
-		{"an actor token", gapCovForm(url.Values{"actor_token": {"x"}}), "invalid_request"},
 		{"another requested token type", gapCovForm(url.Values{"requested_token_type": {tokenTypeIDToken}}), "invalid_request"},
 		{"no subject token", gapCovForm(url.Values{"subject_token": {""}}), "invalid_request"},
 		{"an unknown subject token type", gapCovForm(url.Values{"subject_token_type": {"urn:example:other"}}), "invalid_request"},

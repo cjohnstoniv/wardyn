@@ -44,6 +44,8 @@ import { ADO } from "../../lib/ado-entra-copy";
 import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { PUSH } from "../wardyn/copy/push";
+import { APPROVAL_MCP_CALL } from "../wardyn/copy/approvals";
+import { escapeUnsafeRunes } from "../../lib/escape-runes";
 import {
   APPROVAL_KIND_LABEL,
   CAPABILITY,
@@ -137,6 +139,10 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope, signIn?: string): 
       return "Mint a scoped credential";
     }
     case "tool_call": {
+      // One MCP call (call_sha256 and a server): the list names the tool and the server it was for.
+      if (str(scope, "call_sha256") && str(scope, "mcp_server")) {
+        return APPROVAL_MCP_CALL.LIST_TITLE(escapeUnsafeRunes(str(scope, "tool") ?? ""), escapeUnsafeRunes(str(scope, "mcp_server") ?? ""));
+      }
       const cmd = str(scope, "cmd", "command", "tool");
       return cmd ? `Run ${cmd}` : "Run a tool call";
     }

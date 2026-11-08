@@ -35,5 +35,18 @@ func (s *Server) eraseTokenHistory(ctx context.Context, person string, want *era
 		return err
 	}
 	data["pats_deleted"], data["delegated_deleted"], data["live_left"] = pats, delegated, live
+	// The POST /runs Idempotency-Keys kept for them, direct or through a portal: a kept answer names their run.
+	if ks, ok := s.cfg.Store.(runCreateKeyEraser); ok {
+		keys, err := ks.DeleteRunCreateKeysOf(ctx, namespaces)
+		if err != nil {
+			return err
+		}
+		data["run_create_keys_deleted"] = keys
+	}
 	return nil
+}
+
+// runCreateKeyEraser is the store that keeps POST /runs Idempotency-Keys (store.RunCreateKeyStore).
+type runCreateKeyEraser interface {
+	DeleteRunCreateKeysOf(ctx context.Context, principals []string) (int64, error)
 }

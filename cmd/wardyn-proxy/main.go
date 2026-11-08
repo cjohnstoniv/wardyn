@@ -130,6 +130,9 @@ func main() {
 	if code := applyLLMScanSwitch(cfg, os.Getenv("WARDYN_LLM_SCAN")); code != 0 {
 		os.Exit(code)
 	}
+	if code := applyModelUsageSwitch(cfg, os.Getenv("WARDYN_MODEL_USAGE")); code != 0 {
+		os.Exit(code)
+	}
 
 	// Tell the Go runtime about the sidecar's cgroup ceiling BEFORE any request
 	// is served — see applyCgroupMemoryLimit.

@@ -11,7 +11,7 @@ import { Plus, Trash2, X } from "lucide-react";
 import { type PersonalWallsSpec, type WithheldGrant } from "../../../lib/api/walls";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS } from "../../../lib/ado-capabilities";
 import { adoCapName, adoGroupName } from "../../../lib/ado-access-copy";
-import { CC_ORDER, toolRulesProblem, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
+import { APPROVE_EACH_REASON, CC_ORDER, canApproveEach, toolRulesProblem, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
 import { idleDisplay, isRead, type FormSection } from "../../../lib/wall-preset-words";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -39,7 +39,7 @@ const UNLISTED: { value: FirstUseMode | ""; label: string }[] = [
 ];
 
 export type IdleUnit = "seconds" | "minutes";
-export type WallToolEffect = "hold" | "deny";
+export type WallToolEffect = "hold" | "approve_each" | "deny";
 
 /**
  * A tool rule or a path as a row. `fresh` is a row added in this edit and not yet typed into: Save drops it when it is
@@ -79,9 +79,12 @@ export interface Form {
   /** github_capabilities: a present list (Only these capabilities) and what is checked. */
   githubOnly: boolean;
   github: string[];
+  /** The github_capabilities list as loaded, so a save that does not change the set keeps its stored order. */
+  githubLoaded: string[];
   /** azure_devops_capabilities, the same. */
   adoOnly: boolean;
   ado: string[];
+  adoLoaded: string[];
   tools: ToolRow[];
   /** push_rules.deny_paths. */
   paths: PathRow[];
@@ -109,9 +112,11 @@ export function toForm(s: PersonalWallsSpec): Form {
     denyAll: s.push_rules?.deny_all === true,
     githubOnly: s.github_capabilities !== undefined,
     github: s.github_capabilities ?? [],
+    githubLoaded: s.github_capabilities ?? [],
     adoOnly: s.azure_devops_capabilities !== undefined,
     ado: s.azure_devops_capabilities ?? [],
-    tools: (s.tool_rules ?? []).map((r) => newToolRow(r.tool, r.effect === "deny" ? "deny" : "hold", false)),
+    adoLoaded: s.azure_devops_capabilities ?? [],
+    tools: (s.tool_rules ?? []).map((r) => newToolRow(r.tool, r.effect === "deny" || r.effect === "approve_each" ? r.effect : "hold", false)),
     paths: (s.push_rules?.deny_paths ?? []).map((p) => newPathRow(p, false)),
     recording: s.recording === "terminal" || s.recording === "screen_actions" ? s.recording : undefined,
     idleOn: s.auto_stop_after_sec !== undefined,
@@ -174,7 +179,11 @@ export const withText = (list: string[], text: string): string[] => {
   return site && !list.includes(site) ? [...list, site] : list;
 };
 
-const inCatalogue = (order: readonly string[], picked: string[]) => order.filter((c) => picked.includes(c));
+// The stored list as it was stored while the picked set is the same set; a changed selection takes the catalogue's order.
+const capabilityList = (order: readonly string[], picked: string[], loaded: string[]) => {
+  const same = new Set(picked).size === new Set(loaded).size && picked.every((c) => loaded.includes(c));
+  return same ? [...loaded] : order.filter((c) => picked.includes(c));
+};
 
 export function toSpec(f: Form): PersonalWallsSpec {
   const spec: PersonalWallsSpec = {};
@@ -187,8 +196,8 @@ export function toSpec(f: Form): PersonalWallsSpec {
   const blocked = DIRECTIONS.filter((d) => f.blocked[d.id]);
   if (blocked.length > 0) spec.desktop = Object.fromEntries(blocked.map((d) => [d.id, "blocked" as const]));
   if (f.withheld.length > 0) spec.withheld_grants = f.withheld;
-  if (f.githubOnly) spec.github_capabilities = inCatalogue(GITHUB_CAPABILITIES, f.github);
-  if (f.adoOnly) spec.azure_devops_capabilities = inCatalogue(ADO_CAPABILITIES.map((c) => c.cap), f.ado);
+  if (f.githubOnly) spec.github_capabilities = capabilityList(GITHUB_CAPABILITIES, f.github, f.githubLoaded);
+  if (f.adoOnly) spec.azure_devops_capabilities = capabilityList(ADO_CAPABILITIES.map((c) => c.cap), f.ado, f.adoLoaded);
   // A row added in this edit and left blank is dropped; one that held text and was cleared blocks Save (formBlocked).
   const tools = f.tools.filter((r) => !(r.fresh && r.tool.trim() === ""));
   if (tools.length > 0) spec.tool_rules = tools.map((r) => ({ tool: r.tool, effect: r.effect }));
@@ -201,7 +210,7 @@ export function toSpec(f: Form): PersonalWallsSpec {
 }
 
 /** The sites of one list: a chip for each, and the field a new one is typed into (Enter or a comma enters it). */
-function SiteList({ label, sites, text, onSites, onText }: { label: string; sites: string[]; text: string; onSites: (s: string[]) => void; onText: (t: string) => void }) {
+function SiteList({ label, sites, text, onSites, onText, errorId }: { label: string; sites: string[]; text: string; onSites: (s: string[]) => void; onText: (t: string) => void; errorId?: string }) {
   const enter = () => {
     onSites(withText(sites, text));
     onText("");
@@ -219,6 +228,8 @@ function SiteList({ label, sites, text, onSites, onText }: { label: string; site
       ))}
       <Input
         aria-label={label}
+        aria-describedby={errorId}
+        aria-invalid={errorId ? true : undefined}
         value={text}
         placeholder={T.ADD_SITE}
         className="h-8 w-44 font-mono text-xs"
@@ -238,11 +249,16 @@ function SiteList({ label, sites, text, onSites, onText }: { label: string; site
 export const KIND_OPTIONS = Object.keys(T.KINDS);
 export const LABEL = "text-sm font-medium text-foreground";
 
-const SectionError = ({ text }: { text: string }) => (
-  <p role="alert" className="text-xs text-danger">
+// An error is tied to the input or group it describes by its id (aria-describedby there); the ids come from useId,
+// so two forms on one page never share one.
+const SectionError = ({ id, text }: { id: string; text: string }) => (
+  <p id={id} role="alert" className="text-xs text-danger">
     {text}
   </p>
 );
+
+/** The aria-describedby value for the error ids that are showing, or nothing. */
+const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boolean).join(" ") || undefined;
 
 interface CapGroup {
   name: string;
@@ -284,8 +300,15 @@ function CapabilityList({ id, title, forge, pushName, groups, only, picked, onCh
         <span className={LABEL}>{title}</span>
         {only && <span className="text-xs text-muted-foreground">{T.CAPS_COUNT(all.filter((c) => picked.includes(c)).length, all.length)}</span>}
       </div>
-      {serverError && <SectionError text={serverError} />}
-      <RadioGroup className="gap-2" aria-label={title} value={only ? "only" : "none"} onValueChange={(v) => onChange(v === "only", picked)}>
+      {serverError && <SectionError id={`${uid}-server`} text={serverError} />}
+      <RadioGroup
+        className="gap-2"
+        aria-label={title}
+        aria-describedby={describedBy(serverError && `${uid}-server`, only && problem && `${uid}-problem`)}
+        aria-invalid={serverError || (only && problem) ? true : undefined}
+        value={only ? "only" : "none"}
+        onValueChange={(v) => onChange(v === "only", picked)}
+      >
         <label className="flex items-center gap-2 text-sm">
           <RadioGroupItem value="none" />
           {T.LIMIT_NONE}
@@ -322,7 +345,7 @@ function CapabilityList({ id, title, forge, pushName, groups, only, picked, onCh
               </ul>
             </fieldset>
           ))}
-          {problem && <SectionError text={problem} />}
+          {problem && <SectionError id={`${uid}-problem`} text={problem} />}
           {!picked.includes("code_write") && (
             <>
               <p className="text-xs text-warning">{T.CAPS_NO_PUSH(pushName, forge)}</p>
@@ -335,15 +358,16 @@ function CapabilityList({ id, title, forge, pushName, groups, only, picked, onCh
   );
 }
 const RULE_ROW = "grid grid-cols-[minmax(0,1fr)_9rem_2rem] items-center gap-2 max-[399px]:grid-cols-[minmax(0,1fr)_2rem]";
-const EFFECT_TONE: Record<WallToolEffect, string> = { hold: "text-warning", deny: "text-danger" };
+const EFFECT_TONE: Record<WallToolEffect, string> = { hold: "text-warning", approve_each: "text-warning", deny: "text-danger" };
 
-/** Tool rules: a tool and what to do with it, hold or deny. No default row: `*` is a rule like any other. */
+/** Tool rules: a tool and what to do with it: hold, approve each call, or deny. No default row: `*` is a rule like any other. */
 function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem: ReturnType<typeof formProblems> }) {
+  const uid = React.useId();
   const patch = (id: number, p: Partial<ToolRow>) => edit({ tools: form.tools.map((r) => (r.id === id ? { ...r, ...p } : r)) });
   return (
-    <div className="flex flex-col gap-2" data-testid="walls-tool-rules">
+    <div className="flex flex-col gap-2" role="group" aria-label={T.TOOLS} aria-describedby={describedBy(serverError && `${uid}-server`, problem.tools && `${uid}-problem`)} data-testid="walls-tool-rules">
       <span className={LABEL}>{T.TOOLS}</span>
-      {serverError && <SectionError text={serverError} />}
+      {serverError && <SectionError id={`${uid}-server`} text={serverError} />}
       <p className="text-xs text-muted-foreground">{T.TOOLS_HELP}</p>
       {form.tools.length === 0 ? (
         <p className="text-xs italic text-muted-foreground">{T.TOOLS_NONE}</p>
@@ -363,6 +387,7 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                   <Input
                     aria-label={T.TOOLS_TOOL_N(i + 1)}
                     aria-invalid={invalid || undefined}
+                    aria-describedby={describedBy(blank && `${uid}-blank-${r.id}`, !blank && invalid && problem.tools && `${uid}-problem`)}
                     value={r.tool}
                     spellCheck={false}
                     placeholder={T.TOOLS_PLACEHOLDER}
@@ -372,11 +397,12 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                   <select
                     aria-label={T.TOOLS_EFFECT_N(i + 1)}
                     value={r.effect}
+                    aria-describedby={canApproveEach(r.tool) ? undefined : `${uid}-ae-${r.id}`}
                     onChange={(e) => patch(r.id, { effect: e.target.value as WallToolEffect })}
                     className={cn("h-8 w-full rounded-md border border-input bg-input-background px-2 font-mono text-sm font-medium", EFFECT_TONE[r.effect])}
                   >
-                    {(["hold", "deny"] as const).map((e) => (
-                      <option key={e} value={e} className="text-foreground">
+                    {(["hold", "approve_each", "deny"] as const).map((e) => (
+                      <option key={e} value={e} disabled={e === "approve_each" && !canApproveEach(r.tool)} className="text-foreground">
                         {e}
                       </option>
                     ))}
@@ -385,14 +411,19 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                     <Trash2 className="size-4" aria-hidden="true" />
                   </Button>
                 </div>
-                {blank && <SectionError text={T.TOOLS_BLANK} />}
+                {blank && <SectionError id={`${uid}-blank-${r.id}`} text={T.TOOLS_BLANK} />}
+                {!canApproveEach(r.tool) && (
+                  <p id={`${uid}-ae-${r.id}`} className="mt-1 text-xs text-muted-foreground">
+                    <span className="font-mono text-foreground">approve_each</span> is greyed: {APPROVE_EACH_REASON}
+                  </p>
+                )}
               </div>
             );
           })}
         </div>
       )}
       <p className="text-xs text-muted-foreground">{T.TOOLS_STAR_HINT}</p>
-      {problem.tools && <SectionError text={problem.tools} />}
+      {problem.tools && <SectionError id={`${uid}-problem`} text={problem.tools} />}
       <div>
         <Button type="button" variant="ghost" size="sm" className="px-1" onClick={() => edit({ tools: [...form.tools, newToolRow("", "hold", true)] })}>
           <Plus className="size-4" aria-hidden="true" /> {T.TOOLS_ADD}
@@ -404,12 +435,13 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
 
 /** Pushes: Refuse every push, and the paths never pushed under it. The paths stay editable, dimmed, while the switch is on. */
 function PushRules({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem: ReturnType<typeof formProblems> }) {
+  const uid = React.useId();
   const patch = (id: number, path: string) => edit({ paths: form.paths.map((r) => (r.id === id ? { ...r, path, fresh: false } : r)) });
   const listed = form.paths.some((r) => r.path.trim() !== "");
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2" role="group" aria-label={T.PUSHES} aria-describedby={describedBy(serverError && `${uid}-server`)}>
       <span className={LABEL}>{T.PUSHES}</span>
-      {serverError && <SectionError text={serverError} />}
+      {serverError && <SectionError id={`${uid}-server`} text={serverError} />}
       <label className="flex items-start gap-2 text-sm">
         <Switch checked={form.denyAll} onChange={(denyAll) => edit({ denyAll })} label={T.REFUSE_PUSH} className="mt-0.5" />
         <span className="flex flex-col gap-0.5">
@@ -429,6 +461,7 @@ function PushRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                 <Input
                   aria-label={T.PATHS_PATH_N(i + 1)}
                   aria-invalid={problem.blankPaths.has(r.id) || undefined}
+                  aria-describedby={describedBy(problem.blankPaths.has(r.id) && `${uid}-blank-${r.id}`)}
                   value={r.path}
                   spellCheck={false}
                   className="h-8 flex-1 font-mono text-sm"
@@ -438,7 +471,7 @@ function PushRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
                   <Trash2 className="size-4" aria-hidden="true" />
                 </Button>
               </div>
-              {problem.blankPaths.has(r.id) && <SectionError text={T.PATHS_BLANK} />}
+              {problem.blankPaths.has(r.id) && <SectionError id={`${uid}-blank-${r.id}`} text={T.PATHS_BLANK} />}
             </div>
           ))}
           <div>
@@ -459,12 +492,13 @@ const RECORDING_CHOICES = RECORDING_LEVEL.LEVELS.filter((l) => l.value !== "off"
 
 /** Record at least: a floor, never a way to record less. */
 function RecordingFloor({ form, edit, serverError }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string }) {
+  const uid = React.useId();
   const chosen = RECORDING_CHOICES.find((l) => l.value === form.recording);
   return (
     <div className="flex flex-col gap-2">
       <span className={LABEL}>{T.RECORDING}</span>
-      {serverError && <SectionError text={serverError} />}
-      <RadioGroup className="flex flex-wrap gap-x-4 gap-y-2" aria-label={T.RECORDING} value={form.recording ?? "none"} onValueChange={(v) => edit({ recording: v === "none" ? undefined : (v as Form["recording"]) })}>
+      {serverError && <SectionError id={`${uid}-server`} text={serverError} />}
+      <RadioGroup className="flex flex-wrap gap-x-4 gap-y-2" aria-label={T.RECORDING} aria-describedby={describedBy(serverError && `${uid}-server`)} aria-invalid={serverError ? true : undefined} value={form.recording ?? "none"} onValueChange={(v) => edit({ recording: v === "none" ? undefined : (v as Form["recording"]) })}>
         <label className="flex items-center gap-2 text-sm">
           <RadioGroupItem value="none" />
           {T.RECORDING_NONE}
@@ -483,11 +517,13 @@ function RecordingFloor({ form, edit, serverError }: { form: Form; edit: (patch:
 
 /** Stop when idle: No limit, or a whole number of seconds or minutes. A stored value shows exactly as it is stored. */
 function IdleStop({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem?: string }) {
+  const uid = React.useId();
+  const problemShown = form.idleOn && !!problem;
   return (
     <div className="flex flex-col gap-2">
       <span className={LABEL}>{T.IDLE}</span>
-      {serverError && <SectionError text={serverError} />}
-      <RadioGroup className="gap-2" aria-label={T.IDLE} value={form.idleOn ? "after" : "none"} onValueChange={(v) => edit({ idleOn: v === "after" })}>
+      {serverError && <SectionError id={`${uid}-server`} text={serverError} />}
+      <RadioGroup className="gap-2" aria-label={T.IDLE} aria-describedby={describedBy(serverError && `${uid}-server`)} aria-invalid={serverError ? true : undefined} value={form.idleOn ? "after" : "none"} onValueChange={(v) => edit({ idleOn: v === "after" })}>
         <label className="flex items-center gap-2 text-sm">
           <RadioGroupItem value="none" />
           {T.LIMIT_NONE}
@@ -499,7 +535,8 @@ function IdleStop({ form, edit, serverError, problem }: { form: Form; edit: (pat
           </label>
           <Input
             aria-label={T.IDLE_NUMBER}
-            aria-invalid={(form.idleOn && !!problem) || undefined}
+            aria-invalid={problemShown || undefined}
+            aria-describedby={describedBy(problemShown && `${uid}-problem`)}
             inputMode="numeric"
             value={form.idleText}
             disabled={!form.idleOn}
@@ -519,7 +556,7 @@ function IdleStop({ form, edit, serverError, problem }: { form: Form; edit: (pat
           <span>{T.IDLE_SUFFIX}</span>
         </div>
       </RadioGroup>
-      {form.idleOn && problem && <SectionError text={problem} />}
+      {problemShown && <SectionError id={`${uid}-problem`} text={problem} />}
       <p className="text-xs text-muted-foreground">{T.IDLE_HELP}</p>
     </div>
   );
@@ -531,6 +568,9 @@ function IdleStop({ form, edit, serverError, problem }: { form: Form; edit: (pat
  */
 export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: (patch: Partial<Form>) => void; errors?: Partial<Record<FormSection, string>> }) {
   const problem = formProblems(form);
+  // Two forms can be on the page at once (Your walls and a preset dialog): the error ids are this form's own.
+  const uid = React.useId();
+  const eid = (section: FormSection) => `${uid}-${section}`;
   // The unlisted-sites choice was filled in by picking "Only these sites", not chosen by the person.
   const [autoFirstUse, setAutoFirstUse] = React.useState(false);
   const unnamed = KIND_OPTIONS.filter((k) => !form.withheld.some((g) => g.kind === k));
@@ -538,10 +578,12 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
     <div className="flex flex-col gap-[18px]">
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.SITES}</span>
-        {errors?.sites && <SectionError text={errors.sites} />}
+        {errors?.sites && <SectionError id={eid("sites")} text={errors.sites} />}
         <RadioGroup
           className="gap-2"
           aria-label={T.SITES}
+          aria-describedby={describedBy(errors?.sites && eid("sites"))}
+          aria-invalid={errors?.sites ? true : undefined}
           value={form.only ? "only" : "any"}
           // The unlisted sites of a list are refused unless the person chose otherwise.
           onValueChange={(v) => {
@@ -565,33 +607,35 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
         </RadioGroup>
         {form.only && (
           <div className="flex flex-col gap-1.5 pl-6">
-            <SiteList label={T.SITES_ONLY} sites={form.allowed} text={form.allowedText} onSites={(allowed) => edit({ allowed })} onText={(allowedText) => edit({ allowedText })} />
+            <SiteList errorId={errors?.sites ? eid("sites") : undefined} label={T.SITES_ONLY} sites={form.allowed} text={form.allowedText} onSites={(allowed) => edit({ allowed })} onText={(allowedText) => edit({ allowedText })} />
             <p className="text-xs text-muted-foreground">{T.SITES_ONLY_HINT}</p>
           </div>
         )}
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.NEVER}</span>
-        {errors?.never && <SectionError text={errors.never} />}
-        <SiteList label={T.NEVER} sites={form.denied} text={form.deniedText} onSites={(denied) => edit({ denied })} onText={(deniedText) => edit({ deniedText })} />
+        {errors?.never && <SectionError id={eid("never")} text={errors.never} />}
+        <SiteList errorId={errors?.never ? eid("never") : undefined} label={T.NEVER} sites={form.denied} text={form.deniedText} onSites={(denied) => edit({ denied })} onText={(deniedText) => edit({ deniedText })} />
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.UNLISTED}</span>
-        {errors?.unlisted && <SectionError text={errors.unlisted} />}
-        <Segmented<FirstUseMode | "">
-          stackOnPhone
-          value={form.firstUse ?? ""}
-          options={UNLISTED}
-          onChange={(v) => {
-            setAutoFirstUse(false);
-            edit({ firstUse: v || undefined });
-          }}
-        />
+        {errors?.unlisted && <SectionError id={eid("unlisted")} text={errors.unlisted} />}
+        <div role="group" aria-label={T.UNLISTED} aria-describedby={describedBy(errors?.unlisted && eid("unlisted"))}>
+          <Segmented<FirstUseMode | "">
+            stackOnPhone
+            value={form.firstUse ?? ""}
+            options={UNLISTED}
+            onChange={(v) => {
+              setAutoFirstUse(false);
+              edit({ firstUse: v || undefined });
+            }}
+          />
+        </div>
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.BARRIER}</span>
-        {errors?.barrier && <SectionError text={errors.barrier} />}
-        <RadioGroup className="flex flex-wrap gap-4" aria-label={T.BARRIER} value={form.floor ?? "none"} onValueChange={(v) => edit({ floor: v === "none" ? undefined : (v as ConfinementClass) })}>
+        {errors?.barrier && <SectionError id={eid("barrier")} text={errors.barrier} />}
+        <RadioGroup className="flex flex-wrap gap-4" aria-label={T.BARRIER} aria-describedby={describedBy(errors?.barrier && eid("barrier"))} aria-invalid={errors?.barrier ? true : undefined} value={form.floor ?? "none"} onValueChange={(v) => edit({ floor: v === "none" ? undefined : (v as ConfinementClass) })}>
           <label className="flex items-center gap-2 text-sm">
             <RadioGroupItem value="none" />
             {T.BARRIER_NONE}
@@ -607,8 +651,8 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.CLIPBOARD}</span>
         <p className="text-xs text-muted-foreground">{T.CLIPBOARD_HINT}</p>
-        {errors?.clipboard && <SectionError text={errors.clipboard} />}
-        <div className="flex flex-wrap gap-x-5 gap-y-2">
+        {errors?.clipboard && <SectionError id={eid("clipboard")} text={errors.clipboard} />}
+        <div className="flex flex-wrap gap-x-5 gap-y-2" role="group" aria-label={T.CLIPBOARD} aria-describedby={describedBy(errors?.clipboard && eid("clipboard"))}>
           {DIRECTIONS.map((d) => (
             <label key={d.id} className="flex items-center gap-2 text-sm">
               <Checkbox checked={form.blocked[d.id]} onCheckedChange={(on) => edit({ blocked: { ...form.blocked, [d.id]: on === true } })} />
@@ -619,8 +663,8 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.CREDENTIALS}</span>
-        {errors?.credentials && <SectionError text={errors.credentials} />}
-        <div className="flex flex-wrap items-center gap-1.5">
+        {errors?.credentials && <SectionError id={eid("credentials")} text={errors.credentials} />}
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={T.CREDENTIALS} aria-describedby={describedBy(errors?.credentials && eid("credentials"))}>
           {form.withheld.map((g, i) => (
             <Chip key={`${g.kind}${i}`} className="gap-1">
               {T.KINDS[g.kind] ?? g.kind}

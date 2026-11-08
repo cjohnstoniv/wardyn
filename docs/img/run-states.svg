@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 604" width="1220" height="604" role="img" aria-labelledby="title desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">Run states</title>
+  <desc id="desc">A run starts PENDING, or QUEUED when its runner pool is at its cap, then STARTING and RUNNING. It ends COMPLETED, FAILED, STOPPED or KILLED; a kill switch ends it from any live state.</desc>
+  <style>
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .zone { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; }
+    .card { fill: #ffffff; stroke: #59636e; stroke-width: 1.5; }
+    .sand { fill: #e6f5f2; stroke: #0f8a7e; stroke-width: 2; stroke-dasharray: 8 5; }
+    .ok { fill: #e6f5f2; stroke: #0f8a7e; stroke-width: 2; }
+    .held { fill: #fff8c5; stroke: #9a6700; stroke-width: 2; }
+    .deny { fill: #ffffff; stroke: #cf222e; stroke-width: 1.5; }
+    .outline { fill: none; stroke: #59636e; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .frame { fill: none; stroke: #59636e; stroke-width: 1.5; }
+    .tab { fill: #f6f8fa; stroke: #59636e; stroke-width: 1.5; }
+    .halo { paint-order: stroke; stroke: #ffffff; stroke-width: 5px; stroke-linejoin: round; }
+    .dot { fill: #59636e; }
+    .pill { fill: #0b766b; stroke: none; }
+    .pt { fill: #ffffff; }
+    .t { fill: #1f2328; }
+    .m { fill: #59636e; }
+    .a { fill: #0b766b; }
+    .r { fill: #cf222e; }
+    .h { fill: #9a6700; }
+    .ln { fill: none; stroke: #59636e; stroke-width: 2; }
+    .lt { fill: none; stroke: #0f8a7e; stroke-width: 2.5; }
+    .lr { fill: none; stroke: #cf222e; stroke-width: 2; }
+    .lh { fill: none; stroke: #9a6700; stroke-width: 2; }
+    .life { fill: none; stroke: #d0d7de; stroke-width: 1.5; stroke-dasharray: 4 4; }
+    .edge { fill: none; stroke: #59636e; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .dash { stroke-dasharray: 6 4; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+  </style>
+  <defs><marker id="h-ln" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#59636e"/></marker><marker id="h-lt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f8a7e"/></marker><marker id="h-lr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#cf222e"/></marker><marker id="h-lh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9a6700"/></marker></defs>
+  <rect class="bg" x="0.5" y="0.5" width="1219" height="603" rx="10"/>
+  <rect class="deny" x="40" y="30" width="960" height="50" rx="10"/>
+  <text class="r mono" x="60" y="61" font-size="15" font-weight="600">KILLED</text>
+  <text class="m" x="160" y="61" font-size="14">kill switch, from any live state</text>
+  <rect class="deny" x="40" y="470" width="960" height="50" rx="10"/>
+  <text class="r mono" x="60" y="501" font-size="15" font-weight="600">FAILED</text>
+  <rect class="card" x="40" y="270" width="170" height="54" rx="27"/>
+  <text class="t mono" x="125.0" y="303" font-size="15" text-anchor="middle" font-weight="600">QUEUED</text>
+  <path class="lr" d="M85.0 270 L85.0 82" marker-end="url(#h-lr)"/>
+  <path class="lr" d="M85.0 324 L85.0 468" marker-end="url(#h-lr)"/>
+  <text class="m" x="93.0" y="420" font-size="14">wait ended</text>
+  <rect class="card" x="300" y="270" width="170" height="54" rx="27"/>
+  <text class="t mono" x="385.0" y="303" font-size="15" text-anchor="middle" font-weight="600">PENDING</text>
+  <path class="lr" d="M425.0 270 L425.0 82" marker-end="url(#h-lr)"/>
+  <path class="lr" d="M345.0 324 L345.0 468" marker-end="url(#h-lr)"/>
+  <text class="m" x="353.0" y="420" font-size="14">build error,</text>
+  <text class="m" x="353.0" y="440" font-size="14">before dispatch</text>
+  <rect class="card" x="560" y="270" width="170" height="54" rx="27"/>
+  <text class="t mono" x="645.0" y="303" font-size="15" text-anchor="middle" font-weight="600">STARTING</text>
+  <path class="lr" d="M685.0 270 L685.0 82" marker-end="url(#h-lr)"/>
+  <path class="lr" d="M605.0 324 L605.0 468" marker-end="url(#h-lr)"/>
+  <text class="m" x="613.0" y="420" font-size="14">launch error</text>
+  <rect class="ok" x="820" y="270" width="170" height="54" rx="27"/>
+  <text class="t mono" x="905.0" y="303" font-size="15" text-anchor="middle" font-weight="600">RUNNING</text>
+  <path class="lr" d="M945.0 270 L945.0 82" marker-end="url(#h-lr)"/>
+  <path class="lr" d="M865.0 324 L865.0 468" marker-end="url(#h-lr)"/>
+  <text class="m" x="873.0" y="420" font-size="14">agent error, or</text>
+  <text class="m" x="873.0" y="440" font-size="14">sandbox gone</text>
+  <text class="m" x="937.0" y="120" font-size="14" text-anchor="end">also at its lifetime end:</text>
+  <text class="m" x="937.0" y="140" font-size="14" text-anchor="end">a background run's end, or</text>
+  <text class="m" x="937.0" y="160" font-size="14" text-anchor="end">any run's maximum lifetime</text>
+  <circle class="dot" cx="345.0" cy="200" r="7"/>
+  <text class="t" x="345.0" y="186" font-size="14" text-anchor="middle" font-weight="600">create run</text>
+  <path class="ln" d="M345.0 207 L345.0 268" marker-end="url(#h-ln)"/>
+  <path class="ln" d="M338.0 200 L165.0 200 L165.0 268" marker-end="url(#h-ln)"/>
+  <text class="m" x="173.0" y="236" font-size="14">pool at its cap</text>
+  <path class="ln" d="M210 297 L298 297" marker-end="url(#h-ln)"/>
+  <text class="m" x="255.0" y="320" font-size="14" text-anchor="middle">slot freed</text>
+  <path class="ln" d="M470 297 L558 297" marker-end="url(#h-ln)"/>
+  <text class="m" x="515.0" y="320" font-size="14" text-anchor="middle">dispatch</text>
+  <path class="ln" d="M730 297 L818 297" marker-end="url(#h-ln)"/>
+  <text class="m" x="775.0" y="320" font-size="14" text-anchor="middle">sandbox up</text>
+  <rect class="card" x="1030" y="150" width="170" height="54" rx="27"/>
+  <text class="t mono" x="1115.0" y="183" font-size="15" text-anchor="middle" font-weight="600">COMPLETED</text>
+  <rect class="card" x="1030" y="340" width="170" height="54" rx="27"/>
+  <text class="t mono" x="1115.0" y="373" font-size="15" text-anchor="middle" font-weight="600">STOPPED</text>
+  <path class="ln" d="M990 278 L1050 206" marker-end="url(#h-ln)"/>
+  <text class="m" x="1004" y="268" font-size="14">agent exit 0</text>
+  <path class="ln" d="M990 316 L1050 338" marker-end="url(#h-ln)"/>
+  <text class="m" x="1200" y="418" font-size="14" text-anchor="end">idle stop, max age,</text>
+  <text class="m" x="1200" y="438" font-size="14" text-anchor="end">kept files' grace ends,</text>
+  <text class="m" x="1200" y="458" font-size="14" text-anchor="end">folder brought back</text>
+  <path class="lh" d="M970 324 C 995 390, 905 390, 925 328" marker-end="url(#h-lh)"/>
+  <text class="h" x="985" y="382" font-size="14" font-weight="600">kept</text>
+  <text class="m" x="40" y="556" font-size="14">kept: its end passed or its sandbox was lost. It stays RUNNING with no network until its files' grace ends, then STOPPED.</text>
+  <text class="m" x="40" y="580" font-size="14">COMPLETED, FAILED, STOPPED and KILLED are terminal.</text>
+</svg>

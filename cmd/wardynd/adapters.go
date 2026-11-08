@@ -18,7 +18,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -307,6 +309,19 @@ func siemSink(fan *sinks.Fanout) audit.Sink {
 		return nil
 	}
 	return fan
+}
+
+// buildBroker is the token broker run wires: the pg store, the masked recorder shared with idp and
+// approvals, the mask registry and the trust domain. D29: the credential.mint SUCCESS event is written
+// in-tx (durable/atomic) and fanned to SIEM post-commit via fan — so keep SIEM continuity without
+// double-writing the primary store. Guarded: a typed-nil Fanout would be a non-nil interface that
+// panics on Emit.
+func buildBroker(pool *pgxpool.Pool, secrets secretstore.Store, rec audit.Recorder, idp identity.Provider, gh broker.GitHubMinter, maskReg *secretmask.Registry, trustDomain string, fan *sinks.Fanout) *broker.Broker {
+	brk := broker.New(broker.NewPgxStore(pool), secrets, rec, idp, gh).WithMaskRegistry(maskReg).WithTrustDomain(trustDomain)
+	if fan != nil {
+		brk = brk.WithSIEM(fan)
+	}
+	return brk
 }
 
 // armKeyDestroySIEM has the secret store's subject keys send principal_key.destroyed to siem.

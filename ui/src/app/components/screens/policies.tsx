@@ -535,13 +535,13 @@ function PolicyEditor({
   React.useEffect(() => {
     if (!editor) return;
     let alive = true;
-    let severalOrgs = false;
+    let ownRows = false;
     void setupApi
       .getSetupStatus()
       .then((st) => {
         if (!alive) return;
-        // The first row's ceiling, unless the person's several rows (below) already answered.
-        if (!severalOrgs) setAdoCeiling(st.scm_access?.capability_ceiling);
+        // The first row's ceiling, unless the person's own rows (below) already answered.
+        if (!ownRows) setAdoCeiling(st.scm_access?.capability_ceiling);
         const providers = st.unreachable ? undefined : st.model_providers;
         setModelProviders(providers);
         // A new, untouched policy re-opens on the starter that follows the providers.
@@ -553,13 +553,14 @@ function PolicyEditor({
         }
       })
       .catch(() => {});
-    // With several organisations (#2146) every row names its own ceiling; unreadable leaves the first row's.
+    // The person's own rows name their ceilings, even with one organisation, so the lock follows their row and not
+    // the first row on the provider (#2146); unreadable, or no row naming one, leaves the first row's.
     void scmAccessApi
       .getMine()
       .then((rows) => {
         const perOrg = orgCeilings(Array.isArray(rows) ? rows : []);
-        if (!alive || perOrg.length < 2) return;
-        severalOrgs = true;
+        if (!alive || perOrg.length < 1) return;
+        ownRows = true;
         setAdoCeiling(unionCeiling(perOrg));
         setAdoOrgCeilings(perOrg);
       })

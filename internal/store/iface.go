@@ -40,6 +40,7 @@ type Store interface {
 	SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error
 	SetRunImage(ctx context.Context, id uuid.UUID, image string) error
 	SetRunImageArches(ctx context.Context, id uuid.UUID, arches []string) error
+	SetRunImageAdmission(ctx context.Context, id uuid.UUID, v *types.ImageAdmissionVerdict) error
 	SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error
 	SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error
 	TouchRun(ctx context.Context, id uuid.UUID) error
@@ -381,6 +382,10 @@ type PG struct {
 	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
 	// nowhere.
 	SIEM audit.Sink
+
+	// ModelUsageOff (WARDYN_MODEL_USAGE=off) makes a runner's replay acknowledge a model usage row and
+	// store nothing. Counting is on by default.
+	ModelUsageOff bool
 }
 
 // now reads the app clock. BOTH readings that make an age must come from here.

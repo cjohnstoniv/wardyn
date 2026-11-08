@@ -80,6 +80,7 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 		ModelProviders: block, ConnectedPeople: connected,
 		EntraLoginConfigured: s.providerWriteEnv(nil).EntraLoginConfigured, KindsAvailable: kindsAvailable(),
 		GatewayIdentityIssuer: s.gatewayIdentityIssuer(), GatewayJWKSPath: s.cfg.BasePath + gatewayJWKSRoute,
+		GatewayIdentityBedrockSSO: s.gatewayBedrockSSOAvailable(),
 	})
 }
 

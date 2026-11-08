@@ -603,15 +603,15 @@ func (s *Server) stepRunEnd(f *runFold, rec *foldRecorder) bool {
 // stepADOStanding resolves the run's Azure DevOps lane once, from the inputs
 // create grades and dispatch resolves with, and bounds a member's Azure DevOps
 // list (#1384); the narrowing and a decline (f.adoDecline) are said out loud at
-// every door. A list that leaves nothing standing is dispatch's refusal at
-// create, which the dry doors answer before the click.
+// every door. A list that leaves nothing standing, or holds more than the
+// provider row's ceiling, is dispatch's refusal at create, which the dry doors
+// answer before the click.
 func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 	var lane adoEntraRun
 	lane, f.adoDecline = resolveADOEntraLane(f.scmSite, f.spec.WorkspaceRepos, f.req.Repo, adoLaneOwnerOf(f.r))
-	narrowed, dropped, none := adoStandingAtDoor(f.spec, lane, f.ceiling)
+	narrowed, dropped, past, none := adoStandingAtDoor(f.spec, lane, f.ceiling)
 	if f.mode != foldCreate {
-		if none {
-			writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonADOCapabilitiesNonePermitted, adoNonePermitted(f.spec.AzureDevOpsCapabilities))
+		if refuseADOStandingAtDoor(f.w, f.spec.AzureDevOpsCapabilities, past, none) {
 			return false
 		}
 	}
@@ -916,7 +916,27 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 		requestMiB = f.req.Resources.DiskMiB
 	}
 	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
-	if !md.Soft && md.MiB > 0 && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+	if types.MachineKind(f.req.MachineKind) == types.MachineLinuxVM {
+		// A Linux VM's disk is its image-sized base plus an overlay on the runner, not the container's
+		// writable layer, so no runner enforces a size on it whatever it reports for containers.
+		// A process limit counts as written when the run's source policy asked for one (the Requested
+		// side of the applied amount, as the cut is judged) or the caller's governance profile authors
+		// one. The clamp fills an unset limit from the deployment's default, and the composed spec
+		// cannot tell that from an authored one.
+		applied := f.place.applied.PidsLimit
+		pidsWritten := (applied != nil && applied.Requested > 0) ||
+			(f.ceiling.Unit != nil && f.ceiling.Unit.AuthoredResources.PidsLimit > 0)
+		if linuxVMLimitRefusal(md, pidsWritten).write(s, f.w, f.r) {
+			return false
+		}
+		if md.MiB > 0 && !slices.Contains(f.policyWarns, warnLinuxVMDiskNotCapped) {
+			f.policyWarns = append(f.policyWarns, warnLinuxVMDiskNotCapped)
+		}
+		if f.spec.Resources != nil && f.spec.Resources.PidsLimit > 0 && !slices.Contains(f.policyWarns, warnLinuxVMPidsNotCapped) {
+			f.policyWarns = append(f.policyWarns, warnLinuxVMPidsNotCapped)
+		}
+	}
+	if !md.Soft && md.MiB > 0 && types.MachineKind(f.req.MachineKind) != types.MachineLinuxVM && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
 		msg := mainDriveUnenforceableMsg()
 		if !f.place.pooled {
 			msg = mainDriveUnenforceableUnpooledMsg()

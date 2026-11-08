@@ -1,0 +1,154 @@
+{{/*
+The Kubernetes ground-truth sensor (groundtruth.k8s.*), off by default and
+rendering nothing until switched on. A DaemonSet runs wardynd's OWN image with
+command /wardyn-tetragon-ingest, so no extra image is published. On each node it
+tails the operator's Tetragon JSON export, maps an event to a run by the agent
+pod's name and namespace, and posts it to wardynd's internal listener. The chart
+installs no Tetragon and no TracingPolicy.
+
+Credential: one Secret, which wardynd patches (token and control-plane-ca.pem,
+rotated well inside the token's hour) and the DaemonSet mounts as a DIRECTORY, so
+a rotation reaches the pod without a restart (a subPath mount would never see
+it). The chart creates the Secret EMPTY and marks it keep: wardynd writes the
+data, and Helm's three-way merge leaves data the chart never rendered alone.
+rbac.yaml grants wardynd `patch` on exactly this name and nothing else.
+
+The pod has no API token (automountServiceAccountToken: false): it reads a file
+and calls wardynd, never the API server. It runs as root because Tetragon writes
+its export 0600 root; every capability is dropped, the root filesystem is
+read-only and the export directory is mounted read-only. The DIRECTORY is
+mounted, not the file: a file bind mount follows the inode it was created on, so
+a rotation that renames the export and creates a new one would leave the sensor
+reading the old file for good.
+
+Its labels deliberately do NOT include wardyn.selectorLabels: the Service, the
+PDB and the Deployment select on those, and a sensor pod matching them would
+receive console traffic.
+*/}}
+{{- if include "wardyn.groundtruthEnabled" . -}}
+{{- if not .Values.k8s.enabled -}}
+{{- fail "wardyn: groundtruth.k8s.enabled needs k8s.enabled=true: the sensor correlates Tetragon events to the agent pods the Kubernetes runner creates, and without the runner there are none." -}}
+{{- end -}}
+{{- $gt := .Values.groundtruth.k8s -}}
+{{- $runsNS := .Values.k8s.runsNamespace | default (ternary .Release.Namespace "" (.Values.k8s.allowRunsInReleaseNamespace | default false)) -}}
+{{- if not $runsNS -}}
+{{- fail "wardyn: groundtruth.k8s.enabled needs k8s.runsNamespace set (or k8s.allowRunsInReleaseNamespace=true): the sensor maps an event to a run by the namespace of its agent pod, and with no runs namespace there is nothing to correlate." -}}
+{{- end -}}
+{{- if contains "/" ($gt.exportFilename | default "") -}}
+{{- fail "wardyn: groundtruth.k8s.exportFilename must be a file name. Put the directory in groundtruth.k8s.exportDirectory." -}}
+{{- end -}}
+{{- if or (not $gt.exportDirectory) (not $gt.exportFilename) -}}
+{{- fail "wardyn: groundtruth.k8s.exportDirectory and exportFilename must both be set: they locate the Tetragon export on each node." -}}
+{{- end -}}
+{{- if not (hasPrefix "/" $gt.exportDirectory) -}}
+{{- fail "wardyn: groundtruth.k8s.exportDirectory must be an absolute path on the node." -}}
+{{- end -}}
+{{- $ns := include "wardyn.groundtruthNamespace" . -}}
+{{- $secret := include "wardyn.groundtruthSecret" . -}}
+{{- $name := $secret -}}
+{{- $digest := .Values.image.digest | default "" -}}
+{{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
+{{- $tokenDir := "/var/run/wardyn-groundtruth" -}}
+{{- $exportDir := "/tetragon-export" -}}
+{{- $labels := include "wardyn.groundtruthLabels" . | fromYaml -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secret }}
+  namespace: {{ $ns }}
+  labels:
+    helm.sh/chart: {{ include "wardyn.chart" . }}
+    {{- toYaml $labels | nindent 4 }}
+    app.kubernetes.io/part-of: wardyn
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    # wardynd writes `token` and `control-plane-ca.pem`; the chart renders no data. Kept on
+    # uninstall so a reinstall does not briefly strand a running sensor with no credential.
+    helm.sh/resource-policy: keep
+type: Opaque
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    helm.sh/chart: {{ include "wardyn.chart" . }}
+    {{- toYaml $labels | nindent 4 }}
+    app.kubernetes.io/part-of: wardyn
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml $labels | nindent 8 }}
+        app.kubernetes.io/part-of: wardyn
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: ingest
+          image: "{{ .Values.image.repository }}{{ if $digest }}{{ with .Values.image.tag }}:{{ . }}{{ end }}@{{ $digest }}{{ else }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/wardyn-tetragon-ingest"]
+          env:
+            - name: WARDYN_GROUNDTRUTH_SOURCE
+              value: "k8s"
+            - name: WARDYN_GROUNDTRUTH_K8S_NAMESPACES
+              value: {{ $runsNS | quote }}
+            - name: WARDYN_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: WARDYN_TETRAGON_EXPORT
+              value: {{ printf "%s/%s" $exportDir $gt.exportFilename | quote }}
+            - name: WARDYN_CONTROL_PLANE_URL
+              value: {{ printf "https://%s.%s.svc.%s:%d" (include "wardyn.fullname" .) .Release.Namespace (.Values.k8s.clusterDomain | default "cluster.local") $internalPort | quote }}
+            - name: WARDYN_GROUNDTRUTH_TOKEN_FILE
+              value: {{ printf "%s/token" $tokenDir | quote }}
+            - name: WARDYN_CONTROL_PLANE_CA_FILE
+              value: {{ printf "%s/control-plane-ca.pem" $tokenDir | quote }}
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          {{- with $gt.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tetragon-export
+              mountPath: {{ $exportDir }}
+              readOnly: true
+            - name: token
+              mountPath: {{ $tokenDir }}
+              readOnly: true
+      volumes:
+        - name: tetragon-export
+          hostPath:
+            path: {{ $gt.exportDirectory | quote }}
+            type: Directory
+        - name: token
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0400
+      {{- with $gt.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $gt.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end -}}

@@ -72,6 +72,8 @@ type deps struct {
 	sockFstat func(fd int, name string) (unix.Stat_t, error)
 	// powerSource replaces pmset for a tools update (tests).
 	powerSource macvm.PowerSource
+	// editScreen replaces the Mac's edit-base window (tests).
+	editScreen macvm.WindowScreen
 }
 
 func (d deps) power() macvm.PowerSource {
@@ -390,12 +392,18 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
 		Leaked: j.leaked(d), Log: relayLog}
+	// Stage 2's warnings (a harness withheld, the agent signed ad hoc and how to recover) go to the job's
+	// log, as the command's own do, not nowhere.
+	log := slog.New(slog.NewTextHandler(d.stderr, nil))
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
+		Log:     log,
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
 		// the build beside this helper (§3.4, guest agent drift).
 		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
-		Items: items,
+		// Signed with this Mac's identity first, so the agent keeps Full Disk Access through updates.
+		Signer: &macvm.HostAgentSigner{Dir: macvm.Layout{Root: *j.root}.AgentSigningDir(), Log: log},
+		Items:  items,
 	}}, nil
 }
 
@@ -566,9 +574,9 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 }
 
 // cmdEditBase is `wardyn-macvm edit-base`, which `wardyn-runnerd macos-vm edit-base` starts under an
-// edit_base ledger entry: macvm.EditBase, its two guest-agent boots on stage-2 boots whose network this
-// helper hands them itself (silentNet), its window on prepare's prep network. The person's lines go to
-// stdout; an error, a refusal or a discard is the last stderr line.
+// edit_base ledger entry: macvm.EditBase, its two headless guest-agent boots on stage-2 boots whose network
+// this helper hands them itself (silentNet), and its window on a third stage-2 boot on prepare's prep
+// network. The person's lines go to stdout; an error, a refusal or a discard is the last stderr line.
 func cmdEditBase(ctx context.Context, args []string, d deps) int {
 	fs := flag.NewFlagSet(macvm.EditBaseCommand, flag.ContinueOnError)
 	fs.SetOutput(d.stderr)
@@ -591,16 +599,12 @@ func cmdEditBase(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
-	fb := d.firstBoot
-	if fb == nil {
-		fb = macvm.NewProvisioner()
-	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
 		Leaked: j.leaked(d), Log: relayLog}
 	o := macvm.EditOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Admit: j.admit(macvm.EditBaseCommand, d),
-		Guest:     silentNet(boot.ToolsBoot(), macvm.JobControlSock(*j.sockRoot, *j.entry)),
-		FirstBoot: fb, PrepNet: func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }, Leaked: j.leaked(d),
+		Guest:      silentNet(boot.ToolsBoot(), macvm.JobControlSock(*j.sockRoot, *j.entry)),
+		WindowBoot: boot.WindowBoot(), PrepNet: func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }, Screen: d.editScreen,
 		CPUs: *j.cpus, MemoryMiB: *j.memMiB, Out: d.stdout, Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
 	}
 	if *j.baseFile != "" {

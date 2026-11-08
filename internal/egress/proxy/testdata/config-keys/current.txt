@@ -20,6 +20,11 @@ attribution.request_url
 attribution.source
 aws_sigv4
 aws_sigv4.account_id
+aws_sigv4.gateways
+aws_sigv4.gateways.host
+aws_sigv4.gateways.path_prefix
+aws_sigv4.gateways.port
+aws_sigv4.gateways.signing_host
 aws_sigv4.grant_id
 aws_sigv4.hosts
 aws_sigv4.portal_host
@@ -44,6 +49,7 @@ decision_sink.key
 decision_sink.spki_sha256
 decision_sink.url
 decision_spool_dir
+disable_model_usage
 forge_hosts
 gateway_identity
 gateway_identity.audience
@@ -106,6 +112,8 @@ local_models.*.keep_alive_seconds
 local_models.*.max_context
 local_models.*.max_output
 local_models.*.models
+mcp_approve_each
+mcp_approve_each.windows
 mcp_bindings
 mcp_bindings.harness
 mcp_bindings.servers

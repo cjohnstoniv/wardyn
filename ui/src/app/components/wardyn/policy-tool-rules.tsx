@@ -5,7 +5,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import type { RunPolicySpec, ToolEffect, ToolRule } from "../../lib/types";
-import { TOOL_EFFECTS, TOOL_RULE_DEFAULT, toolRulesProblem } from "../../lib/types";
+import { APPROVE_EACH_REASON, TOOL_EFFECTS, TOOL_RULE_DEFAULT, canApproveEach, toolRulesProblem } from "../../lib/types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { cn } from "../ui/utils";
@@ -15,13 +15,14 @@ import { Chip, SectionLabel } from "./primitives";
 
 // The wire words stay mono and verbatim (allow/hold/deny); these are their past
 // tense, and only the rail's one-line summary uses them.
-export const EFFECT_PAST: Record<ToolEffect, string> = { allow: "allowed", hold: "held", deny: "denied" };
+export const EFFECT_PAST: Record<ToolEffect, string> = { allow: "allowed", hold: "held", approve_each: "approved per call", deny: "denied" };
 
 // The effect's semantic tint. Not decoration: an effect is a run/approval state
 // word, so it takes the state palette (CONSOLE-RULES §2) and never a metal.
 const EFFECT_TONE: Record<ToolEffect, string> = {
   allow: "text-success",
   hold: "text-warning",
+  approve_each: "text-warning",
   deny: "text-danger",
 };
 
@@ -82,14 +83,20 @@ function EffectSelect({
   value,
   label,
   onChange,
+  disabledEffects,
+  describedBy,
 }: {
   value: ToolEffect;
   label: string;
   onChange: (e: ToolEffect) => void;
+  /** Offered but greyed, with its reason as text the caller points describedBy at. */
+  disabledEffects?: readonly ToolEffect[];
+  describedBy?: string;
 }) {
   return (
     <select
       aria-label={label}
+      aria-describedby={describedBy}
       value={value}
       onChange={(e) => onChange(e.target.value as ToolEffect)}
       className={cn(
@@ -99,7 +106,7 @@ function EffectSelect({
       )}
     >
       {TOOL_EFFECTS.map((e) => (
-        <option key={e} value={e} className="text-foreground">
+        <option key={e} value={e} disabled={disabledEffects?.includes(e)} className="text-foreground">
           {e}
         </option>
       ))}
@@ -143,7 +150,7 @@ export function ToolRulesSection({
         </Chip>
       </div>
       <p className="mb-3 text-xs leading-snug text-muted-foreground">
-        Consulted only for a run whose tool approvals are held. A rule narrows what a human is
+        Consulted only for a run whose tool approvals are held, except approve_each, which the proxy enforces on any run. A rule narrows what a human is
         asked about — it never widens what the agent may do. Evaluated outside the sandbox, so the
         agent cannot rewrite the rules that govern it.
       </p>
@@ -155,7 +162,8 @@ export function ToolRulesSection({
       </div>
 
       {named.map((rule, i) => (
-        <div key={i} className={cn(RULE_GRID, "border-b border-border py-2")}>
+        <div key={i} className="border-b border-border py-2">
+        <div className={RULE_GRID}>
           {/* No maxLength: the cap is 64 bytes (Go's len) and the attribute
               counts UTF-16 units, so it cannot express this one — it would
               silently swallow the 65th keystroke of a legal ASCII name while
@@ -173,6 +181,8 @@ export function ToolRulesSection({
             value={rule.effect}
             label={`Effect ${i + 1}`}
             onChange={(effect) => patchNamed(i, { effect })}
+            disabledEffects={canApproveEach(rule.tool) ? undefined : ["approve_each"]}
+            describedBy={canApproveEach(rule.tool) ? undefined : `tool-rule-${i}-note`}
           />
           <Button
             type="button"
@@ -190,6 +200,12 @@ export function ToolRulesSection({
             <Trash2 className="size-4" />
           </Button>
         </div>
+        {!canApproveEach(rule.tool) && (
+          <p id={`tool-rule-${i}-note`} className="mt-1 text-xs leading-snug text-muted-foreground">
+            <span className="font-mono text-foreground">approve_each</span> is greyed: {APPROVE_EACH_REASON}
+          </p>
+        )}
+        </div>
       ))}
 
       {/* The default row: not removable, and it is what keeps an added rule
@@ -199,13 +215,20 @@ export function ToolRulesSection({
         <div className="flex h-8 items-center rounded-md border border-dashed border-input bg-muted px-3 font-mono text-body text-muted-foreground">
           {TOOL_RULE_DEFAULT}
         </div>
-        <EffectSelect value={defaultEffect} label="Default effect" onChange={(e) => write(named, e)} />
+        <EffectSelect
+          value={defaultEffect}
+          label="Default effect"
+          onChange={(e) => write(named, e)}
+          disabledEffects={["approve_each"]}
+          describedBy="tool-rules-default-note"
+        />
         <span />
       </div>
-      <p className="text-xs leading-snug text-muted-foreground">
+      <p id="tool-rules-default-note" className="text-xs leading-snug text-muted-foreground">
         The effect for any tool no rule names. It cannot be removed — leave it on{" "}
         <span className="font-mono text-foreground">hold</span> to keep today&apos;s behaviour for
-        everything unlisted.
+        everything unlisted. <span className="font-mono text-foreground">approve_each</span> is greyed here:{" "}
+        {APPROVE_EACH_REASON}
       </p>
 
       <Button

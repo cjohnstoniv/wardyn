@@ -742,6 +742,8 @@ var reservedBrokerSecretNames = map[string]bool{
 	"bedrock-api-key":          true,
 	// The AI gateway token's signing key (cmd/wardynd's gatewayIdentity).
 	"wardyn-gateway-identity-key": true,
+	// The audit checkpoint signing key: no grant may hand it into a sandbox.
+	"wardyn-audit-receipt-key": true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
 	// internal/api's writeProbeSecretName: a store write probe's row, never a grant's value.
@@ -836,6 +838,11 @@ func mintEvent(caller *identity.Claims, grantID, approvalID uuid.UUID, jti strin
 // late in the mint tx as possible, so the chain lock is always acquired AFTER this tx's
 // grant/approval row locks and can never invert a lock order with a concurrent mint.
 func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {
+	stamped, err := stampPolicyDigestTx(ctx, tx, ev)
+	if err != nil {
+		return err
+	}
+	ev.Data = stamped
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
 		return fmt.Errorf("broker: marshal mint audit data: %w", err)

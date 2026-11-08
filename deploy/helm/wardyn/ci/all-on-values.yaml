@@ -347,3 +347,20 @@ runner:
 maxConcurrentRuns: 25
 trustedProxies: "10.42.0.0/16,fd00:42::/64"
 goMemLimit: "400MiB"
+
+# The Kubernetes ground-truth sensor, the "other side" of its off-by-default
+# switch. A namespace other than the release's, so the render also proves the
+# internal-port NetworkPolicy peer for it.
+groundtruth:
+  k8s:
+    enabled: true
+    namespace: tetragon
+    nodeSelector:
+      kubernetes.io/os: linux
+    tolerations:
+      - operator: Exists
+
+# Image signature checks' registry credentials, the other side of the empty default: a mounted
+# Secret (never created by the chart) and WARDYN_REGISTRY_AUTH_FILE pointing at it.
+imageAdmission:
+  registryAuthSecret: regcred

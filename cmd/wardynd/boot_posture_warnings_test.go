@@ -135,6 +135,7 @@ func postureFlags(issuer, advertise string, set func(*bootFlags)) *bootFlags {
 	listen, ui, ssh, tmpl, strip, base := ":8080", ":8081", "", "", "", ""
 	redirect, control, internal, org, tok := "https://wardyn.example.com/auth/callback", "https://wardynd:8443", "", "", ""
 	allow, member, tail, rate, retention, seal := false, false, 65536, 20, 30, "off"
+	sharedOrigin := true // these cases are about other refusals; the shared origin has its own test
 	off, runner, store := false, "none", "pg"
 	var sessionTTL time.Duration
 	f := &bootFlags{
@@ -148,7 +149,7 @@ func postureFlags(issuer, advertise string, set func(*bootFlags)) *bootFlags {
 		listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, sshProxyCommand: &tmpl, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
 		allowPlaintextListen: &allow, orgURL: &org, orgEnrolToken: &tok, memberMode: &member,
 		internalListen: &ssh, metricsListen: &ssh,
-		oidcSessionTTL: &sessionTTL,
+		oidcSessionTTL: &sessionTTL, allowUISharedOrigin: &sharedOrigin,
 	}
 	if set != nil {
 		set(f)
@@ -157,21 +158,27 @@ func postureFlags(issuer, advertise string, set func(*bootFlags)) *bootFlags {
 }
 
 // TestValidateBootPostureWiring proves the wiring: a plaintext issuer fails validateBootPosture,
-// the gateway-host warning reaches the process log from it, and a good config logs none.
+// the gateway-host warning reaches the process log from it, and a good config logs none. The good config
+// gives each run's apps their own origin: accepting the shared origin instead boots with a warning.
 func TestValidateBootPostureWiring(t *testing.T) {
-	run := func(issuer, advertise string) (string, error) {
+	run := func(issuer, advertise string, set func(*bootFlags)) (string, error) {
 		logs := captureSlog(t)
-		err := validateBootPosture(postureFlags(issuer, advertise, nil), tlsServed)
+		err := validateBootPosture(postureFlags(issuer, advertise, set), tlsServed)
 		return logs.String(), err
 	}
-	if _, err := run("http://idp.example.com", "https://wardyn-ui.example.com"); err == nil || !strings.Contains(err.Error(), "WARDYN_OIDC_ISSUER") {
+	if _, err := run("http://idp.example.com", "https://wardyn-ui.example.com", nil); err == nil || !strings.Contains(err.Error(), "WARDYN_OIDC_ISSUER") {
 		t.Errorf("plaintext issuer: err = %v, want a refusal naming WARDYN_OIDC_ISSUER", err)
 	}
-	if out, err := run("https://idp.example.com", "https://wardyn.example.com:8081"); err != nil || !strings.Contains(out, "WARDYN_UI_SANDBOX_ADVERTISE") {
+	if out, err := run("https://idp.example.com", "https://wardyn.example.com:8081", nil); err != nil || !strings.Contains(out, "WARDYN_UI_SANDBOX_ADVERTISE") {
 		t.Errorf("bad gateway host: err = %v, log %q, want the warning and a boot", err, out)
 	}
-	if out, err := run("https://idp.example.com", "https://wardyn-ui.example.com"); err != nil || strings.Contains(out, "level=WARN") {
+	off, template := false, "https://run-{run}.ui.example.com"
+	perRunOrigin := func(f *bootFlags) { f.allowUISharedOrigin, f.uiOriginTemplate = &off, &template }
+	if out, err := run("https://idp.example.com", "https://wardyn-ui.example.com", perRunOrigin); err != nil || strings.Contains(out, "level=WARN") {
 		t.Errorf("good config: err = %v, log %q, want a clean boot", err, out)
+	}
+	if out, err := run("https://idp.example.com", "https://wardyn-ui.example.com", nil); err != nil || !strings.Contains(out, "WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN is set") {
+		t.Errorf("shared origin accepted: err = %v, log %q, want a boot with its warning", err, out)
 	}
 }
 
@@ -253,5 +260,48 @@ func TestBootPostureUIGatewayUnknownScheme(t *testing.T) {
 				t.Fatalf("warning %q does not name %s and the scheme", w, tc.want)
 			}
 		})
+	}
+}
+
+// TestValidateUISandboxSharedOrigin: the gateway with SSO configured and no per-run origin template is refused
+// unless the shared origin is accepted by name; with a template, with no SSO and with the gateway off it boots.
+func TestValidateUISandboxSharedOrigin(t *testing.T) {
+	const issuer, template = "https://idp.example.com", "https://run-{run}.ui.example.com"
+	for _, tc := range []struct {
+		name, uiListen, issuer, template string
+		allow, wantErr                   bool
+	}{
+		{name: "SSO, gateway, no template", uiListen: ":8081", issuer: issuer, wantErr: true},
+		{name: "SSO, gateway, no template, accepted", uiListen: ":8081", issuer: issuer, allow: true},
+		{name: "SSO, gateway, template", uiListen: ":8081", issuer: issuer, template: template},
+		{name: "no SSO, gateway, no template", uiListen: ":8081"},
+		{name: "blank issuer", uiListen: ":8081", issuer: "  "},
+		{name: "SSO, gateway off", issuer: issuer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateUISandboxSharedOrigin(tc.uiListen, tc.issuer, tc.template, tc.allow)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateUISandboxSharedOrigin = %v, want error: %v", err, tc.wantErr)
+			}
+			if err != nil && (!strings.Contains(err.Error(), "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE") || !strings.Contains(err.Error(), "WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN")) {
+				t.Errorf("the refusal names neither the template nor the hatch: %v", err)
+			}
+		})
+	}
+}
+
+// The refusal is wired into boot: the same flags that boot with the hatch set are refused without it, and
+// a per-run origin template boots without it.
+func TestValidateBootPostureRefusesSharedUIOrigin(t *testing.T) {
+	const issuer, advertise = "https://idp.example.com", "https://wardyn-ui.example.com"
+	off, template := false, "https://run-{run}.ui.example.com"
+	err := validateBootPosture(postureFlags(issuer, advertise, func(f *bootFlags) { f.allowUISharedOrigin = &off }), tlsServed)
+	if err == nil || !strings.Contains(err.Error(), "WARDYN_ALLOW_UI_SANDBOX_SHARED_ORIGIN") {
+		t.Fatalf("SSO and the gateway with no template: %v, want a refusal naming the hatch", err)
+	}
+	if err := validateBootPosture(postureFlags(issuer, advertise, func(f *bootFlags) {
+		f.allowUISharedOrigin, f.uiOriginTemplate = &off, &template
+	}), tlsServed); err != nil {
+		t.Errorf("SSO and the gateway with a template: %v, want a boot", err)
 	}
 }

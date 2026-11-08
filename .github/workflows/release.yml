@@ -1529,7 +1529,7 @@ jobs:
           set -euo pipefail
           # RELEASING.md cuts the Release by hand; create a draft if the tag ran
           # ahead of that so the assets are never homeless.
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --prerelease --notes-from-tag
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --prerelease --notes-from-tag --title "Wardyn $TAG"
           gh release upload "$TAG" assets/* --clobber
       - name: Assert every required asset actually landed
         env:

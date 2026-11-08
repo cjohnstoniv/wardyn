@@ -122,6 +122,9 @@ type runFold struct {
 	// localDelivery is the credential delivery policy and trust class a local run was judged at
 	// (stepLocalEligibility); create persists its grants by the same judgement, never a second read.
 	localDelivery localJudgement
+	// admission is the image admission verdict for the member's image (stepImageAdmission), which the run row
+	// and the run.create row carry; nil when no check applied.
+	admission *types.ImageAdmissionVerdict
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -183,6 +186,8 @@ type runFoldStep struct {
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
 //   - The run's end reads the resolved pool, the governance ceiling and the deployment,
 //     so it sits after placement and refuses before capacity.
+//   - Image admission after every cheaper gate, since it is the one step that reads a registry,
+//     and before capacity, so its refusal also leaves no identity and no run row.
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 //   - The dry doors' derived egress after every gate: create adds those hosts
@@ -221,6 +226,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},
 	{(*Server).stepRunEnd, foldAll},
+	{(*Server).stepImageAdmission, foldCreate | foldPreflight},
 	{(*Server).stepHostCapacity, foldCreate | foldPreflight},
 	{(*Server).stepRunCap, foldCreate | foldPreflight},
 	{(*Server).stepRunFit, foldCreate | foldPreflight},

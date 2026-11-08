@@ -69,7 +69,7 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 		ModelLimit: runner.ModelLimitOf(c.AllowedModels, c.BedrockRoutes), Unattended: c.Unattended,
 		ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
 		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, ForgeHosts: c.ForgeHosts, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
-		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings,
+		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings, MCPApproveEach: c.MCPApproveEach,
 		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "",
 	}
 	for _, in := range c.Injection {
@@ -154,6 +154,9 @@ type ownerCeiling struct {
 	// restrictionIDs are the restrictions the revived run is held to (reviveRestrictions), re-captured on
 	// the run before it is sealed.
 	restrictionIDs []uuid.UUID
+	// requiredImageSigners are the image signers the profile and the restrictions require, which a revive's
+	// image admission holds the run's pinned image to.
+	requiredImageSigners []string
 }
 
 // reviveCeiling is the OWNER's current ceiling: the profile captured on the
@@ -174,7 +177,8 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorTyp
 	}
 	var c ownerCeiling
 	if p != nil {
-		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements}
+		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements,
+			requiredImageSigners: p.Limits.RequiredImageSigners}
 		if len(p.Limits.AllowedMacOSBases) > 0 {
 			c.allowedMacOSBases = [][]string{p.Limits.AllowedMacOSBases}
 		}

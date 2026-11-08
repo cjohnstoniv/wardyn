@@ -411,3 +411,69 @@ func (c *Client) ListWorkloadBindings(ctx context.Context, opts ...ListOpts) ([]
 func (c *Client) DeleteWorkloadBinding(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/workload-bindings/"+id.String(), nil, nil)
 }
+
+// WorkloadChange is one field an apply would change, at its RFC 6901 path over the workload document
+// (`/description`, `/run_in`, `/restart_key`, `/intent/...`). Op is add, remove or change. From is absent
+// for an add and To for a remove. An array is one change at its own path.
+type WorkloadChange struct {
+	Path string          `json:"path"`
+	Op   string          `json:"op"`
+	From json.RawMessage `json:"from,omitempty"`
+	To   json.RawMessage `json:"to,omitempty"`
+}
+
+// WorkloadPreviewRefusal is the refusal an apply would meet from the store: the status and reason the PUT
+// would answer with.
+type WorkloadPreviewRefusal struct {
+	Status int    `json:"status"`
+	Reason string `json:"reason"`
+	Error  string `json:"error"`
+}
+
+// The launch states of a WorkloadPreview.
+const (
+	WorkloadPreviewWouldLaunch = "would_launch"
+	WorkloadPreviewNoLaunch    = "none"
+	WorkloadPreviewWouldRefuse = "would_refuse"
+)
+
+// WorkloadPreviewLaunch is whether an apply would start a run. A run starts when the workload is new or
+// changed, or when its spec's last launch was refused.
+type WorkloadPreviewLaunch struct {
+	// State is would_launch, none or would_refuse.
+	State   string `json:"state"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+	// Replaces is the current run, which ends once the new one runs.
+	Replaces *uuid.UUID `json:"replaces,omitempty"`
+	// Preflight is the launch's dry run, with State would_launch.
+	Preflight *PreflightResult `json:"preflight,omitempty"`
+}
+
+// WorkloadPreview is the answer of POST /api/v1/workloads/{name}/preview: what the same body to PUT
+// would do. It stores nothing.
+type WorkloadPreview struct {
+	Name  string `json:"name"`
+	Owner string `json:"owner"`
+	// Op is create, update or none. A description-only change is none, with the change listed.
+	Op string `json:"op"`
+	// Outcome is what the PUT would answer; empty when a Refusal stops it.
+	Outcome WorkloadOutcome `json:"outcome,omitempty"`
+	// Refusal is the store's own 409 or 422, carried here so Changes still show.
+	Refusal *WorkloadPreviewRefusal `json:"refusal,omitempty"`
+	// Changes is never null.
+	Changes      []WorkloadChange      `json:"changes"`
+	Stored       *WorkloadDocument     `json:"stored,omitempty"`
+	Proposed     WorkloadDocument      `json:"proposed"`
+	StoredDigest string                `json:"stored_digest,omitempty"`
+	Digest       string                `json:"digest"`
+	Launch       WorkloadPreviewLaunch `json:"launch"`
+}
+
+// PreviewWorkload asks what ApplyWorkload would do with req, for the caller, and stores nothing.
+// POST /api/v1/workloads/{name}/preview. A refusal the store would make is in the answer, not an error.
+func (c *Client) PreviewWorkload(ctx context.Context, name string, req WorkloadApplyRequest) (WorkloadPreview, error) {
+	var out WorkloadPreview
+	err := c.do(ctx, http.MethodPost, workloadPath(name, "")+"/preview", req, &out)
+	return out, err
+}

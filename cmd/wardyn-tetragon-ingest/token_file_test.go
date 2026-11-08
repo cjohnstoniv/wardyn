@@ -6,10 +6,14 @@ package main
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestEventSink_ReadsAndRefreshesTokenFromFile covers the recovery path: the
@@ -84,5 +88,66 @@ func TestBootTokenGuard_FailsClosedWithNeitherSource(t *testing.T) {
 
 	if err := checkBootTokenSource(""); err == nil {
 		t.Fatal("boot guard must fail closed when neither a token nor a token file is configured")
+	}
+}
+
+// TestEventSink_RotatedFileIsReadAfterRejection is the whole recovery path on a file source:
+// the sink holds the old token in memory, the file now holds a new one (a Secret mount updated
+// by an atomic replace), the control plane rejects the old token, and the same batch is
+// re-sent with the new one and accepted. Nothing reads the file until the rejection, so a
+// sensor that was never rejected keeps using its cached token.
+func TestEventSink_RotatedFileIsReadAfterRejection(t *testing.T) {
+	const oldTok, newTok = "old-file-token", "new-file-token"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte(oldTok), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	t.Setenv("WARDYN_GROUNDTRUTH_TOKEN_FILE", path)
+
+	var rejected, accepted atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+newTok {
+			rejected.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		accepted.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sink := newEventSink(srv.URL, "", 16, 8, 20*time.Millisecond, srv.Client())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+
+	// The rotation lands: write beside, then rename over, as the kubelet swaps a projected file.
+	next := filepath.Join(dir, "token.next")
+	if err := os.WriteFile(next, []byte(newTok), 0o600); err != nil {
+		t.Fatalf("write rotated file: %v", err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatalf("replace file: %v", err)
+	}
+	if sink.currentToken() != oldTok {
+		t.Fatal("the sink re-read the file before any rejection; the cached token is what the test must see rejected")
+	}
+
+	sink.emit(types.AuditEvent{Action: "kernel.process.exec", Outcome: "success"})
+	deadline := time.Now().Add(3 * time.Second)
+	for sink.postedCount() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sink.postedCount() < 1 || sink.droppedCount() != 0 {
+		t.Fatalf("batch not accepted after rejection: posted=%d dropped=%d", sink.postedCount(), sink.droppedCount())
+	}
+	if rejected.Load() < 1 || accepted.Load() != 1 {
+		t.Fatalf("want the cached token rejected at least once and the batch accepted once; rejected=%d accepted=%d", rejected.Load(), accepted.Load())
+	}
+	if sink.currentToken() != newTok {
+		t.Fatal("the sink did not cache the re-read token")
 	}
 }

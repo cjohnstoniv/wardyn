@@ -382,8 +382,7 @@ const (
 // reason kept for the two callers that already read them), so
 // cmd/wardyn-git-helper's callMint can tell pending, denied, scope_mismatch,
 // and already_minted apart — including the SECOND git operation of an
-// approval-gated run, which legitimately 409s with ErrAlreadyMinted
-// (docs/adoption/corp-network-onboarding-findings.md B2).
+// approval-gated run, which legitimately 409s with ErrAlreadyMinted.
 func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err error) {
 	var pending broker.ErrApprovalPending
 	if errors.As(err, &pending) {

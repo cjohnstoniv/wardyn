@@ -43,6 +43,12 @@ vi.mock("../../lib/api/setup", () => ({
   setup: { getSetupStatus: () => getSetupStatusMock() },
 }));
 
+// The person's own Azure DevOps rows; [] (no row) unless a test sets one.
+const getMineMock = vi.fn<() => Promise<unknown>>(() => Promise.resolve([]));
+vi.mock("../../lib/api/scm-access", () => ({
+  scmAccess: { getMine: () => getMineMock() },
+}));
+
 import { PoliciesScreen } from "./policies";
 import { toYaml } from "../wardyn/yaml-block";
 import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
@@ -394,5 +400,52 @@ describe("PoliciesScreen — the door to the Wardyn boundary", () => {
     renderAs(false);
     await screen.findByRole("button", { name: /New policy/ });
     expect(screen.queryByRole("link", { name: BOUNDARY.TITLE })).toBeNull();
+  });
+});
+
+// #2146: the Azure DevOps capability lock follows the person's own row, even with one organisation.
+describe("PoliciesScreen: Azure DevOps capability lock follows the person's own row", () => {
+  const WIDER = { scm_access: { capability_ceiling: ["code_read", "pr"] }, model_providers: [] };
+  const OWN = [{ state: "live", org: "https://dev.azure.com/acme", capability_ceiling: ["code_read"] }];
+
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([]);
+    getSetupStatusMock.mockReset();
+    getMineMock.mockReset();
+  });
+  afterEach(() => {
+    getSetupStatusMock.mockReset();
+    getMineMock.mockReset();
+    getMineMock.mockResolvedValue([]);
+  });
+
+  it("locks against the person's row when /setup/status settles first", async () => {
+    let settleMine!: (v: unknown) => void;
+    getSetupStatusMock.mockResolvedValue(WIDER);
+    getMineMock.mockReturnValue(new Promise((r) => (settleMine = r)));
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeEnabled());
+    settleMine(OWN);
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeDisabled());
+    expect(screen.getByRole("checkbox", { name: /^Read code/ })).toBeEnabled();
+  });
+
+  it("locks against the person's row when /me/scm-access settles first", async () => {
+    let settleSetup!: (v: unknown) => void;
+    getMineMock.mockResolvedValue(OWN);
+    getSetupStatusMock.mockReturnValue(new Promise((r) => (settleSetup = r)));
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeDisabled());
+    settleSetup(WIDER);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /^Read code/ })).toBeEnabled();
   });
 });

@@ -351,7 +351,8 @@ An install from before the file keeps working: its environment file or LaunchAge
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
-| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give for the substrate in `runnerd.json` or `doctor --substrate` | `drive_root` |
+| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give for the substrate in `runnerd.json` or `doctor --substrate` (all [folder-share settings](operations/hybrid-laptops.md#sharing-a-folder-the-settings)) | `drive_root` |
+| `folder-shares` | macOS VM runners with a base only: whether a folder can be shared into a run. OK when a drive root is set and the base last read Full Disk Access for the guest agent as allowed; otherwise a skip naming the missing setting (no drive root, Full Disk Access refused or not read, or, for a guest agent signed ad hoc, a tools update since the reading). A guest agent signed on this Mac keeps the reading through an update, so it is shown as the base last read it. It cannot read the organisation's workspace roots | `drive_root`; `macos-vm edit-base` |
 | `service` | The installed service, and on Linux whether systemd reports it running | |
 | `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 
@@ -426,5 +427,5 @@ The console shows a runner that registered but has not connected as Offline. Rea
 | `runner still offline, retrying` | Once a minute: `offline_for`, `last_error` and `last_error_age`, the last attempt's error and how long ago it ended, and `waiting_on`, the step the current attempt is on (`dial`, `authenticate`, `org_pending`, `inventory`, `replay`, `before_ready` or `retry_wait`). |
 | `the trusted CA file …` | A certificate in `--trusted-ca-file` that expired or is not a CA, or a file another account can change. The file is still used. |
 
-- Docker, the CA file, the proxy image and the relay are each checked before the first connection. A refusal there appears at the top of the log, and the service restarts and repeats it.
+- Docker, the CA file, the proxy image and the relay are each checked before the first connection. A refusal there appears at the top of the log, and the service restarts and repeats it. A proxy image that cannot be pulled is the exception, whether it is missing, the registry refuses access, or the network fails: the runner stays up and retries (about 15 s, 30 s, 1 minute, 2 minutes, then every 5 minutes), and `wardyn-runnerd doctor` shows the next try.
 

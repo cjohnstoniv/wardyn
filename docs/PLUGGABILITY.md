@@ -9,7 +9,7 @@
 
 ## 1. The standard
 
-- **Honesty rule (read this first).**
+- **Shipped versus recommended.**
   - The *shipped out-of-box default* and the *recommended production default* are kept as **two columns** below, and for every seam `/healthz.components` (signed in) covers — exactly `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` —
   - it reports the **running** impl in `components.<seam>.selected`, plus `available` and `source` —
   - the recommended-production column lives in the matrix below and [ROADMAP.md](../ROADMAP.md), because a runtime endpoint reports runtime facts (see §2 step 5).
@@ -19,7 +19,7 @@
 
 - A pluggable seam in Wardyn has five parts.
 - Four seams implement all of parts 1–4 today — identity, secret store, recording, and the confinement substrate ([`internal/runner/substrate/registry.go`](../internal/runner/substrate/registry.go); its `docker` impl self-registers under `-tags docker`).
-- The rest carry the honest per-row "Seam status" in §3:
+- The rest carry the per-row "Seam status" in §3:
 
 1. **An interface** (`identity.Provider`, `secretstore.Store`, `recording.Store`, `runner.Runner`/`substrate.Substrate`, …) — the contract the control plane talks to.
    - Most carry a `Name()` method so the running impl is self-describing.
@@ -44,7 +44,7 @@
 > [!WARNING]
 > **Not every seam is registry-backed, and this rule used to claim they all were.**
 > - `egress.Evaluator` has a real interface AND a conformance suite, but **no registry, no selector env var, and exactly one implementation** — the only override is an in-process `Options.Evaluator` field that nothing outside tests sets.
-> - `/healthz` correspondingly reports `policy_engine: {selected: "builtin"}` with no `available` list, which is honest; step 5 below used to imply otherwise.
+> - `/healthz` correspondingly reports `policy_engine: {selected: "builtin"}` with no `available` list.
 > - An interface plus a conformance suite is a real head start on pluggability.
 > - It is not the same thing as a swappable seam, and the difference is exactly what this document exists to keep straight.
 
@@ -75,7 +75,7 @@
 
 ---
 
-## 2b. The four-layer question, answered honestly
+## 2b. Which layers can be swapped
 
 - An agent-sandboxing platform decomposes into four layers, and the question an architecture review actually asks is which of them you can swap:
 
@@ -87,7 +87,6 @@
 | **MCP / tool gateway** | **Does not exist.** See [below](#mcp--tool-gateway). |
 
 - **One of four is genuinely pluggable.**
-- That is the honest answer, and it reads better than four seams that are really one seam and three intentions.
 - The strongest thing to say here is the first row: *two implementations, one conformance contract, both enforced in CI* —
   - which is a materially stronger claim than "we have an interface", and it is the only one of the four that has earned it.
 
@@ -160,10 +159,10 @@
   - It trusts the controller with every run's pod. See [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md).
 - A cluster can run both now, each in its own namespace.
 
-### Inner walls: narrowing an organisation's access per person, machine and run
+### Narrowing an organisation's access per person, machine and run
 
-- An organisation's outer wall (identity provider, cloud IAM, network, exemptions) sets the most any run may do.
-- Wardyn's inner walls give each run less. A narrower setting can only narrow, never widen:
+- The organisation's boundary (identity provider, cloud IAM, network, exemptions) sets the most any run may do.
+- Wardyn gives each run less. A narrower setting can only narrow, never widen:
   - a run's drive flag narrows the person's allocation ([who can change what](operations/admin-only-writes.md));
   - an egress decision's scope can hold a domain to one run ([decision scopes](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run)).
 - Going outward is an approval, recorded per domain and per run, never a setting a person changes for good on their own:
@@ -181,7 +180,7 @@
 ## 3. Blessed-default-vs-alternate matrix
 
 - `Shipped` = the out-of-box default that runs today.
-- `Recommended (prod)` = the standard Wardyn recommends for hostile-multi-tenant production (may differ from shipped — see the honesty rule).
+- `Recommended (prod)` = the standard Wardyn recommends for hostile-multi-tenant production (may differ from shipped — see the shipped-versus-recommended note in §1).
 - `Seam status`: **shipped** = the interface + registry + conformance exist today; **planned** = interface lands on the roadmap.
 - Planned entries that carry a MILESTONE — and what they are planned *for* — are enumerated in [`../ROADMAP.md`](../ROADMAP.md) (SPIRE, OpenBao).
   - The rest are seam-ready candidates with no scheduled work.
@@ -280,30 +279,21 @@
 
 ---
 
-## 4. The recommended-vs-shipped tension, made honest
+## 4. Recommended versus shipped
 
 - We recommend SPIRE / OpenBao / OPA / Kata-CC3 / Tetragon for hostile-multi-tenant production while the binary ships embedded / pg / builtin / docker(runc..kata) / heartbeat-only.
 - "Recommended: SPIRE" must never read as "you are running SPIRE", so three things keep the gap visible:
 
 1. The two columns above never merge.
-2. **`/healthz` is machine-honest.** For every seam `components` covers, `components.<seam>.selected` is the *running* impl, `components.<seam>.available` is this build's registry, and `source` distinguishes `default` from `configured`. Signed out, `/healthz` omits it and `confinement_substrates`.
-   - Same anti-overclaim guarantee as `ebpf_groundtruth` and runner `Capabilities`.
+2. **`/healthz` reports the running implementation.** For every seam `components` covers, `components.<seam>.selected` is the *running* impl, `components.<seam>.available` is this build's registry, and `source` distinguishes `default` from `configured`. Signed out, `/healthz` omits it and `confinement_substrates`.
+   - `ebpf_groundtruth` and runner `Capabilities` work the same way.
 3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must pass the *same* `RunConformance` suite the shipped default passes — until an alternate is green, the shipped default is what you run.
 
 ---
 
-## 5. Where the seams live (code map)
+## 5. Where the seams live
 
-- [`internal/component/registry.go`](../internal/component/registry.go) — the shared `Registry[C]`.
-- `internal/identity/{registry.go,revocation.go}` + `identity/embedded/register.go` + `identity/identitytest`.
-- `internal/secretstore/{registry.go,secretstore.go}` + `secretstore/pg/register.go` + `secretstore/secretstoretest`; the KEK seam is `internal/secretstore/kek` (`KEK`, `Versioned`), with Transit in `secretstore/vaultkv/transit.go`.
-  - `Store.For(owner)` (0.7, migration `0050`) is part of the seam contract every implementation must honor — `RunConformance`'s `owner_*` cases hold a future alternate to the same fallback/isolation rules `pg` implements today.
-- [`internal/recording/registry.go`](../internal/recording/registry.go) + `recording/recordingtest`.
-- `internal/runner/substrate/{substrate.go,registry.go}` (the `Substrate` sub-interface + `ClassSupport` + the substrate registry) +
-  - [`internal/runner/docker/register.go`](../internal/runner/docker/register.go) (the OCI substrate's `init()` self-registration, `-tags docker` only) +
-  - `internal/runner/orchestrator/` (the build-tag-free `runner.Runner` that multiplexes substrates by Confinement Class, with a durable pg-backed ref→substrate `RefStore` — [`internal/store/store_sandbox_ref.go`](../internal/store/store_sandbox_ref.go) — so kill-switch routing survives control-plane restarts) +
-  - [`internal/runner/docker/hardening.go`](../internal/runner/docker/hardening.go) (`resolveRuntime`, `capabilitiesForWith`) + `cmd/wardynd` `WARDYN_CONFINEMENT_MAP` — the confinement substrate/runtime seam.
-- [`internal/egress/evaluator.go`](../internal/egress/evaluator.go) (policy evaluator, overridable via `Options.Evaluator` in [`internal/egress/proxy/proxy.go`](../internal/egress/proxy/proxy.go)) + [`internal/egress/proxy/local_routes.go`](../internal/egress/proxy/local_routes.go) (LLM-route forwarding) — the egress seams.
-- [`internal/runner/runner.go`](../internal/runner/runner.go) (`Capabilities.Resolved`) + [`internal/api/healthz.go`](../internal/api/healthz.go) (`/healthz` `confinement_substrates` + `components`).
-- [EXTENDING.md](EXTENDING.md) maps the layers and the interface each extension implements, including the closed sets (model provider kinds, credential classes) that have no seam.
+- [EXTENDING.md](EXTENDING.md#extension-points) lists each seam's interface, registry and test package, including the closed sets (model provider kinds, credential classes) that have no seam.
+- `Store.For(owner)` is part of the secret-store contract: `RunConformance`'s `owner_*` cases hold an alternate to the fallback and isolation rules `pg` implements.
+- `WARDYN_CONFINEMENT_MAP` in `cmd/wardynd` maps a confinement class to a substrate and runtime.
 - Planned impls (seams ready, alternates not built): the non-OCI VMM `Substrate` (SmolVM/Firecracker), SPIRE identity, OPA/Cedar evaluator, an external LLM gateway.

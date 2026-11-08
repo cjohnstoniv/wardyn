@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -171,6 +170,18 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 	// readable from the audit stream alone — "" means no scope recorded, never
 	// inferred as `run`.
 	data["decision_scope"] = string(decision.Scope)
+	// An MCP call row names its tool, server and call hash beside the decision, so the chain from
+	// the request to the forwarded call joins on the audit row alone.
+	if TallyKey(result) == TallyToolCallMCP {
+		var call struct {
+			Tool       string `json:"tool"`
+			MCPServer  string `json:"mcp_server"`
+			CallSHA256 string `json:"call_sha256"`
+		}
+		if json.Unmarshal(result.RequestedScope, &call) == nil {
+			data["tool"], data["mcp_server"], data["call_sha256"] = call.Tool, call.MCPServer, call.CallSHA256
+		}
+	}
 	if decision.ExpiresAt != nil {
 		data["decision_expires_at"] = decision.ExpiresAt.UTC()
 	}
@@ -347,6 +358,9 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 const (
 	// TallyToolCallADO is an Azure DevOps capability escalation.
 	TallyToolCallADO = "tool_call:azure_devops"
+	// TallyToolCallMCP is one MCP call a person approves with its exact arguments (an
+	// approve_each rule): a tool_call known by call_sha256, with no grant.
+	TallyToolCallMCP = "tool_call:mcp_call"
 	// TallyReauthAWSSSO is a lapsed captured AWS SSO session's re-auth.
 	TallyReauthAWSSSO = "credential_reauth:aws_sso"
 	// TallyReauthADOSignIn is an Azure DevOps sign-in request.
@@ -364,6 +378,7 @@ func TallyKey(ap types.ApprovalRequest) string {
 		Mechanism        string    `json:"mechanism"`
 		CredentialSource string    `json:"credential_source"`
 		GrantID          uuid.UUID `json:"grant_id"`
+		CallSHA256       string    `json:"call_sha256"`
 	}
 	if json.Unmarshal(ap.RequestedScope, &sc) != nil {
 		return string(ap.Kind)
@@ -372,6 +387,9 @@ func TallyKey(ap types.ApprovalRequest) string {
 	case types.ApprovalToolCall:
 		if ap.GrantID != nil && *ap.GrantID != uuid.Nil && sc.Lane == "azure_devops" && sc.GrantID == *ap.GrantID {
 			return TallyToolCallADO
+		}
+		if sc.CallSHA256 != "" && (ap.GrantID == nil || *ap.GrantID == uuid.Nil) {
+			return TallyToolCallMCP
 		}
 	case types.ApprovalCredentialReauth:
 		switch {
@@ -472,7 +490,7 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 
 // scopeHash produces a stable content hash over (runID, kind, scope) for
 // deduplication. The scope JSON is re-encoded to normalise key ordering, and
-// its numbers to canonicalNumber's spelling: a row stored before the insert
+// its numbers to types.CanonicalNumber's spelling: a row stored before the insert
 // was canonical still matches, and no number is rounded through float64.
 func scopeHash(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) string {
 	var raw any
@@ -494,7 +512,7 @@ func scopeHash(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) 
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// canonicalScope is scope with each number rewritten to canonicalNumber's spelling and every other
+// canonicalScope is scope with each number rewritten to types.CanonicalNumber's spelling and every other
 // byte as written. The pending index (migration 0213) hashes jsonb_send bytes, which normalise keys,
 // spacing and escapes but keep a number's scale, so 1.0 and 1 hash apart unless the insert carries
 // one spelling. Scope that is not JSON is returned as it came.
@@ -520,7 +538,7 @@ func canonicalScope(scope json.RawMessage) json.RawMessage {
 			for j < len(scope) && strings.IndexByte("+-.eE0123456789", scope[j]) >= 0 {
 				j++
 			}
-			out = append(out, canonicalNumber(string(scope[i:j]))...)
+			out = append(out, types.CanonicalNumber(string(scope[i:j]))...)
 			i = j
 		default:
 			out = append(out, c)
@@ -530,11 +548,11 @@ func canonicalScope(scope json.RawMessage) json.RawMessage {
 	return out
 }
 
-// canonicalNumbers is canonicalNumber over every json.Number in a value decoded with UseNumber.
+// canonicalNumbers is types.CanonicalNumber over every json.Number in a value decoded with UseNumber.
 func canonicalNumbers(v any) any {
 	switch t := v.(type) {
 	case json.Number:
-		return json.Number(canonicalNumber(string(t)))
+		return json.Number(types.CanonicalNumber(string(t)))
 	case map[string]any:
 		for k, e := range t {
 			t[k] = canonicalNumbers(e)
@@ -545,53 +563,4 @@ func canonicalNumbers(v any) any {
 		}
 	}
 	return v
-}
-
-// canonicalNumber is one spelling per value of a JSON number, made from its decimal digits and never
-// through float64: no exponent, no trailing fractional zeros, and no minus on zero, as Postgres
-// prints a numeric with no excess scale; past 20 zeros of padding, the significant digits with an
-// exponent, which Postgres reads to the same numeric. An exponent too large to compute with is
-// returned as written (Postgres refuses such a number).
-func canonicalNumber(n string) string {
-	neg := strings.HasPrefix(n, "-")
-	mant, expPart, hasExp := strings.Cut(strings.TrimPrefix(n, "-"), "e")
-	if !hasExp {
-		mant, expPart, hasExp = strings.Cut(mant, "E")
-	}
-	exp := 0
-	if hasExp {
-		e, err := strconv.Atoi(expPart)
-		if err != nil || e > 1<<40 || e < -(1<<40) {
-			return n
-		}
-		exp = e
-	}
-	whole, frac, _ := strings.Cut(mant, ".")
-	digits := strings.TrimLeft(whole+frac, "0")
-	if digits == "" {
-		return "0"
-	}
-	q := exp - len(frac) // the value is digits × 10^q
-	for strings.HasSuffix(digits, "0") {
-		digits, q = digits[:len(digits)-1], q+1
-	}
-	var out string
-	switch point := len(digits) + q; {
-	case q >= 0 && q <= 20:
-		out = digits + strings.Repeat("0", q)
-	case q < 0 && point > 0:
-		out = digits[:point] + "." + digits[point:]
-	case q < 0 && point > -20:
-		out = "0." + strings.Repeat("0", -point) + digits
-	default:
-		out = digits[:1]
-		if len(digits) > 1 {
-			out += "." + digits[1:]
-		}
-		out += "e" + strconv.Itoa(point-1)
-	}
-	if neg {
-		return "-" + out
-	}
-	return out
 }

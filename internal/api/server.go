@@ -110,10 +110,9 @@ type Config struct {
 	// DropsByName). Nil omits the metric: no SIEM sinks configured, nothing to report.
 	AuditSinkDrops       func() map[string]int64
 	ForgetRunCorrelation func(runIDs []uuid.UUID) // cmd/wardynd: the audit Fanout's ForgetRuns; person erasure calls it after clearing the ids. Nil with no sinks.
-	// AuditDelivery, when set, reports each acknowledged-delivery destination's
-	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
-	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
-	// configured with delivery "acknowledged"). Nil omits the series.
+	// AuditDelivery, when set, reports each acknowledged-delivery destination's checkpoint and the head it
+	// lags behind for the wardyn_audit_delivery_* metrics (cmd/wardynd wires it to the store only when the
+	// webhook sink is configured with delivery "acknowledged"). Nil omits the series.
 	AuditDelivery func(ctx context.Context) ([]store.AuditDeliveryStatus, error)
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
@@ -200,10 +199,10 @@ type Config struct {
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.
 	TrustedCAPEM string
-	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off,
-	// the default: a bare allowlist host is open on every port), "dry_run" or
-	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
+	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off, the default), "dry_run" or "on"
+	// (80/443 plus host:port entries); off leaves a bare allowlist host open on every port. Desktop VM runs always have it on.
 	EgressPortRule string
+	ModelUsageOff  bool // WARDYN_MODEL_USAGE=off: store no model usage record, whatever a proxy sends; on by default
 	// DesktopSignins is WARDYN_DESKTOP_SIGNINS=on: a run whose policy declares
 	// the desktop gets the person's sign-in store and the proxy's sign-in lane,
 	// and its owner may sign in to websites there (run_desktop_signin.go).
@@ -356,7 +355,7 @@ type Config struct {
 
 	HarnessLoginCPUMillis int // WARDYN_HARNESS_LOGIN_CPU_MILLIS; see harnessLoginResources (harnesscred.go)
 	HarnessLoginMemoryMiB int // WARDYN_HARNESS_LOGIN_MEMORY_MIB; ditto — still governance-ceiling capped
-
+	GroundtruthSensorConfig
 	// AWSSSOProxyInject is the kill switch for proxy-side SSO token injection
 	// (WARDYN_AWS_SSO_PROXY_INJECT,
 	// resolved by ResolveAWSSSOProxyInject at boot): when true a captured-AWS-SSO
@@ -413,8 +412,7 @@ type Config struct {
 	// attach lease (live_bus.go). Nil keeps each replica to its own process, as before.
 	LiveBus *livebus.Bus
 	// ADORunPATs, when non-nil, keeps each `minted_pat` run's current token in Postgres so every
-	// replica serves the one any replica created (ado_run_pat_cache.go). Nil keeps it in this
-	// process.
+	// replica serves the one any replica created (ado_run_pat_cache.go). Nil keeps it in this process.
 	ADORunPATs *adorunpat.Store
 	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no non-interactive run
 	// keeps an output tail for GET /runs/{id}/output (run_output.go).
@@ -469,6 +467,8 @@ type Config struct {
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	HostCapacityConfig
+	AuditReceiptConfig
+	ImageAdmissionConfig
 	// MaxConcurrentRuns caps non-terminal runs across the whole deployment, every
 	// replica and every creation door (env WARDYN_MAX_CONCURRENT_RUNS); 0 or less
 	// is unlimited. Past it every door answers 422 run_quota (createRun); POST /runs

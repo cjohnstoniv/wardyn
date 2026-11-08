@@ -294,6 +294,7 @@ type Proxy struct {
 	// dial to the tunnel's end; maxTunnels bounds it (maxOpenTunnels; tests lower it).
 	openTunnels atomic.Int32
 	maxTunnels  int32
+	meterOff    bool // Config.DisableModelUsage: no model-token metering; the zero value meters
 }
 
 // maxOpenTunnels is the most opaque CONNECT tunnels a run's proxy holds at once,

@@ -11,7 +11,7 @@ import type { ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 import { defaultChoices, reasonText, ruleChoices } from "./tool-facts";
 
 const CASES = golden as { name: string; policy_rules: { tool: string; effect: string }[]; lane_default: ToolEffect; tool: string; effect: ToolEffect }[];
-const RANK = { allow: 0, hold: 1, deny: 2 };
+const RANK = { allow: 0, hold: 1, approve_each: 2, deny: 3 };
 
 // A fact whose lane and rows are a golden case's, and whose harness takes any effect.
 const factFor = (c: (typeof CASES)[number]): ToolPolicyFact => ({
@@ -106,5 +106,44 @@ describe("reasonText", () => {
   it("returns nothing for a code this console does not know", () => {
     expect(reasonText("a_new_code")).toBeUndefined();
     expect(reasonText(undefined)).toBeUndefined();
+  });
+});
+
+describe("Approve each call", () => {
+  const four = (approveEach: { available: boolean; reason?: string }) =>
+    (["allow", "hold", "approve_each", "deny"] as const).map((effect) => ({ effect, ...(effect === "approve_each" ? approveEach : { available: true }) }));
+  const fact = (approveEach: { available: boolean; reason?: string }): ToolPolicyFact => ({ ...CLAUDE_UNGATED, rule_effects: four(approveEach), default: { ...CLAUDE_UNGATED.default, options: four({ available: false, reason: "approve_each_default" }) } });
+  const state = (cs: ReturnType<typeof ruleChoices>) => cs.find((c) => c.effect === "approve_each");
+
+  it("is offered for an MCP tool when the server offers it", () => {
+    expect(state(ruleChoices(fact({ available: true }), "Claude Code", "mcp__jira__delete_issue"))).toMatchObject({ available: true });
+  });
+
+  it.each(["mcp__jira", "mcp__jira__", "mcp__jira__*"])("is greyed for %s, which is not one exact MCP tool", (tool) => {
+    expect(state(ruleChoices(fact({ available: true }), "Claude Code", tool))).toMatchObject({ available: false, reason: "Approve each call names one MCP tool. Add it as a rule for that tool." });
+  });
+
+  it("is greyed for any other tool, with the server's own sentence", () => {
+    const c = state(ruleChoices(fact({ available: true }), "Claude Code", "WebFetch"));
+    expect(c).toMatchObject({ available: false, reason: "Approve each call names one MCP tool. Add it as a rule for that tool." });
+  });
+
+  it("is greyed with the server's sentence when no remote MCP server is on", () => {
+    const c = state(ruleChoices(fact({ available: false, reason: "approve_each_no_remote_mcp" }), "Claude Code", "mcp__jira__delete_issue"));
+    expect(c?.available).toBe(false);
+    expect(c?.reason).toMatch(/^Approve each call works for a tool of a remote MCP server/);
+  });
+
+  it("is greyed on the default row", () => {
+    expect(state(defaultChoices(fact({ available: true }), "Claude Code"))).toMatchObject({ available: false, reason: "Approve each call names one MCP tool. Add it as a rule for that tool." });
+  });
+
+  it("is not offered at all by a server that sends three effects", () => {
+    expect(ruleChoices(CLAUDE_UNGATED, "Claude Code", "mcp__jira__delete_issue").map((c) => c.effect)).toEqual(["allow", "hold", "deny"]);
+  });
+
+  it("is stricter than hold and looser than deny", () => {
+    const hold = { ...fact({ available: true }), policy_rules: [{ tool: "mcp__jira__x", effect: "approve_each", source: { kind: "policy" } }] };
+    expect(ruleChoices(hold, "Claude Code", "mcp__jira__x").map((c) => [c.effect, c.available])).toEqual([["allow", false], ["hold", false], ["approve_each", true], ["deny", true]]);
   });
 });

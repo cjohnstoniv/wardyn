@@ -459,18 +459,18 @@ func TestSiteImagesCarryForwardAndAudit(t *testing.T) {
 				t.Errorf("Images = %+v, want %+v", cfg.Images, tc.want)
 			}
 			datum := map[string]any{}
-			auditSiteImages(datum, cfg.Images, tc.named)
+			auditSiteImages(datum, nil, cfg.Images, tc.named)
 			if _, has := datum["images_require_digest"]; has != tc.wantKey {
 				t.Errorf("datum = %v, want images_require_digest present = %v", datum, tc.wantKey)
 			}
 		})
 	}
 	datum := map[string]any{}
-	auditSiteImages(datum, nil, false)
+	auditSiteImages(datum, nil, nil, false)
 	if len(datum) != 0 {
 		t.Errorf("a deployment with no block wrote %v: its site_config.write row must be unchanged", datum)
 	}
-	auditSiteImages(datum, on, true)
+	auditSiteImages(datum, nil, on, true)
 	if datum["images_require_digest"] != true {
 		t.Errorf("datum = %v, want images_require_digest true", datum)
 	}

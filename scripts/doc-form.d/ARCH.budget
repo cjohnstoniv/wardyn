@@ -11,14 +11,16 @@
 # 0.9.4 L8: ARCHITECTURE.md 5876 adds 6 over 5870: ssh_key delivery claims bounded.
 # 0.9.4 W4-DOCS-1: ARCHITECTURE.md 5936 adds 60 over 5876, measured: #2231 #2232 #2233 #2235: CSP summary, invariant 3 scope, QUEUED state, CLI pointer.
 # ARCHITECTURE.md 5956 adds 20 over 5936, measured (rc.8 E5): the pointer to docs/EXTENDING.md and the organisation runner's several runs namespaces.
-ARCHITECTURE.md=5956 share=35
+ARCHITECTURE.md=6245 share=35 # 6245 measured (+4: the mint figure's alt text says minted_jti is written only for a once-only grant); 6241 measured (the Invariant 2 mint lifetime and run lease, and the kept-run substrate rule); 6151 before; 6151 measured (+226 over 5925, measured: the overview, run-states and mint fences became figures, so the facts each shows are now stated in text (placement, five run-state bullets, the mint's one-hour bound and revoke) and the three figures add 88 words of markup and alt text); earlier: -30 from the old budget, -1 from the measured 5927 (front-door docs): the authorization-kernel change log, the layered-egress copy and the CSP and RBAC wording are cut or linked; that offsets the added VM binaries, substrates and machine-kind bullet; measured.
 # 0.9.4 L8: SECURITY.md 1326 adds 327 over 999: the 'Which credentials enter the sandbox' section and the qualified invariants.
 # 0.10.0 VM-B: SECURITY.md 1381 adds 55: the bare-host every-port scope and the port rule (#3193).
-SECURITY.md=1381 share=35
-PROVENANCE.md=821 share=35
+# 0.10.0 docs: SECURITY.md 1340 = 1381 - 41, measured: the email-placeholder note, the advisory-lag anecdote and the component list shortened, one credential kind and the machine kind added.
+SECURITY.md=1340 share=15
+# 0.10.0 docs: PROVENANCE.md 802 = 817 - 15, measured: the AI-assistance paragraph says most of the code is agent-written, offset by filler cuts.
+PROVENANCE.md=802 share=23
 # 0.9.4 L8: docs/DATA-FLOW.md 1421 adds 221 over 1200: rows for notifications, key services, Azure DevOps and the demo player.
 # 0.9.6: docs/DATA-FLOW.md 1461 adds 40: casts hold terminal output only, and the note on casts made before 0.9.6.
-docs/DATA-FLOW.md=1461 share=35
+docs/DATA-FLOW.md=1447 share=35 # -14 (front-door docs): section references become links and the audit-sink row names the OTLP sink; measured.
 # threatmodel/AGENT-THREAT-MODEL.md 2305 adds 31 over 2274: 0.9 final docs pass, measured: the ownership row for a developer's own runner.
 # 0.9.4 L8: threatmodel/AGENT-THREAT-MODEL.md 2346 adds 41 over 2305: categories 6 and 14 corrected.
-threatmodel/AGENT-THREAT-MODEL.md=2346 share=35
+threatmodel/AGENT-THREAT-MODEL.md=2350 share=35 # 2350 measured (+14 over 2336): the signed audit checkpoint docs, receipts, policy stamp and metrics; earlier: 2336 measured (network, actor and VM limit lines, offset by cutting restated-list notes)

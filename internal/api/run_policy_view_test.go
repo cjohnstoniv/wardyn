@@ -949,6 +949,27 @@ func TestLatestPolicyResolve_LastWinsAndSkipsUndecodable(t *testing.T) {
 	}
 }
 
+// TestLatestPolicyResolve_NeverTakesAGenerationRow: a run.policy.generation row is a revive's proposal,
+// which applies only while agent_runs says its generation is current, so the scan of a run's rows keeps
+// the dispatch envelope (runEffectivePolicy picks the generation; run_effective_policy_test.go).
+func TestLatestPolicyResolve_NeverTakesAGenerationRow(t *testing.T) {
+	mk := func(action string, data string, at time.Time) types.AuditEvent {
+		return types.AuditEvent{Action: action, Data: json.RawMessage(data), Time: at}
+	}
+	t0 := time.Now()
+	events := []types.AuditEvent{
+		mk("run.policy.resolve", `{"allowed_domains":["wide.example","kept.example"],"disk_mib_filled":true}`, t0),
+		mk("run.policy.generation", `{"generation":2,"policy":{"allowed_domains":["kept.example"]}}`, t0.Add(time.Second)),
+	}
+	d, at, ok := latestPolicyResolve(events)
+	if !ok || !slices.Equal(d.AllowedDomains, []string{"wide.example", "kept.example"}) || !d.DiskMiBFilled || !at.Equal(t0) {
+		t.Errorf("latest = %+v at %v ok %v; want the dispatch envelope", d, at, ok)
+	}
+	if _, _, ok := latestPolicyResolve(events[1:]); ok {
+		t.Error("a generation row alone reported as an envelope")
+	}
+}
+
 // TestExplainRunPolicy_DiskBasis: the recorded basis of the main drive decides how the run policy
 // view explains its size. A size the run's policy wrote is the policy's own and explains nothing
 // (and is not called an admin's, since an inline policy is written by the person who launched);

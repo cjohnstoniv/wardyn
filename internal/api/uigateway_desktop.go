@@ -594,7 +594,7 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 }
 
 // desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop
-// copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction, size and hash, never the
+// copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction and size, never the
 // text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
 // so no cut text flows today; the filter holds the rules for when one does. viewOnly also keeps the
 // viewer's input from the display. A background run's watch moves nothing but the picture, whatever the run's

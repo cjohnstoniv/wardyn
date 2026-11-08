@@ -76,7 +76,7 @@ func nextRunSubnet(pool netip.Prefix, bits int, used []netip.Prefix) (netip.Pref
 // free is read from the daemon's networks on every create, never kept in memory, so a restart, a
 // second replica and every other stack on the daemon count. The lock keeps this driver's creates
 // from racing each other; a create that loses its subnet to another process anyway is retried.
-func (d *Driver) createPoolRunNetwork(ctx context.Context, name string, labels map[string]string) (string, error) {
+func (d *Driver) createPoolRunNetwork(ctx context.Context, name string, base client.NetworkCreateOptions) (string, error) {
 	d.subnetMu.Lock()
 	defer d.subnetMu.Unlock()
 	var lost []netip.Prefix
@@ -86,8 +86,8 @@ func (d *Driver) createPoolRunNetwork(ctx context.Context, name string, labels m
 		if subnet, err = d.poolRunSubnet(ctx, lost); err != nil {
 			return "", err
 		}
-		opts := client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: labels,
-			IPAM: &network.IPAM{Config: []network.IPAMConfig{{Subnet: subnet}}}}
+		opts := base
+		opts.IPAM = &network.IPAM{Config: []network.IPAMConfig{{Subnet: subnet}}}
 		var res client.NetworkCreateResult
 		if res, err = d.cli.NetworkCreate(ctx, name, opts); err == nil {
 			return res.ID, nil

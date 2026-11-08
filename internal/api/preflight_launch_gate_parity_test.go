@@ -118,9 +118,10 @@ var policyPreviewGateExceptions = map[string]string{
 	"refuseRunCapFull":           "preview does not count runs or enforce quota",
 	"refuseRunFit":               "preview does not read Kubernetes quota",
 	"runFitSpec":                 "preview does not resolve a dispatch fit request",
+	"imageAdmission":             "preview reads no registry; it reports image_admission \"checked at launch\" (imageAdmissionPreview) instead",
 }
 
-const policyPreviewGateExceptionsMax = 11
+const policyPreviewGateExceptionsMax = 12
 
 // wantRunFoldSteps pins runFoldSteps: every step, in order, with the doors it
 // runs at. A lane adding a gate adds its step here in the same commit; a step
@@ -159,6 +160,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepADOStanding", foldCreate | foldPreflight | foldPreview},
 	{"stepPATNarrowing", foldPreflight | foldPreview},
 	{"stepRunEnd", foldCreate | foldPreflight | foldPreview},
+	{"stepImageAdmission", foldCreate | foldPreflight},
 	{"stepHostCapacity", foldCreate | foldPreflight},
 	{"stepRunCap", foldCreate | foldPreflight},
 	{"stepRunFit", foldCreate | foldPreflight},

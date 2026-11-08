@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +64,9 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		closeGitHubDoor(&cfg.Policy)
 		re.droppedLane = append(re.droppedLane, githubDoorLane)
 	}
-	if cfg.AWSSigV4 != nil && w.withheldAny(cfg.AWSSigV4.Hosts) { // the sandbox holds only the placeholder pair, so the re-signer can go
+	// The sandbox holds only the placeholder pair, so the re-signer can go, with its gateways' routes.
+	if sig := cfg.AWSSigV4; sig != nil && w.withheldAny(slices.Concat(sig.Hosts, awsSigV4GatewayHosts(sig.Gateways))) {
+		cfg.GatewayIdentity = dropSignedGatewayRoutes(cfg.GatewayIdentity, sig.Gateways)
 		cfg.AWSSigV4 = nil
 		re.droppedLane = append(re.droppedLane, awsSigV4Lane)
 	}
@@ -186,4 +189,25 @@ func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
 		return nil, err
 	}
 	return proxy.LoadConfigBytes(b)
+}
+
+// auditReviveCeilingRefusal writes the denied run.revive row for a ceiling refusal of the git broker or the
+// Azure CLI lane, before reviveRunProxy returns it; any other refusal writes none here.
+func (s *Server) auditReviveCeilingRefusal(ctx context.Context, run types.AgentRun, rerr *reviveError, actorType types.ActorType, actor string) {
+	if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
+	}
+}
+
+// revivedStoredConfig is the revived config as the run row stores it. The stored row stays the
+// organisation's: a run on a runner keeps the inspection corpus its laptop copy drops, as dispatch stores it
+// (classifyLocalDispatch). A remote run's stored config is cfgJSON itself.
+func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Config, corpus inspectionCorpus, cfgJSON []byte) ([]byte, *reviveError) {
+	if remotePlacement(run.Placement) {
+		return cfgJSON, nil
+	}
+	org := *cfg
+	org.Policy = corpus.restoredOn(cfg.Policy)
+	return encodeRevivedConfig(ctx, &org)
 }

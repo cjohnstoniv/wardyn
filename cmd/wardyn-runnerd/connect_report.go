@@ -148,6 +148,23 @@ func (l *offlineLog) startFailed(err error) {
 	}
 }
 
+// waiting records a start that is waiting for its proxy image, as startFailed does (so the organisation
+// is told why at the first connect), with when the next try is. waiting(nil, zero) says the image is
+// here: the next try goes from status.json, the summary stays until the organisation has it. A nil log
+// records nothing.
+func (l *offlineLog) waiting(err error, next time.Time) {
+	if l == nil {
+		return
+	}
+	if err == nil {
+		l.status.retryAt(nil)
+		return
+	}
+	l.startFailed(err)
+	next = next.UTC()
+	l.status.retryAt(&next)
+}
+
 func (l *offlineLog) fail(stage string, err error) types.RunnerOfflineSummary {
 	now := l.now().UTC()
 	l.mu.Lock()

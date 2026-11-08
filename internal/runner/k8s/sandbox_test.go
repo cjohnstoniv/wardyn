@@ -1361,6 +1361,7 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 	// being ONE list.
 	t.Setenv("WARDYN_CREDENTIAL_REAUTH_TIMEOUT", "45s")
 	t.Setenv("WARDYN_GIT_APPROVAL_TIMEOUT", "10m")
+	t.Setenv("WARDYN_MODEL_USAGE", "off")
 
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
@@ -1383,6 +1384,7 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 		"WARDYN_LLM_SCAN":                     "off",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 		"WARDYN_GIT_APPROVAL_TIMEOUT":         "10m",
+		"WARDYN_MODEL_USAGE":                  "off",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
@@ -1408,6 +1410,7 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 		"WARDYN_LLM_SCAN",
 		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
 		"WARDYN_GIT_APPROVAL_TIMEOUT",
+		"WARDYN_MODEL_USAGE",
 	} {
 		t.Setenv(k, "") // t.Setenv cannot unset; clear then Unsetenv below
 		if err := os.Unsetenv(k); err != nil {

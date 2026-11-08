@@ -16,7 +16,7 @@ the code that makes it true; there is no separate "trust us" layer.
   - Microsoft Graph and the Entra token endpoint, for the identity-directory connector (`internal/directory`) and the Entra sign-in paths;
   - Azure DevOps (`dev.azure.com`, `vssps.dev.azure.com`), for the Azure DevOps PAT API;
   - Azure Key Vault (`vault.azure.net`), when the key service or secret store is Azure Key Vault.
-- Each has its row below, and [`docs/OPERATIONS.md`](OPERATIONS.md)'s "Directory autocomplete: the one path where the daemon dials out" covers the directory connector.
+- Each has its row below, and [Directory autocomplete](OPERATIONS.md#directory-autocomplete-outbound-calls-to-entra-and-graph) covers the directory connector.
 
 - The one telemetry source in the system that is *not* Wardyn's is the agent harness's own:
   - Claude Code ships its own Datadog usage telemetry (`http-intake.logs.us5.datadoghq.com`), which egress policy sees and can gate like any other host —
@@ -27,10 +27,10 @@ the code that makes it true; there is no separate "trust us" layer.
 
 | Component | Talks to | Configured by | Purpose |
 |---|---|---|---|
-| **`wardyn-proxy`** (the **L2** egress gateway every sandboxed process's traffic transits) | Whatever host the run's policy allowlists — typically an LLM API (`api.anthropic.com`, `api.openai.com`, a Bedrock regional endpoint), a git host, or an operator-declared integration host | The operator, per-policy ([`docs/POLICIES.md`](POLICIES.md)) | The model-API and any other allowed egress for the run. This is the one channel the threat model names as an unavoidable data-exit path by design ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1) — the proxy logs it, it does not silently hide it. |
+| **`wardyn-proxy`** (the **L2** egress gateway every sandboxed process's traffic transits) | Whatever host the run's policy allowlists — typically an LLM API (`api.anthropic.com`, `api.openai.com`, a Bedrock regional endpoint), a git host, or an operator-declared integration host | The operator, per-policy ([`docs/POLICIES.md`](POLICIES.md)) | The model-API and any other allowed egress for the run. The threat model names this the one unavoidable data-exit path ([residual 1](../threatmodel/THREAT-MODEL.md#5-out-of-scope--published-residual-risks)); the proxy logs it. |
 | **git broker** (`internal/broker`) | `github.com` / a GitHub Enterprise host, or `dev.azure.com` for Azure DevOps | The operator, via the configured SCM integration | Mints short-lived, scope-bound git credentials (installation tokens / PATs) — never a long-lived credential resident in the sandbox. |
 | **OIDC auth** (`internal/auth/oidc`) | The operator's own IdP issuer URL (`WARDYN_OIDC_ISSUER`) — in the bundled Docker Compose dev stack this is a local Dex sidecar the operator runs themselves, not a Wardyn-hosted service | The operator | Human SSO login: OIDC discovery, JWKS, and the token exchange at `/auth/callback`. Group/directory *reads* are a separate opt-in component — the row below. |
-| **Audit sinks** (`internal/audit/sinks`: `webhook.go`, `syslog.go`) | An operator-configured SIEM webhook URL or syslog endpoint (file sink is local-disk-only, no network) | The operator, opt-in per sink (off by default) | Streams the append-only audit log to the operator's own SIEM, with hashes only for events whose Postgres write succeeded; see [below](#audit-sinks-purpose). |
+| **Audit sinks** (`internal/audit/sinks`: `webhook.go`, `syslog.go`, `otlp.go`) | An operator-configured SIEM webhook URL, syslog endpoint or OpenTelemetry collector (file sink is local-disk-only, no network) | The operator, opt-in per sink (off by default) | Streams the append-only audit log to the operator's own SIEM, with hashes only for events whose Postgres write succeeded; see [below](#audit-sinks-purpose). |
 | **Agent image pulls** (Docker daemon `docker pull`) | `ghcr.io/cjohnstoniv/agent-*` by default (Wardyn's own published OCI images — public, unauthenticated pulls, no data sent besides the standard registry protocol), or an operator-supplied registry via `WARDYN_AGENT_IMAGES` ([`docs/ENV.md`](ENV.md)) | Ships with a default; fully overridable by the operator | Pulls the agent runtime container image. No source code, secrets, or run data is part of this pull — it is a one-way image download. |
 | **Upstream corporate proxy** (optional, [`docs/OPERATIONS.md`](OPERATIONS.md)'s "upstream-proxy" section) | A URL the operator pastes in as a secret | The operator | Lets `wardyn-proxy` itself egress through a corporate forward proxy — this is the operator routing Wardyn's own egress through infrastructure *they* control, the reverse direction of a sub-processor relationship. |
 | **Identity-directory connector** (`internal/directory`, off unless `WARDYN_DIRECTORY_PROVIDER=entra`) | `graph.microsoft.com`, `login.microsoftonline.com` ([`internal/directory/entra.go`](../internal/directory/entra.go)) | The operator, by setting `WARDYN_DIRECTORY_PROVIDER` (unset = the whole feature off, `503 directory_unconfigured`, no connector and no read) | Backs the console's "who" autocomplete by reading the operator's own Entra tenant over daemon-side outbound HTTPS, not sandbox egress; see [below](#identity-directory-connector-purpose). |
@@ -86,12 +86,12 @@ the code that makes it true; there is no separate "trust us" layer.
 - **Model prompts/completions** — traverse `wardyn-proxy` (row 1, above) to
   whichever model API the policy allows;
   - this is the one path the threat
-    model explicitly does not claim to close (§5.1a, `llm_inspection` narrows
+    model explicitly does not claim to close ([LLM egress content inspection](../threatmodel/THREAT-MODEL.md#51a-llm-egress-content-inspection--the-honest-claims-contract); `llm_inspection` narrows
     it for the honest-agent case but is not exfil-proof).
 
 ## Related documents
 
-- [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5 — the full published residual-risk list,
+- [Published residual risks](../threatmodel/THREAT-MODEL.md#5-out-of-scope--published-residual-risks) in the threat model: the full list,
   including the model-API exit path this page summarizes.
 - [`docs/OPERATIONS.md`](OPERATIONS.md) — audit retention/erasure, upstream-proxy setup,
   audit-sink configuration.

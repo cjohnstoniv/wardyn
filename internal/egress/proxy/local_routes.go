@@ -212,6 +212,10 @@ type toolApprovalRequest struct {
 		Env  []string `json:"env,omitempty"`
 		// Reason is a human_takeover's only field: the agent's own words to the person.
 		Reason string `json:"reason,omitempty"`
+		// Input is the tool's whole input, which the gate sends beside the summary (never
+		// more than 32 KiB of it). Only an approve_each call reads it: it holds the
+		// arguments a person approves.
+		Input json.RawMessage `json:"input,omitempty"`
 	} `json:"payload"`
 }
 
@@ -277,7 +281,7 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "tool approval needs a tool or a cmd", http.StatusBadRequest)
 		return
 	}
-	if handled := p.decideByToolRules(w, r, scope.Tool); handled {
+	if handled := p.decideByToolRules(w, r, scope.Tool, body.Payload.Input); handled {
 		return
 	}
 	fwd, err := json.Marshal(struct {

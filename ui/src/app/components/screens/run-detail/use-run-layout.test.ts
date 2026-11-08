@@ -208,19 +208,19 @@ describe("useRunLayout: the default rail by kind of run", () => {
 
   it("a VM run with nothing saved has the Desktop tile, Attach under it and Effective policy under that", async () => {
     const { result } = await loadedAs([], "live", true);
-    expect([y(result.current.layout, "desktop"), y(result.current.layout, "ssh"), y(result.current.layout, "effective-policy")]).toEqual([20, 24, 29]);
+    expect([y(result.current.layout, "desktop"), y(result.current.layout, "ssh"), y(result.current.layout, "effective-policy")]).toEqual([24, 28, 33]);
   });
 
   it("any other run with nothing saved has no Desktop tile and no gap above Effective policy", async () => {
     const { result } = await loadedAs([], "live", false);
     expect(ids(result.current.layout)).not.toContain("desktop");
-    expect([y(result.current.layout, "ssh"), y(result.current.layout, "effective-policy")]).toEqual([20, 25]);
+    expect([y(result.current.layout, "ssh"), y(result.current.layout, "effective-policy")]).toEqual([24, 29]);
   });
 
   it("the first paint, before the saved layout arrives, is the same", () => {
     getLayout.mockReturnValue(new Promise(() => {}));
-    expect(y(renderHook(() => useRunLayout("live", false, false)).result.current.layout, "effective-policy")).toBe(25);
-    expect(y(renderHook(() => useRunLayout("live", false, true)).result.current.layout, "effective-policy")).toBe(29);
+    expect(y(renderHook(() => useRunLayout("live", false, false)).result.current.layout, "effective-policy")).toBe(29);
+    expect(y(renderHook(() => useRunLayout("live", false, true)).result.current.layout, "effective-policy")).toBe(33);
   });
 });
 

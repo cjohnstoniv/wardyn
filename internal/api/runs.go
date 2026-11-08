@@ -163,6 +163,11 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // answers a pool refusal when the insert lost to a pool change, or a server error.
 func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID uuid.UUID, pool types.ResolvedRunnerPool, err error) {
 	s.cfg.Identity.RevokeRun(context.WithoutCancel(r.Context()), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
+	// A later request took this one's Idempotency-Key over, so its run is the key's.
+	if errors.Is(err, store.ErrRunCreateKeySuperseded) {
+		writeRunCreateKeyInFlight(w)
+		return
+	}
 	if errors.Is(err, store.ErrRunnerPoolStale) {
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
@@ -322,7 +327,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// …and the managed-settings one, read off the run's bound runner and the
 	// settled tool lane, which the gate above could not see.
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: autonomy.Level,
-		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, &run)...)
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place, comps: comps}, &run)...)
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
@@ -351,19 +356,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
-	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
-	stampConfinementDefault(createData, reqCC, f.confinementDefault)
-	if len(gw.delivery) > 0 {
-		createData["delivery"] = gw.delivery
-	}
-	stampDriveAudit(createData, f.drives, f.keep != nil, runID)
-	intent.stamp(createData, created.LaunchIntent != nil)
-	stampHarnessSet(createData, f.harnesses, f.image)
-	comps.stampRunCreate(createData)
-	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markRunCreateExempt(ctx, createDigestInput(req, f.carriedImage), createData)
-	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
+	createData := s.runCreateAuditData(ctx, runCreateAudit{req: req, f: f, run: run, created: created, enforced: enforced, reqCC: reqCC,
+		jti: id.JTI, policyWarns: policyWarns, autonomy: autonomy, belowFloor: belowFloor, mpChoice: mpChoice, gw: gw, comps: comps,
+		intent: intent, runID: runID, createdByType: createdByType, createdBy: createdBy})
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 	s.auditRunComponents(ctx, runID, createdByType, createdBy, comps)
@@ -432,7 +427,7 @@ func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.
-	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
+	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run, now, req.Repo, spec.WorkspaceRepos, spec.GitHubCapabilities, comps, &gw) {
 		return grantWiring{}, nil, false
 	}
 	gw.gitPushWithheld = withheld.hosts(gw.adoGitHosts)
@@ -482,6 +477,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		VMMachine:        macOSBaseMachine(req), // a macOS VM's picked base, until the Mac records its machine
 		Experience:       req.Experience,
 		ImageInput:       &imageInput,
+		ImageAdmission:   f.admission,
 		Shape:            storedRunShape(req),
 		CorrelationID:    correlationID(req.CorrelationID),
 		Service:          service,
@@ -506,6 +502,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		OperatorOwned:   operatorOwned,
 		BreakGlass:      breakGlassReason(ctx) != "",
 		CreatedVia:      createdVia(ctx),
+		CreatedViaActor: createdViaActor(ctx),
 		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
 		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
@@ -581,6 +578,47 @@ func noModelAccessWarning(req createRunRequest, mp runProviderChoice) []string {
 		return []string{la.Note}
 	}
 	return nil
+}
+
+// runCreateAudit is what the run.create row's data is built from, once the run row and its grants exist.
+type runCreateAudit struct {
+	req           createRunRequest
+	f             runFold
+	run, created  types.AgentRun
+	enforced      types.ConfinementClass
+	reqCC         types.ConfinementClass
+	jti           string
+	policyWarns   []string
+	autonomy      types.AutonomyResolution
+	belowFloor    bool
+	mpChoice      runProviderChoice
+	gw            grantWiring
+	comps         runComponents
+	intent        launchIntent
+	runID         uuid.UUID
+	createdByType types.ActorType
+	createdBy     string
+}
+
+// runCreateAuditData is handleCreateRun's run.create row data: createRunAuditData, then each stamp in turn.
+func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[string]any {
+	f := a.f
+	createData := createRunAuditData(a.req, f.policyID, a.enforced, a.reqCC, a.jti, a.policyWarns, a.autonomy, a.belowFloor, a.mpChoice)
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(a.run)
+	stampConfinementDefault(createData, a.reqCC, f.confinementDefault)
+	if len(a.gw.delivery) > 0 {
+		createData["delivery"] = a.gw.delivery
+	}
+	stampDriveAudit(createData, f.drives, f.keep != nil, a.runID)
+	a.intent.stamp(createData, a.created.LaunchIntent != nil)
+	stampHarnessSet(createData, f.harnesses, f.image)
+	a.comps.stampRunCreate(createData)
+	maps.Copy(createData, f.place.auditFields(a.created, s.runnerNameOf(ctx, a.created)))
+	s.markRunCreateExempt(ctx, createDigestInput(a.req, f.carriedImage), createData)
+	stampImageAdmission(createData, f.admission)
+	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)
+	stampIdempotencyKey(ctx, createData)
+	return createData
 }
 
 // createRunAuditData assembles the run.create event's payload.

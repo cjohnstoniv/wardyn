@@ -163,8 +163,8 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if c.ToolRules != nil {
 		seen := map[string]bool{}
 		for _, r := range *c.ToolRules {
-			if !types.ValidToolEffect(r.Effect) {
-				m.fail(ReasonOverlayInvalid, "tool_rules", "tool %q has unknown effect %q", r.Tool, r.Effect)
+			if err := types.ValidToolRule(r); err != nil {
+				m.fail(ReasonOverlayInvalid, "tool_rules", "%v", err)
 			}
 			// A stored overlay keeps resolving (last wins, as the proxy reads it); only a write is sent back.
 			if seen[r.Tool] {
@@ -193,6 +193,7 @@ func (m *meeter) validatePresence(ov Overlay) {
 	}
 	m.validateMacOSBases(ov.Limits.AllowedMacOSBases)
 	m.validateAllowedModels(ov.Limits.AllowedModels)
+	m.validateRequiredImageSigners(ov.Limits.RequiredImageSigners)
 	if r := ov.Limits.AutonomyRubric; r != nil {
 		if err := r.Validate(); err != nil {
 			m.fail(ReasonOverlayInvalid, "autonomy_rubric", "%v", err)

@@ -11,7 +11,7 @@ import type { WidgetContext } from "./widget-registry";
 const getFiles = vi.fn();
 const getResources = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { getFiles: (...a: unknown[]) => getFiles(...a), getResources: (...a: unknown[]) => getResources(...a) },
+  runs: { getFiles: (...a: unknown[]) => getFiles(...a), getResources: (...a: unknown[]) => getResources(...a), getModelUsage: () => Promise.resolve({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }) },
 }));
 
 import { RunStatusStrip, useEvidenceFacts } from "./status-strip";

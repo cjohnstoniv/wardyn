@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
@@ -21,7 +23,7 @@ func TestEditBaseRefusesBeforeBooting(t *testing.T) {
 	root := t.TempDir()
 	eng := &macvmtest.Engine{}
 	d, _, errb := testDeps(eng)
-	d.firstBoot = &macvmtest.FirstBoot{}
+	d.editScreen = readyScreen{}
 	args := []string{macvm.EditBaseCommand, "--" + macvm.FlagRoot, root, "--" + macvm.FlagCPUs, "2", "--" + macvm.FlagMemoryMiB, "4096"}
 	if code := run(context.Background(), args, d); code != 2 || !strings.Contains(errb.String(), "--"+macvm.FlagLedgerEntry) {
 		t.Fatalf("no entry: exit %d: %s", code, errb)
@@ -34,6 +36,14 @@ func TestEditBaseRefusesBeforeBooting(t *testing.T) {
 	if len(eng.Machines()) != 0 {
 		t.Fatal("a refused edit built a VM")
 	}
+}
+
+// readyScreen is an edit window that could open: the refusals come before it is asked to.
+type readyScreen struct{}
+
+func (readyScreen) Ready() error { return nil }
+func (readyScreen) Open(unsafe.Pointer, macvm.WindowText) (macvm.Window, error) {
+	return nil, errors.New("readyScreen opens no window")
 }
 
 // silentNet hands each stage-2 boot its network through the boot's own ctl.sock, so the boot starts with

@@ -56,6 +56,9 @@ type Claims struct {
 	Provider string `json:"wardyn_provider,omitempty"` // the model provider id; empty on an MCP server's token
 	MCP      string `json:"wardyn_mcp,omitempty"`      // the MCP server's key, on its token alone
 	Sponsor  string `json:"sponsor,omitempty"`
+	// Delegate is the id of the portal a delegated run was launched through; empty on a run its person
+	// launched themselves. A flat claim, so a gateway rule needs no walk through act.
+	Delegate string `json:"wardyn_delegate,omitempty"`
 
 	ID        string   `json:"jti"`
 	IssuedAt  int64    `json:"iat"`
@@ -64,9 +67,23 @@ type Claims struct {
 	Actor     actClaim `json:"act"`
 }
 
-// actClaim names the agent run acting for the subject, in the run token's shape.
+// actClaim names the agent run acting for the subject, in the run token's shape. Act is the actor
+// before it (RFC 8693 section 4.1: the outermost act is the current actor and the most deeply nested
+// the least recent), so the Wardyn run sits outside the agent a portal named. A gateway that reads it
+// should treat the nested actor as provenance: the RFC says prior actors are informational only.
 type actClaim struct {
-	Sub string `json:"sub"`
+	Sub string    `json:"sub"`
+	Iss string    `json:"iss,omitempty"`
+	Act *actClaim `json:"act,omitempty"`
+}
+
+// NamePriorActor records the agent that asked for this run, as the actor before it. Sign keeps it and
+// sets the run's own subject over it. An empty sub names no one.
+func (c *Claims) NamePriorActor(sub, iss string) {
+	if sub == "" {
+		return
+	}
+	c.Actor.Act = &actClaim{Sub: sub, Iss: iss}
 }
 
 // storedKeys is the secret-store row. The previous key is kept as its public
@@ -174,7 +191,7 @@ func (s *Signer) Sign(c Claims, lifetime time.Duration) (string, Claims, error) 
 	c.IssuedAt = now.Unix()
 	c.ExpiresAt = now.Add(lifetime).Unix()
 	c.Format = tokenFormat
-	c.Actor = actClaim{Sub: c.Issuer + "/agent-run/" + c.Run}
+	c.Actor = actClaim{Sub: c.Issuer + "/agent-run/" + c.Run, Act: c.Actor.Act}
 	token, err := jwt.Signed(s.signer).Claims(c).Serialize()
 	if err != nil {
 		return "", Claims{}, fmt.Errorf("gateway identity: sign: %w", err)

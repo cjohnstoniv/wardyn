@@ -115,6 +115,7 @@ var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}/desktop/sign-ins":    "read the desktop's sign-in store; opens nothing",
 	"GET /runs/{id}/events":              "read",
 	"GET /runs/{id}/launch-intent":       "read the setup the run was launched with; opens nothing",
+	"GET /runs/{id}/model-usage":         "read the run's stored token counts; opens nothing",
 	"GET /runs/{id}/files":               "read",
 	"GET /runs/{id}/grants":              "read",
 	"GET /runs/{id}/output":              "logs and output stay available",

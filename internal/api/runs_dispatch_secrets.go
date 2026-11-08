@@ -26,6 +26,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -108,7 +109,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		}
 		// On the run's masking manifest before it is used anywhere: a value that
 		// cannot be recorded is skipped like one that cannot be read.
-		if err := s.maskDispatchValue(ctx, run.ID, val); err != nil {
+		if err := s.maskDispatchValue(ctx, run.ID, envSecretRenderings(val)...); err != nil {
 			unrecorded++
 			continue
 		}
@@ -216,7 +217,9 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 		row, isResident := residentGrantRow(rows, g)
 		if skip == "" && isResident {
 			v, rerr := s.readResidentValue(ctx, run, row, secretName)
-			if rerr != nil {
+			if errors.Is(rerr, errSecretTrimmedTooShort) {
+				skip = rerr.Error()
+			} else if rerr != nil {
 				skip = "secret could not be resolved"
 			} else {
 				sandboxEnv[name] = placement.ResidentPlaceholder(row.ID)
@@ -237,7 +240,9 @@ func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun,
 				skip = "the grant is owner_only and the run's owner has no secret of that name of their own"
 			case gerr != nil || len(val) == 0:
 				skip = "secret could not be resolved"
-			case s.maskDispatchValue(ctx, run.ID, val) != nil:
+			case secretmask.TrimmedTooShort(val):
+				skip = errSecretTrimmedTooShort.Error()
+			case s.maskDispatchValue(ctx, run.ID, envSecretRenderings(val)...) != nil:
 				// On the run's masking manifest before the sandbox can see it.
 				skip = "the run's masking manifest could not record the value"
 			default:

@@ -52,6 +52,7 @@ type metrics struct {
 	runs         map[types.RunState]int64 // runs that reached a terminal state
 	approvals    map[string]int64         // "approved" / "denied"
 	egressDenies int64
+	modelTok     map[[2]string]int64 // {vendor, direction} -> tokens (metrics_model_usage.go)
 	mints        int64
 	launchSum    float64 // seconds, run creation -> RUNNING
 	launchCount  int64
@@ -468,6 +469,7 @@ func (m *metrics) write(w io.Writer) {
 	// change (the filed alternative in M2-canon-sheet.md §2/§6b).
 	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions ingested with decision=deny (proxy decision ingest). Unlabeled: does not break down by reason.\n"+
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
+	m.writeModelTokens(w)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
 	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures and ticket or key refusals whose audit row (auth.fail, ssh.authenticate, session.attach or ui.authorize) "+
@@ -571,6 +573,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
 	s.writeAuditDelivery(ctx, w)
+	s.writeAuditCheckpoint(w)
 	writeApprovalNotify(w)
 	s.writeSubstrateGauges(ctx, w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous

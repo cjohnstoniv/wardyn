@@ -10,6 +10,7 @@ import {
   canDecideApproval,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
+  isMCPCallRequest,
   isTerminalRunState,
   type RunDetail,
   type ApprovalRequest,
@@ -26,6 +27,7 @@ import { RunRef } from "../wardyn/run-ref";
 import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
+import { McpCallCard } from "../wardyn/mcp-call-card";
 import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { OIDC_HOLD_LANE, REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
 import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
@@ -137,7 +139,7 @@ export function ApprovalCard({
   // tier's whole purpose; the caps fetch above stays on useOperator because
   // capAllowed does (capabilities.go).
   const securityOperator = useSecurityOperator();
-  const kindDecidable = canDecideApproval(securityOperator, item.kind);
+  const kindDecidable = canDecideApproval(securityOperator, item.kind, item);
   // The `egress_host` capability bounds which hosts a member may DECIDE on —
   // the authorizeUserDecision seam (approvals.go). Advisory here: the server
   // refuses it anyway, this just says so before the click instead of after.
@@ -259,6 +261,32 @@ export function ApprovalCard({
             setTakeoverBusy(true);
             await onDecline?.(item.id);
             setTakeoverBusy(false);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // One MCP call gets its own card too: it shows the call's exact arguments and approves that one call, with no scope
+  // menu. Its Approve and Deny take the push card's direct path (no reason dialog, no scope).
+  if (isMCPCallRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <McpCallCard
+          item={item}
+          canDecide={kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
           }}
         />
       </div>

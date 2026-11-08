@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strconv"
@@ -24,8 +25,9 @@ import (
 // so a compromised agent cannot rewrite the rules governing it. `allow`/`deny`
 // answer immediately with no approval row created, but still hit the decision
 // log; `hold`, and a run with no rules at all, return false so the caller
-// raises a human approval unchanged.
-func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool string) bool {
+// raises a human approval unchanged. `approve_each` on a remote MCP tool is answered by
+// gateApproveEach, which raises the call's own approval from the tool's input.
+func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool string, input json.RawMessage) bool {
 	eff, matched, ok := p.toolEffect(r, tool)
 	if !ok {
 		return false
@@ -38,6 +40,9 @@ func (p *Proxy) decideByToolRules(w http.ResponseWriter, r *http.Request, tool s
 	case types.ToolDeny:
 		p.emitToolDecision(r, egress.Deny, ruleSourceToolDeny, tool, matched)
 		writeToolDecision(w, "DENIED")
+		return true
+	case types.ToolApproveEach:
+		p.gateApproveEach(w, r, tool, matched, input)
 		return true
 	}
 	// types.ToolHold: the human is the point. Fall through.
@@ -103,14 +108,13 @@ func harnessToolKey(set types.HarnessToolRules, tool string) string {
 // than the run-wide regime made it. A set with no opinion on the tool counts as a
 // hold, which is what its own call would get.
 func (p *Proxy) strictestToolEffect(tool string) (types.ToolEffect, string, bool) {
-	rank := map[types.ToolEffect]int{types.ToolAllow: 0, types.ToolHold: 1, types.ToolDeny: 2}
 	strictest, matched := types.ToolAllow, ""
 	for i, set := range p.harnessRules {
 		eff, ok := types.ToolEffectForHarness(p.harnessRules, set.Harness, tool)
 		if !ok {
 			eff = types.ToolHold
 		}
-		if i == 0 || rank[eff] > rank[strictest] {
+		if i == 0 || types.ToolEffectStrictness(eff) > types.ToolEffectStrictness(strictest) {
 			strictest, matched = eff, harnessToolKey(set, tool)
 		}
 	}

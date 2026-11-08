@@ -117,6 +117,29 @@ type DecisionLog struct {
 	// attempt, never taken from the sandbox. Empty on every row of a run with no
 	// gateway route, and on every row for a host that is neither.
 	GatewayCallID string `json:"gateway_call_id,omitempty"`
+	// Usage, when non-nil, makes this row a model call's token counts (rule source
+	// llm:usage), sent once the answer has been relayed. It is not an egress
+	// decision: the call's own allow row was sent before the answer.
+	Usage *ModelUsage `json:"usage,omitempty"`
+}
+
+// ModelUsage is one model call's token counts, read from the provider's own
+// answer and never estimated. Numbers, a model name and a host only: no
+// content, no headers. Counts are as the provider reports them: Anthropic and
+// Bedrock Input excludes cache tokens, OpenAI Input includes cached tokens.
+type ModelUsage struct {
+	// CallID is minted by the proxy for each attempt; the store keeps one row per id.
+	CallID     uuid.UUID `json:"call_id"`
+	Vendor     string    `json:"vendor"` // the answer's dialect: anthropic | openai | bedrock | ollama
+	Host       string    `json:"host"`
+	Model      string    `json:"model,omitempty"`
+	Input      int64     `json:"input_tokens"`
+	Output     int64     `json:"output_tokens"`
+	CacheRead  int64     `json:"cache_read_tokens"`
+	CacheWrite int64     `json:"cache_write_tokens"`
+	Reasoning  int64     `json:"reasoning_tokens"`
+	State      string    `json:"state"`            // counted | partial | uncounted
+	Reason     string    `json:"reason,omitempty"` // why a call is partial or uncounted
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.

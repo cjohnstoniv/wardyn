@@ -135,8 +135,10 @@ func (s *Server) handleListDelegates(w http.ResponseWriter, r *http.Request) {
 
 // handleRevokeDelegate is DELETE /api/v1/admin/delegates/{id}: the portal can
 // no longer exchange, and every delegated token it holds answers 401 on its
-// next request. Runs it launched keep running — they are the person's runs
-// (owner decision Q6). Already revoked is 404 and writes no second row.
+// next request. Runs it launched keep running — they are the person's runs.
+// With ?cut_in_flight=true (off by default) those runs also get no more
+// gateway tokens (gatewayMintVia); on a portal already revoked it stamps the
+// cut alone. Already revoked, or already cut, is 404 and writes no second row.
 func (s *Server) handleRevokeDelegate(w http.ResponseWriter, r *http.Request) {
 	ds, ok := s.delegateStoreOr501(w)
 	if !ok {
@@ -146,7 +148,11 @@ func (s *Server) handleRevokeDelegate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := ds.RevokeDelegate(r.Context(), id, s.cfg.Now().UTC())
+	cut, ok := cutInFlightOf(w, r)
+	if !ok {
+		return
+	}
+	d, inFlight, err := ds.RevokeDelegate(r.Context(), id, s.cfg.Now().UTC(), cut)
 	if notFoundIf(w, err, "delegate", reasonDelegateNotFound) {
 		return
 	}
@@ -155,6 +161,6 @@ func (s *Server) handleRevokeDelegate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"delegate.revoke", d.ID.String(), "success", mustJSON(map[string]any{"name": d.Name})))
+		"delegate.revoke", d.ID.String(), "success", mustJSON(revokeAuditData(d, cut, inFlight))))
 	w.WriteHeader(http.StatusNoContent)
 }

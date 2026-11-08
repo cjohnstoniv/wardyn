@@ -207,6 +207,9 @@ type AgentRun struct {
 	// named or an attached workspace's base image set, "" when the run named none (the convention image),
 	// nil for a run created before 0249. A revive re-runs create's decision on it (site_config_images.go).
 	ImageInput *string `json:"-"`
+	// ImageAdmission is the image admission verdict for the member's image (ImageAdmissionVerdict); nil when
+	// admission was off, the run named no member image, an operator started it, or the run predates it.
+	ImageAdmission *ImageAdmissionVerdict `json:"image_admission,omitempty"`
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -218,6 +221,11 @@ type AgentRun struct {
 	// CorrelationID is the caller's own reference for the run (POST /runs correlation_id), stored once at create. It rides in the
 	// data of the run's audit rows as they reach the audit sinks, never in the stored row, and is never a metric label.
 	CorrelationID string `json:"correlation_id,omitempty"`
+	// PolicyDigest is the SHA-256 of the run's current effective policy (RunPolicySpec.Digest), written at dispatch, just before
+	// the run.policy.resolve row that records that policy, and moved by each revive to the policy its run.policy.generation row
+	// records. The run's later audit rows carry their own policy's digest as data.policy_digest. Empty for a run not yet
+	// dispatched, one dispatched before the field, or one whose write failed.
+	PolicyDigest string `json:"policy_digest,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
@@ -275,6 +283,9 @@ type AgentRun struct {
 	BreakGlass bool `json:"break_glass,omitempty"`
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
+	// CreatedViaActor is the agent that portal named when it launched the run (the subject and issuer of the
+	// identity provider token the portal held for it); nil when it named none. It is recorded, never authorised.
+	CreatedViaActor *DelegationActor `json:"created_via_actor,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
 	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
 	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
@@ -505,6 +516,10 @@ type ApprovalRequest struct {
 	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
 	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
 	Decidable *bool `json:"decidable,omitempty"`
+	// CallText is the exact text of an MCP call row's arguments and extra params (MCPCallText), projected at
+	// response time and never stored. The console and the CLI show and copy it as it is, never through a JSON
+	// number. Nil on every other row.
+	CallText *MCPCallText `json:"call_text,omitempty"`
 	// WallsBlock is true on a PENDING egress_domain row whose host the requesting run owner's own walls deny: no
 	// approver can admit it (personal_walls_host), so the console draws Approve disabled. Projected at response time
 	// and never stored; absent when the host is not denied or the walls could not be read.

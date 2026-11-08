@@ -1,2 +1,6 @@
 docs/operations/linux-vm-sandboxes.md
 docs/operations/macos-vms.md
+docs/operations/macos-vm-use.md
+docs/operations/macos-vm-base-image.md
+docs/operations/macos-vm-host.md
+docs/operations/macos-vm-troubleshooting.md

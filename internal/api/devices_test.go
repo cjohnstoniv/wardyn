@@ -412,7 +412,9 @@ func TestDevices_InvalidTokenReasonIsPinned(t *testing.T) {
 // TestDevices_DeviceTokenRefusedOnEveryHumanRoute widens the two named routes
 // to the whole router: every route outside the device routes and the anonymous
 // set answers a live device token 401. routeMatrix is the chi.Walk-checked
-// table, so a route added later is swept without an edit here.
+// table, so a route added later is swept without an edit here. Each route is
+// asked from its own address: a device token on a human route is an admin
+// token guess, and one address has 10 of them.
 func TestDevices_DeviceTokenRefusedOnEveryHumanRoute(t *testing.T) {
 	srv, st, _, _ := newAuthzMatrixServer(t)
 	devID := uuid.New()
@@ -429,11 +431,12 @@ func TestDevices_DeviceTokenRefusedOnEveryHumanRoute(t *testing.T) {
 		}
 		method, pattern, _ := strings.Cut(key, " ")
 		swept++
+		peer := fmt.Sprintf("10.0.%d.%d:4000", swept/256, swept%256)
 		t.Run(key, func(t *testing.T) {
 			if pattern == gatewayMintPath {
 				testGatewayIdentityOn(srv) // off, it answers as a path no route holds, before any credential is read
 			}
-			w := do(t, srv, method, buildPath(pattern, uuid.NewString()), tok, bodyFor(method, rc))
+			w := doFrom(t, srv, peer, method, buildPath(pattern, uuid.NewString()), tok, bodyFor(method, rc))
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("device token on %s = %d, want 401: %s", key, w.Code, w.Body.String())
 			}

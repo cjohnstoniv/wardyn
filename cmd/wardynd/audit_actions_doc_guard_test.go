@@ -600,6 +600,9 @@ var auditActionGrammarAllow = map[string]bool{
 	// The run-output retention sweep (0.8.6): recording.retention.sweep's sibling,
 	// named with a fourth segment by its design before it met this grammar.
 	"run.output.retention.sweep": true,
+	// A run policy generation row (0.10.0), named by the audit design for the generation a revive starts,
+	// a noun with no imperative to stand in for it; the row and its readers ship together.
+	"run.policy.generation": true,
 	// #1428's per-person Azure DevOps token rows, named by its plan and its
 	// contract (ado_pat_contract.go) before they met this grammar; the docs lane
 	// settles the audit names against it, not the lane that first emits them.

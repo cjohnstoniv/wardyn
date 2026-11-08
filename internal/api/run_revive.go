@@ -231,13 +231,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
 	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
 	if rerr != nil {
-		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
-			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
-				mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
-		}
+		s.auditReviveCeilingRefusal(ctx, run, rerr, actorType, actor)
 		return reviveResult{}, rerr
 	}
-	imageMark, rerr := s.reviveImageDigestRefusal(ctx, run, actorType, actor)
+	imageMark, rerr := s.reviveImageRefusals(ctx, run, c.requiredImageSigners, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -264,15 +261,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	// The stored row stays the organisation's: a run on a runner keeps the inspection corpus its
-	// laptop copy drops, as dispatch stores it (classifyLocalDispatch).
-	storedJSON := cfgJSON
-	if !remotePlacement(run.Placement) {
-		org := *cfg
-		org.Policy = corpus.restoredOn(cfg.Policy)
-		if storedJSON, rerr = encodeRevivedConfig(ctx, &org); rerr != nil {
-			return reviveResult{}, rerr
-		}
+	storedJSON, rerr := revivedStoredConfig(ctx, run, cfg, corpus, cfgJSON)
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 
 	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
@@ -323,6 +314,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
 	// it is refused, so it can mint no token this list misses, and the new one renews at once.
 	renewed := s.retireRunTokenLineage(ctx, run.ID, freshJTI)
+	gen, gerr := s.advanceRunPolicyGeneration(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI) // before the new proxy's first row
+	if gerr != nil {
+		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, gerr)
+	}
 	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
@@ -333,6 +328,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			// untouched proxy on a token that can neither renew nor decide,
 			// while its allowlisted egress keeps flowing audit-dark for up to
 			// the lapsed-token sweep's ~1h05m window.
+			// The generation is abandoned first, so the failure row carries the one that still applies.
+			s.abandonRunPolicyGeneration(ctx, run, gen)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 			s.restoreRunTokenLineage(ctx, run.ID, freshJTI, renewed)

@@ -192,6 +192,10 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 		return
 	}
 	dest, sponsor, ref := s.gatewayMintAdmit(ctx, claims, run, body.ProviderID, body.MCPServer)
+	if ref != nil && ref.reason == reasonGatewayAccessCut {
+		s.refuseGatewayCut(w, run, kind, target, ref, record)
+		return
+	}
 	if ref != nil {
 		refuse(ref)
 		return
@@ -228,7 +232,7 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 	if !ok {
 		return "", gatewayidentity.Claims{}, errors.New("the run token names no agent run")
 	}
-	return signer.Sign(gatewayidentity.Claims{
+	c := gatewayidentity.Claims{
 		Issuer:   issuer,
 		Audience: dest.audience,
 		Subject:  claims.Sub,
@@ -237,7 +241,16 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 		Provider: dest.provider,
 		MCP:      dest.mcp,
 		Sponsor:  sponsor,
-	}, dest.lifetime)
+	}
+	// The portal and the agent it named come from the stored run, never the request, so a revived or
+	// restarted run keeps them. On by default: it grants no reach, the agent is provenance only.
+	if run.CreatedVia != nil {
+		c.Delegate = run.CreatedVia.String()
+		if a := run.CreatedViaActor; a != nil {
+			c.NamePriorActor(a.Sub, a.Iss)
+		}
+	}
+	return signer.Sign(c, dest.lifetime)
 }
 
 // gatewayFirstMint reports whether this replica has not yet recorded a first mint
@@ -285,11 +298,15 @@ func (d gatewayDest) holder() string {
 func (d gatewayDest) name() string { return cmp.Or(d.provider, d.mcp) }
 
 // gatewayMintAdmit is every check a token depends on past internalAuth: the
-// person, then the provider or MCP server against what was sealed at dispatch (exactly
-// one of providerID and mcpKey is named). It returns the destination the live record
-// sets and, on a service run, the sponsor the token names.
+// person, the portal that launched the run (gatewayMintVia), then the provider
+// or MCP server against what was sealed at dispatch (exactly one of providerID
+// and mcpKey is named). It returns the destination the live record sets and, on
+// a service run, the sponsor the token names.
 func (s *Server) gatewayMintAdmit(ctx context.Context, claims *identity.Claims, run types.AgentRun, providerID, mcpKey string) (gatewayDest, string, *ownerRefusal) {
 	sponsor, ref := s.gatewayMintPerson(ctx, claims, run)
+	if ref == nil {
+		ref = s.gatewayMintVia(ctx, run)
+	}
 	if ref != nil {
 		return gatewayDest{}, "", ref
 	}
@@ -460,12 +477,11 @@ func gatewayDestinationOf(baseURL string) (_ gatewayDestination, ok bool) {
 	return d, true
 }
 
-// A Bedrock row names its gateway in bedrock.base_url. Its sign-in kind is refused: SigV4 signs Host, so a
-// gateway at its own name breaks the signature unless it re-signs with AWS credentials of its own.
+// A Bedrock row names its gateway in bedrock.base_url. A sign-in row has rules of its own besides
+// (internal_gateway_identity_bedrock_sso.go).
 const (
 	mp400GatewayBedrockBaseURL = "model_providers: %q: gateway_identity needs a bedrock.base_url, or the token would go to AWS"
 	mp400GatewayBedrockAddress = "model_providers: %q: gateway_identity needs a bedrock.base_url with a valid port and no dot segment in its path"
-	mp400GatewayBedrockSSO     = "model_providers: %q: gateway_identity is not available for bedrock_sso providers; use a bedrock_bearer row, or the gateway as a custom endpoint"
 )
 
 // gatewayAddressOf is the address p sends its calls to when it has a gateway: a
@@ -513,6 +529,9 @@ func gatewayBindingHolds(sealed proxy.GatewayIdentityRoute, p types.ModelProvide
 func (s *Server) gatewayIdentityRefusal(ctx context.Context, cfg *proxy.Config) (*ownerRefusal, error) {
 	if len(cfg.GatewayIdentity) == 0 {
 		return nil, nil
+	}
+	if ref, err := s.gatewayReviveCut(ctx, cfg); ref != nil || err != nil {
+		return ref, err
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
@@ -570,11 +589,14 @@ func (d *providerDispatch) addGatewayRoute(p types.ModelProvider) (ok bool) {
 }
 
 // takeProviderGatewayRoute records the gateway route of a lane's provider on prov, for the kinds that may
-// carry one: the key and endpoint kinds and a Bedrock key row, whose call reaches forwardInspectedLLM through
-// the bearer's MITM host. ok is false when the run was refused and is already FAILED: the route clashes with
-// one already on the run, or its stored address can hold none, so the call would otherwise go unsigned.
-func (s *Server) takeProviderGatewayRoute(ctx context.Context, run types.AgentRun, prov *providerDispatch, p types.ModelProvider) (ok bool) {
-	if !providerKeyKind(p.Kind) && p.Kind != types.ModelProviderBedrockBearer {
+// carry one: the key and endpoint kinds, a Bedrock key row, whose call reaches forwardInspectedLLM through
+// the bearer's MITM host, and a Bedrock sign-in row, whose calls the proxy re-signs for the gateway (llm is
+// the lane's transport). ok is false when the run was refused and is already FAILED: the route clashes with
+// one already on the run, its stored address can hold none, so the call would otherwise go unsigned, or a
+// sign-in lane is not re-signed, so the call would carry no identity.
+func (s *Server) takeProviderGatewayRoute(ctx context.Context, run types.AgentRun, prov *providerDispatch, p types.ModelProvider, llm llmTransport) (ok bool) {
+	sso := p.Kind == types.ModelProviderBedrockSSO
+	if !providerKeyKind(p.Kind) && p.Kind != types.ModelProviderBedrockBearer && !sso {
 		return true
 	}
 	if other := prov.gatewayRouteClash(p); other != "" {
@@ -585,14 +607,19 @@ func (s *Server) takeProviderGatewayRoute(ctx context.Context, run types.AgentRu
 		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayAddress, p.ID)}, nil)
 		return false
 	}
+	if why := llm.bedrock.sigv4Why; sso && p.GatewayIdentity != nil && (why.Code != "" || llm.bedrock.sigv4Gateway == nil) {
+		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewaySigV4, p.ID, why.String())},
+			map[string]any{"aws_signing_reason": why.Code})
+		return false
+	}
 	return true
 }
 
 // validateProviderGatewayIdentity holds one row's opt-in to the kinds that may carry
-// a token: a key row with a base_url, a Bedrock key row with a bedrock.base_url, or
-// an endpoint row. Every other kind, a subscription row included, is refused: it has
-// no gateway of an admin's to name. A Bedrock sign-in row is refused with its own
-// reason, since SigV4 signs the Host a gateway at its own name would change.
+// a token: a key row with a base_url, a Bedrock row with a bedrock.base_url (a sign-in
+// row also needs a gateway on a name AWS does not own and a region: validateBedrockSSOGateway),
+// or an endpoint row. Every other kind, a subscription row included, is refused: it has
+// no gateway of an admin's to name.
 func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 	gi := mp.GatewayIdentity
 	if gi == nil {
@@ -601,10 +628,8 @@ func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 	field, noAddress, badAddress := "base_url", mp400GatewayBaseURL, mp400GatewayAddress
 	switch mp.Kind {
 	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint:
-	case types.ModelProviderBedrockBearer:
+	case types.ModelProviderBedrockBearer, types.ModelProviderBedrockSSO:
 		field, noAddress, badAddress = "bedrock.base_url", mp400GatewayBedrockBaseURL, mp400GatewayBedrockAddress
-	case types.ModelProviderBedrockSSO:
-		return fmt.Errorf(mp400GatewayBedrockSSO, mp.ID)
 	default:
 		return fmt.Errorf(mp400GatewayKind, mp.ID, string(mp.Kind))
 	}
@@ -612,8 +637,14 @@ func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 	if addr == "" {
 		return atField(field, fmt.Errorf(noAddress, mp.ID))
 	}
-	if _, ok := gatewayDestinationOf(addr); !ok {
+	d, ok := gatewayDestinationOf(addr)
+	if !ok {
 		return atField(field, fmt.Errorf(badAddress, mp.ID))
+	}
+	if mp.Kind == types.ModelProviderBedrockSSO {
+		if err := validateBedrockSSOGateway(mp, d); err != nil {
+			return err
+		}
 	}
 	if gi.Audience == "" {
 		return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudience, mp.ID))
@@ -728,6 +759,10 @@ func (s *Server) refuseGatewayIdentityWrite(w http.ResponseWriter, r *http.Reque
 		return true
 	}
 	if s.refuseGatewayAudienceWrite(w, r, block, prefix) {
+		return true
+	}
+	if err := s.bedrockSSOGatewayWriteRefusal(block, stored); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, prefix+err.Error())
 		return true
 	}
 	if !introducedGatewayIdentity(block, stored) {

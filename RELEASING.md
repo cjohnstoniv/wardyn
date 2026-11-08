@@ -109,17 +109,6 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
 - A release is a milestone that closed.
 - The steps below do not change; this is how the work reaches them.
 
-```mermaid
-flowchart LR
-  I[Issue on the milestone<br/>labelled approved] --> B[Branch from main<br/>kind/issue-slug]
-  B --> PR[Pull request into main<br/>one issue per PR]
-  PR --> R{Required CI<br/>+ review}
-  R -->|green| M[main]
-  M --> RP[Release PR<br/>CHANGELOG, versions, ROADMAP]
-  RP --> RB[release/X.Y<br/>cut or fast-forwarded]
-  RB --> T[Tag vX.Y.Z<br/>release.yml publishes]
-  M -.->|cherry-pick fixes only| RB
-```
 
 1. **Milestone.** Every planned change is an issue on the `X.Y.Z` milestone,
    filed before work starts and signed off with the `approved` label

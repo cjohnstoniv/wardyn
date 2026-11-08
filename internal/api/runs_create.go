@@ -573,6 +573,8 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	// is before the cases below, so a BYOI wrap, a devcontainer build or a workspace base image still
 	// replaces the image entirely.
 	image = archImage(image, defaultImageKey(req, fact), s.runArch(ctx, run), s.cfg.AgentImageVariants)
+	conventional := image                 // what the run gets by convention, held to image admission under scope all
+	origin := types.ImageOriginConvention // where the image came from: the case below that chose it says
 
 	// Shared FAILED path for the two explicit build lanes (BYOI + devcontainer):
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not
@@ -612,7 +614,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case pw != nil:
 		// A ready prewrapped image runs as is: no wrap and no wardyn-byoi/ tag, so no selftest exec
 		// (design final §3).
-		image, arches = pw.Image, pw.Check.AcceptedArches
+		image, arches, origin = cmp.Or(imagePin(run), pw.Image), pw.Check.AcceptedArches, imageOriginMember
 	case req.Image != "" && s.cfg.ImageBuilder == nil:
 		// Validation let this through as a ready prewrapped image, and its row is gone since: with no
 		// builder nothing else may run it.
@@ -628,13 +630,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			return "", nil, true
 		}
 		s.announceImageBuild(ctx, runID)()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil, false)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, cmp.Or(imagePin(run), req.Image), outTag, nil, false)
 		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
 			return "", nil, true
 		}
-		image = built.Ref
+		image, origin = built.Ref, imageOriginMember
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
 				"byoi_base": req.Image, "image": built.Ref,
@@ -652,7 +654,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error()})
 			return "", nil, true
 		}
-		image = built.Ref
+		image, origin = built.Ref, types.ImageOriginDevcontainer
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
 				"devcontainer_repo": req.DevcontainerRepo, "image": built.Ref,
@@ -673,8 +675,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// creates). resolveWorkspaceImage is fail-open by design (shared with the
 		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
 		// lives here, on the create door, not in it.
-		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" && !prewrappedBase(b) &&
-			strings.TrimSpace(b.Image) != "" && s.cfg.ImageBuilder == nil {
+		if b := imageWS.BaseImage; chosenBaseImageNeedsWrap(b) && s.cfg.ImageBuilder == nil {
 			buildFailed(map[string]any{
 				"base_image": b.Image,
 				"error": "no image builder is wired, so the workspace's chosen base image cannot be wrapped with the " +
@@ -686,10 +687,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		if !ok {
 			return "", nil, true
 		}
-		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{})
+		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{Pinned: imagePin(run)})
 		endBuild()
 		if res.OK {
-			image, arches = res.Image, res.ImageArches
+			image, arches, origin = res.Image, res.ImageArches, imageOriginMember
+			if workspaceBaseImage(imageWS) == "" {
+				origin = types.ImageOriginWorkspace // built from the workspace itself, not a base image it names
+			}
 		} else if res.BaseErr != nil {
 			// The chosen base image failed to wrap (the builder is wired): the same fail-closed answer as
 			// the workspace_id door, not the convention image under a 201. The resolver already wrote the one
@@ -701,6 +705,10 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
 			return "", nil, true
 		}
+	}
+
+	if image, failed = s.admitResolvedImage(ctx, run, image, conventional, origin); failed {
+		return "", nil, true
 	}
 
 	// Persist the resolved image for provenance (best-effort: a failed write
@@ -718,4 +726,31 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		}
 	}
 	return image, arches, false
+}
+
+// chosenBaseImageNeedsWrap is true when a workspace's base image is an explicit choice that only an image builder
+// can wrap with the agent runtime: not the recommended image, not a ready prewrapped image, and not blank.
+func chosenBaseImageNeedsWrap(b *types.WorkspaceBaseImage) bool {
+	return b != nil && b.Kind != "recommended" && !prewrappedBase(b) && strings.TrimSpace(b.Image) != ""
+}
+
+// admitResolvedImage holds the image resolveCreateRunImage chose to image admission by its origin: the convention
+// image is checked (scope all) and may come back as its pin; an image Wardyn built for the run records its
+// origin. failed is true when the run was failed (conventional names the convention image in the refusal).
+func (s *Server) admitResolvedImage(ctx context.Context, run types.AgentRun, image, conventional, origin string) (string, bool) {
+	switch origin {
+	case types.ImageOriginConvention:
+		admitted, refusal := s.conventionImageAdmission(ctx, run, image)
+		if refusal != nil {
+			s.failConventionImage(ctx, run.ID, conventional, refusal)
+			return "", true
+		}
+		return admitted, false
+	case types.ImageOriginDevcontainer, types.ImageOriginWorkspace:
+		if refusal := s.recordBuiltImageOrigin(ctx, run, origin); refusal != nil {
+			s.failConventionImage(ctx, run.ID, image, refusal)
+			return "", true
+		}
+	}
+	return image, false
 }

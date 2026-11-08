@@ -463,6 +463,16 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
   });
 
+  it("the policy preview's image_admission fact has the same value in Go and TS", () => {
+    const go = readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/new-run-contract.ts"), "utf8");
+    const goValues = [...go.matchAll(/ImageAdmissionFact\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
+    const fact = /export type ImageAdmissionFact =([\s\S]*?);/.exec(ts)?.[1] ?? "";
+    const tsValues = [...fact.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(goValues).toEqual(["checked at launch"]);
+    expect(tsValues).toEqual(goValues);
+  });
+
   it("policy-preview pending reasons have the same closed enum in Go and TS", () => {
     const go = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
     const ts = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");

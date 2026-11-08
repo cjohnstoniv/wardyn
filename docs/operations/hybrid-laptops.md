@@ -70,7 +70,7 @@
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
 - `ado_minted_pat` also needs the connection's opt-in and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
-- A `require_posture` class is refused at launch until per-runner placement lands.
+- A `require_posture` on a class whose mode is not `runner_resident` is refused when the policy is saved (`credential_delivery_invalid`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 - Placement judges the posture on record, the runner's last report, however old. A change on the laptop counts once the runner reports it: at every connect and within 15 minutes of a change.
@@ -184,7 +184,27 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - A proxy older than the organisation refuses a configuration that carries a field it does not know, because the proxy reads its configuration strictly. The run then fails to start rather than running with a rule dropped, so pin only an image from the organisation's own release.
 - To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
 
-### Drive roots on a laptop runner
+### Sharing a folder: the settings
+
+<a id="drive-roots-on-a-laptop-runner"></a>
+
+A shared folder has to pass every setting below.
+
+| Setting | Where | Who sets it | macOS VM only |
+|---|---|---|---|
+| Workspace roots, and writable roots for a writable share | The organisation's server: `WARDYN_USER_WORKSPACE_ROOTS` (or a member's entry in `WARDYN_USER_WORKSPACE_ROOTS_MAP`), `WARDYN_USER_WRITABLE_ROOTS` | The server's operator | |
+| Drive roots | The runner: `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` in a managed profile | The machine's person, or the MDM | |
+| Full Disk Access for the guest agent | The base image, once, in `edit-base` ([Editing a base](macos-vm-base-image.md#editing-a-base)) | Whoever edits the base | yes |
+
+What you see tells you which one is missing:
+
+| What you see | Missing | Fix |
+|---|---|---|
+| "is outside every member workspace root", or "configures no member workspace roots" | Workspace roots | The operator sets `WARDYN_USER_WORKSPACE_ROOTS` (and `_MAP`), and `WARDYN_USER_WRITABLE_ROOTS` for a writable share |
+| "which shares no folders", "is outside every --drive-root its runner shares", or "this runner shares no folder" | Drive roots | `wardyn-runnerd setup --drive-root <dir>`, or `DriveRoot` |
+| A macOS run stops within 10 seconds with "approve Full Disk Access for the Wardyn guest agent in edit-base" | Full Disk Access | Grant it to the guest agent in `edit-base` |
+
+Drive roots:
 
 - A drive bound to a person's own runner mounts only below a **drive root** the runner advertises, and a folder bound to it only inside one, or the root itself. With none, the organisation refuses drives and bound folders on it.
 - The person gives the installed service its roots when they set it up: `wardyn-runnerd setup --drive-root /Volumes/team-share --drive-root /srv/x`. Setup writes them to `runnerd.json` as `drive_root`; a rerun with `--drive-root` replaces the list, and a rerun without it keeps it. The roots are not in the unit or the LaunchAgent.
@@ -403,41 +423,11 @@ Do this when a runner's runs keep failing after an upgrade or after its Docker e
 
 ## Behind a shared ingress
 
-Three routes are open to callers with no credential yet. Each has its own rate-limit bucket per client address: 10 attempts, then one every 10 seconds. The address is the TCP peer unless `WARDYN_TRUSTED_PROXIES` lists that peer, so without it every caller behind a shared ingress, internet traffic included, shares the ingress's bucket.
-
-| Route | Refusal when the bucket is empty |
-| --- | --- |
-| `/api/v1/runners/{id}/stream` | `429` `runner_stream_rate_limited` |
-| `/api/v1/runners/register` | `429` `runner_registration_rate_limited` |
-| `/api/v1/devices/enrol` | `429` `device_enrol_rate_limited` |
-
-- The runner stream charges its bucket only when a handshake ends unproved; a registration that redeems a valid token is refunded. Failed and abandoned attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
-- Reconnecting runners stay reliable only if you do one of these. Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket. Or allow-list your runners' source networks on `/api/v1/runners/*/stream` and the other two paths. Or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
-- The buckets are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
-
-The runner stream has two more anonymous limits and one per-runner limit, all per replica:
-
-| Limit | Value | Spent by |
-| --- | --- | --- |
-| Global handshake bucket | 512, then 10 a second, shared by every address | Handshakes that end unproved |
-| Handshakes in progress per address | 32 (`WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS`) | As below, from one address |
-| Handshakes in progress | 256 connections between arrival and proof | A connection until it proves its key or closes; the 15-second handshake deadline bounds each |
-| Per-runner reconnects | 10, then one every 10 seconds, per runner | Only a runner that has proved its key, so a caller naming a runner it cannot prove never spends that runner's budget |
-
-- Every refusal is `429` `runner_stream_rate_limited`; the message says which limit refused.
-- Memory per replica: each keyed bucket map holds at most 4096 entries of under 128 bytes, and each handshake slot under 64 KiB, so the cap bounds unproved connections under 16 MiB.
+Moved to [Behind a shared ingress](ingress-rate-limits.md): the rate limits on `/api/v1/runners/{id}/stream`, `/api/v1/runners/register` and `/api/v1/devices/enrol`.
 
 ### Trusted proxies
 
-`WARDYN_TRUSTED_PROXIES` (off by default) lists the proxies whose `X-Forwarded-For` Wardyn reads. It applies to the public listener only; the proxy-facing listener runs dial is never read through it.
-
-1. Wardyn reads the header only when the TCP peer is inside the list.
-2. It walks the chain right to left, skipping addresses inside the list; the first address outside it is the client. Entries left of it were written by that client and are never read.
-3. A malformed, loopback or unspecified entry, more than 32 entries or more than 2048 bytes, or a chain made only of listed addresses, keeps the TCP peer.
-4. The client becomes the row's `source_ip`, and the peer is kept as `data.proxy_peer` on every audit row the request writes (`data.device_origin.proxy_peer` on a device-forwarded row).
-
-- List only your proxies' addresses. Any address in the list can name the client, so a range that holds callers lets them choose their own `source_ip`.
-- Your proxy must append the client to `X-Forwarded-For`, or replace the header, never pass a client's value through alone.
+Moved to [Trusted proxies](ingress-rate-limits.md#trusted-proxies): `WARDYN_TRUSTED_PROXIES` and how the client address is chosen.
 
 ## Legacy org enrolment (deprecated)
 

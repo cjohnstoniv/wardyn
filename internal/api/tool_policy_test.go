@@ -424,30 +424,33 @@ func TestToolPolicy_HarnessFactsOfferWhatTheServerAccepts(t *testing.T) {
 	}{
 		{"a person's rule on a background run", "claude-code", createRunRequest{Agent: "claude-code", Task: "t", ToolApprovals: "hold", Tools: claude},
 			[]types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}, []provenanceRow{{Field: fieldToolRules, Value: "*:allow", Source: provSource{Kind: provKindPosture}, Effect: provEffectAdded}},
-			toolLaneGated, toolEnforcerGate, "any", types.ToolAllow, provKindPosture, map[types.ToolEffect]string{}, map[types.ToolEffect]string{}},
+			toolLaneGated, toolEnforcerGate, "any", types.ToolAllow, provKindPosture,
+			map[types.ToolEffect]string{types.ToolApproveEach: "approve_each_default"}, map[types.ToolEffect]string{types.ToolApproveEach: "approve_each_no_remote_mcp"}},
 		{"a profile's gated lane holds what the policy does not name", "claude-code", createRunRequest{Agent: "claude-code", Task: "t", ToolApprovals: "hold"},
 			[]types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, nil, toolLaneGated, toolEnforcerGate, "any", types.ToolHold, provKindHarness,
-			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_default"}, map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool"}},
+			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_default", types.ToolApproveEach: "approve_each_default"},
+			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool", types.ToolApproveEach: "approve_each_no_remote_mcp"}},
 		{"an ungated run", "claude-code", createRunRequest{Agent: "claude-code", Task: "t"}, nil, nil, toolLaneUngated, toolEnforcerNone, "any", types.ToolAllow, provKindHarness,
-			map[types.ToolEffect]string{}, map[types.ToolEffect]string{}},
+			map[types.ToolEffect]string{types.ToolApproveEach: "approve_each_default"}, map[types.ToolEffect]string{types.ToolApproveEach: "approve_each_no_remote_mcp"}},
 		{"Codex CLI", "codex-cli", createRunRequest{Agent: "codex-cli", Task: "t"}, nil, nil, toolLaneUngated, toolEnforcerNone, "mcp_only", types.ToolAllow, provKindHarness,
-			map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolDeny: "harness_no_block_builtin"}, map[types.ToolEffect]string{types.ToolHold: "harness_no_hold"}},
+			map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolApproveEach: "approve_each_default", types.ToolDeny: "harness_no_block_builtin"},
+			map[types.ToolEffect]string{types.ToolHold: "harness_no_hold", types.ToolApproveEach: "approve_each_no_remote_mcp"}},
 		{"an interactive run", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true}, nil, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindPosture,
-			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"},
-			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool"}},
+			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolApproveEach: "approve_each_default", types.ToolDeny: "attended_rules_unavailable"},
+			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool", types.ToolApproveEach: "approve_each_no_remote_mcp"}},
 		// Claude Code's settings carry no "*", so whatever the policy's, an unnamed
 		// tool takes the lane's own default; at no level no document manages it.
 		{"an interactive run whose policy allows every tool", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true},
 			[]types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindPosture,
-			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"},
-			map[types.ToolEffect]string{}},
+			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolApproveEach: "approve_each_default", types.ToolDeny: "attended_rules_unavailable"},
+			map[types.ToolEffect]string{types.ToolApproveEach: "approve_each_no_remote_mcp"}},
 		{"an interactive run whose policy blocks every tool", "claude-code", createRunRequest{Agent: "claude-code", Interactive: true},
 			[]types.ToolRule{{Tool: "*", Effect: types.ToolDeny}}, nil, toolLaneAttended, toolEnforcerHarness, "any", types.ToolHold, provKindPosture,
-			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolDeny: "attended_rules_unavailable"},
-			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool", types.ToolHold: "policy_stricter_tool"}},
+			map[types.ToolEffect]string{types.ToolAllow: "attended_rules_unavailable", types.ToolApproveEach: "approve_each_default", types.ToolDeny: "attended_rules_unavailable"},
+			map[types.ToolEffect]string{types.ToolAllow: "policy_stricter_tool", types.ToolHold: "policy_stricter_tool", types.ToolApproveEach: "approve_each_no_remote_mcp"}},
 		{"your own tools", "none", createRunRequest{Agent: "none", Interactive: true}, nil, nil, toolLaneUnsupported, toolEnforcerNone, "any", types.ToolHold, provKindHarness,
-			map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"},
-			map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}},
+			map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolApproveEach: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"},
+			map[types.ToolEffect]string{types.ToolAllow: "custom_harness_rules", types.ToolHold: "custom_harness_rules", types.ToolApproveEach: "custom_harness_rules", types.ToolDeny: "custom_harness_rules"}},
 	} {
 		req := tc.req
 		b := &accessBuilder{in: accessInputs{req: &req, spec: types.RunPolicySpec{ToolRules: tc.spec}, prov: tc.prov}}
@@ -498,7 +501,7 @@ func TestToolPolicy_HarnessFactsOfferWhatTheServerAccepts(t *testing.T) {
 		if f.Default.Effective != types.ToolHold || f.Default.Source != c.src || f.Enforcer != toolEnforcerHarness {
 			t.Errorf("%q: default %+v enforcer %s, want hold from %+v", c.level, f.Default, f.Enforcer, c.src)
 		}
-		if got := avail(f.Default.Options); !maps.Equal(got, map[types.ToolEffect]string{types.ToolAllow: c.skip, types.ToolDeny: "attended_rules_unavailable"}) {
+		if got := avail(f.Default.Options); !maps.Equal(got, map[types.ToolEffect]string{types.ToolAllow: c.skip, types.ToolApproveEach: "approve_each_default", types.ToolDeny: "attended_rules_unavailable"}) {
 			t.Errorf("%q: default greyed %v", c.level, got)
 		}
 		if len(f.PolicyRules) != 1 || f.PolicyRules[0].Tool != "Bash" {

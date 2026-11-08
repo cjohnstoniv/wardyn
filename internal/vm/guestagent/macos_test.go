@@ -233,20 +233,22 @@ func TestParsePointer(t *testing.T) {
 }
 
 func TestSetSessionEnvCommandLines(t *testing.T) {
-	r := &fakeRunner{}
-	d := &Desktop{Run: r, Console: fakeConsole{uid: 502}}
-	if err := d.SetSessionEnv(context.Background(), []string{"SSL_CERT_FILE=/x", "A=b=c"}); err != nil {
-		t.Fatal(err)
+	g := newGUIFake(true)
+	d := &Desktop{Run: g, Console: fakeConsole{uid: 502}}
+	via, err := d.SetSessionEnv(context.Background(), 502, []string{"SSL_CERT_FILE=/x", "A=b=c"})
+	if err != nil || via != "asuser" {
+		t.Fatalf("via %q, err %v", via, err)
 	}
 	want := [][]string{
 		{"/bin/launchctl", "asuser", "502", "/bin/launchctl", "setenv", "SSL_CERT_FILE", "/x"},
 		{"/bin/launchctl", "asuser", "502", "/bin/launchctl", "setenv", "A", "b=c"},
+		{"/bin/launchctl", "asuser", "502", "/bin/launchctl", "getenv", "SSL_CERT_FILE"},
 	}
-	if !slices.EqualFunc(r.calls, want, slices.Equal) {
-		t.Errorf("calls = %v", r.calls)
+	if !slices.EqualFunc(g.calls, want, slices.Equal) {
+		t.Errorf("calls = %v", g.calls)
 	}
 	none := &Desktop{Run: &fakeRunner{}, Console: fakeConsole{err: ErrNoConsoleUser}}
-	if err := none.SetSessionEnv(context.Background(), nil); err != nil {
+	if _, err := none.SetSessionEnv(context.Background(), 502, nil); err != nil {
 		t.Errorf("no variables still asked for a console user: %v", err)
 	}
 }
@@ -362,7 +364,7 @@ func TestSpliceDesktopRefusesWhenTheDesktopIsOff(t *testing.T) {
 	lb := newBroker()
 	d := &Desktop{}
 	d.Disable()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond, nil) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{DesktopOpenByte})
 	select {
@@ -379,7 +381,7 @@ func TestDisableClosesAnOpenTunnel(t *testing.T) {
 	hb := newBroker()
 	lb := newBroker()
 	d := &Desktop{}
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond, nil) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{DesktopOpenByte})
 	local := lb.next(t)
@@ -408,7 +410,7 @@ func TestSpliceDesktopWaitsForTheOpenByte(t *testing.T) {
 	defer cancel()
 	hb := newBroker()
 	lb := newBroker()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond, nil) }()
 
 	host := hb.next(t)
 	select {
@@ -442,7 +444,7 @@ func TestSpliceDesktopRefusesAnotherFirstByte(t *testing.T) {
 	defer cancel()
 	hb := newBroker()
 	lb := newBroker()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond, nil) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{'R'})
 	select {

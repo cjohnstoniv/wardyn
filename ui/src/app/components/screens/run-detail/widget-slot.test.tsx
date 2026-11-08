@@ -10,7 +10,7 @@
 // the page. Both renderers now mount widgets through WidgetSlot, so this suite
 // asserts the SAME contract twice: one throwing widget, the session survives.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -27,6 +27,7 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: {
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
+    getModelUsage: vi.fn().mockResolvedValue({ totals: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, calls: 0, uncounted_calls: 0, partial_calls: 0 }, by_model: [], opaque_tunnels: 0 }),
   },
 }));
 // The unmapped-wire-value case the boundary exists for, on the widget both
@@ -135,6 +136,15 @@ describe("one throwing widget is contained — in BOTH renderers of RUN_WIDGETS"
     // The dock's boundary names the WIDGET, so the operator is told which card
     // failed rather than being handed a blank overlay.
     expect(screen.getByText(/Something went wrong rendering Egress/)).toBeInTheDocument();
+  });
+
+  it("switching the dock to a healthy widget drops the previous widget's error", () => {
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.getByText(/Something went wrong rendering Egress/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show Sandbox" }));
+    expect(screen.getByRole("region", { name: "Sandbox" })).toBeInTheDocument();
+    expect(screen.queryByText(/Something went wrong rendering/)).toBeNull();
+    expect(screen.queryByText("unmapped wire value")).toBeNull();
   });
 });
 

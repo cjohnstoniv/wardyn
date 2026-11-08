@@ -38,6 +38,9 @@ type ModelProvidersRead struct {
 	// this deployment's origin, base path included: what an admin tells a gateway.
 	GatewayIdentityIssuer string `json:"gateway_identity_issuer,omitempty"`
 	GatewayJWKSPath       string `json:"gateway_jwks_path"`
+	// GatewayIdentityBedrockSSO says whether a bedrock_sso provider can send run identity on this install:
+	// true only while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY), which that needs.
+	GatewayIdentityBedrockSSO bool `json:"gateway_identity_bedrock_sso"`
 }
 
 // Empty reports whether p carries no provider — the shape a PUT uses to CLEAR the block, normalized back

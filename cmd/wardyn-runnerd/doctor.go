@@ -229,10 +229,12 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	}
 	stages = append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)
 	subField := runnerFields[slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "substrate" })]
-	if st, ok := driveRootStage(s, s.resolved(subField, o.substrate).Value); ok {
+	substrate := s.resolved(subField, o.substrate).Value
+	if st, ok := driveRootStage(s, substrate); ok {
 		stages = append(stages, st)
 	}
-	stages = append(stages, macOSVMDoctorStages()...)
+	roots, rootsSource := driveRootsOf(s)
+	stages = append(stages, macOSVMDoctorStages(roots, rootsSource)...)
 	if fileErr != nil {
 		bad := doctor.FailStage("config", oneLine(fileErr.Error()), "", "fix that field, or remove the file and run `wardyn-runnerd setup` again")
 		stages = append([]doctor.Stage{bad}, stages...)
@@ -329,6 +331,9 @@ func (h setupHost) serviceStage(ctx context.Context, p setupPaths) doctor.Stage 
 // reads, and no others.
 const orgSetting = "the organisation address (--org, the OrgURL managed preference, or org_url in runnerd.json)"
 
+// statusNow is the clock status lines are read against: the base's age and a runner's next try (tests replace it).
+var statusNow = time.Now
+
 // statusSetting is the setting, and what to set it to, that fixes a connection that failed at stage.
 var statusSetting = map[string][2]string{
 	types.RunnerStageDNS:        {orgSetting, "an address that resolves from this computer (or fix its DNS or VPN)"},
@@ -357,6 +362,10 @@ func statusStage(path string) doctor.Stage {
 	if st.PeersOnlyRefusedBy != "" {
 		last += "; warning: peers-only not in effect: organisation older (its proxy image " + st.PeersOnlyRefusedBy +
 			" refused allowed_peers, so run proxies serve any peer until it is upgraded)"
+	}
+	// A next try already in the past is a leftover (a runner killed while it waited), not a plan.
+	if st.NextRetryAt != nil && st.State == "starting" && st.NextRetryAt.After(statusNow()) {
+		last += "; waiting for the proxy image; next try at " + st.NextRetryAt.UTC().Format(time.RFC3339)
 	}
 	since := st.Since.UTC().Format(time.RFC3339)
 	// A failure is a runner that is not connected and either stopped at a stage or is offline. An error left

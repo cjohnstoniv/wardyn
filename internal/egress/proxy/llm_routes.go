@@ -335,6 +335,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 			return nil, false
 		}
 		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, callID, resp)
+		if meteredSource(ruleSource) {
+			p.meterUsage(r, host, port, resp, callID) // each attempt meters its own answer
+		}
 		if nsOff { // once, however many times a credential heal sends
 			p.emitLLMDecision(r, host, port, egress.Allow, ruleSourceGitNSOff, nil)
 			nsOff = false

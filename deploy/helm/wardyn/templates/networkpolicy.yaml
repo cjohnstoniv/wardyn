@@ -96,6 +96,16 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace }}
         {{- end }}
+        {{- if and (include "wardyn.groundtruthEnabled" .) (ne (include "wardyn.groundtruthNamespace" .) .Release.Namespace) }}
+        # The ground-truth sensor DaemonSet in its own namespace (groundtruth.k8s.namespace): its
+        # pods only, on this port only. In the release namespace the podSelector peer above admits it.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "wardyn.groundtruthNamespace" . }}
+          podSelector:
+            matchLabels:
+              {{- include "wardyn.groundtruthLabels" . | nindent 14 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: internal
