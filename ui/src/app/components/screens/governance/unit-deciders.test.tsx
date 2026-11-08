@@ -19,20 +19,22 @@ vi.mock("../../../lib/api/deciders", async () => {
 
 // The anchor test mounts the whole editor, which grades its ceiling and reads setup status.
 vi.mock("../../../lib/api/runs", () => ({ runs: { gradePolicy: vi.fn().mockResolvedValue({ overall_risk: "medium", risk_assessment: [] }) } }));
-vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn().mockResolvedValue({}) } }));
+const setupMock = vi.fn();
+vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => setupMock(...a) } }));
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { DeciderRule, GovernanceDeciders } from "../../../lib/api/deciders";
 import type { GovernanceUnit } from "../../../lib/api/governance";
 import { CHANGES, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { aheadByHours } from "../../../lib/test-clock";
+import { baseStatus } from "../../../lib/test-fixtures";
 import { DECIDERS, DECIDER_KIND_LABEL } from "../../wardyn/copy/deciders";
 import { ProfileEditor } from "./profile-editor";
 import { whoPhrase } from "./decider-rules";
 import { UnitDeciders } from "./unit-deciders";
 
 const unit = (over: Partial<GovernanceUnit> & { id: string; name: string }): GovernanceUnit => ({
-  ceiling: {},
+  ceiling: { allowed_domains: [], first_use_approval: "deny_with_review", min_confinement_class: "CC2" },
   limits: {},
   created_at: aheadByHours(-1),
   updated_at: aheadByHours(-1),
@@ -59,15 +61,15 @@ function mount(over: Partial<React.ComponentProps<typeof UnitDeciders>> = {}) {
 }
 
 const button = (name: string | RegExp) => screen.getByRole("button", { name });
-const checkbox = (name: string | RegExp) => screen.getByRole("checkbox", { name });
 const editorBox = (i: number) => screen.getByTestId(`decider-rule-editor-${i}`);
 
 beforeEach(() => {
+  setupMock.mockResolvedValue(baseStatus());
   putMock.mockReset();
   vi.mocked(toast.success).mockReset();
 });
 
-describe("UnitDeciders: frame A, a profile with four rules", () => {
+describe("UnitDeciders: a profile with four rules", () => {
   it("lists each rule with its kinds, who decides and the fact line, and keeps Save off until an edit", () => {
     mount();
     expect(screen.getByRole("heading", { name: DECIDERS.TITLE })).toBeInTheDocument();
@@ -103,7 +105,7 @@ describe("UnitDeciders: frame A, a profile with four rules", () => {
   });
 });
 
-describe("UnitDeciders: frame D, inherited and locked", () => {
+describe("UnitDeciders: inherited and locked", () => {
   const inherited = [
     { unit_id: "c1", rules: [], from: { egress_domain: "p1" } } as GovernanceDeciders,
     ownEntry([FOUR[0]]),
@@ -142,7 +144,7 @@ describe("UnitDeciders: frame D, inherited and locked", () => {
   });
 });
 
-describe("UnitDeciders: frame F, the states", () => {
+describe("UnitDeciders: the states", () => {
   it("says an older server does not support deciders", () => {
     mount({ supported: false, deciders: undefined });
     expect(screen.getByText(DECIDERS.OLDER_SERVER)).toBeInTheDocument();
@@ -315,7 +317,8 @@ describe("UnitDeciders: Save", () => {
     await userEvent.type(box.getByLabelText(DECIDERS.ELEV_MAX_LABEL), "120");
     await userEvent.type(box.getAllByPlaceholderText(DECIDERS.GROUP_PLACEHOLDER)[1], "support");
     await userEvent.click(box.getAllByRole("button", { name: DECIDERS.ADD_GROUP })[1]);
-    await userEvent.type(box.getByLabelText(DECIDERS.TICKET_PATTERN_LABEL), "[A-Z]+-[0-9]+");
+    await userEvent.click(box.getByLabelText(DECIDERS.TICKET_PATTERN_LABEL));
+    await userEvent.paste("[A-Z]+-[0-9]+");
     expect(box.getByRole("button", { name: DECIDERS.DONE })).toBeEnabled();
     await userEvent.click(box.getByRole("button", { name: DECIDERS.DONE }));
     await userEvent.click(button(DECIDERS.SAVE));

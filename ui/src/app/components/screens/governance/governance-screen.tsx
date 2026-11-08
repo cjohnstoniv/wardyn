@@ -433,6 +433,10 @@ export function GovernanceScreen() {
                 profile={editing.profile}
                 profiles={snap.profiles}
                 disabled={!securityOperator}
+                deciders={snap.deciders}
+                decidersSupported={snap.envelopes !== undefined}
+                unitNames={snap.unit_names}
+                onDecidersChanged={load}
                 onCancel={() => setEditing(null)}
                 onSaved={(warnings) => {
                   setEditing(null);
