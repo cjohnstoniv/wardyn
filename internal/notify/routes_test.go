@@ -136,6 +136,8 @@ func TestParse_RouteRefusals(t *testing.T) {
 			}
 		})
 	}
+	// unit_admins is allowed through a redacting channel: the admins are not the requester
+	parseRoutes(t, `[{"tiers":[`+tierJSON("0s", `"red"`, `,"notify":["unit_admins"]`)+`]}]`)
 	// profile_contact is allowed through a redacting channel; five tiers are fine
 	parseRoutes(t, `[{"tiers":[`+tierJSON("0s", `"red"`, `,"notify":["profile_contact"]`)+`]}]`)
 	parseRoutes(t, `[{"tiers":[`+strings.Join(six[:5], ",")+`]}]`)

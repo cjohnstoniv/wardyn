@@ -884,7 +884,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Read once at boot.
 - A channel needs `id`, `type` (`webhook`, `teams`, `slack` or `smtp`) and, except for `smtp`, `url`.
 - `redact_requester` is an optional per-channel flag that omits the run owner from its messages.
-- Optional `routes` choose channels by approval `kinds` and leaf `profiles` ids through up to 5 ascending escalation `tiers` (`after`, `channels`, `notify` of `run_owner` or `profile_contact`).
+- Optional `routes` choose channels by approval `kinds` and leaf `profiles` ids through up to 5 ascending escalation `tiers` (`after`, `channels`, `notify` of `run_owner`, `profile_contact` or `unit_admins`).
+- `unit_admins` notifies user-subject unit-admin grants on the run's unit chain only; see OPERATIONS.
 - And boot refuses an unknown channel or kind, bad tiers, or `run_owner` on a redacting channel.
 - `hmac_secret` and `bearer_token` are optional and, like a URL carrying userinfo or a query, require `https://`.
 - And a `teams` or `slack` URL must always be `https://`.
