@@ -76,16 +76,25 @@ describe("ElevationDeciderCard: what it says", () => {
     expect(screen.getByText(/^Requested by/)).toHaveTextContent("Requested by dana.reyes@acme.example");
   });
 
-  it("shows their reason with the ticket in mono", () => {
+  it("shows their reason, and the ticket in mono on the Requested by row", () => {
     setup();
     expect(screen.getByText("Their reason:").parentElement).toHaveTextContent("Their reason: Production incident: I need to deploy the hotfix.");
-    expect(screen.getByText("INC-2210")).toHaveClass("font-mono");
+    expect(screen.getByText("Their reason:").parentElement).not.toHaveTextContent("INC-2210");
+    const ticket = screen.getByText("INC-2210");
+    expect(ticket).toHaveClass("font-mono");
+    expect(ticket.closest("div")).toHaveTextContent("Requested by dana.reyes@acme.example Ticket INC-2210");
   });
 
   it("shows no ticket when there is none", () => {
     setup(request({ note: { reason: "Need it." } }));
     expect(screen.queryByText("INC-2210")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ticket")).not.toBeInTheDocument();
     expect(screen.getByText("Their reason:").parentElement).toHaveTextContent("Their reason: Need it.");
+  });
+
+  it("says when it was requested", () => {
+    setup();
+    expect(screen.getByText("requested 3m ago")).toBeInTheDocument();
   });
 
   it("states what approving does and its blast radius", () => {

@@ -623,6 +623,20 @@ describe("Approvals: elevation requests", () => {
     expect(title.compareDocumentPosition(approval) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("a decider whose probe missed still gets the tab and the card", async () => {
+    mockKnows = false;
+    serveElevation({ requests: [elevationRequest("e1")] });
+    renderScreen();
+    const tab = await waitFor(() => {
+      const t = waitingTab();
+      expect(t).toBeInTheDocument();
+      return t!;
+    });
+    expect(tab).toHaveTextContent(/Waiting on you\s*1$/);
+    await userEvent.click(tab);
+    expect(await screen.findByText(ELEVATE_TITLE)).toBeInTheDocument();
+  });
+
   it("only a pending, decidable elevation request is a decider card", async () => {
     serveElevation({
       requests: [

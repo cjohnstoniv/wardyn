@@ -98,7 +98,12 @@ describe("MyElevationRequests: when it draws nothing", () => {
     expect(screen.getByText("Your requests")).toBeInTheDocument();
     expect(screen.getByText(ELEV.LIST_LEAD)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
-    expect(screen.queryByText(ELEV.LIST_EMPTY)).not.toBeInTheDocument();
+    expect(screen.getByText("You have no requests.")).toBeInTheDocument();
+  });
+
+  it("draws no empty line once there is a row", () => {
+    setup(list([row()]));
+    expect(screen.queryByText("You have no requests.")).not.toBeInTheDocument();
   });
 
   it("offers no action when no unit offers it, and still lists the person's own rows", () => {
