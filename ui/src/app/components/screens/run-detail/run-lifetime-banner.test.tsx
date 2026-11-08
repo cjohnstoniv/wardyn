@@ -760,6 +760,15 @@ describe("RunLifetimeBanner: a run that ends with its elevation", () => {
     expect(await screen.findByText("Payments")).toBeInTheDocument();
   });
 
+  it("an operator viewing another person's run sees the ended banner without the button; the owner sees it with the button", () => {
+    const view = renderBanner(killed({ created_by: "someone-else" }), [], () => {}, { operator: true, principal: OWNER });
+    expect(screen.getByTestId("run-lifetime-elevation-ended")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request elevation" })).not.toBeInTheDocument();
+    view.unmount();
+    renderBanner(killed({ created_by: OWNER }), [], () => {}, { operator: false, principal: OWNER });
+    expect(screen.getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
+  });
+
   it("a viewer who cannot act sees the elevation-ended banner without the button", () => {
     renderBanner(killed(), [], () => {}, { operator: false, principal: "someone-else" });
     expect(screen.getByTestId("run-lifetime-elevation-ended")).toBeInTheDocument();
