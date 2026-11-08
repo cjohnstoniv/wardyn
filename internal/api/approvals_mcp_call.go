@@ -210,13 +210,16 @@ func canonicalMCPCallScope(sc types.MCPCallScope) (json.RawMessage, bool) {
 	return out, err == nil
 }
 
-// projectCallText sets CallText on every MCP call row in place: the exact text of its arguments, so a
-// client never has to read a number out of the scope's JSON. Rows that are not MCP calls stay nil.
+// projectCallText sets CallText on every MCP call row and every held kubectl write in place: the exact text of
+// an MCP call's arguments, or a held kubectl write's body (empty when it has none), so a client never has to read a
+// number out of the scope's JSON. Other rows stay nil.
 func projectCallText(rows []types.ApprovalRequest) {
 	for i := range rows {
 		rows[i].CallText = nil
 		if isMCPCallRow(rows[i]) {
 			rows[i].CallText = types.MCPCallTextOf(rows[i].RequestedScope)
+		} else if isKubeCallRow(rows[i]) {
+			rows[i].CallText = types.KubeCallTextOf(rows[i].RequestedScope)
 		}
 	}
 }

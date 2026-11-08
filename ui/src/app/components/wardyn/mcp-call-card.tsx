@@ -30,7 +30,7 @@ import { escapeUnsafeRunes, quoteToASCII } from "../../lib/escape-runes";
 export type McpCallCardRun = Pick<AgentRun, "state">;
 
 /** The arguments or other parameters: the server's text, wrapped, never cut, reachable by keyboard when it scrolls. */
-function ExactText({ text, label, copyLabel }: { text: string; label: string; copyLabel: string }) {
+export function ExactText({ text, label, copyLabel }: { text: string; label: string; copyLabel: string }) {
   return (
     <div className="group relative rounded-lg border border-border bg-surface-2/60">
       <CopyButton

@@ -10,10 +10,12 @@ import {
   canDecideApproval,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
+  isKubeCallRequest,
   isMCPCallRequest,
   isTerminalRunState,
   type RunDetail,
   type ApprovalRequest,
+  type FileDownloadScope,
   type DecisionOptions,
 } from "../../lib/types";
 import { capabilityAllowed } from "../../lib/capabilities";
@@ -28,6 +30,8 @@ import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { McpCallCard } from "../wardyn/mcp-call-card";
+import { FileDownloadCard } from "../wardyn/file-download-card";
+import { KubeCallCard } from "../wardyn/kube-call-card";
 import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { OIDC_HOLD_LANE, REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
 import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
@@ -289,6 +293,56 @@ export function ApprovalCard({
       <div className="space-y-2">
         {runRow}
         <McpCallCard
+          item={item}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // One reviewed file download and one held kubectl write each get their own card, on the MCP card's direct path: no
+  // scope menu and no reason dialog.
+  if (item.kind === "file_download" && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <FileDownloadCard
+          item={item as ApprovalRequest & { requested_scope: FileDownloadScope }}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (isKubeCallRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <KubeCallCard
           item={item}
           canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
           run={run}

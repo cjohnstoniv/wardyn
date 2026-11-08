@@ -61,3 +61,42 @@ func TestListApprovalsCarriesMCPCallText(t *testing.T) {
 		})
 	}
 }
+
+// GET /approvals gives every held kubectl write a call_text: its body as text, and the empty text when the
+// write has none, so the console can tell a bodiless DELETE from a server that sent no text.
+func TestListApprovalsCarriesKubeCallText(t *testing.T) {
+	const sub = "sub-admin-kubetext"
+	for name, tc := range map[string]struct {
+		method, body string
+		want         string
+	}{
+		"PATCH with a body":   {"PATCH", `{"spec":{"replicas":3}}`, `"replicas": 3`},
+		"DELETE with no body": {"DELETE", "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMDFixture(t, types.ApprovalToolCall, kubeCallScopeJSON(t, tc.method, "", tc.body), nil, sub, nil, nil)
+			w := doSSO(t, f.srv, http.MethodGet, "/api/v1/approvals?state=PENDING", ssoSession(t, sub, sub+"@corp.example", oidc.RoleAdmin), "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET /approvals = %d: %s", w.Code, w.Body.String())
+			}
+			var rows []struct {
+				CallText *struct {
+					Arguments string `json:"arguments"`
+				} `json:"call_text"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil || len(rows) != 1 {
+				t.Fatalf("decode %v rows=%d: %s", err, len(rows), w.Body.String())
+			}
+			ct := rows[0].CallText
+			if ct == nil {
+				t.Fatalf("no call_text on a kubectl write row: %s", w.Body.String())
+			}
+			if tc.body == "" && ct.Arguments != "" {
+				t.Errorf("call_text.arguments = %q, want empty", ct.Arguments)
+			}
+			if tc.want != "" && !strings.Contains(ct.Arguments, tc.want) {
+				t.Errorf("call_text.arguments lacks %s:\n%s", tc.want, ct.Arguments)
+			}
+		})
+	}
+}
