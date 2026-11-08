@@ -12,6 +12,7 @@ import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_RUN_IN } from "../../../wardyn/copy/new-run/run-in";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
@@ -20,6 +21,7 @@ import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
 import { SERVICE_FORM_ERRORS as SE } from "../../../wardyn/copy/run-service";
 import { WALL_PRESET_REASON } from "../../../../lib/api/wall-presets";
 import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
+import type { ElevationOffer } from "../../../../lib/types/governance-requests";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
@@ -30,6 +32,7 @@ import type { RunIntent } from "../draft/run-intent";
 import { setupDoor } from "../lenses/tools-lens";
 import { APP_PROBLEM_CODES, type AppProblemCode, type StepIssue, type StepIssueCode } from "../lenses/step-issues";
 import { appIssueText } from "../steps/run/app-issue-text";
+import type { RunInBlocker } from "../steps/run/run-in-model";
 
 export type BlockerKind = "local" | "gateway_off" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
 
@@ -45,6 +48,8 @@ export interface Blocker {
   hint?: string;
   /** A missing secret the person can store here: the door Tools has (an add-secret fix that names the secret). */
   addSecret?: SetupItem;
+  /** A unit the person can only ask for: the elevation to request, with the unit's offer. */
+  requestElevation?: { unitId: string; offer: ElevationOffer };
 }
 
 /** The screen a field's fix lives on. Review and excluded fields have none to link to. */
@@ -110,6 +115,8 @@ export interface BlockerInput {
   gatewayOff?: boolean;
   /** The wall preset the draft chose, and whether this caller can no longer pick it (a launch or the list said so). */
   wallPreset?: { name: string; unavailable: boolean };
+  /** The unit the draft runs in is one the person can only ask for: Launch waits for the ask, then for its answer. */
+  runIn?: RunInBlocker;
   /** The draft keeps or resumes a machine and the read of the kept machines failed: Launch waits for the Run step's retry. */
   keptReadFailed?: boolean;
   /** The result for this draft is missing or older than a minute. */
@@ -147,12 +154,24 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
       to: { screen: "step", step: "tools" }, field: "wall_preset", ...(presetRefused && input.refusal && { hint: input.refusal.text }),
     });
   }
+  // A unit the person can only ask for holds Launch with the ask; the server's own refusal of the same pick says it in
+  // other words, and this blocker stands for it. A unit that left while Review was open is the server's sentence.
+  const runIn = input.runIn;
+  if (runIn?.kind === "ask") {
+    out.push({
+      id: "run_in:ask", kind: "refusal", text: NR_RUN_IN.BLOCKER_ASK(runIn.name), to: { screen: "step", step: "run" }, field: "run_in",
+      requestElevation: { unitId: runIn.unitId, offer: runIn.offer },
+    });
+  } else if (runIn) {
+    out.push({ id: "run_in:waiting", kind: "refusal", text: NR_RUN_IN.BLOCKER_WAITING(runIn.name), to: { screen: "step", step: "run" }, field: "run_in" });
+  }
   // The server's own refusal of the same conflict says it in other words; the blocker above stands for it. The keep
   // blocker likewise says the member limit. A refusal of the window on the Mac is never a blocker: the choice is cleared
   // with its sentence and the draft checked again without it (window-choice.ts).
   if (
     input.refusal &&
     !presetRefused &&
+    !(runIn && input.refusal.reason === "unit_not_a_context") &&
     input.refusal.field !== DESKTOP_WINDOW_FIELD &&
     !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
     !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
