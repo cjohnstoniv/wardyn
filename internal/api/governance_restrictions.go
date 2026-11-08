@@ -352,6 +352,7 @@ func (c ownerCeiling) withRevivedRestrictions(list []types.Restriction) ownerCei
 		if r.Limits.DenyPlacements != nil {
 			c.denyPlacements = append(slices.Clone(c.denyPlacements), *r.Limits.DenyPlacements...)
 		}
+		c = c.withRevivedDenyLists(r.Limits)
 		if r.Limits.AllowedMacOSBases != nil && len(*r.Limits.AllowedMacOSBases) > 0 {
 			c.allowedMacOSBases = append(slices.Clone(c.allowedMacOSBases), *r.Limits.AllowedMacOSBases)
 		}

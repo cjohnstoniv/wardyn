@@ -650,6 +650,7 @@ What the check does and does not settle:
 | Effect | A create, Review or preview that attaches a listed component is refused `403` `component_denied` (target `runs.component`). One that would use a listed provider is refused `403` `model_provider_denied` (`runs.model_provider`) |
 | Audit | Each refusal writes an `authz.denied` row naming the knob |
 | Queued run | Checked again when it starts: it ends `FAILED` with the same reason |
+| Revive | A revive of a run that holds a listed component or provider, whether listed on the profile or a restriction, is refused with the same reasons |
 | Operators | Not exempt: a hard wall. An admin whose runs are governed (`WARDYN_GOVERN_ADMIN_RUNS`) meets their profile's lists; the admin token and local mode resolve no profile, so they have none |
 | Not covered | Inline and built-in components carry no id and are never named; `local_self_defined_components` governs inline ones. A run already running is not stopped by a new entry |
 

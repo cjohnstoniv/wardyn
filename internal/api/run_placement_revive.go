@@ -110,6 +110,9 @@ func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun,
 		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
 	}
 	if rerr == nil {
+		rerr = s.reviveDenyLists(ctx, run, c, actorType, actor)
+	}
+	if rerr == nil {
 		rerr = s.reviveBelowBoundaryFloor(ctx, run, actorType, actor)
 	}
 	return c, rerr
@@ -157,6 +160,9 @@ type ownerCeiling struct {
 	// requiredImageSigners are the image signers the profile and the restrictions require, which a revive's
 	// image admission holds the run's pinned image to.
 	requiredImageSigners []string
+	// denyComponents and denyModelProviders are the profile's and the restrictions' deny lists, unioned,
+	// which a revive holds the run's stored components and model providers to (reviveDenyLists).
+	denyComponents, denyModelProviders []string
 }
 
 // reviveCeiling is the OWNER's current ceiling: the profile captured on the
@@ -178,7 +184,7 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorTyp
 	var c ownerCeiling
 	if p != nil {
 		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements,
-			requiredImageSigners: p.Limits.RequiredImageSigners}
+			requiredImageSigners: p.Limits.RequiredImageSigners, denyComponents: p.Limits.DenyComponents, denyModelProviders: p.Limits.DenyModelProviders}
 		if len(p.Limits.AllowedMacOSBases) > 0 {
 			c.allowedMacOSBases = [][]string{p.Limits.AllowedMacOSBases}
 		}

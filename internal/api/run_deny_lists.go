@@ -54,22 +54,23 @@ func deniedProviderMsg(name string) string {
 // and the lock a governance door carries; nil when none is listed. Components are judged before
 // providers.
 func (s *Server) denyListRefusal(ctx context.Context, c governanceCeiling, cand denyCandidates) *runRefusal {
-	var d authz.Decision
-	var reason, knob string
 	if i := slices.IndexFunc(cand.components, func(x denyComponent) bool {
 		return slices.Contains(c.Limits.DenyComponents, x.id.String())
 	}); i >= 0 {
-		d = authz.Deny(authz.ReasonGovernanceUnit, "runs.component", deniedComponentMsg(cand.components[i].name))
-		reason, knob = reasonComponentDenied, "deny_components"
-	} else if i := slices.IndexFunc(cand.providers, func(x denyProvider) bool {
+		return s.denyListDecision(ctx, c, reasonComponentDenied, "deny_components",
+			authz.Deny(authz.ReasonGovernanceUnit, "runs.component", deniedComponentMsg(cand.components[i].name)).WithPolicy(s.ceilingPolicy(ctx, c)))
+	}
+	if i := slices.IndexFunc(cand.providers, func(x denyProvider) bool {
 		return slices.Contains(c.Limits.DenyModelProviders, x.uid)
 	}); i >= 0 {
-		d = authz.Deny(authz.ReasonGovernanceUnit, "runs.model_provider", deniedProviderMsg(cand.providers[i].name))
-		reason, knob = reasonModelProviderDenied, "deny_model_providers"
-	} else {
-		return nil
+		return s.denyListDecision(ctx, c, reasonModelProviderDenied, "deny_model_providers",
+			authz.Deny(authz.ReasonGovernanceUnit, "runs.model_provider", deniedProviderMsg(cand.providers[i].name)).WithPolicy(s.ceilingPolicy(ctx, c)))
 	}
-	d = d.WithPolicy(s.ceilingPolicy(ctx, c))
+	return nil
+}
+
+// denyListDecision is the 403 for d, with the lock of the knob that listed it and the profile to ask.
+func (s *Server) denyListDecision(ctx context.Context, c governanceCeiling, reason, knob string, d authz.Decision) *runRefusal {
 	if c.Unit != nil {
 		d = d.OnKnob(s.runLockOf(ctx, c.Unit, knob))
 	}
@@ -79,17 +80,17 @@ func (s *Server) denyListRefusal(ctx context.Context, c governanceCeiling, cand 
 	return rf
 }
 
-// denyCandidatesOf is the stored components f's run attaches and the model providers it chose (the
+// denyCandidatesOf is the stored components a run attaches and the model providers it chose (the
 // main one and each included harness's).
-func denyCandidatesOf(f *runFold) denyCandidates {
+func denyCandidatesOf(comps runComponents, main runProviderChoice, harnesses []harnessChoice) denyCandidates {
 	var cand denyCandidates
-	for _, a := range f.comps.attached {
+	for _, a := range comps.attached {
 		if id := a.snapshot.ComponentID; id != nil {
 			cand.components = append(cand.components, denyComponent{id: *id, name: a.snapshot.Name})
 		}
 	}
-	choices := []runProviderChoice{f.mpChoice}
-	for _, h := range f.harnessChoices {
+	choices := []runProviderChoice{main}
+	for _, h := range harnesses {
 		choices = append(choices, h.choice)
 	}
 	for _, c := range choices {
@@ -106,5 +107,5 @@ func (s *Server) stepDenyLists(f *runFold, _ *foldRecorder) bool {
 	if len(f.ceiling.Limits.DenyComponents) == 0 && len(f.ceiling.Limits.DenyModelProviders) == 0 {
 		return true
 	}
-	return !s.denyListRefusal(f.r.Context(), f.ceiling, denyCandidatesOf(f)).write(s, f.w, f.r)
+	return !s.denyListRefusal(f.r.Context(), f.ceiling, denyCandidatesOf(f.comps, f.mpChoice, f.harnessChoices)).write(s, f.w, f.r)
 }
