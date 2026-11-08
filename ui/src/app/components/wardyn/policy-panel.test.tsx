@@ -284,6 +284,18 @@ describe("PolicyPanel — recording and a macOS VM run", () => {
   });
 });
 
+describe("PolicyPanel — data out", () => {
+  it("renders the Data out section on a parsed spec, after Recording, and not on a spec that does not parse", () => {
+    const { unmount } = render(<Harness initial={VALID} />);
+    const section = screen.getByTestId("policy-data-out");
+    expect(within(section).getByRole("radiogroup", { name: "Data out" })).toBeInTheDocument();
+    expect(screen.getByTestId("policy-recording").compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+    render(<Harness initial="allowed_domains: [" />);
+    expect(screen.queryByTestId("policy-data-out")).toBeNull();
+  });
+});
+
 describe("PolicyPanel — run instance extras", () => {
   it("renders Preflight only when the screen passes a handler", async () => {
     const user = userEvent.setup();

@@ -1067,6 +1067,7 @@ What the check does and does not settle:
 - One rule for content leaving a run: `allowed`, `review` or `blocked`. Omitted is `allowed`, so nothing changes until a policy, a unit's walls, a restriction or the boundary sets it.
 - It is the stricter of every layer's value (`allowed` < `review` < `blocked`), frozen into the run at create and met again at each revive. A layer below can only make it stricter.
 - A member's policy, a unit's walls, a restriction and the boundary each set it as `data_out`.
+- In the console, a policy, a profile's ceiling and the Wardyn boundary set it. A restriction's `data_out` is set through the API (`/governance/restrictions`) or `wardyn governance set`, as every restriction knob is; the console has no restriction editor.
 
 | Path content leaves by | `review` | `blocked` |
 |---|---|---|
