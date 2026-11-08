@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -20,6 +21,22 @@ import (
 const epochFile = "live-epoch.json"
 const signalFile = "live-activity.json"
 const maxMarker = 256
+
+// IsMarker reports whether name is a marker file of this package, or the temporary name one is written
+// under before it is renamed into place. Neither is stream data in the directory they sit in.
+func IsMarker(name string) bool {
+	for _, f := range []string{epochFile, signalFile} {
+		if name == f {
+			return true
+		}
+		if rest, ok := strings.CutPrefix(name, f+"."); ok {
+			if _, err := uuid.Parse(rest); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Marker binds one newly admitted request to the connection present at admission.
 type Marker struct {
