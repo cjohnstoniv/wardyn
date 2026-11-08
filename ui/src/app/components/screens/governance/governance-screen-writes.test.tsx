@@ -35,10 +35,11 @@ vi.mock("../../../lib/api/directory", async () => {
 });
 vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () => Promise.resolve([]) } }));
 
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { PERM } from "../../../lib/permissions-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -105,5 +106,28 @@ describe("GovernanceScreen — a refused or in-flight write", () => {
     await userEvent.click(confirm);
     expect(deleteAssignmentMock).toHaveBeenCalledTimes(1);
     finish();
+  });
+
+  // A held delete (202) names the change, so its note offers Add a note.
+  it("a held profile delete shows the submitted note with Add a note", async () => {
+    deleteProfileMock.mockRejectedValue(
+      new PendingChangeError({
+        id: "c9",
+        target_kind: "governance_unit",
+        op: "delete",
+        target_key: GREENFIELD.id,
+        state: "pending",
+        proposed_by: "ana@example.com",
+        proposed_at: aheadByHours(-1),
+        expires_at: aheadByHours(23),
+        diff: { changed: [] },
+      }),
+    );
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${GREENFIELD.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: GOV.DELETE }));
+    expect(await screen.findByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
   });
 });

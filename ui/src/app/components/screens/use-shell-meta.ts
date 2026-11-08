@@ -52,6 +52,8 @@ export interface ShellMeta {
   // them while `operator` reads false. Fail CLOSED (false) when /me has not
   // answered or an older daemon never sends it — it only gates a link.
   userViewSuperAdmin: boolean;
+  /** /me's unit_admin_of. Fail closed: [] when /me has not answered, failed, or an older server never sends it. Optional only so a ShellMeta built by hand in a test need not name it; absent reads as none. */
+  unitAdminOf?: { unit_id: string; unit_name: string }[];
   // The same B1-derived tier as `operator`, named directly (B3) — fail-open
   // "admin" for the identical three cases (unresolved /me, a failed fetch, an
   // unwrapped test). Kept alongside `operator` rather than replacing it: every
@@ -144,6 +146,7 @@ function identityFromMe(me: Me | null) {
     // this field must fail OPEN like every other identity signal here.
     securityOperator: me?.security_operator ?? true,
     userViewSuperAdmin: me?.user_view_super_admin ?? false,
+    unitAdminOf: me?.unit_admin_of ?? [],
     role: me?.role ?? "admin",
     // F3-F11: a bad string parses to an Invalid Date, not null — guard
     // NaN here so useSessionExpiry never has to. An expiry the server named
@@ -186,6 +189,7 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     operator: true,
     securityOperator: true,
     userViewSuperAdmin: false,
+    unitAdminOf: [],
     role: "admin",
     sessionExpiresAt: null,
     memberLocalDirRoot: null,

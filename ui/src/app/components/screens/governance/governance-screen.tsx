@@ -54,7 +54,7 @@ import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { PageTabs } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
-import { useSecurityOperator } from "../../wardyn/operator-context";
+import { useSecurityOperator, useUnitAdminOf } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { HowItWorks } from "../../wardyn/how-it-works";
@@ -78,6 +78,8 @@ export function GovernanceScreen() {
   // securityOps route group gates server-side, and this mirrors that predicate
   // exactly. UX only — the middleware is what refuses a write.
   const securityOperator = useSecurityOperator();
+  // A unit admin opens a profile to read it; the editor stays disabled for them (securityOperator below).
+  const unitAdmin = useUnitAdminOf().length > 0;
   const [snap, setSnap] = React.useState<GovernanceSnapshot>(EMPTY);
   // X3-F5: FORBIDDEN is its own arm — /governance is a securityOps route hidden
   // from a member's nav, so the 403 that answers a URL-typed visit is a verdict
@@ -94,7 +96,7 @@ export function GovernanceScreen() {
   const [changes, setChanges] = React.useState<GovernanceChange[]>([]);
   const [changesError, setChangesError] = React.useState<string | null>(null);
   // A profile write the server held for a second person (202): the note stands until the next write.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   // Runner credentials and Baseline hosts are the security operators' tabs: anyone else is on Profiles,
   // whatever the URL says.
@@ -148,7 +150,7 @@ export function GovernanceScreen() {
     const profile = snap.profiles.find((p) => p.id === askedProfile);
     if (profile) {
       setOmission([]);
-      setSubmitted(false);
+      setSubmitted(null);
       setEditing({ profile });
     }
     setSearchParams(
@@ -167,13 +169,13 @@ export function GovernanceScreen() {
 
   const openEditor = (profile: GovernanceUnit | null) => {
     setOmission([]);
-    setSubmitted(false);
+    setSubmitted(null);
     setEditing({ profile });
   };
 
   const openDelete = (p: GovernanceUnit) => {
     setDeleteError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     setToDelete(p);
   };
 
@@ -187,7 +189,7 @@ export function GovernanceScreen() {
       if (e instanceof PendingChangeError) {
         // Held for a second person: the profile is still there.
         setToDelete(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -322,7 +324,7 @@ export function GovernanceScreen() {
 
             {submitted && (
               <div className="px-6">
-                <SubmittedNote />
+                <SubmittedNote change={submitted} />
               </div>
             )}
 
@@ -399,7 +401,7 @@ export function GovernanceScreen() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={!securityOperator || editorOpen}
+                                disabled={(!securityOperator && !unitAdmin) || editorOpen}
                                 onClick={() => openEditor(p)}
                                 aria-label={`${GOV.EDIT} ${p.name}`}
                               >
@@ -437,13 +439,13 @@ export function GovernanceScreen() {
                 onSaved={(warnings) => {
                   setEditing(null);
                   setOmission(warnings);
-                  setSubmitted(false);
+                  setSubmitted(null);
                   load();
                 }}
-                onSubmitted={(notes) => {
+                onSubmitted={(notes, change) => {
                   setEditing(null);
                   setOmission(notes);
-                  setSubmitted(true);
+                  setSubmitted(change);
                   load();
                 }}
               />
