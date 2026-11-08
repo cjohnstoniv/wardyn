@@ -10,5 +10,5 @@
 # docs/operations/unit-admins.md 956 adds 136 over 820, measured: the audit route row and the unit view of audit rows (scope, kept fields, the data keys it serves).
 # docs/operations/unit-admins.md 990 adds 34 over 956, measured: unit-view values are codes (no free text), no held push paths, the target filter rule.
 # docs/operations/unit-admins.md 1007 adds 17 over 990, measured at the rc.16 w3 batch B train: the merged lanes' additions together.
-# docs/operations/unit-admins.md 1179 adds 150 over 1007, measured: the governance rows in the unit view of audit rows (who the actor is, what is left out) and the model-usage route row.
+# docs/operations/unit-admins.md 1179 adds 172 over 1007, measured: the governance rows in the unit view of audit rows (who the actor is, what is left out), the model-usage route row and the actor-filter rule.
 docs/operations/unit-admins.md=1179 share=35
