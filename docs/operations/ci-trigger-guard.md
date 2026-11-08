@@ -63,9 +63,9 @@ Each tier adds to the one before. The push rules are a unit's walls or the run's
 | CI definitions | `push_rules.deny_paths` for `azure-pipelines*.yml`, `.azure-pipelines/**`, `.github/workflows/**`, `.github/actions/**` and the repository's template folders |
 | GitHub workflows | `workflows_write` not granted |
 | GitHub actions | `actions_execute` and `actions_admin` not granted |
-| Azure DevOps pipelines | `build_execute`, `build_admin`, `release_execute`, `release_admin`, `serviceendpoint_admin`, `policy_admin` and `policy_bypass` left out of the provider row's capability ceiling |
-| Azure DevOps pull requests | <!-- pr names: added by the lane that splits pr --> `pr_create` in the ceiling but not in the default profile, so opening one is held for the person; `pr_vote` and `pr_complete` left out |
-| GitHub pull requests | <!-- pr names: added by the lane that splits pr --> grant `pr_write` in place of `pr`, so `pr_review` is not granted |
+| Azure DevOps pipelines | `build_execute`, `build_admin`, `release_execute`, `release_admin`, `serviceendpoint_admin`, `policy_admin` and `policy_bypass` left out of the provider row's capability ceiling, or out of the boundary's cap |
+| Azure DevOps pull requests | `pr_create` in the ceiling but not in the default profile, so opening one is held for the person; `pr_vote` and `pr_complete` left out |
+| GitHub pull requests | grant `pr_write` in place of `pr`, so `pr_review` is not granted |
 
 - Opening a pull request starts validation, so the hold on `pr_create` applies only when the run's policy names no capability list. A policy that names `pr_create` inside the ceiling makes it standing.
 - A capability outside the ceiling is refused with `capability_above_ceiling` ([Capabilities](../AZURE-DEVOPS.md#capabilities)).
@@ -85,6 +85,7 @@ Each tier adds to the one before. The push rules are a unit's walls or the run's
 ### Tier 3: no pushes
 
 - `deny_all` refuses every push to every remote: content, ref updates and deletes.
+- `data_out: blocked` on a unit's walls, a restriction or the boundary also denies every git push ([`data_out`](../POLICIES.md#data_out)).
 - A run that holds an `ssh_key`, or a `git_pat` while the git token broker is off, is refused at start, because those pushes skip the broker.
 
 ## Where the rule can live
@@ -93,9 +94,9 @@ Today each tier's push rules are a unit's walls or a run policy. Its capability 
 
 <!-- per-person and organisation-wide forms: added by the lanes that ship them -->
 
-Each tier's push rules can also be a restriction, so they follow a person into every unit.
+Each tier can also be a restriction, so a tier can be per person and follows them into every unit. A restriction carries `push_rules` and `git_push_any_branch: false`, and its own `azure_devops_capabilities` and `github_capabilities` list the only capabilities its people may hold ([Governance writes](governance-writes.md)).
 
-<!-- organisation-wide capability cap: added by the lane that ships the boundary's capability lists -->
+Tier 1's capability part can be organisation-wide: list only the capabilities you allow in the boundary's `azure_devops_capabilities` and `github_capabilities` ([Boundary](boundary.md)). Unlike a unit wall's list, a boundary or restriction cap also cuts a run on the default profile, and a capability it leaves out is refused, not held.
 
 ## What Wardyn guarantees
 
