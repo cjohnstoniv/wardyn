@@ -51,7 +51,7 @@ test.describe("governance — platform envelopes", () => {
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
-    await expect(page.getByRole("heading", { name: ENVELOPE.TITLE })).toBeVisible();
+    await expect(page.getByRole("heading", { name: ENVELOPE.TITLE, exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: ENVELOPE.SET, exact: true }).first().click();
     await page.getByRole("combobox", { name: ENVELOPE.ROOT_LABEL }).click();

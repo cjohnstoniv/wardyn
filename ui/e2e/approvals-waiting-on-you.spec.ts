@@ -87,7 +87,7 @@ test.describe("Approvals — Waiting on you", () => {
     await openApprovals(page);
     await waitingTab(page).click();
     await expect(page.getByText(DECIDERS_INBOX.TRUNCATED)).toBeVisible();
-    await expect(page.getByText("Reach e2e-waiting-1.example.com")).toBeVisible();
+    await expect(page.getByText("Reach e2e-waiting-1.example.com", { exact: true })).toBeVisible();
   });
 
   test("a refused decision reads as its own toast", async ({ page }) => {
