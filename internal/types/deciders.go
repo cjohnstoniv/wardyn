@@ -19,7 +19,8 @@ import (
 
 // The kinds a rule names. tool_call is three kinds here, because a capability escalation, an MCP
 // approve-each call and a kubectl approve-each call are different decisions: a rule for one never
-// binds another. elevation, image and file_download are held requests and downloads, not run holds.
+// binds another. elevation and image are held requests, not run holds; file_download is a run hold
+// (a reviewed download).
 const (
 	DeciderKindEgressDomain  = "egress_domain"
 	DeciderKindADOEscalation = "ado_escalation"
