@@ -70,12 +70,15 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 | renaming a unit | the rename changes no person's legacy context, and the unit ties in priority with no other group's unit | otherwise, for an approver who governs every unit it activates or vacates |
 | granting or revoking a unit admin | — | always |
 | setting a unit's deciders | — | always |
+| a write inside a platform envelope | the cases the [platform tenancy](platform-tenancy.md#what-applies-directly-and-what-is-held) table lists as applying directly | otherwise, including renaming a profile when the rename could change which profile a person is given |
+| a change to an envelope's root, or a grant or revoke on it | — | always, for security only |
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
 - A held change may be decided by a security admin, or by a unit admin who governs every unit it touches.
 - For a grant, and for a change to a unit itself (its walls, locks, mode, name or parent), that means strictly above the unit. An admin granted on a unit never decides a change to that unit, and a move needs someone above the new parent too.
 - A held change is checked again when decided; if what let it in has changed since, it answers stale and changes nothing.
 - Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening. Nobody sets deciders on their own unit either, for the same reason. Nor do they decide a change to their own unit.
+- A platform that wants its admins to move faster inside walls security sets: [platform tenancy](platform-tenancy.md).
 - The change read and the dry-run report list `approvers`: who could decide it, the proposer left out.
 
 ## Locks
