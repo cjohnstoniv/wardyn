@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSepa
 import { NR_RUN_IN } from "../../../../wardyn/copy/new-run/run-in";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { Field, fieldHintId } from "../../../../wardyn/form-primitives";
+import * as RL from "../../../../wardyn/copy/run-lifetime";
 import { Chip } from "../../../../wardyn/primitives";
 import { Note } from "../../../governance/display";
 import { lengthWords } from "../../../elevation/request-phrases";
@@ -107,6 +108,7 @@ export function RunInField({ run, runIn, notice, homeFallbackName, dispatch }: {
           {item?.group === "elevated" && <Chip tone="info">{NR_RUN_IN.CHIP_ELEVATED}</Chip>}
         </div>
       </Field>
+      {item?.group === "elevated" && <Note tone="info">{RL.endsElevation(weekdayClock(item.endsAt))}</Note>}
       {failed && <p className="mt-2 text-xs leading-snug text-muted-foreground">{NR_RUN_IN.UNITS_UNREADABLE}</p>}
       {notice && (
         <Note tone="amber" role="status">
