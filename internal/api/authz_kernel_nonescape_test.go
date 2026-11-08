@@ -66,6 +66,8 @@ var kernelDoors = map[string][]string{
 	// egress-host gate — asked from the attention rule (row 8) and from
 	// TestMayDecideAgreesWithDecide, never from decide() itself.
 	"decidableKindAndOwner": {"capEgressHost"},
+	// A unit's decider rule matching the run's owner on an egress approval: the same egress_host grant.
+	"resolveDecider": {"capEgressHost"},
 	// Attaching a component: an org row by id, a person-defined one by feature.
 	"componentAttachRefusal": {"capComponent", "capFeature"},
 	// The hosts a component reaches: the same egress_host rows that bound an
