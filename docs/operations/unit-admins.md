@@ -50,6 +50,7 @@ Unit admins read the audit rows of runs in their subtrees. It is on at upgrade; 
 - A row keeps its time, action, actor, outcome and run, and its target on `run.*`, `egress.*` and `approval.*` rows.
 - Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class`, `exit_code` and `decision`. Each is a number, a code or a list of them; a value with a space is left out. Personal walls, restriction names, secret names, error text and a held push's paths are never served.
 - A `target` filter needs a `run.`, `egress.` or `approval.` `action` or `action_prefix`, else `400` `audit_unit_target_filter`.
+- An `actor` filter reads run rows only: governance rows, the reader's own writes among them, drop out, since their actor is masked.
 - Their own runs' rows read as any owner's do. A run outside their subtrees answers a member's empty `200`.
 
 ## Four-eyes
