@@ -332,18 +332,56 @@ func TestDataOutNoRecordIsAllowedAndReadErrorIs503(t *testing.T) {
 // policy keeps the rule for the generation the doors read.
 func TestDataOutRevivedProxyConfigCarriesNoRule(t *testing.T) {
 	cfg := &proxy.Config{RunToken: "tok", ControlPlaneURL: "https://wardynd:8443", ControlPlaneCAPEM: "ca"}
-	cfg.Policy.DataOut = types.TransferBlocked
+	cfg.Policy.DataOut, cfg.Policy.Recording = types.TransferBlocked, types.RecordingTerminal
 	b, rerr := encodeRevivedConfig(context.Background(), cfg)
 	if rerr != nil {
 		t.Fatalf("encode: %+v", rerr)
 	}
-	if strings.Contains(string(b), "data_out") {
-		t.Errorf("the revived proxy config carries data_out: %s", b)
+	if strings.Contains(string(b), "data_out") || strings.Contains(string(b), `"recording"`) {
+		t.Errorf("the revived proxy config carries data_out or recording: %s", b)
 	}
 	if bad := refusedByPreviousProxy(t, b); bad != "" {
 		t.Errorf("a previous release's proxy refuses %q in the revived config", bad)
 	}
-	if cfg.Policy.DataOut != types.TransferBlocked {
-		t.Errorf("encoding blanked the caller's rule: %q", cfg.Policy.DataOut)
+	if cfg.Policy.DataOut != types.TransferBlocked || cfg.Policy.Recording != types.RecordingTerminal {
+		t.Errorf("encoding blanked the caller's rules: %q %q", cfg.Policy.DataOut, cfg.Policy.Recording)
+	}
+}
+
+// TestDataOutReviveKeepsTheRunsOwnRules: the stored proxy config leaves data_out and recording off, so a
+// revive starts them from the policy the run is recorded under: the new generation row keeps them, and the
+// config handed to the new proxy does not. A recorded policy that cannot be read refuses the revive.
+func TestDataOutReviveKeepsTheRunsOwnRules(t *testing.T) {
+	f, gs, _ := newGenerationFixture(t)
+	runID := f.run.ID
+	data, _ := json.Marshal(effectivePolicyDatum{RunPolicySpec: types.RunPolicySpec{DataOut: types.TransferBlocked, Recording: types.RecordingScreenActions}})
+	gs.recorded = []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	gens := f.audit.eventsFor(runID, "run.policy.generation")
+	if len(gens) != 1 {
+		t.Fatalf("run.policy.generation rows = %d, want 1", len(gens))
+	}
+	var rec struct {
+		Policy types.RunPolicySpec `json:"policy"`
+	}
+	if err := json.Unmarshal(gens[0].Data, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Policy.DataOut != types.TransferBlocked || rec.Policy.Recording != types.RecordingScreenActions {
+		t.Errorf("the new generation holds data_out %q and recording %q, want blocked and screen_actions", rec.Policy.DataOut, rec.Policy.Recording)
+	}
+	if raw := f.rr.replaced[0]; strings.Contains(string(raw), "data_out") || strings.Contains(string(raw), `"recording"`) {
+		t.Errorf("the new proxy's config carries data_out or recording: %s", raw)
+	}
+
+	f, gs, _ = newGenerationFixture(t)
+	gs.readErr = errors.New("audit store unavailable")
+	if code := f.revive(t); code != http.StatusServiceUnavailable {
+		t.Errorf("revive with an unreadable recorded policy: code %d, want 503", code)
+	}
+	if len(f.rr.replaced) != 0 || len(f.audit.eventsFor(f.run.ID, "run.policy.generation")) != 0 {
+		t.Errorf("an unreadable recorded policy still replaced the proxy (%d) or wrote a generation", len(f.rr.replaced))
 	}
 }
