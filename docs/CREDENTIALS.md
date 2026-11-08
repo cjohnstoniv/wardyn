@@ -79,6 +79,7 @@ What Wardyn does for a delivered value:
 
 - It records the value for output masking before the sandbox is created ([`internal/api/runs_dispatch_files.go#Server.completeMaskManifestWithFileSecrets`](../internal/api/runs_dispatch_files.go)).
 - It audits the delivery by variable or file name and by secret name, without the value (`run.env_secret.resolve`, `run.file_secret.resolve`).
+- With `detect_secrets` on in the policy's `llm_inspection`, it adds the whole value to the known-secret corpus, so a prompt that quotes it can be refused ([POLICIES.md](POLICIES.md#llm_inspection--llminspectionspec)).
 - It writes a file under `/run/wardyn/secrets` ([`internal/runner/managed_files.go#ComponentSecretDir`](../internal/runner/managed_files.go)).
   - On Docker the file is mode `0400`, owned by the workload's user ([`internal/runner/docker/managed_files.go#managedFilesTar`](../internal/runner/docker/managed_files.go)).
   - On Kubernetes an init container running as the workload's user copies it into a memory-backed volume, at mode `0400` and owned by that user. The Secret volume is not mounted in the workload's containers ([`internal/runner/k8s/agent_secrets.go#agentSecretVolumes`](../internal/runner/k8s/agent_secrets.go)).

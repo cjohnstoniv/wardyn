@@ -1080,6 +1080,18 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 - An interactive Claude Code run has no gate. Its managed settings carry the rule as `allow` for a remote server turned on for Claude Code, where the proxy asks, and as `deny` otherwise.
 
 
+### Try approve_each without an MCP server
+
+[`test/gatewayfake`](../test/gatewayfake) is a test binary, never built into an image or published. Its `/mcp` route is a stateless MCP server over streamable HTTP with one tool, `echo`, and no sign-in.
+
+1. Run it with `go run ./test/gatewayfake -addr :8080`.
+2. Put a TLS front before it. A remote MCP server's address must be `https://`, and wardynd must trust the front's certificate authority (`trustedCA`, or `WARDYN_TRUSTED_CA_FILE`).
+3. Add `https://<front>/mcp` as a remote MCP server and allow its host in the run's policy, with an `internal_hosts` entry when it names a private address ([setup](operations/ai-gateway.md#set-it-up)).
+4. Add the rule `{"tool": "mcp__<server>__echo", "effect": "approve_each"}`, where `<server>` is the server's key.
+5. Start a background Claude Code run, or a Codex CLI run, and ask it to call `echo`. The call waits for a person to approve it with its exact arguments.
+6. `GET /_seen` on the fake lists every request it received. `tool_calls` stays `0` until you approve and becomes `1` after.
+
+
 ## `recording`
 
 - `off` records no terminal or screen; the audit log still shows what happened. `terminal` records terminal sessions only, what every run got before the level existed. `screen_actions` also records a desktop's screen while someone watches it through Wardyn, on every machine kind, and an action log of what was opened, copied and transferred.
@@ -1413,12 +1425,13 @@ So an entry a pattern matches is judged one of two ways:
 |---|---|---|---|
 | `mode` | `string` | `off` | `off`, `alert` (scan + audit, forward unchanged), or `block` (a qualifying finding refuses the request). When not off, at least one detector — a `detect_*`, a sidecar URL, or `classified_markers` — must be enabled. |
 | `workspace_secret_names` | `[]string` | `[]` | Operator-declared secret **names**, resolved against the at-rest secret store; a reserved platform-internal name is refused at write time. See [`workspace_secret_names`](#workspace_secret_names). |
-| `workspace_secret_values` | `[]string` | `[]` | **Not settable on a policy write** — populated internally by dispatch from `workspace_secret_names`, only in memory, only for the proxy sidecar. |
-| `detect_secrets` | `bool` | `false` | Exact match against the resolved `workspace_secret_names` corpus. |
+| `workspace_secret_values` | `[]string` | `[]` | **Not settable on a policy write** — populated internally by dispatch from `workspace_secret_names` and, with `detect_secrets` on, the placed `env_secret` and `file_secret` values, only in memory, only for the proxy sidecar. |
+| `detect_secrets` | `bool` | `false` | Exact match against the resolved `workspace_secret_names` corpus and every `env_secret` and `file_secret` value placed in the run. See [Placed secrets](#placed-secrets). |
 | `detect_secret_patterns` | `bool` | `false` | Regex catalog of well-known secret *formats* (AWS/GitHub/Slack/Google keys, PEM, JWTs, Stripe). Higher precision than entropy; false-positives on example keys in code. |
 | `detect_entropy` | `bool` | `false` | Shannon-entropy detector. High false-positive rate in code; emits medium severity so a strict `block_min_severity` can exclude it. |
 | `detect_pii` | `bool` | `false` | Regex/Luhn PII detector. Best-effort visibility signal, never a control. |
 | `detector_sidecar_url` | `string` | (unset) | Out-of-process detector URL the proxy POSTs each span to; its host must also be in this same policy's `allowed_domains` (or `allow_all_egress`). See [`detector_sidecar_url`](#detector_sidecar_url). |
+| `detector_sidecar_format` | `string` | (unset) | `presidio` makes `detector_sidecar_url` an unmodified Presidio analyzer's `/analyze`. Unset is Wardyn's own format. It needs `detector_sidecar_url`, and in `block` mode a `block_min_severity` of `medium` or higher. See [`detector_sidecar_url`](#detector_sidecar_url). |
 | `classified_markers` | `[]string` | `[]` | Literal markers (`INTERNAL ONLY`, `CONFIDENTIAL//NOFORN`) whose presence flags a classified-content leak. Case-insensitive substring match. |
 | `scan_attachments` | `bool` | `false` | Decode and scan base64 image/document attachment bytes. Off by default: binary, large, high-FP. |
 | `inspect_forward_egress` | `bool` | `false` | Extend inspection from the LLM routes to the generic plaintext-HTTP forward path. HTTPS connectors tunnel via opaque CONNECT and stay uninspected unless MITM'd. |
@@ -1441,12 +1454,23 @@ So an entry a pattern matches is judged one of two ways:
 - A **reserved platform-internal name** (`wardyn-signing-key`, `wardyn-session-key`, the harness OAuth blobs, the resident AWS SigV4 secrets, every per-person model-provider credential `wardyn-provider-*`) is refused at write time and skipped at dispatch —
   - resolution puts the value in the proxy sidecar, so this field is a credential sink and takes the same reserved-name guard every other sink does.
 
+### Placed secrets
+
+- With `detect_secrets` on, the corpus also holds every `env_secret` and `file_secret` value placed in the run, a component's included.
+- It matches the whole value only: single-line values, and multi-line values only when pasted verbatim. A value under 8 bytes is not checked.
+- A non-secret value, such as a region or a public URL, does not belong in an `env_secret`: a `block`-mode policy would refuse a prompt that quotes it.
+- A finding carries no value and no name. The redacted count in `run.policy.resolve` leaves out `file_secret` values.
+
 ### `detector_sidecar_url`
 
-- Out-of-process detector the proxy POSTs each span to (e.g. Presidio, LLM-Guard).
+- Out-of-process detector the proxy POSTs each span to, such as a Presidio analyzer you run ([setup](operations/model-gateways.md#presidio-as-the-detector)).
 - Must be an `http(s)://` URL **whose host is also in this SAME policy's `allowed_domains`** (or `allow_all_egress`).
   - This is an operator allowlist, not a bare scheme check, since the sidecar is dialed proxy-side with span text on a surface the sandbox's own confinement class never bounds.
-- A sidecar error respects `on_scanner_error` like any other scanner error.
+- A sidecar error respects `on_scanner_error` like any other scanner error: with `pass` the request flows, so set `block` when an outage must block it.
+- `detector_sidecar_format: presidio` sends `{text, language: "en", score_threshold: 0.5}` to the URL as given (use the full `/analyze` address) and names no entities, so the analyzer's own recognizers decide.
+  - Names, locations, dates, URLs, UUIDs, MAC and IP addresses and US driver licences are `low`. Other entities are `high` from a score of `0.85` and `medium` below it. A hit is category `pii`, detector `sidecar:<entity type>`.
+  - A reply that is not an array is a sidecar error.
+  - A layer cannot change the format its ceiling sets: `Clamp` keeps the ceiling's, and `Leq` refuses a different one.
 
 
 ## `resources` — `ResourceLimits`

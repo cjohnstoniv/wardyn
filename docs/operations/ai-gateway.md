@@ -4,6 +4,7 @@
 
 - An AI gateway such as [agentgateway](https://agentgateway.dev) runs beside Wardyn and serves model and MCP traffic for every caller. [Pluggability](../PLUGGABILITY.md#an-external-ai-gateway-for-example-agentgateway) says where it fits.
 - This page is the intended setup: the config, the hostnames and the Wardyn settings that go with them.
+- LiteLLM, Portkey, OpenRouter and Presidio have their own page: [Model gateways and detectors](model-gateways.md).
 
 ## What the setup is
 
