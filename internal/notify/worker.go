@@ -187,7 +187,9 @@ func (w *Worker) recipients(c claimed, f approvalFacts, contact []byte, unitAdmi
 	for _, target := range r.Tiers[c.tier].Notify {
 		if target == TargetUnitAdmins {
 			for _, e := range unitAdmins {
-				out = append(out, recipient{Role: target, Email: e})
+				if e != "" {
+					out = append(out, recipient{Role: target, Email: e})
+				}
 			}
 			continue
 		}

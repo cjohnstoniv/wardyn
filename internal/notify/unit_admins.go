@@ -23,10 +23,13 @@ WITH RECURSIVE chain AS (
 	FROM governance_units u JOIN chain c ON u.id = c.parent_id
 	WHERE c.n < 63
 )
-SELECT DISTINCT lower(COALESCE(NULLIF(p.email, ''), CASE WHEN a.subject LIKE '%@%' THEN a.subject END, ''))
-  FROM chain c
-  JOIN governance_unit_admins a ON a.unit_id = c.id AND a.subject_type = 'user'
-  LEFT JOIN people p ON p.principal = a.subject OR lower(p.email) = lower(a.subject)
+SELECT DISTINCT lower(btrim(s.addr)) FROM (
+	SELECT COALESCE(NULLIF(p.email, ''), CASE WHEN a.subject LIKE '%@%' THEN a.subject END) AS addr
+	  FROM chain c
+	  JOIN governance_unit_admins a ON a.unit_id = c.id AND a.subject_type = 'user'
+	  LEFT JOIN people p ON p.principal = a.subject OR lower(p.email) = lower(a.subject)
+) s
+ WHERE btrim(s.addr) <> ''
  ORDER BY 1`
 
 // unitAdminEmails is the addresses of the people holding a user-subject unit-admin grant on unit or a
