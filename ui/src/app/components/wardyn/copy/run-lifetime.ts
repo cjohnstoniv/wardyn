@@ -112,14 +112,16 @@ export function warnBody(dateText: string): string {
   return `At ${dateText} the run stops. Its files are kept for a while after that (your admin sets how long); push or save anything you need before then.`;
 }
 // A run launched under an elevation ends when the elevation does, and nothing here can move that end.
-export function endsElevation(dateText: string): string {
-  return `This run ends when your elevation ends, ${dateText}. It can't be extended.`;
+// `mine` is false for someone looking at another person's run, who reads "the elevation" where its owner reads "your elevation".
+export function endsElevation(dateText: string, mine = true): string {
+  return `This run ends when ${mine ? "your" : "the"} elevation ends, ${dateText}. It can't be extended.`;
 }
-export function warnBodyElevation(dateText: string): string {
-  return `At ${dateText} the run stops, because your elevation ends then. Push or save anything you need before then.`;
+export function warnBodyElevation(dateText: string, mine = true): string {
+  return `At ${dateText} the run stops, because ${mine ? "your" : "the"} elevation ends then. Push or save anything you need before then.`;
 }
 // A run the server ended at its elevation's end. It is gone, so the only way on is a new request and a new run.
 export const ELEVATION_ENDED_TITLE = "This run ended when your elevation ended";
+export const ELEVATION_ENDED_TITLE_OTHER = "This run ended when the elevation ended";
 export const ELEVATION_ENDED_BODY = "To keep working, ask for elevation again and start a new run.";
 export const REQUEST_ELEVATION = "Request elevation";
 export const WARN_EXTEND_1_DAY = "Extend 1 day";

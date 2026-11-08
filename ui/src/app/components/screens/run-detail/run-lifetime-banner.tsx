@@ -392,7 +392,7 @@ export function RunLifetimeBanner({
       // An elevation's end cannot be moved, so its warning offers Dismiss alone.
       if (cap) {
         return (
-          <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={RL.warnBodyElevation(weekdayClock(cap))}>
+          <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={RL.warnBodyElevation(weekdayClock(cap), isOwner)}>
             <div className="mt-2.5 flex flex-wrap gap-2">
               <Button size="sm" variant="ghost" onClick={() => setDismissed(`${stage}@${cap}`)}>
                 {RL.WARN_DISMISS}
@@ -439,7 +439,7 @@ export function RunLifetimeBanner({
   if (run.state === "KILLED" && run.status_reason === "max_lifetime_reached" && run.lifetime_cap_source === "elevation") {
     return (
       <>
-        <Banner data-testid="run-lifetime-elevation-ended" tone="plain" title={RL.ELEVATION_ENDED_TITLE} body={RL.ELEVATION_ENDED_BODY}>
+        <Banner data-testid="run-lifetime-elevation-ended" tone="plain" title={isOwner ? RL.ELEVATION_ENDED_TITLE : RL.ELEVATION_ENDED_TITLE_OTHER} body={RL.ELEVATION_ENDED_BODY}>
           {isOwner && (
             <div className="mt-2.5">
               <Button size="sm" onClick={() => setRequestOpen(true)}>

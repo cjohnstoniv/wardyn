@@ -200,7 +200,7 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
-              <Why text={RL.endsElevation(weekdayClock(cap))} />
+              <Why text={RL.endsElevation(weekdayClock(cap), run.created_by === principal)} />
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
