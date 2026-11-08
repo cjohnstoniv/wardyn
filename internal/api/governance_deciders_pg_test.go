@@ -175,8 +175,17 @@ func TestDecidersSecurityWriteFollowsSwitch(t *testing.T) {
 	if w := on.admin(http.MethodPut, decidersPath(on.a1), decidersBody(egressOwnerRule())); w.Code != http.StatusOK {
 		t.Fatalf("switch on: admin token write = %d %s, want 200", w.Code, w.Body)
 	}
-	if rows := on.audits("governance.change.bypass"); len(rows) != 1 {
-		t.Errorf("governance.change.bypass rows = %d, want one for the admin token's write", len(rows))
+	// The env's own unit writes, made by the admin token with the switch on, leave bypass rows of the
+	// unit kind; the deciders write leaves exactly one of its kind, naming ua-a1.
+	var deciders []types.AuditEvent
+	for _, row := range on.audits("governance.change.bypass") {
+		var data map[string]any
+		if json.Unmarshal(row.Data, &data) == nil && data["target_kind"] == govKindUnitDeciders {
+			deciders = append(deciders, row)
+		}
+	}
+	if len(deciders) != 1 || deciders[0].Target != on.a1.ID.String() {
+		t.Errorf("governance.change.bypass rows for deciders = %d, want one for the admin token's write on ua-a1", len(deciders))
 	}
 }
 
