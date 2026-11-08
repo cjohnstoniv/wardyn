@@ -206,6 +206,20 @@ func TestEnvelopeReparentOutHeld(t *testing.T) {
 	}
 }
 
+// rootApproversRefused: no unit admin may approve ch, a held change of the envelope's root ua-a1. Only an
+// admin above a unit decides the unit's own change (unitChangeScope), so the root's peer admin is refused on
+// scope, the reason that check keeps (envelopeRootApprover); the admin above, whom the scope admits, is
+// refused because the envelope makes the root the security tier's.
+func (e *unitAdminEnv) rootApproversRefused(ch types.GovernanceChange, what string) {
+	e.t.Helper()
+	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(e.t, w) {
+		e.t.Errorf("the root's peer admin approving %s = %d %s, want 403 unit_scope_denied", what, w.Code, w.Body)
+	}
+	if w := e.call(e.adminA, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(e.t, w) {
+		e.t.Errorf("an admin above the root approving %s = %d %s, want 403 security_admin_surface", what, w.Code, w.Body)
+	}
+}
+
 // TestEnvelopeRootWideningSecurityOnly: the root's own widening is held, as without an envelope, but only
 // a security admin may decide it: a peer admin of the root and an admin above it are refused. With no
 // envelope an admin above the root's approval applies it.
@@ -226,11 +240,7 @@ func TestEnvelopeRootWideningSecurityOnly(t *testing.T) {
 		t.Fatalf("narrowing the envelope's root = %d %s, want 200", w.Code, w.Body)
 	}
 	ch = e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), wide))
-	for who, c := range map[string]*http.Cookie{"a peer admin of the root": e.peerA1, "an admin above the root": e.adminA} {
-		if w := e.call(c, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
-			t.Errorf("%s approving = %d %s, want 403 security_admin_surface", who, w.Code, w.Body)
-		}
-	}
+	e.rootApproversRefused(ch, "a widening")
 	if got := e.domainsOf(e.a1); len(got) != 1 || e.changeState(ch.ID) != types.GovernanceChangePending {
 		t.Fatalf("a refused approval changed the root to %v (change %s)", got, e.changeState(ch.ID))
 	}
@@ -243,7 +253,7 @@ func TestEnvelopeRootWideningSecurityOnly(t *testing.T) {
 }
 
 // TestEnvelopeRootLockRemovalSecurityOnly: removing a lock on the root is held for a security admin; the
-// root's peer admin is refused.
+// root's peer admin and an admin above it are refused.
 func TestEnvelopeRootLockRemovalSecurityOnly(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	if w := e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), e.restate(e.a1, map[string]any{"locked_knobs": []string{"min_confinement_class"}})); w.Code != http.StatusOK {
@@ -251,9 +261,7 @@ func TestEnvelopeRootLockRemovalSecurityOnly(t *testing.T) {
 	}
 	e.seedEnvelope(e.a1)
 	ch := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), e.restate(e.a1, map[string]any{"locked_knobs": []string{}})))
-	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
-		t.Errorf("the root's peer approving a lock removal = %d %s, want 403 security_admin_surface", w.Code, w.Body)
-	}
+	e.rootApproversRefused(ch, "a lock removal")
 	if !securityOnlyList(e.readApprovers(ch.ID)) {
 		t.Errorf("approvers %+v, want the security admins alone", e.readApprovers(ch.ID))
 	}
@@ -265,15 +273,14 @@ func TestEnvelopeRootLockRemovalSecurityOnly(t *testing.T) {
 	}
 }
 
-// TestEnvelopeRootContactSecurityOnly: a new contact on the root is held for a security admin.
+// TestEnvelopeRootContactSecurityOnly: a new contact on the root is held for a security admin; the root's
+// peer admin and an admin above it are refused.
 func TestEnvelopeRootContactSecurityOnly(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	e.seedEnvelope(e.a1)
 	ch := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1),
 		e.restate(e.a1, map[string]any{"contact": map[string]any{"owner": "Platform A", "email": "plat-a@example.com"}})))
-	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !securitySurfaceRefused(t, w) {
-		t.Errorf("the root's peer approving a contact = %d %s, want 403 security_admin_surface", w.Code, w.Body)
-	}
+	e.rootApproversRefused(ch, "a contact")
 	if w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
 		t.Fatalf("a security admin approving = %d %s, want 200", w.Code, w.Body)
 	}
@@ -646,7 +653,8 @@ func TestEnvelopeUnreadableFailsClosed(t *testing.T) {
 }
 
 // TestNoEnvelopeVerdictsGolden: with no envelope row, every unit-admin verdict these tests change is the
-// one before envelopes: a widening below and of ua-a1 is held and lists the peers, an unplaced group's
+// one before envelopes: a widening below ua-a1 is held and lists its peer, a change of ua-a1 itself lists
+// the admins above it and not its peer (a unit's own change is decided from above it), an unplaced group's
 // add is refused, a group's widening move is held, and a unit admin grant on ua-a1 lists the admins above.
 func TestNoEnvelopeVerdictsGolden(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
@@ -656,8 +664,8 @@ func TestNoEnvelopeVerdictsGolden(t *testing.T) {
 		t.Errorf("a widening below ua-a1 lists %+v, want its peer and the admin above", a)
 	}
 	ch = e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), e.restate(e.a1, map[string]any{"contact": map[string]any{"owner": "x"}})))
-	if a := e.readApprovers(ch.ID); !listsUnitAdmin(a, uaSubPeerA1) {
-		t.Errorf("a change of ua-a1 lists %+v, want its peer", a)
+	if a := e.readApprovers(ch.ID); !listsUnitAdmin(a, uaSubPeerA) || listsUnitAdmin(a, uaSubPeerA1) {
+		t.Errorf("a change of ua-a1 lists %+v, want the admins above it and not its peer", a)
 	}
 	if w := e.call(e.adminA1, http.MethodPost, "/api/v1/governance/memberships", envGroupBody(envGroup, e.a1.ID)); !scopeRefused(t, w) {
 		t.Errorf("an unplaced group's add = %d %s, want 403 unit_scope_denied", w.Code, w.Body)

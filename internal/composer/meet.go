@@ -5,6 +5,8 @@ package composer
 
 import (
 	"fmt"
+	"net"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -74,6 +76,32 @@ func ApplyOverlay(base Authority, ov Overlay) (Authority, []string, error) {
 		return Authority{}, nil, m.err
 	}
 	return m.out, m.warns, nil
+}
+
+// ApplyRestrictionOverlay is ApplyOverlay for a restriction's overlay. A restriction's allowlist that
+// turns open egress off (types.RestrictionSpec.Overlay) meets a policy that allows all egress as that
+// allowlist, not as nothing, as boundaryMeet reads the boundary's allowlist at create and MeetWalls reads
+// the walls': each name the list allows on a port allow-all reaches (none named, 80 or 443) is added to the
+// policy's own before the meet, so it is not dropped as uncovered. (The seal's boundary layer is not read
+// this way: it meets open egress with ApplyOverlay and keeps none of the list.) An IP literal or another
+// port is not added: an exact literal is trusted where allow-all is not, and the port rule keeps allow-all
+// to 80 and 443, so either is kept only where the policy's own list names it. A name added this way is an
+// exact entry, so it also enrols proxy-side credential injection (proxy.Policy.AllowedExactHost) for a
+// credential the run holds for that host, as a name MeetWalls adds already does. A unit's overlay keeps
+// ApplyOverlay's rule, where open egress covers no entry.
+func ApplyRestrictionOverlay(base Authority, ov Overlay) (Authority, []string, error) {
+	closes := ov.Ceiling.AllowAllEgress != nil && !*ov.Ceiling.AllowAllEgress
+	if base.Ceiling.AllowAllEgress && closes && ov.Ceiling.AllowedDomains != nil {
+		seeded := slices.Clone(base.Ceiling.AllowedDomains)
+		for _, s := range *ov.Ceiling.AllowedDomains {
+			e, ok := parseDomEntry(s)
+			if ok && (e.port == 0 || e.port == 80 || e.port == 443) && net.ParseIP(strings.Trim(e.host, "[]")) == nil {
+				seeded = append(seeded, s)
+			}
+		}
+		base.Ceiling.AllowedDomains = seeded
+	}
+	return ApplyOverlay(base, ov)
 }
 
 // ValidateOverlay is the write-time reading of the same meet: it refuses an

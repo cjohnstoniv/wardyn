@@ -16,7 +16,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// allKnobsRestriction carries all six narrow-only knobs a restriction can now hold.
+// allKnobsRestriction carries all six narrow-only knobs a restriction can now hold. Its desktop rule blocks
+// upload as well as copy_out: copy_out is blocked by default, so on its own it would narrow nothing for a
+// unit that names no desktop rule.
 func allKnobsRestriction() (types.RestrictionSpec, types.RestrictionLimits) {
 	deny := true
 	rec := types.RecordingScreenActions
@@ -24,7 +26,7 @@ func allKnobsRestriction() (types.RestrictionSpec, types.RestrictionLimits) {
 			AllowedDomains: strs("b.example", "z.example"),
 			ToolRules:      &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}},
 			PushRules:      &types.PushRulesOverlay{DenyAll: &deny},
-			Desktop:        &types.DesktopControls{CopyOut: types.TransferBlocked},
+			Desktop:        &types.DesktopControls{CopyOut: types.TransferBlocked, Upload: types.TransferBlocked},
 			Recording:      &rec,
 		},
 		types.RestrictionLimits{AllowedModels: strs("model-a")}
@@ -52,8 +54,8 @@ func TestRestrictionKnobsBindInEveryUnit(t *testing.T) {
 		if c.Spec.PushRules == nil || !c.Spec.PushRules.DenyAll {
 			t.Errorf("run_in %s: push_rules %+v, want deny_all", name, c.Spec.PushRules)
 		}
-		if c.Spec.Desktop == nil || c.Spec.Desktop.CopyOut != types.TransferBlocked {
-			t.Errorf("run_in %s: desktop %+v, want copy_out blocked", name, c.Spec.Desktop)
+		if c.Spec.Desktop == nil || c.Spec.Desktop.CopyOut != types.TransferBlocked || c.Spec.Desktop.Upload != types.TransferBlocked {
+			t.Errorf("run_in %s: desktop %+v, want copy_out and upload blocked", name, c.Spec.Desktop)
 		}
 		if c.Spec.Recording != types.RecordingScreenActions {
 			t.Errorf("run_in %s: recording %q, want screen_actions", name, c.Spec.Recording)

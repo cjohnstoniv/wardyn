@@ -83,15 +83,82 @@ func TestRestrictionKnobsSealRunningRun(t *testing.T) {
 }
 
 // TestRestrictionAllowlistClosesOpenEgressAtSeal: a run that was open when it was frozen is closed to the
-// restriction's allowlist.
+// restriction's allowlist, whatever list of its own it carried; a closed run keeps only what both lists name.
 func TestRestrictionAllowlistClosesOpenEgressAtSeal(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	r := seedRestriction(t, e, "rl-open", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionLimits{}, userMember("sub-rl-open"))
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-rl-open", RestrictionIDs: []uuid.UUID{r.ID}}
-	policy := types.RunPolicySpec{AllowAllEgress: true, MinConfinementClass: types.CC2}
-	e.srv.sealRunPolicy(context.Background(), run, &policy, knobProvenance{})
-	if policy.AllowAllEgress || !slices.Equal(policy.AllowedDomains, []string{"b.example"}) {
-		t.Errorf("sealed egress = %v %v, want closed with [b.example]", policy.AllowAllEgress, policy.AllowedDomains)
+	for _, tc := range []struct {
+		open      bool
+		own, want []string
+	}{
+		{true, nil, []string{"b.example"}},
+		{true, []string{"a.example", "b.example"}, []string{"b.example"}},
+		{false, []string{"a.example"}, []string{}},
+	} {
+		policy := types.RunPolicySpec{AllowAllEgress: tc.open, AllowedDomains: tc.own, MinConfinementClass: types.CC2}
+		e.srv.sealRunPolicy(context.Background(), run, &policy, knobProvenance{})
+		if policy.AllowAllEgress || !slices.Equal(policy.AllowedDomains, tc.want) {
+			t.Errorf("open %v with %v: sealed egress = %v %v, want closed with %v", tc.open, tc.own, policy.AllowAllEgress, policy.AllowedDomains, tc.want)
+		}
+	}
+}
+
+// TestRestrictionAllowlistClosesOpenEgressAtCreate: a create meets a restriction's allowlist into an open
+// ceiling as the seal does, so a person under the restriction in a unit that allows all egress is closed
+// to the restriction's list, not to nothing.
+func TestRestrictionAllowlistClosesOpenEgressAtCreate(t *testing.T) {
+	open := governanceCeiling{Unit: &ResolvedUnit{ID: uuid.New(), Name: "open"}, Spec: types.RunPolicySpec{AllowAllEgress: true}}
+	r := types.Restriction{ID: uuid.New(), Name: "rl-create", Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}}
+	c, err := (&Server{}).withRestrictions(context.Background(), open, []types.Restriction{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.AllowAllEgress || !slices.Equal(c.Spec.AllowedDomains, []string{"b.example"}) {
+		t.Errorf("ceiling egress = %v %v, want closed with [b.example]", c.Spec.AllowAllEgress, c.Spec.AllowedDomains)
+	}
+}
+
+// TestRestrictionAllowlistSwapIsNotAtLeastAsStrict: a replacement is exempt from a second human only when
+// its allowlist is a subset of the old one on the whole entry (host, port and literal) and it keeps every
+// deny. A swap to another host, port or literal, the same name on another port, an added port or literal
+// entry, a wildcard for a name, a list where the old one closed open egress with none, a dropped list and a
+// dropped deny are each held. So is a name for the wildcard over it (a run naming that host gets nothing
+// under the wildcard and the host under the name). A first list is held when open egress reads an entry of
+// it, a name or a wildcard on 80 or 443, by Leq's rule that open egress covers no entry; one naming only
+// another port is exempt, since open egress reads none of it and closes to nothing. A dropped entry, a
+// narrower wildcard, and a reorder with a duplicate are exempt.
+func TestRestrictionAllowlistSwapIsNotAtLeastAsStrict(t *testing.T) {
+	off := false
+	for _, tc := range []struct {
+		name      string
+		old, next types.RestrictionSpec
+		exempt    bool
+	}{
+		{"a name swapped", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("evil.example")}, false},
+		{"a port swapped", types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, types.RestrictionSpec{AllowedDomains: strs("b.example:9443")}, false},
+		{"a name to a literal", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("203.0.113.7")}, false},
+		{"a name to a port", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("evil.example:8443")}, false},
+		{"the same name on another port", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, false},
+		{"a port entry added", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example", "evil.example:8443")}, false},
+		{"a literal added", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example", "203.0.113.7")}, false},
+		{"a wildcard for a name", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("*.example")}, false},
+		{"a name for the wildcard over it", types.RestrictionSpec{AllowedDomains: strs("*.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
+		{"a first list naming a host", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
+		{"a first list naming a wildcard", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("*.example")}, false},
+		{"a first list naming only another port", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, true},
+		{"a list where none closed open egress", types.RestrictionSpec{AllowAllEgress: &off}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
+		{"the list dropped", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowAllEgress: &off}, false},
+		{"a deny dropped", types.RestrictionSpec{AllowedDomains: strs("b.example"), DeniedDomains: strs("x.b.example", "y.b.example")},
+			types.RestrictionSpec{AllowedDomains: strs("b.example"), DeniedDomains: strs("x.b.example")}, false},
+		{"a host dropped", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, true},
+		{"a port entry dropped", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example:8443")}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, true},
+		{"a narrower wildcard", types.RestrictionSpec{AllowedDomains: strs("*.example")}, types.RestrictionSpec{AllowedDomains: strs("*.a.example")}, true},
+		{"reordered with a duplicate", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("c.example", "b.example", "b.example")}, true},
+	} {
+		if got := restrictionAtLeastAsStrict(types.Restriction{Spec: tc.old}, types.RestrictionWrite{Spec: tc.next}); got != tc.exempt {
+			t.Errorf("%s: at least as strict = %v, want %v", tc.name, got, tc.exempt)
+		}
 	}
 }
 

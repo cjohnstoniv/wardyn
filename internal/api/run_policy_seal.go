@@ -180,6 +180,9 @@ func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *
 // sealPolicy meets spec with each layer in order, by the governance meet
 // (composer.ApplyOverlay): the allowlist is intersected, allow_all_egress
 // survives only where every layer allows it, and the deny lists are merged. A
+// restriction's layer is met as a create meets it (composer.ApplyRestrictionOverlay),
+// so an open run is closed to the restriction's allowlist, not to nothing; at the
+// boundary's, allow-all is a late widening and keeps only the run's own list. A
 // layer that carries tool, push or recording rules (a restriction's) meets those
 // too, and each is written back only when it narrows, so a policy the layer
 // already holds keeps its spelling. The desktop directions a layer blocks are
@@ -190,7 +193,11 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 	for _, l := range layers {
 		in := types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains, AllowAllEgress: spec.AllowAllEgress,
 			ToolRules: spec.ToolRules, PushRules: spec.PushRules, Recording: spec.Recording}
-		met, _, err := composer.ApplyOverlay(composer.Authority{Ceiling: in}, composer.Overlay{Ceiling: l.egress})
+		meet := composer.ApplyOverlay
+		if l.rec.Layer == policyref.LayerRestriction {
+			meet = composer.ApplyRestrictionOverlay
+		}
+		met, _, err := meet(composer.Authority{Ceiling: in}, composer.Overlay{Ceiling: l.egress})
 		if err != nil {
 			// The egress knobs alone have no unsatisfiable meet; should one appear, nothing is reachable and
 			// the rules stay as they were.

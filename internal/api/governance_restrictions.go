@@ -91,7 +91,7 @@ func (s *Server) withRestrictions(ctx context.Context, c governanceCeiling, list
 	}
 	ids := slices.Clone(c.RestrictionIDs)
 	for _, r := range list {
-		out, _, err := composer.ApplyOverlay(auth, composer.Overlay{Ceiling: r.Spec.Overlay(), Limits: r.Limits.Overlay()})
+		out, _, err := composer.ApplyRestrictionOverlay(auth, composer.Overlay{Ceiling: r.Spec.Overlay(), Limits: r.Limits.Overlay()})
 		if err != nil {
 			return governanceCeiling{}, fmt.Errorf("api: apply restriction %q: %w", r.Name, err)
 		}

@@ -50,8 +50,9 @@ func TestUnitAdminNarrowingDirect(t *testing.T) {
 }
 
 // TestUnitAdminWideningHeld: with the switch off, a unit admin's widening is held. Its proposer, an
-// admin beside the unit and a peer admin of the unit cannot approve it; an admin above it and a security
-// admin each can. A lone admin's widening waits for a security admin, the only approver listed.
+// admin beside the unit and a peer admin of the unit cannot approve it, each refused on scope (only an
+// admin above a unit decides its own change, so the scope refusal comes before the second-human one); an
+// admin above it and a security admin each can. A lone admin's widening waits for a security admin, the only approver listed.
 func TestUnitAdminWideningHeld(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	path := "/api/v1/governance/units/" + e.a1.ID.String()
@@ -65,8 +66,8 @@ func TestUnitAdminWideningHeld(t *testing.T) {
 		if got := e.domainsOf(e.a1); len(got) != 2 {
 			t.Fatalf("a held widening changed ua-a1 to %v before approval", got)
 		}
-		if w := e.call(e.adminA1, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden || wireReason(t, w) != "second_human_required" {
-			t.Errorf("the proposer approving = %d %s, want 403 second_human_required", w.Code, w.Body)
+		if w := e.call(e.adminA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+			t.Errorf("the proposer approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
 		}
 		if w := e.call(e.adminB, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
 			t.Errorf("ua-b's admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
@@ -101,6 +102,20 @@ func TestUnitAdminWideningHeld(t *testing.T) {
 		t.Errorf("the lone admin's change is %s, want still pending", e.changeState(ch.ID))
 	}
 	e.approve(ch.ID)
+}
+
+// TestUnitAdminOffWebPortHeld: a unit admin's edit that names another port of an entry the walls name bare is held
+// (Leq reads the list under the port rule: a bare entry reaches 80 and 443 only), and one naming 443 applies directly.
+func TestUnitAdminOffWebPortHeld(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	path := "/api/v1/governance/units/" + e.a1.ID.String()
+	e.pending(e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:22", "github.com"), nil)))
+	if got := e.domainsOf(e.a1); !slices.Equal(got, []string{"pypi.org", "github.com"}) {
+		t.Fatalf("a held port change altered ua-a1 to %v", got)
+	}
+	if w := e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:443", "github.com"), nil)); w.Code != http.StatusOK {
+		t.Fatalf("pypi.org:443 = %d %s, want 200", w.Code, w.Body)
+	}
 }
 
 // TestUnitAdminOutsideSubtreeAdd: a unit admin adds to their units only people who already belong in
