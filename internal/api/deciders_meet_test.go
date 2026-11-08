@@ -157,15 +157,19 @@ func TestDecidersReparentUnderNarrowerParentMeets(t *testing.T) {
 }
 
 // TestDecidersGroupTokenNeedsStampTTL: a group decider matches an API token's group snapshot only when
-// WARDYN_ROLE_STAMP_TTL bounds its age; a console session matches either way.
+// WARDYN_ROLE_STAMP_TTL bounds its age; a console session and a CLI session match either way.
 func TestDecidersGroupTokenNeedsStampTTL(t *testing.T) {
 	f := newDCFix(t)
 	f.st.setRules(f.root.ID, egressRule(dcGroupEntry))
 	ap := f.hold(types.DeciderKindEgressDomain)
 	token := withAPITokenID(dcCtx(dcLead, oidc.RoleUser, []string{dcGroup}, false), uuid.New())
 	session := dcCtx(dcLead, oidc.RoleUser, []string{dcGroup}, false)
+	cli := withCLISessionID(withAPITokenID(dcCtx(dcLead, oidc.RoleUser, []string{dcGroup}, false), uuid.New()), uuid.New())
 	if f.mayDecideAs(token, ap) {
 		t.Error("TTL off: a token in the group matches the group decider")
+	}
+	if !f.mayDecideAs(cli, ap) {
+		t.Error("TTL off: a CLI session in the group does not match")
 	}
 	if !f.mayDecideAs(session, ap) {
 		t.Error("TTL off: a session in the group does not match")
