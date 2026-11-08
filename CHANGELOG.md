@@ -20,6 +20,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM run now denies `mask.icloud.com`, `mask-h2.icloud.com` and `proxy.safebrowsing.apple` quietly, as it already does for the other Apple background hosts: no approval is raised and each denial is recorded. A run whose policy allows one of them by name keeps it. Allow the host in the run's policy to reach it.
 - A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
+- The Review step's "Sandbox barrier" row now reads "missing", not "unverified", when the deployment has no runner at all, so it holds Launch where it did not before. A runner that Review merely cannot reach still shows "unverified".
+- A macOS VM base that already exists has its guest agent signed again with this Mac's certificate at its next tools update, in the runner's own process, with codesign as the fallback.
+- A Codex Model stored on a custom endpoint or OpenAI key provider, which was ignored before, now takes effect for runs with the Codex CLI. With none stored, Codex keeps its own default.
+- On a configured model gateway's host, a sandbox's own `x-portkey-*` headers are now dropped, except the header the stored credential rule owns. A run that set one itself no longer reaches the gateway with it.
 
 ### Added
 
