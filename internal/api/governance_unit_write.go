@@ -295,9 +295,13 @@ func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Q
 // exemption (unitWriteExempt) judged on the assignments the write commits beside, and for a unit
 // admin's write, whose transaction q is handed in, no rename that changes whose legacy row wins
 // (unitRenameShiftQ, H3), since the unit it hands a person may be outside their units. A security
-// caller's write (q nil) is judged by the exemption alone.
+// caller's write (q nil) is judged by the exemption alone. A unit admin's exemption reads the envelopes
+// (envelopeExempt) on q, the connection this goroutine already holds, not on a second one.
 func (s *Server) unitWriteApplies(ctx context.Context, q store.Querier, all []types.GovernanceUnit, assignments []types.GovernanceMembership,
 	p types.GovernanceUnit, res *ResolvedUnit) (bool, error) {
+	if q != nil {
+		ctx = withUnitScopeTx(ctx, q)
+	}
 	if !s.unitWriteExempt(withGovernanceMemberships(ctx, assignments), all, p, res) {
 		return false, nil
 	}
