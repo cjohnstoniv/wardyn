@@ -437,7 +437,8 @@ describe("ELEV copy", () => {
     expect(ELEV.F_TITLE("Ana", "Payments", "4 hours")).toBe("Elevate Ana to Payments for 4 hours");
     expect(ELEV.F_WHAT("Ana", "Payments", "4 hours")).toBe("Ana becomes a member of Payments for 4 hours, starting when you approve.");
     expect(ELEV.F_BLAST("Payments")).toBe(
-      "They can start runs under Payments's limits until then, and each run they start ends when the elevation ends. Ending the elevation early doesn't stop a run that has already started.",
+      "They can start runs under Payments' limits until then, and each run they start ends when the elevation ends. Ending the elevation early doesn't stop a run that has already started.",
     );
+    expect(ELEV.F_BLAST("Platform")).toContain("under Platform's limits until then");
   });
 });
