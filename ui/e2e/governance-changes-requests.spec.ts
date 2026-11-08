@@ -69,8 +69,10 @@ test.describe("governance — requests on the Changes tab", () => {
   });
 });
 
-// A unit admin's own change. Nothing is spliced: U has one unit admin, so their membership add is held, and with
+// A unit admin's own change. Nothing is spliced: U has one unit admin, so their membership write is held, and with
 // nobody else to approve it only security can decide it. The proposer still sees it, and may note or withdraw it.
+// A unit admin writes memberships only for a person who already holds one in their units, so the member is put
+// in U first with the admin token.
 test.describe("a unit admin's own change", () => {
   test("they read that only security can decide it, and add a note", async ({ page }) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -93,15 +95,22 @@ test.describe("a unit admin's own change", () => {
     expect(made.status(), await made.text()).toBe(201);
     const unitId = (await made.json()).unit.id as string;
     let changeId = "";
+    let memberId = "";
     try {
+      const seeded = await page.request.post("/api/v1/governance/memberships", {
+        headers: auth,
+        data: { subject_type: "user", subject: MEMBER_PRINCIPAL, unit_id: unitId, priority: 0 },
+      });
+      expect(seeded.status(), await seeded.text()).toBe(201);
+      memberId = (await seeded.json()).id as string;
       await grantUnitAdmin(page, unitId);
       await asRealUnitAdmin(page);
-      // A unit admin's membership add is always held for a second person.
+      // A unit admin's membership write is always held for a second person.
       const held = await consoleAPI(page, "POST", "/api/v1/governance/memberships", {
         subject_type: "user",
         subject: MEMBER_PRINCIPAL,
         unit_id: unitId,
-        priority: 0,
+        priority: 1,
       });
       expect(held.status, held.text).toBe(202);
       changeId = JSON.parse(held.text).pending_change.id;
@@ -123,6 +132,7 @@ test.describe("a unit admin's own change", () => {
       await expect(page.getByText(CHANGE_NOTE.SAVED, { exact: true })).toBeVisible();
     } finally {
       if (changeId) await page.request.post(`/api/v1/governance/changes/${changeId}/reject`, { headers: auth, data: {} });
+      if (memberId) await page.request.delete(`/api/v1/governance/memberships/${memberId}`, { headers: auth });
       await page.request.delete(`/api/v1/governance/units/${unitId}`, { headers: auth });
     }
   });
