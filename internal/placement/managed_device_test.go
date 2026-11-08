@@ -62,3 +62,14 @@ func TestOrgClusterUnaffected(t *testing.T) {
 		t.Errorf("org_cluster: off %v, required %v, want admitted both ways", before, after)
 	}
 }
+
+// The managed-device refusal is read by the person who started the run, so it says what to ask for in plain
+// words: the role that marks a runner (PUT /runners/{id}/trust is the security tier's, a security admin or a
+// super admin) and "a managed device", never the stored class names.
+func TestManagedDeviceRefusalPlainWords(t *testing.T) {
+	_, r := LocalEligibility(managedDevicePlan(types.RunnerTrustPersonal, true))
+	const want = "this runner is not marked as company-managed; ask a security admin to mark it as a managed device"
+	if r == nil || r.Detail != want {
+		t.Fatalf("refusal %+v, want detail %q", r, want)
+	}
+}
