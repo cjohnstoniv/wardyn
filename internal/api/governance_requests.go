@@ -306,7 +306,7 @@ func (s *Server) requestRuleFor(ctx context.Context, q store.Querier, unitID uui
 func requestApprover(ch types.GovernanceChange, kind string) govApprover {
 	return govApprover{
 		allowed: func(s *Server, r *http.Request) bool {
-			if securityApprover.allowed(s, r) { // the security tier always decides, rule or none
+			if s.isSecurityOperator(r.Context()) { // the security tier always decides, rule or none
 				return true
 			}
 			ctx := r.Context()
