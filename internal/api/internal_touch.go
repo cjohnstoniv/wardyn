@@ -4,13 +4,11 @@
 package api
 
 import (
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
-	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -25,13 +23,9 @@ const touchDebounce = lifecycle.TouchDebounce
 // predicate every idle clock shares (an allowed request, not a refusal, a hold, a token count or the toolgate's
 // approval poll), minus one case. A macOS guest calls Apple's boot hosts in the background; a run that allows
 // all egress, or whose allow covers one, gets those calls allowed, so on a macOS VM run they never count,
-// allowed or refused. This covers decisions posted to the control plane; a runner's proxy sets its activity
-// flag before the host's run kind is known to it.
+// allowed or refused. A runner's proxy applies the same list (proxy.Config.ActivityIgnoreHosts).
 func decisionIsActivity(kind types.MachineKind, dl egress.DecisionLog) bool {
-	if !egress.CountsAsActivity(dl) {
-		return false
-	}
-	return !kind.IsMacOSVM() || !slices.Contains(macOSBootHosts(), domainmatch.CanonHost(dl.Request.Host))
+	return egress.CountsAsActivityFor(dl, activityIgnoreHosts(kind))
 }
 
 // shouldTouch reports whether dl, a decision on a run of this kind, restarts the idle clock and runID's last

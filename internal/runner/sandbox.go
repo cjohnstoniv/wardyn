@@ -236,6 +236,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		MCPServers:           pc.MCPServers,
 		MCPBindings:          pc.MCPBindings,
 		MCPApproveEach:       pc.MCPApproveEach,
+		ActivityIgnoreHosts:  pc.ActivityIgnoreHosts,
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
 	}
