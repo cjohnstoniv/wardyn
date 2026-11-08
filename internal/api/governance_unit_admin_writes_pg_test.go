@@ -104,6 +104,20 @@ func TestUnitAdminWideningHeld(t *testing.T) {
 	e.approve(ch.ID)
 }
 
+// TestUnitAdminOffWebPortHeld: a unit admin's edit that names another port of an entry the walls name bare is held
+// (Leq reads the list under the port rule: a bare entry reaches 80 and 443 only), and one naming 443 applies directly.
+func TestUnitAdminOffWebPortHeld(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	path := "/api/v1/governance/units/" + e.a1.ID.String()
+	e.pending(e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:22", "github.com"), nil)))
+	if got := e.domainsOf(e.a1); !slices.Equal(got, []string{"pypi.org", "github.com"}) {
+		t.Fatalf("a held port change altered ua-a1 to %v", got)
+	}
+	if w := e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:443", "github.com"), nil)); w.Code != http.StatusOK {
+		t.Fatalf("pypi.org:443 = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
 // TestUnitAdminOutsideSubtreeAdd: a unit admin adds to their units only people who already belong in
 // them: a person or group with no membership there is refused; one with a membership there is held.
 func TestUnitAdminOutsideSubtreeAdd(t *testing.T) {
