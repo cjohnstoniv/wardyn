@@ -172,3 +172,7 @@ c2450be019d75f32f496890ed983465c3294528b:ui/src/app/components/screens/approvals
 # The extra-header refusal test's sample JWT (the well-known example claims, a dummy signature),
 # committed as a literal before it was assembled from parts. A fixture, never a credential.
 41a0ea61912c2c6ebf61c9d4a28118a9b207ac48:internal/egress/proxy/extra_headers_test.go:jwt:73
+# UI test fixtures: a fake hex digest, a fake hash and a made-up UUID, as literals. Fixtures, never credentials.
+52be3c80a58ba96b9a4547850b6a7966d051f3d2:ui/src/app/components/wardyn/kube-call-card.test.tsx:generic-api-key:16
+fbfc044a5bd06512fff0ffba8c4317d44a254285:ui/src/app/components/screens/approvals-waiting.test.tsx:generic-api-key:349
+79fdeb3a4b8ef8909e59be51fc0a20ddb364689d:ui/src/app/components/screens/governance/deny-list-strip.test.tsx:generic-api-key:59
