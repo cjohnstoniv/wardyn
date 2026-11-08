@@ -29,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Before you downgrade: an older binary ignores a portal's `run_in_under`, so the portal can start runs in any of the person's contexts.
 - A kubectl row with `access: restart` (below) is not understood by an older wardynd or proxy image. After a downgrade an older wardynd still loads the row, because it reads `access` as plain text, but it refuses to attach or save it (`cli.kubectl.access: "restart" is not read or write`). An older proxy image refuses to start on a run config that carries `restart`. Move such rows to `read` or `write` first, and update the proxy image before using `restart`.
 - Unit admins now read the audit rows of runs in the units they govern, on `GET /audit` only, with no export, without personal walls, restriction names, secret names or error text. This is on at upgrade. To keep a person out, remove their unit-admin grant.
+- Migration `0269_agent_runs_unit_idx` builds its index without `CONCURRENTLY`, so writes to `agent_runs` wait while it builds, and `0271_approval_file_review` re-checks every `approvals` row under a lock that also holds off reads of `approvals`. On an install with a large `agent_runs` or `approvals` table, upgrade in a quiet period.
 
 ### Before you downgrade
 
@@ -66,6 +67,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A new page, [Model gateways and detectors](docs/operations/model-gateways.md), sets up LiteLLM, Portkey (self-hosted and hosted), OpenRouter and a Presidio analyzer with a `custom_endpoint` provider and `llm_inspection`, and lists the versions a nightly test pins (its first green run is pending). `extra_headers` values are stored in clear and are not secrets; the `model_provider.write` audit row lists their names. The docs also cover `detector_sidecar_format`, the placed-secrets corpus and a walk-through of `approve_each` against `test/gatewayfake`.
 - [Brokered operations](docs/operations/brokered-operations.md), a page of recipes: ops commands through an organisation's MCP server with a checklist for the server, read-only database access, and kubectl with one RBAC Role per row, `access: restart` and `approve_each`, and a pool kept to one unit.
 - New setting `runners.require_managed_device` (`PUT /api/v1/runners/settings {"require_managed_device": true}`, super admin): a new local run is refused with `runner_trust_required` on a runner whose trust class is `personal`, so only a `managed_device` runner or an organisation's runner takes it. Off by default, so an upgrade changes nothing; runs already started are not affected. It trusts the security operator's `managed_device` mark and checks no device certificate; the new Device posture section in the hybrid-laptops page says what is and is not checked.
+- A revive of a run that holds a component or model provider listed in `deny_components` or `deny_model_providers`, on the profile or on a restriction, is refused with the same `component_denied` or `model_provider_denied` reasons as at create.
+- `PUT /site-config` refuses a document that names a different `runners.require_managed_device` than the stored one, with `400` `site_config_runners_via_own_route`; change it with `PUT /runners/settings`. An echo of the stored value, or no mention, is carried forward.
+- A held kubectl write (`approve_each`) is offered to its run's owner in the console and no longer shown as blocking them on the run page, and `wardyn approval get` shows its cluster, method, path and body hash.
+- Migration `0271_approval_file_review` admits the `file_download` approval kind and keeps one pending review of a file per run; no grant is needed.
+- The desktop clamp warning names `review` as well as `blocked`.
 
 ### Changed
 
@@ -76,6 +82,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A run's model token usage now counts a call to the OpenAI Responses API that went through a gateway such as LiteLLM: the gateway ends the stream with the chat stream's `data: [DONE]` line, which the meter read as a malformed answer and showed the call as not counted.
+- A unit admin whose unit moved out of their scope between a held governance change's pre-check and its decision is now refused with `unit_scope_denied`, as the denials page documents; before, the same case answered `security_admin_surface`.
+- A unit admin whose change to the root of a platform envelope is held for the security tier still lists and reads that change and finds it in the duplicate-proposal `409`; peers of the root see none of the three. A unit admin refused on a security-only root now gets `security_admin_surface`, not `unit_scope_denied`.
 
 ## [0.10.0-rc.15] — 2026-11-08
 
