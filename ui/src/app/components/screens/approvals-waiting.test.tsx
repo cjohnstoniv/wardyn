@@ -637,12 +637,12 @@ describe("Approvals: elevation requests", () => {
     expect(await screen.findByText(ELEVATE_TITLE)).toBeInTheDocument();
   });
 
-  it("only a pending, decidable elevation request is a decider card", async () => {
+  it("only a pending, decidable request is a decider card", async () => {
     serveElevation({
       requests: [
         elevationRequest("e1", { decidable: false }),
         elevationRequest("e2", { state: "applied" }),
-        elevationRequest("e3", { kind: "image", unit_name: undefined }),
+        elevationRequest("e3", { kind: "image", state: "applied" }),
         elevationRequest("e4", { mine: true, decidable: false }),
       ],
     });
@@ -719,5 +719,106 @@ describe("Approvals: elevation requests", () => {
     });
     expect(elevationListMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
+  });
+});
+
+const IMAGE_NAME = "ghcr.io/acme/build-tools";
+const IMAGE_DIGEST = "sha256:4f2a91c37be0d5a8e61c29f04b7d3a5c8e9f1a2b3c4d5e6f708192a3b4c5d6e7";
+const imageRequest = (id: string, extra: Partial<GovernanceRequest> = {}): GovernanceRequest =>
+  elevationRequest(id, {
+    target_kind: "governance_image_request",
+    kind: "image",
+    duration: undefined,
+    image: `${IMAGE_NAME}@${IMAGE_DIGEST}`,
+    deciders: [{ kind: "security" }, { kind: "group", name: "platform-leads" }],
+    ...extra,
+  });
+const IMAGE_TITLE = "Grant dana.reyes@acme.example one image, by digest";
+const openWaiting = async () => {
+  await userEvent.click(
+    await waitFor(() => {
+      const t = waitingTab();
+      expect(t).toBeInTheDocument();
+      return t!;
+    }),
+  );
+};
+
+describe("Approvals: image requests", () => {
+  it("a decidable image request alone opens Waiting on you with badge 1 and draws the image card", async () => {
+    serveElevation({ requests: [imageRequest("m1")] });
+    renderScreen();
+    await waitFor(() => expect(waitingTab()).toHaveTextContent(/Waiting on you\s*1$/));
+    await openWaiting();
+    expect(await screen.findByText(IMAGE_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(IMAGE_NAME)).toBeInTheDocument();
+    expect(screen.getByText(IMAGE_DIGEST)).toBeInTheDocument();
+    expect(screen.queryByText(DECIDERS_INBOX.EMPTY_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("an image and an elevation request draw both cards before the approval cards, with badge 3", async () => {
+    mockWaiting = [others("w1")];
+    serveElevation({ requests: [elevationRequest("e1"), imageRequest("m1")] });
+    renderScreen();
+    await waitFor(() => expect(waitingTab()).toHaveTextContent(/Waiting on you\s*3$/));
+    await openWaiting();
+    const elevate = await screen.findByText(ELEVATE_TITLE);
+    const image = await screen.findByText(IMAGE_TITLE);
+    const approval = await screen.findByText("Reach w1.example.com");
+    expect(elevate.compareDocumentPosition(approval) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(image.compareDocumentPosition(approval) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("an image and an elevation request alone give badge 2", async () => {
+    serveElevation({ requests: [elevationRequest("e1"), imageRequest("m1")] });
+    renderScreen();
+    await waitFor(() => expect(waitingTab()).toHaveTextContent(/Waiting on you\s*2$/));
+  });
+
+  it("a security operator gets no image card and no tab", async () => {
+    serveElevation({ requests: [imageRequest("m1")] });
+    renderScreen({ security: true });
+    await screen.findByRole("tab", { name: /^Pending/ });
+    await act(async () => {});
+    expect(waitingTab()).not.toBeInTheDocument();
+    expect(screen.queryByText(IMAGE_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("a request that is not decidable, is the viewer's own or is decided gets no card", async () => {
+    serveElevation({
+      requests: [
+        imageRequest("m1", { decidable: false }),
+        imageRequest("m2", { mine: true, decidable: false }),
+        imageRequest("m3", { state: "applied" }),
+        imageRequest("m4", { state: "rejected" }),
+      ],
+    });
+    renderScreen();
+    await screen.findByRole("tab", { name: /^Pending/ });
+    await act(async () => {});
+    expect(waitingTab()).not.toBeInTheDocument();
+    expect(screen.queryByText(IMAGE_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("Approve on the image card approves the request, with no dialog", async () => {
+    elevationApproveMock.mockResolvedValue({});
+    serveElevation({ requests: [imageRequest("m1")] });
+    renderScreen();
+    await openWaiting();
+    await screen.findByText(IMAGE_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: /Approve/ }));
+    expect(elevationApproveMock).toHaveBeenCalledWith("m1");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("the Decided tab draws no image row", async () => {
+    serveElevation({ requests: [imageRequest("m1"), imageRequest("m2", { state: "applied" })] });
+    renderScreen();
+    await openWaiting();
+    await screen.findByText(IMAGE_TITLE);
+    await userEvent.click(screen.getByRole("tab", { name: /^Decided/ }));
+    await act(async () => {});
+    expect(screen.queryByText(IMAGE_TITLE)).not.toBeInTheDocument();
+    expect(screen.queryByText(IMAGE_NAME)).not.toBeInTheDocument();
   });
 });

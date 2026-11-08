@@ -127,7 +127,7 @@ describe("MyElevationRequests: each state", () => {
   it("an approved request in force says when it ends and how long is left", () => {
     setup(list([row({ state: "applied", ends_at: aheadByHours(3), decided_by: "priya.nair", decided_at: aheadByHours(-0.5) })]));
     expect(screen.getByText("Approved")).toBeInTheDocument();
-    expect(screen.getByText(/^Ends .+ \(in [23]h \d+m\)\. Pick Payments when you start a run\.$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Ends .+ \(in (3 h|2 h \d+ min)\)\. Pick Payments when you start a run\.$/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Withdraw" })).not.toBeInTheDocument();
   });
 
@@ -171,16 +171,18 @@ describe("MyElevationRequests: each state", () => {
   });
 });
 
-describe("MyElevationRequests: what is not listed", () => {
-  it("does not list a withdrawn request (rejected by its own requester)", () => {
+describe("MyElevationRequests: what else is listed", () => {
+  it("lists a withdrawn request (rejected by its own requester) as Withdrawn", () => {
     setup(list([row({ state: "rejected", decided_by: "me@acme.example", decided_at: aheadByHours(-1) })]));
+    expect(screen.getByText("Withdrawn")).toBeInTheDocument();
+    expect(screen.getByText("You withdrew it · 1h ago")).toBeInTheDocument();
     expect(screen.queryByText("Denied")).not.toBeInTheDocument();
-    expect(screen.queryByText("Payments")).not.toBeInTheDocument();
   });
 
-  it("does not list a stale request", () => {
+  it("lists a stale request as Not applied", () => {
     setup(list([row({ state: "stale" })]));
-    expect(screen.queryByText("Payments")).not.toBeInTheDocument();
+    expect(screen.getByText("Not applied")).toBeInTheDocument();
+    expect(screen.getByText("Payments")).toBeInTheDocument();
   });
 
   it("does not list other people's requests", () => {
@@ -188,10 +190,12 @@ describe("MyElevationRequests: what is not listed", () => {
     expect(screen.queryByText("Payments")).not.toBeInTheDocument();
   });
 
-  it("does not list image rows", () => {
-    setup(list([row({ kind: "image", unit_name: undefined, image: "registry.example/app:1" })], []));
-    expect(screen.queryByText("Waiting for approval")).not.toBeInTheDocument();
-    expect(screen.queryByText("Your requests")).not.toBeInTheDocument();
+  it("image rows are listed with their chip and line", () => {
+    setup(list([row({ kind: "image", unit_name: undefined, image: "registry.example/app@sha256:" + "a".repeat(64) })], []));
+    expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
+    expect(screen.getByText("Your requests")).toBeInTheDocument();
+    expect(screen.getByText("registry.example/app")).toBeInTheDocument();
+    expect(screen.getByText("Requested 3m ago · waiting for a decision")).toBeInTheDocument();
   });
 });
 
@@ -237,7 +241,7 @@ describe("MyElevationRequests: loading and error", () => {
   it("draws the header over a skeleton while loading", () => {
     setup("loading");
     expect(screen.getByText("Your requests")).toBeInTheDocument();
-    expect(screen.getByText(ELEV.LIST_LEAD)).toBeInTheDocument();
+    expect(screen.queryByText(ELEV.LIST_LEAD)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Request elevation" })).not.toBeInTheDocument();
   });
 

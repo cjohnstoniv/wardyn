@@ -43,12 +43,15 @@ export function ElevationRequestDialog({
   onOpenChange,
   unitId,
   offers,
+  kindChoice,
   onSent,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   unitId?: string;
   offers?: ElevationOffer[];
+  // The choice between kinds, when a screen offers more than one: drawn between the lead and the first field.
+  kindChoice?: React.ReactNode;
   onSent?: (r: GovernanceRequest) => void;
 }) {
   // A request that is out cannot be walked away from: its answer would have nowhere to show.
@@ -57,7 +60,7 @@ export function ElevationRequestDialog({
     <Dialog open={open} onOpenChange={(o) => !(busy.current && !o) && onOpenChange(o)}>
       <DialogContent className="sm:max-w-lg">
         {/* Mounted only while the dialog is open, so every opening starts from the first state. */}
-        <RequestForm busy={busy} unitId={unitId} given={offers} onClose={() => onOpenChange(false)} onSent={onSent} />
+        <RequestForm busy={busy} unitId={unitId} given={offers} kindChoice={kindChoice} onClose={() => onOpenChange(false)} onSent={onSent} />
       </DialogContent>
     </Dialog>
   );
@@ -67,12 +70,14 @@ function RequestForm({
   busy,
   unitId,
   given,
+  kindChoice,
   onClose,
   onSent,
 }: {
   busy: React.RefObject<boolean>;
   unitId?: string;
   given?: ElevationOffer[];
+  kindChoice?: React.ReactNode;
   onClose: () => void;
   onSent?: (r: GovernanceRequest) => void;
 }) {
@@ -180,6 +185,8 @@ function RequestForm({
         <DialogTitle>{ELEV.TITLE}</DialogTitle>
         <DialogDescription className={sent ? "sr-only" : undefined}>{ELEV.LEAD}</DialogDescription>
       </DialogHeader>
+
+      {!sent && kindChoice}
 
       {sent ? (
         <div className="flex items-start gap-3">

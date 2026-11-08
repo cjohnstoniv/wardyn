@@ -160,7 +160,7 @@ describe("a person's own request", () => {
 
   it("an own image request reads the same way", async () => {
     renderTab([image()], "alice");
-    await userEvent.click(screen.getByRole("button", { name: "Image request · New" }));
+    await userEvent.click(screen.getByRole("button", { name: "Image · New" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST })).toBeInTheDocument();
     expect(within(dialog).getByText(CHANGE_NOTE.OWN_REQUEST)).toBeInTheDocument();
@@ -179,9 +179,9 @@ describe("a person's own request", () => {
 });
 
 describe("kind labels", () => {
-  it("an image request reads Image request · New", () => {
+  it("an image request reads Image · New", () => {
     renderTab([image()]);
-    expect(screen.getByRole("button", { name: "Image request · New" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Image · New" })).toBeInTheDocument();
   });
 
   it("the deciders read Deciders · Set", () => {
