@@ -26,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).
 - macOS VM bases now mark Setup Assistant's panes as seen for the agent account, stop the Fn key raising Dictation, turn Spotlight indexing and diagnostics upload off, and kill Terminal and remove its saved state, so a run's first desktop is clean. On by default. Prepare writes them and every tools update writes them again, through a new guest-agent route that takes no input and adds no allowed exec. Rows that fail or cannot be applied are listed in `tools.json` as `base_settings_skipped` and never fail an update. edit-base's finish also cleans Terminal.
 - `wardyn-runnerd doctor` on a macOS VM runner has a `guest-agent` stage: it fails when the guest agent went in signed ad hoc, quoting why each signer failed, and passes when this Mac's cert signed it. `macos-vm status` shows the signer and the signing errors, and the base's `tools.json` records them as `agent_signer` and `agent_sign_errors`, with no paths.
+- Setup status shows an "Image checks" row when image admission is `audit` or `enforce` and `scope` is `member` (the default), to say that the images runs get from their agent or harness set are not checked. Set `images.admission.scope` to `all` to check them. Nothing changes until you do.
 
 ### Changed
 
@@ -40,6 +41,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run being created no longer has its spool wedged ("spool metadata missing beside existing data") when another run's creation writes the live-activity files into it at the same moment. Those files are no longer counted as existing data.
 - When the runner fails to create the sandbox of a run that was keeping a new machine, the dropped machine now has a `machine.create` audit row with outcome `failure` and `reason` `sandbox_not_created`; before, only the earlier success row was there.
 - A macOS VM runner now signs the guest agent in its own process with this Mac's signing identity, with no keychain and no trust setting, so the agent can keep Full Disk Access across tools updates. codesign could refuse that self-signed identity ("no identity found"), and the agent then went in signed ad hoc. codesign stays as the fallback, now given the designated requirement and the signing keychain on the search list for the call. Each signed copy must pass `codesign --verify --strict` and read back the designated requirement before it is pushed. This is on by default.
+- Review's "Sandbox barrier" row reads the barriers of the runner or pool the run will land on, not the control plane's own runner. A runner Review cannot reach shows the row as unverified, "Checked at the runner when the run starts."
 
 ### Security
 

@@ -38,6 +38,7 @@ A run's VM is deleted when the run ends. To keep it on your own Mac, an admin tu
 
 - In the console, New run and Review offer keeping the machine or resuming a kept one. The run page's Machine card shows the machine as it is now, and Your settings lists your kept machines with their idle days.
 - A resumed machine is kept again when the run stops. A machine a run holds is in use and cannot be deleted.
+- A run that keeps its machine is interactive: its startup command runs when someone attaches, and until then the run records "awaiting attach" (`run.interactive.start`). On a macOS VM the repo clone and harness setup still run at start.
 - `--keep-machine` and `--resume-machine` do not go together, `--machine-name` needs `--keep-machine`, and `--fresh` needs `--resume-machine`. None of them works with `--file`.
 - Kept machines are folders in `macos-vm.noindex/kept/` on the Mac. A resume of a machine whose base is older than `macos_vm.max_base_age_days` is refused (`kept_machine_base_too_old`).
 

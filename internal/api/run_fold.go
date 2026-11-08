@@ -81,6 +81,7 @@ type runFold struct {
 	directGitHubAdded  []string
 	comps              runComponents
 	enforced           types.ConfinementClass
+	placed             backendPlacement                // the barriers the placement enforces, as stepConfinement read them (Review's backend row)
 	confinementDefault runnerpool.BarrierDefaultSource // who chose enforced when the request named no class
 	mpChoice           runProviderChoice
 	modelCred          modelCredentialFacts
