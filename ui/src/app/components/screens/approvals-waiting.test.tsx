@@ -48,7 +48,10 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 let mockGovernance: () => Promise<unknown> = () => Promise.resolve({ unit_names: {}, profiles: [] });
 const governanceMock = vi.fn(() => mockGovernance());
-vi.mock("../../lib/api/governance", () => ({ governance: { getGovernance: () => governanceMock() } }));
+vi.mock("../../lib/api/governance", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/api/governance")>()),
+  governance: { getGovernance: () => governanceMock() },
+}));
 
 import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
@@ -229,8 +232,8 @@ describe("Waiting on you — the tab's body", () => {
     await userEvent.click(waitingTab()!);
     await screen.findByText("Reach own1.example.com");
     await waitFor(() => expect(getRun).toHaveBeenCalledTimes(1));
-    expect(screen.getByText(/^Decided by:/, { selector: "span" }).closest("p")).toBeTruthy();
-    expect(screen.getByText("you, the eng-leads group", { exact: false })).toBeInTheDocument();
+    const lines = screen.getAllByText(DECIDERS_INBOX.DECIDED_BY_LABEL).map((l) => l.closest("p")!.textContent);
+    expect(lines).toContain("Decided by: you or the eng-leads group");
   });
 
   it("Approve is enabled for a non-security decider on someone else's egress row, even under an ungranted host", async () => {

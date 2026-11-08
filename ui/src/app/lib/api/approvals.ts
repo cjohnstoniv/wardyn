@@ -16,7 +16,7 @@
 // decision_* key names below; it exercises this module for real (fetch stubbed,
 // module unmocked) and reads the Go json tags out of internal/api/approvals.go.
 import type { ApprovalRequest, DecisionOptions } from "../types";
-import { asJson, unwrapList, wfetch, withLimit } from "./core";
+import { HttpError, asJson, unwrapList, wfetch, withLimit } from "./core";
 
 export const approvals = {
   // GET /api/v1/approvals?state=<state>&run_id=<id>
@@ -47,6 +47,27 @@ export const approvals = {
     const qs = params.toString();
     const res = await wfetch(withLimit(`/approvals${qs ? `?${qs}` : ""}`), { method: "GET" });
     return unwrapList<ApprovalRequest>(await asJson<unknown>(res));
+  },
+
+  // GET /api/v1/approvals?decidable_by=me: every PENDING request the caller may decide now, their own runs' and other
+  // people's under a unit's deciders rule (internal/api/approvals_decidable_by.go). No state and no limit: the server
+  // reads neither, and cuts the list at 500 with X-Wardyn-Truncated.
+  async listDecidableByMe(): Promise<{ rows: ApprovalRequest[]; truncated: boolean }> {
+    const res = await wfetch("/approvals?decidable_by=me", { method: "GET" });
+    const rows = unwrapList<ApprovalRequest>(await asJson<unknown>(res));
+    return { rows, truncated: res.headers.get("X-Wardyn-Truncated") === "true" };
+  },
+
+  // Whether the server knows the decidable_by filter. A server that does answers any value but "me" with 400
+  // invalid_decidable_by; an older one ignores the parameter and answers the plain list, which must not be read as
+  // "waiting on you". Anything else is not a yes.
+  async knowsDecidableBy(): Promise<boolean> {
+    try {
+      await asJson<unknown>(await wfetch("/approvals?decidable_by=x", { method: "GET" }));
+      return false;
+    } catch (err) {
+      return err instanceof HttpError && err.status === 400 && err.reason === "invalid_decidable_by";
+    }
   },
 
   // POST /api/v1/approvals/{id}/approve  { reason, decision_scope?, decision_expires_at? }

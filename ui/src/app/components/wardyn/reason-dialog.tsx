@@ -35,6 +35,13 @@ import {
   UNTIL_PAST,
   UNTIL_PRESETS,
 } from "./copy";
+import { DECIDERS_INBOX } from "./copy/deciders-inbox";
+
+// How far each scope reaches, narrowest first: a unit rule's max_scope allows nothing above its own rank.
+const SCOPE_RANK: Record<ApprovalScope, number> = { once: 0, until: 1, run: 2, always: 3 };
+const aboveCap = (s: ApprovalScope, maxScope?: ApprovalScope) => !!maxScope && SCOPE_RANK[s] > SCOPE_RANK[maxScope];
+// The dialog opens on This run, or on the widest scope the cap allows when that is wider.
+const openingScope = (maxScope?: ApprovalScope): ApprovalScope => (aboveCap("run", maxScope) ? (maxScope as ApprovalScope) : "run");
 
 // Shared approve/deny reason dialog (deny requires a reason for the audit
 // trail). Kind-aware: approving authorizes the broker to MINT a short-lived
@@ -52,7 +59,8 @@ export function ReasonDialog({
   onClose,
   onSubmit,
 }: {
-  prompt: { id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null;
+  // maxScope: the governing unit rule's cap on how far one decision reaches; scopes wider than it are disabled.
+  prompt: { id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"]; maxScope?: ApprovalScope } | null;
   // Whether THIS run resolves to an onboarded workspace — Always writes there,
   // so it's greyed out without one. Default false: a caller that forgets to
   // pass it shows Always disabled rather than offering a click the server
@@ -77,6 +85,8 @@ export function ReasonDialog({
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const { disabled: submitDisabled, showSpinner } = useDeferredBusy(busy);
+  const maxScope = prompt?.maxScope;
+  const overCap = (s: ApprovalScope) => aboveCap(s, maxScope);
   const [scope, setScope] = React.useState<ApprovalScope>("run");
   // ISO string once chosen; null until the operator picks a preset or a time.
   const [until, setUntil] = React.useState<string | null>(null);
@@ -85,7 +95,7 @@ export function ReasonDialog({
   React.useEffect(() => {
     setReason("");
     setBusy(false);
-    setScope("run");
+    setScope(openingScope(prompt?.maxScope));
     setUntil(null);
     setPreset(null);
   }, [prompt]);
@@ -111,7 +121,7 @@ export function ReasonDialog({
   // A time that is already past is refused by the server (decision_expires_at in the past), after the dialog has closed on it.
   const untilPast = scope === "until" && !!until && Date.parse(until) <= Date.now();
   // One Tab stop for the scope radios, arrows move between them; the disabled "always" is skipped.
-  const choosable = APPROVAL_SCOPE_ORDER.filter((s) => !(s === "always" && alwaysDisabled));
+  const choosable = APPROVAL_SCOPE_ORDER.filter((s) => !(s === "always" && alwaysDisabled) && !overCap(s));
   const scopeGroup = useRovingRadio(choosable.length, Math.max(0, choosable.indexOf(scope)), (i) => setScope(choosable[i]));
 
   // Always reset busy in finally so a failed approve/deny doesn't leave the
@@ -148,10 +158,15 @@ export function ReasonDialog({
           <div className="space-y-2 py-1">
             <div className="space-y-2" role="radiogroup" aria-label="Decision scope" {...scopeGroup.containerProps}>
               {APPROVAL_SCOPE_ORDER.map((s) => {
-                const disabled = s === "always" && alwaysDisabled;
+                const capped = overCap(s);
+                const disabled = capped || (s === "always" && alwaysDisabled);
                 const item = disabled ? null : scopeGroup.itemProps(choosable.indexOf(s));
                 const label = approve ? APPROVAL_SCOPE_LABEL[s] : DENY_SCOPE_LABEL[s];
-                const hint = disabled ? alwaysReason : approve ? APPROVAL_SCOPE_HINT[s] : DENY_SCOPE_HINT[s];
+                const hint = capped
+                  ? DECIDERS_INBOX.SCOPE_CAP(APPROVAL_SCOPE_LABEL[maxScope!].replace(/…$/, ""))
+                  : disabled
+                    ? alwaysReason
+                    : approve ? APPROVAL_SCOPE_HINT[s] : DENY_SCOPE_HINT[s];
                 return (
                   <button
                     key={s}

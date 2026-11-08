@@ -65,6 +65,7 @@ import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ADO_PAT } from "../../lib/ado-pat-copy";
 import { Chip } from "./primitives";
+import { DecidedByLine, SecondPersonLine } from "./decider-lines";
 import { Mono } from "./code-block";
 import { cn } from "../ui/utils";
 
@@ -288,6 +289,8 @@ export function AdoCapabilityCard({
           <span className="text-meta text-muted-foreground">{source}</span>
         </div>
       </div>
+      <DecidedByLine item={item} />
+      <SecondPersonLine item={item} />
 
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">{ADO.REQ_FIELD_REPOSITORY}</dt>

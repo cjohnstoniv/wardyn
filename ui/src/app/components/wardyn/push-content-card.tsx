@@ -36,6 +36,7 @@ import { PUSH } from "./copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, Chip } from "./primitives";
+import { DecidedByLine, SecondPersonLine } from "./decider-lines";
 
 // Lives here rather than beside isAdoCapabilityRequest/isAdoConsentRequest in
 // lib/types/approvals.ts: that module is eager (isHeld is imported into the
@@ -186,6 +187,8 @@ export function PushContentCard({
         <ApprovalKindChip kind="push_content" />
         <span className="text-sm font-semibold text-foreground">{PUSH.CARD_TITLE}</span>
       </div>
+      <DecidedByLine item={item} />
+      <SecondPersonLine item={item} />
 
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">{PUSH.FIELD_REPOSITORY}</dt>
