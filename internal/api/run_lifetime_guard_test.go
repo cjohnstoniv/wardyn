@@ -55,6 +55,21 @@ func TestLifetimePassedEnd(t *testing.T) {
 	}
 }
 
+// TestLifetimePassedEndElevationHint: a run capped at its elevation's end is told the elevation ended; a pool
+// cap keeps the plain sentence.
+func TestLifetimePassedEndElevationHint(t *testing.T) {
+	now := time.Now().UTC()
+	past := now.Add(-time.Second)
+	end := lifetimePassedEnd(types.AgentRun{LifetimeCapAt: &past, LifetimeCapSource: types.LimitSourceElevation}, now)
+	if end == nil || end.token != string(types.RunEndMaxLifetimeReached) || end.hint != "the elevation it was launched under has ended" {
+		t.Errorf("an elevation cap behind = %+v, want max_lifetime_reached naming the elevation", end)
+	}
+	end = lifetimePassedEnd(types.AgentRun{LifetimeCapAt: &past, LifetimeCapSource: types.LimitSourcePool}, now)
+	if end == nil || end.hint != types.RunEndMaxLifetimeReached.Sentence() {
+		t.Errorf("a pool cap behind = %+v, want the plain sentence", end)
+	}
+}
+
 // lifetimeCapRunStore serves one RUNNING run with a lifetime cap.
 type lifetimeCapRunStore struct {
 	touchStore

@@ -20,6 +20,11 @@ func TestMeetDeciderRules(t *testing.T) {
 	}
 	withScope := func(r DeciderRule, s ApprovalScope) DeciderRule { r.MaxScope = s; return r }
 	withSecond := func(r DeciderRule) DeciderRule { r.SecondHuman = true; return r }
+	withEligible := func(r DeciderRule, groups ...string) DeciderRule { r.EligibleRequesters = groups; return r }
+	withRenew := func(r DeciderRule, renew, pattern string) DeciderRule {
+		r.RenewAfter, r.TicketPattern = renew, pattern
+		return r
+	}
 	for _, tc := range []struct {
 		name  string
 		kind  string
@@ -47,6 +52,12 @@ func TestMeetDeciderRules(t *testing.T) {
 		{"8h and 4h give 4h", DeciderKindElevation,
 			[]DeciderRule{elevation("8h"), elevation("4h")},
 			DeciderRule{Kinds: []string{DeciderKindElevation}, Who: []string{"unit_admins"}, MaxElevation: "4h"}},
+		{"eligible_requesters: the intersection in the nearest rule's order", DeciderKindElevation,
+			[]DeciderRule{withEligible(elevation("4h"), "group:b", "group:a"), withEligible(elevation("4h"), "group:a", "group:c", "group:b")},
+			DeciderRule{Kinds: []string{DeciderKindElevation}, Who: []string{"unit_admins"}, MaxElevation: "4h", EligibleRequesters: []string{"group:b", "group:a"}}},
+		{"renew_after: the longest, and no ticket_pattern in the meet", DeciderKindElevation,
+			[]DeciderRule{withRenew(elevation("4h"), "1h", "INC-[0-9]+"), withRenew(elevation("4h"), "24h", "CHG-[0-9]+")},
+			DeciderRule{Kinds: []string{DeciderKindElevation}, Who: []string{"unit_admins"}, MaxElevation: "4h", RenewAfter: "24h"}},
 		{"a single rule is that rule, for the one kind", DeciderKindMCPCall,
 			[]DeciderRule{withScope(egress("owner", "group:a"), ScopeOnce)},
 			DeciderRule{Kinds: []string{DeciderKindMCPCall}, Who: []string{"owner", "group:a"}, MaxScope: ScopeOnce}},
@@ -64,6 +75,8 @@ func TestMeetDeciderRules(t *testing.T) {
 func TestDeciderRuleWithin(t *testing.T) {
 	base := DeciderRule{Kinds: []string{DeciderKindEgressDomain}, Who: []string{"unit_admins", "group:a"}, SecondHuman: true, MaxScope: ScopeUntil}
 	elevation := DeciderRule{Kinds: []string{DeciderKindElevation}, Who: []string{"unit_admins"}, MaxElevation: "4h"}
+	eligible := DeciderRule{Kinds: []string{DeciderKindElevation}, Who: []string{"unit_admins"}, MaxElevation: "4h",
+		EligibleRequesters: []string{"group:a", "group:b"}, RenewAfter: "24h"}
 	with := func(r DeciderRule, f func(*DeciderRule)) DeciderRule {
 		r.Who = append([]string{}, r.Who...)
 		f(&r)
@@ -86,6 +99,14 @@ func TestDeciderRuleWithin(t *testing.T) {
 		{"max_elevation: 8h over 4h", DeciderKindElevation, with(elevation, func(r *DeciderRule) { r.MaxElevation = "8h" }), elevation, "max_elevation"},
 		{"max_elevation: 1h under 4h", DeciderKindElevation, with(elevation, func(r *DeciderRule) { r.MaxElevation = "1h" }), elevation, ""},
 		{"max_elevation: an equal rule", DeciderKindElevation, elevation, elevation, ""},
+		{"eligible_requesters: an entry the bound does not name", DeciderKindElevation,
+			with(eligible, func(r *DeciderRule) { r.EligibleRequesters = []string{"group:a", "group:c"} }), eligible, "eligible_requesters"},
+		{"eligible_requesters: fewer entries", DeciderKindElevation,
+			with(eligible, func(r *DeciderRule) { r.EligibleRequesters = []string{"group:b"} }), eligible, ""},
+		{"renew_after: shorter than the bound's", DeciderKindElevation,
+			with(eligible, func(r *DeciderRule) { r.RenewAfter = "1h" }), eligible, "renew_after"},
+		{"renew_after: longer than the bound's", DeciderKindElevation,
+			with(eligible, func(r *DeciderRule) { r.RenewAfter = "48h" }), eligible, ""},
 	} {
 		if got := DeciderRuleWithin(tc.kind, tc.r, tc.bound); got != tc.want {
 			t.Errorf("%s: DeciderRuleWithin = %q, want %q", tc.name, got, tc.want)
