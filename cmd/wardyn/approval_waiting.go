@@ -11,7 +11,7 @@ import (
 )
 
 // approvalListWaitingOnMe lists the PENDING approvals the caller may decide now (`approval list
-// --waiting-on-me`). The server takes no other filter or page there, so the caller refuses those flags.
+// --waiting-on-me`). The server pages nothing there and lists only pending rows, so --state, --limit and --offset would be ignored; this command takes none of them, nor --run.
 // REQUESTED_BY is the run's creator, set when the caller decides as someone other than the creator.
 func approvalListWaitingOnMe(cmd *cobra.Command, client clientFn, asJSON bool) error {
 	aps, truncated, err := client().ListApprovalsDecidable(cmd.Context())
