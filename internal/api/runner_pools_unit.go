@@ -50,22 +50,23 @@ func rowsNameUnit(rows []store.RunnerPoolCatalogueRow) bool {
 	return false
 }
 
-// unitLineage is id and every unit above it, as the strings a unit row is stored in. A unit that no
-// longer exists, a nil id or a read that failed has none.
+// unitLineage is id and every unit above it, as the strings a unit row is stored in, read through the
+// resolver. A unit that no longer exists, a nil id, a read that failed or a chain the resolver refuses
+// has none.
 func (s *Server) unitLineage(ctx context.Context, id *uuid.UUID) []string {
 	if id == nil || s.cfg.Store == nil {
 		return nil
 	}
-	chain, err := s.cfg.Store.GetGovernanceUnitChain(ctx, *id)
+	u, err := s.resolveUnitByID(ctx, *id)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.WarnContext(ctx, "wardynd: read the unit chain for a pool use policy", slog.String("unit_id", id.String()), slog.Any("err", err))
 		}
 		return nil
 	}
-	out := make([]string, len(chain))
-	for i, u := range chain {
-		out[i] = u.ID.String()
+	out := make([]string, len(u.Chain))
+	for i, l := range u.Chain {
+		out[i] = l.ID.String()
 	}
 	return out
 }

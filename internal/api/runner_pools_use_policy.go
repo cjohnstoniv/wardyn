@@ -90,7 +90,7 @@ func (s *Server) canonicalPoolSubjects(w http.ResponseWriter, r *http.Request, i
 				return nil, false
 			}
 			sub.Subject = id.String()
-			if _, err := s.cfg.Store.GetGovernanceUnitChain(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+			if _, err := s.unitLeafName(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 				writePoolInvalid(w, "subject "+sub.Subject+" is not a unit")
 				return nil, false
 			} else if err != nil {

@@ -55,7 +55,7 @@ func (s *Server) portalUnitRefusal(ctx context.Context, ceiling governanceCeilin
 	if d.RunInUnder == nil {
 		return nil
 	}
-	units, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	units, err := s.unitOutlines(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "portal unit: read the units", slog.Any("err", err))
 		return runError(http.StatusServiceUnavailable, reasonPortalUnitUnavailable, portalUnitUnavailableMsg)
@@ -83,7 +83,7 @@ func (s *Server) resolvePortalUnit(w http.ResponseWriter, r *http.Request, raw s
 	if raw == "" {
 		return nil, true
 	}
-	units, err := s.cfg.Store.ListGovernanceUnits(r.Context())
+	units, err := s.unitOutlines(r.Context())
 	if err != nil {
 		writeServerError(w, r, "register delegate: read the units", err)
 		return nil, false
