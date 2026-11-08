@@ -159,11 +159,12 @@ describe("the security card", () => {
     expect(within(row).getByText("3d ago")).toHaveAttribute("title", absoluteTime(SET_AT));
   });
 
-  it("shows the empty state with Set an envelope when there are none", () => {
+  // The empty state's own button is the only Set an envelope: the card head draws none (the approved empty state).
+  it("shows the empty state with one Set an envelope when there are none", () => {
     renderCard(snap([]));
     expect(screen.getByText(ENVELOPE.EMPTY_TITLE)).toBeInTheDocument();
     expect(screen.getByText(ENVELOPE.EMPTY_BODY)).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: ENVELOPE.SET }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: ENVELOPE.SET })).toHaveLength(1);
   });
 });
 
