@@ -664,16 +664,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       </Tabs>
       {tabDrawn && <p className="-mt-2 mb-4 text-xs text-muted-foreground">{DECIDERS_INBOX.HELP}</p>}
 
+      {/* The tab is drawn only after a read has succeeded, so this body never shows a first-read loading or error state. */}
       {shown === "waiting" ? (
-        waitingStatus === "error" ? (
-          <div className="rounded-xl border border-border bg-card">
-            <ErrorState onRetry={loadWaiting} />
-          </div>
-        ) : waitingStatus !== "ready" ? (
-          <div className="rounded-xl border border-border bg-card">
-            <TableSkeleton rows={4} cols={3} />
-          </div>
-        ) : waitingRows.length === 0 ? (
+        waitingRows.length === 0 ? (
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
               icon={ShieldCheck}
