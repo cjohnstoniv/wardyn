@@ -65,7 +65,12 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	actorType, principal := actorFromRequest(r)
-	if rule, held := s.dataOutHolds(r.Context(), id); held {
+	rule, rerr := s.runDataOutRule(r.Context(), id)
+	if rerr != nil {
+		refuseDataOutUnreadable(r.Context(), w, id, rerr)
+		return
+	}
+	if rule != types.TransferAllowed {
 		s.auditDataOutDenied(r.Context(), id, actorType, principal, "computer_folder", rule)
 		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutFolderMsg)
 		return
