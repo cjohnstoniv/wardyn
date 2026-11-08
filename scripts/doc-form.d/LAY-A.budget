@@ -11,4 +11,5 @@
 # docs/operations/boundary.md 1142 measured: break-glass only while the boundary bounds something; revive judges hosts only
 # docs/operations/boundary.md 1176 adds 34 over 1142, measured (0.10 W5-API-DESKTOP, #2967): the spec.desktop row and the unread seal's desktop
 # docs/operations/boundary.md 1241 adds 65 over 1176, measured (rc.8 E4, #2948): how a person's walls meet the run and the seal.
-docs/operations/boundary.md=1406 share=35 # 1406 measured (+30 at rc.14: the Linux-only qualifier on the no-core-dumps section); 1376 measured (+68 at rc.14: the no-core-dumps section moved in from monitoring.md); earlier: 1308 measured (+67 over 1241, measured: the nested-limits figure and the restriction, wall preset and layer-name bullet)
+docs/operations/boundary.md=1740 share=35 # 1740 measured (+334 over 1406: the two capability-cap rows and the source-control capabilities section); earlier: 1406 measured (+30 at rc.14: the Linux-only qualifier on the no-core-dumps section); 1376 measured (+68 at rc.14: the no-core-dumps section moved in from monitoring.md); earlier: 1308 measured (+67 over 1241, measured: the nested-limits figure and the restriction, wall preset and layer-name bullet)
+# docs/operations/boundary.md 1740 = 1406 + 334, measured: the two capability-cap rows and the source-control capabilities section.
