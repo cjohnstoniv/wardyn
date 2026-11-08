@@ -459,5 +459,7 @@ func sidecarPolicy(policy types.RunPolicySpec, p dispatchParams) types.RunPolicy
 	}
 	// The proxy enforces nothing about recording, and a previous release's proxy refuses the key.
 	policy.Recording = ""
+	// data_out is kept by the control plane's doors, never the proxy, and a previous release's proxy refuses the key.
+	policy.DataOut = ""
 	return policy
 }

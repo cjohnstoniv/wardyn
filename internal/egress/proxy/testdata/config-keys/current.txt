@@ -144,6 +144,7 @@ policy.allowed_domains
 policy.allowed_methods
 policy.auto_stop_after_sec
 policy.azure_devops_capabilities
+policy.data_out
 policy.denied_domains
 policy.desktop
 policy.desktop.copy_out
