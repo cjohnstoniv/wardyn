@@ -178,6 +178,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 	}
 
 	warns = clampPushRules(&out, ceiling, warns)
+	warns = clampDataOut(&out, ceiling, warns)
 	warns = clampGitHubCapabilities(&out, ceiling, warns)
 
 	return out, warns
@@ -976,4 +977,17 @@ func clampInnerWall(field, proposed, ceiling string, warns []string) (string, []
 		warns = append(warns, fmt.Sprintf("%s set to %q: operator policy chooses it", field, ceiling))
 	}
 	return ceiling, warns
+}
+
+// clampDataOut raises data_out to the ceiling's rule. A blocked result denies every push, a member's own
+// blocked included (which no limit follows).
+func clampDataOut(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if r := types.StricterTransfer(out.DataOut.DataOut(), ceiling.DataOut.DataOut()); r != out.DataOut.DataOut() {
+		warns = append(warns, fmt.Sprintf("data_out raised from %q to the ceiling's %q", out.DataOut.DataOut(), r))
+		out.DataOut = r
+	}
+	if out.DataOut.DataOut() == types.TransferBlocked {
+		out.PushRules = pushDenyAll(out.PushRules)
+	}
+	return warns
 }

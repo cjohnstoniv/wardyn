@@ -84,6 +84,7 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 		}
 		c.Recording = c.Recording.AtLeast(*o.Recording)
 	}
+	m.meetDataOut(o.DataOut)
 	if o.GitHubCapabilities != nil {
 		if both, ok := m.meetCapabilities("github_capabilities", capStrings(c.GitHubCapabilities), capStrings(*o.GitHubCapabilities)); ok {
 			c.GitHubCapabilities = toCaps[ghscope.Capability](both)

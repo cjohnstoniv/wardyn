@@ -184,6 +184,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Policy", Path: "GitHubCapabilities", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "HarnessInnerWalls", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "Desktop", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "DataOut", Class: ClassExempt, Rule: RuleExempt, Variant: "enforced by the control plane's doors, not the sidecar"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "Recording", Class: ClassExempt, Rule: RuleExempt, Variant: "never sent: sidecarPolicy clears it"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection", Class: ClassExempt, Rule: RuleExempt, Variant: "the rest of LLMInspection; its resolved secret names are the strip row above"},
 	{Struct: StructProxyConfig, Field: "ControlPlaneURL", Class: ClassExempt, Rule: RuleExempt},
