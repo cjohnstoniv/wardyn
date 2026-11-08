@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -170,8 +171,8 @@ func TestDataOutRecordingOwnerRefused(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodGet, path, outputOwnerCookie(t), ""); w.Code != http.StatusNotFound {
 		t.Fatalf("owner replay under review = %d %s, want 404", w.Code, w.Body.String())
 	}
-	if ev := findAudit(rec.snapshot(), id, "run.data_out.denied", "denied"); ev == nil || !strings.Contains(string(ev.Data), `"path":"recording"`) {
-		t.Errorf("no run.data_out.denied row for the recording: %+v", ev)
+	if ev := findAudit(rec.snapshot(), id, "run.data_out.deny", "denied"); ev == nil || !strings.Contains(string(ev.Data), `"path":"recording"`) {
+		t.Errorf("no run.data_out.deny row for the recording: %+v", ev)
 	}
 	if w := doSSO(t, srv, http.MethodGet, path, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), ""); w.Code != http.StatusOK {
 		t.Fatalf("super admin replay under review = %d %s, want 200", w.Code, w.Body.String())
@@ -214,8 +215,8 @@ func TestDataOutWebAppRefusedDesktopOpen(t *testing.T) {
 	if h.srv.refuseAppDataOut(w, r, h.run, "code") != true || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonDataOutBlocked) {
 		t.Fatalf("a web app under review: refused %d %s", w.Code, w.Body.String())
 	}
-	if rows := h.audit.auditRows("run.data_out.denied", "denied"); len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"path":"app"`) {
-		t.Errorf("run.data_out.denied rows = %+v, want one for the app", rows)
+	if rows := h.audit.auditRows("run.data_out.deny", "denied"); len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"path":"app"`) {
+		t.Errorf("run.data_out.deny rows = %+v, want one for the app", rows)
 	}
 	for _, app := range []string{"novnc", desktopSigninApp} {
 		w = httptest.NewRecorder()
@@ -259,8 +260,8 @@ func TestDataOutBringBackRefused(t *testing.T) {
 	if res.code != http.StatusForbidden || res.reason() != reasonDataOutBlocked {
 		t.Fatalf("bring-back under review = %d %s, want 403 %s", res.code, res.body, reasonDataOutBlocked)
 	}
-	if ev := findAudit(audit.snapshot(), run.ID, "run.data_out.denied", "denied"); ev == nil || !strings.Contains(string(ev.Data), `"path":"computer_folder"`) {
-		t.Errorf("no run.data_out.denied row for the folder: %+v", ev)
+	if ev := findAudit(audit.snapshot(), run.ID, "run.data_out.deny", "denied"); ev == nil || !strings.Contains(string(ev.Data), `"path":"computer_folder"`) {
+		t.Errorf("no run.data_out.deny row for the folder: %+v", ev)
 	}
 	if s.bringComputerFolderBack(context.Background(), run.ID, "sbx") {
 		t.Error("the run's end brought the folder back under review")
@@ -273,10 +274,76 @@ func TestDataOutBringBackRefused(t *testing.T) {
 // dataOutFolderStore is a computer-folder store whose run records a policy envelope with spec.
 type dataOutFolderStore struct {
 	refStore
-	spec types.RunPolicySpec
+	spec       types.RunPolicySpec
+	readErr    error // every read fails with it
+	noEnvelope bool  // the run's log holds no envelope
 }
 
 func (s dataOutFolderStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	if s.readErr != nil || s.noEnvelope {
+		return nil, s.readErr
+	}
 	data, _ := json.Marshal(s.spec)
 	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
+}
+
+// TestDataOutNoRecordIsAllowedAndReadErrorIs503: a run with no recorded policy (its audit rows were pruned)
+// carries no rule, so output, web apps and the bring-back read it as allowed; a store that cannot answer
+// refuses each of them with 503 data_out_unreadable.
+func TestDataOutNoRecordIsAllowedAndReadErrorIs503(t *testing.T) {
+	readErr := errors.New("audit store unavailable")
+
+	srv, id := dataOutRunOutput(t, types.TransferBlocked, nil)
+	srv.cfg.Store.(*envelopeStore).noEnvelope = true
+	if code, _, refusal := getRunOutput(t, srv, id, "", outputOwnerCookie(t)); code == http.StatusForbidden || code == http.StatusServiceUnavailable {
+		t.Errorf("output with no recorded policy = %d %q, want the output's own answer", code, refusal.Reason)
+	}
+	srv.cfg.Store.(*envelopeStore).noEnvelope, srv.cfg.Store.(*envelopeStore).readErr = false, readErr
+	if code, _, refusal := getRunOutput(t, srv, id, "", outputOwnerCookie(t)); code != http.StatusServiceUnavailable || refusal.Reason != reasonDataOutUnreadable {
+		t.Errorf("output with a read error = %d %q, want 503 %s", code, refusal.Reason, reasonDataOutUnreadable)
+	}
+
+	h := newUIHarness(t, okBackend())
+	h.srv.cfg.Store = &envelopeStore{Store: h.srv.cfg.Store, noEnvelope: true}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/ui/code/session")
+	if w := httptest.NewRecorder(); h.srv.refuseAppDataOut(w, r, h.run, "code") {
+		t.Errorf("a web app with no recorded policy was refused: %d %s", w.Code, w.Body.String())
+	}
+	h.srv.cfg.Store = &envelopeStore{Store: h.srv.cfg.Store, readErr: readErr}
+	w := httptest.NewRecorder()
+	if !h.srv.refuseAppDataOut(w, r, h.run, "code") || w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonDataOutUnreadable) {
+		t.Errorf("a web app with a read error: %d %s, want 503 %s", w.Code, w.Body.String(), reasonDataOutUnreadable)
+	}
+
+	s, _, _, run, _, _ := bringBackFixture(t)
+	base := s.cfg.Store.(refStore)
+	s.cfg.Store = dataOutFolderStore{refStore: base, noEnvelope: true}
+	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.reason() == reasonDataOutBlocked || res.reason() == reasonDataOutUnreadable {
+		t.Errorf("bring-back with no recorded policy = %d %s, want the rule not to refuse it", res.code, res.body)
+	}
+	s.cfg.Store = dataOutFolderStore{refStore: base, readErr: readErr}
+	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusServiceUnavailable || res.reason() != reasonDataOutUnreadable {
+		t.Errorf("bring-back with a read error = %d %s, want 503 %s", res.code, res.body, reasonDataOutUnreadable)
+	}
+}
+
+// TestDataOutRevivedProxyConfigCarriesNoRule: a revive seals data_out into the run's policy, but the bytes it
+// hands the new proxy leave the key off, so a previous release's proxy still loads them, and the caller's
+// policy keeps the rule for the generation the doors read.
+func TestDataOutRevivedProxyConfigCarriesNoRule(t *testing.T) {
+	cfg := &proxy.Config{RunToken: "tok", ControlPlaneURL: "https://wardynd:8443", ControlPlaneCAPEM: "ca"}
+	cfg.Policy.DataOut = types.TransferBlocked
+	b, rerr := encodeRevivedConfig(context.Background(), cfg)
+	if rerr != nil {
+		t.Fatalf("encode: %+v", rerr)
+	}
+	if strings.Contains(string(b), "data_out") {
+		t.Errorf("the revived proxy config carries data_out: %s", b)
+	}
+	if bad := refusedByPreviousProxy(t, b); bad != "" {
+		t.Errorf("a previous release's proxy refuses %q in the revived config", bad)
+	}
+	if cfg.Policy.DataOut != types.TransferBlocked {
+		t.Errorf("encoding blanked the caller's rule: %q", cfg.Policy.DataOut)
+	}
 }

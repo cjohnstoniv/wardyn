@@ -41,8 +41,12 @@ func validateDataOut(r types.TransferRule) error {
 // run that recorded no envelope, which carries no rule.
 func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule types.TransferRule, found bool, err error) {
 	envelope, _, found, err := s.runEffectivePolicy(ctx, runID)
-	if err != nil || !found {
+	if err != nil {
 		return types.TransferAllowed, false, err
+	}
+	if !found {
+		// A run with no recorded policy (its audit rows were pruned) carries no rule; refusing it would close output and replay on every pruned run.
+		return types.TransferAllowed, false, nil
 	}
 	return envelope.DataOut.DataOut(), true, nil
 }
@@ -66,7 +70,7 @@ func (s *Server) runDataOutAllowed(ctx context.Context, runID uuid.UUID) bool {
 
 // auditDataOutDenied records one path a run's data_out rule kept content in on.
 func (s *Server) auditDataOutDenied(ctx context.Context, runID uuid.UUID, actorType types.ActorType, actor, path string, rule types.TransferRule) {
-	s.recordAudit(ctx, s.auditEvent(&runID, actorType, actor, "run.data_out.denied", runID.String(), "denied",
+	s.recordAudit(ctx, s.auditEvent(&runID, actorType, actor, "run.data_out.deny", runID.String(), "denied",
 		mustJSON(map[string]any{"path": path, "rule": string(rule)})))
 }
 

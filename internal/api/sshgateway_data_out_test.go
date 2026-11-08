@@ -58,7 +58,7 @@ func (d *dataOutSSH) denied(t *testing.T, path string) *types.AuditEvent {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, ev := range d.h.audit.snapshot() {
-			if ev.Action == "run.data_out.denied" && ev.Outcome == "denied" && strings.Contains(string(ev.Data), `"path":"`+path+`"`) {
+			if ev.Action == "run.data_out.deny" && ev.Outcome == "denied" && strings.Contains(string(ev.Data), `"path":"`+path+`"`) {
 				return &ev
 			}
 		}
@@ -83,7 +83,7 @@ func TestDataOutSSHExecRefused(t *testing.T) {
 			t.Errorf("%s: %d execs reached the sandbox", rule, n)
 		}
 		if d.denied(t, "exec") == nil {
-			t.Errorf("%s: no run.data_out.denied row for exec; events=%s", rule, auditDump(d.h.audit.snapshot(), d.run.ID))
+			t.Errorf("%s: no run.data_out.deny row for exec; events=%s", rule, auditDump(d.h.audit.snapshot(), d.run.ID))
 		}
 	}
 }
@@ -98,7 +98,7 @@ func TestDataOutSSHSFTPRefused(t *testing.T) {
 		t.Error("the sftp subsystem was accepted under review")
 	}
 	if d.denied(t, "sftp") == nil {
-		t.Errorf("no run.data_out.denied row for sftp; events=%s", auditDump(d.h.audit.snapshot(), d.run.ID))
+		t.Errorf("no run.data_out.deny row for sftp; events=%s", auditDump(d.h.audit.snapshot(), d.run.ID))
 	}
 	if n := d.execs.Load(); n != 0 {
 		t.Errorf("%d execs reached the sandbox", n)
@@ -133,7 +133,7 @@ func TestDataOutDirectTCPIPRefused(t *testing.T) {
 		t.Errorf("the refusal = %v, want it to name the data_out rule", err)
 	}
 	if d.denied(t, "port_forward") == nil {
-		t.Errorf("no run.data_out.denied row for the forward; events=%s", auditDump(d.h.audit.snapshot(), d.run.ID))
+		t.Errorf("no run.data_out.deny row for the forward; events=%s", auditDump(d.h.audit.snapshot(), d.run.ID))
 	}
 }
 
@@ -231,6 +231,6 @@ func TestDataOutSyncClosesOnData(t *testing.T) {
 		t.Errorf("the client read %d bytes, want only the 12 of the NAME reply before the DATA reply", len(got))
 	}
 	if d.denied(t, "sync_down") == nil {
-		t.Errorf("no run.data_out.denied row for sync_down; events=%s", auditDump(d.h.audit.snapshot(), d.run.ID))
+		t.Errorf("no run.data_out.deny row for sync_down; events=%s", auditDump(d.h.audit.snapshot(), d.run.ID))
 	}
 }
