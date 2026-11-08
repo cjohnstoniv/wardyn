@@ -15,15 +15,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// backendRowStore serves the runners' rows (ownedRunners) and no workspaces, which deriveRunSetupItems lists.
-type backendRowStore struct{ ownedRunners }
-
-func (backendRowStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
-
-func backendRowServer(rn runner.Runner) *Server {
-	return &Server{cfg: Config{Runner: rn, Store: backendRowStore{capsServer(nil).cfg.Store.(ownedRunners)}}}
-}
-
 // foldedBackendRow runs Review's confinement step for req and then derives the setup rows the way Review does,
 // for a run at class final, and returns the backend row.
 func foldedBackendRow(t *testing.T, s *Server, req createRunRequest, place runPlacement, final types.ConfinementClass) SetupItem {
@@ -48,7 +39,7 @@ func foldedBackendRow(t *testing.T, s *Server, req createRunRequest, place runPl
 // Review's backend row reads the barriers of the runner the request pins, not the control plane's own runner
 // (which here advertises all three).
 func TestPreflightBackendRow_ReadsLocalRunnerClasses(t *testing.T) {
-	s := backendRowServer(&fakeRunner{})
+	s := capsServer(&fakeRunner{})
 	id := installRunner(t, s, true, laptopCaps(types.CC1, types.CC2))
 	req := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
 
@@ -62,7 +53,7 @@ func TestPreflightBackendRow_ReadsLocalRunnerClasses(t *testing.T) {
 
 // A pooled run's row reads its eligible candidates, with no executor asked at all.
 func TestPreflightBackendRow_PoolUsesCandidates(t *testing.T) {
-	s := backendRowServer(nil)
+	s := capsServer(nil)
 	place := runPlacement{
 		pooled: true, row: types.RunnerPool{Scope: types.RunnerPoolOrganization},
 		eligible: []poolTarget{{id: "a", facts: classes(types.CC1, types.CC2)}},
@@ -79,7 +70,7 @@ func TestPreflightBackendRow_PoolUsesCandidates(t *testing.T) {
 
 // A runner the fold could not read is not guessed from the control plane's runner: the row is unverified.
 func TestPreflightBackendRow_RunnerUnreadIsCheckedAtRunner(t *testing.T) {
-	s := backendRowServer(&fakeRunner{})
+	s := capsServer(&fakeRunner{})
 	id := installRunner(t, s, false, laptopCaps(types.CC1, types.CC2, types.CC3))
 	req := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
 	it := foldedBackendRow(t, s, req, runPlacement{}, types.CC3)
