@@ -30,11 +30,11 @@ import (
 func prSplitCases(pr, create string) []caseT {
 	return []caseT{
 		// Row 1: reviewers, any method, body not read.
-		{name: "reviewer add", req: adoReq(http.MethodPut, pr+"/reviewers/a1b2", `{"vote":0}`), want: CapPRVote},
-		{name: "reviewer vote", req: adoReq(http.MethodPut, pr+"/reviewers/a1b2", `{"vote":10}`), want: CapPRVote},
+		{name: "reviewers add", req: adoReq(http.MethodPut, pr+"/reviewers/a1b2", `{"vote":0}`), want: CapPRVote},
+		{name: "reviewers vote", req: adoReq(http.MethodPut, pr+"/reviewers/a1b2", `{"vote":10}`), want: CapPRVote},
 		{name: "reviewers bulk (array)", req: adoReq(http.MethodPost, pr+"/reviewers", `[{"id":"a1b2"}]`), want: CapPRVote},
-		{name: "reviewer remove", req: adoReq(http.MethodDelete, pr+"/reviewers/a1b2", ""), want: CapPRVote},
-		{name: "reviewer body unreadable", req: adoReq(http.MethodPatch, pr+"/reviewers/a1b2", `not json`), want: CapPRVote},
+		{name: "reviewers remove", req: adoReq(http.MethodDelete, pr+"/reviewers/a1b2", ""), want: CapPRVote},
+		{name: "reviewers body unreadable", req: adoReq(http.MethodPatch, pr+"/reviewers/a1b2", `not json`), want: CapPRVote},
 		// Row 2 and 3: statuses, on the pull request and on an iteration.
 		{name: "status on the pull request", req: adoReq(http.MethodPost, pr+"/statuses", `{"iterationId":3,"state":"succeeded"}`), want: CapPRVote},
 		{name: "status delete", req: adoReq(http.MethodPatch, pr+"/statuses", `[{"op":"remove","path":"/1"}]`), want: CapPRVote},

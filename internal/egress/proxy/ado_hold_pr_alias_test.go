@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// adoVotePath is a reviewer vote, classified pr_vote.
+// adoVotePath is a vote under reviewers, classified pr_vote.
 const adoVotePath = "/acme/proj/_apis/git/repositories/r1/pullrequests/7/reviewers/a1b2?api-version=7.1"
 
 // A run dispatched before the pull-request split holds pr. Its grant, and every resolve answer
@@ -69,7 +69,7 @@ func TestADOHoldResolveNamingPRAdmitsVote(t *testing.T) {
 	}
 }
 
-// wantForwarded holds rec to the upstream's answer: the fake serves no reviewer route, so a forwarded
+// wantForwarded holds rec to the upstream's answer: the fake serves no reviewers route, so a forwarded
 // vote is its 404, never the proxy's 403 refusal.
 func wantForwarded(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()

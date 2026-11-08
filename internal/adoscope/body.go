@@ -242,7 +242,7 @@ func packageBatchWrite(req Request) (Verdict, error) {
 // the difference exists. sub is the segment after the PR id (reviewers, threads, labels, …) and
 // subNext2 the segment two after it (statuses in iterations/{n}/statuses).
 //
-// pr_vote is anything a branch policy can count as a person's review: a reviewer write, a status, a
+// pr_vote is anything a branch policy can count as a person's review: a write under reviewers, a status, a
 // thread resolved, and a sub this catalogue does not list (fail-closed).
 func pullRequestWrite(method string, req Request, sub, subNext2 string) (Verdict, error) {
 	switch {
