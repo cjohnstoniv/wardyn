@@ -239,3 +239,17 @@ describe("isKubeCallRequest", () => {
     expect(isKubeCallRequest({ ...kube, grant_id: "g1" })).toBe(false);
   });
 });
+
+// A held kubectl write is decided by its run's owner, as one MCP call is: the server's per-row verdict leads.
+describe("canDecideApproval on a held kubectl write", () => {
+  const kubeScope = { cluster: "k8s.example.com", namespace: "team-a", method: "PATCH",
+    path: "/apis/apps/v1/namespaces/team-a/deployments/web", call_sha256: "ab".repeat(32) };
+  it("offers decide to the run's owner", () => {
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: kubeScope, decidable: true })).toBe(true);
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: kubeScope })).toBe(true);
+  });
+  it("does not offer decide to someone else", () => {
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: kubeScope, decidable: false })).toBe(false);
+    expect(canDecideApproval(false, "tool_call", { grant_id: "g1", requested_scope: kubeScope })).toBe(false);
+  });
+});
