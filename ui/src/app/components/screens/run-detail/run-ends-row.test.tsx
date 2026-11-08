@@ -12,7 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { RunDetail } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { RunEndsControls } from "./run-ends-row";
+import { RunEndsControls, weekdayClock } from "./run-ends-row";
 
 const setRunEndAndWaitMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
@@ -312,5 +312,53 @@ describe("RunEndsControls — F16: a non-owner, non-operator viewer gets no acti
     await openMenu("run-ends-pill");
     expect(await screen.findByText(/Keeps going until you or an admin ends it/)).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Set an end…/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("RunEndsControls: a run that ends with its elevation", () => {
+  const capAt = () => new Date(NOW + 2 * 3600_000).toISOString();
+  const SENTENCE = /This run ends when your elevation ends, .+\. It can't be extended\./;
+  const extendNames = [/1 more day/, /1 more week/, /as far as allowed/i, /Change…/, /No end/];
+
+  it.each([
+    ["no end of its own", (cap: string) => ({ lifetime_cap_at: cap, lifetime_cap_source: "elevation" as const })],
+    ["an end equal to the cap", (cap: string) => ({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation" as const })],
+  ])("an elevation-capped run with %s: the pill shows the cap and its menu says why, with no extend", async (_n, shape) => {
+    const cap = capAt();
+    renderRow(detail({ ...shape(cap), run_limits: { user_changes_limits: true, allow_no_end: true, max_end_ahead_sec: 7 * 24 * 3600 } }));
+    expect(screen.getByTestId("run-ends-pill").textContent).toBe(`Ends: ${weekdayClock(cap)}`);
+    expect(screen.getByTestId("run-ends-pill").textContent).not.toMatch(/never/);
+    await openMenu("run-ends-pill");
+    expect(await screen.findByTestId("lock-reason")).toHaveTextContent(SENTENCE);
+    for (const name of extendNames) expect(screen.queryByRole("menuitem", { name })).not.toBeInTheDocument();
+  });
+
+  it("a viewer who cannot act sees the same pill as plain text", () => {
+    const cap = capAt();
+    renderRow(detail({ lifetime_cap_at: cap, lifetime_cap_source: "elevation" }), () => {}, { principal: "someone-else" });
+    expect(screen.getByTestId("run-ends-pill").tagName).toBe("SPAN");
+    expect(screen.getByTestId("run-ends-pill").textContent).toBe(`Ends: ${weekdayClock(cap)}`);
+  });
+
+  it("a run whose own end is before the elevation's cap keeps the extend items", async () => {
+    renderRow(
+      detail({
+        ends_at: endsAt(),
+        lifetime_cap_at: new Date(NOW + 48 * 3600_000).toISOString(),
+        lifetime_cap_source: "elevation",
+        run_limits: { user_changes_limits: true, max_end_ahead_sec: 30 * 24 * 3600 },
+      }),
+    );
+    await openMenu("run-ends-pill");
+    expect(await screen.findByRole("menuitem", { name: "1 more day" })).toBeInTheDocument();
+    expect(screen.queryByText(SENTENCE)).not.toBeInTheDocument();
+  });
+
+  it("a pool-capped run is unchanged", async () => {
+    const cap = capAt();
+    renderRow(detail({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "pool", run_limits: { user_changes_limits: true } }));
+    await openMenu("run-ends-pill");
+    expect(await screen.findByRole("menuitem", { name: "1 more day" })).toBeInTheDocument();
+    expect(screen.queryByText(SENTENCE)).not.toBeInTheDocument();
   });
 });

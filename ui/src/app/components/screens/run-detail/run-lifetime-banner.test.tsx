@@ -701,3 +701,60 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+describe("RunLifetimeBanner: a run that ends with its elevation", () => {
+  const killed = (o: Partial<RunDetail> = {}) =>
+    detail({ state: "KILLED", status_reason: "max_lifetime_reached", lifetime_cap_at: new Date(NOW - 60_000).toISOString(), lifetime_cap_source: "elevation", ...o });
+
+  it("the elevation warning has Dismiss only and the elevation sentence", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "elevation", run_limits: { user_changes_limits: true } }));
+    const banner = screen.getByTestId("run-lifetime-warning");
+    expect(banner).toHaveTextContent("This run ends in 10 minutes");
+    expect(banner).toHaveTextContent(`At ${weekdayClock(cap)} the run stops, because your elevation ends then. Push or save anything you need before then.`);
+    expect(banner).not.toHaveTextContent("files are kept");
+    expect(screen.queryByRole("button", { name: "Extend 1 day" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change end…" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("run-lifetime-warning")).not.toBeInTheDocument();
+  });
+
+  it("the warning counts down to the cap when the run has no end of its own", () => {
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ lifetime_cap_at: cap, lifetime_cap_source: "elevation" }));
+    expect(screen.getByTestId("run-lifetime-warning")).toHaveTextContent("This run ends in 10 minutes");
+  });
+
+  it("a pool-capped run keeps Extend 1 day and the files sentence", () => {
+    const cap = new Date(NOW + 9 * 60_000).toISOString();
+    renderBanner(detail({ ends_at: cap, lifetime_cap_at: cap, lifetime_cap_source: "pool" }));
+    expect(screen.getByRole("button", { name: "Extend 1 day" })).toBeInTheDocument();
+    expect(screen.getByTestId("run-lifetime-warning")).toHaveTextContent("Its files are kept for a while after that");
+  });
+
+  it("a run KILLED at its elevation's end shows the elevation-ended banner", () => {
+    renderBanner(killed());
+    const banner = screen.getByTestId("run-lifetime-elevation-ended");
+    expect(banner).toHaveTextContent("This run ended when your elevation ended");
+    expect(banner).toHaveTextContent("To keep working, ask for elevation again and start a new run.");
+    expect(within(banner).getByRole("button", { name: "Request elevation" })).toBeInTheDocument();
+    for (const name of ["Revive", "Extend", "End run"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  });
+
+  it("a viewer who cannot act sees the elevation-ended banner without the button", () => {
+    renderBanner(killed(), [], () => {}, { operator: false, principal: "someone-else" });
+    expect(screen.getByTestId("run-lifetime-elevation-ended")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request elevation" })).not.toBeInTheDocument();
+  });
+
+  it("a run KILLED max_lifetime_reached under a pool cap shows nothing", () => {
+    const { container } = renderBanner(killed({ lifetime_cap_source: "pool" }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("a run KILLED by a person shows nothing", () => {
+    const { container } = renderBanner(killed({ status_reason: "killed_by_user" }));
+    expect(container).toBeEmptyDOMElement();
+  });
+});

@@ -108,6 +108,17 @@ describe("Review blockers", () => {
     }
   });
 
+  it("a byoi_user refusal is a blocker in the server's sentence, with and without the Approvals clause", () => {
+    const tail = "or launch with the agent's convention image or an onboarded workspace's base image";
+    const plain = `image ghcr.io/acme/tool:1 is not granted to you — ask an admin for an image grant that covers it, ${tail}`;
+    const offered = `image ghcr.io/acme/tool:1 is not granted to you — request it in Approvals, ask an admin for an image grant that covers it, ${tail}`;
+    for (const text of [plain, offered]) {
+      const out = buildBlockers({ ...NOTHING, refusal: { text, reason: "byoi_user" } });
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ kind: "refusal", text });
+    }
+  });
+
   it("holds Launch for a wall preset that is gone, never swapping it for Open, and links it to the Tools step", () => {
     const [b] = buildBlockers({ ...NOTHING, wallPreset: { name: "Docs triage", unavailable: true } });
     expect(b).toMatchObject({ id: "wall_preset_unknown", kind: "refusal", text: "Docs triage is no longer available. Choose another wall preset to continue.", to: { screen: "step", step: "tools" }, field: "wall_preset" });
