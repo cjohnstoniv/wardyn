@@ -208,7 +208,7 @@ func TestEnvelopeReparentOutHeld(t *testing.T) {
 
 // TestEnvelopeRootWideningSecurityOnly: the root's own widening is held, as without an envelope, but only
 // a security admin may decide it: a peer admin of the root and an admin above it are refused. With no
-// envelope the peer's approval applies it.
+// envelope an admin above the root's approval applies it.
 func TestEnvelopeRootWideningSecurityOnly(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	narrow := envUnitBody(e.a1, e.a.ID, uaDomains("pypi.org"))
@@ -217,8 +217,8 @@ func TestEnvelopeRootWideningSecurityOnly(t *testing.T) {
 		t.Fatalf("narrowing the root = %d %s, want 200", w.Code, w.Body)
 	}
 	ch := e.pending(e.call(e.adminA1, http.MethodPut, envUnitPath(e.a1), wide))
-	if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
-		t.Fatalf("no envelope: the peer approving = %d %s, want 200", w.Code, w.Body)
+	if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
+		t.Fatalf("no envelope: an admin above the root approving = %d %s, want 200", w.Code, w.Body)
 	}
 
 	e.seedEnvelope(e.a1)
@@ -401,8 +401,8 @@ func TestEnvelopeDryRunMatchesWrite(t *testing.T) {
 	owner := func(u types.GovernanceUnit, name string) string {
 		return e.restate(u, map[string]any{"contact": map[string]any{"owner": name}})
 	}
-	if a := same("the root, no envelope", e.a1, owner(e.a1, "One")); !listsUnitAdmin(a, uaSubPeerA1) {
-		t.Errorf("no envelope: %+v, want the root's peer admin listed", a)
+	if a := same("the root, no envelope", e.a1, owner(e.a1, "One")); !listsUnitAdmin(a, uaSubPeerA) || listsUnitAdmin(a, uaSubPeerA1) {
+		t.Errorf("no envelope: %+v, want the admins above the root listed and its peer admin not", a)
 	}
 	e.seedEnvelope(e.a1)
 	if a := same("the envelope's root", e.a1, owner(e.a1, "Two")); !securityOnlyList(a) {

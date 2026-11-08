@@ -335,7 +335,8 @@ func (s *Server) auditUnitScope(ctx context.Context, unit uuid.UUID, strict bool
 // unitChangeScope is the units a held change of a unit kind touches, which an approving unit admin
 // must govern (strict: strictly above), from the change's key, payload and stored diff. ok is false
 // for a change only a security admin may decide: a promotion, a unit with no parent, a payload that
-// does not decode.
+// does not decode. A unit's own update (its walls, locks, mode, name or parent) is strict: only someone
+// above the unit, and above every other unit it touches, decides it.
 func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok bool) {
 	var diff governanceDiffBody
 	if json.Unmarshal(ch.Diff, &diff) != nil {
@@ -361,13 +362,13 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 				units = append(units, a.UnitID)
 			}
 			if sameJSON(before.ParentID, after.ParentID) {
-				return units, false, true
+				return units, true, true
 			}
 		}
 		if after.ParentID == nil {
 			return nil, false, false
 		}
-		return append(units, *after.ParentID), false, true
+		return append(units, *after.ParentID), ch.Op == "update", true
 	case govKindMembership:
 		unit, _, _, keyed := splitMembershipKey(ch.TargetKey)
 		if !keyed || ch.Op == "promote" {
