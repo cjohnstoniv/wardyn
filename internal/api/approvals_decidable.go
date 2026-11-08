@@ -113,10 +113,15 @@ func (s *Server) withHoldProjectionAll(r *http.Request, fn func() ([]types.Appro
 // projectDecidable sets Decidable on every PENDING row to the part of mayDecide's verdict the console can act on
 // before a click: kind, ownership and, for a member's egress_domain row, the egress_host grant (#2604). The
 // four-eyes switch is left out on purpose: it refuses with its own stated reason on the click, and a button
-// disabled with no reason would be worse. The run is loaded (once per run) only for a non-operator. A run that
-// cannot be read leaves the row's Decidable nil, which the console reads as "not told", never as "no".
+// disabled with no reason would be worse. The run is loaded (once per run) only for a non-operator, or when a
+// unit has a deciders rule. A run that cannot be read, and for a non-operator deciders that cannot be read, leave
+// the row's Decidable nil, which the console reads as "not told", never as "no". Deciders lists who decides a row
+// a rule governs (deciders_resolve.go), and stays nil on every other row.
 func (s *Server) projectDecidable(r *http.Request, rows []types.ApprovalRequest) {
+	r = withDeciderMemo(r)
 	operator := s.isSecurityOperator(r.Context())
+	tree, terr := s.deciderTree(r.Context())
+	needRun := !operator || tree != nil || terr != nil
 	runs := map[uuid.UUID]*types.AgentRun{}
 	for i := range rows {
 		ap := rows[i]
@@ -124,7 +129,7 @@ func (s *Server) projectDecidable(r *http.Request, rows []types.ApprovalRequest)
 			continue
 		}
 		var run types.AgentRun
-		if !operator {
+		if needRun {
 			got, seen := runs[ap.RunID]
 			if !seen && s.cfg.Store != nil {
 				if loaded, err := s.cfg.Store.GetRun(r.Context(), ap.RunID); err == nil {
@@ -132,13 +137,20 @@ func (s *Server) projectDecidable(r *http.Request, rows []types.ApprovalRequest)
 				}
 				runs[ap.RunID] = got
 			}
-			if got == nil {
+			if got == nil && !operator {
 				continue
 			}
-			run = *got
+			if got != nil {
+				run = *got
+			}
+		}
+		v, err := s.governingRule(r.Context(), ap, run)
+		if err != nil && !operator {
+			continue
 		}
 		may := ap.Kind != types.ApprovalCredentialReauth && s.decidableKindAndOwner(r, ap, run)
 		rows[i].Decidable = &may
+		rows[i].Deciders = v.deciderList()
 	}
 }
 
@@ -199,6 +211,11 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 	if s.isSecurityOperator(r.Context()) {
 		return true
 	}
+	// Under a unit deciders rule the resolver is the whole verdict, as it is for authorizeUserDecision's member
+	// arm; a rule that cannot be read refuses, as the decision does.
+	if v, err := s.resolveDecider(r, ap, run); err != nil || v.rule != nil {
+		return err == nil && v.decides()
+	}
 	_, isADO := adoEscalationScope(ap)
 	isMCP := isMCPCallRow(ap)
 	if ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP {
@@ -222,7 +239,10 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 // requireSecondHuman's own doc), and otherwise it refuses only when the
 // asking principal IS the run's own creator, or sponsors the service identity that created it.
 func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, run types.AgentRun) bool {
-	if _, on := secondHumanGate(ap); !on {
+	// A rule that cannot be read is no rule here: decidableKindAndOwner already refused a member for it, and a
+	// security caller decides as without deciders (deciderForDecide).
+	v, _ := s.governingRule(r.Context(), ap, run)
+	if _, on := secondHumanGateUnder(ap, v); !on {
 		return true
 	}
 	if _, isPolicy := policyDeciderFrom(r.Context()); isPolicy {

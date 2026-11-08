@@ -25,3 +25,7 @@ const (
 	// reasonInvalidDeciders: a unit's deciders rules break the model (types.ValidateDeciderRules); the message names the rule.
 	reasonInvalidDeciders = "invalid_deciders"
 )
+
+// reasonDecidersUnreadable: the unit deciders rules, or the unit tree they are walked on, could not be read, so a
+// decision that one of them may govern is refused rather than read as having no rule (503).
+const reasonDecidersUnreadable = "deciders_unreadable"
