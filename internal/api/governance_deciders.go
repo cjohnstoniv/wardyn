@@ -36,7 +36,7 @@ type unitDecidersPayload struct {
 	Rules  []types.DeciderRule `json:"rules"`
 }
 
-// unitDecidersDiffView is a unit's rules as the reviewer reads them.
+// unitDecidersDiffView is a unit's rules as an approver reads them.
 type unitDecidersDiffView struct {
 	UnitID   uuid.UUID           `json:"unit_id"`
 	UnitName string              `json:"unit_name"`
