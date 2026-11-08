@@ -48,7 +48,7 @@ an operator follows to turn one on and run the queue.
 
 **Restrictions.**
 
-- A restriction (`/governance/restrictions`) is a deny-only list (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+- A restriction (`/governance/restrictions`) is a deny-only list (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit` (`strict: true` drops the parent-unit mapping: only people whose own unit is the pin or below it run on the workspace), and an organisation component's is `PUT /components/{id}/owning-unit`.
 
 **Optional: four-eyes on governance writes.**
 
@@ -165,7 +165,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
 | The recording level (`PUT /governance/recording`) | always | security admin or super admin |
 | A platform envelope (`PUT` or `DELETE /governance/units/{id}/envelope`) | always | security admin or super admin |
-| A restriction delete or loosening; a unit pin moved off its branch | always | security admin or super admin |
+| A restriction delete or loosening; a unit pin moved off its branch (a workspace's or a component's), or a strict workspace pin made plain | always | security admin or super admin |
 | An approval rule (`PUT /governance/approval-rules/{name}`, see [approval-rules.md](approval-rules.md)); a `DELETE` is never held | always, an edit included | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |

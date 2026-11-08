@@ -42,6 +42,7 @@ const (
 	GovernanceTargetUnitAdmin              = "governance_unit_admin"
 	GovernanceTargetRestriction            = "governance_restriction"
 	GovernanceTargetWorkspaceOwningUnit    = "workspace_owning_unit"
+	GovernanceTargetComponentOwningUnit    = "component_owning_unit"
 	GovernanceTargetApprovalRule           = "approval_rule"
 	GovernanceTargetRecording              = "org_recording"
 	GovernanceTargetUnitDeciders           = "governance_unit_deciders"

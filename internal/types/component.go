@@ -133,6 +133,11 @@ type Component struct {
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// OwningUnitID pins an organisation component to a unit: only a run whose context is that unit or a
+	// unit below it may attach it. Read-only on the wire: written only by PUT /components/{id}/owning-unit.
+	// OwningUnitName is the unit's name, joined at read.
+	OwningUnitID   *uuid.UUID `json:"owning_unit_id,omitempty"`
+	OwningUnitName string     `json:"owning_unit_name,omitempty"`
 }
 
 // ComponentRef attaches one component to a run: a stored one by ID, a run-only

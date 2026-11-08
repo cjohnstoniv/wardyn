@@ -30,6 +30,7 @@ func orgComponentView(c types.Component) client.OrgComponentView {
 	for _, sec := range c.Definition.Secrets {
 		v.Secrets = append(v.Secrets, client.ComponentSecretView{Delivery: sec.Delivery, Shared: sec.Shared})
 	}
+	v.OwningUnitID, v.OwningUnitName = c.OwningUnitID, c.OwningUnitName
 	v.Category = "api"
 	if cli := c.Definition.CLI; cli != nil {
 		v.Category, v.CLI = "cli", cliView(cli)

@@ -946,11 +946,19 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 	return true
 }
 
-// unitPinnedMsg is the 409 a unit delete gets while workspaces name it as their owning unit.
+// unitPinnedMsg is the 409 a unit delete gets while workspaces or organisation components name it as
+// their owning unit.
 func unitPinnedMsg(e *store.ErrUnitPinned) string {
-	names := "a workspace"
+	var parts []string
 	if len(e.Workspaces) > 0 {
-		names = "workspace(s) " + strings.Join(e.Workspaces, ", ")
+		parts = append(parts, "workspace(s) "+strings.Join(e.Workspaces, ", "))
+	}
+	if len(e.Components) > 0 {
+		parts = append(parts, "component(s) "+strings.Join(e.Components, ", "))
+	}
+	names := "a workspace or component"
+	if len(parts) > 0 {
+		names = strings.Join(parts, " and ")
 	}
 	return "this governance profile is pinned by " + names + "; unpin them first"
 }

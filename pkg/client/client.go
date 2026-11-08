@@ -23,7 +23,7 @@
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
-//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit
+//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit, SetWorkspaceOwningUnitStrict
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition, AuditReceipt, AuditCheckpoints, AuditReceiptKeys
@@ -82,7 +82,8 @@
 //   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, PreviewWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
 //     WorkloadHistory, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
 //     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
-//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
+//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin),
+//     SetComponentOwningUnit (security tier) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
