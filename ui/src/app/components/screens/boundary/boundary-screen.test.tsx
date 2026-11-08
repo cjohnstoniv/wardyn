@@ -28,6 +28,7 @@ import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { BOUNDARY, BOUNDARY_DESKTOP, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
 import { BASELINE, CHANGES, DELIVERY, RUN_LIMITS } from "../../../lib/governance-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import type { GovernanceChange } from "../../../lib/types";
 import type { BoundaryReport } from "../../../lib/api/boundary";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -290,6 +291,7 @@ describe("BoundaryScreen", () => {
     const report = await screen.findByTestId("boundary-dry-run");
     await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
     expect(await within(report).findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(within(report).getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.queryByText(DELIVERY.SAVED)).toBeNull();
     expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT })).toBeDisabled();
   });

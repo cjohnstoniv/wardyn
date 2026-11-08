@@ -39,6 +39,7 @@ vi.mock("../../../lib/api/directory", async () => {
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { CHANGES } from "../../../lib/governance-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { AccessCollisionError, AccessPostureFlipRequiredError } from "../../../lib/api/access";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import type { AccessResponse } from "../../../lib/types";
@@ -873,6 +874,7 @@ describe("AccessPanel — a 202 is submitted, never saved", () => {
     await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.getByLabelText(PEOPLE.FIELD_VALUE)).toHaveValue("");
     expect(onReload).toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();

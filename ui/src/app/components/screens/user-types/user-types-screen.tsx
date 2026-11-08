@@ -19,7 +19,7 @@ import { userTypes as api } from "../../../lib/api/user-types";
 import { governance as governanceApi, type GovernanceSnapshot } from "../../../lib/api/governance";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { USER_TYPES as UT } from "../../../lib/user-types-copy";
-import type { UserType } from "../../../lib/types";
+import type { GovernanceChange, UserType } from "../../../lib/types";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -72,14 +72,14 @@ export function UserTypesScreen() {
   React.useEffect(load, [load]);
 
   // A write the server held for a second person (202): nothing has changed yet.
-  const [submitted, setSubmitted] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState<GovernanceChange | null>(null);
   const openEditor = (type: UserType | null) => {
-    setSubmitted(false);
+    setSubmitted(null);
     setEditing({ type });
   };
   const openDelete = (t: UserType) => {
     setDeleteError(null);
-    setSubmitted(false);
+    setSubmitted(null);
     setToDelete(t);
   };
 
@@ -92,7 +92,7 @@ export function UserTypesScreen() {
     } catch (e) {
       if (e instanceof PendingChangeError) {
         setToDelete(null);
-        setSubmitted(true);
+        setSubmitted(e.change);
         load();
         return;
       }
@@ -144,7 +144,7 @@ export function UserTypesScreen() {
 
           {submitted && (
             <div className="px-6">
-              <SubmittedNote />
+              <SubmittedNote change={submitted} />
             </div>
           )}
 
@@ -243,9 +243,9 @@ export function UserTypesScreen() {
                 setEditing(null);
                 load();
               }}
-              onSubmitted={() => {
+              onSubmitted={(change) => {
                 setEditing(null);
-                setSubmitted(true);
+                setSubmitted(change);
                 load();
               }}
             />

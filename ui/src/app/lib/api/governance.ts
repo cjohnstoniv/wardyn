@@ -662,15 +662,27 @@ export const governance = {
   },
 
   // GET /api/v1/governance/changes -> the pending changes (the server's default state), newest first. A
-  // change of a kind the caller may not approve is not listed.
-  async listChanges(): Promise<GovernanceChange[]> {
-    const res = await wfetch("/governance/changes", { method: "GET" });
+  // change of a kind the caller may not approve is not listed. `approver: "security"` narrows it to the
+  // changes only a security admin can decide.
+  async listChanges(opts?: { approver?: "security" }): Promise<GovernanceChange[]> {
+    const res = await wfetch(`/governance/changes${opts?.approver ? `?approver=${opts.approver}` : ""}`, { method: "GET" });
     return unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
   },
 
   // GET /api/v1/governance/changes/{id} -> the change in whatever state it is now (pending, applied, rejected, expired).
   async getChange(id: string): Promise<GovernanceChange> {
     const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}`, { method: "GET" });
+    return asJson<GovernanceChange>(res);
+  },
+
+  // PUT /api/v1/governance/changes/{id}/note -> 200 the change. Only its proposer, only while it is pending; the
+  // note replaces the one before, and both empty clears the note.
+  async noteChange(id: string, note: { reason: string; ticket: string }): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/note`, {
+      method: "PUT",
+      asPerson: true,
+      body: JSON.stringify({ reason: note.reason, ticket: note.ticket }),
+    });
     return asJson<GovernanceChange>(res);
   },
 

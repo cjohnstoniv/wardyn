@@ -28,7 +28,7 @@ import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOO
 import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
 import { ScheduledRunsDoorRow } from "./limits-schedule-autonomy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
+import type { GovernanceChange, PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -101,7 +101,7 @@ export function ProfileEditor({
   onSaved: (warnings: string[]) => void;
   /** The write was held for a second person (202): nothing is saved yet. */
   /** The notes the held change carries, for the screen to show beside the submitted note. */
-  onSubmitted: (notes: string[]) => void;
+  onSubmitted: (notes: string[], change: GovernanceChange) => void;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
@@ -259,7 +259,7 @@ export function ProfileEditor({
       onSaved(res.warnings);
     } catch (e) {
       if (e instanceof PendingChangeError) {
-        onSubmitted(e.change.diff?.notes ?? []);
+        onSubmitted(e.change.diff?.notes ?? [], e.change);
         return;
       }
       // A refusal the SERVER composed is rendered verbatim — it names the
