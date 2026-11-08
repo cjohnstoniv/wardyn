@@ -116,7 +116,7 @@
 
 - A `group:<name>` decider matches the groups in the person's session. A group left at the identity provider applies when the session next signs in, or when SCIM removes the person.
 - A console session lasts to the ID token's expiry by default, about an hour on Entra ID. An API token's group snapshot can be as old as the token.
-- Set [`WARDYN_ROLE_STAMP_TTL`](../ENV.md#wardyn_role_stamp_ttl) when a group decides `credential`, `push_content` or anything with a wide scope: it sends the owner through sign-in again once the stamp is older.
+- Set [`WARDYN_ROLE_STAMP_TTL`](../ENV.md#wardyn_role_stamp_ttl) when a group decides `credential`, `push_content` or anything with a wide scope: it sends the session or token holder through sign-in again once the stamp is older.
 
 ## Before you downgrade
 
