@@ -158,9 +158,11 @@ func TestReasonsMatchDesign(t *testing.T) {
 		"runner_at_capacity": 422, "runner_limits_unset": 422, "runner_recording_off": 422, "recording_store_off": 422,
 		// runner_trust_changed is a revive whose runner's trust class is no longer the run's (K1 §2).
 		"runner_trust_changed": 409,
+		// runner_trust_required is a new local run refused on a personal-trust runner while the organisation requires a managed device.
+		"runner_trust_required": 422,
 	}
 	if got := Reasons(); len(got) != len(want) {
-		t.Fatalf("%d reasons, design §12.3 lists %d plus runner_at_capacity, runner_limits_unset, runner_recording_off, recording_store_off and runner_trust_changed", len(got), len(want)-5)
+		t.Fatalf("%d reasons, the closed set lists %d plus runner_at_capacity, runner_limits_unset, runner_recording_off, recording_store_off, runner_trust_changed and runner_trust_required", len(got), len(want)-6)
 	}
 	for r, status := range want {
 		if r.Status() != status || !r.Valid() {

@@ -77,7 +77,7 @@ var msg = map[string]*regexp.Regexp{
 	"preparing":  regexp.MustCompile(`This Mac is preparing macOS, which uses one of its 2 VM slots`),
 	"posture":    regexp.MustCompile("has no MDM posture file saying it is managed"),
 	"managedOp":  regexp.MustCompile("is not marked as company-managed. Mark it with `wardyn runner trust"),
-	"managedMem": regexp.MustCompile(`is not marked as company-managed. Ask a security operator to mark it`),
+	"managedMem": regexp.MustCompile(`is not marked as company-managed. Ask a security admin to mark it as a managed device`),
 	// signInsOff is the 403 at desktop open and at the sign-in pause (internal/api), never placement's.
 	"signInsOff": regexp.MustCompile(`Your admin doesn't allow sign-ins in this desktop while this agent runs`),
 	// signInsOffMac is the same 403 at a macOS desktop's open, which says a macOS desktop cannot block them.

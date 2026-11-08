@@ -226,7 +226,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 
   it("RunnerSettings: default-off admission block mirrors the Go wire shape", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "RunnerSettings");
-    expect(goTags).toEqual(["enabled"]);
+    expect(goTags).toEqual(["enabled", "require_managed_device"]);
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "RunnerSettings");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });

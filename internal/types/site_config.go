@@ -363,4 +363,9 @@ type WithheldScmHost struct {
 // RunnerSettings controls admission to runner routes. Nil and false both deny.
 type RunnerSettings struct {
 	Enabled bool `json:"enabled"`
+	// RequireManagedDevice refuses a new local run on a runner whose trust class is personal, so only a
+	// runner a security operator marked managed_device (or an organisation's cluster runner) takes one.
+	// Default off: an existing install keeps placing on personal runners until an admin turns this on.
+	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
+	RequireManagedDevice bool `json:"require_managed_device,omitempty"`
 }

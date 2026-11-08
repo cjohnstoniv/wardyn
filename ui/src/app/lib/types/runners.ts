@@ -243,9 +243,10 @@ export interface RunnerUpdateRequest {
   limits: RunnerLimits;
 }
 
-/** Go: types.RunnerSettingsRequest. `enabled` is required; the answer is site.ts's RunnerSettings. */
+/** Go: types.RunnerSettingsRequest. At least one field is required; a field left out is left as stored. The answer is site.ts's RunnerSettings. */
 export interface RunnerSettingsRequest {
-  enabled: boolean;
+  enabled?: boolean;
+  require_managed_device?: boolean;
 }
 
 /** `GET /runners?state=`; the default is active. */

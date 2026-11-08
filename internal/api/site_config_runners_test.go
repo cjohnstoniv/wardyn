@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -114,5 +115,27 @@ func TestSiteConfigSDKRoundTripSurvivesRunnersSwitch(t *testing.T) {
 	managed := types.SiteConfig{Runners: &types.RunnerSettings{Enabled: false}, UpstreamProxyURL: "http://proxy.corp:3128"}
 	if _, err := c.PutSiteConfigResult(context.Background(), managed); err != nil || !runnersEnabled(fake.cfg) {
 		t.Fatalf("a managed re-apply failed or moved the switch: %v enabled=%v", err, runnersEnabled(fake.cfg))
+	}
+}
+
+// runners.require_managed_device has its own route like runners.enabled: PUT /site-config accepts the
+// stored value (a captured baseline) and refuses a different one.
+func TestSiteConfigCannotChangeRequireManagedDevice(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		for _, named := range []bool{false, true} {
+			fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true, RequireManagedDevice: stored}}}
+			srv, _ := newSiteConfigHarness(t, fake)
+			body := `{"runners":{"enabled":true,"require_managed_device":` + strconv.FormatBool(named) + `}}`
+			w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+			if named != stored {
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonSiteConfigRunnersViaOwnRoute) || fake.putSeen != nil {
+					t.Fatalf("stored=%v body=%s: a changed require_managed_device was not refused: %d %s", stored, body, w.Code, w.Body.String())
+				}
+				continue
+			}
+			if w.Code != http.StatusOK || fake.putSeen == nil || fake.putSeen.Runners == nil || fake.putSeen.Runners.RequireManagedDevice != stored || !fake.putSeen.Runners.Enabled {
+				t.Fatalf("stored=%v body=%s: the stored value did not round-trip: %d %s", stored, body, w.Code, w.Body.String())
+			}
+		}
 	}
 }
