@@ -12,6 +12,7 @@ import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import { makeApproval } from "../../../../test/factories";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
+import { DATA_OUT_RUN } from "../../wardyn/copy/data-out-run";
 
 const listMock = vi.fn();
 const uploadMock = vi.fn();
@@ -29,6 +30,9 @@ vi.mock("../../../lib/api/desktop-files", () => ({
 vi.mock("../../../lib/api/approvals", () => ({
   approvals: { listApprovals: (...a: unknown[]) => listApprovalsMock(...a) },
 }));
+// The run's recorded policy: its data_out rule is what the panel's lines read.
+const getPolicyMock = vi.fn();
+vi.mock("../../../lib/api/runs", () => ({ runs: { getPolicy: (...a: unknown[]) => getPolicyMock(...a) } }));
 
 import { DesktopFilesPanel, REVIEW_POLL_MS, transferSize } from "./desktop-files-panel";
 
@@ -44,6 +48,8 @@ beforeEach(() => {
   downloadMock.mockReset();
   listApprovalsMock.mockReset();
   listApprovalsMock.mockResolvedValue([]);
+  getPolicyMock.mockReset();
+  getPolicyMock.mockResolvedValue({ run_id: "r1", state: "never", source: { kind: "unknown" }, redacted: false, changes: [] });
 });
 
 afterEach(() => {
@@ -303,5 +309,87 @@ describe("DesktopFilesPanel under review", () => {
     const reads = listApprovalsMock.mock.calls.length;
     await act(() => vi.advanceTimersByTimeAsync(REVIEW_POLL_MS * 3));
     expect(listApprovalsMock.mock.calls.length).toBe(reads);
+  });
+});
+
+// The run's data_out rule on the panel: a line under a refused download, the no-desktop layout, and the
+// refusals the server answers with.
+const recorded = (data_out?: string) => ({
+  run_id: "r1",
+  state: "recorded",
+  source: { kind: "default" },
+  spec: data_out ? { data_out } : {},
+  redacted: false,
+  changes: [],
+});
+
+describe("DesktopFilesPanel on a run that keeps its content in", () => {
+  it("under a blocked download says the run's data_out rule keeps its content in", async () => {
+    getPolicyMock.mockResolvedValue(recorded("blocked"));
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+    expect(await within(panel).findByText(DATA_OUT_RUN.FILES_BLOCKED)).toBeTruthy();
+    expect(within(panel).getByText(C.downloadBlocked)).toBeTruthy();
+  });
+
+  it("draws no such line while the rule is unread, failed, or allowed", async () => {
+    for (const read of [() => new Promise(() => {}), () => Promise.reject(new Error("down")), () => Promise.resolve(recorded())]) {
+      getPolicyMock.mockReset();
+      getPolicyMock.mockImplementation(read);
+      listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+      const { unmount } = render(<DesktopFilesPanel runId="r1" />);
+      const panel = await screen.findByRole("region", { name: C.title });
+      await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+      expect(await within(panel).findByText(C.downloadBlocked)).toBeTruthy();
+      await waitFor(() => expect(getPolicyMock).toHaveBeenCalled());
+      expect(within(panel).queryByText(DATA_OUT_RUN.FILES_BLOCKED)).toBeNull();
+      unmount();
+    }
+  });
+
+  it("with no desktop hides the strip and the To tab, and says only the reviewed way out is left", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: reviewing, files: [{ name: "results.parquet", bytes: 6.3 * 1024 ** 2 }] });
+    render(<DesktopFilesPanel runId="r1" noDesktop />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    expect(within(panel).getByText(DATA_OUT_RUN.FILES_NO_DESKTOP)).toBeTruthy();
+    expect(panel.textContent).toContain(DATA_OUT_RUN.FOLDER_IN_RUN);
+    expect(panel.textContent).not.toContain(C.folderWhere);
+    expect(within(panel).queryByText(C.pasteIn)).toBeNull();
+    expect(within(panel).queryByText(C.copyOut)).toBeNull();
+    expect(within(panel).queryByRole("tab")).toBeNull();
+    expect(within(panel).queryByText(C.drop)).toBeNull();
+    const row = await within(panel).findByTestId("desktop-download");
+    expect(within(row).getByRole("button", { name: C.requestDownload })).toBeTruthy();
+  });
+
+  it("with a desktop keeps the strip, both tabs and the desktop folder words", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: reviewing, files: [] });
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    expect(within(panel).getAllByRole("tab")).toHaveLength(2);
+    expect(panel.textContent).toContain(C.folderWhere);
+    expect(within(panel).queryByText(DATA_OUT_RUN.FILES_NO_DESKTOP)).toBeNull();
+  });
+
+  it("an unreadable rule on load shows its sentence with Try again, which reads again", async () => {
+    const unreadable = "This run's data_out rule could not be read. Try again.";
+    listMock.mockRejectedValueOnce(new HttpError(503, unreadable, "data_out_unreadable"));
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    render(<DesktopFilesPanel runId="r1" />);
+    expect(await screen.findByText(unreadable)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: DATA_OUT_RUN.RETRY }));
+    const panel = await screen.findByRole("region", { name: C.title });
+    expect(within(panel).queryByText(unreadable)).toBeNull();
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a review that cannot move files prints the server's sentence and no Try again", async () => {
+    const unavailable = "This run's machine cannot move files through Wardyn; nothing can leave it while data_out is review.";
+    listMock.mockRejectedValue(new HttpError(409, unavailable, "data_out_review_unavailable"));
+    render(<DesktopFilesPanel runId="r1" noDesktop />);
+    expect(await screen.findByText(unavailable)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: DATA_OUT_RUN.RETRY })).toBeNull();
   });
 });
