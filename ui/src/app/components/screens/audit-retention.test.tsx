@@ -26,7 +26,9 @@ vi.mock("../../lib/api/audit", () => ({
   },
 }));
 vi.mock("../../lib/api/runs", () => ({ runs: { getRun: vi.fn().mockResolvedValue(undefined) } }));
-vi.mock("../../lib/api/health", () => ({ health: { health: () => Promise.resolve({}) } }));
+vi.mock("../../lib/api/health", () => ({
+  health: { health: () => Promise.resolve({}), whoami: () => Promise.resolve(null) },
+}));
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: (...a: unknown[]) => toastError(...a) } }));
 
