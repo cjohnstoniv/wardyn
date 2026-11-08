@@ -153,7 +153,10 @@ func unitModelUsageViews(asked uuid.UUID, units []uuid.UUID, names map[uuid.UUID
 			}
 			return 1
 		}
-		return strings.Compare(a.UnitName, b.UnitName)
+		if c := strings.Compare(a.UnitName, b.UnitName); c != 0 {
+			return c
+		}
+		return strings.Compare(a.UnitID.String(), b.UnitID.String()) // two units may share a name
 	})
 	return out
 }
