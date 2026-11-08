@@ -17,7 +17,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM run now denies `mask.icloud.com`, `mask-h2.icloud.com` and `proxy.safebrowsing.apple` quietly, as it already does for the other Apple background hosts: no approval is raised and each denial is recorded. A run whose policy allows one of them by name keeps it. Allow the host in the run's policy to reach it.
 - A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_deciders`. Without it `GET /governance` fails and a unit's deciders cannot be set.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
+  `governance_unit_deciders` and `governance_envelopes`. Without the first, `GET /governance` fails and a unit's
+  deciders cannot be set; without the second, `GET /governance` fails and an envelope cannot be set. An upgrade from
+  before 0.10.0-rc.14 also needs every grant the 0.10.0-rc.14 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `run_create_keys`, `wall_presets`, `kept_machines`, `workloads`, `workload_bindings`, `workload_run_ends`,
+  `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`,
+  `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`, `governance_restrictions`,
+  `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`,
+  `SELECT, INSERT, UPDATE` on `groundtruth_sensors`, `runner_health`, `launch_preset_version_floor`, `cli_sessions`
+  and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`), and `SELECT, INSERT`
+  on `audit_checkpoints` and `run_model_usage`.
 - Before you downgrade: an older binary ignores a portal's `run_in_under`, so the portal can start runs in any of the person's contexts.
 - A kubectl row with `access: restart` (below) is not understood by an older wardynd or proxy image. After a downgrade an older wardynd still loads the row, because it reads `access` as plain text, but it refuses to attach or save it (`cli.kubectl.access: "restart" is not read or write`). An older proxy image refuses to start on a run config that carries `restart`. Move such rows to `read` or `write` first, and update the proxy image before using `restart`.
 
