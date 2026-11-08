@@ -272,3 +272,25 @@ test.describe("Run output tab", () => {
     expect(calls).toBe(3);
   });
 });
+
+// The server's own sentences (internal/api/data_out.go); the console prints the first and keeps Retry on the second.
+const DATA_OUT_KEEPS = "This run's data_out rule keeps its content in: only a security admin can read its output.";
+const DATA_OUT_UNREADABLE = "This run's data_out rule could not be read. Try again.";
+
+test.describe("Run output tab: data_out", () => {
+  test("a 403 data_out_blocked shows the server's sentence and no Retry", async ({ page }) => {
+    await page.route(OUTPUT_GLOB, (route) => route.fulfill({ status: 403, json: { error: DATA_OUT_KEEPS, reason: "data_out_blocked" } }));
+    await openOutputTab(page);
+    const refusal = page.getByTestId("run-output-refusal");
+    await expect(refusal.getByText(DATA_OUT_KEEPS)).toBeVisible();
+    await expect(page.getByRole("button", { name: STATES.RETRY })).toHaveCount(0);
+  });
+
+  test("a 503 data_out_unreadable keeps Retry", async ({ page }) => {
+    await page.route(OUTPUT_GLOB, (route) => route.fulfill({ status: 503, json: { error: DATA_OUT_UNREADABLE, reason: "data_out_unreadable" } }));
+    await openOutputTab(page);
+    const refusal = page.getByTestId("run-output-refusal");
+    await expect(refusal.getByText(RUN_COCKPIT.loadError)).toBeVisible();
+    await expect(page.getByRole("button", { name: STATES.RETRY })).toBeVisible();
+  });
+});

@@ -60,6 +60,16 @@ export function keptUntilText(iso: string, now: number = Date.now()): string {
   return `${shortDate(iso)} ${shortTime(iso)}`;
 }
 
+/**
+ * The end of a run launched under an elevation, when that end is the elevation's: the cap's own time, for a run
+ * whose own end is absent or no earlier than it. A run whose own end comes first ends there, so it keeps its controls.
+ */
+export function elevationCapAt(run: RunDetail): string | undefined {
+  if (run.lifetime_cap_source !== "elevation" || !run.lifetime_cap_at) return undefined;
+  if (run.ends_at && Date.parse(run.ends_at) < Date.parse(run.lifetime_cap_at)) return undefined;
+  return run.lifetime_cap_at;
+}
+
 const PILL = "h-6 gap-1 rounded-full px-2.5 text-xs font-normal";
 const ITEM = "flex-col items-start gap-0.5";
 const LOCKED = "opacity-70";
@@ -177,10 +187,28 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
     </>
   );
   const wait = run.wait_budget_sec;
+  const cap = elevationCapAt(run);
 
   return (
     <>
-      {run.ends_at ? (
+      {cap ? (
+        canAct ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button data-testid="run-ends-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+                {pill(RL.endsPill(weekdayClock(cap)))}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <Why text={RL.endsElevation(weekdayClock(cap), run.created_by === principal)} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span data-testid="run-ends-pill" className={cn("inline-flex items-center rounded-full border border-border text-muted-foreground", PILL)}>
+            {RL.endsPill(weekdayClock(cap))}
+          </span>
+        )
+      ) : run.ends_at ? (
         canAct ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

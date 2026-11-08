@@ -19,7 +19,7 @@ const MAX_BACKOFF_MS = 30_000;
 // moment after the run reaches STOPPED.
 const SAVING_WINDOW_MS = 60_000;
 
-export type Refusal = "off" | "not_kept" | "expired" | "erased" | "interactive" | "not_captured" | "mask" | "error";
+export type Refusal = "off" | "not_kept" | "expired" | "erased" | "interactive" | "not_captured" | "mask" | "data_out" | "error";
 
 const REFUSALS: Record<string, Refusal> = {
   run_output_off: "off",
@@ -31,12 +31,16 @@ const REFUSALS: Record<string, Refusal> = {
   run_output_interactive: "interactive",
   run_output_not_captured: "not_captured",
   mask_state_unavailable: "mask",
+  // The run's data_out rule keeps its output in. An answer, so it is not read again.
+  data_out_blocked: "data_out",
 };
 
 /** enabled false reads nothing: the Overview pane asks only for the runs it may show output for. */
 export function useRunOutput(runId: string, live: boolean, state: string, endedAt: string | undefined, enabled = true) {
   const [out, setOut] = React.useState<RunOutput | null>(null);
   const [refusal, setRefusal] = React.useState<Refusal | null>(null);
+  // The server's own sentence for a mapped refusal; "" for any other.
+  const [refusalText, setRefusalText] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
   // The `live` the answer was read under: a read from while the run lived is not the ended run's answer.
   const [readLive, setReadLive] = React.useState(live);
@@ -65,6 +69,7 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
         setOut(o);
         setReadLive(live);
         setRefusal(null);
+        setRefusalText("");
         setSaving(false);
         setRetrying(false);
         setLoaded(true);
@@ -82,6 +87,7 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
         setOut(null);
         setReadLive(live);
         setRefusal(r);
+        setRefusalText(e instanceof HttpError && e.reason in REFUSALS ? e.message : "");
         setRetrying(false);
         setLoaded(true);
         // Only an answer around the end of a run is worth another look: not-kept
@@ -106,5 +112,5 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
     setRetrying(true);
     setAttempt((n) => n + 1);
   };
-  return { out, refusal, loaded, readLive, saving, retrying, retry };
+  return { out, refusal, refusalText, loaded, readLive, saving, retrying, retry };
 }
