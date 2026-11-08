@@ -31,10 +31,20 @@
 | `DELETE /governance/memberships/{id}` | when the person keeps another membership in their units |
 | `POST /governance/check`, `POST /governance/dry-run` | a target in their units; the boundary target stays the security tier's |
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
+| `GET /audit`, `GET /audit/export` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows) |
 
 - Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
   - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.
 - A caller with no grant at all is refused the same reason with "this needs a unit admin or a security admin".
+
+## The unit view of audit rows
+
+Unit admins read the audit rows of runs in their subtrees. It is on at upgrade; to keep a person out, remove their grant.
+
+- Rows with no run, such as sign-ins and governance writes, are not served.
+- A row keeps its time, action, actor, outcome and run, and its target on `run.*`, `egress.*` and `approval.*` rows.
+- Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class` and `exit_code`, each a value or a list of values. Personal walls, restriction names, secret names and error text are never served.
+- Their own runs' rows read as any owner's do. A run outside their subtrees answers a member's empty `200`.
 
 ## Four-eyes
 

@@ -17,6 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM run now denies `mask.icloud.com`, `mask-h2.icloud.com` and `proxy.safebrowsing.apple` quietly, as it already does for the other Apple background hosts: no approval is raised and each denial is recorded. A run whose policy allows one of them by name keeps it. Allow the host in the run's policy to reach it.
 - A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
+- Unit admins now read the audit rows of runs in the units they govern, on `GET /audit` and its export, without personal walls, restriction names, secret names or error text. This is on at upgrade. To keep a person out, remove their unit-admin grant.
 
 ### Added
 
@@ -25,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).
 - macOS VM bases now mark Setup Assistant's panes as seen for the agent account, stop the Fn key raising Dictation, turn Spotlight indexing and diagnostics upload off, and kill Terminal and remove its saved state, so a run's first desktop is clean. On by default. Prepare writes them and every tools update writes them again, through a new guest-agent route that takes no input and adds no allowed exec. Rows that fail or cannot be applied are listed in `tools.json` as `base_settings_skipped` and never fail an update. edit-base's finish also cleans Terminal.
 - `wardyn-runnerd doctor` on a macOS VM runner has a `guest-agent` stage: it fails when the guest agent went in signed ad hoc, quoting why each signer failed, and passes when this Mac's cert signed it. `macos-vm status` shows the signer and the signing errors, and the base's `tools.json` records them as `agent_signer` and `agent_sign_errors`, with no paths.
+- A unit admin's `GET /audit` and `GET /audit/export` serve the rows of runs frozen to a unit in their subtrees, through an allow-listed view: the row's envelope, its target for run, egress and approval rows, and listed data keys only. Rows with no run are not served. A new index on `agent_runs.unit_id` serves the read.
 
 ### Changed
 
