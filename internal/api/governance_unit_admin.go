@@ -388,6 +388,9 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 	case govKindUnitAdmin:
 		unit, _, _, keyed := splitMembershipKey(ch.TargetKey)
 		return []uuid.UUID{unit}, true, keyed
+	case govKindUnitDeciders:
+		unit, err := uuid.Parse(ch.TargetKey)
+		return []uuid.UUID{unit}, true, err == nil
 	}
 	return nil, false, false
 }

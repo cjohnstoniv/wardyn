@@ -429,6 +429,7 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 			return types.GovernanceUnit{}, err
 		}
 		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, b, limit)
+		err = s.checkDeciderLockWrite(ctx, q, err, p, all)
 		effective = res
 		if err != nil {
 			return p, err

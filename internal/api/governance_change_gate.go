@@ -209,6 +209,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
 	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
+	govKindUnitDeciders:        {approver: securityApprover, apply: applyUnitDecidersChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
@@ -231,7 +232,7 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 		if profilePayloadSetsHostPath(ch.Payload) {
 			k.approver = operatorApprover
 		}
-	case govKindMembership, govKindUnitAdmin:
+	case govKindMembership, govKindUnitAdmin, govKindUnitDeciders:
 		k.approver = unitChangeApprover(ch)
 	}
 	return k
