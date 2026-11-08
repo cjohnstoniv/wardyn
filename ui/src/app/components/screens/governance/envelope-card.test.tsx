@@ -97,6 +97,16 @@ describe("EnvelopeChip", () => {
     expect(screen.queryByText(ENVELOPE.CHIP_ROOT)).toBeNull();
   });
 
+  it("marks a profile whose parent is unlisted and not a root, when one envelope is served", () => {
+    chip(C, [ENV_A], [C]);
+    expect(screen.getByText(ENVELOPE.CHIP_IN("Platform A"))).toBeInTheDocument();
+  });
+
+  it("draws nothing for such a profile when several envelopes are served, as it cannot say which", () => {
+    const { container } = chip(C, [ENV_A, ENV_D], [C]);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("names a root the list does not hold from the unit names", () => {
     chip(B, [ENV_A], [B, C]);
     expect(screen.getByText(ENVELOPE.CHIP_IN("Platform A"))).toBeInTheDocument();
@@ -335,9 +345,16 @@ describe("a unit admin's read-only card", () => {
     snap([{ ...ENV_A, set_by: "security" }], { profiles: [B, C], ...extra });
   const viewer = { security: false, principal: "uma@example.com" };
 
-  it("draws nothing when no envelope covers a listed profile", () => {
-    renderCard(snap([{ ...ENV_D, set_by: "security" }], { profiles: [B, C, E] }), viewer);
-    expect(screen.queryByText(ENVELOPE.TITLE_UNIT_ADMIN)).toBeNull();
+  // A unit admin granted below an unlisted, envelope-less unit: the server serves the envelope above it (it
+  // lists only envelopes at or above a listed subtree) and the names of the units above, but no parent links.
+  it("lists every envelope the server sent, since the server scopes them to at or above a listed profile", () => {
+    renderCard(
+      snap([{ ...ENV_A, set_by: "security" }], { profiles: [C], unit_names: { a: "Platform A", b: "Platform A / build" } }),
+      viewer,
+    );
+    expect(screen.getByRole("heading", { name: ENVELOPE.TITLE_UNIT_ADMIN })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /plat-a-users/ })).toHaveTextContent("Platform A");
+    for (const s of ENVELOPE.APPLIES("Platform A")) expect(screen.getByText(s)).toBeInTheDocument();
   });
 
   it("draws nothing when the server sent no envelopes", () => {
