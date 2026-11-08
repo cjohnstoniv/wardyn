@@ -48,7 +48,9 @@ export const MEMBER_TOKEN = personToken("e2e-member");
 const SECURITY_ADMIN_TOKEN = personToken("e2e-security-admin");
 const SECURITY_ADMIN_2_TOKEN = personToken("e2e-security-admin-2");
 const OPEN_EGRESS_TOKEN = personToken("e2e-open-egress");
+const UNIT_ADMIN_TOKEN = personToken("e2e-unit-admin");
 export const MEMBER_PRINCIPAL = "e2e-member";
+export const UNIT_ADMIN_PRINCIPAL = "e2e-unit-admin";
 export const OPEN_EGRESS_PRINCIPAL = "e2e-open-egress";
 
 // T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
@@ -527,6 +529,21 @@ async function asRealPerson(page: Page, token: string, principal: string, role: 
 
 export async function asRealMember(page: Page): Promise<void> {
   await asRealPerson(page, MEMBER_TOKEN, MEMBER_PRINCIPAL, "user");
+}
+
+// A role `user` who holds no grant at seed time: a spec makes them a unit admin with grantUnitAdmin first.
+export async function asRealUnitAdmin(page: Page): Promise<void> {
+  await asRealPerson(page, UNIT_ADMIN_TOKEN, UNIT_ADMIN_PRINCIPAL, "user");
+}
+
+// Makes e2e-unit-admin a unit admin of the profile `unitId`, with the admin token. The second-person switch is
+// off on this harness, so the grant applies at once (201) rather than being held.
+export async function grantUnitAdmin(page: Pick<Page, "request">, unitId: string): Promise<void> {
+  const response = await page.request.post(`/api/v1/governance/units/${unitId}/admins`, {
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    data: { subject_type: "user", subject: UNIT_ADMIN_PRINCIPAL },
+  });
+  expect(response.status(), await response.text()).toBe(201);
 }
 
 export async function asRealSecurityAdmin(page: Page): Promise<void> {

@@ -191,12 +191,18 @@ const USER_NAV: NavItem[] = [
   { to: "/account", label: NAV.SETTINGS, icon: Settings, group: "setup" },
 ];
 
-function navItemsForView(view: ConsoleView, superAdmin: boolean, identityResolved: boolean): NavItem[] {
+// What a role `user` with a unit-admin grant gains: the same two screens as ADMIN_NAV's, under one heading.
+const UNIT_ADMIN_NAV: NavItem[] = [
+  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale, group: "limits" },
+  { to: "/admin/audit", label: "Audit", icon: ScrollText, group: "limits" },
+];
+
+function navItemsForView(view: ConsoleView, superAdmin: boolean, identityResolved: boolean, unitAdmin = false): NavItem[] {
   // B1 — `role` and the tiers are fail-open for an unresolved or failed /me,
   // so "not known yet" renders neither nav, rather than a guess, and the
   // banner says why. The fail-open defaults themselves stay (operator-context.tsx).
   if (!identityResolved) return [];
-  if (view === "user") return USER_NAV;
+  if (view === "user") return unitAdmin ? [...USER_NAV, ...UNIT_ADMIN_NAV] : USER_NAV;
   const tier = superAdmin ? "super" : "security";
   return ADMIN_NAV.filter((i) => !i.tier || i.tier === tier);
 }
@@ -298,7 +304,7 @@ function SidebarNav({
   onNavigate?: () => void;
 }) {
   const { access, view, hasSwitch } = useShellView(meta);
-  const items = navItemsForView(view, meta.operator, meta.identityResolved);
+  const items = navItemsForView(view, meta.operator, meta.identityResolved, access === "user-only" && (meta.unitAdminOf?.length ?? 0) > 0);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   // #217 — a sidebar click can navigate away from a dirty form (Settings ➝
@@ -538,6 +544,7 @@ export function AppShell({
       operatorResolved={meta.identityResolved}
       securityOperator={meta.securityOperator}
       userViewSuperAdmin={meta.userViewSuperAdmin}
+      unitAdminOf={meta.unitAdminOf}
       principal={meta.principal}
       identityRevision={meta.identityRevision}
       authGeneration={meta.authGeneration}

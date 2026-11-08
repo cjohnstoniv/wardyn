@@ -365,18 +365,18 @@ cmd_seed() {
   TOKEN="$(cmd_token)"
   log "Seeding deterministic fixtures via API + SQL"
   # Match fixtures.ts's per-person derivation without passing the bearer to psql.
-  local token_hashes member_hash security_hash security2_hash open_egress_hash
+  local token_hashes member_hash security_hash security2_hash open_egress_hash unit_admin_hash
   token_hashes="$(printf '%s' "${TOKEN}" | python3 -c '
 import hashlib, sys
 admin = sys.stdin.read()
-for principal in ("e2e-member", "e2e-security-admin", "e2e-security-admin-2", "e2e-open-egress"):
+for principal in ("e2e-member", "e2e-security-admin", "e2e-security-admin-2", "e2e-open-egress", "e2e-unit-admin"):
     token = "wdn_" + hashlib.sha256(f"{admin}:{principal}".encode()).hexdigest()
     print(hashlib.sha256(token.encode()).hexdigest(), end=" ")
 ')"
-  read -r member_hash security_hash security2_hash open_egress_hash <<< "${token_hashes}"
+  read -r member_hash security_hash security2_hash open_egress_hash unit_admin_hash <<< "${token_hashes}"
   psql_e2e -v ON_ERROR_STOP=1 -v member_hash="${member_hash}" \
     -v security_hash="${security_hash}" -v security2_hash="${security2_hash}" \
-    -v open_egress_hash="${open_egress_hash}" >/dev/null <<'SQL'
+    -v open_egress_hash="${open_egress_hash}" -v unit_admin_hash="${unit_admin_hash}" >/dev/null <<'SQL'
 INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256)
 VALUES
   ('69800000-0000-4000-8000-000000000001', 'e2e-member', 'member@e2e.wardyn.invalid',
@@ -394,7 +394,12 @@ VALUES
   -- narrowed default ceiling that member-demos-sweep.spec.ts relies on.
   ('69800000-0000-4000-8000-000000000004', 'e2e-open-egress', 'open-egress@e2e.wardyn.invalid',
    'user', 'standard', '[]', false, 'e2e open egress member',
-   :'open_egress_hash')
+   :'open_egress_hash'),
+  -- A person a spec makes a unit admin (governance-unit-admin.spec.ts and the governance specs' unit-admin cases);
+  -- e2e-member stays a plain user.
+  ('69800000-0000-4000-8000-000000000005', 'e2e-unit-admin', 'unit-admin@e2e.wardyn.invalid',
+   'user', 'standard', '[]', false, 'e2e unit admin',
+   :'unit_admin_hash')
 ON CONFLICT (id) DO NOTHING;
 SQL
   # The fixture install is ONBOARDED. The suite's specs exercise the console,
