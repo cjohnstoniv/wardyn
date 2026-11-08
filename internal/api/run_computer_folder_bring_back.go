@@ -65,7 +65,7 @@ func (s *Server) handleBringComputerFolderBack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	actorType, principal := actorFromRequest(r)
-	rule, rerr := s.runDataOutRule(r.Context(), id)
+	rule, _, rerr := s.runDataOutRule(r.Context(), id)
 	if rerr != nil {
 		refuseDataOutUnreadable(r.Context(), w, id, rerr)
 		return
