@@ -18,7 +18,7 @@
 import type { RunPolicySpec } from "../../lib/types";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS, type ADOCapabilityInfo } from "../../lib/ado-capabilities";
 import { ADO_ACCESS, adoCapName, adoGroupName } from "../../lib/ado-access-copy";
-import { refusedBy, type OrgCeiling } from "../../lib/ado-ceilings";
+import { adoAllows, refusedBy, type OrgCeiling } from "../../lib/ado-ceilings";
 import { joinOrgs } from "../../lib/ado-pat-display";
 import { Checkbox } from "../ui/checkbox";
 // clsx, not cn: tailwind-merge doesn't know the text-meta/text-body size
@@ -155,7 +155,7 @@ export function ADOCapabilitiesSection({
                     key={info.cap}
                     info={info}
                     checked={chosen.includes(info.cap)}
-                    locked={ceiling !== undefined && !ceiling.includes(info.cap)}
+                    locked={ceiling !== undefined && !adoAllows(ceiling, info.cap)}
                     refusedByOrgs={orgCeilings ? refusedBy(orgCeilings, info.cap) : []}
                     onToggle={(on) => onSpecChange(withADOCapabilities(spec, info.cap, on))}
                   />
