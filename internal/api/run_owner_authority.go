@@ -685,10 +685,11 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 // the claim and before the old proxy is touched: replacing a proxy with one
 // that exits at config load leaves the run no proxy at all.
 func encodeRevivedConfig(ctx context.Context, cfg *proxy.Config) ([]byte, *reviveError) {
-	// data_out is kept by the control plane's doors, never the proxy, and a previous release's proxy refuses the
-	// key; the caller's cfg keeps it for the policy generation the doors read (sidecarPolicy does the same at dispatch).
+	// data_out and recording are kept by the control plane, never the proxy, and a previous release's proxy
+	// refuses both keys; the caller's cfg keeps them for the policy generation the doors read (sidecarPolicy
+	// does the same at dispatch).
 	sidecar := *cfg
-	sidecar.Policy.DataOut = ""
+	sidecar.Policy.DataOut, sidecar.Policy.Recording = "", ""
 	b, err := json.Marshal(&sidecar)
 	if err != nil {
 		return nil, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, loggedMsg(ctx, "encode proxy config", err))
