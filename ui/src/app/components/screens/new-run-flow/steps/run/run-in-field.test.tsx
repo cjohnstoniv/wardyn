@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import type { DefaultPolicyContext } from "../../../../../lib/api/policies";
 import type { ElevationOffer, GovernanceRequest, GovernanceRequestList } from "../../../../../lib/types/governance-requests";
 import { NR_RUN_IN } from "../../../../wardyn/copy/new-run/run-in";
+import * as RL from "../../../../wardyn/copy/run-lifetime";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { weekdayClock } from "../../../run-detail/run-ends-row";
 import type { DraftAction } from "../../draft/draft-reducer";
@@ -80,6 +81,17 @@ describe("Run in field: states", () => {
     expect(trigger()).not.toHaveTextContent("(home)");
     expect(screen.getByText(NR_RUN_IN.CHIP_ELEVATED)).toBeInTheDocument();
     expect(screen.queryByText(NR_RUN_IN.HINT)).toBeNull();
+  });
+
+  it("says the run ends when the elevation ends, under an elevated pick only", () => {
+    setup({ runIn: "u-pay" });
+    expect(screen.getByText(RL.endsElevation(weekdayClock(ENDS)))).toBeInTheDocument();
+    cleanup();
+    setup({ runIn: "u-data" });
+    expect(screen.queryByText(/This run ends when/)).toBeNull();
+    cleanup();
+    setup();
+    expect(screen.queryByText(/This run ends when/)).toBeNull();
   });
 
   it("hides the hint once any unit but the home unit is picked", () => {

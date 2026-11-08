@@ -15,6 +15,7 @@ import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_RUN_IN } from "../src/app/components/wardyn/copy/new-run/run-in";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
+import * as RL from "../src/app/components/wardyn/copy/run-lifetime";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
@@ -146,13 +147,16 @@ test.describe("New Run, Run in", () => {
     await expect(page.getByRole("option", { name: /^Platform/ }).getByText(NR_RUN_IN.CHIP_HOME)).toBeVisible();
   });
 
-  test("an elevated unit picked shows the Elevated chip, and the pool line names it", async ({ page }) => {
+  test("an elevated unit picked says the run ends with the elevation, and the pool line names it", async ({ page }) => {
     const seen = await stub(page, world());
     await openRunStep(page);
     await pick(page, /^Payments/);
     await expect(trigger(page)).toHaveText(/^Payments/);
     await expect(page.getByText(NR_RUN_IN.CHIP_ELEVATED, { exact: true })).toBeVisible();
     await expect(page.getByText(NR_RUN_IN.HINT)).toHaveCount(0);
+    // The sentence is the run page's own, with the end's weekday and clock left open.
+    const ends = RL.endsElevation("@@").split("@@").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    await expect(page.getByText(new RegExp(`^${ends[0]}.+${ends[1]}$`))).toBeVisible();
     await expect(page.getByText(NR_RUN.LIMITS_NOTE("Payments"))).toBeVisible();
     const asked = page.waitForRequest((r) => r.url().endsWith("/runs/preflight") && (r.postDataJSON() as { run_in?: string }).run_in === "u-pay");
     await toReview(page);
