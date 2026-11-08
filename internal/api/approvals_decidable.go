@@ -151,6 +151,9 @@ func (s *Server) projectDecidable(r *http.Request, rows []types.ApprovalRequest)
 		may := ap.Kind != types.ApprovalCredentialReauth && s.decidableKindAndOwner(r, ap, run)
 		rows[i].Decidable = &may
 		rows[i].Deciders = v.deciderList()
+		if v.rule != nil {
+			rows[i].MaxScope, rows[i].SecondHuman = v.rule.MaxScope, v.rule.SecondHuman
+		}
 	}
 }
 

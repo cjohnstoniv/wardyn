@@ -118,7 +118,7 @@ func routeFamilies() map[string][]string {
 	return map[string][]string{
 		"runs":        {"CreateRun", "CreateRunWith", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "GetRunAllowedModels", "GetRunWallPreset", "RunContainment", "RecordRunNode", "OpenMacWindow", "GetMacWindow", "GetRunMachine"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
-		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
+		"approvals":   {"ListApprovals", "ListApprovalsPage", "ListApprovalsDecidable", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace", "SetWorkspaceOwningUnit"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},

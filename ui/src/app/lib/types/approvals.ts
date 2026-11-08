@@ -96,6 +96,18 @@ export interface ApprovalRequest {
   // deciders: who may decide this PENDING row under the unit deciders rule that governs it (owner, unit_admins,
   // group:<name>, then security). Absent when no rule governs the row.
   deciders?: string[];
+  // max_scope, second_human: that rule's own cap on how far one decision reaches and whether a second person must
+  // decide, beside deciders on the same PENDING rows. Absent when no rule governs the row or the rule sets neither.
+  max_scope?: ApprovalScope;
+  second_human?: boolean;
+  // requested_by: the run's creator, on a PENDING row served to a decider who is not that creator
+  // (GET /approvals?decidable_by=me). Absent on the creator's own row.
+  requested_by?: string;
+  // decision_basis: how a DECIDED row was decided under the unit deciders rule that governed it (owner,
+  // unit_admin:<unit id>, group:<name>, security, policy or admin_token), and decision_rule_unit the unit id holding
+  // that rule. Absent when no rule governed the decision, and on rows decided by an older server.
+  decision_basis?: string;
+  decision_rule_unit?: string;
 }
 
 // canDecideApproval mirrors the ROLE and KIND checks of internal/api/approvals.go's decide(): an

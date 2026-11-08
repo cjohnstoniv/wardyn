@@ -509,6 +509,11 @@ type ApprovalRequest struct {
 	DecisionScope ApprovalScope `json:"decision_scope,omitempty"`
 	// DecisionExpiresAt is set only when DecisionScope is until — a different clock than the EXPIRED-state sweeper, which ages out stale PENDING requests.
 	DecisionExpiresAt *time.Time `json:"decision_expires_at,omitempty"`
+	// DecisionBasis is how a DECIDED row was decided under the unit deciders rule that governed it (owner,
+	// unit_admin:<unit>, group:<name>, security, policy or admin_token), and DecisionRuleUnit is the unit that
+	// holds that rule. Both are stored with the decision and empty when no rule governed it.
+	DecisionBasis    string     `json:"decision_basis,omitempty"`
+	DecisionRuleUnit *uuid.UUID `json:"decision_rule_unit,omitempty"`
 	// ExpiresAt is when a PENDING request stops waiting: min(requested_at+WaitBudgetSec, EndsAt); computed on read, never stored.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
@@ -520,6 +525,13 @@ type ApprovalRequest struct {
 	// unit_admins, group:<name>, then security), projected at response time and never stored. Nil when no rule
 	// governs the row.
 	Deciders []string `json:"deciders,omitempty"`
+	// MaxScope and SecondHuman are that rule's own max_scope and second_human, projected beside Deciders and
+	// never stored. A deployment's four-eyes switch can require a second person where the rule does not.
+	MaxScope    ApprovalScope `json:"max_scope,omitempty"`
+	SecondHuman bool          `json:"second_human,omitempty"`
+	// RequestedBy is the run's creator, projected at response time and never stored, on a PENDING row served to
+	// a decider who is not that creator (GET /approvals?decidable_by=me). Absent on the creator's own row.
+	RequestedBy string `json:"requested_by,omitempty"`
 	// CallText is the exact text of an MCP call row's arguments and extra params (MCPCallText), projected at
 	// response time and never stored. The console and the CLI show and copy it as it is, never through a JSON
 	// number. Nil on every other row.

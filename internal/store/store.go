@@ -792,13 +792,18 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 	}
 	const q = `
 		UPDATE approvals
-		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
+		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6,
+		    decision_basis=NULLIF($8, ''), decision_rule_unit=$9
 		WHERE id=$7 AND state='PENDING'
 		  AND (($1 IN ('EXPIRED', 'CANCELLED') AND $3 = 'system') OR COALESCE(` + approvalExpiresAtSQL + ` > $2, true))
 		RETURNING ` + approvalCols
+	var ruleUnit *uuid.UUID
+	if decision.Rule != nil {
+		ruleUnit = &decision.Rule.Unit
+	}
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason,
-		string(decision.Scope), decision.ExpiresAt, id,
+		string(decision.Scope), decision.ExpiresAt, id, decision.Basis, ruleUnit,
 	))
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "not PENDING or past its expires_at" from "doesn't exist" by checking existence.
@@ -819,7 +824,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 // scanApproval's order. Same shape as agent_runs: the read list adds the
 // columns a raise does not set (see CreateApproval).
 const approvalInsertCols = `id, run_id, grant_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason`
-const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at, takeover_holder, handed_back_at`
+const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at, takeover_holder, handed_back_at, COALESCE(decision_basis, ''), decision_rule_unit`
 
 // approvalExpiresAtSQL computes a request's expiry from its run's CURRENT end
 // and wait: min(requested_at + wait_budget_sec, ends_at); NULL when the run has
@@ -839,7 +844,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	err := row.Scan(
 		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
 		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt, &a.ExpiresAt,
-		&a.LastRejoinedAt, &a.TakeoverHolder, &a.HandedBackAt,
+		&a.LastRejoinedAt, &a.TakeoverHolder, &a.HandedBackAt, &a.DecisionBasis, &a.DecisionRuleUnit,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ApprovalRequest{}, ErrNotFound
