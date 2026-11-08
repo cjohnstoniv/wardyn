@@ -83,3 +83,44 @@ func TestHandlerAuthorizerWroteAndAllowedServesNoCast(t *testing.T) {
 		t.Errorf("body %q lost the authorizer's refusal", body)
 	}
 }
+
+// An authorizer's refusal reaches the client under a non-HTML type with nosniff, whatever its body holds or the
+// type it set: a JSON refusal stays JSON, anything else is plain text.
+func TestHandlerRefusalIsNeverHTML(t *testing.T) {
+	for _, tc := range []struct{ name, setType, want string }{
+		{"plain", "", "text/plain; charset=utf-8"},
+		{"html", "text/html; charset=utf-8", "text/plain; charset=utf-8"},
+		{"json", "application/json", "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := recording.NewFSStore(t.TempDir())
+			if err := store.SaveCast(context.Background(), refusalRun, strings.NewReader(refusalCast)); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(newTestRouterWithAuth(store, func(w http.ResponseWriter, _ *http.Request, _ string) bool {
+				if tc.setType != "" {
+					w.Header().Set("Content-Type", tc.setType)
+				}
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, "<script>alert(1)</script>")
+				return false
+			}))
+			defer srv.Close()
+			resp, err := http.Get(srv.URL + "/api/v1/runs/" + refusalRun + "/recording/" + refusalRun)
+			if err != nil {
+				t.Fatalf("GET: %v", err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "<script>") {
+				t.Fatalf("got %d %q, want the authorizer's 403 body", resp.StatusCode, body)
+			}
+			if got := resp.Header.Get("Content-Type"); got != tc.want {
+				t.Errorf("Content-Type = %q, want %q", got, tc.want)
+			}
+			if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+		})
+	}
+}
