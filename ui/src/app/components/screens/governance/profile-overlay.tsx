@@ -25,6 +25,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
 import { SCHEDULE_DOOR } from "../../wardyn/copy/schedule-door";
+import { DATA_OUT, type DataOutLevel } from "../../wardyn/copy/data-out";
 import { DENY_LISTS } from "../../wardyn/copy/deny-lists";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
@@ -137,7 +138,7 @@ export function BasePicker({
 
 // ---- overlay rows ---------------------------------------------------------
 
-type Kind = "list" | "number" | "false" | "true" | "barrier";
+type Kind = "list" | "number" | "false" | "true" | "barrier" | "level";
 type Field = { key: string; kind: Kind; label: string; mono: boolean; hint?: string };
 
 const ceilingField = (key: string, kind: Kind): Field => ({ key, kind, label: key, mono: true });
@@ -152,6 +153,7 @@ export const CEILING_FIELDS: Field[] = [
   ceilingField("min_confinement_class", "barrier"),
   ceilingField("allow_all_egress", "false"),
   ceilingField("git_push_any_branch", "false"),
+  { ...ceilingField("data_out", "level"), hint: DATA_OUT.CEILING_HINT },
   ceilingField("auto_stop_after_sec", "number"),
 ];
 
@@ -220,6 +222,7 @@ const onOff = (v: unknown) => (v ? "On" : "Off");
 function shown(kind: Kind, v: unknown): string {
   if (kind === "list") return Array.isArray(v) && v.length > 0 ? v.join(", ") : GOV.LIMITS_NONE;
   if (kind === "number") return typeof v === "number" && v > 0 ? String(v) : GOV.LIMITS_NONE;
+  if (kind === "level") return DATA_OUT.label(typeof v === "string" ? v : undefined);
   if (kind === "barrier") return typeof v === "string" && v in CC_META ? CC_META[v as ConfinementClass].label : GOV.LIMITS_NONE;
   return onOff(v);
 }
@@ -240,6 +243,8 @@ function seed(f: Field, inherited: unknown): unknown {
       return typeof inherited === "number" && inherited > 0 ? inherited : 1;
     case "barrier":
       return typeof inherited === "string" ? inherited : "CC1";
+    case "level":
+      return typeof inherited === "string" ? inherited : "allowed";
     default:
       return Array.isArray(inherited) && inherited.length > 0 ? inherited : f.key === "allowed_methods" ? ["GET"] : [];
   }
@@ -331,6 +336,18 @@ function OverlayValue({
         value={typeof value === "number" ? value : ""}
         onChange={(e) => onChange(Math.max(0, Math.trunc(Number(e.target.value)) || 0))}
       />
+    );
+  }
+  if (field.kind === "level") {
+    return (
+      <div className="mt-2">
+        <Segmented
+          value={(typeof value === "string" ? value : "allowed") as DataOutLevel}
+          disabled={disabled}
+          onChange={onChange}
+          options={DATA_OUT.LEVELS.map((o) => ({ value: o.value, label: o.label }))}
+        />
+      </div>
     );
   }
   if (field.kind === "barrier") {

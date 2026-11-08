@@ -34,6 +34,8 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
+import { DataOutCard } from "./data-out-card";
+import type { DataOutLevel } from "../../wardyn/copy/data-out";
 import { DesktopGroupCard, desktopLocksNow, desktopNow } from "./desktop-group-card";
 
 const CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
@@ -44,6 +46,7 @@ interface Draft {
   floor: ConfinementClass | "";
   // Absent: the boundary names no desktop, so it bounds none of its directions.
   desktop?: DesktopControls;
+  data_out?: DataOutLevel;
   // The boundary's locked_knobs: the Desktop card edits its desktop ones, and the rest are kept.
   locks: string[];
 }
@@ -59,6 +62,7 @@ const draftFrom = (b: BoundaryWrite): Draft => ({
   blocked: (b.spec.denied_domains ?? []).join("\n"),
   floor: b.spec.min_confinement_class ?? "",
   desktop: b.spec.desktop,
+  data_out: b.spec.data_out,
   locks: b.locked_knobs ?? [],
 });
 
@@ -75,6 +79,7 @@ const bodyFrom = (d: Draft, stored: BoundaryWrite): BoundaryWrite => {
       denied_domains: blocked.length > 0 ? blocked : undefined,
       min_confinement_class: d.floor || undefined,
       desktop: d.desktop,
+      data_out: d.data_out,
     },
     limits: stored.limits,
     ...(stored.contact ? { contact: stored.contact } : {}),
@@ -313,6 +318,7 @@ export function BoundaryScreen() {
                 onChange={(desktop) => edit({ desktop })}
                 onLocksChange={(locks) => edit({ locks })}
               />
+              <DataOutCard value={draft.data_out} locks={draft.locks} disabled={disabled} onChange={(data_out) => edit({ data_out })} onLocksChange={(locks) => edit({ locks })} />
               <p className="text-xs text-muted-foreground">
                 {BOUNDARY.HARD_FOOT}
                 <br />
