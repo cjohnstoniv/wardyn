@@ -207,6 +207,9 @@ func (s *Server) serveReviewedDownload(w http.ResponseWriter, r *http.Request, r
 		writeErrorReason(w, http.StatusNotFound, reasonDesktopTransferNotFound, "no file of that name in "+desktopTransferFolder)
 		return
 	case err != nil || code != 0:
+		if s.refuseReviewUnavailable(w, r, run, err) {
+			return
+		}
 		s.auditDesktopTransfer(r, run, "download", "failure", n, "")
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, fmt.Sprintf("could not read the file in the desktop (exit %d)", code))
 		return

@@ -717,7 +717,13 @@ func wallsCapList[C ~string](caps []C) string {
 // policy that names a list met the walls at create (personalWallsRunStep).
 func (s *Server) wallsADOCapabilities(ctx context.Context, run types.AgentRun, caps []adoscope.Capability) ([]adoscope.Capability, *wallsCapabilityRefusal) {
 	return wallsCapabilityMeet(ctx, s, run, "azure_devops_capabilities", caps,
-		func(w types.PersonalWallsSpec) *[]adoscope.Capability { return w.AzureDevOpsCapabilities })
+		func(w types.PersonalWallsSpec) *[]adoscope.Capability {
+			if w.AzureDevOpsCapabilities == nil {
+				return nil
+			}
+			expanded := adoscope.ExpandPR(*w.AzureDevOpsCapabilities)
+			return &expanded
+		})
 }
 
 // wallsGitHubCLICapabilities narrows the GitHub CLI's capabilities, the attached rows' default after
@@ -725,7 +731,13 @@ func (s *Server) wallsADOCapabilities(ctx context.Context, run types.AgentRun, c
 // meet them on every run.
 func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.AgentRun, caps []ghscope.Capability) ([]ghscope.Capability, *wallsCapabilityRefusal) {
 	return wallsCapabilityMeet(ctx, s, run, "github_capabilities", caps,
-		func(w types.PersonalWallsSpec) *[]ghscope.Capability { return w.GitHubCapabilities })
+		func(w types.PersonalWallsSpec) *[]ghscope.Capability {
+			if w.GitHubCapabilities == nil {
+				return nil
+			}
+			expanded := ghscope.ExpandPR(*w.GitHubCapabilities)
+			return &expanded
+		})
 }
 
 // wallsBeyondMeet applies to met what the meet alone would place wrongly; before is the policy the meet

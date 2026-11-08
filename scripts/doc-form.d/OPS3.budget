@@ -1,3 +1,4 @@
+# governance-writes.md 4280 measured at data-out + w4a: both sides' additions together.
 # governance-writes.md 4212 measured at the rc.17 w4a merge of lane/017-context-pins: both sides' additions together.
 # governance-writes.md 4172 measured at the rc.17 w4a merge of lane/017-restriction-knobs: both sides' additions together.
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. The multi-user split (#1519) moved the
@@ -132,7 +133,8 @@ docs/operations/ownership-and-offboarding.md=2424 share=35 # -4 net, measured: s
 # docs/operations/governance-writes.md 3934 adds 13 over 3921, measured at the rc.16 w3 batch A train: the merged lanes' additions together.
 # docs/operations/governance-writes.md 3951 adds 17 over 3934, measured at the rc.16 w3 batch B train: the merged lanes' additions together.
 # docs/operations/governance-writes.md 3974 adds 23 over 3951, measured: a held change to a unit itself is decided from above it.
-docs/operations/governance-writes.md=4212 share=35 # 3921 measured (+168: the change note, the approver filter and the webhook recipe); earlier: +8 (rc.14, measured 3753: the MCP call beside the Azure DevOps request); 3745 measured (restore matches memberships per unit); 3686 before; one exemption list instead of two, break-glass and single-human lists stated once, export and restore moved in from integrations.md (-5)
+# docs/operations/governance-writes.md 4213 adds 1 over 4212, measured: `data_out`: data_out in the restriction knob list.
+docs/operations/governance-writes.md=4280 share=35 # 3921 measured (+168: the change note, the approver filter and the webhook recipe); earlier: +8 (rc.14, measured 3753: the MCP call beside the Azure DevOps request); 3745 measured (restore matches memberships per unit); 3686 before; one exemption list instead of two, break-glass and single-human lists stated once, export and restore moved in from integrations.md (-5)
 # docs/operations/governance-writes.md 4113 adds 162 over 3951, measured: the knobs a restriction can carry, the open-egress rule, and keeping the strictest floor.
 # docs/operations/governance-writes.md 4149 adds 36 over 4113, measured: a restriction binds a run that is already running.
 # docs/operations/governance-writes.md 3991 adds 40 over 3951, measured: the strict workspace pin and the component unit pin.
@@ -248,3 +250,4 @@ docs/operations/denials.md=5573 share=35 # 5500 measured (+60: the not_a_decider
 # docs/operations/admin-only-writes.md 3495 adds 51 over 3444, measured: the two security-tier rows for GET and PUT /governance/credential-delivery (the tier table covered neither).
 # docs/operations/three-roles.md 4578 adds 360 over 4218, measured: the baseline the rubric grades against (built-in set, the operator's baseline hosts) and the profile-write posture advisory.
 # docs/operations/three-roles.md 4630 adds 52 over 4578, measured: the graded Bedrock host is its base URL's host when set, and the advisory's secrets reach counts every launchable harness.
+# docs/operations/governance-writes.md 4221 = 4212 + 9, measured: a restriction carries capability caps.

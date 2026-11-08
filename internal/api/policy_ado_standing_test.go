@@ -96,6 +96,7 @@ func adoStandingLaunch(t *testing.T, c adoStandingCase, defaults, ceiling []ados
 // assertStanding checks the REST gate and every grant snapshot hold exactly want.
 func assertStanding(t *testing.T, f *adoCapFixture, lane adoEntraLane, ok bool, want []adoscope.Capability) {
 	t.Helper()
+	want = adoscope.ExpandPR(want) // a new run records pr's parts, never pr
 	if !ok || lane.gate == nil {
 		t.Fatalf("dispatch refused (ok=%v)", ok)
 	}
@@ -136,7 +137,7 @@ func TestADOStanding_MemberStandsOnlyWhatAnAdminGranted(t *testing.T) {
 		t.Run(source+"/governance list grants PR", func(t *testing.T) {
 			f, lane, ok := adoStandingLaunch(t, adoStandingCase{source: source, picked: both, governance: both}, []adoscope.Capability{r}, both)
 			assertStanding(t, f, lane, ok, both)
-			if got := granted(t, f.ask(t, pr, types.FirstUseAlwaysDeny, uuid.Nil, prPath)); !slices.Contains(got, string(pr)) {
+			if got := granted(t, f.ask(t, pr, types.FirstUseAlwaysDeny, uuid.Nil, prPath)); !adoscope.HasName(got, pr) {
 				t.Errorf("granted %v, want PR standing", got)
 			}
 		})

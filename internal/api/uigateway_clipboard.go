@@ -29,18 +29,19 @@ var errNoPolicyEnvelope = errors.New("the run has no recorded policy envelope")
 const desktopRulesUnreadableMsg = "This run's desktop rules could not be read. Try again."
 
 // runDesktopPolicy is one read of the run's run.policy.resolve envelope (effectiveUIApps' source):
-// its UI apps and its effective desktop rules, from the same snapshot. A failed read, or a run with
-// no envelope, is an error and never the defaults, which allow paste in and upload where the run's
-// rules may block them. The defaults are only for an envelope that has no desktop block.
-func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types.UIApp, types.DesktopControls, error) {
+// its UI apps, its effective desktop rules under its data_out rule (types.WithDataOut), and that rule, all
+// from the same snapshot. A failed read, or a run with no envelope, is an error and never the defaults, which
+// allow paste in and upload where the run's rules may block them. The defaults are only for an envelope that
+// has no desktop block.
+func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types.UIApp, types.DesktopControls, types.TransferRule, error) {
 	envelope, _, ok, err := s.runEffectivePolicy(ctx, runID)
 	if err != nil {
-		return nil, types.DesktopControls{}, err
+		return nil, types.DesktopControls{}, "", err
 	}
 	if !ok {
-		return nil, types.DesktopControls{}, errNoPolicyEnvelope
+		return nil, types.DesktopControls{}, "", errNoPolicyEnvelope
 	}
-	return envelope.UIApps, envelope.Desktop.Effective(), nil
+	return envelope.UIApps, types.WithDataOut(envelope.Desktop, envelope.DataOut), envelope.DataOut.DataOut(), nil
 }
 
 // uiDesktopApp is whether app is a desktop the run's desktop rules govern: the noVNC image's
@@ -64,7 +65,7 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 		return nil // ReverseProxy refuses a 101 without a writable body itself
 	}
 	ctx := resp.Request.Context()
-	_, d, err := s.runDesktopPolicy(ctx, sess.Run)
+	_, d, _, err := s.runDesktopPolicy(ctx, sess.Run)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: desktop rules unreadable; the desktop socket is refused", "run_id", sess.Run, "err", err)
 		return uiFail(ctx, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)

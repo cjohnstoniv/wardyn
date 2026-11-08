@@ -39,6 +39,22 @@ const (
 	// (run_deny_lists.go); a hard wall, operators included.
 	reasonComponentDenied     = "component_denied"
 	reasonModelProviderDenied = "model_provider_denied"
+	// The source-control capability cap (vcs_capability_cap.go), set by the boundary in hard_limits or a
+	// restriction: reasonADOCapabilitiesCapped refuses a dispatch whose cap leaves the run's Azure DevOps
+	// lane nothing, or a policy list past it; reasonGitHubCapabilitiesCapped refuses a launch whose cap
+	// leaves the GitHub CLI nothing; reasonCapabilityCapped refuses an Azure DevOps request or resolve for a
+	// capability the cap leaves out.
+	reasonADOCapabilitiesCapped    = "ado_capabilities_capped"
+	reasonGitHubCapabilitiesCapped = "github_capabilities_capped"
+	reasonCapabilityCapped         = "capability_capped"
+)
+
+// The data_out reasons (data_out.go).
+const (
+	reasonDataOutBlocked           = "data_out_blocked"            // the run's data_out rule keeps content in on this path
+	reasonDataOutUnreadable        = "data_out_unreadable"         // the run's data_out rule could not be read; the path is refused
+	reasonDataOutReviewUnavailable = "data_out_review_unavailable" // review needs a machine that can move files through Wardyn
+	reasonComputerFolderDataOut    = "computer_folder_data_out"    // a computer folder may only go in under the run's data_out rule
 )
 
 // reasonDecidersUnreadable: the unit deciders rules, or the unit tree they are walked on, could not be read, so a

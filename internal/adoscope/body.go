@@ -6,6 +6,7 @@ package adoscope
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -235,39 +236,113 @@ func packageBatchWrite(req Request) (Verdict, error) {
 	return Verdict{Capability: c}, nil
 }
 
-// pullRequestWrite classifies a pull-request write, promoting it to
-// CapPolicyBypass when the body asks to complete the PR through the branch
-// policy — Azure DevOps takes the same vso.code_write scope either way, so
-// the body is the only place the difference exists. sub is the segment after
-// the PR id (reviewers, properties, attachments, …): those bodies are often an
-// array or raw bytes, not the PR object, so one this struct cannot read is
-// still a pull-request write.
-func pullRequestWrite(method string, req Request, sub string) (Verdict, error) {
-	if method == http.MethodDelete {
-		return Verdict{Capability: CapPR}, nil
+// pullRequestWrite classifies a pull-request write into pr_create, pr_vote or pr_complete, promoting
+// it to CapPolicyBypass when the body asks to complete the PR through the branch policy. Azure DevOps
+// takes the same vso.code_write scope for all of them, so the route and the body are the only places
+// the difference exists. sub is the segment after the PR id (reviewers, threads, labels, …) and
+// subNext2 the segment two after it (statuses in iterations/{n}/statuses).
+//
+// pr_vote is anything a branch policy can count as a person's review: a write under reviewers, a status, a
+// thread resolved, and a sub this catalogue does not list (fail-closed).
+func pullRequestWrite(method string, req Request, sub, subNext2 string) (Verdict, error) {
+	switch {
+	case sub == "reviewers", sub == "statuses", sub == "iterations" && subNext2 == "statuses":
+		return Verdict{Capability: CapPRVote}, nil
+	case sub == "threads" && (method == http.MethodPatch || method == http.MethodPut):
+		return threadWrite(req)
+	case sub == "threads", slices.Contains(pullRequestCreateSubs, sub):
+		return Verdict{Capability: CapPRCreate}, nil
+	case sub != "":
+		return Verdict{Capability: CapPRVote}, nil
+	case method == http.MethodDelete:
+		return Verdict{Capability: CapPRCreate}, nil
 	}
 	body, err := peekBody(req)
 	if err != nil {
 		return Verdict{}, err
 	}
 	if len(body) == 0 {
-		return Verdict{Capability: CapPR}, nil
+		return Verdict{Capability: CapPRCreate}, nil
 	}
 	var pr struct {
+		Status            json.RawMessage `json:"status"`
+		AutoCompleteSetBy json.RawMessage `json:"autoCompleteSetBy"`
 		CompletionOptions *struct {
 			BypassPolicy *bool `json:"bypassPolicy"`
 		} `json:"completionOptions"`
+		Reviewers []struct {
+			Vote *int `json:"vote"`
+		} `json:"reviewers"`
 	}
 	if err := decodeUnique(body, &pr); err != nil {
-		if sub != "" {
-			return Verdict{Capability: CapPR}, nil
-		}
 		return Verdict{}, err
 	}
-	if pr.CompletionOptions != nil && pr.CompletionOptions.BypassPolicy != nil && *pr.CompletionOptions.BypassPolicy {
-		return Verdict{Capability: CapPolicyBypass}, nil
+	// The server's enum parser ORs a comma-joined list (active,abandoned is completed), so a status
+	// completes unless it is exactly one that does not.
+	keeps := len(pr.Status) == 0 || string(pr.Status) == "null" ||
+		enumIs(pr.Status, "notSet", 0) || enumIs(pr.Status, "active", 1) || enumIs(pr.Status, "abandoned", 2)
+	completes := !keeps || (len(pr.AutoCompleteSetBy) > 0 && string(pr.AutoCompleteSetBy) != "null") ||
+		pr.CompletionOptions != nil
+	votes := false
+	for _, r := range pr.Reviewers {
+		votes = votes || (r.Vote != nil && *r.Vote != 0)
 	}
-	return Verdict{Capability: CapPR}, nil
+	switch {
+	case completes && votes:
+		// A bypass is a completion too, so a bypass that votes is refused here as well.
+		return Verdict{}, fmt.Errorf("adoscope: a pull-request body that both completes and votes is two requests")
+	case pr.CompletionOptions != nil && pr.CompletionOptions.BypassPolicy != nil && *pr.CompletionOptions.BypassPolicy:
+		return Verdict{Capability: CapPolicyBypass}, nil
+	case completes:
+		return Verdict{Capability: CapPRComplete}, nil
+	case votes:
+		return Verdict{Capability: CapPRVote}, nil
+	}
+	return Verdict{Capability: CapPRCreate}, nil
+}
+
+// pullRequestCreateSubs are the subs under a pull request that are pr_create whatever their body:
+// none can count as a person's review. iterations is here for every iteration route but
+// iterations/{n}/statuses, which pullRequestWrite has already made pr_vote.
+var pullRequestCreateSubs = []string{"labels", "workitems", "properties", "attachments", "conflicts", "share", "iterations"}
+
+// threadWrite is a thread update: resolving it (any status but active) is pr_vote, since a branch
+// policy can require every comment resolved; editing it is pr_create. A body this catalogue cannot
+// read is pr_vote. A withheld body is still asked for.
+func threadWrite(req Request) (Verdict, error) {
+	body, err := peekBody(req)
+	if errors.Is(err, ErrNeedsBody) {
+		return Verdict{}, err
+	}
+	if err != nil {
+		return Verdict{Capability: CapPRVote}, nil
+	}
+	if len(body) == 0 {
+		return Verdict{Capability: CapPRCreate}, nil
+	}
+	var thread struct {
+		Status json.RawMessage `json:"status"`
+	}
+	if err := decodeUnique(body, &thread); err != nil || (len(thread.Status) > 0 && !enumIs(thread.Status, "active", 1)) {
+		return Verdict{Capability: CapPRVote}, nil
+	}
+	return Verdict{Capability: CapPRCreate}, nil
+}
+
+// enumIs reports whether raw is the Azure DevOps enum value name (any case) or its number, as a JSON
+// number or a string of digits (the server's enum parser reads both). A list or anything else is not.
+func enumIs(raw json.RawMessage, name string, number float64) bool {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		s = strings.TrimSpace(s)
+		if s != "" && strings.Trim(s, "0123456789") == "" {
+			n, err := strconv.ParseFloat(s, 64)
+			return err == nil && n == number
+		}
+		return strings.EqualFold(s, name)
+	}
+	var n float64
+	return json.Unmarshal(raw, &n) == nil && n == number
 }
 
 // refUpdate is the one field of a ref update this catalogue reads.

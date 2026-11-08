@@ -12,8 +12,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -210,4 +213,25 @@ func revivedStoredConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Con
 	org := *cfg
 	org.Policy = corpus.restoredOn(cfg.Policy)
 	return encodeRevivedConfig(ctx, &org)
+}
+
+// reviveCarryRecordedRules gives the revived policy the rules the stored proxy config leaves off, data_out and
+// recording (sidecarPolicy blanks both: the proxy enforces neither), from the policy the run is recorded
+// under now, so the re-seal and the new generation start from the run's own rules. Without it a revive
+// would keep only what an outer layer imposes. A store that keeps no generations has no new row to carry
+// them into, and a run with no recorded policy keeps what the stored config holds. A recorded policy that
+// cannot be read refuses the revive.
+func (s *Server) reviveCarryRecordedRules(ctx context.Context, runID uuid.UUID, cfg *proxy.Config) *reviveError {
+	if _, ok := s.cfg.Store.(store.RunPolicyGenerations); !ok {
+		return nil
+	}
+	envelope, _, ok, err := s.runEffectivePolicy(ctx, runID)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's recorded policy", err))
+	}
+	if !ok {
+		return nil
+	}
+	cfg.Policy.DataOut, cfg.Policy.Recording = envelope.DataOut, envelope.Recording
+	return nil
 }

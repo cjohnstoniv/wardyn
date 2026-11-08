@@ -48,6 +48,7 @@ type CeilingOverlay struct {
 	HarnessInnerWalls       *HarnessInnerWalls     `json:"harness_inner_walls,omitempty"`
 	Desktop                 *DesktopControls       `json:"desktop,omitempty"`
 	Recording               *RecordingLevel        `json:"recording,omitempty"`
+	DataOut                 *TransferRule          `json:"data_out,omitempty"`
 }
 
 // ResourcesOverlay mirrors ResourceLimits with per-field presence.

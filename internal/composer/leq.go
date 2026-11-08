@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -132,8 +134,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 	if confinementRank(a.MinConfinementClass) < confinementRank(b.MinConfinementClass) ||
 		!notLooser(a.AutoStopAfterSec, b.AutoStopAfterSec) ||
 		(a.GitPushAnyBranch && !b.GitPushAnyBranch) ||
-		!leqCapabilities(capStrings(a.AzureDevOpsCapabilities), capStrings(b.AzureDevOpsCapabilities)) ||
-		!leqCapabilities(capStrings(a.GitHubCapabilities), capStrings(b.GitHubCapabilities)) {
+		!leqCapabilities(capStrings(adoscope.ExpandPR(a.AzureDevOpsCapabilities)), capStrings(adoscope.ExpandPR(b.AzureDevOpsCapabilities))) ||
+		!leqCapabilities(capStrings(ghscope.ExpandPR(a.GitHubCapabilities)), capStrings(ghscope.ExpandPR(b.GitHubCapabilities))) {
 		return false
 	}
 	for _, g := range a.EligibleGrants {
@@ -149,7 +151,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		leqToolRules(a.ToolRules, b.ToolRules) &&
 		leqInnerWalls(a.HarnessInnerWalls, b.HarnessInnerWalls) &&
 		leqDesktop(a.Desktop, b.Desktop) &&
-		a.Recording.Rank() >= b.Recording.Rank()
+		a.Recording.Rank() >= b.Recording.Rank() &&
+		leqDataOut(a.DataOut, b.DataOut)
 }
 
 // leqDesktop holds when no desktop direction of a is looser than b's (allowed < review < blocked,

@@ -358,7 +358,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// deny_interactive too, as a VM's desktop does (uiEnterDesktop, which keeps
 	// its own door); any other declared app is deny_ui_apps' alone.
 	rt := r.WithContext(withTicketActor(r.Context(), ta))
-	if (!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run))) {
+	if ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {

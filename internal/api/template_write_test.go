@@ -38,7 +38,7 @@ func saveBodyWith(scope, group, name, kind, intent string) string {
 // the registry (run-wide network, credential and access-rule parts) and are
 // exactly these.
 func TestTemplatePolicyKeysArePinned(t *testing.T) {
-	want := []string{"allow_all_egress", "allowed_domains", "allowed_methods", "denied_domains", "eligible_grants",
+	want := []string{"allow_all_egress", "allowed_domains", "allowed_methods", "data_out", "denied_domains", "eligible_grants",
 		"first_use_approval", "first_use_hold_seconds", "harness_inner_walls", "llm_inspection", "max_holds", "recording"}
 	got := templatePolicyKeys()
 	slices.Sort(got)

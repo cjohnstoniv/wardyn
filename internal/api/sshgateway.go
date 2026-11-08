@@ -670,6 +670,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	dataOut := s.sshDataOut(connCtx, runID)
 	sshGo(func() { sshProbeConn(connCtx, sconn) })
 
 	for newCh := range chans {
@@ -700,11 +701,15 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", s.cfg.SSHMaxSessionsPerRun))
 				continue
 			}
+			slot.dataOut = dataOut
 			sshGo(func() {
 				defer slot.release()
 				s.handleSSHSessionChannel(connCtx, runID, principal, newCh, slot)
 			})
 		case "direct-tcpip":
+			if s.sshRefuseDataOut(connCtx, runID, principal, newCh, dataOut) {
+				continue
+			}
 			if !s.sshAcquireSession(runID) {
 				s.sshAuditChannelRejected(connCtx, runID, principal, "direct-tcpip", sshCapReasonChannels, s.cfg.SSHMaxSessionsPerRun)
 				_ = newCh.Reject(ssh.ResourceShortage,
@@ -867,9 +872,10 @@ func (s *Server) sshReleaseSync(runID uuid.UUID) { s.sshReleaseCount(s.sshSyncSe
 // one (a shell, exec, sftp), or the separate wardyn-sync one. Touched only from
 // the channel's own goroutine, so it needs no lock.
 type sshChannelSlot struct {
-	s     *Server
-	runID uuid.UUID
-	sync  bool
+	s       *Server
+	runID   uuid.UUID
+	sync    bool
+	dataOut types.TransferRule // the run's data_out rule when the connection opened
 }
 
 // sshOpenSlot admits a new "session" channel. The shared budget first; when it

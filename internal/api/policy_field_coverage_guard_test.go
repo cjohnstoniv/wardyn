@@ -81,6 +81,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "closed effect enum, name charset/length, count cap; a proposal may narrow the ceiling's rules and never widen them"},
 	"Recording": {validated: true, clamped: true,
 		why: "closed levels (validateRecordingLevel), none of them keystrokes; raised to the ceiling's level (clampRecording), since a ceiling's level is a minimum. The organisation's level and lock apply at dispatch (types.RecordingChoice)"},
+	"DataOut": {validated: true, clamped: true,
+		why: "closed values (validateDataOut); the stricter of the proposal's and the ceiling's rule stands (clampDataOut), and an unset rule reads as allowed. The doors that hold content in read the sealed value at the run"},
 	"HarnessInnerWalls": {validated: true, clamped: true,
 		why: "closed values, the harness's own sandbox modes refused with their own reason (validateHarnessInnerWalls); each axis the ceiling chooses stands over the proposal's (clampInnerWalls). The create door refuses a run whose walls cannot meet the choice, a looser one included (innerWallsFor)"},
 	"Desktop": {validated: true, clamped: true,

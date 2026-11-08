@@ -51,6 +51,22 @@ type sshMemStore struct {
 	profiles []types.GovernanceUnit
 	// profilesErr, when set, is ListGovernanceUnits' answer instead.
 	profilesErr error
+	// policy is the run policy QueryAuditEvents answers as the run's recorded envelope (the zero value has no
+	// data_out rule); policyErr fails the read, and noPolicy answers no envelope at all (data_out_test.go).
+	policy    types.RunPolicySpec
+	policyErr error
+	noPolicy  bool
+}
+
+// QueryAuditEvents answers the run's run.policy.resolve envelope, which the gateway reads for its data_out rule.
+func (s *sshMemStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.policyErr != nil || s.noPolicy {
+		return nil, s.policyErr
+	}
+	data, _ := json.Marshal(s.policy)
+	return []types.AuditEvent{{ID: uuid.New(), RunID: &runID, Action: "run.policy.resolve", Outcome: "success", Data: data}}, nil
 }
 
 func newSSHMemStore() *sshMemStore {

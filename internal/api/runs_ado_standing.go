@@ -5,7 +5,6 @@ package api
 
 import (
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -50,7 +49,7 @@ func adoStandingAtDoor(spec types.RunPolicySpec, lane adoEntraRun, ceiling gover
 	pastCeiling = adoCapsOutside(bounded.caps, lane.ceiling)
 	var dropped []string
 	for _, c := range picked {
-		if !slices.Contains(bounded.caps, c) {
+		if !adoscope.Has(bounded.caps, c) {
 			dropped = append(dropped, "“"+adoscope.ShortLabel(c)+"”")
 			droppedCaps = append(droppedCaps, c)
 		}
