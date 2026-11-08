@@ -131,6 +131,7 @@
       "detect_entropy",
       "detect_pii",
       "detector_sidecar_url",
+      "detector_sidecar_format",
       "classified_markers",
       "scan_attachments",
       "inspect_forward_egress",

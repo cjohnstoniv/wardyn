@@ -328,7 +328,7 @@ var templateNestedCarried = map[string]string{
 	"HarnessInnerWalls":   "sandbox_mode approvals",
 	"DesktopControls":     "paste_in copy_out upload download",
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
-	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url " +
+	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url detector_sidecar_format " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib deny_all",

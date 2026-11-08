@@ -58,6 +58,9 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 				"when a run launches on the Bedrock bearer key, never by name", i, name)
 		}
 	}
+	if err := validateDetectorSidecarFormat(li, mode); err != nil {
+		return err
+	}
 	if mode != "" && mode != "off" {
 		if !li.DetectSecrets && !li.DetectSecretPatterns && !li.DetectEntropy &&
 			!li.DetectPII && li.DetectorSidecarURL == "" && len(li.ClassifiedMarkers) == 0 {
@@ -105,6 +108,34 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 	case "", "low", "medium", "high", "critical":
 	default:
 		return fmt.Errorf("llm_inspection.block_min_severity: unknown severity %q", li.BlockMinSeverity)
+	}
+	return nil
+}
+
+// validateDetectorSidecarFormat checks detector_sidecar_format. Unset is Wardyn's own format and
+// asks nothing. "presidio" needs the URL it posts to, and in block mode needs a threshold of at
+// least medium: Presidio reports dates, names, URLs, ids and addresses in ordinary code text, and
+// the default (low) threshold would refuse those prompts. Alert mode has no such limit, and a
+// policy that does not opt in is not affected.
+func validateDetectorSidecarFormat(li *types.LLMInspectionSpec, mode string) error {
+	switch strings.ToLower(strings.TrimSpace(li.DetectorSidecarFormat)) {
+	case "":
+		return nil
+	case types.DetectorSidecarFormatPresidio:
+	default:
+		return fmt.Errorf("llm_inspection.detector_sidecar_format: must be unset or %q", types.DetectorSidecarFormatPresidio)
+	}
+	if strings.TrimSpace(li.DetectorSidecarURL) == "" {
+		return fmt.Errorf("llm_inspection.detector_sidecar_format %q needs detector_sidecar_url", types.DetectorSidecarFormatPresidio)
+	}
+	if mode == "block" {
+		switch strings.ToLower(strings.TrimSpace(li.BlockMinSeverity)) {
+		case "medium", "high", "critical":
+		default:
+			return fmt.Errorf("llm_inspection: detector_sidecar_format %q in block mode needs block_min_severity of "+
+				"medium or higher (its low-severity entities, such as names, dates and URLs, would otherwise block ordinary prompts)",
+				types.DetectorSidecarFormatPresidio)
+		}
 	}
 	return nil
 }
