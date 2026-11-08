@@ -166,7 +166,8 @@ An image request is one image, by digest, for the person who asks, given by the 
 - `GET /api/v1/governance/requests` sets `image_offered` when the caller may ask, and a launch refused for an image the person does not hold says "request it in Approvals" only then.
 - **Deciding.** As for an elevation: the met rule's `who` at the unit the offer was read on, and a security admin always, never the requester. The rule is read again inside the decision; one removed since the request, or an equal grant written meanwhile, answers stale.
 - **The grant.** An approval writes one allow grant of `image` for the person, of exactly the ref asked for, created by the decider. It is a user grant, so it holds in any unit the person runs in.
-- **What still binds.** Nothing is checked ahead of a launch. The digest rule, a deny of the image, the `image` kind's switch and image admission ([capabilities](capabilities.md)) apply at every launch, as for any grant. Deleting the grant ends it.
+- **What still binds.** Nothing is checked ahead of a launch. The digest rule, a deny of the image and image admission ([capabilities](capabilities.md)) apply at every launch, as for any grant. Deleting the grant ends it.
+- With the `image` kind's switch off, nothing is offered: an approved grant would not launch.
 - An `image` rule takes none of the elevation fields: `eligible_requesters`, `renew_after` or `ticket_pattern` on one answers `400` `invalid_deciders`.
 
 ## Group deciders and sign-in age

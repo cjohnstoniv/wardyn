@@ -52,6 +52,7 @@ func newImgEnv(t *testing.T) *imgEnv {
 	e.deciderGroup = uaSession(t, imgDecider, []string{imgDeciders}, false)
 	treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, imgReqSub, 1, true)
 	e.setRules(e.a, imageRule(nil))
+	e.enforceImages()
 	return e
 }
 
@@ -77,6 +78,7 @@ func (e *imgEnv) setRules(u types.GovernanceUnit, rules ...types.DeciderRule) {
 }
 
 // enforceImages switches the image kind on, so an allow grant is what lets a person launch an image.
+// newImgEnv does it: off, an image request is not offered.
 func (e *imgEnv) enforceImages() {
 	e.t.Helper()
 	if _, err := e.pg.PutCapabilityEnforcement(context.Background(), map[string]bool{capImage: true}); err != nil {
@@ -393,7 +395,6 @@ func TestImageRequestServicePortalDeviceRefused(t *testing.T) {
 
 func TestImageRequestAlreadyGranted409(t *testing.T) {
 	e := newImgEnv(t)
-	e.enforceImages()
 	e.seedGrant(types.CapabilitySubjectUser, imgReqSub, imgRef, types.CapabilityAllow)
 	e.wantReason("an image already granted", e.call(e.req, http.MethodPost, requestsPath, imgBody(imgRef, "need it", "")), http.StatusConflict, reasonImageAlreadyGranted)
 	// The grant is exact: the same digest under another name is not granted, so it may be asked for.
@@ -402,7 +403,6 @@ func TestImageRequestAlreadyGranted409(t *testing.T) {
 
 func TestImageRequestRestrictionStillRefusesAtLaunch(t *testing.T) {
 	e := newImgEnv(t)
-	e.enforceImages()
 	e.approved(imgRef)
 	ctx := imgPersonCtx(imgReqSub)
 	if ok, err := e.srv.capGranted(withCapBatch(ctx), capImage, imgRef); err != nil || !ok {
@@ -418,7 +418,6 @@ func TestImageRequestRestrictionStillRefusesAtLaunch(t *testing.T) {
 
 func TestImageRequestAdmissionStillApplies(t *testing.T) {
 	e := newImgEnv(t)
-	e.enforceImages()
 	e.approved(imgRef)
 	e.srv.cfg.Store = imgAdmitSite{e.pg}
 	e.srv.cfg.ImageAdmissionConfig.ImageAdmitter = &fakeAdmitter{admit: func(imageadmit.Requirements) (imageadmit.Verdict, error) {
@@ -503,7 +502,6 @@ func TestImageRequestPendingTwiceIs409(t *testing.T) {
 
 func TestImageRefusalTextOffersRequestOnlyWhenOffered(t *testing.T) {
 	e := newImgEnv(t)
-	e.enforceImages()
 	ref := e.imgRunRefusal(imgPersonCtx(imgReqSub), imgRef)
 	if ref == nil || ref.decision == nil || ref.decision.Sentence != imgRequestItText ||
 		ref.decision.Reason != authz.ReasonBYOIUser || ref.decision.Target != "runs.image" {
@@ -518,9 +516,27 @@ func TestImageRefusalTextOffersRequestOnlyWhenOffered(t *testing.T) {
 	}
 }
 
+func TestImageRequestNotOfferedWhileKindOff(t *testing.T) {
+	e := newImgEnv(t)
+	if _, err := e.pg.PutCapabilityEnforcement(context.Background(), map[string]bool{capImage: false}); err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.req, http.MethodPost, requestsPath, imgBody(imgRef, "need it", ""))
+	e.wantReason("a request while the image kind is off", w, http.StatusBadRequest, reasonImageRequestNotOffered)
+	if !strings.Contains(w.Body.String(), "image grants are off in this deployment") {
+		t.Errorf("body = %s, want the switch-off sentence", w.Body)
+	}
+	if ref := e.imgRunRefusal(imgPersonCtx(imgReqSub), imgRef); ref == nil || ref.decision == nil || ref.decision.Sentence != imgNotGrantedText {
+		t.Errorf("launch refusal while the image kind is off = %+v, want the unchanged %q", ref, imgNotGrantedText)
+	}
+	// The list's image_offered is rule-based: there is no ref to ask about.
+	if l := e.list(e.req); !l.ImageOffered {
+		t.Error("image_offered false with the rule present and the switch off; want rule-based")
+	}
+}
+
 func TestImageRefusalTextOnOfferReadErrorIsUnchanged(t *testing.T) {
 	e := newImgEnv(t)
-	e.enforceImages()
 	e.srv.cfg.Store = imgDecidersDown{e.pg}
 	ref := e.imgRunRefusal(imgPersonCtx(imgReqSub), imgRef)
 	if ref == nil || ref.decision == nil || ref.decision.Sentence != imgNotGrantedText {

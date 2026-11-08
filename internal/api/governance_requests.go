@@ -105,7 +105,8 @@ type governanceRequestList struct {
 	Requests []GovernanceRequestView `json:"requests"`
 	Offered  []ElevationOffer        `json:"offered"`
 	// ImageOffered is whether the caller may ask for an image: a person whose default unit has an image
-	// rule on it or above it (imageRequestOffered).
+	// rule on it or above it (imageRequestOffered). Rule-based only: with no ref to ask about, it does not
+	// read the image kind's switch, which create checks.
 	ImageOffered bool `json:"image_offered"`
 }
 

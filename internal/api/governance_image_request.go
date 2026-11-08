@@ -78,8 +78,9 @@ func proposeImageRequest(s *Server, w http.ResponseWriter, r *http.Request, body
 	})
 }
 
-// imageRequestChecks is the create's checks in order: only image, reason and ticket; a pinned ref; an offer
-// on the default context; the note; not already granted. err is the grant read's failure only.
+// imageRequestChecks is the create's checks in order: only image, reason and ticket; a pinned ref a grant
+// can hold; an offer on the default context; the note; a grant that would bind; not already granted. err
+// is a capability read's failure only.
 func (s *Server) imageRequestChecks(ctx context.Context, body governanceRequestBody, ref string) (types.GovernanceUnit, types.ChangeNote, *elevationRefusal, error) {
 	var none types.GovernanceUnit
 	if body.UnitID != "" || body.Duration != "" {
@@ -87,6 +88,10 @@ func (s *Server) imageRequestChecks(ctx context.Context, body governanceRequestB
 			msg: "an image request names only image, reason and ticket"}, nil
 	}
 	if !prewrappedPinned(ref) || !imageRefPathSafe(ref) {
+		return none, types.ChangeNote{}, &elevationRefusal{status: http.StatusBadRequest, reason: reasonImageRequestNotPinned,
+			msg: "request an image by digest: <name>@sha256:<64 hex>"}, nil
+	}
+	if _, err := canonicalGrantValue(capImage, ref); err != nil {
 		return none, types.ChangeNote{}, &elevationRefusal{status: http.StatusBadRequest, reason: reasonImageRequestNotPinned,
 			msg: "request an image by digest: <name>@sha256:<64 hex>"}, nil
 	}
@@ -103,6 +108,14 @@ func (s *Server) imageRequestChecks(ctx context.Context, body governanceRequestB
 	note, refusal := elevationNote(body.Reason, body.Ticket)
 	if refusal != nil {
 		return none, note, refusal, nil
+	}
+	binds, err := s.imageGrantWouldBind(ctx, ref)
+	if err != nil {
+		return none, note, nil, err
+	}
+	if !binds {
+		return none, note, &elevationRefusal{status: http.StatusBadRequest, reason: reasonImageRequestNotOffered,
+			msg: "image grants are off in this deployment, so an approved image would not launch; ask an admin"}, nil
 	}
 	granted, err := s.capGranted(ctx, capImage, ref)
 	if err != nil {
@@ -171,6 +184,21 @@ func imageRuleAnywhere(t *deciderTree) bool {
 		}
 	}
 	return false
+}
+
+// imageGrantWouldBind is whether an allow grant of ref could decide a launch now: the image kind's switch
+// is on, or ref is a restricted value (capRead.enforced's rule). Off, an approved grant would sit inert
+// and the launch would still refuse, so the request is not offered. No store: no grant binds.
+func (s *Server) imageGrantWouldBind(ctx context.Context, ref string) (bool, error) {
+	b := s.capBatchFor(ctx)
+	if b.noStore {
+		return false, nil
+	}
+	on, err := b.enforced(ctx, capImage)
+	if err != nil || on {
+		return on, err
+	}
+	return b.isRestricted(ctx, capImage, ref)
 }
 
 // imageRequestOfferedQuiet is whether the caller is a person who may ask for an image. A read error is

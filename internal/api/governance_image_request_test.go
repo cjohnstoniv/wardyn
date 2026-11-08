@@ -51,11 +51,12 @@ func TestImageRequestTargetKey(t *testing.T) {
 func TestImageRequestRequiresDigest(t *testing.T) {
 	const hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for name, ref := range map[string]string{
-		"a tag only":       "registry.example.com/team/tool:1",
-		"a path traversal": "registry.example.com/../tool@sha256:" + hex,
-		"a backslash":      `registry.example.com\tool@sha256:` + hex,
-		"a short digest":   "registry.example.com/team/tool@sha256:abc",
-		"no image":         "",
+		"a tag only":         "registry.example.com/team/tool:1",
+		"a path traversal":   "registry.example.com/../tool@sha256:" + hex,
+		"a backslash":        `registry.example.com\tool@sha256:` + hex,
+		"a short digest":     "registry.example.com/team/tool@sha256:abc",
+		"a star in the name": "ghcr.io/team/*@sha256:" + hex,
+		"no image":           "",
 	} {
 		w := imgCreateBare(`{"kind":"image","image":"` + strings.ReplaceAll(ref, `\`, `\\`) + `","reason":"need it"}`)
 		if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonImageRequestNotPinned {

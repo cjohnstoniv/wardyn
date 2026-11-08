@@ -1041,7 +1041,7 @@ start.
 | `elevation_ticket_invalid` | `POST /governance/requests`, or `PUT /governance/changes/{id}/note` on an elevation (400): the ticket does not match a `ticket_pattern` on the unit or above it; the message shows the pattern. |
 | `elevation_cooldown` | `POST /governance/requests` (409): the caller's last elevation in the unit ended less than the rule's `renew_after` ago. `retry_after` (RFC 3339) is when they may ask again. |
 | `image_request_not_pinned` | `POST /governance/requests`, kind `image` (400): the image is not `<name>@sha256:<64 hex>`, or its path has an empty, `.` or `..` segment. |
-| `image_request_not_offered` | `POST /governance/requests`, kind `image` (400): the caller's default unit offers no image requests: no `image` rule on it or above it, the unit is Default, or the group list is out of date. One answer for all of them. |
+| `image_request_not_offered` | `POST /governance/requests`, kind `image` (400): the caller's default unit offers no image requests: no `image` rule on it or above it, the unit is Default, or the group list is out of date (one answer for all of them), or image grants are off in this deployment. |
 | `image_already_granted` | `POST /governance/requests`, kind `image` (409): the caller already holds a grant of exactly this image. |
 | `boundary_invalid` | `PUT /governance/boundary` and `POST /governance/dry-run` (400): the `PUT` names no `mode` or an unknown one, or the document sets `allow_all_egress` beside `allowed_domains`, a `max_end_ahead_sec` below 1, a bad `contact`, or a value a run policy would refuse; `501` on a store that keeps no boundary. |
 | `boundary_stale` | `PUT /governance/boundary` (412): `If-Match` names a boundary that has since changed. |
