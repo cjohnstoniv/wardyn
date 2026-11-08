@@ -218,7 +218,7 @@ const approvalRunEndedBody = "The run ended before anyone decided this; the appr
 
 // approvalRunPastLifetimeBody is the 409 body when the run has reached its lifetime cap: the lease sweep
 // is about to end it and cancel the row, so nothing is decided in between.
-const approvalRunPastLifetimeBody = "this run has reached its lifetime cap and is being ended; the request can no longer be decided"
+const approvalRunPastLifetimeBody = "This run has reached its lifetime cap and is being ended; the request can no longer be decided"
 
 // refuseIfRunEnded is decide()'s last pre-Decide() rule. The terminal cascade
 // (cancelRunApprovals) is supposed to have moved a dead run's rows to

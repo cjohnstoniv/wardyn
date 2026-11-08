@@ -55,13 +55,13 @@ func TestLifetimePassedEnd(t *testing.T) {
 	}
 }
 
-// cappedRunStore serves one RUNNING run with a lifetime cap.
-type cappedRunStore struct {
+// lifetimeCapRunStore serves one RUNNING run with a lifetime cap.
+type lifetimeCapRunStore struct {
 	touchStore
 	capAt time.Time
 }
 
-func (s *cappedRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+func (s *lifetimeCapRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
 	capAt := s.capAt
 	return types.AgentRun{ID: id, State: types.RunRunning, UpdatedAt: time.Now().UTC(), LifetimeCapAt: &capAt}, nil
 }
@@ -72,7 +72,7 @@ func cappedDoorServer(t *testing.T, capAt time.Time) (*harness, *Server, uuid.UU
 	t.Helper()
 	h := newHarness(t)
 	runID, grantID := uuid.New(), uuid.New()
-	cfg := baseTestConfig(h, &cappedRunStore{capAt: capAt})
+	cfg := baseTestConfig(h, &lifetimeCapRunStore{capAt: capAt})
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.RecordingStore = &fakeRecordingStore{}
 	cfg.Approvals = h.approvals
@@ -109,7 +109,7 @@ func TestInternalDoorRefusedPastLifetimeCap(t *testing.T) {
 
 func TestInternalDoorBeforeLifetimeCapUnchanged(t *testing.T) {
 	h := newHarness(t)
-	srv := New(baseTestConfig(h, &cappedRunStore{capAt: time.Now().UTC().Add(time.Hour)}))
+	srv := New(baseTestConfig(h, &lifetimeCapRunStore{capAt: time.Now().UTC().Add(time.Hour)}))
 	tok := h.mintRunToken(t, uuid.New())
 	w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok,
 		`{"request":{"host":"api.anthropic.com","method":"POST"},"decision":"allow"}`)
@@ -138,7 +138,7 @@ func TestInternalUploadGraceFromLifetimeCap(t *testing.T) {
 
 func TestTokenRenewRefusedPastLifetimeCap(t *testing.T) {
 	h := newHarness(t)
-	srv := New(baseTestConfig(h, &cappedRunStore{capAt: time.Now().UTC().Add(-time.Second)}))
+	srv := New(baseTestConfig(h, &lifetimeCapRunStore{capAt: time.Now().UTC().Add(-time.Second)}))
 	tok := h.mintRunToken(t, uuid.New())
 	w := do(t, srv, http.MethodPost, "/api/v1/internal/token/renew", tok, "")
 	if w.Code != http.StatusForbidden || errorReason(w) != "run_terminal" {
