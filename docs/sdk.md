@@ -1471,6 +1471,10 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   A row served to a decider who is not the run's creator carries `requested_by`. A hold the caller may not decide
   is left out whether it exists or not, so `run_id=` on it answers the same empty list for a run the caller
   may not decide on as for one that does not exist. A portal's delegated token gets `403 delegation_scope`.
+- An approval row a unit deciders rule governs names how it is decided. A `PENDING` row carries the rule's
+  `max_scope` and `second_human` beside `deciders`. A decided row carries `decision_basis` (`owner`,
+  `unit_admin:<unit id>`, `group:<name>`, `security`, `policy` or `admin_token`) and `decision_rule_unit`. Each is
+  absent when no rule governs the row.
 
 - `view=user`/`view=admin` on `GET /api/v1/runs` also projects `attention:
   {kind, by, pending}` onto each LIVE run (#1197) — what it is waiting on
