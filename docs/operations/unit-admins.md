@@ -32,7 +32,8 @@
 | `POST /governance/check`, `POST /governance/dry-run` | a target in their units; the boundary target stays the security tier's |
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
 | `PUT /governance/changes/{id}/note` | the note on a change they proposed, while it is pending |
-| `GET /audit`, `GET /audit/export` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows) |
+| `GET /audit`, `GET /audit/export` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows); the feed also serves the governance rows about their units |
+| `GET /governance/units/{id}/model-usage` | a unit in their units: the token usage of its runs and the runs of the units below it, up to 92 days (30 by default) |
 
 - Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
   - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.
@@ -42,7 +43,10 @@
 
 Unit admins read the audit rows of runs in their subtrees. It is on at upgrade; to keep a person out, remove their grant.
 
-- Rows with no run, such as sign-ins and governance writes, are not served.
+- `GET /audit` also serves governance rows about their units, through a separate view; the export serves run rows only.
+  - The rows are unit, membership, unit-admin, deciders, envelope and request writes that name one of their units. `units` keeps only theirs. Sign-ins, other rows with no run and `governance.change.*` rows are not served.
+  - `actor` is the person for a unit admin acting in their units, a person's own request and the system. It is `security` for a security admin, `group` for a group decider, `unit_admin` for an admin of a unit above them, and empty when the grant was gone at approval.
+  - For a held change a peer unit admin approved, `actor` is the approver; the proposer's name is absent. `approver` and `proposed_by` are never served.
 - A row keeps its time, action, actor, outcome and run, and its target on `run.*`, `egress.*` and `approval.*` rows.
 - Its data keeps `reason`, `kind`, `host`, `hosts`, `port`, `state`, `count`, `bytes`, `approval_id`, `expires_at`, `provider`, `mode`, `cause`, `agent`, `repo`, `confinement_class`, `exit_code` and `decision`. Each is a number, a code or a list of them; a value with a space is left out. Personal walls, restriction names, secret names, error text and a held push's paths are never served.
 - A `target` filter needs a `run.`, `egress.` or `approval.` `action` or `action_prefix`, else `400` `audit_unit_target_filter`.
