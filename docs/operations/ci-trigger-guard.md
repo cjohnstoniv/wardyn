@@ -93,6 +93,10 @@ Today each tier's push rules are a unit's walls or a run policy. Its capability 
 
 <!-- per-person and organisation-wide forms: added by the lanes that ship them -->
 
+Each tier's push rules can also be a restriction, so they follow a person into every unit.
+
+<!-- organisation-wide capability cap: added by the lane that ships the boundary's capability lists -->
+
 ## What Wardyn guarantees
 
 These hold on brokered lanes. They do not hold for an `ssh_key` grant or a resident PAT, so keep those out with `withheld_grants`.
