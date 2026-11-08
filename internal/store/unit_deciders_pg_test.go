@@ -22,7 +22,7 @@ func TestUnitDeciders(t *testing.T) {
 	ctx := context.Background()
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
-	a, a1, _, _, _ := unitAdminTree(t, pg)
+	a, a1, _, a1x, _ := unitAdminTree(t, pg)
 
 	if _, err := store.GetUnitDecidersQ(ctx, pool, a.ID, false); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a unit with no row: err = %v, want ErrNotFound", err)
@@ -63,9 +63,11 @@ func TestUnitDeciders(t *testing.T) {
 	if _, err := store.SetUnitDecidersQ(ctx, pool, uuid.New(), rules, "sec-1"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("unknown unit: err = %v, want ErrNotFound", err)
 	}
-	// The row goes with its unit.
-	if _, err := pool.Exec(ctx, `DELETE FROM governance_units WHERE id = $1`, a1.ID); err != nil {
-		t.Fatal(err)
+	// The row goes with its unit. A unit with a child cannot be deleted, so a1's child goes first.
+	for _, id := range []uuid.UUID{a1x.ID, a1.ID} {
+		if _, err := pool.Exec(ctx, `DELETE FROM governance_units WHERE id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if left, _ := store.ListUnitDecidersQ(ctx, pool); len(left) != 0 {
 		t.Errorf("rows left after the unit was deleted: %v", left)

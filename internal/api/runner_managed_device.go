@@ -50,15 +50,15 @@ func (s *Server) storeRunnerSettings(w http.ResponseWriter, r *http.Request, req
 		writeServerError(w, r, "put site config", err)
 		return before, after, false
 	}
-	audit := func(target string, was, now bool) {
+	auditSetting := func(target string, was, now bool) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			placement.ActionRunnersEnabledSet, target, "success", mustJSON(map[string]any{"before": was, "after": now})))
 	}
 	if req.Enabled != nil {
-		audit("runners.enabled", before.Enabled, after.Enabled)
+		auditSetting("runners.enabled", before.Enabled, after.Enabled)
 	}
 	if req.RequireManagedDevice != nil {
-		audit("runners.require_managed_device", before.RequireManagedDevice, after.RequireManagedDevice)
+		auditSetting("runners.require_managed_device", before.RequireManagedDevice, after.RequireManagedDevice)
 	}
 	return before, after, true
 }

@@ -91,10 +91,11 @@ func (p *parser) responsesBody(b []byte) {
 }
 
 // responsesLine reads response.created (model) and the terminal response.completed / response.incomplete /
-// response.failed events, whose response object carries usage when the model ran.
+// response.failed events, whose response object carries usage when the model ran. A gateway that
+// frames every stream as a chat stream (LiteLLM's proxy) ends it with data: [DONE], which is no event.
 func (p *parser) responsesLine(l []byte) {
 	data, ok := sseData(l)
-	if !ok || len(data) == 0 {
+	if !ok || len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
 		return
 	}
 	var ev struct {

@@ -229,10 +229,11 @@ var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth"
 // treeAPIFields are the top-level keys the unit tree's API (lane TREE-API brief §8 and §10) added to
 // a step's body, left out per step because a unit's own "effective" is renamed surface: check's
 // contexts, dormant and effective, and the read's boundary. A unit's people (§10) is in treeFields.
+// The read's envelopes came later still, with the platform envelopes (governance_envelope.go).
 var treeAPIFields = map[string][]string{
 	"check":        {"contexts", "dormant", "effective"},
 	"check nobody": {"contexts", "dormant", "effective"},
-	"read":         {"boundary"},
+	"read":         {"boundary", "envelopes"},
 }
 
 func withoutTreeFields(v any) any {

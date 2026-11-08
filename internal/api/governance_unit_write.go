@@ -275,18 +275,33 @@ func (req *governanceUnitRequest) parseComposition() string {
 	return ""
 }
 
-// writeUnit is store.WriteGovernanceUnit for a security caller, whose build is handed no transaction.
+// writeUnit is the write for a security caller. Its build is handed the write's transaction, so a read it
+// makes sees the graph lock's state and takes no second connection while this one is held; a store with no
+// governance transaction (a test double) writes through WriteGovernanceUnit with none. The build judges
+// "applies without a second human" by the caller's tier, not by whether it was handed a transaction.
 func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Querier) store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
-	return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+	var out types.GovernanceUnit
+	err := s.writeGovernance(ctx, func(q store.Querier) (err error) {
+		out, err = store.WriteGovernanceUnitQ(ctx, q, id, build(q))
+		return err
+	})
+	if errors.Is(err, errGovernanceTxUnsupported) {
+		return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+	}
+	return out, err
 }
 
 // unitWriteApplies reports whether a write build accepted applies without a second human: the
 // exemption (unitWriteExempt) judged on the assignments the write commits beside, and for a unit
 // admin's write, whose transaction q is handed in, no rename that changes whose legacy row wins
 // (unitRenameShiftQ, H3), since the unit it hands a person may be outside their units. A security
-// caller's write (q nil) is judged by the exemption alone.
+// caller's write (q nil) is judged by the exemption alone. A unit admin's exemption reads the envelopes
+// (envelopeExempt) on q, the connection this goroutine already holds, not on a second one.
 func (s *Server) unitWriteApplies(ctx context.Context, q store.Querier, all []types.GovernanceUnit, assignments []types.GovernanceMembership,
 	p types.GovernanceUnit, res *ResolvedUnit) (bool, error) {
+	if q != nil {
+		ctx = withUnitScopeTx(ctx, q)
+	}
 	if !s.unitWriteExempt(withGovernanceMemberships(ctx, assignments), all, p, res) {
 		return false, nil
 	}
@@ -378,7 +393,11 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			if err != nil || mode != govQueue || (unitAdmin && newUnit) {
 				return p, err
 			}
-			applies, err := s.unitWriteApplies(r.Context(), q, all, assignments, p, res)
+			appliesQ := q // only a unit admin's write is judged for a rename that shifts whose legacy row wins
+			if !unitAdmin {
+				appliesQ = nil
+			}
+			applies, err := s.unitWriteApplies(r.Context(), appliesQ, all, assignments, p, res)
 			if err == nil && !applies {
 				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval

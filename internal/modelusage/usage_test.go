@@ -150,6 +150,14 @@ func TestOpenAIResponsesStream(t *testing.T) {
 	expect(t, got, Usage{Model: "gpt-5-codex", Input: 37, Output: 11, State: StateCounted})
 }
 
+// A gateway (LiteLLM's proxy) ends a Responses stream with the chat stream's data: [DONE] line after
+// response.completed: the sentinel is not an event, and the call stays counted.
+func TestOpenAIResponsesStreamDoneSentinel(t *testing.T) {
+	data := append(fixture(t, "openai_responses_stream.sse"), []byte("data: [DONE]\n\n")...)
+	got := runAllChunks(t, ShapeOpenAIResponses, Options{Stream: true}, data)
+	expect(t, got, Usage{Model: "gpt-5-codex", Input: 37, Output: 11, State: StateCounted})
+}
+
 func TestOpenAIResponsesStreamCutAndFailed(t *testing.T) {
 	data := fixture(t, "openai_responses_stream.sse")
 	cut := data[:bytes.Index(data, []byte("event: response.completed"))]

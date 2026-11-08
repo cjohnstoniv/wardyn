@@ -86,8 +86,8 @@ func (s *Server) envelopeRefusal(ctx context.Context, err error) error {
 			"an envelope already covers this unit's path: a unit above or below it has one, and only one envelope may apply to a unit")
 	case errors.As(err, &taken):
 		name := taken.UnitID.String()
-		if chain, gerr := s.cfg.Store.GetGovernanceUnitChain(ctx, taken.UnitID); gerr == nil && len(chain) > 0 {
-			name = chain[0].Name
+		if leaf, gerr := s.unitLeafName(ctx, taken.UnitID); gerr == nil {
+			name = leaf
 		}
 		return writeRefusal(http.StatusConflict, reasonEnvelopeGroupTaken,
 			"the group %q is already approved on the envelope of unit %q: a group sits on at most one envelope", taken.Group, name)

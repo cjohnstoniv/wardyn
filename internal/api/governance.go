@@ -191,11 +191,13 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.isSecurityOperator(r.Context()) {
+		// scopeGovernanceRead builds a fresh response, so the deciders are narrowed from the full list.
+		deciders := resp.Deciders
 		if resp, err = s.scopeGovernanceRead(r.Context(), resp, resolved, boundary, limit); err != nil {
 			writeServerError(w, r, "read unit admin grants", err)
 			return
 		}
-		resp.Deciders = scopeDecidersRead(resp.Deciders, resp.Units)
+		resp.Deciders = scopeDecidersRead(deciders, resp.Units)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

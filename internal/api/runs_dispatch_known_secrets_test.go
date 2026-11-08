@@ -67,6 +67,7 @@ func newKnownSecretFixture(t *testing.T) *knownSecretFixture {
 	_, sec, _ := fileSecretServer(t)
 	srv.cfg.Store, srv.cfg.Secrets, srv.cfg.MaskRegistry = ps, sec, secretmask.NewRegistry()
 	srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
+	srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080" // the fixture's in-cluster name is refused as plain http when the stored row loads
 	return &knownSecretFixture{srv: srv, rn: rn, st: st, ps: ps, sec: sec, audit: audit, run: run}
 }
 

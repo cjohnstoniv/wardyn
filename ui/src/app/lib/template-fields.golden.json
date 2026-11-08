@@ -29,7 +29,8 @@
       "ca_pem",
       "service_account",
       "namespaces",
-      "access"
+      "access",
+      "approve_each"
     ],
     "CLIServiceAccount": [
       "namespace",

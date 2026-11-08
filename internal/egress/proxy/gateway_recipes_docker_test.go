@@ -395,7 +395,8 @@ func TestGatewayRecipes_Live(t *testing.T) {
 		}
 		_, port := recipeRun(t, recipeLiteLLMImage, "4000",
 			map[string]string{"LITELLM_MASTER_KEY": recipeLiteLLMKey, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
-			[]string{dir + ":/app:ro"}, "--config", "/app/config.yaml", "--port", "4000")
+			// Not /app: that is the image's working directory, which holds its relative entrypoint.
+			[]string{dir + ":/etc/litellm:ro"}, "--config", "/etc/litellm/config.yaml", "--port", "4000")
 		recipeWait(t, "http://127.0.0.1:"+port+"/health/liveliness", 4*time.Minute)
 		t.Logf("litellm ready after %s", time.Since(start).Round(time.Second))
 

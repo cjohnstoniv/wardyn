@@ -68,7 +68,7 @@ func TestDenyComponentRefusedAtCreate(t *testing.T) {
 	}
 	var denied int
 	for _, ev := range e.h.audit.snapshot() {
-		if ev.Action == "authz.denied" && strings.Contains(string(ev.Data), "runs.component") {
+		if ev.Action == "authz.denied" && ev.Target == "runs.component" { // the target is the row's own column, not its data
 			denied++
 		}
 	}

@@ -407,7 +407,7 @@ func TestMacOSHostGate(t *testing.T) {
 		if _, ref := macOSHostGate(rn, true); ref == nil || ref.Reason != placement.ReasonPlacementCapability || !strings.Contains(ref.Detail, "wardyn runner trust "+id.String()+" managed_device") {
 			t.Errorf("trust %q, operator: refusal = %+v", class, ref)
 		}
-		if _, ref := macOSHostGate(rn, false); ref == nil || strings.Contains(ref.Detail, "wardyn runner trust") || !strings.Contains(ref.Detail, "Ask a security operator") {
+		if _, ref := macOSHostGate(rn, false); ref == nil || strings.Contains(ref.Detail, "wardyn runner trust") || !strings.Contains(ref.Detail, "Ask a security admin") {
 			t.Errorf("trust %q, member: refusal = %+v", class, ref)
 		}
 	}

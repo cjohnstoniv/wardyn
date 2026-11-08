@@ -7,7 +7,7 @@ import {
   canDecideAdoCapability,
   canDecideApproval,
   isAdoCapabilityRequest,
-  isMCPCallRequest,
+  isExactCallRequest,
   type ApprovalRequest,
 } from "../../../lib/types";
 
@@ -18,8 +18,8 @@ import {
  *
  * A re-auth row is excluded from the predicate: no admin decides it, and the person who can fix it is the
  * credential's own owner. An Azure DevOps escalation the viewer owns is excluded too, because
- * canDecideApproval does not know the ownership carve-out (canDecideAdoCapability does). One MCP call the viewer
- * may decide (the server's per-row verdict, else ownership) is excluded the same way.
+ * canDecideApproval does not know the ownership carve-out (canDecideAdoCapability does). One MCP call or held kubectl
+ * write the viewer may decide (the server's per-row verdict, else ownership) is excluded the same way.
  */
 export function viewerBlockedOnDecision(pending: ApprovalRequest[], securityOperator: boolean, isRunOwner: boolean): boolean {
   return (
@@ -31,7 +31,7 @@ export function viewerBlockedOnDecision(pending: ApprovalRequest[], securityOper
         p.kind !== "credential_reauth" &&
         (canDecideApproval(false, p.kind) ||
           (isAdoCapabilityRequest(p) && canDecideAdoCapability(false, isRunOwner)) ||
-          (isMCPCallRequest(p) && (p.decidable ?? isRunOwner))),
+          (isExactCallRequest(p) && (p.decidable ?? isRunOwner))),
     )
   );
 }
