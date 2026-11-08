@@ -30,20 +30,21 @@ type unitAuditScope struct {
 }
 
 // unitAuditScopeFor is the caller's unit scope, for a caller below the security tier whose request
-// auditScope did not settle as their own run: nil, true for no scope (the member collapse follows); a
-// scope when they hold a unit-admin grant and either asked for no run or asked for a run frozen to one of
-// their units (run is that run as auditScope read it, zero for none or an unknown id). ok false means
-// the 503 is written. A grant only a stale or truncated group snapshot would vouch for counts as none
-// (unitAdminSubjects), as do the callers no admin tier answers for.
-func (s *Server) unitAuditScopeFor(w http.ResponseWriter, r *http.Request, runAsked bool, run types.AgentRun) (*unitAuditScope, bool) {
+// auditScope did not settle as their own run: nil for no scope (the member collapse follows); a scope
+// when they hold a unit-admin grant and either asked for no run or asked for a run frozen to one of their
+// units (run is that run as auditScope read it, zero for none or an unknown id). A grant only a stale or
+// truncated group snapshot would vouch for counts as none (unitAdminSubjects), as do the callers no admin
+// tier answers for. A grant, tree or depth read that fails is also no scope, logged: the caller gets the
+// member's empty 200, the answer the design keeps for every request it does not serve.
+func (s *Server) unitAuditScopeFor(r *http.Request, runAsked bool, run types.AgentRun) *unitAuditScope {
 	reader, ok := s.cfg.Store.(store.UnitAuditReader)
 	if !unitAdminAuditRead || !ok {
-		return nil, true
+		return nil
 	}
 	ctx := r.Context()
 	grants, err := s.callerUnitGrants(ctx)
 	if err == nil && len(grants) == 0 {
-		return nil, true
+		return nil
 	}
 	var rows []types.GovernanceUnit
 	limit := 0
@@ -54,20 +55,31 @@ func (s *Server) unitAuditScopeFor(w http.ResponseWriter, r *http.Request, runAs
 		limit, err = s.unitDepthLimit(ctx)
 	}
 	if err != nil {
-		// As for the ownership read: a scope that cannot be read is not "nothing to show".
-		slog.ErrorContext(ctx, "wardyn: audit scope could not read the unit-admin scope", slog.Any("err", err))
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditScopeUnavailable, "the audit scope could not be determined; try again")
-		return nil, false
+		slog.ErrorContext(ctx, "wardyn: audit scope could not read the unit-admin scope; serving the member view", slog.Any("err", err))
+		return nil
 	}
 	in, _ := subtreeUnits(rows, grants, limit)
 	if runAsked && (run.UnitID == nil || !in[*run.UnitID]) {
-		return nil, true
+		return nil
 	}
 	units := slices.Collect(maps.Keys(in))
 	if len(units) == 0 {
-		return nil, true
+		return nil
 	}
-	return &unitAuditScope{units: units, reader: reader}, true
+	return &unitAuditScope{units: units, reader: reader}
+}
+
+// unitTargetFilterOK is whether a unit admin's ?target= can be applied, and the 400 when it cannot: only
+// with an action or action_prefix in a family whose target the unit view serves (unitViewTargetFamilies).
+// Anywhere else the filter would match a target the view serves empty, and rows coming back would tell
+// the caller that the target exists. The refusal does not depend on what is stored.
+func unitTargetFilterOK(w http.ResponseWriter, filter store.AuditFilter) bool {
+	if filter.Target == "" || unitViewServesTarget(filter.Action) || unitViewServesTarget(filter.ActionPrefix) {
+		return true
+	}
+	writeErrorReason(w, http.StatusBadRequest, reasonAuditUnitTargetFilter,
+		"a unit admin's target filter needs an action or action_prefix in run., egress. or approval.")
+	return false
 }
 
 // errUnitAuditNoFallback answers the fetch-all fallback servePage takes only without a page reader,

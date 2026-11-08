@@ -490,6 +490,7 @@ const (
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditUnitTargetFilter            = "audit_unit_target_filter"
 	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
 	reasonAuditPartitionNotFound           = "audit_partition_not_found"
 	reasonAuditPartitionOpen               = "audit_partition_open"

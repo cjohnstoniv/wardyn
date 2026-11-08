@@ -79,10 +79,7 @@ func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty f
 			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
 		}
 		if !owned {
-			unit, ok := s.unitAuditScopeFor(w, r, raw != "", run)
-			if !ok {
-				return nil, nil, false
-			}
+			unit := s.unitAuditScopeFor(r, raw != "", run)
 			if unit == nil {
 				writeEmpty()
 				return nil, nil, false
@@ -139,7 +136,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope, unit, ok := s.auditScope(w, r, func() { writeJSON(w, http.StatusOK, []types.AuditEvent{}) })
-	if !ok {
+	if !ok || (unit != nil && !unitTargetFilterOK(w, filter)) {
 		return
 	}
 	if unit != nil && scope == nil {
@@ -323,7 +320,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	// Same gate as handleQueryAudit by construction, not by copy — see the
 	// member paragraph above, which auditScope is now the single home of.
 	scope, unit, ok := s.auditScope(w, r, func() { w.Header().Set("Content-Type", "application/x-ndjson") })
-	if !ok {
+	if !ok || (unit != nil && !unitTargetFilterOK(w, filter)) {
 		return
 	}
 	served := s.auditRowsFor(r, scope)
@@ -361,7 +358,9 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range page {
 			ev := page[i]
-			if ev.Action == pushPathsAuditAction {
+			// The path list is inlined after the row view, so a unit admin's export never takes it:
+			// the unit view holds no paths.
+			if unit == nil && ev.Action == pushPathsAuditAction {
 				if ev, err = s.withPushPaths(r.Context(), ev); err != nil {
 					fail("push path list read", err)
 					return
