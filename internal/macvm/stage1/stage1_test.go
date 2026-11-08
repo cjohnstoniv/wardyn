@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1/stage1test"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"github.com/cjohnstoniv/wardyn/internal/vmnet"
@@ -71,7 +72,56 @@ var wantArgv = [][]string{
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"),
+	// The base settings: sw_vers first, whose values the host checks and renders into the stamps, then the
+	// table's rows in order, the agent's through sudo -H -u agent.
+	root("/usr/bin/sw_vers", "-productVersion"),
+	root("/usr/bin/sw_vers", "-buildVersion"),
+	saRow("MiniBuddyLaunchReason", "-int", "0"),
+	saRow("MiniBuddyShouldLaunchToResumeSetup", "-bool", "false"),
+	saRow("SkipFirstLoginOptimization", "-bool", "true"),
+	saRow("SkipExpressSettingsUpdating", "-bool", "true"),
+	saRow("LastPreLoginTasksPerformedBuild", "-string", "25G83"),
+	saRow("LastPreLoginTasksPerformedVersion", "-string", "26.6.2"),
+	saRow("LastSeenBuddyBuildVersion", "-string", "25G83"),
+	saRow("LastSeenCloudProductVersion", "-string", "26.6.2"),
+	saRow("LastSeenDiagnosticsProductVersion", "-string", "26.6.2"),
+	saRow("LastSeenAgeRangeSelectionProductVersion", "-string", "26.6.2"),
+	saRow("DidSeeAccessibility", "-bool", "true"),
+	saRow("DidSeeActivationLock", "-bool", "true"),
+	saRow("DidSeeAppStore", "-bool", "true"),
+	saRow("DidSeeAppearanceSetup", "-bool", "true"),
+	saRow("DidSeeApplePaySetup", "-bool", "true"),
+	saRow("DidSeeCloudSetup", "-bool", "true"),
+	saRow("DidSeeLockdownMode", "-bool", "true"),
+	saRow("DidSeePrivacy", "-bool", "true"),
+	saRow("DidSeeScreenTime", "-bool", "true"),
+	saRow("DidSeeSetupSequence", "-bool", "true"),
+	saRow("DidSeeSiriSetup", "-bool", "true"),
+	saRow("DidSeeSyncSetup", "-bool", "true"),
+	saRow("DidSeeSyncSetup2", "-bool", "true"),
+	saRow("DidSeeTermsOfAddress", "-bool", "true"),
+	saRow("DidSeeTouchIDSetup", "-bool", "true"),
+	saRow("DidSeeiCloudLoginForStorageServices", "-bool", "true"),
+	saRow("DidSeeAppleIntelligence", "-bool", "true"),
+	agentRoot("/usr/bin/defaults", "write", "/Users/agent/Library/Preferences/com.apple.HIToolbox", "AppleFnUsageType", "-int", "0"),
+	agentRoot("/usr/bin/defaults", "write", "-g", "NSQuitAlwaysKeepsWindows", "-bool", "false"),
+	agentRoot("/usr/bin/defaults", "-currentHost", "write", "com.apple.loginwindow", "TALLogoutSavesState", "-bool", "false"),
+	root("/usr/bin/mdutil", "-a", "-i", "off"),
+	root("/usr/bin/defaults", "write", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory", "AutoSubmit", "-bool", "false"),
+	root("/usr/bin/defaults", "write", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory", "ThirdPartyDataSubmit", "-bool", "false"),
+	root("/bin/chmod", "644", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"),
+	root("/usr/bin/chgrp", "admin", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"),
 	root("/usr/sbin/systemsetup", "-f", "-setremotelogin", "off"),
+}
+
+// agentRoot is argv as the agent user, under stage 1's sudo.
+func agentRoot(argv ...string) []string {
+	return root(append([]string{"/usr/bin/sudo", "-H", "-u", "agent", "--"}, argv...)...)
+}
+
+// saRow writes one key of the agent's Setup Assistant domain by its absolute path, as the agent.
+func saRow(key string, typ, val string) []string {
+	return agentRoot("/usr/bin/defaults", "write", "/Users/agent/Library/Preferences/com.apple.SetupAssistant", key, typ, val)
 }
 
 type fixture struct {
@@ -321,6 +371,10 @@ func TestAFailureAtEachStepStopsStage1(t *testing.T) {
 				if p.SkipIfOK != nil {
 					probes++
 				}
+				if p.ThenBaseSettings && p.ID != c.ID { // the base-settings rows run right after it, unless it failed
+					rows, _ := basesettings.Stage1Rows(basesettings.Release{Version: "26.6.2", Build: "25G83"})
+					probes += len(rows)
+				}
 			}
 			if len(execs) != i+1+probes || !slices.Equal(execs[len(execs)-1].Argv, c.argv()) {
 				t.Fatalf("%d commands ran, the last %q; want the failing one last", len(execs), execs[len(execs)-1].Line)
@@ -407,6 +461,49 @@ func TestCommandTableCitesItsStep(t *testing.T) {
 	for _, c := range commands {
 		if !slices.Contains(steps, c.Step) || c.ID == "" || len(c.Argv) == 0 {
 			t.Errorf("%+v: every row names its §3.4 step, an id and an argv", c)
+		}
+	}
+}
+
+// The stamps come from the guest's sw_vers, read over the same login. A value outside the fixed patterns (a
+// six-digit RSR-style build among them) makes the host skip the whole table, with no base-settings row run,
+// and the prepare goes on to Remote Login off.
+func TestBaseSettingsSkippedOnAnUnpatternedSwVers(t *testing.T) {
+	for name, set := range map[string]func(*stage1test.Server){
+		"version with a command": func(s *stage1test.Server) { s.ProductVersion = "26.6.2; reboot" },
+		"version with one part":  func(s *stage1test.Server) { s.ProductVersion = "26" },
+		"build with a space":     func(s *stage1test.Server) { s.BuildVersion = "25G83 x" },
+		"build in lower case":    func(s *stage1test.Server) { s.BuildVersion = "25g83" },
+		"six-digit RSR build":    func(s *stage1test.Server) { s.BuildVersion = "22E772610a" },
+		"sw_vers fails": func(s *stage1test.Server) {
+			s.Fail = func(a []string) bool { return slices.Contains(a, "-buildVersion") }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, provPass)
+			set(f.srv)
+			if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+				t.Fatalf("an unusable sw_vers failed the prepare: %v", err)
+			}
+			for _, a := range argvs(f.srv.Execs()) {
+				if strings.Contains(strings.Join(a, " "), "/Users/agent/Library/Preferences/com.apple.SetupAssistant") || slices.Contains(a, "mdutil") || slices.Contains(a, "/usr/bin/mdutil") {
+					t.Fatalf("a base-settings row ran after an unusable sw_vers: %q", a)
+				}
+			}
+			if f.srv.RemoteLogin() {
+				t.Fatal("stage 1 did not reach Remote Login off")
+			}
+		})
+	}
+}
+
+// Every base-settings row is Optional in stage 1: whichever one fails, the prepare goes on.
+func TestBaseSettingsRowFailureIsSkipped(t *testing.T) {
+	for _, key := range []string{"DidSeeAppleIntelligence", "DidSeeCloudSetup", "LastSeenCloudProductVersion", "NSQuitAlwaysKeepsWindows", "/usr/bin/mdutil"} {
+		f := newFixture(t, provPass)
+		f.srv.Fail = func(argv []string) bool { return slices.Contains(argv, key) }
+		if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+			t.Fatalf("%s failing stopped stage 1: %v", key, err)
 		}
 	}
 }
@@ -704,7 +801,8 @@ func TestStage1RefusesAnInputWithoutAPairKey(t *testing.T) {
 	}
 }
 
-// Only the screen lock row is optional: a Mac that refuses it must still publish a base.
+// Only the screen lock row and the two sw_vers reads of the base settings are optional (the rows that table
+// renders are all skipped on failure, too): a Mac that refuses them must still publish a base.
 func TestAnOptionalStepFailingDoesNotStopStage1(t *testing.T) {
 	var optional []string
 	for _, c := range commands {
@@ -712,7 +810,7 @@ func TestAnOptionalStepFailingDoesNotStopStage1(t *testing.T) {
 			optional = append(optional, c.ID)
 		}
 	}
-	if !slices.Equal(optional, []string{"screenlock-off"}) {
+	if !slices.Equal(optional, []string{"screenlock-off", "sw-vers-version", "sw-vers-build"}) {
 		t.Fatalf("optional rows = %q", optional)
 	}
 	var logs bytes.Buffer

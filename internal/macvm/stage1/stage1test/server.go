@@ -11,6 +11,7 @@ package stage1test
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -57,6 +58,8 @@ type Server struct {
 	// AskAgain, with KeyboardOnly, asks for the password again after a wrong
 	// answer until the client gives up, as a PAM sshd does.
 	AskAgain bool
+	// ProductVersion and BuildVersion are what sw_vers prints; "" is 26.6.2 and 25G83.
+	ProductVersion, BuildVersion string
 
 	mu       sync.Mutex
 	sharing  bool // Screen Sharing loaded: port 5900 sends its RFB banner
@@ -325,6 +328,10 @@ func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byt
 	case len(argv) == 4 && argv[0] == "/usr/bin/shasum":
 		sum := sha256.Sum256(s.files[argv[3]])
 		return 0, []byte(hex.EncodeToString(sum[:]) + "  " + argv[3] + "\n"), nil, false
+	case len(argv) == 2 && argv[0] == "/usr/bin/sw_vers" && argv[1] == "-productVersion":
+		return 0, []byte(cmp.Or(s.ProductVersion, "26.6.2") + "\n"), nil, false
+	case len(argv) == 2 && argv[0] == "/usr/bin/sw_vers" && argv[1] == "-buildVersion":
+		return 0, []byte(cmp.Or(s.BuildVersion, "25G83") + "\n"), nil, false
 	case len(argv) >= 3 && argv[0] == "/bin/launchctl":
 		code, stderr = s.launchctl(argv)
 		return code, nil, stderr, false
