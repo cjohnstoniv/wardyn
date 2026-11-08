@@ -457,7 +457,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if scope, isMCP, ok = mcpCallDecisionRule(w, ap, scope); !ok {
 		return
 	}
-	if !isADO && !isMCP && !decisionScopeFitsKind(w, ap.Kind, scope) {
+	var isFD bool // a reviewed download is decided once (desktop_review.go)
+	if scope, isFD, ok = fileDownloadDecisionRule(w, ap, scope); !ok {
+		return
+	}
+	if !isADO && !isMCP && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
 		return
 	}
 	// The unit deciders rule that governs this request, how this caller decides under it, and its max_scope

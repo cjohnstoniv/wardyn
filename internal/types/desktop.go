@@ -3,7 +3,10 @@
 
 package types
 
-import "cmp"
+import (
+	"cmp"
+	"fmt"
+)
 
 // DesktopControls sets what may cross a desktop's edge, one rule per direction (#2967). The
 // clipboard rules are enforced at Wardyn's desktop relay, outside the sandbox; the file rules at
@@ -21,12 +24,57 @@ type TransferRule string
 
 const (
 	TransferAllowed TransferRule = "allowed"
+	// TransferReview holds each download for a person's yes on that file (download only): the Files panel asks,
+	// the file_download deciders see its name, size and hash, and an approval releases those bytes once. Opt in;
+	// download's default stays blocked.
+	TransferReview  TransferRule = "review"
 	TransferBlocked TransferRule = "blocked"
 )
 
-// ValidTransferRule reports whether r is a value a policy may write ("" is the default).
+// ValidTransferRule reports whether r is a value a policy may write on paste_in, copy_out or upload ("" is the
+// default). Download also takes review (ValidateDesktopControls).
 func ValidTransferRule(r TransferRule) bool {
 	return r == "" || r == TransferAllowed || r == TransferBlocked
+}
+
+// TransferStrictness ranks r: allowed < review < blocked. A value this build does not know ranks as blocked, so
+// a rule a newer build wrote never loosens a direction here.
+func TransferStrictness(r TransferRule) int {
+	switch r {
+	case TransferAllowed:
+		return 0
+	case TransferReview:
+		return 1
+	}
+	return 2
+}
+
+// stricterTransfer is the stricter of x and y, an unknown value read as blocked.
+func stricterTransfer(x, y TransferRule) TransferRule {
+	return [...]TransferRule{TransferAllowed, TransferReview, TransferBlocked}[max(TransferStrictness(x), TransferStrictness(y))]
+}
+
+// ValidateDesktopControls refuses a direction that is not a rule: allowed or blocked, and review on download
+// alone.
+func ValidateDesktopControls(d *DesktopControls) error {
+	if d == nil {
+		return nil
+	}
+	for _, dir := range []struct {
+		field string
+		rule  TransferRule
+	}{{"paste_in", d.PasteIn}, {"copy_out", d.CopyOut}, {"upload", d.Upload}} {
+		if dir.rule == TransferReview {
+			return fmt.Errorf("desktop.%s: review applies to download only", dir.field)
+		}
+		if !ValidTransferRule(dir.rule) {
+			return fmt.Errorf("desktop.%s: %q is not allowed or blocked", dir.field, dir.rule)
+		}
+	}
+	if d.Download != TransferReview && !ValidTransferRule(d.Download) {
+		return fmt.Errorf("desktop.download: %q is not allowed, review or blocked", d.Download)
+	}
+	return nil
 }
 
 // Effective is d with every unset direction at its default.
@@ -42,17 +90,11 @@ func (d *DesktopControls) Effective() DesktopControls {
 	return e
 }
 
-// Meet is the narrower of d and o in every direction.
+// Meet is the narrower of d and o in every direction (TransferStrictness).
 func (d *DesktopControls) Meet(o *DesktopControls) DesktopControls {
 	a, b := d.Effective(), o.Effective()
-	block := func(x, y TransferRule) TransferRule {
-		if x == TransferBlocked || y == TransferBlocked {
-			return TransferBlocked
-		}
-		return TransferAllowed
-	}
 	return DesktopControls{
-		PasteIn: block(a.PasteIn, b.PasteIn), CopyOut: block(a.CopyOut, b.CopyOut),
-		Upload: block(a.Upload, b.Upload), Download: block(a.Download, b.Download),
+		PasteIn: stricterTransfer(a.PasteIn, b.PasteIn), CopyOut: stricterTransfer(a.CopyOut, b.CopyOut),
+		Upload: stricterTransfer(a.Upload, b.Upload), Download: stricterTransfer(a.Download, b.Download),
 	}
 }

@@ -256,5 +256,5 @@ func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, ru
 		return false // requireSecondHuman's unconditional 503: unenforceable here
 	}
 	authored, err := s.runAuthoredBy(r.Context(), run, principal)
-	return err == nil && !authored
+	return err == nil && !authored && !askedForDownload(ap, principal)
 }

@@ -911,6 +911,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/desktop/files":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"PUT /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"GET /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	// A reviewed download's ask: entry, like the download it asks for.
+	"POST /api/v1/runs/{id}/desktop/files/{name}/review": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Sign-ins in a VM's desktop (#2972): reading the store is owner or security admin; pausing and
 	// resuming the agent is entry, like the desktop itself.
 	"GET /api/v1/runs/{id}/desktop/sign-ins":         {class: classOwner, entity: entityRun, ownerTier: tierSecurity},

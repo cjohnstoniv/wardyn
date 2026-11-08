@@ -13,7 +13,17 @@
 // see PushContentScope below and internal/types/push_content.go.
 // human_takeover (#2963, "Needs you"): the run's agent asked a person to take over its desktop or
 // terminal. Answered with take-over / hand-back / decline, never approve/deny.
-export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content" | "human_takeover";
+// file_download: a person asked to download one file from a run whose desktop.download is review. Its scope
+// is FileDownloadScope below (name, size, hash, who asked), never the content (internal/types/file_download.go).
+export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content" | "human_takeover" | "file_download";
+
+// Mirrors Go's types.FileDownloadScope: the requested_scope of a file_download row.
+export interface FileDownloadScope {
+  name: string;
+  bytes: number;
+  sha256: string;
+  requested_by: string;
+}
 
 // CANCELLED is the terminal state a run's own end writes: the run reached
 // COMPLETED/FAILED/STOPPED/KILLED while this approval was still PENDING, so

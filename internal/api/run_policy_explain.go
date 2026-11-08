@@ -433,6 +433,9 @@ func desktopBlocked(sp types.RunPolicySpec) []string {
 			out = append(out, dir.name)
 		}
 	}
+	if d.Download == types.TransferReview { // held for a person's yes on each file: neither allowed nor blocked
+		out = append(out, "Review download")
+	}
 	return out
 }
 

@@ -409,13 +409,18 @@ const (
 	// to APPROVED with a holder, hand back stamps handed_back_at, decline moves it to DENIED. It
 	// grants the run nothing — the person drives what the agent already has.
 	ApprovalHumanTakeover ApprovalKind = "human_takeover"
+	// ApprovalFileDownload: a person asked to download one file from a run whose desktop.download is review.
+	// Its scope is FileDownloadScope (name, size, hash, who asked), never the content. Decided once, by the
+	// security tier or a unit's file_download deciders, never by the run's own people or the asker; an approval
+	// releases those bytes once (store.PG.SpendFileDownloadApproval).
+	ApprovalFileDownload ApprovalKind = "file_download"
 )
 
 // ApprovalKinds is the closed set, checked by test against the constants above — closedEnumChecks
 // once missed approvals.kind entirely, which would have let a DB-rejected constant pass every gate green.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
-	ApprovalPushContent, ApprovalHumanTakeover,
+	ApprovalPushContent, ApprovalHumanTakeover, ApprovalFileDownload,
 }
 
 // ApprovalState is the approval lifecycle.

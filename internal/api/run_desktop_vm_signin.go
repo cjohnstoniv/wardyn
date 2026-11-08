@@ -208,6 +208,7 @@ func (s *Server) mountDesktopSignInRoutes(r chi.Router) {
 	r.Get("/runs/{id}/desktop/sign-ins", s.handleGetDesktopSignIns)
 	r.Post("/runs/{id}/desktop/sign-ins/pause", s.handlePauseDesktopAgent)
 	r.Post("/runs/{id}/desktop/sign-ins/resume", s.handleResumeDesktopAgent)
+	s.mountDesktopReviewRoutes(r) // the Files panel's reviewed download (desktop_review.go)
 }
 
 func (s *Server) handleGetDesktopSignIns(w http.ResponseWriter, r *http.Request) {

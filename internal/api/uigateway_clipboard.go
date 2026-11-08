@@ -6,7 +6,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,17 +16,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// validateDesktopControls refuses a desktop rule that is neither allowed nor blocked.
+// validateDesktopControls refuses a desktop rule that is neither allowed nor blocked, or review on any direction
+// but download (types.ValidateDesktopControls).
 func validateDesktopControls(d *types.DesktopControls) error {
-	if d == nil {
-		return nil
-	}
-	for field, r := range map[string]types.TransferRule{"paste_in": d.PasteIn, "copy_out": d.CopyOut, "upload": d.Upload, "download": d.Download} {
-		if !types.ValidTransferRule(r) {
-			return fmt.Errorf("desktop.%s: %q is not allowed or blocked", field, r)
-		}
-	}
-	return nil
+	return types.ValidateDesktopControls(d)
 }
 
 // errNoPolicyEnvelope is a run with no run.policy.resolve envelope to read its desktop rules from.
