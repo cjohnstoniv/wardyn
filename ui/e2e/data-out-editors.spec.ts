@@ -132,8 +132,8 @@ test.describe("data_out on the Wardyn boundary", () => {
     await navTo(page, "Policies");
     await page.getByRole("link", { name: BOUNDARY.TITLE, exact: true }).click();
     const card = page.getByTestId("boundary-data-out");
-    await expect(card.getByText("Content leaving a run").first()).toBeVisible();
     const level = card.getByRole("group", { name: "Content leaving a run" });
+    await expect(level).toBeVisible();
     await level.getByText("Blocked", { exact: true }).click();
     await expect(level.getByRole("radio", { name: "Blocked" })).toBeChecked();
     await card.getByRole("checkbox", { name: "Lock for profiles below" }).check();
