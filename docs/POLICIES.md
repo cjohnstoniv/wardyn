@@ -1225,6 +1225,7 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 
 - Content rules for this run's brokered git pushes — the counterpart to `git_push_any_branch`'s WHERE: this says WHAT a push may touch (issue #57).
 - `null`/omitted (every policy authored before this field existed) means **no content rules at all** — byte-identical to today's wire shape and behaviour.
+- To keep pushes from starting pipelines, see [ci-trigger-guard.md](operations/ci-trigger-guard.md).
 
 **What a run with content rules gets.** The broker buffers the receive-pack request up to the run's inspection ceiling, reads which paths the push would introduce. It answers one of three refusals, holds it for an admin's review, or forwards the buffered bytes unchanged:
 

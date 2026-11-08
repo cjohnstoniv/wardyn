@@ -51,6 +51,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- A new page, Keep run branches from starting pipelines ([docs/operations/ci-trigger-guard.md](docs/operations/ci-trigger-guard.md)): what to set in Azure DevOps and GitHub so a run's pushes and pull requests cannot start a pipeline unreviewed, and the Wardyn settings that hold or refuse them.
 - `data_out` (`allowed`, `review` or `blocked`) on a run policy, a unit's walls, a restriction and the Wardyn boundary: one rule for content leaving a run.
   - `review` and `blocked` both turn off desktop copy-out, SSH file transfer (sftp and scp), SSH commands and port forwards, `wardyn sync` down, web apps other than the desktop, and a computer folder that syncs back. They also limit run output to security admins, and recording replay to super admins.
   - `review` lets files out one at a time through the Files panel, on any running run, each with a person's yes.
