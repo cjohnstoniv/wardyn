@@ -64,9 +64,14 @@ func (s *Server) handlePutGovernanceChangeNote(w http.ResponseWriter, r *http.Re
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid JSON body: "+err.Error())
 		return
 	}
-	note, err := types.ValidateChangeNote(req.Reason, req.Ticket, false)
+	// A request's note is never emptied of its reason, and an elevation's ticket still meets its unit's rule.
+	_, isRequest := requestKindOf(ch.TargetKind)
+	note, err := types.ValidateChangeNote(req.Reason, req.Ticket, isRequest)
 	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceChangeNoteInvalid, err.Error())
+		return
+	}
+	if ch.TargetKind == types.GovernanceTargetElevation && !s.elevationNoteTicketOK(w, r, ch, note.Ticket) {
 		return
 	}
 	saved, err := s.cfg.Store.SetGovernanceChangeNote(ctx, id, note)

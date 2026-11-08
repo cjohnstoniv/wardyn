@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -77,6 +78,7 @@ func (s *Server) mountGovernanceRoutes(operatorOnly, member chi.Router) {
 	unit.Post("/governance/check", s.handleGovernanceCheck)
 	unit.Post("/governance/dry-run", s.handleBoundaryDryRun)
 	s.mountGovernanceChangeRoutes(unit)
+	s.mountGovernanceRequestRoutes(member)
 }
 
 // GET /governance
@@ -301,6 +303,9 @@ type governanceCeiling struct {
 	Limits   types.GovernanceLimits
 	Unit     *ResolvedUnit
 	Warnings []string
+	// ContextExpiresAt is the picked membership's end when it is an elevation; nil otherwise. A run
+	// launched here is capped at it (capAtElevation).
+	ContextExpiresAt *time.Time
 	// MemberDefault is a governed member's size before any ask (composer.MemberDefault from the
 	// deployment's own size, lowered by this ceiling), set when the ceiling is resolved. Read it
 	// through memberSize.

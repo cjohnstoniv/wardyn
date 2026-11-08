@@ -274,6 +274,7 @@ const (
 	LimitSourceGovernance LimitSource = "governance"
 	LimitSourceDeployment LimitSource = "deployment"
 	LimitSourceRunner     LimitSource = "runner"
+	LimitSourceElevation  LimitSource = "elevation"
 )
 
 // LimitAmount is an effective number. Unlimited is its own value, never a zero.

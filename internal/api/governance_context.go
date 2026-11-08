@@ -333,7 +333,11 @@ func (s *Server) contextCeilingBelowRestrictions(ctx context.Context, q contextQ
 		return deployment, nil
 	}
 	p, err := s.composeContext(ctx, pick.unit)
-	return s.ceilingFromUnit(ctx, p, err, deployment)
+	c, err := s.ceilingFromUnit(ctx, p, err, deployment)
+	if err == nil && pick.row != nil {
+		c.ContextExpiresAt = pick.row.Membership.ExpiresAt
+	}
+	return c, err
 }
 
 // composeContext composes unit's path. A unit with no parent is its own path and costs no read.
@@ -442,7 +446,8 @@ func soundRow(m *store.MembershipMatch) bool {
 }
 
 // pickContext is §4.1 steps 3-5 over the active rows, in precedence order. The candidates are the
-// rows' units, or Default when there are none. Each strict pin keeps the candidates at or below it,
+// rows' units, or Default when there are none; an elevation (a row with an end) is a candidate only when
+// RunIn names its unit, so a run never lands on one unasked. Each strict pin keeps the candidates at or below it,
 // then each plain workspace pin keeps the candidates on its path, mapped to the deeper of the two, and
 // drops the rest (pinnedCandidates). Then RunIn picks (it must be a candidate),
 // else the only candidate, else the precedence winner among home rows, else among all. sound
@@ -450,6 +455,9 @@ func soundRow(m *store.MembershipMatch) bool {
 func (s *Server) pickContext(ctx context.Context, active []store.MembershipMatch, choice contextChoice) (contextPick, bool, error) {
 	cands := make([]contextPick, 0, max(1, len(active)))
 	for i := range active {
+		if m := active[i].Membership; m.ExpiresAt != nil && m.UnitID != choice.RunIn {
+			continue
+		}
 		cands = append(cands, contextPick{unit: active[i].Unit, row: &active[i]})
 	}
 	if len(cands) == 0 {
@@ -462,9 +470,12 @@ func (s *Server) pickContext(ctx context.Context, active []store.MembershipMatch
 		}
 	}
 	if choice.RunIn != uuid.Nil {
-		for _, c := range cands {
-			if c.unit.ID == choice.RunIn {
-				return c, soundRow(c.row), nil
+		// A permanent row in the unit first, then an elevation there.
+		for _, expiring := range []bool{false, true} {
+			for _, c := range cands {
+				if c.unit.ID == choice.RunIn && (c.row != nil && c.row.Membership.ExpiresAt != nil) == expiring {
+					return c, soundRow(c.row), nil
+				}
 			}
 		}
 		return contextPick{}, false, errUnitNotAContext

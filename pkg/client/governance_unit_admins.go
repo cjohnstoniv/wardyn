@@ -26,7 +26,8 @@ type GovernanceAdminSubject struct {
 }
 
 // GovernanceChangeApprover is one who could decide a held change: kind "security" (any security
-// admin) or "unit_admin" (the grant Name names, on UnitName; SubjectType says person or group).
+// admin), "unit_admin" (the grant Name names, on UnitName; SubjectType says person or group) or, for a
+// request, "group" (anyone in the group Name names).
 type GovernanceChangeApprover struct {
 	Kind        string                `json:"kind"`
 	Name        string                `json:"name,omitempty"`

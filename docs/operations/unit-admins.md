@@ -35,6 +35,7 @@
 | `PUT /governance/changes/{id}/note` | the note on a change they proposed, while it is pending |
 | `GET /audit` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows) |
 | `PUT /governance/units/{id}/deciders` | a unit strictly below one of theirs; always held ([deciders](deciders.md)) |
+| `/governance/requests` and the decisions | elevation requests in their units: decide them under an `elevation` rule that names `unit_admins` ([elevations](deciders.md#elevations)) |
 
 - Anything else is refused `403`: the promotion, the boundary, the restrictions and every other admin route.
   - The promotion is a security-tier route and answers `security_admin_surface`; the boundary dry-run target answers `unit_scope_denied`.

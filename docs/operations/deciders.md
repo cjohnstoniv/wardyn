@@ -38,6 +38,9 @@
 | `second_human` | the run's own people never decide it, security admins included |
 | `max_scope` | the widest scope one decision may have: `once`, `until` or `run`. `always` is never allowed |
 | `max_elevation` | `elevation` rules only: `15m` to `24h`, stored in its shortest form |
+| `eligible_requesters` | `elevation` rules only, and required there: one to eight `group:<name>` entries, who may ask ([elevations](#elevations)) |
+| `renew_after` | `elevation` rules only: how long after an elevation ends before the same person may ask again in the unit, `0s` to `168h`. Absent means no wait |
+| `ticket_pattern` | `elevation` rules only: a regular expression of at most 256 characters a request's ticket must match whole |
 
 - Security is always a decider and is never listed. `security`, `manager` and `delegate` are refused.
 - A bad rule answers `400` `invalid_deciders`, naming it (`rules[1]: ...`).
@@ -52,10 +55,11 @@
 | `credential` | a credential hold | `owner` | required |
 | `push_content` | a held push | `owner` | required |
 | `kube_call` | nothing in this build | none | optional |
-| `elevation`, `image`, `file_download` | nothing in this build | `owner` | `elevation` and `image` refuse it; `file_download` stores it as true |
+| `elevation` | a person's request to be a member of the unit for a while ([elevations](#elevations)) | `owner` | refused |
+| `image`, `file_download` | nothing in this build | `owner` | `image` refuses it; `file_download` stores it as true |
 
-- `elevation`, `image` and `file_download` are each their own rule and take no `max_scope`. An `elevation` rule also needs `max_elevation`.
-- The last two rows' kinds are stored and shown, but no hold in this build maps to them, so a rule for one decides nothing.
+- `elevation`, `image` and `file_download` are each their own rule and take no `max_scope`. An `elevation` rule also needs `max_elevation` and `eligible_requesters`.
+- The last row's kinds are stored and shown, but no hold in this build maps to them, so a rule for one decides nothing.
 - A plain tool call is no kind here and is decided as before.
 - The rule for one kind never binds another: an Azure DevOps rule leaves MCP calls alone.
 
@@ -110,6 +114,7 @@ Set a unit's rules with `PUT /api/v1/governance/units/{id}/deciders` or `wardyn 
 ### A unit's rule only narrows the rules above it
 
 - A rule may not reach further than the rules for the same kind on the units above. One that names a decider they do not, has a wider `max_scope` or `max_elevation`, or leaves off a `second_human` one sets answers `422` `decider_rule_wider_than_parent`. The message names the rule, the field and the nearest unit above with a rule.
+- For `elevation`, who may ask is the groups every rule on the chain names, `renew_after` is the longest on the chain, and a ticket must match every `ticket_pattern` on the chain. A rule naming an `eligible_requesters` group the rules above do not, or a shorter `renew_after`, answers the same `422`.
 - It is checked at the write, when a held write is proposed, and when it is approved. It binds every writer, the admin token included. Clearing rules is never refused.
 - A rule above that is narrowed later refuses nothing below it, and a unit moved under a narrower parent keeps its rules. Both narrow the holds at decide time.
 - To widen a parent and a child, write the parent first. Propose the child's widening once the parent's change has applied: until then it is refused.
@@ -121,6 +126,29 @@ Set a unit's rules with `PUT /api/v1/governance/units/{id}/deciders` or `wardyn 
 - `GET /api/v1/approvals?decidable_by=me` lists the pending holds the caller may decide now, newest first, at most 500 (`X-Wardyn-Truncated: true` marks more). `wardyn approval list --waiting-on-me` prints it. Rows served to someone other than the run's creator carry `requested_by`.
 - A decider sees the host, the tool call, the push paths and who asked. They never see the run, its output or a terminal.
 - `approval.decide` gains `data.basis` and, under a rule, `data.rule` ([audit actions](../AUDIT-ACTIONS.md)).
+
+## Elevations
+
+An elevation is membership of a unit for a while, asked for by the person and given by the unit's deciders. A unit offers one when an `elevation` rule is on it or above it.
+
+```json
+{"rules": [
+  {"kinds": ["elevation"], "who": ["unit_admins", "group:support-leads"], "max_elevation": "4h",
+   "eligible_requesters": ["group:support"], "renew_after": "24h", "ticket_pattern": "INC-[0-9]{4,}"}
+]}
+```
+
+- **Who may ask.** A person in a group of the met `eligible_requesters`, matched as a `group:<name>` decider is ([sign-in age](#group-deciders-and-sign-in-age)): a stale or truncated group snapshot matches none, and a bare API token only with `WARDYN_ROLE_STAMP_TTL` set.
+- A person a membership already places in the unit is not offered it. The admin token, a service identity, a device and a portal cannot ask.
+- **Asking.** `POST /api/v1/governance/requests` with `kind` `elevation`, the `unit_id`, a `duration` from `15m` to the met `max_elevation`, a required `reason` and, when a rule on the chain has a `ticket_pattern`, a matching `ticket`.
+- It is held as a governance change, one pending per person and unit, and lapses undecided like any other.
+- `GET /api/v1/governance/requests` lists the caller's requests and the ones they may decide (pending, and decided in the last day), and `offered`, the units they may ask in.
+- **Deciding.** The met rule's `who` decides at `/governance/requests/{id}/approve` or `/reject`, and a security admin always may. The requester never approves their own request; their reject withdraws it. Rules, grants and groups are read again inside the decision, and an approval whose rule, limit, ticket pattern or wait no longer allows the request answers stale.
+- **The membership.** An approval writes a user membership in the unit that ends `duration` after the decision. It is never the person's default unit: a run lands there only when it names the unit (`run_in`). A run launched there has its lifetime cap at the elevation's end ([at the lifetime cap](run-lifetime.md#at-the-lifetime-cap)), and is not revived after it.
+- **The end.** The membership counts for nothing once it ends, and a periodic sweep deletes it (`governance.elevation.expire`). `renew_after` is how long after that end the person waits before asking again in the unit; the refusal carries `retry_after`.
+- **Ending it early** is a membership delete. Runs already started under it still end at the elevation's end.
+- A unit admin's membership write for the same person in the unit makes the membership permanent.
+- For standing access that follows a group at the identity provider, a membership for the group (or JIT group assignment at the provider) is the alternative to elevations.
 
 ## Group deciders and sign-in age
 

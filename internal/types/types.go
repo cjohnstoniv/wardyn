@@ -251,9 +251,9 @@ type AgentRun struct {
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
 	Queue  *RunQueue  `json:"queue,omitempty"`
 	EndsAt *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
-	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
+	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums), or the end of the elevation the run was launched under when that is earlier; absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool, deployment or elevation).
 	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
-	LifetimeCapSource LimitSource `json:"-"`
+	LifetimeCapSource LimitSource `json:"lifetime_cap_source,omitempty"`
 	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
 	RunLimits RunLimits  `json:"run_limits"`

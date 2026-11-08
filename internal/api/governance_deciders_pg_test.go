@@ -330,9 +330,14 @@ func TestDecidersCredentialPushRequireSecondHuman(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400 invalid_deciders", name, w.Code, w.Body)
 		}
 	}
+	noEligible := decidersBody(map[string]any{"kinds": []string{"elevation"}, "who": []string{"unit_admins"}, "max_elevation": "4h"})
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), noEligible); w.Code != http.StatusBadRequest ||
+		wireReason(t, w) != "invalid_deciders" || !strings.Contains(w.Body.String(), "eligible_requesters") {
+		t.Errorf("elevation without eligible_requesters: %d %s, want 400 invalid_deciders naming eligible_requesters", w.Code, w.Body)
+	}
 	ok := decidersBody(
 		map[string]any{"kinds": []string{"credential", "push_content"}, "who": []string{"unit_admins"}, "second_human": true, "max_scope": "once"},
-		map[string]any{"kinds": []string{"elevation"}, "who": []string{"unit_admins", "group:support-leads"}, "max_elevation": "4h"})
+		map[string]any{"kinds": []string{"elevation"}, "who": []string{"unit_admins", "group:support-leads"}, "max_elevation": "4h", "eligible_requesters": []string{"group:support-leads"}})
 	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), ok); w.Code != http.StatusOK {
 		t.Errorf("credential, push and elevation rules = %d %s, want 200", w.Code, w.Body)
 	}

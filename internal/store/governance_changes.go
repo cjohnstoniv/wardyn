@@ -113,13 +113,17 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	if ch.ID == uuid.Nil {
 		ch.ID = uuid.New()
 	}
+	var note types.ChangeNote // a request carries its note from the start; every other proposal none
+	if ch.Note != nil {
+		note = *ch.Note
+	}
 	out, err := scanGovernanceChange(tx.QueryRow(ctx, `
 		INSERT INTO governance_changes (id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
-			proposed_by, proposed_by_email, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond')
+			proposed_by, proposed_by_email, expires_at, note_reason, note_ticket)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond', $12, $13)
 		RETURNING `+governanceChangeCols,
 		ch.ID, ch.TargetKind, ch.Op, ch.TargetKey, ch.Payload, ch.Diff, ch.BaseHash, ch.DeploymentHash,
-		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds()))
+		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds(), note.Reason, note.Ticket))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

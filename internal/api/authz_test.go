@@ -625,6 +625,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
 	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
+	// Requests (elevation, image): the member router, so a group decider reaches them; who may see or decide a request is the approver table's, inside the handler.
+	"GET /api/v1/governance/requests":               {class: classMember},
+	"POST /api/v1/governance/requests":              {class: classMember},
+	"POST /api/v1/governance/requests/{id}/approve": {class: classMember},
+	"POST /api/v1/governance/requests/{id}/reject":  {class: classMember},
 	// User types (migration 0071_user_types): defining a type is the security
 	// tier's duty, like a profile. Who IS a type is the /access routes'
 	// (classAdmin). A member reads their own type from /me, never this list.

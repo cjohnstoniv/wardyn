@@ -88,6 +88,7 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 			run.LifetimeCapAt, run.LifetimeCapSource = &capAt, types.LimitSourceDeployment
 		}
 	}
+	capAtElevation(run, ceiling.ContextExpiresAt)
 	// A run never shows an end it will not reach: a profile's default end past
 	// the cap is the cap (the record path above; a create already cut its ask).
 	// A record-path run whose profile names no end ends at the cap too, not "No end".
@@ -98,6 +99,17 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 		run.EndsAt = run.LifetimeCapAt
 	}
 	run.WaitBudgetSec = runWaitSec(l, s.cfg.ApprovalExpiryAfter)
+}
+
+// capAtElevation caps a run launched under an elevation at the elevation's end: the earlier of that and the cap it already has.
+func capAtElevation(run *types.AgentRun, until *time.Time) {
+	if until == nil {
+		return
+	}
+	if run.LifetimeCapAt == nil || until.Before(*run.LifetimeCapAt) {
+		at := *until
+		run.LifetimeCapAt, run.LifetimeCapSource = &at, types.LimitSourceElevation
+	}
 }
 
 // runWaitSec is a new run's wait for a decision: the profile's default, else

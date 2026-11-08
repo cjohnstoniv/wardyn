@@ -304,6 +304,8 @@ export interface GovernanceMembership {
   // before the policy tree; only a person's first legacy membership by precedence is a context.
   home?: boolean;
   legacy?: boolean;
+  // An elevation's end: the membership counts for nothing after it. Absent on a permanent membership.
+  expires_at?: string;
 }
 
 // GET /governance's body: the whole picture in one read.

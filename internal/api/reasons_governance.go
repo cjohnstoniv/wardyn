@@ -63,3 +63,32 @@ const reasonDecidersUnreadable = "deciders_unreadable"
 
 // reasonInvalidDecidableBy: ?decidable_by= on GET /approvals is not "me" (400).
 const reasonInvalidDecidableBy = "invalid_decidable_by"
+
+// The held-request reasons (governance_requests.go, governance_elevation.go).
+const (
+	// reasonGovernanceRequestNeedsPerson: a request asked by a caller who is not a signed-in person (the admin
+	// token, a service, a device, local mode) (403).
+	reasonGovernanceRequestNeedsPerson = "governance_request_needs_person"
+	// reasonGovernanceRequestKindInvalid: a request whose kind is not one this build takes (400).
+	reasonGovernanceRequestKindInvalid = "governance_request_kind_invalid"
+	// reasonElevationNotOffered: the unit offers the caller no elevation: no rule, not eligible, an unusable
+	// group snapshot, or a unit that is Default or unknown, all one answer (400).
+	reasonElevationNotOffered = "elevation_not_offered"
+	// reasonElevationDurationInvalid: the duration does not parse or is under 15m; reasonElevationTooLong: it
+	// is over the unit's max_elevation (400 each).
+	reasonElevationDurationInvalid = "elevation_duration_invalid"
+	reasonElevationTooLong         = "elevation_too_long"
+	// reasonRequestReasonRequired and reasonRequestReasonTooLong: a request's reason is empty, or over 500
+	// characters (400 each).
+	reasonRequestReasonRequired = "request_reason_required"
+	reasonRequestReasonTooLong  = "request_reason_too_long"
+	// reasonElevationAlreadyMember: a membership already places the caller in the unit (409).
+	reasonElevationAlreadyMember = "elevation_already_member"
+	// reasonElevationTicketRequired and reasonElevationTicketInvalid: a rule on the unit's chain names a
+	// ticket_pattern, and the ticket is missing, or does not match it (400 each).
+	reasonElevationTicketRequired = "elevation_ticket_required"
+	reasonElevationTicketInvalid  = "elevation_ticket_invalid"
+	// reasonElevationCooldown: the caller's last elevation in the unit ended less than the rule's
+	// renew_after ago; retry_after says when they may ask again (409).
+	reasonElevationCooldown = "elevation_cooldown"
+)

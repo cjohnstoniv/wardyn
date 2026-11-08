@@ -459,4 +459,6 @@ type GovernanceMembership struct {
 	// Legacy marks a membership that existed before the tree (unit-tree migration): per person only the
 	// precedence winner among legacy rows is a context; the rest are dormant for that person.
 	Legacy bool `json:"legacy,omitempty"`
+	// ExpiresAt is an elevation's end (governance_elevation.go): the membership counts until then and the sweep deletes it after. Nil is a permanent membership.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
