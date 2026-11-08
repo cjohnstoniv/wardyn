@@ -82,7 +82,7 @@ describe("ElevationDeciderCard: what it says", () => {
     expect(screen.getByText("Their reason:").parentElement).not.toHaveTextContent("INC-2210");
     const ticket = screen.getByText("INC-2210");
     expect(ticket).toHaveClass("font-mono");
-    expect(ticket.closest("div")).toHaveTextContent("Requested by dana.reyes@acme.example Ticket INC-2210");
+    expect(ticket.closest("div")).toHaveTextContent("Requested by dana.reyes@acme.exampleTicket INC-2210");
   });
 
   it("shows no ticket when there is none", () => {

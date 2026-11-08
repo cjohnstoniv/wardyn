@@ -47,20 +47,22 @@ export function ElevationDeciderCard({ request, onDone }: { request: GovernanceR
           {ELEV.F_TITLE(person, unit, length)}
         </span>
       </div>
-      <RequestedByRow who={person} />
+      <RequestedByRow
+        who={person}
+        extra={
+          request.note?.ticket ? (
+            <span className="text-xs text-muted-foreground">
+              {ELEV.TICKET_REQUIRED_LABEL} <span className="font-mono">{request.note.ticket}</span>
+            </span>
+          ) : undefined
+        }
+      />
       <p className="mt-1 text-xs text-muted-foreground">
         <span className="font-medium text-foreground">{DECIDERS_INBOX.DECIDED_BY_LABEL}</span> {decidersPhrase(request.deciders)}
       </p>
       <div className="mt-3 space-y-1.5 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground">
         <p>
           <span className="font-semibold">{ELEV.F_REASON}</span> {request.note?.reason}
-          {request.note?.ticket && (
-            <>
-              {" "}
-              <span className="text-xs text-muted-foreground">{ELEV.TICKET_REQUIRED_LABEL}</span>{" "}
-              <span className="font-mono text-xs">{request.note.ticket}</span>
-            </>
-          )}
         </p>
         <p>
           <span className="font-semibold">{ELEV.F_WHAT_LABEL}</span> {ELEV.F_WHAT(person, unit, length)}
@@ -77,7 +79,7 @@ export function ElevationDeciderCard({ request, onDone }: { request: GovernanceR
           <X className="size-4" /> Deny
         </Button>
         <span className="ml-auto text-xs text-muted-foreground" title={absoluteTime(request.proposed_at)}>
-          {relativeTime(request.proposed_at)}
+          {ELEV.F_REQUESTED(relativeTime(request.proposed_at))}
         </span>
       </div>
     </div>

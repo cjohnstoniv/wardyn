@@ -113,6 +113,9 @@ export function MyElevationRequests({
       </div>
       {list === "loading" && <TableSkeleton rows={2} cols={3} />}
       {list === "error" && <ErrorState size="compact" onRetry={onReload} />}
+      {typeof list === "object" && rows.length === 0 && (
+        <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{ELEV.LIST_EMPTY}</p>
+      )}
       {rows.map((r) => (
         <Row key={r.id} r={r} onReload={onReload} />
       ))}

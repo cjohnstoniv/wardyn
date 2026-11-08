@@ -375,7 +375,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const waitingOn = !securityOperator && knows === true;
   const waitingOnRef = React.useRef(waitingOn);
   waitingOnRef.current = waitingOn;
-  const tabDrawn = waitingOn && (latched || deciderRequests.length > 0);
+  const tabDrawn = (waitingOn && latched) || (!securityOperator && deciderRequests.length > 0);
   const shown: Filter = filter === "waiting" && !tabDrawn ? "PENDING" : filter;
   // Unit names for the basis line of a decision made as a unit admin, read once and only when such a row is on screen.
   const [unitNames, setUnitNames] = React.useState<Record<string, string> | undefined>(undefined);

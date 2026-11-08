@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ReactNode } from "react";
 import { User } from "lucide-react";
 import type { ApprovalRequest } from "../../lib/types";
 import { DECIDERS_INBOX as C } from "./copy/deciders-inbox";
@@ -62,7 +63,8 @@ export function SecondPersonLine({ item }: { item: Row }) {
 
 // A decider's card names who asked instead of the run row: a decider cannot read the run, so the row's own fetch
 // would draw "run unavailable" and an Open run link that leads nowhere. No link and no run read.
-export function RequestedByRow({ who, runId }: { who: string; runId?: string }) {
+// `extra` is a card's own detail after the who and run part (an elevation's ticket).
+export function RequestedByRow({ who, runId, extra }: { who: string; runId?: string; extra?: ReactNode }) {
   const t = C.REQUESTED_BY(who, runId ? runId.slice(0, 8) : "");
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-border bg-background px-3 py-2">
@@ -76,6 +78,7 @@ export function RequestedByRow({ who, runId }: { who: string; runId?: string }) 
           run <span className="font-mono">{t.run}</span>
         </span>
       )}
+      {extra}
       {runId && <span className="ml-auto whitespace-nowrap text-xs text-muted-foreground">{C.CANT_OPEN_RUN}</span>}
     </div>
   );
