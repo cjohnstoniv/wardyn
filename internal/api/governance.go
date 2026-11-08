@@ -71,6 +71,8 @@ func (s *Server) mountGovernanceRoutes(operatorOnly, member chi.Router) {
 	unit.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
 	unit.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)
 	operatorOnly.Post("/governance/memberships/{id}/promote", s.handlePromoteGovernanceMembership)
+	operatorOnly.Put("/governance/units/{id}/envelope", s.handlePutEnvelope)
+	operatorOnly.Delete("/governance/units/{id}/envelope", s.handleDeleteEnvelope)
 	unit.Post("/governance/check", s.handleGovernanceCheck)
 	unit.Post("/governance/dry-run", s.handleBoundaryDryRun)
 	s.mountGovernanceChangeRoutes(unit)
@@ -98,6 +100,9 @@ type governanceResponse struct {
 	UnitAdmins []types.GovernanceUnitAdmin `json:"unit_admins"`
 	// ParentWalls is, for a unit admin, the walls each of their subtrees hangs from (scopeGovernanceRead).
 	ParentWalls []unitParentWalls `json:"parent_walls,omitempty"`
+	// Envelopes are the platform envelopes (governance_envelope.go): every one for the security tier,
+	// for a unit admin those on or above their subtrees' roots and those inside them.
+	Envelopes []types.GovernanceEnvelope `json:"envelopes"`
 }
 
 // handleGetGovernance returns the whole governance picture to a security caller, and a unit admin's
@@ -166,8 +171,13 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	envelopes, err := s.governanceEnvelopes(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list envelopes", err)
+		return
+	}
 	resp := governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: &boundary, UnitAdmins: admins,
-		Restrictions: restrictionViews(restrictions)}
+		Restrictions: restrictionViews(restrictions), Envelopes: envelopes}
 	if !s.isSecurityOperator(r.Context()) {
 		if resp, err = s.scopeGovernanceRead(r.Context(), resp, resolved, boundary, limit); err != nil {
 			writeServerError(w, r, "read unit admin grants", err)

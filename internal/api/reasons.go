@@ -345,6 +345,11 @@ const (
 	reasonRecordingInvalid = "recording_level_invalid" // the recording level is not one (off, terminal or screen_actions)
 	reasonRecordingStale   = "recording_level_stale"   // If-Match does not match the current recording ETag
 
+	// PUT/DELETE /governance/units/{id}/envelope (governance_envelope.go).
+	reasonEnvelopeInvalid    = "envelope_invalid"     // the unit is unknown or Default, or the group list is not valid
+	reasonEnvelopeNested     = "envelope_nested"      // an envelope already sits on a unit above or below this one
+	reasonEnvelopeGroupTaken = "envelope_group_taken" // a group is already approved on another unit's envelope
+
 	// GET/PUT /governance/boundary, POST /governance/dry-run, and the boundary's own refusals.
 	reasonBoundaryInvalid = "boundary_invalid" // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
 	// POST/PUT/DELETE /governance/restrictions, PUT /workspaces/{id}/owning-unit, and the restriction refusals at a launch.

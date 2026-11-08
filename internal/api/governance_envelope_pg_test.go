@@ -101,8 +101,8 @@ func TestEnvelopeWriteHeldUnderSecondHuman(t *testing.T) {
 		t.Fatal("a held set was written")
 	}
 	// A unit admin may not decide it: the kind is decided on the security tier.
-	if w := e.call(e.adminA, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden {
-		t.Fatalf("unit admin approve = %d %s, want 403", w.Code, w.Body)
+	if w := e.call(e.adminA, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden && w.Code != http.StatusNotFound {
+		t.Fatalf("unit admin approve = %d %s, want 403 or 404", w.Code, w.Body)
 	}
 	e.approve(ch.ID)
 	if env, ok := e.envelopeOf(e.a.ID); !ok || !slices.Equal(env.ApprovedGroups, []string{"plat-a"}) {

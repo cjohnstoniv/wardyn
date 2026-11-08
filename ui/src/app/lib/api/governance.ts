@@ -25,6 +25,7 @@ import type { PlacementValue } from "../types/new-run-contract";
 import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
 import type { GovernanceChangeApprover } from "../types/governance-change";
+import type { GovernanceEnvelope } from "../types/governance-envelope";
 import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
 import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, asNoContent, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
@@ -303,6 +304,8 @@ export interface GovernanceSnapshot {
   parent_walls?: GovernanceParentWalls[];
   // The deny-only lists that follow people, each with how many people it names.
   restrictions?: RestrictionView[];
+  // The platform envelopes (a unit admin sees those on or above their units, and inside them).
+  envelopes?: GovernanceEnvelope[];
   // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
   unit_names?: Record<string, string>;
 }
@@ -506,6 +509,7 @@ export const governance = {
       restrictions?: unknown;
       unit_admins?: unknown;
       parent_walls?: unknown;
+      envelopes?: unknown;
     }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
@@ -514,6 +518,7 @@ export const governance = {
       max_depth: body.max_depth,
       unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
       parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),
+      envelopes: unwrapList<GovernanceEnvelope>(body.envelopes),
     };
   },
 
