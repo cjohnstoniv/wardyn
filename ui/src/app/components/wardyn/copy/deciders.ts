@@ -37,6 +37,9 @@ export const DECIDERS = {
   SECOND_FORCED: "Required for credentials and pushes.",
   SECOND_FORCED_DOWNLOAD: "Always on for file downloads.",
   SECOND_WITH_OWNER: "Not available with the run's owner.",
+  RULE_HEAD: (n: number, kinds: string[]) =>
+    kinds.length ? `Rule ${n} · ${kinds.length < 2 ? kinds[0] : `${kinds.slice(0, -1).join(", ")} and ${kinds[kinds.length - 1]}`}` : `Rule ${n}`,
+  WHO_DECIDES: "Who decides",
   KINDS_LABEL: "Applies to",
   KINDS_HINT: "Each kind is named by one rule. Elevation, image and file download are each their own rule.",
   ELEVATION_OWN_RULE: "An elevation request is its own rule: it states its own limits.",

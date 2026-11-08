@@ -221,6 +221,7 @@ export function DeciderRuleEditor({
       className="rounded-lg border border-border bg-surface-2 p-4"
     >
       {refusal}
+      <p className="mb-3 text-sm font-medium text-foreground">{DECIDERS.RULE_HEAD(index + 1, rule.kinds.map((k) => DECIDER_KIND_LABEL[k]))}</p>
 
       <SubHeading>{DECIDERS.KINDS_LABEL}</SubHeading>
       <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -244,7 +245,7 @@ export function DeciderRuleEditor({
       <p className="mt-2 text-xs text-muted-foreground">{DECIDERS.KINDS_HINT}</p>
       {isElevation && <p className="mt-1 text-xs text-muted-foreground">{DECIDERS.ELEVATION_OWN_RULE}</p>}
 
-      <SubHeading top>{DECIDERS.DECIDED_BY}</SubHeading>
+      <SubHeading top>{DECIDERS.WHO_DECIDES}</SubHeading>
       <div className="mt-2 flex flex-col gap-2">
         <CheckRow
           id={id("owner")}

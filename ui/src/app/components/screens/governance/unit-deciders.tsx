@@ -16,6 +16,7 @@ import type { GovernanceUnit } from "../../../lib/api/governance";
 import { formatDuration } from "../../../lib/format";
 import { goDurationMs } from "../../../lib/go-duration";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
+import { useUnitAdminOf } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { DECIDERS, DECIDER_KIND_LABEL } from "../../wardyn/copy/deciders";
 import { Chip } from "../../wardyn/primitives";
@@ -123,6 +124,8 @@ export function UnitDeciders({
   const locker = profile ? lockedBy(profile, profiles) : null;
   const canEdit = supported && profile !== null && !disabled && !locker;
   const from = entry?.from ?? {};
+  // A unit admin of this very profile sees it read only, and is told why.
+  const adminsThis = useUnitAdminOf().some((u) => u.unit_id === profile?.id);
 
   // The kinds this profile does not name, by the rule above that decides each: one row per rule above.
   const inherited = new Map<string, { unitId: string; rule: DeciderRule | undefined; kinds: DeciderKind[] }>();
@@ -209,6 +212,7 @@ export function UnitDeciders({
       </div>
       <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{DECIDERS.LEAD}</p>
       <p className="mt-0.5 text-xs text-muted-foreground">{DECIDERS.HELP}</p>
+      {disabled && profile && adminsThis && <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{DECIDERS.OWN_UNIT(profile.name)}</p>}
       {locker && <p className="mt-2 max-w-[62ch] text-xs text-muted-foreground">{DECIDERS.LOCKED_EXPLAIN(locker.name)}</p>}
 
       {!supported ? (
