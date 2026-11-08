@@ -30,7 +30,7 @@ vi.mock("../../../lib/api/approvals", () => ({
   approvals: { listApprovals: (...a: unknown[]) => listApprovalsMock(...a) },
 }));
 
-import { DesktopFilesPanel, transferSize } from "./desktop-files-panel";
+import { DesktopFilesPanel, REVIEW_POLL_MS, transferSize } from "./desktop-files-panel";
 
 const defaults = { paste_in: "allowed", copy_out: "blocked", upload: "allowed", download: "blocked" };
 
@@ -276,5 +276,33 @@ describe("DesktopFilesPanel under review", () => {
     expect(downloadMock).toHaveBeenCalledWith("r1", "a.csv", "ap_1");
     expect(await within(panel).findByText(`${C.downloadFailed}: ${sentence}`)).toBeTruthy();
     expect(within(panel).getByRole("button", { name: C.downloadApproved })).toBeTruthy();
+  });
+
+  it("a request approved while the From tab is open shows Approved on the next read", async () => {
+    vi.useFakeTimers();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: reviewing, files: [{ name: "a.csv", bytes: 84 * 1024 }] });
+    listApprovalsMock.mockResolvedValue([fileRow({})]);
+    render(<DesktopFilesPanel runId="r1" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await user.click(screen.getByRole("tab", { name: C.fromTab }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByText(C.stateWaiting)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: C.downloadApproved })).toBeNull();
+
+    listApprovalsMock.mockResolvedValue([fileRow({ state: "APPROVED", decided_by: "lee@acme.example", decided_at: aheadByHours(0) })]);
+    await act(() => vi.advanceTimersByTimeAsync(REVIEW_POLL_MS));
+    expect(screen.getByText(C.stateApproved)).toBeTruthy();
+    expect(screen.getByRole("button", { name: C.downloadApproved })).toBeTruthy();
+  });
+
+  it("does not read the requests on a timer while the To tab is showing", async () => {
+    vi.useFakeTimers();
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: reviewing, files: [{ name: "a.csv", bytes: 1 }] });
+    render(<DesktopFilesPanel runId="r1" />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const reads = listApprovalsMock.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(REVIEW_POLL_MS * 3));
+    expect(listApprovalsMock.mock.calls.length).toBe(reads);
   });
 });
