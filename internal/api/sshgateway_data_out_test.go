@@ -268,8 +268,9 @@ func TestDataOutSyncClosesOnData(t *testing.T) {
 		t.Fatalf("wardyn-sync refused: %v", err)
 	}
 	got, _ := io.ReadAll(out)
-	if len(got) != 12 {
-		t.Errorf("the client read %d bytes, want only the 12 of the NAME reply before the DATA reply", len(got))
+	// The NAME reply is 13 bytes: a 4-byte length, its type and 8 bytes.
+	if len(got) != 13 {
+		t.Errorf("the client read %d bytes, want only the 13 of the NAME reply before the DATA reply", len(got))
 	}
 	if d.denied(t, "sync_down") == nil {
 		t.Errorf("no run.data_out.deny row for sync_down; events=%s", auditDump(d.h.audit.snapshot(), d.run.ID))
