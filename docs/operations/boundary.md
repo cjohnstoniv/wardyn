@@ -22,6 +22,7 @@
 | `spec.min_confinement_class` | Every run's confinement floor is raised to at least this class. |
 | `spec.eligible_grants` | A credential grant the boundary's grants do not cover is dropped from the run's eligible grants. |
 | `spec.desktop` | Each direction it blocks (`paste_in`, `copy_out`, `upload`, `download`) is blocked for every run, at resolve and at the seal. An unset direction keeps its default: copy out and download blocked. |
+| `spec.data_out` | Every run's data_out rule is at least this strict ([POLICIES.md](../POLICIES.md#data_out)). `blocked` also denies drives, member drives, kept machines and git pushes. |
 | `limits.max_end_ahead_sec` | No run's end may be set further ahead than this, at create or by a later change, including a run created in `no_limits`. |
 
 A knob the boundary does not name is left as the layers below set it. `contact` names who owns the boundary and how to ask for a change.

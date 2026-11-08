@@ -22,6 +22,8 @@ export interface BoundarySpec {
   eligible_grants?: GrantSpec[];
   // The desktop directions every run is held to (#2967); a direction left unset is its default.
   desktop?: DesktopControls;
+  // The least strict rule for content leaving any run; a run's own is at least this strict.
+  data_out?: "allowed" | "review" | "blocked";
 }
 
 export interface BoundaryLimits {

@@ -28,6 +28,8 @@ export interface RestrictionSpec {
   desktop?: DesktopControls;
   /** A floor: a run of the restriction's people is recorded at least this much. */
   recording?: RecordingLevel;
+  /** A floor on the rule for content leaving a run of the restriction's people. */
+  data_out?: "allowed" | "review" | "blocked";
   /** Credentials the run is not given: a scope-less entry names every grant of its kind. */
   withheld_grants?: GrantSpec[];
 }

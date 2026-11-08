@@ -63,6 +63,7 @@
 | `desktop` | `DesktopControls` | omitted = paste in and upload allowed, copy out and download blocked | The desktop's clipboard and file-transfer rules by direction. See [below](#desktop--desktopcontrols). |
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
+| `data_out` | `string` | omitted = allowed | Content leaving the run: `allowed`, `review` or `blocked`. See [below](#data_out). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for brokered git pushes on every broker lane and the Azure DevOps REST door ([details](#push_rules--pushrulesspec)). With `deny_all`, a run holding an `ssh_key`, or a `git_pat` while the git token broker is off, is refused at start. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -1060,6 +1061,37 @@ What the check does and does not settle:
 | `upload` | `string` | `allowed` | Files sent from the Files panel into `~/Transfers`. |
 | `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. `review` holds each file for a person's yes (below). |
 
+
+## `data_out`
+
+- One rule for content leaving a run: `allowed`, `review` or `blocked`. Omitted is `allowed`, so nothing changes until a policy, a unit's walls, a restriction or the boundary sets it.
+- It is the stricter of every layer's value (`allowed` < `review` < `blocked`), frozen into the run at create and met again at each revive. A layer below can only make it stricter.
+- A member's policy, a unit's walls, a restriction and the boundary each set it as `data_out`.
+
+| Path content leaves by | `review` | `blocked` |
+|---|---|---|
+| Desktop copy out (Linux, VM and macOS desktops) | off | off |
+| Files panel download | each file waits for a person's yes | off |
+| SSH `sftp` and `scp` | off | off |
+| SSH commands (`ssh <run> <command>`, `wardyn run exec`) | off | off |
+| SSH `-L` port forwards | off | off |
+| `wardyn sync` down | off: sync only sends files to the run | off |
+| Run output | security admins only | security admins only |
+| Recording replay | super admins only | super admins only |
+| Web apps other than the desktop | off | off |
+| A computer folder that syncs back | off | off |
+| Git push | keeps its own `push_rules` | every push refused |
+| Drives, member drives and kept machines | as their own switches say | denied, when walls, a restriction or the boundary set `blocked` |
+
+- Paste in and upload are not covered: they bring content in.
+- On a run with no desktop, `review` opens the Files panel's folder `~/Transfers` for reviewed downloads only. Where the machine cannot move files through Wardyn, the panel answers `data_out_review_unavailable` and nothing leaves.
+- `review` can open a door the defaults keep shut. Desktop download is blocked by default, so on a run whose desktop rules leave download unset, `data_out: review` turns download into a held download: each file waits for a person's yes. An explicit `desktop.download: blocked` in the run's policy, a unit's walls, a restriction or the boundary still wins.
+- `review` does not hold every push. A push keeps its own push rules; `blocked` refuses them all.
+- `blocked` denies drives, member drives and kept machines through the same doors as `deny_user_drive`, `deny_member_drives` and `deny_kept_machines`, so it applies where those apply: to runs under a unit, and to a kept machine's governed callers. A member's own `data_out: blocked` denies pushes but not drives or kept machines, which are governance limits.
+- A rule that cannot be read keeps content in: SSH treats it as `blocked`, and run output answers 503 `data_out_unreadable`.
+- Paths left open: the SSH shell, `GET /runs/{id}/attach` and watching the desktop show a person what is on screen, and the run's file list and event stream carry names, sizes and events, not file contents. Turn off interactive access (`deny_interactive`) and background desktop watching (`deny_background_desktop_watch`) to close them.
+- With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
+- Audit: each refusal on a path above writes `run.data_out.denied` with the `path` and the `rule`. A refused Files panel download keeps its `desktop.file.transfer` row.
 
 ## `tool_rules` — `[]ToolRule`
 
