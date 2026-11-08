@@ -9,7 +9,16 @@
 // when a unit admin writes them).
 
 /** The kinds a rule may name (types.DeciderKinds). */
-export type DeciderKind = "egress_domain" | "ado_escalation" | "mcp_call" | "credential" | "push_content" | "elevation";
+export type DeciderKind =
+  | "egress_domain"
+  | "ado_escalation"
+  | "mcp_call"
+  | "kube_call"
+  | "credential"
+  | "push_content"
+  | "elevation"
+  | "image"
+  | "file_download";
 
 /** types.DeciderRule: `who` is owner, unit_admins or group:<name>; empty means the security tier alone. */
 export interface DeciderRule {
@@ -18,7 +27,7 @@ export interface DeciderRule {
   second_human?: boolean;
   /** once, until or run; never always. */
   max_scope?: "once" | "until" | "run";
-  /** An elevation rule's longest grant, 15m to 24h, as a Go duration. */
+  /** An elevation rule's longest grant, 15m to 24h, stored as one canonical duration ("4h" for "240m"). */
   max_elevation?: string;
 }
 

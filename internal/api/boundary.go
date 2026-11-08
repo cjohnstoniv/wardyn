@@ -173,6 +173,10 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, ref.status, ref.reason, ref.msg)
 			return
 		}
+		if err := s.boundaryDeciderLockRefusal(r.Context(), nil, body, cur, units); err != nil {
+			s.writeDecidersError(w, r, err)
+			return
+		}
 	}
 	if mode == govQueue {
 		s.proposeGovernanceChange(w, r, govProposal{
@@ -201,7 +205,7 @@ func boundaryAuditData(before, after types.BoundaryWrite) map[string]any {
 
 // applyBoundaryChange applies a held replacement inside the decision transaction: the target lock,
 // the boundary as it now stands compared with what the proposal reviewed, then the write on q.
-func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
+func applyBoundaryChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	var held types.BoundaryWrite
 	if err := decodeHeldPayload(ch.Payload, &held); err != nil {
@@ -228,6 +232,9 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 		}
 		if ref := boundaryLocksRefusal(&held, cur, units); ref != nil {
 			return govApplied{}, ref
+		}
+		if err := s.boundaryDeciderLockRefusal(ctx, q, held, cur, units); err != nil {
+			return govApplied{}, err
 		}
 	}
 	if _, err := store.PutBoundaryQ(ctx, q, held, principalFromRequest(r)); err != nil {

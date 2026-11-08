@@ -181,28 +181,49 @@ func (s *Server) deciderWriteCheck(ctx context.Context, q store.Querier, unit uu
 	return row, nil
 }
 
-// checkDeciderLockWrite is err, or, when err is nil, the refusal for a unit write that newly locks the
-// deciders knob while a unit below states rules: clearing their values would widen them, so the write
-// names them and waits for them to be cleared (the same 409 a knob lock over a differing value gives).
-// q is the write's transaction, nil for a security caller's.
+// checkDeciderLockWrite is err, or, when err is nil, the refusal for a unit write that would leave rules
+// under a deciders lock: it newly locks the knob while a unit below states rules, or it moves the unit
+// under a parent that locks it while the unit or one below it states rules. Clearing their values would
+// widen them and freezing them under the lock would strand them, so the write names them and waits for
+// them to be cleared (the same 409 a knob lock over a differing value gives). q is the write's
+// transaction, nil for a security caller's.
 func (s *Server) checkDeciderLockWrite(ctx context.Context, q store.Querier, err error, p types.GovernanceUnit, all []types.GovernanceUnit) error {
-	if err != nil || !slices.Contains(p.LockedKnobs, types.DeciderLockKnob) || slices.Contains(unitsByID(all)[p.ID].LockedKnobs, types.DeciderLockKnob) {
+	cur, exists := unitsByID(all)[p.ID]
+	newlyLocks := slices.Contains(p.LockedKnobs, types.DeciderLockKnob) && !slices.Contains(cur.LockedKnobs, types.DeciderLockKnob)
+	moved := exists && !sameJSON(cur.ParentID, p.ParentID)
+	if err != nil || (!newlyLocks && !moved) {
 		return err
 	}
-	var rows []types.UnitDeciders
-	switch {
-	case q != nil:
-		rows, err = store.ListUnitDecidersQ(ctx, q)
-	case s.unitDeciderStore() != nil:
-		rows, err = s.unitDeciderStore().ListUnitDeciders(ctx)
-	}
+	rows, err := s.listUnitDeciders(ctx, q)
 	if err != nil {
 		return err
 	}
+	hasRules := func(id uuid.UUID) bool {
+		return slices.ContainsFunc(rows, func(x types.UnitDeciders) bool { return x.UnitID == id && len(x.Rules) > 0 })
+	}
 	proposed := append(slices.DeleteFunc(slices.Clone(all), func(x types.GovernanceUnit) bool { return x.ID == p.ID }), p)
+	below := descendantsOf(proposed, p.ID)
 	var differ []string
-	for _, d := range descendantsOf(proposed, p.ID) {
-		if slices.ContainsFunc(rows, func(x types.UnitDeciders) bool { return x.UnitID == d.ID && len(x.Rules) > 0 }) {
+	if newlyLocks {
+		for _, d := range below {
+			if hasRules(d.ID) {
+				differ = append(differ, d.Name)
+			}
+		}
+		if len(differ) > 0 {
+			slices.Sort(differ)
+			return writeRefusal(http.StatusConflict, reasonUnitKnobLocked,
+				"%s cannot be locked: %s set rules; clear them first", types.DeciderLockKnob, strings.Join(differ, ", "))
+		}
+	}
+	if !moved {
+		return nil
+	}
+	// The moved unit and the units below it come under the locks over their new place; a lock they
+	// were already under is not new. The boundary's lock is the same on both sides and not compared.
+	for _, d := range append([]types.GovernanceUnit{p}, below...) {
+		_, was := deciderLockOver(all, unitsByID(all)[d.ID].ParentID, types.Boundary{})
+		if _, now := deciderLockOver(proposed, d.ParentID, types.Boundary{}); now && !was && hasRules(d.ID) {
 			differ = append(differ, d.Name)
 		}
 	}
@@ -211,7 +232,48 @@ func (s *Server) checkDeciderLockWrite(ctx context.Context, q store.Querier, err
 	}
 	slices.Sort(differ)
 	return writeRefusal(http.StatusConflict, reasonUnitKnobLocked,
-		"%s cannot be locked: %s set rules; clear them first", types.DeciderLockKnob, strings.Join(differ, ", "))
+		"%s is locked above the new place: %s set rules; clear them first", types.DeciderLockKnob, strings.Join(differ, ", "))
+}
+
+// listUnitDeciders is every unit's rules on q, or on the store when q is nil; none for a store that keeps none.
+func (s *Server) listUnitDeciders(ctx context.Context, q store.Querier) ([]types.UnitDeciders, error) {
+	switch {
+	case q != nil:
+		return store.ListUnitDecidersQ(ctx, q)
+	case s.unitDeciderStore() != nil:
+		return s.unitDeciderStore().ListUnitDeciders(ctx)
+	}
+	return nil, nil
+}
+
+// boundaryDeciderLockRefusal is the 409 for a boundary write that newly locks the deciders knob while a
+// unit states rules: the boundary's lock binds every unit, top level included, so their rules would
+// freeze. Only a boundary in hard_limits binds. q is the write's transaction, nil outside one.
+func (s *Server) boundaryDeciderLockRefusal(ctx context.Context, q store.Querier, body types.BoundaryWrite, cur types.Boundary, units []types.GovernanceUnit) error {
+	if body.LockedKnobs == nil {
+		return nil
+	}
+	after := types.Boundary{Mode: body.Mode, LockedKnobs: *body.LockedKnobs}
+	if !after.HardLimits() || !slices.Contains(after.LockedKnobs, types.DeciderLockKnob) ||
+		(cur.HardLimits() && slices.Contains(cur.LockedKnobs, types.DeciderLockKnob)) {
+		return nil
+	}
+	rows, err := s.listUnitDeciders(ctx, q)
+	if err != nil {
+		return err
+	}
+	var differ []string
+	for _, u := range units {
+		if slices.ContainsFunc(rows, func(x types.UnitDeciders) bool { return x.UnitID == u.ID && len(x.Rules) > 0 }) {
+			differ = append(differ, u.Name)
+		}
+	}
+	if len(differ) == 0 {
+		return nil
+	}
+	slices.Sort(differ)
+	return writeRefusal(http.StatusConflict, reasonUnitKnobLocked,
+		"%s cannot be locked by the boundary: %s set rules; clear them first", types.DeciderLockKnob, strings.Join(differ, ", "))
 }
 
 // holdUnitDeciders stores a write as a pending change.

@@ -17,21 +17,34 @@ import (
 // kind governs it, and with no rule anywhere the verdicts are the ones a deployment without deciders
 // gives. The security tier always decides and is never listed.
 
-// The kinds a rule names. tool_call is two kinds here, because a capability escalation and an MCP
-// approve-each call are different decisions: a rule for one never binds the other.
+// The kinds a rule names. tool_call is three kinds here, because a capability escalation, an MCP
+// approve-each call and a kubectl approve-each call are different decisions: a rule for one never
+// binds another. elevation, image and file_download are held requests and downloads, not run holds.
 const (
 	DeciderKindEgressDomain  = "egress_domain"
 	DeciderKindADOEscalation = "ado_escalation"
 	DeciderKindMCPCall       = "mcp_call"
+	DeciderKindKubeCall      = "kube_call"
 	DeciderKindCredential    = "credential"
 	DeciderKindPushContent   = "push_content"
 	DeciderKindElevation     = "elevation"
+	DeciderKindImage         = "image"
+	DeciderKindFileDownload  = "file_download"
 )
 
 // DeciderKinds is the closed set of kinds a rule may name.
 var DeciderKinds = []string{
-	DeciderKindEgressDomain, DeciderKindADOEscalation, DeciderKindMCPCall,
-	DeciderKindCredential, DeciderKindPushContent, DeciderKindElevation,
+	DeciderKindEgressDomain, DeciderKindADOEscalation, DeciderKindMCPCall, DeciderKindKubeCall,
+	DeciderKindCredential, DeciderKindPushContent, DeciderKindElevation, DeciderKindImage, DeciderKindFileDownload,
+}
+
+// deciderOwnRuleKinds are the kinds a rule names alone: each states its own second_human and limits.
+var deciderOwnRuleKinds = []string{DeciderKindElevation, DeciderKindImage, DeciderKindFileDownload}
+
+// deciderOwnerRefusedKinds are the kinds the requester or run owner never decides: deciding would
+// approve their own request, credential, push or download.
+var deciderOwnerRefusedKinds = []string{
+	DeciderKindCredential, DeciderKindPushContent, DeciderKindElevation, DeciderKindImage, DeciderKindFileDownload,
 }
 
 // The decider types a rule's who may hold. A group is "group:<name>", written as the group subject of
@@ -61,12 +74,14 @@ type DeciderRule struct {
 	Kinds []string `json:"kinds"`
 	Who   []string `json:"who"`
 	// SecondHuman refuses the run's own people, security included. It is required for credential and
-	// push_content and not allowed for elevation, where the requester is always excluded.
+	// push_content, stored as true for file_download, and not allowed for elevation or image, where the
+	// requester is always excluded.
 	SecondHuman bool `json:"second_human,omitempty"`
 	// MaxScope caps how far one decision reaches: once, until or run. Never always. Empty leaves the
 	// kind's own range.
 	MaxScope ApprovalScope `json:"max_scope,omitempty"`
-	// MaxElevation is an elevation rule's longest grant, from 15m to 24h, as a Go duration.
+	// MaxElevation is an elevation rule's longest grant, from 15m to 24h, stored as one canonical
+	// duration string ("4h" for "240m").
 	MaxElevation string `json:"max_elevation,omitempty"`
 }
 
@@ -151,7 +166,7 @@ func validateDeciderRule(in DeciderRule) (r DeciderRule, msg string) {
 	for _, k := range in.Kinds {
 		switch {
 		case k == string(ApprovalToolCall):
-			return r, `kinds: "tool_call" is two kinds here, ado_escalation and mcp_call`
+			return r, `kinds: "tool_call" is three kinds here: ado_escalation, mcp_call and kube_call`
 		case !slices.Contains(DeciderKinds, k):
 			return r, fmt.Sprintf("kinds: %q is not one of %s", k, strings.Join(DeciderKinds, ", "))
 		case slices.Contains(r.Kinds, k):
@@ -159,35 +174,42 @@ func validateDeciderRule(in DeciderRule) (r DeciderRule, msg string) {
 		}
 		r.Kinds = append(r.Kinds, k)
 	}
-	elevation := r.Names(DeciderKindElevation)
-	if elevation && len(r.Kinds) > 1 {
-		return r, "kinds: elevation is its own rule: it has no scope and no second_human"
+	for _, k := range deciderOwnRuleKinds {
+		if r.Names(k) && len(r.Kinds) > 1 {
+			return r, fmt.Sprintf("kinds: %s is its own rule: it states its own second_human and limits", k)
+		}
 	}
-	if msg = validateDeciderWho(&r, in.Who, elevation); msg != "" {
+	elevation := r.Names(DeciderKindElevation)
+	requesterOnly := elevation || r.Names(DeciderKindImage)
+	scopeless := requesterOnly || r.Names(DeciderKindFileDownload)
+	if msg = validateDeciderWho(&r, in.Who); msg != "" {
 		return r, msg
 	}
 	needsSecond := r.Names(DeciderKindCredential) || r.Names(DeciderKindPushContent)
 	switch {
 	case needsSecond && !r.SecondHuman:
 		return r, "second_human: required for credential and push_content, which a person must not decide for their own run"
-	case elevation && r.SecondHuman:
-		return r, "second_human: not allowed for elevation, where the requester is always excluded"
+	case requesterOnly && r.SecondHuman:
+		return r, "second_human: not allowed for elevation or image, where the requester is always excluded"
 	case r.SecondHuman && slices.Contains(r.Who, DeciderOwner):
 		return r, "who: owner can't be listed with second_human, which refuses the run's own people"
 	}
-	return r, validateDeciderLimits(r, elevation)
+	if r.Names(DeciderKindFileDownload) {
+		r.SecondHuman = true // forced: the requester and the run's authors never decide a download
+	}
+	return validateDeciderLimits(r, elevation, scopeless)
 }
 
 // validateDeciderWho normalizes who into r and checks each entry.
-func validateDeciderWho(r *DeciderRule, who []string, elevation bool) string {
+func validateDeciderWho(r *DeciderRule, who []string) string {
 	if len(who) > MaxDeciderWho {
 		return fmt.Sprintf("who: at most %d entries", MaxDeciderWho)
 	}
 	for _, w := range who {
 		switch w = strings.TrimSpace(w); {
 		case w == DeciderOwner:
-			if elevation || r.Names(DeciderKindCredential) || r.Names(DeciderKindPushContent) {
-				return "who: owner can't decide credential, push_content or elevation: it would approve its own request"
+			if slices.ContainsFunc(deciderOwnerRefusedKinds, r.Names) {
+				return "who: owner can't decide credential, push_content, elevation, image or file_download: it would approve its own request"
 			}
 		case w == DeciderUnitAdmins:
 		case w == "security":
@@ -211,27 +233,42 @@ func validateDeciderWho(r *DeciderRule, who []string, elevation bool) string {
 	return ""
 }
 
-// validateDeciderLimits checks max_scope and max_elevation.
-func validateDeciderLimits(r DeciderRule, elevation bool) string {
+// validateDeciderLimits checks max_scope and max_elevation and returns the rule with max_elevation
+// canonical. scopeless kinds (elevation, image, file_download) take no max_scope.
+func validateDeciderLimits(r DeciderRule, elevation, scopeless bool) (DeciderRule, string) {
 	switch r.MaxScope {
 	case "", ScopeOnce, ScopeUntil, ScopeRun:
 	case ScopeAlways:
-		return "max_scope: always is never allowed under a rule: it persists a host beyond the run"
+		return r, "max_scope: always is never allowed under a rule: it persists a host beyond the run"
 	default:
-		return fmt.Sprintf("max_scope: %q is not once, until or run", r.MaxScope)
+		return r, fmt.Sprintf("max_scope: %q is not once, until or run", r.MaxScope)
 	}
-	if elevation && r.MaxScope != "" {
-		return "max_scope: does not apply to elevation"
+	if scopeless && r.MaxScope != "" {
+		return r, "max_scope: does not apply to elevation, image or file_download"
 	}
 	if !elevation {
 		if r.MaxElevation != "" {
-			return "max_elevation: only an elevation rule has one"
+			return r, "max_elevation: only an elevation rule has one"
 		}
-		return ""
+		return r, ""
 	}
 	d, err := time.ParseDuration(r.MaxElevation)
 	if err != nil || d < MinMaxElevation || d > MaxMaxElevation {
-		return fmt.Sprintf("max_elevation: required, a duration from %s to %s (got %q)", MinMaxElevation, MaxMaxElevation, r.MaxElevation)
+		return r, fmt.Sprintf("max_elevation: required, a duration from %s to %s (got %q)", MinMaxElevation, MaxMaxElevation, r.MaxElevation)
 	}
-	return ""
+	r.MaxElevation = canonicalDuration(d)
+	return r, ""
+}
+
+// canonicalDuration is d as the shortest Go duration string that parses back to it: "4h" for 240m,
+// "1h30m" for 90m, never "4h0m0s".
+func canonicalDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
