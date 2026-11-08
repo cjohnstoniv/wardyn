@@ -81,8 +81,12 @@ func TestDispatchSecrets_ResolveTheRunSubjectNotTheAttribution(t *testing.T) {
 	li := &types.LLMInspectionSpec{WorkspaceSecretNames: []string{secretName}}
 	insp := types.RunPolicySpec{LLMInspection: li}
 	srv.resolveLLMInspectionSecrets(ctx, run, &insp)
+	// The resolver writes on a copy and points the policy at it, so the copy is what holds a value.
+	if got := insp.LLMInspection.WorkspaceSecretValues; len(got) != 0 {
+		t.Errorf("llm_inspection resolved %d value(s) from the attribution's namespace", len(got))
+	}
 	if len(li.WorkspaceSecretValues) != 0 {
-		t.Errorf("llm_inspection resolved %d value(s) from the attribution's namespace", len(li.WorkspaceSecretValues))
+		t.Errorf("the original inspection block gained %d value(s)", len(li.WorkspaceSecretValues))
 	}
 }
 

@@ -90,7 +90,7 @@ func (f *residentFix) authorClass(t *testing.T, run types.AgentRun, c residentCl
 	ok := true
 	switch c.kind {
 	case types.GrantEnvSecret:
-		_, values = f.srv.resolveEnvSecretValues(ctx, run, spec.ProxyConfig.Policy, rows, env)
+		_, values, _ = f.srv.resolveEnvSecretValues(ctx, run, spec.ProxyConfig.Policy, rows, env)
 		spec.SecretEnv = env
 	case types.GrantFileSecret:
 		spec.ManagedFiles, _, values, ok = f.srv.resolveFileSecretValues(ctx, run, spec.ProxyConfig.Policy, rows)

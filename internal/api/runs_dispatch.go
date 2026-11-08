@@ -361,7 +361,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
 	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
-	secretEnvKeys, resident := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
+	secretEnvKeys, resident, placedEnv := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
+	addPlacedSecrets(&policy, placedEnv...) // before the sidecar policy and the audited snapshot copy it
 
 	// Split the composed environment into its non-secret and credential-bearing
 	// halves — after EVERY writer above, so the "already set" guards each of them
@@ -641,6 +642,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
 	// The file_secret files join the spec last, so the manifest completes over their values.
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, grantRows, p.PATBroker, &spec, &resident) {
+		return
+	}
+	if !s.keepFinalRunProxyConfig(ctx, run, spec.ProxyConfig, stopCreateLease) {
 		return
 	}
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
