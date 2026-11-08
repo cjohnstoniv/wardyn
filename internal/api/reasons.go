@@ -91,6 +91,7 @@ const (
 	reasonInvalidRunIDParam            = "invalid_run_id_param"            // ?run_id= does not parse as a UUID
 	reasonListingUnscopedBackend       = "listing_unscoped_backend"        // the store backend cannot scope this listing to the caller's own runs (approvals AND runs listings — same missing capability)
 	reasonApprovalRunEnded             = "approval_run_ended"              // the run ended before the approval was decided; it was auto-cancelled
+	reasonApprovalRunPastLifetime      = "approval_run_past_lifetime"      // the run reached its lifetime cap before the approval was decided; the sweep that ends it cancels the approval
 	reasonCredentialReauthNotDecidable = "credential_reauth_not_decidable" // a credential-reauth approval is resolved by signing in again, not Approve/Deny
 	reasonDecisionScopeInvalidForKind  = "decision_scope_invalid_for_kind" // decision_scope was sent on an approval kind that does not accept one
 	reasonTakeoverNotDecidable         = "takeover_not_decidable"          // a takeover request is answered by taking over or declining, not Approve/Deny

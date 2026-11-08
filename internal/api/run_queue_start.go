@@ -497,6 +497,11 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	anchor := run
 	anchor.CreatedAt = *run.AdmittedAt
 	s.captureRunLimits(&anchor, ceiling, &f.end)
+	// A run whose cap passed while it waited (a cap set by an elevation that ended, say) ends here,
+	// before anything is minted, rather than starting for the seconds until the sweep kills it.
+	if end := lifetimePassedEnd(anchor, s.cfg.Now().UTC()); end != nil {
+		return end
+	}
 
 	id, err := s.cfg.Identity.MintRunIdentity(st.ctx, run.ID, runIdentitySubject(st.ctx, run.CreatedBy), requestSponsor(st.ctx, run.CreatedBy), internalAudience, run.OperatorOwned)
 	if err != nil {

@@ -216,6 +216,10 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // with its run.
 const approvalRunEndedBody = "The run ended before anyone decided this; the approval has been cancelled and nothing was approved or denied"
 
+// approvalRunPastLifetimeBody is the 409 body when the run has reached its lifetime cap: the lease sweep
+// is about to end it and cancel the row, so nothing is decided in between.
+const approvalRunPastLifetimeBody = "this run has reached its lifetime cap and is being ended; the request can no longer be decided"
+
 // refuseIfRunEnded is decide()'s last pre-Decide() rule. The terminal cascade
 // (cancelRunApprovals) is supposed to have moved a dead run's rows to
 // CANCELLED already, but that cascade is best-effort — a failed CancelForRun
@@ -226,11 +230,11 @@ const approvalRunEndedBody = "The run ended before anyone decided this; the appr
 // sandbox that is gone, which is exactly the widening CANCELLED exists to
 // stop. So CAS-cancel it here and answer 409, rather than a question whose
 // asker no longer exists. decide has loaded the approval by here; the run is read
-// only when the member gate had not. false means the response is written.
+// only when the member gate had not. A non-empty answer is the bypass-failure class: the response is written.
 func (s *Server) refuseIfRunEnded(
 	w http.ResponseWriter, r *http.Request,
 	ap types.ApprovalRequest, run types.AgentRun, haveRun bool,
-) bool {
+) string {
 	if !haveRun && ap.RunID != uuid.Nil && s.cfg.Store != nil {
 		if got, gerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); gerr == nil {
 			run, haveRun = got, true
@@ -244,9 +248,15 @@ func (s *Server) refuseIfRunEnded(
 			s.cancelRunApprovals(r.Context(), ap.RunID)
 		}
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
-		return false
+		return "run_ended"
 	}
-	return true
+	// A run at its lifetime cap is being ended by the lease sweep, whose kill cancels this row. It is not
+	// decided in between: an approve now would hand a credential or a host to a run that is over.
+	if haveRun && pastLifetimeCap(run, s.cfg.Now()) && (ap.State == "" || ap.State == types.ApprovalPending) {
+		writeErrorReason(w, http.StatusConflict, reasonApprovalRunPastLifetime, approvalRunPastLifetimeBody)
+		return "run_past_lifetime"
+	}
+	return ""
 }
 
 // decisionScopeFitsKind refuses a decision_scope on a kind that takes none: only an egress_domain approval takes one,
@@ -514,10 +524,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// Defence in depth: the run may have ENDED while this approval sat in
 	// the queue (refuseIfRunEnded). Placed with the other pre-Decide() rules, and
 	// for their reason: PENDING -> decided is one-way.
-	if !s.refuseIfRunEnded(w, r, ap, run, haveRun) {
+	if class := s.refuseIfRunEnded(w, r, ap, run, haveRun); class != "" {
 		// The admin token got past the four-eyes gate above before this refusal, so the break-glass
 		// leaves its failure row here as it does when Decide fails (docs/ENV.md: every bypass writes one).
-		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, "run_ended")
+		s.recordBypassFailure(r, id, ap, haveAP, bypassSwitch, class)
 		return
 	}
 
