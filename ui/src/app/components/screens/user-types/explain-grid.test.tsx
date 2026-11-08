@@ -58,6 +58,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { CHANGES } from "../../../lib/governance-copy";
 import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import type { ExplainRow } from "../../../lib/api/permissions";
+import { aheadByHours } from "../../../lib/test-clock";
 import { KIND, PERM } from "../../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../../lib/types";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
@@ -281,8 +282,8 @@ describe("ExplainGrid — Remove", () => {
         target_key: "own-deny",
         state: "pending",
         proposed_by: "ana",
-        proposed_at: "2026-11-08T10:00:00Z",
-        expires_at: "2026-11-09T10:00:00Z",
+        proposed_at: aheadByHours(-1),
+        expires_at: aheadByHours(20),
         diff: { changed: [] },
       }),
     );
