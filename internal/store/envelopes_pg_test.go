@@ -61,7 +61,10 @@ func TestEnvelopesCRUDPG(t *testing.T) {
 	if _, err := set(b.ID, "plat-b"); err != nil {
 		t.Fatalf("set on B: %v", err)
 	}
-	if _, err := store.DeleteEnvelopeQ(ctx, pg.Pool, a.ID); err != nil {
+	if err := pg.WriteGovernance(ctx, func(q store.Querier) error {
+		_, err := store.DeleteEnvelopeQ(ctx, q, a.ID)
+		return err
+	}); err != nil {
 		t.Fatalf("delete A's envelope: %v", err)
 	}
 	if _, err := set(a1.ID, "plat-x"); err != nil {
@@ -96,7 +99,10 @@ func TestEnvelopesCRUDPG(t *testing.T) {
 	if _, err := store.GetEnvelopeQ(ctx, pg.Pool, b.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("an envelope outlived its unit: %v", err)
 	}
-	if _, err := store.DeleteEnvelopeQ(ctx, pg.Pool, a2.ID); !errors.Is(err, store.ErrNotFound) {
+	if err := pg.WriteGovernance(ctx, func(q store.Querier) error {
+		_, err := store.DeleteEnvelopeQ(ctx, q, a2.ID)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete of an absent envelope = %v, want ErrNotFound", err)
 	}
 }
