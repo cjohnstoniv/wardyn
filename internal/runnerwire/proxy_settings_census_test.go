@@ -59,8 +59,11 @@ var proxySettingOfField = map[string]string{
 	"ForgeHosts": ProxySettingForgeHosts,
 	// Dropped, the run's proxy holds no model list and admits every model the
 	// governance profile limits.
-	"ModelLimit":     ProxySettingAllowedModels,
-	"MCPApproveEach": ProxySettingMCPApproveEach,
+	"ModelLimit": ProxySettingAllowedModels,
+	// Dropped, the runner's proxy reads a macOS guest's allowed background traffic as the run working, so an
+	// idle run is not stopped: an older remote executor must refuse the run, not run it unstoppable.
+	"ActivityIgnoreHosts": ProxySettingActivityIgnoreHosts,
+	"MCPApproveEach":      ProxySettingMCPApproveEach,
 }
 
 // proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.

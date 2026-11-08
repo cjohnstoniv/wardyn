@@ -37,3 +37,33 @@ func TestCountsAsActivity_Matrix(t *testing.T) {
 		}
 	}
 }
+
+// TestCountsAsActivityFor_IgnoredHosts: an allowed request to a host on the ignore list is not activity, by
+// the same exact-or-wildcard match the policy's domain lists use. A refusal never counts, listed or not, and
+// an empty list changes nothing.
+func TestCountsAsActivityFor_IgnoredHosts(t *testing.T) {
+	allow := func(host string) DecisionLog {
+		return DecisionLog{Request: Request{Host: host}, Decision: Allow, RuleSource: "policy:allowlist"}
+	}
+	ignore := []string{"mask.icloud.com", "*.apple.com"}
+	for _, c := range []struct {
+		name   string
+		d      DecisionLog
+		ignore []string
+		want   bool
+	}{
+		{"listed host", allow("mask.icloud.com"), ignore, false},
+		{"listed host, any case and a trailing dot", allow("MASK.iCloud.com."), ignore, false},
+		{"wildcard match", allow("gdmf.apple.com"), ignore, false},
+		{"the wildcard's apex is not covered", allow("apple.com"), ignore, true},
+		{"a host that only shares a suffix", allow("notmask.icloud.com"), ignore, true},
+		{"unlisted host", allow("github.com"), ignore, true},
+		{"empty list", allow("mask.icloud.com"), nil, true},
+		{"refusal of a listed host", DecisionLog{Request: Request{Host: "mask.icloud.com"}, Decision: Deny, RuleSource: "policy:denied"}, ignore, false},
+		{"approvals poll", DecisionLog{Request: Request{Host: "github.com"}, Decision: Allow, RuleSource: "brokered:approvals"}, ignore, false},
+	} {
+		if got := CountsAsActivityFor(c.d, c.ignore); got != c.want {
+			t.Errorf("%s: CountsAsActivityFor = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
