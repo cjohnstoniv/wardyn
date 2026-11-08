@@ -82,16 +82,22 @@ func TestRestrictionKnobsSealRunningRun(t *testing.T) {
 	}
 }
 
-// TestRestrictionAllowlistClosesOpenEgressAtSeal: a run that was open when it was frozen is closed to the
-// restriction's allowlist.
+// TestRestrictionAllowlistClosesOpenEgressAtSeal: a run that was open when it was frozen is closed by the
+// restriction's allowlist, met as a create meets it (composer.ApplyOverlay): open egress covers none of the
+// restriction's entries, so the run keeps only the hosts its own list and the restriction's both name.
 func TestRestrictionAllowlistClosesOpenEgressAtSeal(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	r := seedRestriction(t, e, "rl-open", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionLimits{}, userMember("sub-rl-open"))
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-rl-open", RestrictionIDs: []uuid.UUID{r.ID}}
-	policy := types.RunPolicySpec{AllowAllEgress: true, MinConfinementClass: types.CC2}
-	e.srv.sealRunPolicy(context.Background(), run, &policy, knobProvenance{})
-	if policy.AllowAllEgress || !slices.Equal(policy.AllowedDomains, []string{"b.example"}) {
-		t.Errorf("sealed egress = %v %v, want closed with [b.example]", policy.AllowAllEgress, policy.AllowedDomains)
+	for _, tc := range []struct{ own, want []string }{
+		{nil, nil},
+		{[]string{"a.example", "b.example"}, []string{"b.example"}},
+	} {
+		policy := types.RunPolicySpec{AllowAllEgress: true, AllowedDomains: tc.own, MinConfinementClass: types.CC2}
+		e.srv.sealRunPolicy(context.Background(), run, &policy, knobProvenance{})
+		if policy.AllowAllEgress || !slices.Equal(policy.AllowedDomains, tc.want) {
+			t.Errorf("open with %v: sealed egress = %v %v, want closed with %v", tc.own, policy.AllowAllEgress, policy.AllowedDomains, tc.want)
+		}
 	}
 }
 
