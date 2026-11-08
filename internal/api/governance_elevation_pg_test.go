@@ -920,6 +920,22 @@ func TestGovernanceRequestsHiddenFromOthers(t *testing.T) {
 	}
 }
 
+// TestGovernanceRequestsHiddenOutsideScope: the list serves a person's request only to its deciders. The
+// admin of ua-b, beside ua-a1, and a plain member who neither decides nor asked get no row of a request
+// in ua-a1; the admin of ua-a1 gets it, decidable.
+func TestGovernanceRequestsHiddenOutsideScope(t *testing.T) {
+	e := newElevEnv(t)
+	got := e.ask(e.req, e.a1, "1h", "")
+	for name, c := range map[string]*http.Cookie{"the admin of ua-b": e.adminB, "a plain member": e.member} {
+		if l := e.list(c); len(l.Requests) != 0 {
+			t.Errorf("%s's list = %+v, want no row of another person's request", name, l.Requests)
+		}
+	}
+	if l := e.list(e.adminA1); len(l.Requests) != 1 || l.Requests[0].ID != got.Request.ID || !l.Requests[0].Decidable {
+		t.Errorf("the admin of ua-a1's list = %+v, want the request, decidable", l.Requests)
+	}
+}
+
 func TestGovernanceRequestsListKeepsOneDay(t *testing.T) {
 	e := newElevEnv(t)
 	got := e.ask(e.req, e.a1, "1h", "")
