@@ -407,14 +407,12 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 
 // uiDeclaredApp finds the run's declared UI app named app.
 func uiDeclaredApp(apps []types.UIApp, app string) (types.UIApp, bool) {
-	declared, found := types.UIApp{}, false
 	for _, a := range apps {
 		if a.Name == app {
-			declared, found = a, true
-			break
+			return a, true
 		}
 	}
-	return declared, found
+	return types.UIApp{}, false
 }
 
 // relay
