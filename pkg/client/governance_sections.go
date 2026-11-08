@@ -204,10 +204,10 @@ func planUnitDeciders(current, doc GovernanceDocument, unitID func(string) (uuid
 // deferred. A child refused as wider than its parent while an ancestor's deciders write of this apply is
 // held waits for that change (Deferred, Base the ancestor); any other refusal is the unit's failed step.
 func (c *Client) applyUnitDeciders(ctx context.Context, p deciderPlan, unitID func(string) (uuid.UUID, bool), pendingProfile map[string]bool, res *GovernanceApplyResult) error {
-	held := map[string]bool{}
+	held := map[string]string{} // unit → the unit whose held change its write waits on (itself when its own is held)
 	for _, w := range p.updates {
 		if pendingProfile[w.name] {
-			res.Deferred = append(res.Deferred, GovernanceDeferredWrite{Unit: w.name})
+			res.Deferred = append(res.Deferred, GovernanceDeferredWrite{Kind: "deciders", Unit: w.name})
 			continue
 		}
 		id, ok := unitID(w.name)
@@ -221,8 +221,8 @@ func (c *Client) applyUnitDeciders(ctx context.Context, p deciderPlan, unitID fu
 		if base := p.heldAncestor(w.name, held); base != "" && widerThanParent(err) {
 			step.Outcome, step.Error = "deferred", fmt.Sprintf("waits for %s's held change; run set again after it is approved", base)
 			res.Steps = append(res.Steps, step)
-			res.Deferred = append(res.Deferred, GovernanceDeferredWrite{Unit: w.name, Base: base})
-			held[w.name] = true
+			res.Deferred = append(res.Deferred, GovernanceDeferredWrite{Kind: "deciders", Unit: w.name, Base: base})
+			held[w.name] = base
 			continue
 		}
 		if err != nil {
@@ -234,17 +234,18 @@ func (c *Client) applyUnitDeciders(ctx context.Context, p deciderPlan, unitID fu
 		}
 		if pending != nil {
 			res.Pending = append(res.Pending, *pending)
-			held[w.name] = true
+			held[w.name] = w.name
 		}
 	}
 	return nil
 }
 
-// heldAncestor is the nearest unit above name whose deciders write in this apply is held, "" when none is.
-func (p deciderPlan) heldAncestor(name string, held map[string]bool) string {
+// heldAncestor is the unit whose held deciders change in this apply the nearest held or deferred unit
+// above name waits on, "" when there is none.
+func (p deciderPlan) heldAncestor(name string, held map[string]string) string {
 	for _, up := range p.ancestors(name) {
-		if held[up] {
-			return up
+		if base := held[up]; base != "" {
+			return base
 		}
 	}
 	return ""
@@ -322,7 +323,11 @@ func (c *Client) ApplyGovernanceResultUnder(ctx context.Context, doc GovernanceD
 	if err != nil {
 		return GovernanceApplyResult{}, err
 	}
-	return c.applyGovernanceTo(ctx, narrowed, doc, prune)
+	res, err := c.applyGovernanceTo(ctx, narrowed, doc, prune)
+	if sub, serr := subtreeOf(res.Document, under); serr == nil { // the read after the apply, narrowed as `get --under` prints it
+		res.Document = sub.narrow(res.Document)
+	}
+	return res, err
 }
 
 // GetGovernanceUnder is GetGovernance narrowed the same way (what `get --under` prints).

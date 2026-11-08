@@ -268,11 +268,14 @@ func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
 	for _, ch := range res.Pending {
 		fmt.Fprintf(w, "  %s  %s %s %s  proposed by %s  expires %s\n", ch.ID, ch.Op, ch.TargetKind, ch.TargetKey, ch.ProposedBy, ch.ExpiresAt.Format(time.RFC3339))
 	}
-	var profiles, assignments []sdk.GovernanceDeferredWrite
+	var profiles, assignments, deciders []sdk.GovernanceDeferredWrite
 	for _, d := range res.Deferred {
-		if d.Base != "" {
+		switch {
+		case d.Kind == "deciders":
+			deciders = append(deciders, d)
+		case d.Base != "":
 			profiles = append(profiles, d)
-		} else {
+		default:
 			assignments = append(assignments, d)
 		}
 	}
@@ -286,6 +289,16 @@ func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
 		fmt.Fprintf(w, "deferred: %d assignment(s) not sent, their profile is pending; apply again once it is approved\n", len(assignments))
 		for _, d := range assignments {
 			fmt.Fprintf(w, "  %s %q -> profile %q\n", d.SubjectType, d.Subject, d.Unit)
+		}
+	}
+	if len(deciders) > 0 {
+		fmt.Fprintf(w, "deferred: %d deciders write(s) not sent; run set again once the change they wait for is approved\n", len(deciders))
+		for _, d := range deciders {
+			if d.Base != "" {
+				fmt.Fprintf(w, "  deciders of %q -> waits for %q's held change\n", d.Unit, d.Base)
+			} else {
+				fmt.Fprintf(w, "  deciders of %q -> the unit's own write is pending\n", d.Unit)
+			}
 		}
 	}
 	if res.PruneSkipped {

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -256,5 +257,31 @@ func TestGovernancePlanUnderMatchesAPIHeldChanges(t *testing.T) {
 	}
 	if got, want := shape(viaSet), shape(f.held); len(got) != 2 || !reflect.DeepEqual(got, want) {
 		t.Errorf("set --under held %+v, the API held %+v; want the same changes", got, want)
+	}
+}
+
+// TestPrintGovernancePendingDecidersGroup: a deciders deferral prints in its own group, never as a
+// composed profile or as an assignment with an empty subject.
+func TestPrintGovernancePendingDecidersGroup(t *testing.T) {
+	var buf bytes.Buffer
+	printGovernancePending(&buf, sdk.GovernanceApplyResult{
+		Pending: []sdk.GovernanceChange{{ID: uuid.New(), Op: "update", TargetKind: "unit_deciders", TargetKey: "k"}},
+		Deferred: []sdk.GovernanceDeferredWrite{
+			{Kind: "deciders", Unit: "a-child", Base: "z-parent"},
+			{Kind: "deciders", Unit: "fresh"},
+		},
+	})
+	out := buf.String()
+	for _, want := range []string{
+		"deferred: 2 deciders write(s) not sent; run set again once the change they wait for is approved",
+		`  deciders of "a-child" -> waits for "z-parent"'s held change`,
+		`  deciders of "fresh" -> the unit's own write is pending`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stderr missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "profile(s)") || strings.Contains(out, "assignment(s)") {
+		t.Errorf("a deciders deferral printed as a profile or an assignment:\n%s", out)
 	}
 }

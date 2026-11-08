@@ -35,6 +35,7 @@ type sectionsFake struct {
 	inheritOnly  []uuid.UUID
 	restrictions []client.Restriction
 	held         map[uuid.UUID]bool
+	holdCreates  bool                    // POST /governance/units answers 202
 	refuse       map[uuid.UUID][2]string // reason, message
 	calls        []string                // every write: "METHOD path #body-hash", ids as unit names
 	paths        []string                // every write: "METHOD path", ids as unit names
@@ -100,6 +101,8 @@ func (f *sectionsFake) handler(t *testing.T) http.HandlerFunc {
 		switch {
 		case r.Method == http.MethodPut && strings.HasSuffix(path, "/deciders"):
 			f.putDeciders(w, uuid.MustParse(strings.TrimSuffix(strings.TrimPrefix(path, "units/"), "/deciders")), body)
+		case r.Method == http.MethodPost && path == "units" && f.holdCreates:
+			writeJSON(w, http.StatusAccepted, pendingChange("create", "governance_unit", "fresh"))
 		case r.Method == http.MethodPost && path == "units":
 			var req client.GovernanceUnitRequest
 			_ = json.Unmarshal(body, &req)
@@ -480,7 +483,7 @@ func TestGovernancePlanWidensParentAndChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a child behind a held parent failed the apply: %v", err)
 	}
-	if len(res.Pending) != 1 || !slices.Contains(res.Deferred, client.GovernanceDeferredWrite{Unit: "a-child", Base: "z-parent"}) {
+	if len(res.Pending) != 1 || !slices.Contains(res.Deferred, client.GovernanceDeferredWrite{Kind: "deciders", Unit: "a-child", Base: "z-parent"}) {
 		t.Fatalf("pending %d, deferred %+v; want the parent held and the child deferred behind it", len(res.Pending), res.Deferred)
 	}
 	got := stepsOf(res.Steps, "deciders")
@@ -668,5 +671,79 @@ func TestPruneUnderNeverTouchesOutside(t *testing.T) {
 			strings.Contains(p, "<platform>") && !strings.Contains(p, "/admins/") {
 			t.Errorf("prune under platform wrote %s", p)
 		}
+	}
+}
+
+// TestDecidersDeferralKind: a deciders write deferred because its unit's own write is held carries Kind
+// "deciders" and no Base, so it never reads as an assignment or a composed profile.
+func TestDecidersDeferralKind(t *testing.T) {
+	f, c := newSectionsFake(t)
+	_, platform, _, _ := platformTree(f)
+	f.holdCreates = true
+	doc, err := c.GetGovernance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Units = append(doc.Units, client.GovernanceUnit{ID: uuid.New(), Name: "fresh", ParentID: &platform.ID})
+	doc.Deciders["fresh"] = []client.DeciderRule{egressRule("unit_admins")}
+	res, err := c.ApplyGovernanceResult(context.Background(), doc, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(res.Deferred, client.GovernanceDeferredWrite{Kind: "deciders", Unit: "fresh"}) {
+		t.Errorf("deferred = %+v, want fresh's deciders write as Kind deciders", res.Deferred)
+	}
+	if got := f.decidersWrites(); len(got) != 0 {
+		t.Errorf("a unit whose create is held had its rules written: %v", got)
+	}
+}
+
+// TestApplyUnderDocumentIsSubtree: the document an apply under a unit returns is the read after it,
+// narrowed as get --under prints it, so `set --under > f` can be set again under the same unit.
+func TestApplyUnderDocumentIsSubtree(t *testing.T) {
+	f, c := newSectionsFake(t)
+	platformTree(f)
+	doc, err := c.GetGovernanceUnder(context.Background(), "platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.ApplyGovernanceResultUnder(context.Background(), doc, "platform", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, u := range res.Document.Units {
+		names = append(names, u.Name)
+	}
+	if !slices.Equal(names, []string{"platform", "team"}) || res.Document.Deciders["other"] != nil || len(res.Document.Memberships) != 1 {
+		t.Fatalf("document = units %v, deciders %v, memberships %+v; want platform's subtree", names, res.Document.Deciders, res.Document.Memberships)
+	}
+	if _, err := c.ApplyGovernanceResultUnder(context.Background(), res.Document, "platform", true); err != nil || len(f.paths) != 0 {
+		t.Errorf("setting the returned document again: err %v, writes %v; want a no-op", err, f.paths)
+	}
+}
+
+// TestGrandchildDeferralNamesHeldRoot: below a held parent and a deferred child, a grandchild refused as
+// wider waits on the parent's held change, the one that is actually pending, not on the child.
+func TestGrandchildDeferralNamesHeldRoot(t *testing.T) {
+	f, c := newSectionsFake(t)
+	parent, child, doc := widenFixture(f)
+	grand := f.unit("m-grandchild", &child)
+	f.rules[grand.ID] = []client.DeciderRule{egressRule("group:a")}
+	doc.Units = append(doc.Units, grand)
+	doc.Deciders["m-grandchild"] = []client.DeciderRule{egressRule("group:a", "group:b")}
+	f.held[parent.ID] = true
+	wider := [2]string{"decider_rule_wider_than_parent", "rules[0]: who: group:b is wider than the rules above"}
+	f.refuse[child.ID], f.refuse[grand.ID] = wider, wider
+	res, err := c.ApplyGovernanceResult(context.Background(), doc, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(res.Deferred, client.GovernanceDeferredWrite{Kind: "deciders", Unit: "m-grandchild", Base: "z-parent"}) {
+		t.Errorf("deferred = %+v, want the grandchild waiting on z-parent", res.Deferred)
+	}
+	got := stepsOf(res.Steps, "deciders")
+	if len(got) != 3 || got[2].Name != "m-grandchild" || !strings.Contains(got[2].Error, "waits for z-parent's held change") {
+		t.Errorf("steps = %+v, want the grandchild's step naming z-parent", got)
 	}
 }

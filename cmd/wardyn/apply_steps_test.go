@@ -70,7 +70,7 @@ func TestGovernanceSet_FailurePrintsStepsOnStderr(t *testing.T) {
 		t.Fatalf("stdout = %q, want nothing on a failed apply", stdout)
 	}
 	for _, want := range []string{
-		"applied: 1, pending: 0, failed: 1\n",
+		"applied: 1, pending: 0, deferred: 0, failed: 1\n",
 		"  applied unit create fresh\n",
 		"  failed membership upsert user alice: ",
 	} {
@@ -105,7 +105,7 @@ func TestDriveSet_FailurePrintsStepsOnStderr(t *testing.T) {
 		t.Fatalf("stdout = %q, want nothing on a failed apply", stdout)
 	}
 	for _, want := range []string{
-		"applied: 1, pending: 0, failed: 1\n",
+		"applied: 1, pending: 0, deferred: 0, failed: 1\n",
 		"  applied drive create home\n",
 		"  failed drive_grant upsert user alice: ",
 	} {

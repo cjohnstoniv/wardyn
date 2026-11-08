@@ -163,6 +163,8 @@ type GovernanceDeferredWrite struct {
 	// Base is set when the deferred write is a PROFILE rather than an assignment: Profile is the
 	// child that was not sent, Base the profile it composes on whose write is pending.
 	Base string `json:"base,omitempty"`
+	// Kind is "deciders" for a unit's rules write; "" for a profile or an assignment.
+	Kind string `json:"kind,omitempty"`
 }
 
 // PendingApprovalError is returned when a write was held for a second approver

@@ -296,6 +296,7 @@ wardyn governance set platform.json --under platform --prune --reason "team lead
   - any restriction: restrictions are organisation-wide, so write them without `--under`.
 - `--prune` compares against the subtree only, so it never deletes or clears anything outside it.
 - A unit admin's `get --under` followed by `set --under` of that file writes nothing.
+- `set --under` prints the subtree after the apply, the same shape `get --under` prints.
 
 The `deciders` section is each unit's own rules by unit name, in the form `wardyn governance deciders set` takes. Rules a unit inherits are not in it.
 
