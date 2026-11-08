@@ -546,7 +546,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	err = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body)
 	if err == nil {
 		var refused bool // one MCP call: its key is recomputed, and the row stores the validated scope
-		if body.RequestedScope, refused = s.refuseBadMCPCallScope(w, r, body.Kind, body.RequestedScope); refused {
+		if body.RequestedScope, refused = s.refuseBadCallScope(w, r, body.Kind, body.RequestedScope); refused {
 			return
 		}
 	}

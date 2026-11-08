@@ -686,7 +686,7 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 		}
 		b.addCredential(client.AccessCredential{ID: row.ID + ":kube_api", Kind: credKindKubeAPI, Owner: credOwnerShared,
 			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone,
-			Namespaces: append([]string{}, cli.Kubectl.Namespaces...), Access: access})
+			Namespaces: append([]string{}, cli.Kubectl.Namespaces...), Access: access, ApproveEach: cli.Kubectl.ApproveEach})
 	}
 	for i, sec := range fact.Secrets {
 		c := client.AccessCredential{ID: row.ID + ":secret:" + strconv.Itoa(i), Kind: credKindSecret, Owner: credOwnerOwn,

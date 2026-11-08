@@ -38,6 +38,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - An older binary ignores `deny_components` and `deny_model_providers` on unit limits, so denied components and providers attach again.
 - An older version ignores platform envelopes, so a held change of an envelope's unit, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs that unit. Changes below the envelope's unit and adds of its approved groups are held again, as before.
+- An older wardynd loads a kubectl row with `approve_each` but drops that field without an error, so after a downgrade the row's writes are sent without a person's yes. Turn `approve_each` off and narrow the row's access, or its service account's RBAC, first. Rows with `access: restart` fail to validate on an older binary.
 
 ### Added
 
@@ -66,6 +67,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `llm_inspection.detector_sidecar_format` can be set to `presidio`, so `detector_sidecar_url` can point at an unmodified Presidio analyzer (`/analyze`). Unset, the default, keeps Wardyn's own format. It needs `detector_sidecar_url`, and in `block` mode it needs `block_min_severity` of at least `medium`, because Presidio also reports names, dates, URLs, ids and addresses, which are logged here at low severity. A reply that is not a JSON array counts as a sidecar error.
 - `GET /api/v1/approvals?decidable_by=me` lists the pending approvals the caller may decide now, newest first, at most 500 (`X-Wardyn-Truncated: true` when more were decidable): a security admin's are every pending approval the switches let them decide; anyone else's are those on runs they created plus those their unit's deciders rule names them for. A row served to a decider who is not the run's creator carries `requested_by`, and a decider can read the path list of a held push they decide. A hold the caller may not decide is left out whether it exists or not, and a portal's delegated token is refused as for every approvals route. Without a deciders rule the list is what the caller could already decide. The SDK has `ListApprovalsDecidable`.
 - An approval row a unit deciders rule governs says how it is decided. A pending row carries the rule's `max_scope` and `second_human` beside `deciders`. A decided row carries `decision_basis` and `decision_rule_unit`, stored with the decision (migration `0270_approvals_decision_basis`). Rows decided before the upgrade carry neither.
+- kubectl component: `approve_each: true` on a `restart` or `write` row holds each write the door admits until a person approves that exact request (method, path, query, media type and body), once. The run's owner decides it, as for one MCP call. A held write waits 90 seconds, then is refused with the approval to wait for; the same command run again sends it once approved. Bodies must be JSON, not encoded, at most 32 KiB. Off by default; an older proxy image refuses a config that carries it.
 
 ### Changed
 

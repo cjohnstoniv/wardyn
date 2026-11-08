@@ -105,7 +105,7 @@ func policyActor(d *policyDecider) string { return "policy:" + d.m.RuleID.String
 func (s *Server) runApprovalRules(created types.ApprovalRequest) {
 	sw := approvalRulesSwitch()
 	// One MCP call returns here too, before any rule is read: its tool rule asks for a person.
-	if sw == approvalRulesOff || !policyDecidableKinds[created.Kind] || created.GrantID != nil || isMCPCallRow(created) {
+	if sw == approvalRulesOff || !policyDecidableKinds[created.Kind] || created.GrantID != nil || isExactCallRow(created) {
 		return
 	}
 	rs, ok := s.cfg.Store.(store.ApprovalRuleStore)
@@ -248,7 +248,7 @@ func (s *Server) authorizePolicyDecision(w http.ResponseWriter, r *http.Request,
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return ap, run, false, false
 	}
-	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isMCPCallRow(ap) { // the belt to runApprovalRules' return
+	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isExactCallRow(ap) { // the belt to runApprovalRules' return
 		writeErrorReason(w, http.StatusForbidden, reasonApprovalRuleNotApplicable, "an approval rule never decides this approval")
 		return ap, run, false, false
 	}
@@ -391,7 +391,7 @@ func (s *Server) serviceEgressHostAllowed(ctx context.Context, run types.AgentRu
 // within one; a rule naming neither repos nor presets matches nothing.
 func (s *Server) matchApprovalRule(ctx context.Context, rule types.ApprovalRule, ap types.ApprovalRequest, run types.AgentRun) (types.ApprovalPolicyMatch, bool, error) {
 	var none types.ApprovalPolicyMatch
-	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isMCPCallRow(ap) || !slices.Contains(rule.Kinds, ap.Kind) {
+	if !policyDecidableKinds[ap.Kind] || ap.GrantID != nil || isExactCallRow(ap) || !slices.Contains(rule.Kinds, ap.Kind) {
 		return none, false, nil
 	}
 	matched := map[string]string{}

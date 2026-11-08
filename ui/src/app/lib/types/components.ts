@@ -102,6 +102,8 @@ export interface CLIKubectl {
   // 1 to 16 namespace names.
   namespaces: string[];
   access: "read" | "restart" | "write";
+  // Each admitted write waits for a person's yes on that exact request; restart or write only.
+  approve_each?: boolean;
 }
 
 export interface CLIServiceAccount {

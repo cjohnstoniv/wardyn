@@ -464,7 +464,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if scope, isFD, ok = fileDownloadDecisionRule(w, ap, scope); !ok {
 		return
 	}
-	if !isADO && !isMCP && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
+	var isKube bool // one kubectl write is decided once (approvals_kube_call.go)
+	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok {
+		return
+	}
+	if !isADO && !isMCP && !isKube && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
 		return
 	}
 	// The unit deciders rule that governs this request, how this caller decides under it, and its max_scope
@@ -702,7 +706,7 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 	// STRUCTURALLY by its grant_id (adoEscalationScope), never by its scope.
 	// One MCP call is the other, known by call_sha256 with no grant (isMCPCallRow).
 	_, isADO := adoEscalationScope(ap)
-	isMCP := isMCPCallRow(ap)
+	isMCP := isExactCallRow(ap) // a held kubectl write is decided as one MCP call is
 	if err != nil || (ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP) {
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return ap, run, false, false

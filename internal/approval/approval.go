@@ -182,6 +182,14 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 			data["tool"], data["mcp_server"], data["call_sha256"] = call.Tool, call.MCPServer, call.CallSHA256
 		}
 	}
+	// A kubectl write names its cluster, namespace, method, path and call hash the same way.
+	if TallyKey(result) == TallyToolCallKube {
+		var call types.KubeCallScope
+		if json.Unmarshal(result.RequestedScope, &call) == nil {
+			data["cluster"], data["namespace"], data["method"], data["path"] = call.Cluster, call.Namespace, call.Method, call.Path
+			data["call_sha256"] = call.CallSHA256
+		}
+	}
 	if decision.ExpiresAt != nil {
 		data["decision_expires_at"] = decision.ExpiresAt.UTC()
 	}
@@ -368,6 +376,9 @@ const (
 	// TallyToolCallMCP is one MCP call a person approves with its exact arguments (an
 	// approve_each rule): a tool_call known by call_sha256, with no grant.
 	TallyToolCallMCP = "tool_call:mcp_call"
+	// TallyToolCallKube is one kubectl write a person approves with its exact request (a
+	// kubectl row's approve_each): a tool_call known by call_sha256 and cluster, with no grant.
+	TallyToolCallKube = "tool_call:kube_call"
 	// TallyReauthAWSSSO is a lapsed captured AWS SSO session's re-auth.
 	TallyReauthAWSSSO = "credential_reauth:aws_sso"
 	// TallyReauthADOSignIn is an Azure DevOps sign-in request.
@@ -396,6 +407,9 @@ func TallyKey(ap types.ApprovalRequest) string {
 			return TallyToolCallADO
 		}
 		if sc.CallSHA256 != "" && (ap.GrantID == nil || *ap.GrantID == uuid.Nil) {
+			if types.IsKubeCallScope(ap.RequestedScope) {
+				return TallyToolCallKube
+			}
 			return TallyToolCallMCP
 		}
 	case types.ApprovalCredentialReauth:

@@ -77,6 +77,8 @@ export interface AccessCredential {
   // A cluster account (kind kube_api): the namespaces it may reach and how.
   namespaces?: string[];
   access?: "read_only" | "restart" | "read_write" | (string & {});
+  // A person approves each of the account's writes, one exact request at a time.
+  approve_each?: boolean;
 }
 
 export interface AccessUnlisted {

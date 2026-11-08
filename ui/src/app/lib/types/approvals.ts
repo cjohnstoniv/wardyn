@@ -132,7 +132,7 @@ export interface ApprovalRequest {
 // at all, not something this predicate needs to re-check. It does NOT know the
 // egress_host capability: when an admin withholds that grant the server refuses
 // a member's egress_domain decision with capability_egress_host, and the strip
-// turns the row's buttons off on that first refusal. One MCP call is the one tool_call a member may decide (pass the row).
+// turns the row's buttons off on that first refusal. One MCP call or held kubectl write is the one tool_call a member may decide (pass the row).
 export function canDecideApproval(
   operator: boolean,
   kind: ApprovalKind,
@@ -146,9 +146,10 @@ export function canDecideApproval(
   // door for this kind instead of an Approve/Deny pair.
   if (kind === "credential_reauth") return false;
   if (operator) return true;
-  // One MCP call: its run's owner decides it too (the list is owner-scoped, so a row on screen is the viewer's own),
-  // and the server's per-row verdict leads when it sent one. This is the only tool_call a member may decide.
-  if (row && isMCPCallRequest({ kind, ...row })) return row.decidable ?? true;
+  // One MCP call or one held kubectl write (the server's isExactCallRow): its run's owner decides it too (the list
+  // is owner-scoped, so a row on screen is the viewer's own), and the server's per-row verdict leads when it sent
+  // one. These are the only tool_calls a member may decide.
+  if (row && isExactCallRequest({ kind, ...row })) return row.decidable ?? true;
   return kind === "egress_domain";
 }
 
@@ -282,12 +283,41 @@ export interface MCPCallText {
   extra?: string;
 }
 
-// Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256.
+// KubeCallScope mirrors internal/types.KubeCallScope: one kubectl write a person approves with its exact
+// request. body is the canonical JSON the request sends.
+export interface KubeCallScope {
+  cluster: string;
+  namespace: string;
+  method: string;
+  path: string;
+  query?: string;
+  media_type?: string;
+  body?: unknown;
+  call_sha256: string;
+  hold_seconds?: number;
+}
+
+// Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256
+// and no cluster (a scope with a cluster is a kubectl write, isKubeCallRequest).
 export function isMCPCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
   a: T,
 ): a is T & { requested_scope: MCPCallScope } {
   const key = a.requested_scope?.call_sha256;
-  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "";
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster === undefined;
+}
+
+// Structural, like the server's isKubeCallRow: a tool_call with no grant whose scope carries a call_sha256
+// and a cluster.
+export function isKubeCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
+  a: T,
+): a is T & { requested_scope: KubeCallScope } {
+  const key = a.requested_scope?.call_sha256;
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster !== undefined;
+}
+
+// Structural, like the server's isExactCallRow: one MCP call or one held kubectl write.
+export function isExactCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(a: T): boolean {
+  return isMCPCallRequest(a) || isKubeCallRequest(a);
 }
 
 export function isAdoConsentRequest(
