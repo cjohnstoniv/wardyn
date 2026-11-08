@@ -10,18 +10,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// A run that names hosts whose allowed traffic is not activity names activity_ignore_hosts, so a remote
-// runner that would drop the list is refused the run instead of reading a macOS guest's background traffic
-// as the run working.
-func TestProxySettingsSet_NamesActivityIgnoreHosts(t *testing.T) {
-	if got := ProxySettingsSet(runner.ProxyConfig{}); len(got) != 0 {
-		t.Fatalf("an unset config names %v", got)
-	}
+// The hosts whose allowed requests are not idle activity are advisory: a run that carries them names no proxy
+// setting, so an older remote runner that drops the list is still given the run and keeps its old accounting.
+func TestProxySettingsSet_ActivityIgnoreHostsIsAdvisory(t *testing.T) {
 	pc := runner.ProxyConfig{ActivityIgnoreHosts: []string{"mask.icloud.com"}}
-	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{"activity_ignore_hosts"}) {
-		t.Fatalf("ProxySettingsSet = %v, want [activity_ignore_hosts]", got)
+	if got := ProxySettingsSet(pc); len(got) != 0 {
+		t.Fatalf("ProxySettingsSet = %v, want none: the list is advisory", got)
 	}
-	if !slices.Contains(ProxySettings, ProxySettingActivityIgnoreHosts) {
-		t.Fatalf("ProxySettings = %v, want it to list %s", ProxySettings, ProxySettingActivityIgnoreHosts)
+	if slices.Contains(ProxySettings, "activity_ignore_hosts") {
+		t.Fatalf("ProxySettings = %v, want it not to gate activity_ignore_hosts", ProxySettings)
+	}
+	if why := proxyFieldExemptions["ActivityIgnoreHosts"]; why == "" {
+		t.Fatal("ActivityIgnoreHosts has no exemption reason in proxyFieldExemptions")
 	}
 }

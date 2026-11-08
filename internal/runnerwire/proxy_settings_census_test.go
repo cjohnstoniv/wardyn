@@ -59,11 +59,8 @@ var proxySettingOfField = map[string]string{
 	"ForgeHosts": ProxySettingForgeHosts,
 	// Dropped, the run's proxy holds no model list and admits every model the
 	// governance profile limits.
-	"ModelLimit": ProxySettingAllowedModels,
-	// Dropped, the runner's proxy reads a macOS guest's allowed background traffic as the run working, so an
-	// idle run is not stopped: an older remote executor must refuse the run, not run it unstoppable.
-	"ActivityIgnoreHosts": ProxySettingActivityIgnoreHosts,
-	"MCPApproveEach":      ProxySettingMCPApproveEach,
+	"ModelLimit":     ProxySettingAllowedModels,
+	"MCPApproveEach": ProxySettingMCPApproveEach,
 }
 
 // proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.
@@ -76,6 +73,7 @@ var proxyNestedSettings = map[string]string{
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
 // dropping it fails closed.
 var proxyFieldExemptions = map[string]string{
+	"ActivityIgnoreHosts": "advisory: an older runner keeps counting boot-host traffic as activity",
 	"DesktopSignins": "the org sets it only when signinTarget holds, which is false for a run with a runner or a pool " +
 		"(internal/api run_desktop_signin.go signinTarget; remote.Substrate is no runner.SigninExecer either), so a " +
 		"wardyn-runnerd never receives it set; dropped, " +
