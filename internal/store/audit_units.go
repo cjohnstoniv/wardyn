@@ -31,9 +31,10 @@ type UnitAuditReader interface {
 var _ UnitAuditReader = PG{}
 
 // QueryAuditEventsForUnits reads through agent_runs_unit_idx for the runs and audit_events' run_id index
-// for their rows, and the governance arm (unitGovernanceActions) for the rows with no run.
+// for their rows, and the governance arm (unitGovernanceActions) for the rows with no run. An actor filter
+// reads the run rows alone: the view masks a governance row's actor, so matching on it would confirm a name.
 func (s PG) QueryAuditEventsForUnits(ctx context.Context, units []uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
-	q, args := unitAuditQuery(auditCols, units, f, 0, true)
+	q, args := unitAuditQuery(auditCols, units, f, 0, f.Actor == "" && f.ActorAlt == "")
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "query", "unit audit events", q, args, scanAuditEvent)
 }
