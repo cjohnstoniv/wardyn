@@ -236,6 +236,9 @@ func TestDecidersHeldChangeStaleOnDecide(t *testing.T) {
 		t.Errorf("change is %s, want stale", e.changeState(ch.ID))
 	}
 
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a1), decidersBody()); w.Code != http.StatusOK { // a lock waits for the rules below it to clear
+		t.Fatalf("clear ua-a1's rules = %d %s", w.Code, w.Body)
+	}
 	ch = e.pending(e.call(e.adminA, http.MethodPut, decidersPath(e.a2), decidersBody(egressOwnerRule())))
 	lock := e.restate(e.a, map[string]any{"locked_knobs": []string{"deciders"}})
 	if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.a.ID.String(), lock); w.Code != http.StatusOK {

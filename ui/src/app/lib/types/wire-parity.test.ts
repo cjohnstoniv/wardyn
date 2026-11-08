@@ -973,6 +973,44 @@ describe("Restriction wire (GET /governance restrictions, POST/PUT /governance/r
   });
 });
 
+describe("Unit deciders wire (GET /governance deciders, PUT /governance/units/{id}/deciders)", () => {
+  it("each deciders DTO's TypeScript keys are exactly its Go json tags", () => {
+    const root = repoRoot();
+    const types = readFileSync(join(root, "internal/types/deciders.go"), "utf8");
+    const api = readFileSync(join(root, "internal/api/governance_deciders.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/deciders.ts"), "utf8");
+    const pairs: [string, string, string][] = [
+      [types, "DeciderRule", "DeciderRule"],
+      [types, "UnitDeciders", "UnitDeciders"],
+      [api, "governanceDecidersView", "GovernanceDeciders"],
+    ];
+    for (const [go, goName, tsName] of pairs) {
+      expect(tsInterfaceTopKeys(ts, tsName).sort(), tsName).toEqual(goJSONTags(go, goName).sort());
+    }
+  });
+
+  it("DeciderKind is the Go closed set of kinds", () => {
+    const root = repoRoot();
+    const go = readFileSync(join(root, "internal/types/deciders.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/deciders.ts"), "utf8");
+    const goKinds = [...go.matchAll(/\bDeciderKind\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    const union = /export type DeciderKind =([^;]+);/.exec(stripComments(ts))?.[1] ?? "";
+    const tsKinds = [...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(goKinds.length).toBe(6);
+    expect(tsKinds.sort()).toEqual(goKinds.sort());
+  });
+
+  it("GovernanceSnapshot carries the deciders field and a lock names the deciders knob", () => {
+    const root = repoRoot();
+    const gov = readFileSync(join(root, "internal/api/governance.go"), "utf8");
+    expect(gov).toMatch(/Deciders\s+\[\]governanceDecidersView\s+`json:"deciders,omitempty"`/);
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
+    expect(tsInterfaceBody(ts, "GovernanceSnapshot")).toMatch(/deciders\?: GovernanceDeciders\[\];/);
+    const types = readFileSync(join(root, "internal/types/deciders.go"), "utf8");
+    expect(types).toMatch(/DeciderLockKnob\s*=\s*"deciders"/);
+  });
+});
+
 describe("Your walls wire (GET/PUT /me/walls)", () => {
   it("the walls DTOs' TypeScript keys are exactly the Go json tags", () => {
     const root = repoRoot();

@@ -56,7 +56,7 @@ func normalizeLockedKnobs(knobs []string) ([]string, string) {
 	out := make([]string, 0, len(knobs))
 	for _, k := range knobs {
 		k = strings.TrimSpace(k)
-		if !lockableKnobs[k] {
+		if !lockableKnobs[k] && k != types.DeciderLockKnob {
 			return nil, fmt.Sprintf("locked_knobs: %q is not a knob a unit sets", k)
 		}
 		if !slices.Contains(out, k) {

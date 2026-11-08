@@ -235,6 +235,7 @@ func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID,
 			return types.GovernanceUnit{}, err
 		}
 		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, kept, all, b, limit)
+		err = s.checkDeciderLockWrite(r.Context(), q, err, p, all)
 		if err == nil {
 			shift, err = unitRenameShiftQ(r.Context(), q, all, id, p.Name)
 		}

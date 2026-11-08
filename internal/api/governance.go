@@ -67,6 +67,7 @@ func (s *Server) mountGovernanceRoutes(operatorOnly, member chi.Router) {
 	unit.Delete("/governance/units/{id}", s.handleDeleteGovernanceUnit)
 	unit.Post("/governance/units/{id}/admins", s.handleGrantUnitAdmin)
 	unit.Delete("/governance/units/{id}/admins/{admin}", s.handleRevokeUnitAdmin)
+	unit.Put("/governance/units/{id}/deciders", s.handlePutUnitDeciders)
 	unit.Post("/governance/memberships", s.handleUpsertGovernanceMembership)
 	unit.Put("/governance/memberships/{id}", s.handleMoveGovernanceMembership)
 	unit.Delete("/governance/memberships/{id}", s.handleDeleteGovernanceMembership)
@@ -98,6 +99,8 @@ type governanceResponse struct {
 	UnitAdmins []types.GovernanceUnitAdmin `json:"unit_admins"`
 	// ParentWalls is, for a unit admin, the walls each of their subtrees hangs from (scopeGovernanceRead).
 	ParentWalls []unitParentWalls `json:"parent_walls,omitempty"`
+	// Deciders is each unit's hold-deciding rules and, per kind, the unit whose rule governs it; absent when no unit has any.
+	Deciders []governanceDecidersView `json:"deciders,omitempty"`
 }
 
 // handleGetGovernance returns the whole governance picture to a security caller, and a unit admin's
@@ -168,11 +171,16 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: &boundary, UnitAdmins: admins,
 		Restrictions: restrictionViews(restrictions)}
+	if resp.Deciders, err = s.governanceDeciders(r.Context(), resolved); err != nil {
+		writeServerError(w, r, "list unit deciders", err)
+		return
+	}
 	if !s.isSecurityOperator(r.Context()) {
 		if resp, err = s.scopeGovernanceRead(r.Context(), resp, resolved, boundary, limit); err != nil {
 			writeServerError(w, r, "read unit admin grants", err)
 			return
 		}
+		resp.Deciders = scopeDecidersRead(resp.Deciders, resp.Units)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

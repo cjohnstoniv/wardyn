@@ -22,4 +22,6 @@ const (
 	// group, or one already an admin of the unit; reasonGovernanceUnitAdminNotFound: no such grant.
 	reasonGovernanceUnitAdminInvalid  = "governance_unit_admin_invalid"
 	reasonGovernanceUnitAdminNotFound = "governance_unit_admin_not_found"
+	// reasonInvalidDeciders: a unit's deciders rules break the model (types.ValidateDeciderRules); the message names the rule.
+	reasonInvalidDeciders = "invalid_deciders"
 )

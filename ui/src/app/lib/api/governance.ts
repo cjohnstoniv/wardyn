@@ -26,6 +26,7 @@ import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
 import type { GovernanceChangeApprover } from "../types/governance-change";
 import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
+import type { GovernanceDeciders } from "./deciders";
 import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, asNoContent, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
@@ -303,6 +304,8 @@ export interface GovernanceSnapshot {
   parent_walls?: GovernanceParentWalls[];
   // The deny-only lists that follow people, each with how many people it names.
   restrictions?: RestrictionView[];
+  // Each unit's hold-deciding rules and the unit whose rule governs each kind; absent when no unit has any.
+  deciders?: GovernanceDeciders[];
   // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
   unit_names?: Record<string, string>;
 }
@@ -506,6 +509,7 @@ export const governance = {
       restrictions?: unknown;
       unit_admins?: unknown;
       parent_walls?: unknown;
+      deciders?: unknown;
     }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
@@ -514,6 +518,7 @@ export const governance = {
       max_depth: body.max_depth,
       unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
       parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),
+      deciders: unwrapList<GovernanceDeciders>(body.deciders),
     };
   },
 
