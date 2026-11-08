@@ -58,6 +58,7 @@ import { ApprovalNotifyCard } from "./approval-notify-card";
 import { ScimCard } from "./scim-card";
 import { ComponentsSettingsCard } from "./components-settings-card";
 import { MacOSVMSettingsCard } from "./macos-vm-settings-card";
+import { RunnersSettingsCard } from "./runners-settings-card";
 import { RoleRefusal } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -471,6 +472,8 @@ export function AdminSettingsScreen() {
             <AdminSshKeysCard />
             {/* rc.9 (M11a, board J7): the oldest macOS base a run may use; reads its own site-config snapshot. */}
             <MacOSVMSettingsCard />
+            {/* The runner placement rule: only a managed device takes a new local run. */}
+            <RunnersSettingsCard />
           </SettingsGroup>
           <SettingsGroup title={SETTINGS_GROUPS.PEOPLE}>
             {/* notify-e4 (packet M6 S3): read-only channel health for the approval notifications

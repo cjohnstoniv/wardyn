@@ -26,7 +26,8 @@ async function open() {
   await expandCard(RUNNERS.MANAGED_CARD_TITLE);
   return screen.getByTestId("runners-settings-card");
 }
-const sw = () => screen.findByRole("switch", { name: RUNNERS.MANAGED_LABEL });
+// hidden: an open dialog marks the page behind it aria-hidden.
+const sw = () => screen.findByRole("switch", { name: RUNNERS.MANAGED_LABEL, hidden: true });
 const confirmDialog = () => screen.findByRole("alertdialog");
 
 beforeEach(() => {
