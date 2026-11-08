@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.16] — 2026-11-08
+
 ### Before you upgrade
 
 - Before a downgrade, set any `desktop.download: review` to `blocked`: an older server can resolve `review` to allowed when it meets a unit's rules, so its Files panel could send files with no one's yes.
