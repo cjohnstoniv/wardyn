@@ -297,6 +297,10 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	if slices.ContainsFunc(b.DenyPlacements, func(p types.Placement) bool { return !slices.Contains(a.DenyPlacements, p) }) {
 		return false // a placement denial the base keeps must stay
 	}
+	if slices.ContainsFunc(b.DenyComponents, func(id string) bool { return !slices.Contains(a.DenyComponents, id) }) ||
+		slices.ContainsFunc(b.DenyModelProviders, func(id string) bool { return !slices.Contains(a.DenyModelProviders, id) }) {
+		return false // a component or provider denial the base keeps must stay
+	}
 	if len(b.AllowedMacOSBases) > 0 && (len(a.AllowedMacOSBases) == 0 ||
 		slices.ContainsFunc(a.AllowedMacOSBases, func(n string) bool { return !slices.Contains(b.AllowedMacOSBases, n) })) {
 		return false // a macOS base the base does not allow must stay refused

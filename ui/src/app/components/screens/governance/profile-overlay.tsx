@@ -25,6 +25,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
 import { SCHEDULE_DOOR } from "../../wardyn/copy/schedule-door";
+import { DENY_LISTS } from "../../wardyn/copy/deny-lists";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
@@ -169,6 +170,8 @@ export const LIMIT_FIELDS: Field[] = [
   { key: "deny_kept_machines", kind: "true", label: KEEP_POLICY.LABEL, mono: false, hint: KEEP_POLICY.HINT },
   { key: "deny_scheduled_runs", kind: "true", label: SCHEDULE_DOOR.LABEL, mono: false, hint: SCHEDULE_DOOR.HINT },
   ceilingField("deny_placements", "list"),
+  { key: "deny_components", kind: "list", label: DENY_LISTS.COMPONENTS_LABEL, mono: false, hint: DENY_LISTS.COMPONENTS_HINT },
+  { key: "deny_model_providers", kind: "list", label: DENY_LISTS.PROVIDERS_LABEL, mono: false, hint: DENY_LISTS.PROVIDERS_HINT },
   { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
   // The hint under this row is chosen by what the base lists (modelsHint), so it carries none here.
   { key: ALLOWED_MODELS_KEY, kind: "list", label: ALLOWED_MODELS.LABEL, mono: false },

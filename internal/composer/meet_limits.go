@@ -41,6 +41,7 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	if o.DenyPlacements != nil {
 		l.DenyPlacements = unionPlacements(l.DenyPlacements, *o.DenyPlacements)
 	}
+	m.meetDenyLists(o)
 	if o.AllowedMacOSBases != nil {
 		m.meetMacOSBases(*o.AllowedMacOSBases)
 	}

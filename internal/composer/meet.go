@@ -191,6 +191,7 @@ func (m *meeter) validatePresence(ov Overlay) {
 			}
 		}
 	}
+	m.validateDenyLists(ov.Limits)
 	m.validateMacOSBases(ov.Limits.AllowedMacOSBases)
 	m.validateAllowedModels(ov.Limits.AllowedModels)
 	m.validateRequiredImageSigners(ov.Limits.RequiredImageSigners)

@@ -99,6 +99,16 @@ type GovernanceLimits struct {
 	// nothing and no existing install refuses more on upgrade. Deny wins in composition, so a
 	// child unit can never re-open what a parent closed. Operators are exempt.
 	DenyScheduledRuns bool `json:"deny_scheduled_runs,omitempty"`
+	// DenyComponents lists stored components, by id, that a run under this profile may not attach
+	// (403 component_denied, at create and again when a queued run starts). DenyModelProviders lists
+	// model providers, by uid, that such a run may not use. Both are DENY LISTS and a hard wall, so
+	// operators are not exempt. Empty means nothing is denied, so an upgrade changes no run and an
+	// unset profile refuses nothing. Deny wins in composition: a child unit's list is the union of its
+	// parents' and its own, and removing an id is a widening an update holds for a second human.
+	// Inline and built-in components carry no id and are never named here; local_self_defined_components
+	// governs the inline ones.
+	DenyComponents     []string `json:"deny_components,omitempty"`
+	DenyModelProviders []string `json:"deny_model_providers,omitempty"`
 	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
 	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
 	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is

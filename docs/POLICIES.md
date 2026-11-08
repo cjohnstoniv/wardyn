@@ -637,6 +637,22 @@ What the check does and does not settle:
 | Effect | A create or Review with `start_at` is refused `403` `scheduled_runs_denied`, target `runs.schedule`, with an `authz.denied` row naming the knob. A run booked earlier ends `FAILED` `scheduled_runs_denied` at its start time |
 | Not affected | A run with no start time, and operators |
 
+## `deny_components` and `deny_model_providers`
+
+`deny_components` and `deny_model_providers` are limits on a governance profile, not fields of a run's policy. Each is a list of ids a run under the profile may not use: stored component ids, and model provider uids.
+
+| Part | Behaviour |
+|---|---|
+| Default | Empty, so nothing is denied. Upgrading changes no run, and a profile that sets neither refuses nothing |
+| Entries | A canonical lower-case id, listed once, at most 200 per list. A name or a mistyped id is a `400` at write, so a typo cannot leave a wall that denies nothing |
+| Composition | The union: a unit's list is its parents' and its own, so deny wins and a child cannot lift a parent's entry |
+| Changes | Adding an id is a narrowing and applies at once. Removing one is a widening and is held like any other |
+| Effect | A create, Review or preview that attaches a listed component is refused `403` `component_denied` (target `runs.component`). One that would use a listed provider is refused `403` `model_provider_denied` (`runs.model_provider`) |
+| Audit | Each refusal writes an `authz.denied` row naming the knob |
+| Queued run | Checked again when it starts: it ends `FAILED` with the same reason |
+| Operators | Not exempt: a hard wall. An admin whose runs are governed (`WARDYN_GOVERN_ADMIN_RUNS`) meets their profile's lists; the admin token and local mode resolve no profile, so they have none |
+| Not covered | Inline and built-in components carry no id and are never named; `local_self_defined_components` governs inline ones. A run already running is not stopped by a new entry |
+
 ## `autonomy_rubric.self_defined_component`
 
 `self_defined_component` is the tenth field of a profile's `limits.autonomy_rubric`: an autonomy level that caps a run carrying a component its launcher defined ([custom components](operations/custom-components.md)).

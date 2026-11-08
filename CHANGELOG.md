@@ -18,9 +18,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
 
+### Before you downgrade
+
+- An older binary ignores `deny_components` and `deny_model_providers` on unit limits, so denied components and providers attach again.
+
 ### Added
 
 - Governance: a profile can set `deny_scheduled_runs` to refuse a start time (`start_at`) for its people with `403` `scheduled_runs_denied`, and a run booked earlier ends `FAILED` `scheduled_runs_denied` at its start time. It is off by default, and `WARDYN_SCHEDULED_RUNS` stays the deployment's master switch, so nothing refuses more until a profile turns it on. Operators are exempt.
+- Governance: a profile can set `deny_components` (stored component ids) and `deny_model_providers` (model provider uids) to refuse a run that attaches a listed component or would use a listed provider, with `403` `component_denied` or `model_provider_denied` at create, Review and preview, and `FAILED` with the same reason when a queued run starts. Both lists are empty by default, so nothing is denied and no install refuses more on upgrade. The lists compose as a union (deny wins), removing an id is held like any widening, and operators are not exempt.
 - Governance: a profile's autonomy rubric has a tenth field, `self_defined_component`, that caps a run carrying a component its launcher defined. It is unset by default, so it caps nothing. It composes with `components.autonomy_cap` as the lower of the two, so a profile can tighten below the site cap and never loosen it.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.

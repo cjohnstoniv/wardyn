@@ -25,4 +25,9 @@ const (
 	// reasonScheduledRunsDenied: start_at on a launch whose governance profile turns off scheduled runs
 	// (run_schedule_door.go); the deployment switch stays reasonScheduledRunsOff.
 	reasonScheduledRunsDenied = "scheduled_runs_denied"
+	// reasonComponentDenied and reasonModelProviderDenied: a run that attaches a component, or would use
+	// a model provider, its governance profile's deny_components or deny_model_providers lists
+	// (run_deny_lists.go); a hard wall, operators included.
+	reasonComponentDenied     = "component_denied"
+	reasonModelProviderDenied = "model_provider_denied"
 )

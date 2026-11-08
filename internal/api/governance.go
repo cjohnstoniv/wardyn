@@ -253,6 +253,12 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	if err := types.ValidRequiredImageSigners(l.RequiredImageSigners); err != nil {
 		return "limits.required_image_signers: " + err.Error()
 	}
+	if err := types.ValidDenyIDs(l.DenyComponents); err != nil {
+		return "limits.deny_components: " + err.Error()
+	}
+	if err := types.ValidDenyIDs(l.DenyModelProviders); err != nil {
+		return "limits.deny_model_providers: " + err.Error()
+	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
 			return "limits.autonomy_rubric." + err.Error()

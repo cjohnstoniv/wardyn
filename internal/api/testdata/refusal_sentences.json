@@ -346,6 +346,11 @@
   },
   {
     "reason": "governance_unit",
+    "target": "\"runs.component\"",
+    "sentence": "deniedComponentMsg(cand.components[i].name)"
+  },
+  {
+    "reason": "governance_unit",
     "target": "\"runs.desktop_watch\"",
     "sentence": "\"Your organisation's governance profile doesn't allow watching a background run's desktop.\""
   },
@@ -378,6 +383,11 @@
     "reason": "governance_unit",
     "target": "\"runs.kept_machine\"",
     "sentence": "keptMachineGovernanceMsg"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.model_provider\"",
+    "sentence": "deniedProviderMsg(cand.providers[i].name)"
   },
   {
     "reason": "governance_unit",

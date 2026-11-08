@@ -56,7 +56,7 @@ func TestValidDenyIDs(t *testing.T) {
 		{"empty", nil, true},
 		{"two ids", []string{denyIDA, denyIDB}, true},
 		{"not an id", []string{"corp-gateway"}, false},
-		{"upper case", []string{strings.ToUpper(denyIDA)}, false},
+		{"upper case", []string{"ABCDEFAB-1111-4111-8111-111111111111"}, false},
 		{"listed twice", []string{denyIDA, denyIDA}, false},
 		{"empty entry", []string{""}, false},
 		{"too many", long, false},

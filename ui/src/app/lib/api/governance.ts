@@ -60,6 +60,11 @@ export interface GovernanceLimits extends RunLimits {
   // types.GovernanceLimits.DenyScheduledRuns — refuses a start time (start_at) under this profile and ends a booked run at its
   // start, on top of the deployment switch WARDYN_SCHEDULED_RUNS. False/absent inherits the switch; deny wins in composition.
   deny_scheduled_runs?: boolean;
+  // types.GovernanceLimits.DenyComponents / DenyModelProviders — stored component ids and model provider uids a run under this
+  // profile may not attach or use (403 component_denied / model_provider_denied; a hard wall, operators included). Empty denies
+  // none. Deny wins in composition: a child's list is the union, and removing an id is a widening an update holds.
+  deny_components?: string[];
+  deny_model_providers?: string[];
   // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
   // under this profile may not take. A deny list: absent means every placement
   // is permitted. The server refuses a profile denying both.
