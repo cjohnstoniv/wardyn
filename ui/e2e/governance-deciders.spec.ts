@@ -4,9 +4,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, asRealSecurityAdmin, asRealUnitAdmin, consoleAPI, gotoConsole, grantUnitAdmin, navTo, navToRoute, sidebarLink } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, asRealSecurityAdmin, asRealUnitAdmin, consoleAPI, gotoConsole, grantUnitAdmin, navTo, sidebarLink } from "./fixtures";
 import { DECIDERS, DECIDER_KIND_LABEL } from "../src/app/components/wardyn/copy/deciders";
-import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { GOVERNANCE as GOV, PEOPLE } from "../src/app/lib/governance-copy";
 
 // A security admin sets who besides security admins decides each kind of hold for a profile. The four-eyes
 // switch is off in this suite, so a security admin's write applies. The admin token is only the setup and
@@ -135,8 +135,9 @@ test.describe("governance — profile deciders", () => {
     await expect(section.getByRole("button", { name: DECIDERS.ADD, exact: true })).toHaveCount(0);
     await expect(section.getByText(DECIDERS.OWN_UNIT(NAME_P), { exact: true })).toBeVisible();
 
-    // The grant is on the parent profile, not on the child.
-    await navToRoute(page, "/admin/governance");
+    // The grant is on the parent profile, not on the child. An open editor holds every row's Edit, so it closes first.
+    await page.getByTestId("governance-profile-editor").getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
+    await expect(page.getByTestId("governance-profile-editor")).toHaveCount(0);
     await page.getByRole("button", { name: `${GOV.EDIT} ${NAME_C}`, exact: true }).click();
     await expect(page.getByTestId("governance-profile-deciders")).toBeVisible();
     await expect(page.getByText(DECIDERS.OWN_UNIT(NAME_C), { exact: true })).toHaveCount(0);
