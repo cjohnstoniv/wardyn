@@ -59,6 +59,7 @@ import {
 } from "../wardyn/copy";
 import { ApprovalCard, DecidedRow } from "./approvals-cards";
 import { ElevationDeciderCard } from "./elevation/elevation-decider-card";
+import { ImageDeciderCard } from "./elevation/image-decider-card";
 import { MyElevationRequests } from "./elevation/my-elevation-requests";
 
 type Filter = "PENDING" | "waiting" | "decided";
@@ -370,7 +371,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const [elevation, setElevation] = React.useState<GovernanceRequestList | null | "loading" | "error">("loading");
   const deciderRequests =
     !securityOperator && typeof elevation === "object" && elevation !== null
-      ? elevation.requests.filter((r) => r.kind === "elevation" && r.decidable && r.state === "pending")
+      ? elevation.requests.filter((r) => (r.kind === "elevation" || r.kind === "image") && r.decidable && r.state === "pending")
       : [];
   const waitingOn = !securityOperator && knows === true;
   const waitingOnRef = React.useRef(waitingOn);
@@ -720,9 +721,13 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
               </TruncatedNote>
             )}
             <div className="space-y-3.5">
-              {deciderRequests.map((r) => (
-                <ElevationDeciderCard key={r.id} request={r} onDone={elevationDecided} />
-              ))}
+              {deciderRequests.map((r) =>
+                r.kind === "image" ? (
+                  <ImageDeciderCard key={r.id} request={r} onDone={elevationDecided} />
+                ) : (
+                  <ElevationDeciderCard key={r.id} request={r} onDone={elevationDecided} />
+                ),
+              )}
               {waitingRows.map((a) => approvalCard(a, true))}
             </div>
           </>

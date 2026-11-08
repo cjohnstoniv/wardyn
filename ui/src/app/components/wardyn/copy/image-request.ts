@@ -45,4 +45,14 @@ export const IMG = {
   ASKED_UNDER: (unit: string) => `${unit}, their default profile`,
   WRITES:
     "An allow grant of exactly this image for this person. It holds in any profile they run in. The digest rule, a deny of the image and image admission still apply at every launch.",
+  F_KIND: "Image",
+  F_TITLE: (person: string) => `Grant ${person} one image, by digest`,
+  F_TICKET: "Ticket",
+  F_FOR_LABEL: "For:",
+  F_FOR: (person: string, unit: string) => `${person}, asked under ${unit}, their default profile`,
+  F_REASON: "Their reason:",
+  F_WHAT_LABEL: "What you're approving:",
+  F_WHAT: (person: string) => `${person} can launch exactly this image, in any profile they run in. The grant stays until an admin deletes it.`,
+  F_BLAST_LABEL: "Blast radius:",
+  F_BLAST: "The digest rule, a deny of the image and image admission still apply at every launch. Nothing else changes.",
 } as const;
