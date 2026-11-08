@@ -484,7 +484,7 @@ export function AuditScreen() {
         <DrillBanner
           runId={runFilter}
           run={drillRun}
-          loading={drillLoading || (unitAdmin && drillError === "not-found" && status !== "ready")}
+          loading={drillLoading || !unitsKnown || (unitAdmin && drillError === "not-found" && status !== "ready")}
           error={drillError}
           view={view}
           onRetry={() => fetchDrillRun(runFilter)}
