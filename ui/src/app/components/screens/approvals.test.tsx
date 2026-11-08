@@ -161,7 +161,8 @@ vi.mock("../../lib/api/runs", () => ({
   },
 }));
 
-import { ApprovalsScreen } from "./approvals";
+import { ApprovalsScreen, deriveTitle } from "./approvals";
+import { FILE_DOWNLOAD_CARD, KUBE_CALL_CARD } from "../wardyn/copy/files-review";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import { HttpError } from "../../lib/api/core";
@@ -877,5 +878,21 @@ describe("ApprovalsScreen — a held push (#181)", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText(PUSH.TIMEOUT_BODY)).toBeInTheDocument();
+  });
+});
+
+describe("deriveTitle for the download and kubectl cards", () => {
+  it("names a file_download by its file", () => {
+    expect(deriveTitle("file_download", { name: "build-logs.tar.gz", bytes: 3, sha256: "ab", requested_by: "dana" })).toBe(
+      FILE_DOWNLOAD_CARD.LIST_TITLE("build-logs.tar.gz"),
+    );
+    expect(FILE_DOWNLOAD_CARD.LIST_TITLE("build-logs.tar.gz")).toBe("Download build-logs.tar.gz");
+  });
+
+  it("names a kubectl write by its method and namespace, ahead of the MCP and plain tool_call arms", () => {
+    const scope = { cluster: "k8s.example.com", namespace: "team-a", method: "PATCH", path: "/apis/apps/v1/namespaces/team-a/deployments/web", call_sha256: "ab".repeat(32) };
+    expect(deriveTitle("tool_call", scope)).toBe(KUBE_CALL_CARD.LIST_TITLE("PATCH", "team-a"));
+    expect(KUBE_CALL_CARD.LIST_TITLE("PATCH", "team-a")).toBe("kubectl PATCH in team-a");
+    expect(deriveTitle("tool_call", { tool: "mcp__jira__delete_issue", mcp_server: "jira", call_sha256: "ab".repeat(32) })).toBe("Call mcp__jira__delete_issue on jira");
   });
 });
