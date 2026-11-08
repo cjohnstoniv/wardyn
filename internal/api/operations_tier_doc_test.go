@@ -124,6 +124,7 @@ var docTierRows = []struct{ route, token string }{
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
 	{"PUT /api/v1/workspaces/{id}/owning-unit", "`PUT /workspaces/{id}/owning-unit`"},
+	{"PUT /api/v1/components/{id}/owning-unit", "`PUT /components/{id}/owning-unit`"},
 	{"PUT /api/v1/workspaces/{id}/denied-egress", "`denied-egress`"},
 	// SEPARATE TOKENS, because 0.7 re-tiered one of these and not the other.
 	// They shared the surface token "`record` + `promote-egress`" while they
