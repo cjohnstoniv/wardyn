@@ -202,9 +202,6 @@ const (
 	// for AWS, so such a runner is refused a run that carries one.
 	ProxySettingAWSSigV4Gateways = "aws_sigv4_gateways"
 	ProxySettingMCPApproveEach   = "mcp_approve_each"
-	// ProxySettingActivityIgnoreHosts is activity_ignore_hosts: the hosts whose allowed requests are not
-	// activity. Dropped, a macOS guest's boot traffic keeps an idle run from being stopped.
-	ProxySettingActivityIgnoreHosts = "activity_ignore_hosts"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -230,7 +227,6 @@ var ProxySettings = []string{
 	ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels,
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
-	ProxySettingActivityIgnoreHosts,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -239,8 +235,7 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
 	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0, pc.ModelLimit != nil,
 		pc.AWSSigV4 != nil && len(pc.AWSSigV4.Gateways) != 0,
-		pc.MCPApproveEach != nil,
-		len(pc.ActivityIgnoreHosts) != 0} {
+		pc.MCPApproveEach != nil} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
