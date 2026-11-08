@@ -64,6 +64,7 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { AssignmentsBlock } from "./assignments";
 import { ChangesTab } from "./changes";
 import { EgressBaselineTab } from "./egress-baseline";
+import { EnvelopeCard, EnvelopeChip } from "./envelope-card";
 import { Note, noteClass, question, withMono } from "./display";
 import { profileLimitsContent } from "./limit-chips";
 import { BaseChip, childrenOf } from "./profile-overlay";
@@ -373,7 +374,15 @@ export function GovernanceScreen() {
                           {/* A profile name is a human-chosen label, never mono. */}
                           <TableCell className="font-medium">
                             {p.name}
-                            <BaseChip profile={p} profiles={snap.profiles} />
+                            <div className="flex flex-wrap gap-x-1.5">
+                              <BaseChip profile={p} profiles={snap.profiles} />
+                              <EnvelopeChip
+                                profile={p}
+                                profiles={snap.profiles}
+                                envelopes={snap.envelopes ?? []}
+                                unitNames={snap.unit_names}
+                              />
+                            </div>
                           </TableCell>
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
@@ -454,6 +463,9 @@ export function GovernanceScreen() {
               unloaded snapshot is a confident empty state that is a false
               claim (CONSOLE-RULES §10). The profiles card above holds the
               skeleton for both. */}
+          {status === "ready" && snap.envelopes !== undefined && (
+            <EnvelopeCard snapshot={snap} securityOperator={securityOperator} onChanged={load} />
+          )}
           {status === "ready" && (
             <AssignmentsBlock
               snapshot={snap}
