@@ -5,8 +5,11 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/doctor"
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/basesettings"
 )
 
@@ -40,5 +43,18 @@ func TestBaseSettingsWarnings(t *testing.T) {
 	old := []basesettings.Skipped{{Name: "base-settings", Reason: "agent predates this setting; run the tools update again"}}
 	if got, want := BaseSettingsWarnings(old), []string{"base settings skipped, agent predates this setting; run the tools update again: base-settings"}; !slices.Equal(got, want) {
 		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+// The guest-agent stage carries the base settings a tools update skipped as warnings, and they never fail it.
+func TestGuestAgentStageWarnsOnSkippedBaseSettings(t *testing.T) {
+	rec := macvm.ToolsRecord{AgentSignature: macvm.AgentSignedThisMac,
+		BaseSettingsSkipped: []basesettings.Skipped{{Name: "mdutil", Reason: "exit status 1"}}}
+	w := guestAgentWarnings(rec)
+	if len(w) == 0 {
+		t.Fatal("no warning for a skipped base setting")
+	}
+	if st := guestAgentStage(rec, w); st.Status == doctor.StatusFail || !strings.Contains(st.Detail, "mdutil") {
+		t.Fatalf("stage: %+v", st)
 	}
 }

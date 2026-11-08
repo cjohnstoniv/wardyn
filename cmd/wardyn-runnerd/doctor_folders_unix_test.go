@@ -89,13 +89,20 @@ func TestMacOSVMDoctorFolderSharesReadsTheBaseRecords(t *testing.T) {
 // and no guest posture add nothing.
 func TestMacOSVMDoctorWarnsWhenFileVaultIsOn(t *testing.T) {
 	roots := []string{"/Users/a/Work"}
-	st := folderSharesFor(t, roots, macvm.ToolsRecord{Guest: &macvm.GuestPosture{FileVault: "on"}}, nil)
+	st := fileVaultAndFolders(t, roots, macvm.ToolsRecord{Guest: &macvm.GuestPosture{FileVault: "on"}}, nil)
 	if len(st) != 2 || st[0].Name != "file-vault" || st[0].Status != doctor.StatusSkip || !strings.Contains(st[0].Detail, "Turn it off") || st[1].Name != "folder-shares" {
 		t.Fatalf("FileVault on: %+v", st)
 	}
 	for _, g := range []*macvm.GuestPosture{{FileVault: "off"}, {}, nil} {
-		if st := folderSharesFor(t, roots, macvm.ToolsRecord{Guest: g}, nil); len(st) != 1 || st[0].Name != "folder-shares" {
+		if st := fileVaultAndFolders(t, roots, macvm.ToolsRecord{Guest: g}, nil); len(st) != 1 || st[0].Name != "folder-shares" {
 			t.Errorf("guest %+v: %+v", g, st)
 		}
 	}
+}
+
+// fileVaultAndFolders is doctor's macOS VM stages without the guest-agent stage: file-vault, when shown, then
+// folder-shares.
+func fileVaultAndFolders(t *testing.T, roots []string, tools macvm.ToolsRecord, edit *macvm.EditRecord) []doctor.Stage {
+	t.Helper()
+	return slices.DeleteFunc(macOSVMStagesFor(t, roots, tools, edit), func(s doctor.Stage) bool { return s.Name == "guest-agent" })
 }

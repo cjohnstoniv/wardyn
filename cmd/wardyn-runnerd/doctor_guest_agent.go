@@ -48,6 +48,5 @@ func guestAgentStage(rec macvm.ToolsRecord, warnings []string) doctor.Stage {
 // guestAgentWarnings are the guest-agent stage's warning lines, read from the base's tools.json. Each further
 // source of a warning adds its lines here.
 func guestAgentWarnings(rec macvm.ToolsRecord) []string {
-	var w []string
-	return w
+	return BaseSettingsWarnings(rec.BaseSettingsSkipped)
 }
