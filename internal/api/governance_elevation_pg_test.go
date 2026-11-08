@@ -820,10 +820,9 @@ func TestElevationQueuedStartAfterExpiryEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := e.cappedPool("Busy", 1)
+	// Queued under the elevation: run_in names a unit only the elevation makes the person's context. A queued
+	// row carries no lifetime cap yet; the start captures the limits, counted from admission.
 	waiting, occupant := e.waitingPerson(pool, `,"run_in":"`+unit.ID.String()+`"`)
-	if waiting.LifetimeCapSource != types.LimitSourceElevation {
-		t.Errorf("queued run's cap source = %q, want elevation", waiting.LifetimeCapSource)
-	}
 	e.exec(`UPDATE governance_memberships SET expires_at = now() - interval '1 second' WHERE id = $1`, m.ID)
 	e.free(occupant)
 	e.ended(waiting.ID, queueStartRecheck{reason: string(reasonUnitNotAContext)})
