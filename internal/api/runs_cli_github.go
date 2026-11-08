@@ -104,10 +104,11 @@ func (s *Server) persistGitHubCLIGrants(ctx context.Context, w http.ResponseWrit
 	// for a member that list is within their governance profile's (the clamp bounds it, and a run on
 	// the profile itself carries the profile's list). A list that shares nothing with the rows
 	// refuses the run, as a wall's does.
+	caps, policyCaps = ghscope.ExpandPR(caps), ghscope.ExpandPR(policyCaps)
 	if len(policyCaps) > 0 {
 		var within []ghscope.Capability
 		for _, c := range caps {
-			if slices.Contains(policyCaps, c) {
+			if ghscope.Has(policyCaps, c) {
 				within = append(within, c)
 			}
 		}

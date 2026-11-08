@@ -27,8 +27,8 @@ func TestClamp_GitHubCapabilitiesBoundedByTheCeiling(t *testing.T) {
 	}{
 		{"wider than the ceiling", caps(r, w), caps(r), caps(r), true},
 		{"none named", nil, caps(r), caps(r), false},
-		{"within the ceiling", caps(pr, r), caps(r, w, pr), caps(pr, r), false},
-		{"order kept", caps(ra, pr, r), caps(r, pr), caps(pr, r), true},
+		{"within the ceiling", caps(pr, r), caps(r, w, pr), caps(ghscope.CapPRWrite, ghscope.CapPRReview, r), false},
+		{"order kept", caps(ra, pr, r), caps(r, pr), caps(ghscope.CapPRWrite, ghscope.CapPRReview, r), true},
 		{"nothing in common", caps(pr), caps(r), caps(r), true},
 		{"ceiling silent", caps(r, ra), nil, caps(r, ra), false},
 	} {
@@ -87,7 +87,7 @@ func TestClamp_GitHubCapabilitiesNarrowOnly(t *testing.T) {
 		return out
 	}
 	within := func(a, b []ghscope.Capability) bool {
-		return !slices.ContainsFunc(a, func(c ghscope.Capability) bool { return !slices.Contains(b, c) })
+		return !slices.ContainsFunc(a, func(c ghscope.Capability) bool { return !ghscope.Has(b, c) })
 	}
 	for i := 0; i < 500; i++ {
 		proposed, ceilingCaps := subset(), subset()
@@ -100,7 +100,7 @@ func TestClamp_GitHubCapabilitiesNarrowOnly(t *testing.T) {
 		if len(got.GitHubCapabilities) == 0 || !within(got.GitHubCapabilities, ceilingCaps) {
 			t.Fatalf("proposed %v ceiling %v: %v, want a non-empty list within the ceiling", proposed, ceilingCaps, got.GitHubCapabilities)
 		}
-		shared := slices.ContainsFunc(proposed, func(c ghscope.Capability) bool { return slices.Contains(ceilingCaps, c) })
+		shared := slices.ContainsFunc(ghscope.ExpandPR(proposed), func(c ghscope.Capability) bool { return ghscope.Has(ceilingCaps, c) })
 		if shared && !within(got.GitHubCapabilities, proposed) {
 			t.Fatalf("proposed %v ceiling %v: %v, want it within the proposal too", proposed, ceilingCaps, got.GitHubCapabilities)
 		}

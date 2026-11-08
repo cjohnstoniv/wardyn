@@ -44,10 +44,15 @@ const (
 	// nothing without CapCodeWrite beside it. The classifier cannot see which
 	// files a push touches; GitHub's token check is what tells them apart.
 	CapWorkflowsWrite Capability = "workflows_write"
-	// CapPR is opening, updating and reviewing a pull request. Merging one,
-	// or updating its branch, writes the repository and is
-	// CapRepoContentWriteREST.
+	// CapPR is the pre-split name for CapPRWrite and CapPRReview together. Lists may still name it
+	// (ExpandPR reads it as both); the classifier never returns it. Merging a pull request, or
+	// updating its branch, writes the repository and is CapRepoContentWriteREST.
 	CapPR Capability = "pr"
+	// CapPRWrite is opening, updating and commenting on a pull request and requesting or removing reviewers.
+	CapPRWrite Capability = "pr_write"
+	// CapPRReview is any write under a pull request's reviews: creating, submitting (events), updating,
+	// deleting a pending review, and dismissing one (dismissals). An approving review is one of these.
+	CapPRReview Capability = "pr_review"
 	// CapIssuesRead is a read of issues, their comments, labels and milestones.
 	CapIssuesRead Capability = "issues_read"
 	// CapIssuesWrite is creating and changing issues, comments, labels and
@@ -139,7 +144,7 @@ const (
 
 // grantableCapabilities is the closed grantable set.
 var grantableCapabilities = map[Capability]bool{
-	CapCodeRead: true, CapCodeWrite: true, CapWorkflowsWrite: true, CapPR: true,
+	CapCodeRead: true, CapCodeWrite: true, CapWorkflowsWrite: true, CapPR: true, CapPRWrite: true, CapPRReview: true,
 	CapIssuesRead: true, CapIssuesWrite: true,
 	CapActionsRead: true, CapActionsExecute: true, CapActionsAdmin: true,
 	CapPackagesRead: true, CapPackagesWrite: true,
@@ -190,6 +195,8 @@ var labels = map[Capability]string{
 	CapCodeWrite:      "Push commits with git, inside this run's own branch unless its policy allows any branch",
 	CapWorkflowsWrite: "Push changes to workflow files under .github/workflows",
 	CapPR:             "Open, update and review pull requests",
+	CapPRWrite:        "Open, update and comment on pull requests, and request reviewers",
+	CapPRReview:       "Submit, approve, request changes on and dismiss pull request reviews",
 	CapIssuesRead:     "Read issues, comments, labels and milestones",
 	CapIssuesWrite:    "Create and change issues, comments, labels and milestones",
 	CapActionsRead:    "Read workflows, runs, jobs, logs and artifacts",

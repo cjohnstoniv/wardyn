@@ -171,18 +171,18 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 	}
 	// driftFrom has proved the row exists, is live and carries Entra.
 	row, _ := gitProviderRowByID(sc, sn.ProviderRowID)
-	ceiling := row.Entra.CapabilityCeiling
+	ceiling := row.Entra.Ceiling()
 	rows, err := s.runApprovals(r.Context(), claims.RunID, "")
 	if err != nil {
 		return adoCapabilityGrant{}, !fail(http.StatusServiceUnavailable, reasonApprovalsUnreadable, adoCapApprovalsUnreadable, nil)
 	}
 	g := adoCapabilityGrant{capability: c, standing: adoStanding(sn, ceiling, rows)}
-	if slices.Contains(g.standing, c) {
+	if adoscope.Has(g.standing, c) {
 		return g, true
 	}
 	// NEVER ABOVE THE CEILING, whoever approved what: checked against the live
 	// row on every ask, before any approval is honoured or raised.
-	if !slices.Contains(ceiling, c) {
+	if !adoscope.Has(ceiling, c) {
 		return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonCapabilityAboveCeiling,
 			fmt.Sprintf(adoCapAboveCeilingRefusal, adoscope.Label(c)), map[string]any{"capability": c})
 	}
@@ -260,7 +260,7 @@ func adoStanding(sn adoEntraScopeSnapshot, ceiling []adoscope.Capability, rows [
 			continue
 		}
 		c := adoscope.Capability(sc.Capability)
-		if slices.Contains(ceiling, c) && !slices.Contains(out, c) {
+		if adoscope.Has(ceiling, c) && !adoscope.Has(out, c) {
 			out = append(out, c)
 		}
 	}
@@ -484,7 +484,7 @@ func (s *Server) adoEscalationWithinCeiling(ctx context.Context, sc adoCapabilit
 	}
 	row, found := gitProviderRowByID(site, sc.ProviderID)
 	return found && !row.Disabled && row.Entra != nil &&
-		slices.Contains(row.Entra.CapabilityCeiling, adoscope.Capability(sc.Capability))
+		adoscope.Has(row.Entra.Ceiling(), adoscope.Capability(sc.Capability))
 }
 
 // adoDecisionRule is decide()'s rule 4 for an Azure DevOps escalation — the

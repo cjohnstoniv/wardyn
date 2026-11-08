@@ -116,7 +116,7 @@ func TestResolveADOEntraRun_Golden(t *testing.T) {
 		tenantID: adoTestTenant, clientID: adoTestClient,
 		tokenMode: types.ADOTokenModeBearer, credentialSource: types.CredentialSourcePerUser,
 		caps:     []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite},
-		ceiling:  []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR},
+		ceiling:  []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPRCreate, adoscope.CapPRVote, adoscope.CapPRComplete},
 		patHours: types.ADOPATMaxHoursDefault,
 	}
 	if !reflect.DeepEqual(got, want) {

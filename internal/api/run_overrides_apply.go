@@ -398,7 +398,7 @@ func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, base []a
 		if !c.Grantable() {
 			return overrideInvalid("azure_devops.capabilities: %q is not a capability a run can hold", name)
 		}
-		if !slices.Contains(base, c) {
+		if !adoscope.Has(base, c) {
 			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
 				"An override can only narrow azure_devops.capabilities, and %s is not among the capabilities this run has.", name))
 		}
@@ -406,7 +406,7 @@ func applyADOOverride(spec *types.RunPolicySpec, o client.ADOOverrides, base []a
 	}
 	narrowed := false
 	for _, c := range base {
-		if !slices.Contains(keep, c) {
+		if !adoscope.Has(keep, c) {
 			narrowed = true
 			e.add(fieldADOCaps, string(c), provEffectNarrowed)
 		}

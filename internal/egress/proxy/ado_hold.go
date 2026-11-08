@@ -21,7 +21,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -149,7 +148,7 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	out, err := resolveInjectionQuery(ctx, inj.base, inj.token.Get(), grantID, q, inj.client)
 	if err == nil {
 		// A 200 to a FIRST ask is a standing grant naming the capability; else refuse (an ignored ask).
-		if !slices.Contains(out.Capabilities, string(v.Capability)) {
+		if !adoscope.HasName(out.Capabilities, v.Capability) {
 			return false, fallback
 		}
 		inj.installResolved(host, out)
@@ -179,7 +178,7 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 		return false, adoHoldDeniedRefusal
 	case herr != nil:
 		return false, adoHoldEndedRefusal
-	case slices.Contains(res.Capabilities, string(v.Capability)):
+	case adoscope.HasName(res.Capabilities, v.Capability):
 		inj.installResolved(host, res)
 		inj.reauth.widen(v.Capability)
 		return true, ""

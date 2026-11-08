@@ -54,6 +54,22 @@ const CANON_CAPABILITIES: Record<
       "Open, update, comment on, vote on and complete pull requests — without bypassing a branch policy.",
     ado: "ADO: vso.code_write — Contribute to pull requests",
   },
+  pr_create: {
+    name: "Open & update pull requests",
+    consequence: "Open, update, comment on, label and abandon pull requests. No vote, no completion.",
+    ado: "ADO: vso.code_write — Contribute to pull requests",
+  },
+  pr_vote: {
+    name: "Vote on pull requests",
+    consequence:
+      "Approve, reject or reset a vote, add or remove reviewers, post statuses and resolve comment threads. Each can count toward a branch policy's required reviewers.",
+    ado: "ADO: vso.code_write — Contribute to pull requests",
+  },
+  pr_complete: {
+    name: "Complete pull requests",
+    consequence: "Complete a pull request or set it to complete automatically, without bypassing a branch policy.",
+    ado: "ADO: vso.code_write — Contribute to pull requests",
+  },
   policy_admin: {
     name: "Edit branch policies",
     consequence:
@@ -242,7 +258,7 @@ describe("Azure DevOps per-area packet — canon strings", () => {
     expect(FIELD_HELP.azure_devops_capabilities.snippet).toEqual([
       "code_read",
       "code_write",
-      "pr",
+      "pr_create",
       "project_read",
     ]);
   });
