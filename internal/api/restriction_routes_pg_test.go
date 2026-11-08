@@ -152,21 +152,43 @@ func TestRestrictionWriteFourEyes(t *testing.T) {
 	}
 }
 
-// TestRestrictionAllowlistSwapHeld: with the switch on, replacing a restriction's allowlist by one that
-// names a host outside it is held for a second human and leaves the list as it was, whether the new list
-// swaps every host or adds one beside the old ones; dropping a host is direct.
+// TestRestrictionAllowlistSwapHeld: with the switch on, a replacement whose allowlist is not a subset of the
+// old one on the whole entry (host, port and literal), or that drops a deny, is held for a second human (202)
+// and leaves the restriction as it was; a dropped entry, a narrower wildcard, and a reorder with a duplicate
+// are direct (200). A name for the wildcard over it is held: a run naming that host gets nothing under the
+// wildcard and the host under the name.
 func TestRestrictionAllowlistSwapHeld(t *testing.T) {
 	e := newGovEnv(t)
+	bc := []string{"b.example", "c.example"}
 	for _, tc := range []struct {
-		name string
-		next []string
-		held bool
+		name              string
+		old, next         []string
+		oldDeny, nextDeny []string
+		held              bool
 	}{
-		{"swapped", []string{"evil.example"}, true},
-		{"one added", []string{"b.example", "c.example", "evil.example"}, true},
-		{"one dropped", []string{"b.example"}, false},
+		{"swapped", bc, []string{"evil.example"}, nil, nil, true},
+		{"one added", bc, []string{"b.example", "c.example", "evil.example"}, nil, nil, true},
+		{"port swap", []string{"b.example:8443"}, []string{"b.example:9443"}, nil, nil, true},
+		{"name to literal", []string{"b.example"}, []string{"203.0.113.7"}, nil, nil, true},
+		{"name to port", []string{"b.example"}, []string{"evil.example:8443"}, nil, nil, true},
+		{"port entry added", bc, []string{"b.example", "c.example", "evil.example:8443"}, nil, nil, true},
+		{"literal added", bc, []string{"b.example", "c.example", "203.0.113.7"}, nil, nil, true},
+		{"wildcard for a name", []string{"b.example"}, []string{"*.example"}, nil, nil, true},
+		{"name for the wildcard over it", []string{"*.example"}, []string{"b.example"}, nil, nil, true},
+		{"deny dropped", []string{"b.example"}, []string{"b.example"}, []string{"x.b.example", "y.b.example"}, []string{"x.b.example"}, true},
+		{"one dropped", bc, []string{"b.example"}, nil, nil, false},
+		{"port entry dropped", []string{"b.example", "c.example:8443"}, []string{"b.example"}, nil, nil, false},
+		{"narrower wildcard", []string{"*.example"}, []string{"*.a.example"}, nil, nil, false},
+		{"reordered with a duplicate", bc, []string{"c.example", "b.example", "b.example"}, nil, nil, false},
 	} {
-		base := types.RestrictionWrite{Name: "sw-" + strings.ReplaceAll(tc.name, " ", "-"), Spec: types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")},
+		spec := func(allow, deny []string) types.RestrictionSpec {
+			sp := types.RestrictionSpec{AllowedDomains: strs(allow...)}
+			if deny != nil {
+				sp.DeniedDomains = strs(deny...)
+			}
+			return sp
+		}
+		base := types.RestrictionWrite{Name: "sw-" + strings.ReplaceAll(tc.name, " ", "-"), Spec: spec(tc.old, tc.oldDeny),
 			Members: []types.RestrictionMember{userMember("sub-sw")}}
 		w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, base))
 		var created types.Restriction
@@ -174,7 +196,7 @@ func TestRestrictionAllowlistSwapHeld(t *testing.T) {
 			t.Fatalf("%s: create %d %s", tc.name, w.Code, w.Body)
 		}
 		next := base
-		next.Spec = types.RestrictionSpec{AllowedDomains: strs(tc.next...)}
+		next.Spec = spec(tc.next, tc.nextDeny)
 		w = e.call(e.alice, http.MethodPut, "/api/v1/governance/restrictions/"+created.ID.String(), restrictionJSON(t, next))
 		want := http.StatusOK
 		if tc.held {
@@ -187,10 +209,17 @@ func TestRestrictionAllowlistSwapHeld(t *testing.T) {
 		if err != nil || got.Spec.AllowedDomains == nil {
 			t.Fatalf("%s: read back %+v %v", tc.name, got.Spec, err)
 		}
-		if stays := []string{"b.example", "c.example"}; tc.held && !slices.Equal(*got.Spec.AllowedDomains, stays) {
-			t.Errorf("%s: a held replacement changed the list to %v, want %v until approved", tc.name, *got.Spec.AllowedDomains, stays)
+		if tc.held && (!slices.Equal(*got.Spec.AllowedDomains, *created.Spec.AllowedDomains) || len(derefStrs(got.Spec.DeniedDomains)) != len(tc.oldDeny)) {
+			t.Errorf("%s: a held replacement changed the restriction to %+v, want it as created until approved", tc.name, got.Spec)
 		}
 	}
+}
+
+func derefStrs(p *[]string) []string {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // TestRestrictionOverlappingReplacements: a replacement judged at least as strict as the restriction
