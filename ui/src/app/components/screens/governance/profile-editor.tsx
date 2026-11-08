@@ -41,6 +41,7 @@ import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { specToSource, type PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
 import { minimalSpec, parseSpec } from "../../wardyn/policy-panel";
 import { AllowedModelsRow, ALLOWED_MODELS_KEY } from "./allowed-models";
+import { DenyListRow } from "./deny-list-strip";
 import { Note, withMono } from "./display";
 import {
   asOverlay,
@@ -268,8 +269,8 @@ export function ProfileEditor({
       setError(
         isGrantBoundError(e)
           ? { title: GOV.GRANT_BOUND_TITLE, message: getErrorMessage(e) }
-          : e instanceof HttpError && composeRefusalTitle(e.reason)
-            ? { title: composeRefusalTitle(e.reason), message: e.message }
+          : e instanceof HttpError && composeRefusalTitle(e.reason, e.message)
+            ? { title: composeRefusalTitle(e.reason, e.message), message: e.message }
           : e instanceof HttpError
             ? { message: e.message }
             : { message: GOV.SAVE_ERROR },
@@ -491,6 +492,18 @@ export function ProfileEditor({
           onChange={(models) =>
             setLimits(({ allowed_models: _drop, ...rest }) => (models.length > 0 ? { ...rest, allowed_models: models } : rest))
           }
+        />
+        <DenyListRow
+          which="components"
+          value={limits.deny_components ?? []}
+          disabled={disabled}
+          onChange={(ids) => setLimits(({ deny_components: _drop, ...rest }) => (ids.length > 0 ? { ...rest, deny_components: ids } : rest))}
+        />
+        <DenyListRow
+          which="providers"
+          value={limits.deny_model_providers ?? []}
+          disabled={disabled}
+          onChange={(ids) => setLimits(({ deny_model_providers: _drop, ...rest }) => (ids.length > 0 ? { ...rest, deny_model_providers: ids } : rest))}
         />
           </>
         )}

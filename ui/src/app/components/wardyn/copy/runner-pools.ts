@@ -268,7 +268,7 @@ export const POOL_DRAWER = {
   REMOVE: "Remove",
   REMOVE_SUBJECT: (subject: string) => `Remove ${subject}`,
   SUBJECT: { user: "Person", group: "Group", user_type: "Role", unit: "Unit" },
-  ERR_SUBJECT_EMPTY: "Name a person, group or role to add.",
+  ERR_SUBJECT_EMPTY: "Name a person, group, role or unit to add.",
   ERR_SUBJECT_TWICE: (kind: string, subject: string) => `${kind} "${subject}" is listed twice`,
   MEMBERS: "Members",
   MEMBERS_ORG: "Remote-hosted and organization runners",

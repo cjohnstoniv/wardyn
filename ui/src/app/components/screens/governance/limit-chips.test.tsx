@@ -44,7 +44,7 @@ describe("limitChips and limitsBoundNothing", () => {
 
 describe("the unit deny lists in a composed profile's overlay rows", () => {
   it("are list rows with their label and hint", () => {
-    expect(LIMIT_FIELDS.find((f) => f.key === "deny_components")).toMatchObject({ kind: "list", label: DENY_LISTS.COMPONENTS_LABEL, mono: false, hint: DENY_LISTS.COMPONENTS_HINT });
-    expect(LIMIT_FIELDS.find((f) => f.key === "deny_model_providers")).toMatchObject({ kind: "list", label: DENY_LISTS.PROVIDERS_LABEL, mono: false, hint: DENY_LISTS.PROVIDERS_HINT });
+    expect(LIMIT_FIELDS.find((f) => f.key === "deny_components")).toMatchObject({ kind: "list", label: DENY_LISTS.COMPONENTS_LABEL, mono: false, hint: DENY_LISTS.COMPONENTS_HINT_COMPOSED });
+    expect(LIMIT_FIELDS.find((f) => f.key === "deny_model_providers")).toMatchObject({ kind: "list", label: DENY_LISTS.PROVIDERS_LABEL, mono: false, hint: DENY_LISTS.PROVIDERS_HINT_COMPOSED });
   });
 });

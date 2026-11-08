@@ -103,6 +103,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - New setting `runners.require_managed_device` (`PUT /api/v1/runners/settings {"require_managed_device": true}`, super admin): a new local run is refused with `runner_trust_required` on a runner whose trust class is `personal`, so only a `managed_device` runner or an organisation's runner takes it. Off by default, so an upgrade changes nothing; runs already started are not affected. It trusts the security operator's `managed_device` mark and checks no device certificate; the new Device posture section in the hybrid-laptops page says what is and is not checked.
 - Setup status shows an "Image checks" row when image admission is `audit` or `enforce` and `scope` is `member` (the default), to say that the images runs get from their agent or harness set are not checked. Set `images.admission.scope` to `all` to check them. Nothing changes until you do.
 - The Wardyn boundary and a restriction can cap the Azure DevOps and GitHub capabilities of every run they bind (`azure_devops_capabilities`, `github_capabilities`). A capability the cap does not list is refused at launch, at every request and approval, and at every Azure DevOps credential resolve, whatever a provider row allows. A capability added in a later release is outside the cap until you list it. Absent means no cap, so nothing changes at upgrade.
+- The denied components and model providers rows offer the stored components and the model providers by name, a profile without a base has both rows, and a runner pool's policy can name a unit, picked from the profiles.
 
 ### Changed
 
@@ -113,6 +114,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Codex Model stored on a custom endpoint or OpenAI key provider now takes effect: runs with the Codex CLI use it. With none stored, Codex keeps its own default.
 - The proposer of a held governance change may withdraw it with `POST /governance/changes/{id}/reject`, even when only others may approve it, such as a unit admin's change held for the security tier. The `governance.change.reject` row then carries `withdrawn: true`.
 - With `detect_secrets` on, the known-secret check now covers every `env_secret` and `file_secret` value placed in the run, with a component's secrets, not only the secrets named in `workspace_secret_names`. A `block`-mode policy may therefore refuse a prompt that quotes such a value. It checks the whole value only (single-line values, and multi-line values only when pasted verbatim), at least 8 bytes long. Do not store non-secret values, such as a region or a public URL, as an `env_secret`. A revive now rebuilds the proxy with the `file_secret` placeholders as well. Nothing changes with `detect_secrets` off.
+- Narrowing a profile's denied components or model providers starts from an empty list that adds to what the base denies, instead of a copy of the base's list.
 
 ### Fixed
 

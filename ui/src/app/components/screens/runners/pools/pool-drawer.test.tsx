@@ -323,7 +323,7 @@ describe("who may use it", () => {
     renderDrawer(pool());
     await userEvent.click(await screen.findByRole("button", { name: "Edit who may use it" }));
     await userEvent.click(screen.getByRole("button", { name: "Add to list" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("Name a person, group or role to add.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Name a person, group, role or unit to add.");
     await userEvent.click(screen.getByRole("combobox", { name: "Add" }));
     await userEvent.click(await screen.findByRole("option", { name: "Group" }));
     setField(screen.getByLabelText("Name"), "platform-eng");

@@ -40,7 +40,7 @@ const GONE = "e5a9c1d3-6f28-47b0-8d14-3b7a0e9c5f62";
 const unit = (id: string, name: string): GovernanceUnit => ({
   id,
   name,
-  ceiling: {},
+  ceiling: {} as GovernanceUnit["ceiling"],
   limits: {},
   created_at: aheadByHours(-1),
   updated_at: aheadByHours(-1),
