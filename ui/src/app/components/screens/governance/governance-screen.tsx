@@ -54,7 +54,7 @@ import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { PageTabs } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
-import { useSecurityOperator } from "../../wardyn/operator-context";
+import { useSecurityOperator, useUnitAdminOf } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { HowItWorks } from "../../wardyn/how-it-works";
@@ -78,6 +78,8 @@ export function GovernanceScreen() {
   // securityOps route group gates server-side, and this mirrors that predicate
   // exactly. UX only — the middleware is what refuses a write.
   const securityOperator = useSecurityOperator();
+  // A unit admin opens a profile to read it; the editor stays disabled for them (securityOperator below).
+  const unitAdmin = useUnitAdminOf().length > 0;
   const [snap, setSnap] = React.useState<GovernanceSnapshot>(EMPTY);
   // X3-F5: FORBIDDEN is its own arm — /governance is a securityOps route hidden
   // from a member's nav, so the 403 that answers a URL-typed visit is a verdict
@@ -399,7 +401,7 @@ export function GovernanceScreen() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={!securityOperator || editorOpen}
+                                disabled={(!securityOperator && !unitAdmin) || editorOpen}
                                 onClick={() => openEditor(p)}
                                 aria-label={`${GOV.EDIT} ${p.name}`}
                               >
