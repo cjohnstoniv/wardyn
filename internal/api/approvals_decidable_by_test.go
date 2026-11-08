@@ -98,8 +98,8 @@ func rowIDs(rows []map[string]any) []string {
 	return ids
 }
 
-// idsOf is the sorted ids of the holds of kinds.
-func idsOf(all map[string]types.ApprovalRequest, kinds ...string) []string {
+// holdIDsOf is the sorted ids of the holds of kinds.
+func holdIDsOf(all map[string]types.ApprovalRequest, kinds ...string) []string {
 	ids := []string{}
 	for _, k := range kinds {
 		ids = append(ids, all[k].ID.String())
@@ -122,10 +122,10 @@ func TestDecidableByMeOnlyDecidable(t *testing.T) {
 	f := newDCFix(t)
 	dcInboxRules(f)
 	all := f.seedAll()
-	wantIDs(t, "unit admin", f.inboxIDs(dcMember(t, dcAdmin)), idsOf(all, types.DeciderKindEgressDomain, types.DeciderKindCredential))
-	wantIDs(t, "group decider", f.inboxIDs(dcMember(t, dcLead, dcGroup)), idsOf(all, types.DeciderKindMCPCall, types.DeciderKindCredential))
-	wantIDs(t, "owner a rule names", f.inboxIDs(dcMember(t, dcOwner)), idsOf(all, types.DeciderKindADOEscalation))
-	wantIDs(t, "security admin", f.inboxIDs(dcSecurity(t, dcSec)), idsOf(all, dcAllKinds...))
+	wantIDs(t, "unit admin", f.inboxIDs(dcMember(t, dcAdmin)), holdIDsOf(all, types.DeciderKindEgressDomain, types.DeciderKindCredential))
+	wantIDs(t, "group decider", f.inboxIDs(dcMember(t, dcLead, dcGroup)), holdIDsOf(all, types.DeciderKindMCPCall, types.DeciderKindCredential))
+	wantIDs(t, "owner a rule names", f.inboxIDs(dcMember(t, dcOwner)), holdIDsOf(all, types.DeciderKindADOEscalation))
+	wantIDs(t, "security admin", f.inboxIDs(dcSecurity(t, dcSec)), holdIDsOf(all, dcAllKinds...))
 	wantIDs(t, "member with no entry", f.inboxIDs(dcMember(t, dcOther)), []string{})
 	wantIDs(t, "group member of another group", f.inboxIDs(dcMember(t, dcOther, "other-group")), []string{})
 }
@@ -137,9 +137,9 @@ func TestDecidableByMeWithoutRulesIsToday(t *testing.T) {
 	f := newDCFix(t)
 	all := f.seedAll()
 	wantIDs(t, "owner", f.inboxIDs(dcMember(t, dcOwner)),
-		idsOf(all, types.DeciderKindEgressDomain, types.DeciderKindADOEscalation, types.DeciderKindMCPCall))
+		holdIDsOf(all, types.DeciderKindEgressDomain, types.DeciderKindADOEscalation, types.DeciderKindMCPCall))
 	wantIDs(t, "unit admin", f.inboxIDs(dcMember(t, dcAdmin)), []string{})
-	wantIDs(t, "security admin", f.inboxIDs(dcSecurity(t, dcSec)), idsOf(all, dcAllKinds...))
+	wantIDs(t, "security admin", f.inboxIDs(dcSecurity(t, dcSec)), holdIDsOf(all, dcAllKinds...))
 }
 
 // TestDecidableByMeNeverListsTheAuthorsOwnRun: a run's author in a decider group, or a unit admin, never
