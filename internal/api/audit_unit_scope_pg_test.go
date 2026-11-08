@@ -115,7 +115,10 @@ func uaRows(t *testing.T, path string, w *httptest.ResponseRecorder) []types.Aud
 	return out
 }
 
+// uaPaths are both audit reads; a unit admin is served rows on the first only, so a test that reads
+// rows of a unit admin uses uaViewPaths and one that compares an answer with a member's uses uaPaths.
 var uaPaths = []string{"/api/v1/audit", "/api/v1/audit/export"}
+var uaViewPaths = []string{"/api/v1/audit"}
 
 // uaRunCounts is the number of rows per run, and of rows with no run.
 func uaRunCounts(evs []types.AuditEvent) (map[uuid.UUID]int, int) {
@@ -163,7 +166,7 @@ func uaSame(t *testing.T, what string, got, want *httptest.ResponseRecorder) {
 
 func TestAuditUnitAdminSeesOnlySubtreeRuns(t *testing.T) {
 	e := newUnitAuditEnv(t)
-	for _, path := range uaPaths {
+	for _, path := range uaViewPaths {
 		runs, none := uaRunCounts(e.read(e.adminA, path, ""))
 		for name, run := range map[string]uuid.UUID{"ua-a": e.runA, "ua-a1": e.runA1, "their own in ua-a": e.runOwnA} {
 			if runs[run] != 3 {
@@ -188,8 +191,10 @@ func TestAuditUnitAdminSeesOnlySubtreeRuns(t *testing.T) {
 func TestAuditUnitAdminForeignRunIsEmpty200(t *testing.T) {
 	e := newUnitAuditEnv(t)
 	for _, path := range uaPaths {
-		if got := e.read(e.adminA, path, "?run_id="+e.runA.String()); len(got) != 3 {
-			t.Errorf("%s: adminA got %d rows of a subtree run's trail, want 3", path, len(got))
+		if path == "/api/v1/audit" {
+			if got := e.read(e.adminA, path, "?run_id="+e.runA.String()); len(got) != 3 {
+				t.Errorf("%s: adminA got %d rows of a subtree run's trail, want 3", path, len(got))
+			}
 		}
 		for name, q := range map[string]string{
 			"ua-b's run": "?run_id=" + e.runB.String(), "a run with no unit": "?run_id=" + e.runNone.String(),
@@ -202,7 +207,7 @@ func TestAuditUnitAdminForeignRunIsEmpty200(t *testing.T) {
 
 func TestAuditUnitViewDropsPrivateKeys(t *testing.T) {
 	e := newUnitAuditEnv(t)
-	for _, path := range uaPaths {
+	for _, path := range uaViewPaths {
 		for name, evs := range map[string][]types.AuditEvent{
 			"trail": e.read(e.adminA, path, "?run_id="+e.runA.String()),
 			"feed":  e.read(e.adminA, path, ""),
@@ -287,7 +292,7 @@ func TestAuditUnitAdminReparentOut(t *testing.T) {
 	if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+moved.ID.String(), e.restate(moved, map[string]any{"parent_id": e.b.ID})); w.Code != http.StatusOK {
 		t.Fatalf("move the unit below ua-b: %d %s", w.Code, w.Body.String())
 	}
-	for _, path := range uaPaths {
+	for _, path := range uaViewPaths {
 		if runs, _ := uaRunCounts(e.read(e.adminA, path, "")); runs[run] != 0 {
 			t.Errorf("%s: after the move adminA still got %d rows of the moved unit's run", path, runs[run])
 		}
@@ -306,8 +311,12 @@ func TestAuditNoGrantCallers(t *testing.T) {
 	member := withOIDCGroups(operatorCtx("sub-ua-member", "sub-ua-member@corp.example", oidc.RoleUser), []string{})
 	handlers := map[string]http.HandlerFunc{"/api/v1/audit": e.srv.handleQueryAudit, "/api/v1/audit/export": e.srv.handleExportAudit}
 	for path, h := range handlers {
-		if runs, _ := uaRunCounts(uaRows(t, path, memberCall(person, h, http.MethodGet, path, "", nil))); runs[e.runA] != 3 {
-			t.Errorf("%s: the granted person got %d rows of ua-a's run, want 3", path, runs[e.runA])
+		want := 3 // the view; the export is a member's empty answer, with or without a grant
+		if path == "/api/v1/audit/export" {
+			want = 0
+		}
+		if runs, _ := uaRunCounts(uaRows(t, path, memberCall(person, h, http.MethodGet, path, "", nil))); runs[e.runA] != want {
+			t.Errorf("%s: the granted person got %d rows of ua-a's run, want %d", path, runs[e.runA], want)
 		}
 		for name, ctx := range map[string]context.Context{
 			"device":           context.WithValue(person, deviceCtxKey{}, types.Device{ID: uuid.New()}),
@@ -373,36 +382,28 @@ func TestAuditSecurityAndMemberGolden(t *testing.T) {
 	}
 }
 
-func TestAuditExportUnitScope(t *testing.T) {
+// A unit admin has the view on GET /audit and no export: the export answers the empty NDJSON 200 a member
+// gets, for the feed, for a run frozen to their unit that someone else created, and for a run outside it.
+// The creator of a run still exports it, as any owner does.
+func TestAuditExportUnitAdminIsEmpty(t *testing.T) {
 	e := newUnitAuditEnv(t)
-	query, export := e.read(e.adminA, "/api/v1/audit", ""), e.read(e.adminA, "/api/v1/audit/export", "")
-	if len(export) == 0 {
-		t.Fatalf("adminA's export is empty, want the rows of the runs in ua-a's subtree")
+	if runs, _ := uaRunCounts(e.read(e.adminA, "/api/v1/audit", "")); runs[e.runA] != 3 {
+		t.Fatalf("adminA's view has %d rows of ua-a's run, want the 3 the export must not serve", runs[e.runA])
 	}
-	q, x := map[uuid.UUID]types.AuditEvent{}, map[uuid.UUID]types.AuditEvent{}
-	for _, ev := range query {
-		q[ev.ID] = ev
-	}
-	for _, ev := range export {
-		x[ev.ID] = ev
-	}
-	if len(q) != len(x) {
-		t.Errorf("query served %d rows, export %d", len(q), len(x))
-	}
-	for id, ev := range x {
-		a, _ := json.Marshal(ev)
-		b, _ := json.Marshal(q[id])
-		if string(a) != string(b) {
-			t.Errorf("export row %s = %s, query served %s", id, a, b)
+	for name, q := range map[string]string{
+		"the feed":                          "",
+		"a filtered feed":                   "?action=egress.deny",
+		"a subtree run they did not create": "?run_id=" + e.runA.String(),
+		"a child unit's run":                "?run_id=" + e.runA1.String(),
+		"ua-b's run":                        "?run_id=" + e.runB.String(),
+	} {
+		w := e.call(e.adminA, http.MethodGet, "/api/v1/audit/export"+q, "")
+		if w.Code != http.StatusOK || w.Body.Len() != 0 || w.Header().Get("Content-Type") != "application/x-ndjson" {
+			t.Errorf("adminA's export of %s: %d %q %q, want an empty NDJSON 200", name, w.Code, w.Header().Get("Content-Type"), w.Body.String())
 		}
+		uaSame(t, "adminA's export of "+name, w, e.call(e.member, http.MethodGet, "/api/v1/audit/export"+q, ""))
 	}
-	denies := e.read(e.adminA, "/api/v1/audit/export", "?action=egress.deny")
-	runs, none := uaRunCounts(denies)
-	if len(denies) != 3 || runs[e.runB] != 0 || none != 0 {
-		t.Errorf("a filtered export served %d rows (%v), want the 3 egress.deny rows of the subtree's runs", len(denies), runs)
-	}
-	w := e.call(e.adminA, http.MethodGet, "/api/v1/audit/export?run_id="+e.runB.String(), "")
-	if w.Code != http.StatusOK || w.Body.Len() != 0 || w.Header().Get("Content-Type") != "application/x-ndjson" {
-		t.Errorf("export of ua-b's run: %d %q %q, want an empty NDJSON 200", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	if own := e.read(e.adminA, "/api/v1/audit/export", "?run_id="+e.runOwnA.String()); len(own) != 3 {
+		t.Errorf("adminA's export of the run they created = %d rows, want its 3", len(own))
 	}
 }
