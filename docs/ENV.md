@@ -1414,12 +1414,17 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_KUBECTL_CLI`
 
 - Opt in to the `kubectl` CLI component kind (`cli.kind: kubectl`). Off by default.
-- On, an admin writes an organisation row through `PUT /api/v1/components/{id}` naming the API server (`server`, https, no path), its CA bundle (`ca_pem`), one service account (`service_account.namespace`, `service_account.name`), 1 to 16 `namespaces` and `access` (`read` or `write`).
+- On, an admin writes a row through `PUT /api/v1/components/{id}` naming the API server (`server`, https, no path), its CA bundle (`ca_pem`), one service account (`service_account.namespace`, `service_account.name`), 1 to 16 `namespaces` and `access` (`read`, `restart`, `write`).
 - The admin then stores that account's token with `PUT /api/v1/components/{id}/kubectl-token` (`{"value": "<token>"}`). It is kept in the operator namespace under a name the secrets API refuses, with the server, CA and account it was registered for, and is never returned. A run uses it only if those are still the ones it launched with.
 - Editing the row's server, CA or service account deletes the stored token, and so does deleting the row.
 - The account needs `create` on `serviceaccounts/token` for itself (bind it with `resourceNames`). At each proxy refresh the control plane trades the stored token for a 10-minute one with the cluster's TokenRequest API, trusting only the row's CA bundle.
 - The sandbox gets a `~/.kube/config` with the run's own CA and an inert token. Neither the stored token nor a minted one enters the sandbox.
 - The proxy's door holds each request to the row's namespaces and access (`read` is `GET` only), allows discovery, and refuses cluster-wide resources, Secrets, token requests, `exec`, `attach`, `port-forward`, the API server proxy, ephemeral containers and impersonation.
+- `access: restart` reads like `read` and admits one change: what `kubectl rollout restart` sends to a named deployment in `apps/v1`.
+- That is one strategic merge patch, at most 4 KiB with no `Content-Encoding`, that sets only the `kubectl.kubernetes.io/restartedAt` pod-template annotation (query: none, or `fieldManager=kubectl-rollout`). Anything else is refused with a `403`.
+- The shape was verified against kubectl v0.32.2. A kubectl that shapes the patch differently is refused.
+- The cluster's RBAC still scopes verbs and resources: grant the account `get`, `list`, `watch` and `patch` on `deployments` in the row's namespaces, and nothing wider.
+- Update the proxy image before using `restart`. An older proxy refuses to start on a config that carries it.
 - A cluster on a private address also needs the admin's internal-hosts lift, as any private host does.
 - Off, a kubectl row is refused at save and at launch with the unknown-kind error, the New Run card stays `coming_soon`, the token route answers `404`, and a running run's next token refresh is refused.
 - `GET /api/v1/setup/status` reports it as `features.kubectl_cli`.

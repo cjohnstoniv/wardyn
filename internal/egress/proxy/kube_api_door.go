@@ -51,13 +51,16 @@ const (
 
 // KubeAPIGrant is the run's kubectl grant: the API server's host and port, the
 // CA bundle its serving certificate chains to ("" = the egress trust set), the
-// namespaces the row pins and whether the row lets kubectl change them.
+// namespaces the row pins and whether the row lets kubectl change them. Restart
+// admits the one change `kubectl rollout restart` sends (kube_restart.go) and
+// no other; it is ignored when Write is set.
 type KubeAPIGrant struct {
 	Host       string   `json:"host"`
 	Port       int      `json:"port"`
 	CAPEM      string   `json:"ca_pem,omitempty"`
 	Namespaces []string `json:"namespaces"`
 	Write      bool     `json:"write,omitempty"`
+	Restart    bool     `json:"restart,omitempty"`
 }
 
 // kubeAPIDoor is the compiled grant.
@@ -65,6 +68,7 @@ type kubeAPIDoor struct {
 	host       string
 	namespaces []string
 	write      bool
+	restart    bool
 	roots      *x509.CertPool // nil: the egress transport's own trust
 	rt         http.RoundTripper
 }
@@ -78,7 +82,7 @@ func newKubeAPIDoor(g *KubeAPIGrant, mitmHosts map[string]bool, mitmPorts map[st
 	}
 	h := patAPIHost(g.Host)
 	mitmHosts[h], mitmPorts[h] = true, g.Port
-	d := &kubeAPIDoor{host: h, namespaces: slices.Clone(g.Namespaces), write: g.Write}
+	d := &kubeAPIDoor{host: h, namespaces: slices.Clone(g.Namespaces), write: g.Write, restart: g.Restart}
 	if g.CAPEM != "" {
 		d.roots = x509.NewCertPool()
 		d.roots.AppendCertsFromPEM([]byte(g.CAPEM))
@@ -170,7 +174,7 @@ func (d *kubeAPIDoor) admitInNamespace(method string, core bool, rest []string) 
 		return fmt.Errorf("%s is not allowed for this run's kubectl", rest[2])
 	case len(rest) == 3 && rest[0] == "serviceaccounts" && rest[2] == "token":
 		return errors.New("this run's kubectl cannot request a service account token")
-	case method != http.MethodGet && !d.write:
+	case method != http.MethodGet && !d.write && !d.restart:
 		return errors.New("this run's kubectl has read access only")
 	}
 	return nil
@@ -225,6 +229,12 @@ func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string
 	if err := p.kube.admit(r.Method, adoRawPath(r), r.Header); err != nil {
 		p.refuseKubeAPI(w, r, host, port, kubeAPIRefused, kubeAPIRefusedPrefix+err.Error()+".")
 		return
+	}
+	if r.Method != http.MethodGet && p.kube.restartOnly() {
+		if err := p.kube.admitRestart(r, adoRawPath(r)); err != nil {
+			p.refuseKubeAPI(w, r, host, port, kubeAPIRefused, kubeAPIRefusedPrefix+err.Error()+".")
+			return
+		}
 	}
 	// After the gate, so a refused request never mints a token.
 	hdr, ok, err := p.inject.resolveCtx(r.Context(), host)

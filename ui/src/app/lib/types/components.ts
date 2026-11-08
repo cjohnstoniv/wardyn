@@ -101,7 +101,7 @@ export interface CLIKubectl {
   service_account: CLIServiceAccount;
   // 1 to 16 namespace names.
   namespaces: string[];
-  access: "read" | "write";
+  access: "read" | "restart" | "write";
 }
 
 export interface CLIServiceAccount {

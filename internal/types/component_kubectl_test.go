@@ -77,7 +77,7 @@ func TestComponentCLI_KubectlShape(t *testing.T) {
 		"too many":         {row(func(k *types.CLIKubectl) { k.Namespaces = tooMany }), "1 to 16"},
 		"bad namespace":    {row(func(k *types.CLIKubectl) { k.Namespaces = []string{"a/b"} }), "namespaces[0]"},
 		"twice":            {row(func(k *types.CLIKubectl) { k.Namespaces = []string{"a", "a"} }), "listed twice"},
-		"access":           {row(func(k *types.CLIKubectl) { k.Access = "admin" }), "read or write"},
+		"access":           {row(func(k *types.CLIKubectl) { k.Access = "admin" }), "read, restart or write"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
