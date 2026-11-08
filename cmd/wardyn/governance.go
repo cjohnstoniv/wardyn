@@ -67,7 +67,7 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"`wardyn governance changes approve <id>`.",
 	}
 	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client),
-		governanceCheckCmd(client), governanceDryRunCmd(client), governanceAdminsCmd(client))
+		governanceCheckCmd(client), governanceDryRunCmd(client), governanceAdminsCmd(client), governanceDecidersCmd(client))
 	return subcommandGroup(cmd)
 }
 

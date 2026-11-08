@@ -555,11 +555,15 @@ func approvalCmd(client clientFn) *cobra.Command {
 	var runFilter string
 	var asJSON bool
 	var listLimit, listOffset int
+	var waitingOnMe bool
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List approval requests (optionally filtered by --state and/or --run)",
+		Short: "List approval requests (optionally filtered by --state and/or --run, or --waiting-on-me)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if waitingOnMe {
+				return approvalListWaitingOnMe(cmd, client, asJSON)
+			}
 			runID, err := parseOptionalUUID(runFilter, "--run")
 			if err != nil {
 				return err
@@ -593,6 +597,11 @@ func approvalCmd(client clientFn) *cobra.Command {
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
+	list.Flags().BoolVar(&waitingOnMe, "waiting-on-me", false, "only the pending approvals you may decide now (takes no other filter)")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "state")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "run")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "limit")
+	list.MarkFlagsMutuallyExclusive("waiting-on-me", "offset")
 	cmd.AddCommand(list)
 
 	// approvalScanPage is the page size `approval get` scans a run with. It

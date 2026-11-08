@@ -1314,6 +1314,7 @@ applied only once another approver approves it. The SDK never reads it as a save
   A unit admin reads only their subtrees, plus `parent_walls`: the walls above each subtree, with `provenance`.
 - `GrantUnitAdmin` (`POST /governance/units/{id}/admins`) and `RevokeUnitAdmin` (`DELETE …/admins/{admin}`) are `wardyn governance admins add|remove`; a unit admin's are always held ([unit admins](operations/unit-admins.md)).
   The governance file's `admins`, keyed by unit name, and each unit's `locked_knobs` apply and prune like memberships.
+- `PutUnitDeciders` (`PUT /governance/units/{id}/deciders`) is `wardyn governance deciders set <unit> --file`; the file is `{"rules": [...]}`, and a unit admin's write is always held.
 - A held change and a dry-run report list `approvers`: who could decide it. `GET /me`'s `unit_admin_of` names the caller's granted units.
 - `MoveGovernanceMembership` (`PUT /governance/memberships/{id}`) and `PromoteGovernanceMembership` (`POST …/promote`, a legacy one becomes a context) follow the second-human switch ([governance writes](operations/governance-writes.md)).
 - `CheckGovernance` (`POST /governance/check`, `wardyn governance check`) takes `RunIn`: returns `contexts` (each with its `path`), `dormant` memberships and the chosen or home context's `effective` walls with `provenance` and admin-only `path_provenance`, which path unit changed each knob (on `GET /governance` units, not SDK ones).
