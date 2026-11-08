@@ -640,7 +640,7 @@ type CLIKubectl struct {
 	CAPEM          string            `json:"ca_pem,omitempty"` // PEM; empty trusts the system roots
 	ServiceAccount CLIServiceAccount `json:"service_account"`
 	Namespaces     []string          `json:"namespaces"` // 1..MaxCLIKubectlNamespaces
-	Access         string            `json:"access"`     // read (GET only) | write
+	Access         string            `json:"access"`     // read (GET only) | restart (rollout restart) | write
 }
 
 // CLIServiceAccount names a Kubernetes service account.

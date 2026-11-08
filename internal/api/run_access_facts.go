@@ -103,8 +103,9 @@ const (
 	credKindAzureARM    = "azure_arm"
 	credKindKubeAPI     = "kube_api"
 
-	// A kube_api credential's access, from its row's read or write.
+	// A kube_api credential's access, from its row's read, restart or write.
 	kubeAccessReadOnly   = "read_only"
+	kubeAccessRestart    = "restart"
 	kubeAccessReadWrite  = "read_write"
 	signInModelProvider  = "model_provider"
 	signInAWSCLI         = "aws_cli"
@@ -677,8 +678,11 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 			b.addHost(host, viaInjected, row.ID)
 		}
 		access := kubeAccessReadOnly
-		if cli.Kubectl.Access == types.ComponentAccessWrite {
+		switch cli.Kubectl.Access {
+		case types.ComponentAccessWrite:
 			access = kubeAccessReadWrite
+		case types.ComponentAccessRestart:
+			access = kubeAccessRestart
 		}
 		b.addCredential(client.AccessCredential{ID: row.ID + ":kube_api", Kind: credKindKubeAPI, Owner: credOwnerShared,
 			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone,

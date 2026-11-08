@@ -381,7 +381,7 @@ func (s *Server) authorKubectlCLI(ctx context.Context, run types.AgentRun, cli *
 	opened := unionAllowedDomains(policy, []string{net.JoinHostPort(host, strconv.Itoa(port))})
 	return injections, kubectlCLIPlan{opened: opened, gate: &proxy.KubeAPIGrant{
 		Host: host, Port: port, CAPEM: cli.Kubectl.CAPEM, Namespaces: slices.Clone(cli.Kubectl.Namespaces),
-		Write: cli.Kubectl.Access == types.ComponentAccessWrite,
+		Write: cli.Kubectl.Access == types.ComponentAccessWrite, Restart: cli.Kubectl.Access == types.ComponentAccessRestart,
 	}}, true
 }
 

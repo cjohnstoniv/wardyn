@@ -76,7 +76,7 @@ export interface AccessCredential {
   after_end: "gone" | "expires" | "stays" | (string & {});
   // A cluster account (kind kube_api): the namespaces it may reach and how.
   namespaces?: string[];
-  access?: "read_only" | "read_write" | (string & {});
+  access?: "read_only" | "restart" | "read_write" | (string & {});
 }
 
 export interface AccessUnlisted {
