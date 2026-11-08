@@ -73,6 +73,10 @@ var kernelDoors = map[string][]string{
 	// The hosts a component reaches: the same egress_host rows that bound an
 	// inline policy's hosts.
 	"componentHostsBounded": {"capEgressHost"},
+	// A run's context pins: an organisation component attached by id pins the
+	// run's context only for a caller it is granted to, asked as the attach door
+	// asks it, so an ungranted caller never learns the pinned unit. It grants nothing.
+	"componentPins": {"capComponent"},
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
