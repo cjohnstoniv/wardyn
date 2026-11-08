@@ -1041,6 +1041,11 @@ What the check does and does not settle:
 - The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
 - A member's policy that leaves `desktop` out gets its ceiling's controls; one that sets them can only block more, the defaults included.
 - What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
+- `download: review` (download only, opt in) holds each download for a person's yes on that file. The security tier
+  or a unit's `file_download` deciders see its name, size and SHA-256, never its content. Nobody who created the run or
+  asked decides it.
+- An approval releases those bytes once; a file changed since is refused. `allowed` < `review` < `blocked`, so a layer
+  below can only make it stricter.
 - The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
   under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
   port forward to the desktop's VNC port is outside the relay.
@@ -1052,7 +1057,7 @@ What the check does and does not settle:
 | `paste_in` | `string` | `allowed` | The browser's clipboard sent into the desktop (RFB `ClientCutText`). |
 | `copy_out` | `string` | `blocked` | The desktop's clipboard sent to the browser (RFB `ServerCutText`). |
 | `upload` | `string` | `allowed` | Files sent from the Files panel into `~/Transfers`. |
-| `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. |
+| `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. `review` holds each file for a person's yes (below). |
 
 
 ## `tool_rules` — `[]ToolRule`

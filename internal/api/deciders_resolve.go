@@ -72,10 +72,10 @@ func (v deciderVerdict) deciderList() []string {
 // break-glass audit row.
 func deciderSwitchName(unit uuid.UUID) string { return "unit deciders (" + unit.String() + ")" }
 
-// deciderKindOf is the kind a rule names for ap. Five of the nine kinds are run holds: egress_domain,
-// credential, push_content, and the two tool_calls a person may decide, an Azure DevOps escalation and one MCP
-// call. kube_call, image, file_download and elevation name requests that are not run holds, so no approval maps
-// to them and a rule for one of them governs no run hold. Any other row (a plain tool_call, credential_reauth,
+// deciderKindOf is the kind a rule names for ap. Six of the nine kinds are run holds: egress_domain,
+// credential, push_content, a reviewed download (file_download), and the two tool_calls a person may decide, an
+// Azure DevOps escalation and one MCP call. kube_call, image and elevation name requests that are not run holds,
+// so no approval maps to them and a rule for one of them governs no run hold. Any other row (a plain tool_call, credential_reauth,
 // human_takeover) maps to none and is decided exactly as without deciders.
 func deciderKindOf(ap types.ApprovalRequest) string {
 	switch ap.Kind {
@@ -85,6 +85,8 @@ func deciderKindOf(ap types.ApprovalRequest) string {
 		return types.DeciderKindCredential
 	case types.ApprovalPushContent:
 		return types.DeciderKindPushContent
+	case types.ApprovalFileDownload:
+		return types.DeciderKindFileDownload
 	case types.ApprovalToolCall:
 		if _, isADO := adoEscalationScope(ap); isADO {
 			return types.DeciderKindADOEscalation

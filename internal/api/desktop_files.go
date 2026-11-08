@@ -57,7 +57,7 @@ type desktopFile struct {
 }
 
 // desktopFilesView is GET /runs/{id}/desktop/files: the run's effective desktop rules and, only
-// when download is allowed, what is in the transfer folder.
+// when download is allowed or held for review, what is in the transfer folder.
 type desktopFilesView struct {
 	Folder string                `json:"folder"`
 	Rules  types.DesktopControls `json:"rules"`
@@ -173,7 +173,7 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	view := desktopFilesView{Folder: desktopTransferFolder, Rules: rules, Files: []desktopFile{}}
-	if rules.Download == types.TransferAllowed {
+	if rules.Download == types.TransferAllowed || rules.Download == types.TransferReview { // a reviewed download lists what may be asked for
 		// Reading the folder is an exec, which a paused run refuses, and a look is not a person, so it
 		// never thaws (runPausedReadMsg). With download blocked no exec runs and the rules still answer.
 		if run.PausedAt != nil {
@@ -261,6 +261,9 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 	switch {
 	case !validDesktopFileName(name):
 		writeErrorReason(w, http.StatusBadRequest, reasonDesktopTransferBadRequest, "a file name is a plain name: no folder, no leading dot")
+		return
+	case rules.Download == types.TransferReview:
+		s.serveReviewedDownload(w, r, run, name) // desktop_review.go
 		return
 	case rules.Download != types.TransferAllowed:
 		s.auditDesktopTransfer(r, run, "download", "denied", -1, "")

@@ -954,7 +954,7 @@ func clampDesktop(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns [
 	}
 	m := out.Desktop.Meet(ceiling.Desktop)
 	out.Desktop = &m
-	return append(warns, "desktop narrowed: operator policy blocks a direction the proposal allowed")
+	return append(warns, "desktop narrowed: operator policy is stricter (review or blocked) on a direction the proposal allowed")
 }
 
 // clampRecording raises a proposal's recording level to the ceiling's: a ceiling's level is a minimum,

@@ -152,10 +152,11 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 		a.Recording.Rank() >= b.Recording.Rank()
 }
 
-// leqDesktop holds when a allows no desktop direction b blocks, either side's defaults applied.
+// leqDesktop holds when no desktop direction of a is looser than b's (allowed < review < blocked,
+// types.TransferStrictness), either side's defaults applied.
 func leqDesktop(a, b *types.DesktopControls) bool {
 	x, y := a.Effective(), b.Effective()
-	opens := func(p, q types.TransferRule) bool { return p == types.TransferAllowed && q == types.TransferBlocked }
+	opens := func(p, q types.TransferRule) bool { return types.TransferStrictness(p) < types.TransferStrictness(q) }
 	return !opens(x.PasteIn, y.PasteIn) && !opens(x.CopyOut, y.CopyOut) && !opens(x.Upload, y.Upload) && !opens(x.Download, y.Download)
 }
 

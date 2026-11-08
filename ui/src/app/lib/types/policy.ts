@@ -341,7 +341,8 @@ export interface RunPolicySpec {
   recording?: RecordingLevel;
 }
 
-export type TransferRule = "allowed" | "blocked";
+// review (download only): each download waits for a person's yes on that file (Go's types.TransferReview).
+export type TransferRule = "allowed" | "review" | "blocked";
 
 // Mirrors Go's types.DesktopControls.
 export interface DesktopControls {

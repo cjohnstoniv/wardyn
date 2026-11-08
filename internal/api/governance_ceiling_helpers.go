@@ -99,7 +99,7 @@ func governanceControlWarnings(ceiling, deployment types.RunPolicySpec, limits t
 		{"paste_in", own.PasteIn, dep.PasteIn}, {"copy_out", own.CopyOut, dep.CopyOut},
 		{"upload", own.Upload, dep.Upload}, {"download", own.Download, dep.Download},
 	} {
-		if d.own == types.TransferAllowed && d.dep == types.TransferBlocked {
+		if types.TransferStrictness(d.own) < types.TransferStrictness(d.dep) {
 			opened = append(opened, d.name)
 		}
 	}
