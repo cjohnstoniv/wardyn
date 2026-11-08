@@ -92,6 +92,13 @@ type GovernanceLimits struct {
 	// for kept machines. A DOOR with no zero-value opinion: false inherits the switch, so an
 	// unset profile changes nothing. Deny wins in composition.
 	DenyKeptMachines bool `json:"deny_kept_machines,omitempty"`
+	// DenyScheduledRuns refuses a start time (start_at) on a run launched under this profile, and
+	// ends a run already booked when its start comes, on top of the deployment's switch for
+	// scheduled runs (WARDYN_SCHEDULED_RUNS), which stays the master: off there refuses everyone.
+	// A DOOR with no zero-value opinion: false inherits the switch, so an unset profile changes
+	// nothing and no existing install refuses more on upgrade. Deny wins in composition, so a
+	// child unit can never re-open what a parent closed. Operators are exempt.
+	DenyScheduledRuns bool `json:"deny_scheduled_runs,omitempty"`
 	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
 	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
 	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
@@ -262,11 +269,17 @@ type AutonomyRubric struct {
 	// repository hooks and permission rules cannot override the agent-side guardrails. It caps no level
 	// and changes nothing at any other rung.
 	AgentGuardrailLocks bool `json:"agent_guardrail_locks,omitempty"`
+	// SelfDefinedComponent caps the level for a run that carries a component its launcher defined.
+	// It composes with the deployment's own cap (components.autonomy_cap) as a minimum, so a unit
+	// can tighten below that cap and never loosen it. It is named apart from the deployment cap's
+	// custom_component cause so bound_by says which one decided. Empty caps nothing, so a rubric
+	// that leaves it unset changes no run.
+	SelfDefinedComponent AutonomyLevel `json:"self_defined_component,omitempty"`
 }
 
 // Validate reports the first field carrying an undefined AutonomyLevel,
 // naming it — governanceLimitsRefusal prefixes the field name onto its 400
-// so an admin knows which of the nine to fix. An empty field is always
+// so an admin knows which of the ten to fix. An empty field is always
 // valid: unset caps nothing.
 func (a AutonomyRubric) Validate() error {
 	for _, f := range []struct {
@@ -282,6 +295,7 @@ func (a AutonomyRubric) Validate() error {
 		{"confinement_cc1", a.ConfinementCC1},
 		{"confinement_cc2", a.ConfinementCC2},
 		{"confinement_cc3", a.ConfinementCC3},
+		{"self_defined_component", a.SelfDefinedComponent},
 	} {
 		if f.level != "" && !f.level.Valid() {
 			return fmt.Errorf("%s: %q is not a valid autonomy level", f.field, f.level)
@@ -318,6 +332,10 @@ type AutonomyPosture struct {
 	Egress      AutonomyEgressPosture  `json:"egress"`
 	Secrets     AutonomySecretsPosture `json:"secrets"`
 	Confinement ConfinementClass       `json:"confinement"`
+	// CustomComponent is set when the run carries a component its launcher defined; it selects the
+	// rubric's self_defined_component field. Omitted when false, so a run without one records the
+	// posture it always did.
+	CustomComponent bool `json:"custom_component,omitempty"`
 }
 
 // AutonomyResolution is what resolveRunAutonomy (#97) decides for one run: the level, the

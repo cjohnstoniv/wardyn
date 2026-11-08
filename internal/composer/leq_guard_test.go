@@ -64,6 +64,7 @@ var leqRules = map[string]string{
 	"deny_user_drive":                       "b implies a",
 	"deny_member_drives":                    "b implies a",
 	"deny_kept_machines":                    "b implies a",
+	"deny_scheduled_runs":                   "b implies a",
 	"deny_background_desktop_watch":         "b implies a",
 	"deny_placements":                       "every placement b denies is denied by a",
 	"allowed_macos_bases":                   "b allows any: any a; else a is a non-empty subset of b",
@@ -90,6 +91,8 @@ var leqRules = map[string]string{
 	"default_wait_sec":                      "a is no looser bound than b, a 0 default read as the maximum",
 	"user_changes_limits":                   "a implies b",
 	"pause_idle_after_sec":                  "a is no looser bound than b",
+
+	"autonomy_rubric.self_defined_component": "b caps nothing: any a; else a caps at a level <= b's",
 }
 
 // unleqedFields reports each leaf of spec that has no row in rules, or whose Go

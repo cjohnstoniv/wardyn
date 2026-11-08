@@ -31,6 +31,7 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 		{&l.DenyUserDrive, o.DenyUserDrive},
 		{&l.DenyMemberDrives, o.DenyMemberDrives},
 		{&l.DenyKeptMachines, o.DenyKeptMachines},
+		{&l.DenyScheduledRuns, o.DenyScheduledRuns},
 		{&l.DenyBackgroundDesktopWatch, o.DenyBackgroundDesktopWatch},
 	} {
 		if f.ov != nil {
@@ -275,6 +276,7 @@ func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 		{"confinement_cc1", &b.ConfinementCC1, o.ConfinementCC1},
 		{"confinement_cc2", &b.ConfinementCC2, o.ConfinementCC2},
 		{"confinement_cc3", &b.ConfinementCC3, o.ConfinementCC3},
+		{"self_defined_component", &b.SelfDefinedComponent, o.SelfDefinedComponent},
 	} {
 		switch {
 		case f.ov == "":

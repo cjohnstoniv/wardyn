@@ -72,7 +72,7 @@ func autonomyConfinement(enforced types.ConfinementClass) types.ConfinementClass
 }
 
 // FoldAutonomy folds a rubric against a posture: the level is the MINIMUM over
-// the three fields the posture selects, and boundBy names EVERY field tied at
+// the three (or four) fields the posture selects, and boundBy names EVERY field tied at
 // that minimum (its rubric wire name), not just the first — so an admin who
 // raises one capping row can see the level not move because another field tied
 // it. An unset field caps nothing and is skipped, so an all-unset rubric
@@ -100,7 +100,7 @@ type autonomyCap struct {
 	level types.AutonomyLevel
 }
 
-// applicableAutonomyCaps returns the three caps this posture selects, in the
+// applicableAutonomyCaps returns the caps this posture selects (three, and a fourth for a run with a self-defined component), in the
 // fixed order FoldAutonomy lists tied causes in. A posture axis whose value is
 // not one of its three defined states selects no cap, so the zero
 // AutonomyPosture (a run under no profile) caps nothing.
@@ -129,6 +129,11 @@ func applicableAutonomyCaps(rubric types.AutonomyRubric, posture types.AutonomyP
 		caps = append(caps, autonomyCap{"confinement_cc2", rubric.ConfinementCC2})
 	case types.CC3:
 		caps = append(caps, autonomyCap{"confinement_cc3", rubric.ConfinementCC3})
+	}
+	// The unit's cap on a run that carries a component its launcher defined; last, so a tie names
+	// it after the three axes. Distinct from the deployment cap's custom_component cause.
+	if posture.CustomComponent {
+		caps = append(caps, autonomyCap{"self_defined_component", rubric.SelfDefinedComponent})
 	}
 	return caps
 }

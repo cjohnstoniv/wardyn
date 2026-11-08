@@ -133,7 +133,7 @@ derives its role.
 
 | `GovernanceLimits` field | Unset means | Meet |
 |---|---|---|
-| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives`, `deny_kept_machines`, `deny_background_desktop_watch` | false | OR |
+| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives`, `deny_kept_machines`, `deny_scheduled_runs`, `deny_background_desktop_watch` | false | OR |
 | `local_self_defined_components` | false | AND |
 | `deny_placements` | none denied: every placement is permitted | union of the denied placements |
 | `allowed_models` | none listed: no limit | intersection; an empty list on one side yields the other; disjoint is unsatisfiable |
@@ -256,7 +256,7 @@ Profiles narrow by omission: a profile that omits secret grants revokes them for
 
 ### The autonomy rubric
 
-- A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`).
+- A profile may also carry `limits.autonomy_rubric`, ten closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`), three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`) and [`self_defined_component`](../POLICIES.md#autonomy_rubricself_defined_component).
   - Each is unset or one of four autonomy levels:
     - `L0` attended (interactive only, supervised seeding), `L1` gated (adds non-interactive runs, but `tool_approvals` is derived to `hold`),
     - `L2` unattended (adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the door that routes around every other gate, so it is the top rung).

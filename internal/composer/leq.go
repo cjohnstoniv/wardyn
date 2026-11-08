@@ -288,7 +288,7 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 		{a.DenyTaskModeExec, b.DenyTaskModeExec}, {a.DenyInteractive, b.DenyInteractive},
 		{a.DenyUIApps, b.DenyUIApps}, {a.DenyUserDrive, b.DenyUserDrive},
 		{a.DenyMemberDrives, b.DenyMemberDrives}, {a.DenyKeptMachines, b.DenyKeptMachines},
-		{a.DenyBackgroundDesktopWatch, b.DenyBackgroundDesktopWatch},
+		{a.DenyBackgroundDesktopWatch, b.DenyBackgroundDesktopWatch}, {a.DenyScheduledRuns, b.DenyScheduledRuns},
 	} {
 		if p[1] && !p[0] { // a denial the base keeps must stay
 			return false
@@ -324,12 +324,12 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 func leqRubric(a, b *types.AutonomyRubric) bool {
 	levels := func(r *types.AutonomyRubric) []types.AutonomyLevel {
 		if r == nil {
-			return make([]types.AutonomyLevel, 9)
+			return make([]types.AutonomyLevel, 10)
 		}
 		return []types.AutonomyLevel{
 			r.EgressOpen, r.EgressReviewed, r.EgressSealed,
 			r.SecretsPowerful, r.SecretsBaseline, r.SecretsNone,
-			r.ConfinementCC1, r.ConfinementCC2, r.ConfinementCC3,
+			r.ConfinementCC1, r.ConfinementCC2, r.ConfinementCC3, r.SelfDefinedComponent,
 		}
 	}
 	if b != nil && b.AgentGuardrailLocks && (a == nil || !a.AgentGuardrailLocks) {

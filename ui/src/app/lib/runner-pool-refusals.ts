@@ -98,6 +98,7 @@ export const RUN_END_REASON_SENTENCE = {
   queue_timeout: "This run waited too long for a free slot and was not started.",
   queue_sign_in_timeout: "This run waited for you to sign in to its model provider again, and was not started.",
   scheduled_runs_off: "Scheduled runs were switched off (WARDYN_SCHEDULED_RUNS) before this run's start time, so it was not started.",
+  scheduled_runs_denied: "Your admin turned off scheduled runs for your team before this run's start time, so it was not started.",
   queue_profile_changed: "Your governance profile changed while this run waited. Start it again.",
   queue_policy_changed: "The policy this run used changed while it waited. Start it again to review it.",
   queue_portal_revoked: "The portal that launched this run was removed while it waited.",

@@ -677,6 +677,7 @@ export const RUBRIC = {
   GROUP_SECRETS: "Secrets",
   GROUP_BARRIER: "Barrier",
   GROUP_BARRIER_HINT: "The enforced barrier — “confinement class” in the API and the docs.",
+  GROUP_COMPONENTS: "Custom components",
   // key -> [row label, why]. Iterate AUTONOMY_RUBRIC_ROW_KEYS for a stable,
   // Go-matching order rather than Object.keys.
   ROWS: {
@@ -689,8 +690,9 @@ export const RUBRIC = {
     confinement_cc1: ["Fence (CC1)", "Shared kernel."],
     confinement_cc2: ["Wall (CC2)", "gVisor userspace kernel."],
     confinement_cc3: ["Vault (CC3)", "Kata microVM."],
+    self_defined_component: ["Defined by the launcher", "The run uses a component its launcher defined. This can only tighten the organisation's own cap on these runs."],
   } as Record<AutonomyRubricRowKey, [label: string, why: string]>,
-  SET_NOTE: (n: number, level: string) => `${n} of 9 rows set a cap. The lowest is ${level}.`,
+  SET_NOTE: (n: number, level: string) => `${n} of 10 rows set a cap. The lowest is ${level}.`,
 } as const;
 
 // foldAutonomyRubric summarizes a WHOLE rubric for display — every row that
@@ -854,6 +856,7 @@ const AUTONOMY_BOUND_DETAIL: Record<AutonomyBoundKey, { dimension: string; detai
   confinement_cc1: { dimension: "barrier", detail: "Fence, confinement class CC1" },
   confinement_cc2: { dimension: "barrier", detail: "Wall, confinement class CC2" },
   confinement_cc3: { dimension: "barrier", detail: "Vault, confinement class CC3" },
+  self_defined_component: { dimension: "custom components", detail: "your governance profile limits runs that use components you defined" },
   // The org's cap on runs that use a component the launcher defined; the Go
   // reason names it "your organisation's rule for runs that use your own custom components".
   custom_component: { dimension: "custom components", detail: "your organisation limits runs that use components you defined" },
@@ -899,7 +902,8 @@ export function autonomyBoundSentence(causes: AutonomyBoundKey[]): string {
     const only = AUTONOMY_BOUND_DETAIL[causes[0]];
     return `Bound by this run's ${only.dimension}: ${only.detail}.`;
   }
-  const dims = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension);
+  // Two causes can share a dimension (the profile's and the organisation's cap on custom components): name it once.
+  const dims = [...new Set(causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension))];
   const details = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].detail);
   return `Bound by this run's ${joinAnd(dims)}: ${joinDetails(details)}.`;
 }

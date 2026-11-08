@@ -216,6 +216,9 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if end != nil {
 		return end
 	}
+	if end := s.queueScheduleDoor(st, ceiling); end != nil {
+		return end
+	}
 	if end := s.queuePolicyUnchanged(st, req, nil); end != nil {
 		return end
 	}
