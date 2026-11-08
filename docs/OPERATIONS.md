@@ -2914,6 +2914,18 @@ The residuals an operator should plan for:
   - IAM Identity Center is the system of record, so terminating their Identity Center session (or removing their assignment) stops the refresh token redeeming and their console reads *sign in again* — the offboarding step.
   - The session also dies with its OIDC client registration.
 
+#### How long an AWS sign-in lasts
+
+A `bedrock_sso` sign-in lasts as long as IAM Identity Center's session for it. Wardyn renews the session's access token by itself, but it cannot extend the session. When that session ends, AWS refuses the renewal, the run asks its owner to sign in again, and the message says how long after sign-in it happened. When people sign in to Wardyn and to IAM Identity Center through the same identity provider, three settings outside Wardyn decide how often that happens:
+
+1. **IAM Identity Center session duration.** IAM Identity Center console → Settings → Authentication → Session duration → User interactive sessions. The default is 8 hours; it can be 15 minutes to 90 days. A change applies to new sessions only.
+2. **Your identity provider's session for the IAM Identity Center application.** If the identity provider sends a session end time in its SAML assertion (`SessionNotOnOrAfter`), the shorter of the two applies. A sign-in-frequency or conditional-access policy on that application can also end it. Give it the same policy as the Wardyn console's application, so one doesn't end before the other.
+3. **The same people on both applications.** Assign the Wardyn console application and the IAM Identity Center application to the same groups, so anyone who can start a run can also renew its AWS session.
+
+None of these changes what a role may do, only how long a sign-in lasts.
+
+Wardyn does not turn its own sign-in into an IAM Identity Center token through a trusted token issuer. That AWS call is signed with AWS credentials, so Wardyn would have to hold a standing AWS credential of its own.
+
 ### One live sign-in sandbox per person
 
 - Starting a sign-in closes that person's previous one.
