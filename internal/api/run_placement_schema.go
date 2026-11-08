@@ -42,7 +42,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[kubectlCLIDispatch](): strings.Fields("ComponentID Kubectl"),
 	reflect.TypeFor[types.CLIAzure]():     strings.Fields("Subscriptions Access"),
 	reflect.TypeFor[types.CLIAWS]():       strings.Fields("StartURL SSORegion AccountID RoleName Region"),
-	reflect.TypeFor[types.CLIKubectl]():   strings.Fields("Server CAPEM ServiceAccount Namespaces Access"),
+	reflect.TypeFor[types.CLIKubectl]():   strings.Fields("Server CAPEM ServiceAccount Namespaces Access ApproveEach"), // ApproveEach: a bool holding each write for a person's yes; no credential
 	reflect.TypeFor[dispatchCeiling]():    strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound modelLimit"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives MainDrive Components " +
 		"GitPushWithheld PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart Machine modelLimit"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
