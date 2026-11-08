@@ -24,14 +24,15 @@ import { Button } from "../../ui/button";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import * as RL from "../../wardyn/copy/run-lifetime";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
-import { keptUntilText, weekdayClock } from "./run-ends-row";
+import { elevationCapAt, keptUntilText, weekdayClock } from "./run-ends-row";
 import { ChangeEndDialog } from "./change-end-dialog";
 import { reviveWithToasts } from "../runs/revive-run";
 
 // Same three thresholds the board row's own chip warns at (runs-model.ts).
 function endsWarningStageNow(run: RunDetail): RL.EndsWarningStage | null {
-  const approxLeaseMs = run.ends_at ? Date.parse(run.ends_at) - Date.parse(run.created_at) : 0;
-  return RL.endsWarningStage(run.ends_at, Date.now(), approxLeaseMs);
+  const end = elevationCapAt(run) ?? run.ends_at;
+  const approxLeaseMs = end ? Date.parse(end) - Date.parse(run.created_at) : 0;
+  return RL.endsWarningStage(end, Date.now(), approxLeaseMs);
 }
 
 // Claude Code continues its conversation on revive; every other harness
@@ -381,7 +382,21 @@ export function RunLifetimeBanner({
 
     // ---- Ending soon: the 24h/1h/10m warning (design.md §2.3) ----
     const stage = endsWarningStageNow(run);
-    if (stage && dismissed !== `${stage}@${run.ends_at}`) {
+    const cap = elevationCapAt(run);
+    const end = cap ?? run.ends_at;
+    if (stage && dismissed !== `${stage}@${end}`) {
+      // An elevation's end cannot be moved, so its warning offers Dismiss alone.
+      if (cap) {
+        return (
+          <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={RL.warnBodyElevation(weekdayClock(cap))}>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDismissed(`${stage}@${cap}`)}>
+                {RL.WARN_DISMISS}
+              </Button>
+            </div>
+          </Banner>
+        );
+      }
       return (
         <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={run.ends_at ? RL.warnBody(weekdayClock(run.ends_at)) : undefined}>
           <div className="mt-2.5 flex flex-wrap gap-2">

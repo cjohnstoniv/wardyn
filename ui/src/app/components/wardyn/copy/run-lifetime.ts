@@ -111,6 +111,13 @@ export function warnTitle(stage: EndsWarningStage): string {
 export function warnBody(dateText: string): string {
   return `At ${dateText} the run stops. Its files are kept for a while after that (your admin sets how long); push or save anything you need before then.`;
 }
+// A run launched under an elevation ends when the elevation does, and nothing here can move that end.
+export function endsElevation(dateText: string): string {
+  return `This run ends when your elevation ends, ${dateText}. It can't be extended.`;
+}
+export function warnBodyElevation(dateText: string): string {
+  return `At ${dateText} the run stops, because your elevation ends then. Push or save anything you need before then.`;
+}
 export const WARN_EXTEND_1_DAY = "Extend 1 day";
 export const WARN_CHANGE_END = "Change end…";
 export const WARN_DISMISS = "Dismiss";
