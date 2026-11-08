@@ -54,7 +54,7 @@ const policy = (subjects: RunnerPoolUsePolicy["subjects"]): RunnerPoolUsePolicy 
   pool_id: "p-ci",
   subjects,
   revision: 3,
-  updated_at: "2026-10-11T10:00:00Z",
+  updated_at: aheadByHours(-2),
 });
 
 function deferred<T>() {
