@@ -306,9 +306,13 @@ func applyEnvelopeChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	return govApplied{action: envelopeSetAction, target: p.UnitID.String(), data: envelopeAuditData(p.UnitID, cur.ApprovedGroups, saved.ApprovedGroups)}, nil
 }
 
+// envelopeSetByForUnitAdmins is the set_by a unit admin reads on an envelope.
+const envelopeSetByForUnitAdmins = "security"
+
 // envelopesInScope narrows envelopes for a unit admin: those on a unit of their subtrees (in) and
 // those on a unit above a subtree root, which is the envelope their units sit under. roots are the
-// subtree roots (subtreeUnits).
+// subtree roots (subtreeUnits). Each reads set_by as envelopeSetByForUnitAdmins: the setter is a security
+// admin, whose principal is not shown to a lower tier.
 func envelopesInScope(envelopes []types.GovernanceEnvelope, rows []types.GovernanceUnit, in map[uuid.UUID]bool, roots []uuid.UUID) []types.GovernanceEnvelope {
 	byID := unitsByID(rows)
 	above := map[uuid.UUID]bool{}
@@ -326,6 +330,7 @@ func envelopesInScope(envelopes []types.GovernanceEnvelope, rows []types.Governa
 	out := []types.GovernanceEnvelope{}
 	for _, e := range envelopes {
 		if in[e.UnitID] || above[e.UnitID] {
+			e.SetBy = envelopeSetByForUnitAdmins
 			out = append(out, e)
 		}
 	}

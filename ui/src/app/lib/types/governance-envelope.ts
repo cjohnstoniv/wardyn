@@ -9,6 +9,7 @@
 export interface GovernanceEnvelope {
   unit_id: string;
   approved_groups: string[];
+  // set_by: the setter's principal for the security tier; "security" for a unit admin.
   set_by: string;
   set_at: string;
 }
