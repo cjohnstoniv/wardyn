@@ -644,7 +644,7 @@ func macOSMemoryBelowMinimum(rn types.Runner, haveGB, needGB int) string {
 // the pass rested on, or the first check that failed. No device-certificate check exists in 0.10.0.
 func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *placement.Refusal) {
 	if rn.TrustClass != types.RunnerTrustManagedDevice {
-		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security operator to mark it."
+		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security admin to mark it as a managed device."
 		if operator {
 			detail = fmt.Sprintf("%s is not marked as company-managed. Mark it with `wardyn runner trust %s managed_device`.", macRunnerName(rn), rn.ID)
 		}
