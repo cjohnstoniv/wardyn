@@ -4,7 +4,7 @@
  */
 
 // The platform envelope card on Governance > Profiles, and the two chips in the Profiles table. The
-// strings are the approved board's, character for character. LAZY: reached only through the governance
+// strings are the approved design's, character for character. LAZY: reached only through the governance
 // screen, never re-exported from the eager copy.ts barrel.
 export const ENVELOPE = {
   TITLE: "Platform envelopes",
