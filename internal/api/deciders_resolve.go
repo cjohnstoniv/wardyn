@@ -214,14 +214,14 @@ func (s *Server) resolveDecider(r *http.Request, ap types.ApprovalRequest, run t
 	if err != nil || v.rule == nil {
 		return v, err
 	}
-	actorType, principal := actorFromRequest(r)
+	_, principal := actorFromRequest(r)
 	if _, isPolicy := policyDeciderFrom(ctx); isPolicy {
 		v.basis = deciderBasisPolicy
 		return v, nil
 	}
 	if s.isSecurityOperator(ctx) {
 		v.basis = deciderBasisSecurity
-		if actorType == types.ActorSystem && principal == adminTokenPrincipal {
+		if isAdminTokenCaller(r) {
 			v.basis = deciderBasisAdminToken
 		}
 		return v, nil
