@@ -21,7 +21,7 @@
 | **v0.10.0** | Developer sandboxes: Linux VM and macOS VM sandboxes (macOS is a preview, off by default), organisation walls, local model servers, folders from your computer, desktop controls, services. The macOS parts have not run end to end on a real Mac | **Shipped (pre-alpha)** — `v0.10.0-rc.1` to `v0.10.0-rc.13`, 2026-10-24 to 2026-11-04 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.14** | rc.14: image signature admission, signed audit receipts, per-run model token usage, MCP step-up approval, Idempotency-Key on run creation, macOS GUI sessions; Docker runs need Engine 28 or later. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.14`, 2026-11-07 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.15** | rc.15: a refused request no longer keeps a run awake, gateway rerouting keys refused under the allowed-models list, cleaner macOS VM bases, the guest agent signed in-process. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.15`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.16** | rc.16: unit deciders for held approvals, platform envelopes, file download approvals, kubectl restart and per-write approval, model gateway and detector pages. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.16`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.16** | rc.16: unit deciders for held approvals, platform envelopes, file download approvals, kubectl restart and per-write approval, model gateway and detector pages. | **Shipped (pre-alpha)** — `v0.10.0-rc.16`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
