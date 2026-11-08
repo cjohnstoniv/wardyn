@@ -38,7 +38,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you downgrade
 
-- Replace `pr_create`, `pr_vote` and `pr_complete` (Azure DevOps) and `pr_write` and `pr_review` (GitHub) with `pr` in every provider row, policy, unit wall, person's walls, wall preset and GitHub CLI component first: an older release refuses the new names.
+- Replace `pr_create`, `pr_vote` and `pr_complete` (Azure DevOps) and `pr_write` and `pr_review` (GitHub) with `pr` in every provider row, policy, unit wall, person's walls, wall preset and GitHub CLI component first. An older release refuses the new Azure DevOps names, and grants nothing for `pr_write` or `pr_review` in a GitHub list, without an error.
 - An older binary ignores `deny_components` and `deny_model_providers` on unit limits, so denied components and providers attach again.
 - An older version ignores platform envelopes, so a held change of an envelope's unit, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs that unit. Changes below the envelope's unit and adds of its approved groups are held again, as before.
 - An older wardynd loads a kubectl row with `approve_each` but drops that field without an error, so after a downgrade the row's writes are sent without a person's yes. Turn `approve_each` off and narrow the row's access, or its service account's RBAC, first. Rows with `access: restart` fail to validate on an older binary.
