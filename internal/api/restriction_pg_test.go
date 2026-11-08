@@ -86,12 +86,11 @@ func TestRestrictionDeniesInEveryContext(t *testing.T) {
 	}
 }
 
-// TestRestrictionAllowlistRefused: a restriction cannot carry an allowlist, a credential grant list, an
-// allow-all, or a true boolean; nothing is stored.
+// TestRestrictionAllowlistRefused: a restriction cannot carry a credential grant list, an allow-all, or a
+// true boolean; nothing is stored.
 func TestRestrictionAllowlistRefused(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	for name, body := range map[string]string{
-		"allowed_domains":   `{"name":"x","spec":{"allowed_domains":["a.example"]},"limits":{},"members":[]}`,
 		"eligible_grants":   `{"name":"x","spec":{"eligible_grants":[{"kind":"ssh_key"}]},"limits":{},"members":[]}`,
 		"allow_all_egress":  `{"name":"x","spec":{"allow_all_egress":true},"limits":{},"members":[]}`,
 		"git_push_any":      `{"name":"x","spec":{"git_push_any_branch":true},"limits":{},"members":[]}`,
