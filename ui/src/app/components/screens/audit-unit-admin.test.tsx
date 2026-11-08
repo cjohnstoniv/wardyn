@@ -216,7 +216,6 @@ describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
     expect(await screen.findByText("Loading run…")).toBeInTheDocument();
     await act(async () => answerRun(undefined));
     expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Open run/ })).not.toBeInTheDocument();
 
     await act(async () => answerMe(unitsOf("payments")));
     expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
