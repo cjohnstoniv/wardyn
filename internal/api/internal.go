@@ -60,11 +60,17 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// Debounced: a chatty agent can emit many decisions a second, and each touch
 	// is an UPDATE on the same agent_runs row; the reaper thresholds are minutes,
 	// so one touch per touchDebounce per run loses nothing.
-	if s.cfg.Store != nil && s.shouldTouch(runID, dl.RuleSource) {
+	// An allowed request is activity, a refused one is not (egress.CountsAsActivity): a run that is only
+	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
+	var kind types.MachineKind
+	if run, ok := liveRunFromContext(r.Context()); ok {
+		kind = run.MachineKind
+	}
+	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	// The same decision moves the pause's presence clock (run_pause.go).
-	if agentActivityDecision(dl.RuleSource) {
+	if decisionIsActivity(kind, dl) {
 		s.noteAgentActive(r.Context(), runID)
 	}
 
@@ -97,6 +103,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	}
 	if dl.Via != "" {
 		fields["via"] = dl.Via
+	}
+	// The allow of an opaque CONNECT to a model host; counted by RunOpaqueTunnels.
+	if dl.ModelTunnel {
+		fields["model_tunnel"] = true
 	}
 	// A desktop VM's relay flow id, and the port rule's dry-run mark.
 	if dl.Flow != "" {

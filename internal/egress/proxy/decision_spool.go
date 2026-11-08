@@ -397,7 +397,7 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 			err = s.local.Append(ctx, log)
 		}
 	}
-	if err == nil && charged && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout" {
+	if err == nil && charged && egress.CountsAsActivity(log) {
 		_ = runneractivity.Record(s.activityDir, held.epoch)
 	}
 	// A served request whose record did not land, for any reason, is an audit gap: it refuses all

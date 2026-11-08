@@ -316,7 +316,7 @@ func (s *remoteSink) emit(log egress.DecisionLog) {
 		epoch = held.epoch
 	}
 	body, merr := json.Marshal(RecordBody{Admitted: admitted, Epoch: epoch, Decision: log,
-		Activity: admitted && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout"})
+		Activity: admitted && egress.CountsAsActivity(log)})
 	switch {
 	case err != nil || merr != nil || s.closed || s.stopped:
 		// Never counted: an admitted record here is already in the drained

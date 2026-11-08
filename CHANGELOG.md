@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- A refused egress request no longer counts as activity for idle auto-stop or idle pause, on every kind of run, with no switch: a run that is only being refused now idles out. Only an allowed request restarts the idle clock. A runner's proxy keeps the old behaviour until the runner is upgraded.
 - A run with an allowed-models list, or with content inspection in `alert` or `block` mode, now treats a model call whose body carries `fallbacks`, `models`, `context_window_fallbacks`, `content_policy_fallbacks`, `router_settings_override` or `preset` as a refusal (`block`, and always under the allowed-models list) or a logged alert (`alert`). Claude Code and the Codex CLI send none of these keys. In `block` mode, a model call whose body is over the 32 MiB scan limit, has a `Content-Encoding`, or is not one JSON object is now refused where an oversize body used to pass with `on_scanner_error: pass`. A run with neither feature is unchanged, and so is a route set to `inspection: gateway`.
 - A macOS VM run now denies `mask.icloud.com`, `mask-h2.icloud.com` and `proxy.safebrowsing.apple` quietly, as it already does for the other Apple background hosts: no approval is raised and each denial is recorded. A run whose policy allows one of them by name keeps it. Allow the host in the run's policy to reach it.
 - A macOS VM base gets its new settings (below) from the tools update, and the first update after the upgrade is answered by the base's old guest agent, which cannot apply them: `tools.json` records "agent predates this setting; run the tools update again". Run the update twice.
@@ -33,6 +34,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- `opaque_tunnels` in a run's model usage now counts a tunnelled connection to a model host whether or not content inspection is on: the proxy marks the connection's allow row (`model_tunnel`), and the count is the larger of the marked rows and the `llm.scan.bypass` rows, so older runners still count.
+- Idle auto-stop no longer reads a refused request as the run working. A macOS VM run's Apple background requests (a refused boot host above all) kept resetting the idle clock, so the run never stopped at its cap. Only allowed requests count.
 - A macOS VM runner now signs the guest agent in its own process with this Mac's signing identity, with no keychain and no trust setting, so the agent can keep Full Disk Access across tools updates. codesign could refuse that self-signed identity ("no identity found"), and the agent then went in signed ad hoc. codesign stays as the fallback, now given the designated requirement and the signing keychain on the search list for the call. Each signed copy must pass `codesign --verify --strict` and read back the designated requirement before it is pushed. This is on by default.
 
 ### Security

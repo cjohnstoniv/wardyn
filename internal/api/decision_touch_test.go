@@ -105,7 +105,7 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 func TestShouldTouch_ApprovalPollAndReauthTimeoutAreNotActivity(t *testing.T) {
 	srv := &Server{}
 	for _, dl := range []egress.DecisionLog{
-		{Decision: egress.Allow, RuleSource: ruleSourceApprovalsPoll},
+		{Decision: egress.Allow, RuleSource: egress.RuleSourceApprovals},
 		{Decision: egress.Deny, RuleSource: ruleSourceCredentialReauthTimeout},
 		{Decision: egress.Deny, RuleSource: "policy:denied"},
 		{Decision: egress.Pending, RuleSource: "policy:first-use"},

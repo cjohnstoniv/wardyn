@@ -47,6 +47,9 @@ func TestLocalDecisionActivityUsesAdmissionEpochOnly(t *testing.T) {
 		}
 		log.Request.AuditReservation = ticket
 		log.RuleSource = source
+		if source == "credential:reauth-timeout" {
+			log.Decision = egress.Deny // the proxy only ever writes it as a deny
+		}
 		sink.emitLocal(log)
 		same, err := runneractivity.Read(dir)
 		if err != nil || same != marker {
@@ -54,7 +57,7 @@ func TestLocalDecisionActivityUsesAdmissionEpochOnly(t *testing.T) {
 		}
 	}
 	log.Request.AuditReservation = uuid.Nil
-	log.RuleSource = "policy:allowed"
+	log.Decision, log.RuleSource = egress.Allow, "policy:allowed"
 	sink.emitLocal(log)
 	same, err := runneractivity.Read(dir)
 	if err != nil || same != marker {

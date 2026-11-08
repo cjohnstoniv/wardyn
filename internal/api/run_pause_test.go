@@ -559,7 +559,7 @@ func TestInternalActivity_StampsTheTokensRunOnly(t *testing.T) {
 	if _, thaws := f.rn.counts(); thaws != 0 {
 		t.Errorf("thaws = %d; agent activity must never thaw a paused run", thaws)
 	}
-	if egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Allow, RuleSource: ruleSourceApprovalsPoll}) ||
+	if egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Allow, RuleSource: egress.RuleSourceApprovals}) ||
 		egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Deny, RuleSource: ruleSourceCredentialReauthTimeout}) ||
 		!egress.CountsAsActivity(egress.DecisionLog{Decision: egress.Allow, RuleSource: "policy:allowlist"}) {
 		t.Error("egress.CountsAsActivity: the approvals poll and the re-auth timeout are not activity; an allow is")
