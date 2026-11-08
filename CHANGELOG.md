@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- `llm_inspection.detector_sidecar_format` can be set to `presidio`, so `detector_sidecar_url` can point at an unmodified Presidio analyzer (`/analyze`). Unset, the default, keeps Wardyn's own format. It needs `detector_sidecar_url`, and in `block` mode it needs `block_min_severity` of at least `medium`, because Presidio also reports names, dates, URLs, ids and addresses, which are logged here at low severity. A reply that is not a JSON array counts as a sidecar error.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.
 - Two configuration profile templates for organisations with MDM, in `deploy/macos-guest/mdm/`: Setup Assistant panes to skip (installs by hand or MDM) and Full Disk Access for the guest agent (MDM only).
