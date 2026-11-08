@@ -15,7 +15,8 @@
 //     and the server remains the authority: a 403 or 409 is shown as its own sentence, verbatim, under the
 //     frozen heading.
 //
-// Every string is from CHANGES (governance-copy.ts); this file adds none.
+// Every string is from CHANGES (governance-copy.ts) or CHANGE_NOTE (wardyn/copy/change-note.ts); this file
+// adds none.
 import * as React from "react";
 import { Inbox } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -23,17 +24,24 @@ import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api } from "../../../lib/api/governance";
 import { runnerPools } from "../../../lib/api/runner-pools";
-import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, formatDuration, getErrorMessage, relativeTime } from "../../../lib/format";
+import { goDurationMs } from "../../../lib/go-duration";
 import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
+import { cn } from "../../ui/utils";
 import { Mono } from "../../wardyn/code-block";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
+import { IMG } from "../../wardyn/copy/image-request";
+import { changeTargetRef, splitImageRef } from "../elevation/image-ref";
 import { Field } from "../../wardyn/form-primitives";
-import { usePrincipal } from "../../wardyn/operator-context";
+import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState } from "../../wardyn/states";
+import { useRovingRadio } from "../../wardyn/use-roving-radio";
+import { ChangeNoteForm } from "./change-note-form";
 import { Note } from "./display";
 
 // "Profile · Edit": the kind and the op, each in the table's own vocabulary. One this console predates
@@ -110,6 +118,82 @@ function assignedProfile(c: GovernanceChange): Record<string, unknown> | null {
   return p && typeof p === "object" ? (p as Record<string, unknown>) : null;
 }
 
+// An elevation request's person, unit and length, read from the server's diff (`after`). Null when a field is
+// missing or the length is not a Go duration, so the row and drawer fall back to the generic ones.
+function elevationOf(c: GovernanceChange): { person: string; unit: string; length: string } | null {
+  if (c.target_kind !== "governance_elevation") return null;
+  const a = c.diff.after as { unit_name?: unknown; subject?: unknown; duration?: unknown } | undefined;
+  if (typeof a?.unit_name !== "string" || typeof a.subject !== "string" || typeof a.duration !== "string") return null;
+  if (!a.unit_name || !a.subject) return null;
+  const ms = goDurationMs(a.duration);
+  return Number.isFinite(ms) ? { person: a.subject, unit: a.unit_name, length: formatDuration(ms, "words") } : null;
+}
+
+// An image request's person, the reference and the unit it was asked under, read from the server's diff (`after`).
+// Null when a field is missing or the reference has no digest, so the row and drawer fall back to the generic ones.
+function imageOf(c: GovernanceChange): { person: string; ref: string; unit: string } | null {
+  if (c.target_kind !== "governance_image_request") return null;
+  const a = c.diff.after as { image?: unknown; unit_name?: unknown; subject?: unknown } | undefined;
+  if (typeof a?.image !== "string" || typeof a.unit_name !== "string" || typeof a.subject !== "string") return null;
+  if (!a.unit_name || !a.subject || !splitImageRef(a.image).digest) return null;
+  return { person: a.subject, ref: a.image, unit: a.unit_name };
+}
+
+// A person asking for something, not proposing a change: the kinds whose proposer's Reject is a withdrawal.
+function isRequest(c: GovernanceChange): boolean {
+  return c.target_kind === "governance_elevation" || c.target_kind === "governance_image_request";
+}
+
+// The proposer's reason, cut with an ellipsis, then the ticket in mono.
+function NoteLine({ note }: { note: NonNullable<GovernanceChange["note"]> }) {
+  return (
+    <p className="flex items-baseline gap-1.5 text-xs font-normal text-muted-foreground">
+      <span className="max-w-[48ch] truncate">{note.reason}</span>
+      {note.ticket && (
+        <>
+          {" "}
+          <Mono>{note.ticket}</Mono>
+        </>
+      )}
+    </p>
+  );
+}
+
+// "Who can decide": the all/only-security pill group, the look of the runners screen's filter.
+function DeciderFilter({ onlySecurity, onChange }: { onlySecurity: boolean; onChange: (only: boolean) => void }) {
+  const options = [
+    { only: false, label: CHANGE_NOTE.FILTER_ALL },
+    { only: true, label: CHANGE_NOTE.FILTER_SECURITY },
+  ];
+  const group = useRovingRadio(options.length, onlySecurity ? 1 : 0, (i) => onChange(options[i].only));
+  return (
+    <div role="radiogroup" aria-label={CHANGE_NOTE.FILTER_LABEL} className="flex gap-1.5" {...group.containerProps}>
+      {options.map((o, i) => {
+        const { tabIndex, radioRef } = group.itemProps(i);
+        return (
+          <button
+            key={o.label}
+            ref={radioRef}
+            tabIndex={tabIndex}
+            type="button"
+            role="radio"
+            aria-checked={onlySecurity === o.only}
+            onClick={() => onChange(o.only)}
+            className={cn(
+              "rounded-full border px-2.5 py-0.5 text-xs",
+              onlySecurity === o.only ? "border-primary text-foreground" : "border-border text-muted-foreground",
+            )}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const NONE: GovernanceChange[] = [];
+
 export function ChangesTab({
   changes,
   loadError,
@@ -122,25 +206,69 @@ export function ChangesTab({
 }) {
   const [open, setOpen] = React.useState<GovernanceChange | null>(null);
   const navigate = useNavigate();
-  const removalNames = useRemovalNames(changes);
+  const securityOperator = useSecurityOperator();
+  // "Only security can decide" is a request of its own: the list rows do not say who could decide them, so the
+  // server answers which ones are security's alone. It is read again whenever the parent reloads the list.
+  const [onlySecurity, setOnlySecurity] = React.useState(false);
+  const [filtered, setFiltered] = React.useState<GovernanceChange[] | null>(null);
+  const [filterError, setFilterError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!onlySecurity) return;
+    let live = true;
+    api
+      .listChanges({ approver: "security" })
+      .then((list) => {
+        if (!live) return;
+        setFiltered(list);
+        setFilterError(null);
+      })
+      .catch((e) => live && setFilterError(getErrorMessage(e)));
+    return () => {
+      live = false;
+    };
+  }, [onlySecurity, changes]);
+  const chooseFilter = (only: boolean) => {
+    setOnlySecurity(only);
+    setFiltered(null);
+    setFilterError(null);
+  };
+  const shown = onlySecurity ? filtered : changes;
+  const shownError = onlySecurity ? filterError : loadError;
+  const removalNames = useRemovalNames(shown ?? NONE);
+  const hasList = changes.length > 0 || (filtered?.length ?? 0) > 0;
   return (
     <section className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
       {/* The lead describes the list, so it rides with the list; with nothing waiting the empty block
           below says the same thing once (#2907). */}
-      {changes.length > 0 && (
-        <div className="px-6 pt-5">
-          <p className="max-w-[82ch] text-body text-muted-foreground">{CHANGES.LEAD}</p>
+      {(hasList || (securityOperator && onlySecurity)) && (
+        <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
+          {hasList && <p className="max-w-[82ch] text-body text-muted-foreground">{CHANGES.LEAD}</p>}
+          {securityOperator && <DeciderFilter onlySecurity={onlySecurity} onChange={chooseFilter} />}
         </div>
       )}
-      {loadError && (
+      {shownError && (
         <div className="px-6 pt-5">
           <Note tone="red" role="alert">
-            <Mono className="text-inherit">{loadError}</Mono>
+            <Mono className="text-inherit">{shownError}</Mono>
           </Note>
         </div>
       )}
-      <div className={changes.length > 0 ? "mt-4" : undefined}>
-        {changes.length === 0 ? (
+      <div className={shown && shown.length > 0 ? "mt-4" : undefined}>
+        {shown === null ? null : shown.length === 0 && onlySecurity ? (
+          <div data-testid="changes-empty-filtered">
+            <EmptyState
+              size="compact"
+              icon={Inbox}
+              title={CHANGE_NOTE.FILTERED_EMPTY_TITLE}
+              description={CHANGE_NOTE.FILTERED_EMPTY_BODY}
+              action={
+                <Button variant="outline" size="sm" onClick={() => chooseFilter(false)}>
+                  {CHANGE_NOTE.FILTERED_EMPTY_ACTION}
+                </Button>
+              }
+            />
+          </div>
+        ) : shown.length === 0 ? (
           // A change reaches this list only by being proposed at a write site, so the one door is the audit
           // trail, where the decided ones are.
           <div data-testid="changes-empty">
@@ -173,8 +301,10 @@ export function ChangesTab({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {changes.map((c) => {
+              {shown.map((c) => {
                 const gone = removedOrgRunner(c);
+                const elevation = elevationOf(c);
+                const img = imageOf(c);
                 return (
                   <TableRow key={c.id} className="cursor-pointer" onClick={() => setOpen(c)}>
                     <TableCell className="font-medium">
@@ -186,9 +316,24 @@ export function ChangesTab({
                       {gone && (
                         <p className="text-xs font-normal text-muted-foreground">{CHANGES.SUPER_ADMIN_DECIDES}</p>
                       )}
+                      {elevation ? (
+                        <p className="text-xs font-normal text-muted-foreground">
+                          {CHANGE_NOTE.ELEVATION_LINE(elevation.length, c.note?.ticket)}
+                        </p>
+                      ) : img ? (
+                        <p className="text-xs font-normal text-muted-foreground">{IMG.CHANGE_LINE(c.note?.ticket)}</p>
+                      ) : (
+                        c.note && <NoteLine note={c.note} />
+                      )}
                     </TableCell>
                     <TableCell>
-                      <Mono className="text-foreground">{changeTarget(c)}</Mono>
+                      {elevation ? (
+                        CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
+                      ) : img ? (
+                        <Mono className="text-foreground">{IMG.CHANGE_TARGET(img.person, changeTargetRef(img.ref))}</Mono>
+                      ) : (
+                        <Mono className="text-foreground">{changeTarget(c)}</Mono>
+                      )}
                     </TableCell>
                     <TableCell>{c.proposed_by}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
@@ -228,9 +373,32 @@ export function ChangeDrawer({
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
+  // The change as the note form last saved it: the list behind the drawer reloads, this drawer keeps its own copy.
+  const [noted, setNoted] = React.useState<GovernanceChange | null>(null);
+  const [editing, setEditing] = React.useState(false);
+  // Whether only security can decide this change, read from the change itself: the list does not carry approvers.
+  const [securityOnly, setSecurityOnly] = React.useState(false);
 
   const own = !!change && !!principal && change.proposed_by === principal;
-  const profile = change ? assignedProfile(change) : null;
+  const shown = noted ?? change;
+  const profile = shown ? assignedProfile(shown) : null;
+  const elevation = shown ? elevationOf(shown) : null;
+  const img = shown ? imageOf(shown) : null;
+  const withdrawal = own && !!shown && isRequest(shown);
+  const hasNote = !!(shown?.note?.reason || shown?.note?.ticket);
+  const id = change?.id;
+
+  React.useEffect(() => {
+    if (!own || !id) return;
+    let live = true;
+    api
+      .getChange(id)
+      .then((c) => live && setSecurityOnly(!!c.approvers?.length && c.approvers.every((a) => a.kind === "security")))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [own, id]);
 
   const decide = async (approve: boolean) => {
     if (!change) return;
@@ -260,7 +428,13 @@ export function ChangeDrawer({
             <SheetHeader className="border-b border-border p-5">
               <SheetTitle className="flex flex-wrap items-baseline gap-x-2">
                 {changeLabel(change)}
-                <Mono className="text-foreground">{changeTarget(change)}</Mono>
+                <Mono className="text-foreground">
+                  {elevation
+                    ? CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
+                    : img
+                      ? IMG.CHANGE_TARGET(img.person, changeTargetRef(img.ref))
+                      : changeTarget(change)}
+                </Mono>
               </SheetTitle>
               <SheetDescription>
                 {CHANGES.META(change.proposed_by, relativeTime(change.proposed_at), relativeTime(change.expires_at))}
@@ -268,26 +442,61 @@ export function ChangeDrawer({
             </SheetHeader>
 
             <div className="space-y-4 p-5">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead>{CHANGES.DIFF_FIELD}</TableHead>
-                    <TableHead>{CHANGES.DIFF_BEFORE}</TableHead>
-                    <TableHead>{CHANGES.DIFF_AFTER}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {change.diff.changed.map((path) => (
-                    <TableRow key={path}>
-                      <TableCell className="align-top">
-                        <Mono className="text-foreground">{path}</Mono>
-                      </TableCell>
-                      <TableCell className="align-top">{cell(valueAt(change.diff.before, path))}</TableCell>
-                      <TableCell className="align-top">{cell(valueAt(change.diff.after, path))}</TableCell>
+              {elevation ? (
+                // A request reads as three plain rows; the full before and after stays below.
+                <Table>
+                  <TableBody>
+                    {[
+                      [CHANGE_NOTE.ELEV_PERSON, elevation.person],
+                      [CHANGE_NOTE.ELEV_UNIT, elevation.unit],
+                      [CHANGE_NOTE.ELEV_LENGTH, CHANGE_NOTE.ELEV_LENGTH_VALUE(elevation.length)],
+                    ].map(([label, value]) => (
+                      <TableRow key={label}>
+                        <TableCell className="text-muted-foreground">{label}</TableCell>
+                        <TableCell>{value}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : img ? (
+                <Table>
+                  <TableBody>
+                    {[
+                      [IMG.ROW_PERSON, img.person],
+                      [IMG.ROW_IMAGE, <Mono key="n" className="text-foreground">{splitImageRef(img.ref).name}</Mono>],
+                      [IMG.ROW_DIGEST, <Mono key="d" className="break-all text-foreground">{splitImageRef(img.ref).digest}</Mono>],
+                      [IMG.ROW_ASKED_UNDER, IMG.ASKED_UNDER(img.unit)],
+                      [IMG.ROW_WRITES, IMG.WRITES],
+                    ].map(([label, value]) => (
+                      <TableRow key={String(label)}>
+                        <TableCell className="align-top text-muted-foreground">{label}</TableCell>
+                        <TableCell>{value}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>{CHANGES.DIFF_FIELD}</TableHead>
+                      <TableHead>{CHANGES.DIFF_BEFORE}</TableHead>
+                      <TableHead>{CHANGES.DIFF_AFTER}</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {change.diff.changed.map((path) => (
+                      <TableRow key={path}>
+                        <TableCell className="align-top">
+                          <Mono className="text-foreground">{path}</Mono>
+                        </TableCell>
+                        <TableCell className="align-top">{cell(valueAt(change.diff.before, path))}</TableCell>
+                        <TableCell className="align-top">{cell(valueAt(change.diff.after, path))}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
 
               <details>
                 <summary className="cursor-pointer text-body text-muted-foreground">{CHANGES.DIFF_FULL}</summary>
@@ -328,18 +537,74 @@ export function ChangeDrawer({
                   ))}
                 </Note>
               )}
-              <Field label={CHANGES.REASON_LABEL} htmlFor="governance-change-reason" hint={CHANGES.REASON_HINT}>
-                <Input
-                  id="governance-change-reason"
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  disabled={busy}
-                  maxLength={512}
-                  autoComplete="off"
-                />
-              </Field>
 
-              {own && <Note>{CHANGES.OWN_NOTE}</Note>}
+              {/* The proposer's note, between the diff (and its notes) and the decider's own reason. */}
+              {editing ? (
+                <section className="space-y-2">
+                  <h4 className="text-body font-medium text-foreground">{CHANGE_NOTE.WHY_TITLE}</h4>
+                  <ChangeNoteForm
+                    change={shown!}
+                    onSaved={(c) => {
+                      setNoted(c);
+                      setEditing(false);
+                      onChanged();
+                    }}
+                    onCancel={() => setEditing(false)}
+                    onGone={(status) => {
+                      onChanged();
+                      if (status === 404) onClose();
+                    }}
+                  />
+                </section>
+              ) : (
+                <>
+                  {hasNote && (
+                    <section data-testid="change-note" className="space-y-1">
+                      <h4 className="text-body font-medium text-foreground">{CHANGE_NOTE.WHY_TITLE}</h4>
+                      {shown?.note?.reason && (
+                        <p className="whitespace-pre-wrap break-words text-body text-foreground">{shown.note.reason}</p>
+                      )}
+                      {shown?.note?.ticket && (
+                        <p className="text-xs text-muted-foreground">
+                          {CHANGE_NOTE.TICKET(shown.note.ticket).label} <Mono className="break-all">{shown.note.ticket}</Mono>
+                        </p>
+                      )}
+                    </section>
+                  )}
+                  {own && (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                        {hasNote ? CHANGE_NOTE.EDIT : CHANGE_NOTE.ADD}
+                      </Button>
+                      {!hasNote && <span className="text-xs text-muted-foreground">{CHANGE_NOTE.NO_NOTE_HINT}</span>}
+                    </div>
+                  )}
+                </>
+              )}
+              {!editing && !withdrawal && (
+                <Field label={CHANGES.REASON_LABEL} htmlFor="governance-change-reason" hint={CHANGES.REASON_HINT}>
+                  <Input
+                    id="governance-change-reason"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    disabled={busy}
+                    maxLength={512}
+                    autoComplete="off"
+                  />
+                </Field>
+              )}
+
+              {own &&
+                (withdrawal ? (
+                  <Note>{CHANGE_NOTE.OWN_REQUEST}</Note>
+                ) : securityOnly ? (
+                  <Note>
+                    <b className="font-semibold">{CHANGE_NOTE.OWN_SECURITY_TITLE}</b>
+                    <span>{CHANGE_NOTE.OWN_SECURITY_BODY}</span>
+                  </Note>
+                ) : (
+                  <Note>{CHANGES.OWN_NOTE}</Note>
+                ))}
               {refused && (
                 <Note tone="red" role="alert">
                   <b className="font-semibold">{CHANGES.DECIDE_REFUSED_TITLE}</b>
@@ -347,14 +612,16 @@ export function ChangeDrawer({
                 </Note>
               )}
 
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" disabled={busy} onClick={() => void decide(false)}>
-                  {CHANGES.REJECT}
-                </Button>
-                <Button disabled={busy || own} onClick={() => void decide(true)}>
-                  {CHANGES.APPROVE}
-                </Button>
-              </div>
+              {!editing && (
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" disabled={busy} onClick={() => void decide(false)}>
+                    {withdrawal ? CHANGE_NOTE.WITHDRAW_REQUEST : CHANGES.REJECT}
+                  </Button>
+                  <Button disabled={busy || own} onClick={() => void decide(true)}>
+                    {CHANGES.APPROVE}
+                  </Button>
+                </div>
+              )}
             </div>
           </>
         )}

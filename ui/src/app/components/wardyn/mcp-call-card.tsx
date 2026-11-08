@@ -23,6 +23,7 @@ import { APPROVAL, APPROVAL_BANNER_LABEL } from "./copy";
 import { APPROVAL_MCP_CALL as C } from "./copy/approvals";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, Chip } from "./primitives";
+import { DecidedByLine, SecondPersonLine } from "./decider-lines";
 import { CopyButton } from "./copy-button";
 import { escapeUnsafeRunes, quoteToASCII } from "../../lib/escape-runes";
 
@@ -100,6 +101,8 @@ export function McpCallCard({
         <span className="text-sm font-semibold text-foreground">{C.TITLE}</span>
         <Chip tone="neutral">{C.ONCE}</Chip>
       </div>
+      <DecidedByLine item={item} />
+      <SecondPersonLine item={item} />
 
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
         <dt className="text-muted-foreground">{C.FIELD_SERVER}</dt>
