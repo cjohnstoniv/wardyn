@@ -87,6 +87,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A unit admin whose unit moved out of their scope between a held governance change's pre-check and its decision is now refused with `unit_scope_denied`, as the denials page documents; before, the same case answered `security_admin_surface`.
 - A unit admin whose change to the root of a platform envelope is held for the security tier still lists and reads that change and finds it in the duplicate-proposal `409`; peers of the root see none of the three. A unit admin refused on a security-only root now gets `security_admin_surface`, not `unit_scope_denied`.
 
+### Known issues
+
+- Reviving a run that allowed all egress, after the Wardyn boundary gained an allowed-domains list, seals the revived run to no egress instead of to the boundary's list. Start a new run instead of reviving one.
+
 ## [0.10.0-rc.15] — 2026-11-08
 
 ### Before you upgrade
