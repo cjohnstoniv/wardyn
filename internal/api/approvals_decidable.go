@@ -200,7 +200,7 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 		return true
 	}
 	_, isADO := adoEscalationScope(ap)
-	isMCP := isMCPCallRow(ap)
+	isMCP := isExactCallRow(ap) // an MCP call or a held kubectl write
 	if ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP {
 		return false
 	}

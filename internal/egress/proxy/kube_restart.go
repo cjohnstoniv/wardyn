@@ -18,13 +18,11 @@ package proxy
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -32,7 +30,7 @@ import (
 const (
 	kubeRestartMediaType   = "application/strategic-merge-patch+json"
 	kubeRestartQuery       = "fieldManager=kubectl-rollout"
-	kubeRestartAnnotation  = "kubectl.kubernetes.io/restartedAt"
+	kubeRestartAnnotation  = types.KubeRestartAnnotation
 	kubeRestartMaxBody     = 4 << 10
 	kubeRestartRefusalLead = "this run's kubectl may only restart a deployment (kubectl rollout restart); "
 )
@@ -85,35 +83,6 @@ func (d *kubeAPIDoor) admitRestart(r *http.Request, raw string) error {
 	return nil
 }
 
-// kubeRestartPatch reports whether body is exactly
-// {"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"<RFC 3339 time>"}}}}}.
-// A repeated key at any depth is refused by the strict canonical form.
-func kubeRestartPatch(body []byte) bool {
-	canon, err := types.CanonicalJSON(body)
-	if err != nil {
-		return false
-	}
-	var v any
-	if json.Unmarshal(canon, &v) != nil {
-		return false
-	}
-	for _, key := range []string{"spec", "template", "metadata", "annotations"} {
-		m, ok := v.(map[string]any)
-		if !ok || len(m) != 1 {
-			return false
-		}
-		if v, ok = m[key]; !ok {
-			return false
-		}
-	}
-	m, ok := v.(map[string]any)
-	if !ok || len(m) != 1 {
-		return false
-	}
-	at, ok := m[kubeRestartAnnotation].(string)
-	if !ok {
-		return false
-	}
-	_, err = time.Parse(time.RFC3339, at)
-	return err == nil
-}
+// kubeRestartPatch reports whether body is exactly the restart patch
+// (types.KubeRestartPatch), the one the held-write key also reads.
+func kubeRestartPatch(body []byte) bool { return types.KubeRestartPatch(body) }

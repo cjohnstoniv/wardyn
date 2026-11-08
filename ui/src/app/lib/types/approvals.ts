@@ -257,12 +257,36 @@ export interface MCPCallText {
   extra?: string;
 }
 
-// Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256.
+// KubeCallScope mirrors internal/types.KubeCallScope: one kubectl write a person approves with its exact
+// request. body is the canonical JSON the request sends.
+export interface KubeCallScope {
+  cluster: string;
+  namespace: string;
+  method: string;
+  path: string;
+  query?: string;
+  media_type?: string;
+  body?: unknown;
+  call_sha256: string;
+  hold_seconds?: number;
+}
+
+// Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256
+// and no cluster (a scope with a cluster is a kubectl write, isKubeCallRequest).
 export function isMCPCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
   a: T,
 ): a is T & { requested_scope: MCPCallScope } {
   const key = a.requested_scope?.call_sha256;
-  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "";
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster === undefined;
+}
+
+// Structural, like the server's isKubeCallRow: a tool_call with no grant whose scope carries a call_sha256
+// and a cluster.
+export function isKubeCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
+  a: T,
+): a is T & { requested_scope: KubeCallScope } {
+  const key = a.requested_scope?.call_sha256;
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster !== undefined;
 }
 
 export function isAdoConsentRequest(

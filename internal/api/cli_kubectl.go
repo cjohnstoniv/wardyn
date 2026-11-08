@@ -263,6 +263,7 @@ type kubectlGrantSnapshot struct {
 	ServiceAccount types.CLIServiceAccount `json:"service_account"`
 	Namespaces     []string                `json:"namespaces"`
 	Access         string                  `json:"access"`
+	ApproveEach    bool                    `json:"approve_each,omitempty"`
 }
 
 func (sn kubectlGrantSnapshot) authored() bool {
@@ -274,7 +275,8 @@ func (sn kubectlGrantSnapshot) authored() bool {
 func kubectlSnapshotOf(k types.CLIKubectl) kubectlGrantSnapshot {
 	sum := sha256.Sum256([]byte(k.CAPEM))
 	return kubectlGrantSnapshot{Mechanism: kubectlCLIMechanism, Server: strings.TrimSuffix(k.Server, "/"), CASHA256: hex.EncodeToString(sum[:]),
-		ServiceAccount: k.ServiceAccount, Namespaces: slices.Sorted(slices.Values(k.Namespaces)), Access: k.Access}
+		ServiceAccount: k.ServiceAccount, Namespaces: slices.Sorted(slices.Values(k.Namespaces)), Access: k.Access,
+		ApproveEach: k.ApproveEach}
 }
 
 // kubectlCLIFiles is the ~/.kube/config a run's kubectl reads: the row's
@@ -382,13 +384,14 @@ func (s *Server) authorKubectlCLI(ctx context.Context, run types.AgentRun, cli *
 	return injections, kubectlCLIPlan{opened: opened, gate: &proxy.KubeAPIGrant{
 		Host: host, Port: port, CAPEM: cli.Kubectl.CAPEM, Namespaces: slices.Clone(cli.Kubectl.Namespaces),
 		Write: cli.Kubectl.Access == types.ComponentAccessWrite, Restart: cli.Kubectl.Access == types.ComponentAccessRestart,
+		ApproveEach: cli.Kubectl.ApproveEach,
 	}}, true
 }
 
 // kubectlCLIDrift names the first thing that moved between the dispatch-time
 // snapshot and now ("" = nothing): the switch was turned off, the run no longer
 // carries the row, the row is gone or no longer a kubectl row, or it names
-// another cluster, CA, account, namespaces or access. A store that cannot
+// another cluster, CA, account, namespaces, access or approve_each. A store that cannot
 // answer is an error, never a drift.
 func (s *Server) kubectlCLIDrift(ctx context.Context, runID uuid.UUID, sn kubectlGrantSnapshot) (string, *types.CLIKubectl, error) {
 	if !kubectlCLIOn() {
@@ -429,6 +432,8 @@ func (s *Server) kubectlCLIDrift(ctx context.Context, runID uuid.UUID, sn kubect
 		return "namespaces", nil, nil
 	case live.Access != sn.Access:
 		return "access", nil, nil
+	case live.ApproveEach != sn.ApproveEach:
+		return "approve_each", nil, nil
 	}
 	return "", k, nil
 }

@@ -847,6 +847,8 @@ const (
 	reasonMCPCallScopeInvalid = "mcp_call_scope_invalid"
 	// 400: an MCP call larger than a person can be shown (arguments over 32 KiB, or a scope over 64 KiB)
 	reasonMCPCallTooLarge = "mcp_call_too_large"
+	// 400: a requested_scope naming cluster that is not exactly one kubectl write's scope, on tool_call, hashing to its own call_sha256 (approvals_kube_call.go)
+	reasonKubeCallScopeInvalid = "kube_call_scope_invalid"
 )
 
 // The signed audit receipt, checkpoint and key routes (audit_receipt.go).

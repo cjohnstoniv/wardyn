@@ -456,7 +456,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if scope, isMCP, ok = mcpCallDecisionRule(w, ap, scope); !ok {
 		return
 	}
-	if !isADO && !isMCP && !decisionScopeFitsKind(w, ap.Kind, scope) {
+	var isKube bool // so is one kubectl write (approvals_kube_call.go)
+	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok {
+		return
+	}
+	if !isADO && !isMCP && !isKube && !decisionScopeFitsKind(w, ap.Kind, scope) {
 		return
 	}
 
@@ -681,7 +685,7 @@ func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, i
 	// STRUCTURALLY by its grant_id (adoEscalationScope), never by its scope.
 	// One MCP call is the other, known by call_sha256 with no grant (isMCPCallRow).
 	_, isADO := adoEscalationScope(ap)
-	isMCP := isMCPCallRow(ap)
+	isMCP := isExactCallRow(ap) // a held kubectl write is decided as one MCP call is
 	if err != nil || (ap.Kind != types.ApprovalEgressDomain && !isADO && !isMCP) {
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
 		return ap, run, false, false

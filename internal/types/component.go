@@ -639,8 +639,9 @@ type CLIKubectl struct {
 	Server         string            `json:"server"`           // https://host[:port], no path
 	CAPEM          string            `json:"ca_pem,omitempty"` // PEM; empty trusts the system roots
 	ServiceAccount CLIServiceAccount `json:"service_account"`
-	Namespaces     []string          `json:"namespaces"` // 1..MaxCLIKubectlNamespaces
-	Access         string            `json:"access"`     // read (GET only) | restart (rollout restart) | write
+	Namespaces     []string          `json:"namespaces"`             // 1..MaxCLIKubectlNamespaces
+	Access         string            `json:"access"`                 // read (GET only) | restart (rollout restart) | write
+	ApproveEach    bool              `json:"approve_each,omitempty"` // each admitted write waits for a person's yes (kube_call.go)
 }
 
 // CLIServiceAccount names a Kubernetes service account.

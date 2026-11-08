@@ -19,8 +19,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a macOS VM runner, `wardyn-runnerd doctor` now has a `guest-agent` stage that fails when the base's last tools update pushed the guest agent signed ad hoc. The tools update after the upgrade signs it again; if the stage still fails, it says why each signer failed.
 - A kubectl row with `access: restart` (below) is not understood by an older wardynd or proxy image. After a downgrade an older wardynd still loads the row, because it reads `access` as plain text, but it refuses to attach or save it (`cli.kubectl.access: "restart" is not read or write`). An older proxy image refuses to start on a run config that carries `restart`. Move such rows to `read` or `write` first, and update the proxy image before using `restart`.
 
+### Before you downgrade
+
+- An older wardynd loads a kubectl row with `approve_each` but drops that field without an error, so after a downgrade the row's writes are sent without a person's yes. Turn `approve_each` off and narrow the row's access, or its service account's RBAC, first. Rows with `access: restart` fail to validate on an older binary.
+
 ### Added
 
+- kubectl component: `approve_each: true` on a `restart` or `write` row holds each write the door admits until a person approves that exact request (method, path, query, media type and body), once. The run's owner decides it, as for one MCP call. A held write waits 90 seconds, then is refused with the approval to wait for; the same command run again sends it once approved. Bodies must be JSON, not encoded, at most 32 KiB. Off by default; an older proxy image refuses a config that carries it.
 - kubectl component: `access: restart` (rows are `read` or `write` today). It reads like `read` and admits one change: the patch `kubectl rollout restart` sends to a named deployment in `apps/v1`, a strategic merge patch of at most 4 KiB that sets only the `kubectl.kubernetes.io/restartedAt` pod-template annotation. Every other write is refused, and the cluster's RBAC still scopes the account. Verified against kubectl v0.32.2. Off unless you set a row to `restart`; `WARDYN_KUBECTL_CLI` stays off by default.
 - macOS VM: `edit-base` has an Install Rosetta button, which runs Apple's Rosetta installer in the base once you press it. Rosetta stays off otherwise, and the prep proxy now also allows `configuration.apple.com` for it.
 - macOS VM: the guest agent's posture reads FileVault with `fdesetup status`. `edit-base` warns, in its window and in the recheck, when FileVault is on in the guest, and `doctor` shows a `file-vault` line. The base is kept either way.

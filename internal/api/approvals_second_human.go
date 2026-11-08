@@ -55,7 +55,7 @@ func secondHumanGate(ap types.ApprovalRequest) (name string, on bool) {
 	if ap.Kind == types.ApprovalEgressDomain {
 		return envEgressSecondHuman, envEnabled(envEgressSecondHuman)
 	}
-	if _, isADO := adoEscalationScope(ap); isADO || isMCPCallRow(ap) { // one MCP call: the same owner rule
+	if _, isADO := adoEscalationScope(ap); isADO || isExactCallRow(ap) { // one MCP call or kubectl write: the same owner rule
 		return envCapabilitySecondHuman, envEnabled(envCapabilitySecondHuman)
 	}
 	return "", false
@@ -252,6 +252,12 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	}
 	if !authored {
 		return "", true
+	}
+	if sw == envCapabilitySecondHuman && isKubeCallRow(ap) {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this — you created this run, so someone else approves or denies this kubectl change").
+			OnRun(ap.RunID))
+		return "", false
 	}
 	if sw == envCapabilitySecondHuman && isMCPCallRow(ap) {
 		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
