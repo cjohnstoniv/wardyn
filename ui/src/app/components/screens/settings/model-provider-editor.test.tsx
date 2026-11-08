@@ -759,3 +759,50 @@ describe("the draft rules", () => {
     ).toBe(false);
   });
 });
+
+describe("extra headers in the editor", () => {
+  const HEADER_BODY =
+    'invalid model providers: model_providers: "corp-gateway": extra_headers: "X-Portkey-Api-Key" is this provider\'s own credential header';
+  const WITH_HEADER: ModelProvider = { ...CORP, extra_headers: [{ name: "X-Portkey-Provider", value: "anthropic" }] };
+
+  it("a refused save shows the server's sentence verbatim in the refusal box, and the fields keep what was typed", async () => {
+    putMock.mockRejectedValue(new HttpError(400, HEADER_BODY));
+    const { onSaved, user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.custom_endpoint }));
+    setField(screen.getByLabelText(E.BASE_URL), "https://gateway.corp.example");
+    setField(screen.getAllByLabelText(E.PATH)[0], "/anthropic");
+    setField(screen.getAllByLabelText(E.PATH)[1], "/v1");
+    await user.click(screen.getByRole("button", { name: E.HEADERS_ADD }));
+    setField(screen.getByPlaceholderText(E.HEADER_NAME_PLACEHOLDER), "x-portkey-api-key");
+    setField(screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER), "team");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+
+    const note = await screen.findByRole("alert");
+    expect(within(note).getByText(PROVIDERS.SAVE_REFUSED_TITLE_ONE)).toBeInTheDocument();
+    expect(note.querySelector("p")?.textContent).toBe(HEADER_BODY);
+    expect(screen.getByPlaceholderText(E.HEADER_NAME_PLACEHOLDER)).toHaveValue("x-portkey-api-key");
+    expect(screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER)).toHaveValue("team");
+    expect(screen.getByLabelText(E.BASE_URL)).toHaveValue("https://gateway.corp.example");
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("a changed header on a provider people have connected to asks the address confirm; Cancel writes nothing", async () => {
+    const { user } = renderEditor({ editing: WITH_HEADER, list: list([WITH_HEADER], { "corp-gateway": 12 }) });
+    const value = screen.getByPlaceholderText(E.HEADER_VALUE_PLACEHOLDER);
+    await user.clear(value);
+    setField(value, "openai");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    expect(within(alert()).getByText(E.ADDRESS_TITLE(WITH_HEADER.name!))).toBeInTheDocument();
+    expect(within(alert()).getByText(E.ADDRESS_BODY(12))).toBeInTheDocument();
+    await user.click(within(alert()).getByRole("button", { name: E.CANCEL }));
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("a save with no header edit asks nothing and keeps the stored rows", async () => {
+    const { onSaved, user } = renderEditor({ editing: WITH_HEADER, list: list([WITH_HEADER], { "corp-gateway": 12 }) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(putBody().providers[0].extra_headers).toEqual([{ name: "X-Portkey-Provider", value: "anthropic" }]);
+  });
+});

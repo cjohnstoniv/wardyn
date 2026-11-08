@@ -112,3 +112,75 @@ describe("providerFrom: the sign-in block", () => {
     expect(draftFrom(base(), harnesses).oidcOn).toBe(false);
   });
 });
+
+describe("extra headers: the address rule and the record a save writes", () => {
+  const HARNESSES = [{ id: "claude-code", display: "Claude Code" }];
+  const withHeaders = (extra_headers?: { name: string; value: string }[]): ModelProvider => ({ ...base(), extra_headers });
+  const PK = [
+    { name: "X-Portkey-Provider", value: "anthropic" },
+    { name: "X-Team", value: "blue" },
+  ];
+
+  it.each<[string, ModelProvider, boolean]>([
+    ["the same rows", withHeaders(PK), false],
+    ["the rows in another order", withHeaders([PK[1], PK[0]]), false],
+    ["a row added", withHeaders([...PK, { name: "X-Extra", value: "1" }]), true],
+    ["a row removed", withHeaders([PK[0]]), true],
+    ["a value changed", withHeaders([PK[0], { name: "X-Team", value: "red" }]), true],
+    ["a name changed", withHeaders([PK[0], { name: "X-Squad", value: "blue" }]), true],
+    ["a name in another case, which the server stores in canonical case", withHeaders([{ name: "x-portkey-provider", value: "anthropic" }, PK[1]]), false],
+  ])("%s -> %s", (_, next, changed) => {
+    expect(addressChanged(withHeaders(PK), next)).toBe(changed);
+  });
+
+  it("no headers, an empty list and a missing key are the same", () => {
+    expect(addressChanged(base(), withHeaders([]))).toBe(false);
+    expect(addressChanged(base(), withHeaders(PK))).toBe(true);
+    expect(addressChanged(withHeaders(PK), base())).toBe(true);
+  });
+
+  it("providerFrom sends the trimmed rows for a custom endpoint, with no placeholder key in any row", () => {
+    const draft = {
+      ...draftFrom(base(), HARNESSES),
+      headers: [
+        { name: " x-portkey-provider ", value: " @team ", placeholder: "@<slug>" },
+        { name: "x-b", value: "c" },
+      ],
+    };
+    const out = providerFrom(draft, null, []);
+    expect(out.extra_headers).toStrictEqual([
+      { name: "x-portkey-provider", value: "@team" },
+      { name: "x-b", value: "c" },
+    ]);
+    expect(JSON.stringify(out)).not.toContain("placeholder");
+  });
+
+  it("providerFrom sends no extra_headers key with zero rows, even when the stored provider had some", () => {
+    const stored = withHeaders(PK);
+    const out = providerFrom({ ...draftFrom(stored, HARNESSES), headers: [] }, stored, []);
+    expect("extra_headers" in JSON.parse(JSON.stringify(out))).toBe(false);
+    expect("extra_headers" in JSON.parse(JSON.stringify(providerFrom(draftFrom(base(), HARNESSES), null, [])))).toBe(false);
+  });
+
+  it("providerFrom sends no extra_headers key for any other kind", () => {
+    const draft = { ...draftFrom({ ...base(), kind: "anthropic_api_key" }, HARNESSES), headers: [{ name: "x-a", value: "b" }] };
+    const out = providerFrom(draft, null, []);
+    expect(JSON.parse(JSON.stringify(out))).not.toHaveProperty("extra_headers");
+    const stored: ModelProvider = { ...base(), kind: "openai_api_key", extra_headers: PK };
+    expect(JSON.parse(JSON.stringify(providerFrom(draftFrom(stored, HARNESSES), stored, [])))).not.toHaveProperty("extra_headers");
+  });
+
+  it("a stored extra_headers survives an unrelated edit, and is no address change", () => {
+    const stored = withHeaders(PK);
+    const draft = { ...draftFrom(stored, HARNESSES), name: "Renamed" };
+    const out = providerFrom(draft, stored, []);
+    expect(out.name).toBe("Renamed");
+    expect(out.extra_headers).toStrictEqual(PK);
+    expect(addressChanged(stored, out)).toBe(false);
+  });
+
+  it("draftFrom reads the stored names as stored, in canonical case, with no placeholder", () => {
+    expect(draftFrom(withHeaders(PK), HARNESSES).headers).toStrictEqual(PK);
+    expect(draftFrom(base(), HARNESSES).headers).toStrictEqual([]);
+  });
+});
