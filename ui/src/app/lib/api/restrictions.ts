@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Restrictions (internal/types/restriction.go): deny-only lists that follow people, in every unit they run in.
+// Restrictions (internal/types/restriction.go): narrow-only rules that follow people, in every unit they run in.
 // They arrive in GET /governance's `restrictions` and, for the caller, in GET /policies/default. The write routes
 // are POST/PUT/DELETE /governance/restrictions (securityOps; a delete is always held under the second-person switch).
 import type { ConfinementClass } from "../types/runs";
-import type { FirstUseMode, GrantSpec } from "../types/policy";
+import type { DesktopControls, FirstUseMode, GrantSpec, PushRulesSpec, RecordingLevel, ToolRule } from "../types/policy";
 import type { PolicyContact } from "../types/site";
 import type { PlacementValue } from "../types/new-run-contract";
 
@@ -21,6 +21,13 @@ export interface RestrictionSpec {
   min_confinement_class?: ConfinementClass;
   auto_stop_after_sec?: number;
   git_push_any_branch?: boolean;
+  /** Naming it without allow_all_egress turns open egress off for the restriction's people. */
+  allowed_domains?: string[];
+  tool_rules?: ToolRule[];
+  push_rules?: PushRulesSpec;
+  desktop?: DesktopControls;
+  /** A floor: a run of the restriction's people is recorded at least this much. */
+  recording?: RecordingLevel;
   /** Credentials the run is not given: a scope-less entry names every grant of its kind. */
   withheld_grants?: GrantSpec[];
 }
@@ -41,6 +48,7 @@ export interface RestrictionLimits {
   deny_placements?: PlacementValue[];
   allowed_macos_bases?: string[];
   required_image_signers?: string[];
+  allowed_models?: string[];
   max_concurrent_runs?: number;
   max_cpu_millis?: number;
   max_memory_mib?: number;

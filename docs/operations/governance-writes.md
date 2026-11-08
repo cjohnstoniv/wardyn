@@ -48,7 +48,14 @@ an operator follows to turn one on and run the queue.
 
 **Restrictions.**
 
-- A restriction (`/governance/restrictions`) is a deny-only list (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+- A restriction (`/governance/restrictions`) is a list of narrowing rules (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+- A restriction can carry `denied_domains`, `allowed_domains`, `allow_all_egress: false`, first-use approval, `max_holds`, a confinement floor, `auto_stop_after_sec`, `git_push_any_branch: false`, `push_rules`, `desktop`, `recording` (a floor), `tool_rules` and `withheld_grants`, and in its limits the `deny_*` switches, `allowed_models` and the caps. Each only narrows, by the same rule a unit's walls use, in every unit its people run in.
+- A restriction that names `allowed_domains` and not `allow_all_egress` turns open egress off for its people.
+- A restriction binds a run that is already running: a revive meets it again, a credential for a host outside its `allowed_domains` is withheld at the next mint, and an approval cannot admit such a host.
+- Keeping the strictest floor:
+  - Key a floor restriction on a group, not a user type. Restrictions on groups combine over every group a person holds, so a person in both a restrictive and a permissive group keeps the restrictive floor.
+  - A person has one user type: the highest-priority type their sign-in matches. Two types tied at the top refuse sign-in. Where a user type must carry the floor, give the restrictive type the higher priority.
+  - A floor keyed only on a user type is lost when a higher-priority type also matches.
 
 **Optional: four-eyes on governance writes.**
 

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"reflect"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -22,8 +23,9 @@ import (
 // fails on a new one, or on a widening that runs after the seal.
 
 // sealLayer is one outer limit on a run's egress, and the record a knob it
-// decides carries in the run's provenance. egress holds only the three egress
-// knobs, each nil when the layer does not bound it: AllowedDomains is an
+// decides carries in the run's provenance. egress holds the three egress
+// knobs, each nil when the layer does not bound it (a restriction's layer also
+// carries its tool, push and recording rules, which sealPolicy meets): AllowedDomains is an
 // allowlist (an empty one allows nothing), AllowAllEgress false turns open
 // egress off and keeps the run's own allowlist, and DeniedDomains is added. A
 // layer that only denies leaves the first two nil. grants is the credential
@@ -156,18 +158,23 @@ func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *
 
 // sealPolicy meets spec with each layer in order, by the governance meet
 // (composer.ApplyOverlay): the allowlist is intersected, allow_all_egress
-// survives only where every layer allows it, and the deny lists are merged.
-// The desktop directions a layer blocks are blocked (types.DesktopControls.Meet).
-// Only those four knobs are read, so nothing else in spec can change. With no
-// layers spec is untouched.
+// survives only where every layer allows it, and the deny lists are merged. A
+// layer that carries tool, push or recording rules (a restriction's) meets those
+// too, and each is written back only when it narrows, so a policy the layer
+// already holds keeps its spelling. The desktop directions a layer blocks are
+// blocked (types.DesktopControls.Meet). Only those knobs are read, so nothing
+// else in spec can change. With no layers spec is untouched.
 func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 	var decided []sealDecision
 	for _, l := range layers {
-		in := types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains, AllowAllEgress: spec.AllowAllEgress}
+		in := types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains, AllowAllEgress: spec.AllowAllEgress,
+			ToolRules: spec.ToolRules, PushRules: spec.PushRules, Recording: spec.Recording}
 		met, _, err := composer.ApplyOverlay(composer.Authority{Ceiling: in}, composer.Overlay{Ceiling: l.egress})
 		if err != nil {
-			// The egress knobs alone have no unsatisfiable meet; should one appear, nothing is reachable.
-			met.Ceiling = types.RunPolicySpec{AllowedDomains: []string{}, DeniedDomains: spec.DeniedDomains}
+			// The egress knobs alone have no unsatisfiable meet; should one appear, nothing is reachable and
+			// the rules stay as they were.
+			met.Ceiling = in
+			met.Ceiling.AllowedDomains, met.Ceiling.AllowAllEgress = []string{}, false
 		}
 		out := met.Ceiling
 		// Compared canonical, as the provenance record compares, so a re-spelling decides nothing.
@@ -182,6 +189,18 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 			decided = append(decided, sealDecision{"denied_domains", l.rec})
 		}
 		spec.AllowedDomains, spec.DeniedDomains, spec.AllowAllEgress = out.AllowedDomains, out.DeniedDomains, out.AllowAllEgress
+		if !slices.Equal(before.ToolRules, after.ToolRules) {
+			spec.ToolRules = out.ToolRules
+			decided = append(decided, sealDecision{"tool_rules", l.rec})
+		}
+		if !reflect.DeepEqual(before.PushRules, after.PushRules) {
+			spec.PushRules = out.PushRules
+			decided = append(decided, sealDecision{"push_rules", l.rec})
+		}
+		if before.Recording != after.Recording {
+			spec.Recording = out.Recording
+			decided = append(decided, sealDecision{"recording", l.rec})
+		}
 		if l.desktop != nil {
 			// Written only when it narrows, so a run the layer already holds keeps its spelling.
 			if d := spec.Desktop.Meet(l.desktop); d != spec.Desktop.Effective() {
