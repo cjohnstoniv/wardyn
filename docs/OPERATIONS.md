@@ -3396,6 +3396,9 @@ Naming these is the point of the walk, not a caveat on it:
 
 - Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`.
 - An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by `base_url` alone. Its `fast_model` sets the haiku alias.
+- Codex CLI on a `custom_endpoint` or `local_model` provider calls `<base_url><path>/responses`, the OpenAI Responses API, so the endpoint must serve it.
+  - Set the Model field of the harness entry (it is per harness entry; the console hint is in [`model-providers-copy.ts`](../ui/src/app/lib/model-providers-copy.ts)) to a name the endpoint accepts.
+  - From 0.10.0-rc.15, Codex CLI uses that Model on `custom_endpoint` too.
 
 > [!WARNING]
 > A Claude subscription provider's `base_url` re-points the sign-in token too.
