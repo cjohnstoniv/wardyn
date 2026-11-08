@@ -30,7 +30,7 @@ import (
 // against docs/AUDIT-ACTIONS.md and against the keys that must never be served.
 var unitViewDataKeys = []string{
 	"reason", "kind", "host", "hosts", "port", "state", "count", "bytes", "approval_id", "expires_at",
-	"provider", "mode", "cause", "agent", "repo", "confinement_class", "exit_code",
+	"provider", "mode", "cause", "agent", "repo", "confinement_class", "exit_code", "decision",
 }
 
 // unitViewTargetFamilies are the action families whose target the unit view serves: a run, a host, an
