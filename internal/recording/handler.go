@@ -4,10 +4,12 @@
 package recording
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -25,25 +27,43 @@ import (
 // vs "never recorded".
 type Authorizer func(w http.ResponseWriter, r *http.Request, runIDPrefix string) bool
 
-// writeWatch records whether anything was written to the response, so Handler can tell an authorizer that
-// answered from one that said nothing.
-type writeWatch struct {
-	http.ResponseWriter
-	wrote bool
+// refusal holds an authorizer's answer so Handler can tell one that answered from one that said nothing, and
+// can write it to the client under a type it chose: a refusal is never served as HTML.
+type refusal struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
 }
 
-func (w *writeWatch) WriteHeader(code int) {
-	w.wrote = true
-	w.ResponseWriter.WriteHeader(code)
+func (r *refusal) Header() http.Header { return r.header }
+
+func (r *refusal) WriteHeader(code int) {
+	if r.status == 0 {
+		r.status = code
+	}
 }
 
-func (w *writeWatch) Write(p []byte) (int, error) {
-	w.wrote = true
-	return w.ResponseWriter.Write(p)
+func (r *refusal) Write(p []byte) (int, error) {
+	r.WriteHeader(http.StatusOK)
+	return r.body.Write(p)
 }
 
-// Unwrap lets http.NewResponseController reach the underlying writer.
-func (w *writeWatch) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (r *refusal) wrote() bool { return r.status != 0 }
+
+// writeTo sends the held answer: JSON stays JSON, anything else is plain text, both with nosniff, and
+// Retry-After passes through.
+func (r *refusal) writeTo(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if mt, _, _ := mime.ParseMediaType(r.header.Get("Content-Type")); mt == "application/json" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if ra := r.header.Get("Retry-After"); ra != "" {
+		w.Header().Set("Retry-After", ra)
+	}
+	w.WriteHeader(r.status)
+	_, _ = w.Write(r.body.Bytes())
+}
 
 // Handler returns an http.Handler serving GET /{runID} as an asciicast
 // stream (Content-Type: application/x-asciicast); mount it under
@@ -72,16 +92,17 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return
 		}
-		watched := &writeWatch{ResponseWriter: w}
-		allowed := authorize(watched, req, prefix)
-		if !allowed {
-			if !watched.wrote {
-				http.Error(w, "recording not found", http.StatusNotFound)
-			}
+		answer := &refusal{header: http.Header{}}
+		allowed := authorize(answer, req, prefix)
+		if !allowed && !answer.wrote() {
+			http.Error(w, "recording not found", http.StatusNotFound)
 			return
 		}
-		if watched.wrote {
-			slog.ErrorContext(req.Context(), "recording: authorizer wrote and allowed", "run", prefix)
+		if answer.wrote() {
+			if allowed {
+				slog.ErrorContext(req.Context(), "recording: authorizer wrote and allowed", "run", prefix)
+			}
+			answer.writeTo(w)
 			return
 		}
 		open := store.OpenCast
