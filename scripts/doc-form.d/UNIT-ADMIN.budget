@@ -12,4 +12,5 @@
 # docs/operations/unit-admins.md 1007 adds 17 over 990, measured at the rc.16 w3 batch B train: the merged lanes' additions together.
 # docs/operations/unit-admins.md=902 measured (+82 over 820): the deciders pointers, the lock bullet and the held-write row.
 # docs/operations/unit-admins.md 1089 = ours 1007 + theirs 902 - base 820 at the 0.10 W7 merge of the 0.10 W7 merge of lane/016-approvers-docs into the rc.16 w3 batch D train.
-docs/operations/unit-admins.md=1089 share=35
+# docs/operations/unit-admins.md 1105 adds 16 over 1089, measured: the audit export serves a unit admin only runs they created.
+docs/operations/unit-admins.md=1105 share=35
