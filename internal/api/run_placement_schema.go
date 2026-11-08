@@ -86,7 +86,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.ProviderHeader]():      strings.Fields("Name Value"), // non-secret by validation (proxy.ReservedExtraHeader, ExtraHeaderValueRefusal): a secret-shaped value is refused
 	reflect.TypeFor[types.ProviderHarness]():     strings.Fields("Harness Model FastModel Path AuthHeader AuthFormat"),
 	reflect.TypeFor[types.RunHarness]():          strings.Fields("Harness ModelProviderID Starts Task"),
-	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
+	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled RequireManagedDevice"), // RequireManagedDevice: a bool refusing personal-trust runners; no credential
 	reflect.TypeFor[types.SiteBranding]():        strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress " +
 		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM Images"),
