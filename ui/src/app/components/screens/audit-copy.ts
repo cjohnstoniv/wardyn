@@ -93,7 +93,7 @@ function piecesText(pieces: CopyPiece[]): string {
   return pieces.map((p) => (typeof p === "string" ? p : `\`${p.mono}\``)).join("");
 }
 
-/** Up to three unit names, comma separated, then " and N more". */
+/** Up to three unit names, comma separated, then " and N more" (the sentence goes on after a comma then). */
 function unitNamePieces(names: string[]): CopyPiece[] {
   const shown = names.slice(0, 3);
   const out: CopyPiece[] = [];
@@ -109,7 +109,7 @@ export function unitNotePieces(names: string[]): CopyPiece[] {
   return [
     "Showing runs in ",
     ...unitNamePieces(names),
-    names.length === 1 ? " and the units below it" : " and the units below them",
+    names.length === 1 ? " and the units below it" : names.length > 3 ? ", and the units below them" : " and the units below them",
     ", and the changes made to those units. Sign-ins aren't listed here, and a run's row leaves out names, paths and error text.",
   ];
 }

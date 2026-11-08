@@ -192,7 +192,7 @@ export function AuditScreen() {
   const securityOperator = useSecurityOperator();
   // A unit admin: not a security admin, and `/me` names at least one unit they administer. The units are read
   // here, once, and only as served; operator-context keeps no copy of them.
-  const [unitsAdmin, setUnitsAdmin] = React.useState<{ unit_id: string; unit_name: string }[]>([]);
+  const [unitsAdmin, setUnitsAdmin] = React.useState<{ unit_id: string; unit_name: string }[] | null>(null);
   React.useEffect(() => {
     let alive = true;
     void healthApi.whoami().then((me) => {
@@ -202,7 +202,9 @@ export function AuditScreen() {
       alive = false;
     };
   }, []);
-  const unitAdmin = !securityOperator && unitsAdmin.length > 0;
+  // null until /me answers (a failed read answers []: the member view). Until then no empty state may speak.
+  const unitsKnown = securityOperator || unitsAdmin !== null;
+  const unitAdmin = !securityOperator && (unitsAdmin?.length ?? 0) > 0;
   const view = useConsoleMode();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -482,7 +484,7 @@ export function AuditScreen() {
         <DrillBanner
           runId={runFilter}
           run={drillRun}
-          loading={drillLoading}
+          loading={drillLoading || (unitAdmin && drillError === "not-found" && status !== "ready")}
           error={drillError}
           view={view}
           onRetry={() => fetchDrillRun(runFilter)}
@@ -495,7 +497,7 @@ export function AuditScreen() {
         <div className="mb-4">
           <Note>
             <p className="font-medium text-foreground">{AUDIT.UNIT_NOTE_TITLE}</p>
-            <p>{renderPieces(unitNotePieces(unitsAdmin.map((u) => u.unit_name)))}</p>
+            <p>{renderPieces(unitNotePieces((unitsAdmin ?? []).map((u) => u.unit_name)))}</p>
           </Note>
         </div>
       )}
@@ -517,7 +519,7 @@ export function AuditScreen() {
         </TruncatedNote>
       )}
 
-      {status === "loading" ? (
+      {status === "loading" || !unitsKnown ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <TableSkeleton rows={8} cols={5} />
         </div>
@@ -531,7 +533,7 @@ export function AuditScreen() {
             <EmptyState
               icon={ScrollText}
               title={AUDIT.UNIT_EMPTY_TITLE}
-              description={renderPieces(unitEmptyPieces(unitsAdmin[0].unit_name))}
+              description={renderPieces(unitEmptyPieces((unitsAdmin ?? [])[0].unit_name))}
               action={
                 <Button variant="outline" onClick={() => navigate("/runs")}>
                   Open Runs
