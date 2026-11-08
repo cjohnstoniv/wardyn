@@ -39,6 +39,8 @@ export function transferSize(n: number): string {
 
 // A paused run's folder cannot be read. A look never wakes it, so the panel looks again until it has woken.
 const PAUSED_POLL_MS = 4000;
+// Under review a decider answers the requests without this browser: read them while the From tab is open.
+export const REVIEW_POLL_MS = 5000;
 
 const clock = () => new Date().toTimeString().slice(0, 5);
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -96,6 +98,8 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
     void load();
   }, [load]);
   usePoll(load, PAUSED_POLL_MS, paused === null);
+  const [tab, setTab] = React.useState("to");
+  usePoll(loadRequests, REVIEW_POLL_MS, !(view?.rules.download === "review" && tab === "from"));
 
   const patch = (key: number, next: Partial<UploadRow>) =>
     setUploads((rows) => rows.map((r) => (r.key === key ? { ...r, ...next } : r)));
@@ -167,7 +171,10 @@ export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: b
           ))}
         </dl>
       )}
-      <Tabs defaultValue="to" className="mt-2" onValueChange={(v) => v === "from" && void load()}>
+      <Tabs defaultValue="to" className="mt-2" onValueChange={(v) => {
+          setTab(v);
+          if (v === "from") void load();
+        }}>
         <TabsList>
           <TabsTrigger value="to">{C.toTab}</TabsTrigger>
           <TabsTrigger value="from">{C.fromTab}</TabsTrigger>

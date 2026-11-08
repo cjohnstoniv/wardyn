@@ -6,7 +6,7 @@
 // The Files panel (mock M7-Files): the strip and both tabs render the server's rules with the
 // board's strings, an upload reports delivered or too large, and a blocked download lists nothing.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -280,12 +280,11 @@ describe("DesktopFilesPanel under review", () => {
 
   it("a request approved while the From tab is open shows Approved on the next read", async () => {
     vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     listMock.mockResolvedValue({ folder: "~/Transfers", rules: reviewing, files: [{ name: "a.csv", bytes: 84 * 1024 }] });
     listApprovalsMock.mockResolvedValue([fileRow({})]);
     render(<DesktopFilesPanel runId="r1" />);
     await act(() => vi.advanceTimersByTimeAsync(0));
-    await user.click(screen.getByRole("tab", { name: C.fromTab }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: C.fromTab }), { button: 0 });
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(screen.getByText(C.stateWaiting)).toBeTruthy();
     expect(screen.queryByRole("button", { name: C.downloadApproved })).toBeNull();
