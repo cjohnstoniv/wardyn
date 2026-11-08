@@ -831,9 +831,9 @@ start.
 | `host_capacity_refused` | `503` with `Retry-After: 30` on every run launch door (new run, preflight, record, harness sign-in, source scan, site-config probe, workspace build): the host is short of memory or over its load ceiling (`WARDYN_HOST_MIN_MEM_AVAILABLE_MIB` / `WARDYN_HOST_MAX_LOAD1`). The body is the one exception to the `error`/`reason` shape: `error` is this code, `reason` names each limit crossed with its measured value, and `message` is the sentence to show. Wait and retry. |
 | `runner_limits_required` | `422`: a registration that declares no limits, or limits that are not a valid set. Register with this release's `wardyn-runnerd`. |
 | `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
-| `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
+| `runners_enabled_required` | `PUT /runners/settings` needs `enabled` or `require_managed_device`, each true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
-| `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
+| `site_config_runners_via_own_route` | Change `runners.enabled` or `runners.require_managed_device` with `PUT /runners/settings`. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
 | `kept_machine_not_your_mac` | `403`: the caller is not a person, or has no Mac of their own outside other people's pools. |
 | `kept_machine_person_limit` | The caller already keeps `macos_vm.max_kept_machines_per_person` machines. |
