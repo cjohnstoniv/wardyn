@@ -68,13 +68,13 @@
 | `group:<name>` | a person whose session holds the group or App Role, from a complete snapshot |
 
 - A device, a service identity and a delegated portal token match none of these. The admin token, local mode and a stale or truncated group snapshot match neither `unit_admins` nor a group.
-- `unit_admins` and `group:<name>` never match the run's own people: its creator, the sponsor of a service identity that created it, or its recorded author. They decide only through `owner`, so the `egress_host` grant still stands between them and a host.
+- `unit_admins` and `group:<name>` never match the run's own people: its creator, the sponsor of a service identity that created it, or its recorded author. The creator decides only through `owner`, so the `egress_host` grant still stands between them and a host. The sponsor of a service identity and the recorded author decide none of the run's holds.
 - A service identity's run with no recorded author is decided by security alone.
 - An approval rule (`policy:`) never matches `who`. It decides only as the security tier's automation, and `second_human` refuses it.
 
 ## How a hold is resolved
 
-1. The run's frozen unit is read, then its ancestors. The nearest unit with a rule for the kind wins.
+1. The run's frozen unit is read, then its ancestors. Every rule for the kind on that chain binds: deciders are the entries all of them name, `second_human` holds if any sets it, and the narrowest `max_scope` and `max_elevation` win. `rule` in the audit row names the nearest unit with a rule.
 2. A security admin decides. The rule's `second_human` and `max_scope` still bind them; the admin token is the audited break-glass for `second_human` (`approval.second_human.bypass`, `switch` `unit deciders (<unit id>)`).
 3. Anyone else decides through the first `who` entry that matches. Otherwise they get the `404` they get without rules, so no one learns of a hold they cannot decide.
 4. The run's owner, when `who` leaves them out of an egress, Azure DevOps or MCP hold, gets `403` `not_a_decider`, which names who decides.
@@ -107,6 +107,14 @@ Set a unit's rules with `PUT /api/v1/governance/units/{id}/deciders` or `wardyn 
 - `GET /governance` lists each unit's `deciders` with `from`: the unit whose rule governs each kind there. A unit admin sees the units of their subtree.
 - The audit row is `governance.deciders.set` ([audit actions](../AUDIT-ACTIONS.md)).
 
+### A unit's rule only narrows the rules above it
+
+- A rule may not reach further than the rules for the same kind on the units above. One that names a decider they do not, has a wider `max_scope` or `max_elevation`, or leaves off a `second_human` one sets answers `422` `decider_rule_wider_than_parent`. The message names the rule, the field and the nearest unit above with a rule.
+- It is checked at the write, when a held write is proposed, and when it is approved. It binds every writer, the admin token included. Clearing rules is never refused.
+- A rule above that is narrowed later refuses nothing below it, and a unit moved under a narrower parent keeps its rules. Both narrow the holds at decide time.
+- To widen a parent and a child, write the parent first. Propose the child's widening once the parent's change has applied: until then it is refused.
+- `GET /governance` shows `bounded_by`, every unit whose rule for a kind binds the unit, nearest first, and `effective`, the rule they leave. An `effective` `who` of `[]` means only the security tier decides.
+
 ## What deciders see
 
 - A pending hold a rule governs carries `deciders`: who may decide it, with `security` last.
@@ -117,8 +125,7 @@ Set a unit's rules with `PUT /api/v1/governance/units/{id}/deciders` or `wardyn 
 ## Group deciders and sign-in age
 
 - A `group:<name>` decider matches the groups in the person's session. A group left at the identity provider applies when the session next signs in, or when SCIM removes the person.
-- A console session lasts to the ID token's expiry by default, about an hour on Entra ID. An API token's group snapshot can be as old as the token.
-- Set [`WARDYN_ROLE_STAMP_TTL`](../ENV.md#wardyn_role_stamp_ttl) when a group decides `credential`, `push_content` or anything with a wide scope: it sends the session or token holder through sign-in again once the stamp is older.
+- A group decider matches an API token only when [`WARDYN_ROLE_STAMP_TTL`](../ENV.md#wardyn_role_stamp_ttl) is set, and then the token's groups are at most that old when it decides. A console session's groups are as old as its sign-in. `unit_admins` through a group grant reads the same snapshot.
 
 ## Before you downgrade
 

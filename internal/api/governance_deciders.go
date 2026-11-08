@@ -81,7 +81,11 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 		if err := lockDecidersKey(ctx, q, unit); err != nil {
 			return err
 		}
-		if _, err := s.deciderWriteCheck(ctx, q, unit); err != nil {
+		row, all, err := s.deciderWriteCheck(ctx, q, unit)
+		if err != nil {
+			return err
+		}
+		if err := s.deciderBoundRefusal(ctx, q, row, all, rules); err != nil {
 			return err
 		}
 		saved, err = store.SetUnitDecidersQ(ctx, q, unit, rules, principalFromRequest(r))
@@ -161,24 +165,24 @@ func deciderLockOver(all []types.GovernanceUnit, parent *uuid.UUID, b types.Boun
 
 // deciderWriteCheck reads the unit on q and refuses a write to its rules: 404 for a unit that is gone,
 // 409 unit_knob_locked when a lock above it names the deciders knob. It binds every writer, a security
-// admin and the admin token included.
-func (s *Server) deciderWriteCheck(ctx context.Context, q store.Querier, unit uuid.UUID) (types.GovernanceUnit, error) {
+// admin and the admin token included. It returns the unit's row and every unit it read.
+func (s *Server) deciderWriteCheck(ctx context.Context, q store.Querier, unit uuid.UUID) (types.GovernanceUnit, []types.GovernanceUnit, error) {
 	all, err := store.ListGovernanceUnitsQ(ctx, q)
 	if err != nil {
-		return types.GovernanceUnit{}, err
+		return types.GovernanceUnit{}, nil, err
 	}
 	row, ok := unitsByID(all)[unit]
 	if !ok {
-		return types.GovernanceUnit{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance unit not found")
+		return types.GovernanceUnit{}, nil, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance unit not found")
 	}
 	b, err := s.boundaryQ(ctx, q)
 	if err != nil {
-		return types.GovernanceUnit{}, err
+		return types.GovernanceUnit{}, nil, err
 	}
 	if l, locked := deciderLockOver(all, row.ParentID, b); locked {
-		return types.GovernanceUnit{}, lockedRefusal(types.DeciderLockKnob, l)
+		return types.GovernanceUnit{}, nil, lockedRefusal(types.DeciderLockKnob, l)
 	}
-	return row, nil
+	return row, all, nil
 }
 
 // checkDeciderLockWrite is err, or, when err is nil, the refusal for a unit write that would leave rules
@@ -283,7 +287,11 @@ func (s *Server) holdUnitDeciders(w http.ResponseWriter, r *http.Request, p unit
 	var cur *types.UnitDeciders
 	var row types.GovernanceUnit
 	err := s.readGovernanceState(r, func(q store.Querier) (err error) {
-		if row, err = s.deciderWriteCheck(ctx, q, p.UnitID); err != nil {
+		var all []types.GovernanceUnit
+		if row, all, err = s.deciderWriteCheck(ctx, q, p.UnitID); err != nil {
+			return err
+		}
+		if err = s.deciderBoundRefusal(ctx, q, row, all, p.Rules); err != nil {
 			return err
 		}
 		base, cur, err = unitDecidersState(ctx, q, p.UnitID, false)
@@ -326,7 +334,11 @@ func applyUnitDecidersChange(s *Server, r *http.Request, q store.Querier, ch typ
 	if computeETag(base) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
-	if _, err := s.deciderWriteCheck(ctx, q, p.UnitID); err != nil {
+	row, all, err := s.deciderWriteCheck(ctx, q, p.UnitID)
+	if err != nil {
+		return govApplied{}, err
+	}
+	if err := s.deciderBoundRefusal(ctx, q, row, all, rules); err != nil {
 		return govApplied{}, err
 	}
 	if _, err := store.SetUnitDecidersQ(ctx, q, p.UnitID, rules, ch.ProposedBy); err != nil {
@@ -355,7 +367,7 @@ type governanceDecidersView struct {
 }
 
 // governanceDeciders is the deciders of every unit that has rules or inherits some, computed here so the
-// console keeps no second copy of the nearest-rule-wins walk. A store that keeps none lists none.
+// console keeps no second copy of the walk or of the meet. A store that keeps none lists none.
 func (s *Server) governanceDeciders(ctx context.Context, units []unitResolution) ([]governanceDecidersView, error) {
 	st := s.unitDeciderStore()
 	if st == nil {
@@ -365,34 +377,18 @@ func (s *Server) governanceDeciders(ctx context.Context, units []unitResolution)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
-	own := map[uuid.UUID][]types.DeciderRule{}
-	for _, d := range rows {
-		own[d.UnitID] = d.Rules
-	}
 	flat := make([]types.GovernanceUnit, len(units))
 	for i, u := range units {
 		flat[i] = u.Row
 	}
-	byID := unitsByID(flat)
+	t := newDeciderTree(rows, flat)
 	var out []governanceDecidersView
 	for _, u := range flat {
-		from := map[string]uuid.UUID{}
-		seen := map[uuid.UUID]bool{}
-		for cur := &u.ID; cur != nil && !seen[*cur] && len(seen) <= store.MaxUnitDepthCap; cur = byID[*cur].ParentID {
-			seen[*cur] = true
-			for _, k := range types.DeciderKinds {
-				if _, done := from[k]; done {
-					continue
-				}
-				if _, has := types.DeciderRuleFor(own[*cur], k); has {
-					from[k] = *cur
-				}
-			}
-		}
-		if len(own[u.ID]) == 0 && len(from) == 0 {
+		from, bounded, effective := t.boundedBy(u.ID)
+		if len(t.rules[u.ID]) == 0 && len(from) == 0 {
 			continue
 		}
-		v := governanceDecidersView{UnitID: u.ID, Rules: own[u.ID], From: from}
+		v := governanceDecidersView{UnitID: u.ID, Rules: t.rules[u.ID], From: from, BoundedBy: bounded, Effective: effective}
 		if v.Rules == nil {
 			v.Rules = []types.DeciderRule{}
 		}
