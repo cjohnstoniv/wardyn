@@ -343,12 +343,15 @@ func unitDecidersAuditData(unit uuid.UUID, rules []types.DeciderRule, actor, app
 	return map[string]any{"unit_id": unit, "rules": rules, "actor": actor, "approver": approver}
 }
 
-// governanceDecidersView is one unit's entry in GET /governance's deciders: its own rules and, per kind,
-// the unit whose rule governs that kind for runs in it (itself, or the nearest unit above with one).
+// governanceDecidersView is one unit's entry in GET /governance's deciders: its own rules; per kind, the
+// nearest unit with a rule (from), every unit on the chain with one, nearest first (bounded_by), and the
+// rule those leave once met (effective; an empty who means the security tier alone).
 type governanceDecidersView struct {
-	UnitID uuid.UUID            `json:"unit_id"`
-	Rules  []types.DeciderRule  `json:"rules"`
-	From   map[string]uuid.UUID `json:"from,omitempty"`
+	UnitID    uuid.UUID                    `json:"unit_id"`
+	Rules     []types.DeciderRule          `json:"rules"`
+	From      map[string]uuid.UUID         `json:"from,omitempty"`
+	BoundedBy map[string][]uuid.UUID       `json:"bounded_by,omitempty"`
+	Effective map[string]types.DeciderRule `json:"effective,omitempty"`
 }
 
 // governanceDeciders is the deciders of every unit that has rules or inherits some, computed here so the

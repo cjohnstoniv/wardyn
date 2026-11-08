@@ -362,33 +362,42 @@ func TestDecidersWriteUnknownUnit(t *testing.T) {
 }
 
 // TestDecidersGovernanceRead: GET /governance carries each unit's rules and, per kind, the unit whose
-// rule governs it, scoped to the caller's subtrees; with no rules anywhere the field is absent.
+// rule governs it, every unit whose rule bounds it and the rule they leave once met, scoped to the
+// caller's subtrees; with no rules anywhere the field is absent.
 func TestDecidersGovernanceRead(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	read := func(c *http.Cookie) map[string]struct {
-		Rules []types.DeciderRule `json:"rules"`
-		From  map[string]string   `json:"from"`
+		Rules     []types.DeciderRule          `json:"rules"`
+		From      map[string]string            `json:"from"`
+		BoundedBy map[string][]string          `json:"bounded_by"`
+		Effective map[string]types.DeciderRule `json:"effective"`
 	} {
 		w := e.call(c, http.MethodGet, "/api/v1/governance", "")
 		var body struct {
 			Deciders []struct {
-				UnitID string              `json:"unit_id"`
-				Rules  []types.DeciderRule `json:"rules"`
-				From   map[string]string   `json:"from"`
+				UnitID    string                       `json:"unit_id"`
+				Rules     []types.DeciderRule          `json:"rules"`
+				From      map[string]string            `json:"from"`
+				BoundedBy map[string][]string          `json:"bounded_by"`
+				Effective map[string]types.DeciderRule `json:"effective"`
 			} `json:"deciders"`
 		}
 		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil {
 			t.Fatalf("GET /governance = %d %s", w.Code, w.Body)
 		}
 		out := map[string]struct {
-			Rules []types.DeciderRule `json:"rules"`
-			From  map[string]string   `json:"from"`
+			Rules     []types.DeciderRule          `json:"rules"`
+			From      map[string]string            `json:"from"`
+			BoundedBy map[string][]string          `json:"bounded_by"`
+			Effective map[string]types.DeciderRule `json:"effective"`
 		}{}
 		for _, d := range body.Deciders {
 			out[d.UnitID] = struct {
-				Rules []types.DeciderRule `json:"rules"`
-				From  map[string]string   `json:"from"`
-			}{d.Rules, d.From}
+				Rules     []types.DeciderRule          `json:"rules"`
+				From      map[string]string            `json:"from"`
+				BoundedBy map[string][]string          `json:"bounded_by"`
+				Effective map[string]types.DeciderRule `json:"effective"`
+			}{d.Rules, d.From, d.BoundedBy, d.Effective}
 		}
 		return out
 	}
@@ -420,6 +429,24 @@ func TestDecidersGovernanceRead(t *testing.T) {
 	}
 	if seen := read(e.adminA1); len(seen) != 1 || seen[a1].From["mcp_call"] != a1 {
 		t.Errorf("ua-a1's admin sees %v, want ua-a1's entry only", seen)
+	}
+	// bounded_by lists every unit with a rule for the kind, nearest first; effective is their meet.
+	if g := got[a1]; !slices.Equal(g.BoundedBy["egress_domain"], []string{a}) || !slices.Equal(g.BoundedBy["mcp_call"], []string{a1}) ||
+		!slices.Equal(g.Effective["egress_domain"].Who, []string{"owner", "group:eng-leads"}) || !g.Effective["mcp_call"].SecondHuman {
+		t.Errorf("ua-a1 = %+v, want egress_domain bounded by ua-a and mcp_call by itself, each its one rule", g)
+	}
+	narrower := map[string]any{"kinds": []string{"egress_domain"}, "who": []string{"group:eng-leads"}, "max_scope": "once"}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a1), decidersBody(mcpPeersRule(), narrower)); w.Code != http.StatusOK {
+		t.Fatal(w.Body)
+	}
+	got = read(e.alice)
+	if g := got[a1]; g.From["egress_domain"] != a1 || !slices.Equal(g.BoundedBy["egress_domain"], []string{a1, a}) ||
+		!slices.Equal(g.Effective["egress_domain"].Who, []string{"group:eng-leads"}) || g.Effective["egress_domain"].MaxScope != types.ScopeOnce ||
+		!slices.Equal(g.Effective["egress_domain"].Kinds, []string{"egress_domain"}) {
+		t.Errorf("ua-a1 = %+v, want egress_domain from itself, bounded by itself then ua-a, met to group:eng-leads once", g)
+	}
+	if g := got[a2]; !slices.Equal(g.BoundedBy["egress_domain"], []string{a}) || g.Effective["egress_domain"].MaxScope != types.ScopeRun {
+		t.Errorf("ua-a2 = %+v, want egress_domain bounded by ua-a alone", g)
 	}
 }
 
