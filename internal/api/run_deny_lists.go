@@ -7,13 +7,11 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"net/http"
 	"slices"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
-	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 // The unit deny lists: a governance profile names components (by id) and model providers (by uid)
@@ -74,10 +72,7 @@ func (s *Server) denyListDecision(ctx context.Context, c governanceCeiling, reas
 	if c.Unit != nil {
 		d = d.OnKnob(s.runLockOf(ctx, c.Unit, knob))
 	}
-	rf := runError(http.StatusForbidden, reason, d.Sentence)
-	rf.body.Policy = policyref.Layered(policyref.AttributedTo(d.Policy, d.Knob)) // who to ask, as refuseOn does
-	rf.decision = &d
-	return rf
+	return runDoorDenied(reason, d)
 }
 
 // denyCandidatesOf is the stored components a run attaches and the model providers it chose (the

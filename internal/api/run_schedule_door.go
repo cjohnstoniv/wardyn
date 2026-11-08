@@ -5,10 +5,8 @@ package api
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
-	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -31,10 +29,7 @@ func (s *Server) scheduleDoorRefusal(ctx context.Context, c governanceCeiling) *
 	if c.Unit != nil {
 		d = d.OnKnob(s.runLockOf(ctx, c.Unit, "deny_scheduled_runs"))
 	}
-	rf := runError(http.StatusForbidden, reasonScheduledRunsDenied, d.Sentence)
-	rf.body.Policy = policyref.Layered(policyref.AttributedTo(d.Policy, d.Knob)) // who to ask, as refuseOn does
-	rf.decision = &d
-	return rf
+	return runDoorDenied(reasonScheduledRunsDenied, d)
 }
 
 // stepScheduleDoor refuses a start time the profile forbids, at create, Review and preview. It runs

@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 // runRefusal keeps a gate's decision separate from its HTTP/audit emission.
@@ -27,6 +28,13 @@ func runError(status int, reason, message string) *runRefusal {
 
 func runDenied(decision authz.Decision) *runRefusal {
 	return &runRefusal{decision: &decision}
+}
+
+// runDoorDenied is a governance door's 403 under reason for d: its sentence, and who to ask, as refuseOn
+// writes it.
+func runDoorDenied(reason string, d authz.Decision) *runRefusal {
+	return &runRefusal{status: http.StatusForbidden, decision: &d,
+		body: errorBody{Error: d.Sentence, Reason: reason, Policy: policyref.Layered(policyref.AttributedTo(d.Policy, d.Knob))}}
 }
 
 func runServerError(operation string, err error) *runRefusal {
