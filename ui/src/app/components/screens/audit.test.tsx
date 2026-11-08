@@ -35,9 +35,11 @@ vi.mock("../../lib/api/runs", () => ({
   },
 }));
 const healthMock = vi.fn();
+const whoamiMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({
   health: {
     health: () => healthMock(),
+    whoami: () => whoamiMock(),
   },
 }));
 
@@ -84,6 +86,8 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     listRunsMock.mockResolvedValue([]);
     healthMock.mockReset();
     healthMock.mockResolvedValue({});
+    whoamiMock.mockReset();
+    whoamiMock.mockResolvedValue(null);
   });
 
   it("re-queries the server with run_id when a run is selected from a row", async () => {

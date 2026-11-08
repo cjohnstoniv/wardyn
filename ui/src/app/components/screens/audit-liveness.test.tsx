@@ -30,6 +30,7 @@ const healthMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({
   health: {
     health: () => healthMock(),
+    whoami: () => Promise.resolve(null),
   },
 }));
 

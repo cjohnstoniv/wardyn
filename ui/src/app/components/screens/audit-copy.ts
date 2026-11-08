@@ -72,7 +72,55 @@ export const AUDIT = {
   SCAN_LEFT_TO: "Left prompt checks to",
   OUTCOME_ALLOW: "allow",
   OUTCOME_DENY: "deny",
+  // A unit admin (not a security admin): the Audit page lists the rows of the runs in their units, and the
+  // changes made to those units. The note names the units `/me` serves, as served.
+  UNIT_DESCRIPTION:
+    "Append-only. Every egress decision, brokered credential, approval and enforcement action, across the runs in your units.",
+  UNIT_NOTE_TITLE: "Runs in your units",
+  unitNoteBody: (names: string[]): string => piecesText(unitNotePieces(names)),
+  UNIT_EMPTY_TITLE: "No runs in your units yet.",
+  unitEmptyBody: (unit: string): string => piecesText(unitEmptyPieces(unit)),
+  UNIT_DRILL_TITLE: "This run is in your unit",
+  UNIT_DRILL_BODY: "Its page isn't open to you. The trail below is what the audit view can show.",
+  UNIT_DRILL_BACK: "Back to all runs in your units",
 } as const;
+
+// A sentence as the pieces it is rendered from: a plain string, or a name (a unit) that renders mono. The
+// copy functions above return the same sentence as text, with each name in backticks.
+export type CopyPiece = string | { mono: string };
+
+function piecesText(pieces: CopyPiece[]): string {
+  return pieces.map((p) => (typeof p === "string" ? p : `\`${p.mono}\``)).join("");
+}
+
+/** Up to three unit names, comma separated, then " and N more" (the sentence goes on after a comma then). */
+function unitNamePieces(names: string[]): CopyPiece[] {
+  const shown = names.slice(0, 3);
+  const out: CopyPiece[] = [];
+  shown.forEach((n, i) => {
+    if (i > 0) out.push(", ");
+    out.push({ mono: n });
+  });
+  if (names.length > shown.length) out.push(` and ${names.length - shown.length} more`);
+  return out;
+}
+
+export function unitNotePieces(names: string[]): CopyPiece[] {
+  return [
+    "Showing runs in ",
+    ...unitNamePieces(names),
+    names.length === 1 ? " and the units below it" : names.length > 3 ? ", and the units below them" : " and the units below them",
+    ", and the changes made to those units. Sign-ins aren't listed here, and a run's row leaves out names, paths and error text.",
+  ];
+}
+
+export function unitEmptyPieces(unit: string): CopyPiece[] {
+  return [
+    "Every egress decision, brokered credential, approval and enforcement action of a run in ",
+    { mono: unit },
+    " or below it appears here once that run starts.",
+  ];
+}
 
 // Short, human verbs for the actions we know about, shared by the Audit screen
 // and a run's own Audit tab. Anything not in this table falls back to the raw

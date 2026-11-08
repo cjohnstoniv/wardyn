@@ -21,12 +21,14 @@ import {
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { isNetworkFault, runHeadline } from "../../lib/types";
 import { describeEvent, hasNoCaller, inboundDetail, isInbound, serviceSource } from "../../lib/audit-copy";
-import { RunRef } from "../wardyn/run-ref";
-import { AUDIT } from "./audit-copy";
+import { RunRef, shortRunId } from "../wardyn/run-ref";
+import { AUDIT, unitEmptyPieces, unitNotePieces } from "./audit-copy";
+import type { CopyPiece } from "./audit-copy";
 import { audit as api, gatewayCallId } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
+import { Note } from "./governance/display";
 import { absoluteTime, clockTime, mediumDate } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { Input } from "../ui/input";
@@ -188,6 +190,21 @@ export function AuditScreen() {
   // unfiltered trail an admin does — reading and verifying it is that tier's
   // job. The "admin-only" empty state below is all this gates.
   const securityOperator = useSecurityOperator();
+  // A unit admin: not a security admin, and `/me` names at least one unit they administer. The units are read
+  // here, once, and only as served; operator-context keeps no copy of them.
+  const [unitsAdmin, setUnitsAdmin] = React.useState<{ unit_id: string; unit_name: string }[] | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    void healthApi.whoami().then((me) => {
+      if (alive) setUnitsAdmin(me?.unit_admin_of ?? []);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  // null until /me answers (a failed read answers []: the member view). Until then no empty state may speak.
+  const unitsKnown = securityOperator || unitsAdmin !== null;
+  const unitAdmin = !securityOperator && (unitsAdmin?.length ?? 0) > 0;
   const view = useConsoleMode();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -369,6 +386,10 @@ export function AuditScreen() {
 
   const groups = React.useMemo(() => groupByDay(filtered), [filtered]);
 
+  // A unit admin is refused the run page of a run they do not own with the same 404 as a missing run, so a
+  // 404 alone cannot say which. A trail that came back with rows can only be a run in their units.
+  const unitRun = unitAdmin && drillError === "not-found" && status === "ready" && events.length > 0;
+
   const noFiltersActive = !query && kindFilter === "all" && actorFilter === "all" && !runFilter;
 
   const clearFilters = () => {
@@ -382,7 +403,11 @@ export function AuditScreen() {
     <PageContainer width="list">
       <PageHeader
         title="Audit"
-        description="Append-only. Every egress decision, brokered credential, approval and enforcement action, across every run."
+        description={
+          unitAdmin
+            ? AUDIT.UNIT_DESCRIPTION
+            : "Append-only. Every egress decision, brokered credential, approval and enforcement action, across every run."
+        }
       />
 
       {securityOperator && (
@@ -459,12 +484,22 @@ export function AuditScreen() {
         <DrillBanner
           runId={runFilter}
           run={drillRun}
-          loading={drillLoading}
+          loading={drillLoading || !unitsKnown || (unitAdmin && drillError === "not-found" && status !== "ready")}
           error={drillError}
           view={view}
           onRetry={() => fetchDrillRun(runFilter)}
           onClear={() => setRunFilter("")}
+          unitRun={unitRun}
         />
+      )}
+
+      {unitAdmin && !unitRun && (
+        <div className="mb-4">
+          <Note>
+            <p className="font-medium text-foreground">{AUDIT.UNIT_NOTE_TITLE}</p>
+            <p>{renderPieces(unitNotePieces((unitsAdmin ?? []).map((u) => u.unit_name)))}</p>
+          </Note>
+        </div>
       )}
 
       {/* MEDIUM/fix: when the window is capped, say so explicitly — otherwise
@@ -484,7 +519,7 @@ export function AuditScreen() {
         </TruncatedNote>
       )}
 
-      {status === "loading" ? (
+      {status === "loading" || !unitsKnown ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <TableSkeleton rows={8} cols={5} />
         </div>
@@ -494,7 +529,18 @@ export function AuditScreen() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          {noFiltersActive && !securityOperator ? (
+          {noFiltersActive && unitAdmin ? (
+            <EmptyState
+              icon={ScrollText}
+              title={AUDIT.UNIT_EMPTY_TITLE}
+              description={renderPieces(unitEmptyPieces((unitsAdmin ?? [])[0].unit_name))}
+              action={
+                <Button variant="outline" onClick={() => navigate("/runs")}>
+                  Open Runs
+                </Button>
+              }
+            />
+          ) : noFiltersActive && !securityOperator ? (
             // W25-W25.2-3: a member's global feed (no run_id) is ALWAYS empty —
             // handleQueryAudit scopes members to a run they own and requires
             // ?run_id= to do it (internal/api/audit.go). "The trail starts with
@@ -547,7 +593,7 @@ export function AuditScreen() {
               </div>
               <div className="divide-y divide-border">
                 {g.events.map((e) => (
-                  <EventRow key={e.id} event={e} runTitles={runTitles} onDrill={setRunFilter} />
+                  <EventRow key={e.id} event={e} runTitles={runTitles} onDrill={setRunFilter} plainRunRef={unitRun} />
                 ))}
               </div>
             </div>
@@ -559,6 +605,11 @@ export function AuditScreen() {
 
     </PageContainer>
   );
+}
+
+// A sentence kept as pieces: a unit name renders mono, the rest as written.
+function renderPieces(pieces: CopyPiece[]): React.ReactNode {
+  return pieces.map((p, i) => (typeof p === "string" ? <React.Fragment key={i}>{p}</React.Fragment> : <Mono key={i}>{p.mono}</Mono>));
 }
 
 // Per-run drill banner: real run fields only (id / agent / task / repo / the
@@ -575,6 +626,7 @@ function DrillBanner({
   view,
   onRetry,
   onClear,
+  unitRun,
 }: {
   runId: string;
   run: AgentRun | undefined;
@@ -583,6 +635,8 @@ function DrillBanner({
   view: ConsoleView;
   onRetry: () => void;
   onClear: () => void;
+  /** A unit admin's drill of a run whose page is closed to them: the audit trail is all there is. */
+  unitRun: boolean;
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-primary/25 bg-primary/5 px-4 py-3">
@@ -600,6 +654,11 @@ function DrillBanner({
           <span className="font-mono text-xs text-muted-foreground">{run.repo}</span>
           <ConfinementChip value={run.confinement_class} />
         </>
+      ) : unitRun ? (
+        <>
+          <span className="text-sm font-medium text-foreground">{AUDIT.UNIT_DRILL_TITLE}</span>
+          <span className="text-xs text-muted-foreground">{AUDIT.UNIT_DRILL_BODY}</span>
+        </>
       ) : error === "failed" ? (
         <>
           <span className="text-xs text-muted-foreground">Couldn&apos;t load this run.</span>
@@ -611,14 +670,16 @@ function DrillBanner({
         <span className="text-xs text-muted-foreground">Run not found — it may have been archived or deleted.</span>
       )}
       <div className="ml-auto flex items-center gap-4">
-        <Link
-          to={runPath(view, runId)}
-          className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
-        >
-          Open run <ArrowRight className="size-3.5" />
-        </Link>
+        {!unitRun && (
+          <Link
+            to={runPath(view, runId)}
+            className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+          >
+            Open run <ArrowRight className="size-3.5" />
+          </Link>
+        )}
         <button onClick={onClear} className="text-sm text-muted-foreground hover:text-foreground">
-          Show all events
+          {unitRun ? AUDIT.UNIT_DRILL_BACK : "Show all events"}
         </button>
       </div>
     </div>
@@ -701,10 +762,13 @@ function EventRow({
   event,
   runTitles,
   onDrill,
+  plainRunRef,
 }: {
   event: AuditEvent;
   runTitles: ReadonlyMap<string, string>;
   onDrill: (runId: string) => void;
+  /** Inside a drill that is already open on this run, the reference has nowhere to go: text, no button. */
+  plainRunRef?: boolean;
 }) {
   const kind = eventKind(event);
   // A rule-decided call says who decided it instead of naming a host it never
@@ -766,7 +830,12 @@ function EventRow({
           <ErasedFields event={event} className="shrink-0 text-xs" />
         </span>
       )}
-      {event.run_id && (
+      {event.run_id && plainRunRef && (
+        <span className="order-3 max-w-[14rem] shrink-0 text-sm text-muted-foreground sm:order-none">
+          Run <Mono title={event.run_id}>{shortRunId(event.run_id)}</Mono>
+        </span>
+      )}
+      {event.run_id && !plainRunRef && (
         <RunRef
           runId={event.run_id}
           title={runTitles.get(event.run_id)}
