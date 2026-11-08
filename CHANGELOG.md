@@ -107,7 +107,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A revived run keeps its own recording rule; before, a revive could drop it from the run's recorded policy. A revive reads the recorded policy first and is refused if it cannot be read.
+- After a revive, a run's recorded policy and its policy view showed the organisation's recording level instead of the run's own; the recording itself was never changed. A revive now starts from the run's recorded policy and is refused (503) when that cannot be read.
 - `opaque_tunnels` in a run's model usage now counts a tunnelled connection to a model host whether or not content inspection is on: the proxy marks the connection's allow row (`model_tunnel`), and the count is the larger of the marked rows and the `llm.scan.bypass` rows, so older runners still count.
 - Idle auto-stop no longer reads a refused request as the run working. A macOS VM run's Apple background requests (a refused boot host above all) kept resetting the idle clock, so the run never stopped at its cap. Only allowed requests count.
 - A runner no longer fails a new run with a spool lock error when something outside Wardyn removes the run's new spool directory just before its lock is made: the directory is made again once. A spool that already held data is never recreated, and the error now says when the directory was removed or replaced while it was opened.
