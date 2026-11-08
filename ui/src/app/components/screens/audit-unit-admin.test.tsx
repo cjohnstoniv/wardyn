@@ -197,6 +197,35 @@ describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
     expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
   });
 
+  it("never says Run not found while /me is still held, even once the run read has answered 404", async () => {
+    let answerRun: (run: undefined) => void = () => {};
+    let answerMe: (me: unknown) => void = () => {};
+    let answerTrail: (rows: AuditEvent[]) => void = () => {};
+    getRunMock.mockReturnValue(new Promise((resolve) => (answerRun = resolve)));
+    whoamiMock.mockReturnValue(new Promise((resolve) => (answerMe = resolve)));
+    listAuditMock.mockReturnValue(new Promise((resolve) => (answerTrail = resolve)));
+    const { OperatorProvider } = await import("../wardyn/operator-context");
+    render(
+      <MemoryRouter initialEntries={["/admin/audit?run_id=run_abcdef12"]}>
+        <OperatorProvider operator={false} securityOperator={false}>
+          <AuditScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Loading run…")).toBeInTheDocument();
+    await act(async () => answerRun(undefined));
+    expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open run/ })).not.toBeInTheDocument();
+
+    await act(async () => answerMe(unitsOf("payments")));
+    expect(screen.queryByText(/Run not found/)).not.toBeInTheDocument();
+    await act(async () =>
+      answerTrail([ev({ id: "e1", run_id: "run_abcdef12", action: "egress.allow", target: "api.github.com:443" })]),
+    );
+    expect(await screen.findByText("This run is in your unit")).toBeInTheDocument();
+  });
+
   it("shows neither empty state while /me has not answered, then the unit one", async () => {
     // The feed answers (empty) while /me is still held: the page must not speak for either empty state yet.
     let answerMe: (me: unknown) => void = () => {};
