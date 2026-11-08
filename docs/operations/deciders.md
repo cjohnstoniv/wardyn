@@ -125,7 +125,7 @@ Set a unit's rules with `PUT /api/v1/governance/units/{id}/deciders` or `wardyn 
 ## Group deciders and sign-in age
 
 - A `group:<name>` decider matches the groups in the person's session. A group left at the identity provider applies when the session next signs in, or when SCIM removes the person.
-- A group decider matches an API token only when [`WARDYN_ROLE_STAMP_TTL`](../ENV.md#wardyn_role_stamp_ttl) is set, and then the token's groups are at most that old when it decides. A console session's groups are as old as its sign-in. `unit_admins` through a group grant reads the same snapshot.
+- A group decider matches an API token only when [`WARDYN_ROLE_STAMP_TTL`](../ENV.md#wardyn_role_stamp_ttl) is set, and then the token's groups are at most that old when it decides. A console session and a CLI session (`wardyn login`) match as before; their groups are as old as their sign-in. `unit_admins` through a group grant reads the same snapshot.
 
 ## Before you downgrade
 

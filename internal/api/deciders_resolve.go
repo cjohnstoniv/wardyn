@@ -256,9 +256,10 @@ func (s *Server) resolveDecider(r *http.Request, ap types.ApprovalRequest, run t
 
 // callerInGroup reports whether the caller's group snapshot, complete and from a person, holds g. An API
 // token's snapshot is as old as its owner's last sign-in, so a token matches a group only when
-// WARDYN_ROLE_STAMP_TTL bounds that age (refuseStaleRoleStamp has already refused an older one).
+// WARDYN_ROLE_STAMP_TTL bounds that age (refuseStaleRoleStamp has already refused an older one). A CLI
+// session's token is a person's session, like a console session, and matches as before.
 func (s *Server) callerInGroup(ctx context.Context, g string) bool {
-	if apiTokenIDFromContext(ctx) != uuid.Nil && s.cfg.RoleStampTTL <= 0 {
+	if apiTokenIDFromContext(ctx) != uuid.Nil && cliSessionIDFromContext(ctx) == uuid.Nil && s.cfg.RoleStampTTL <= 0 {
 		return false
 	}
 	_, groups := s.unitAdminSubjects(ctx)
