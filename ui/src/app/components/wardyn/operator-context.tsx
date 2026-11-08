@@ -17,6 +17,10 @@ import type { MeUserDrive } from "../../lib/api/health";
 // keystroke, so that is cheap; a field that changes often needs its own
 // context instead.
 export interface MeIdentity {
+  // GET /me's `unit_admin_of`: the units this caller holds a unit-admin grant on. Default empty: fail
+  // CLOSED, like userDrive, so an unresolved or failed /me, an older server that never sends the key, and an
+  // unwrapped component all read as "no grant". UX only: the server's requireUnitScope is the gate.
+  unitAdminOf: readonly { unit_id: string; unit_name: string }[];
   // Whether the signed-in caller holds the operator role (see GET
   // /api/v1/me's `operator` field, sourced from the same isOperator
   // predicate the server gates writes with — internal/api/http.go). Default
@@ -208,7 +212,11 @@ export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "u
 // The single fail-open/fail-closed default every field's own doc comment
 // (above) explains — this is what every unwrapped consumer (every existing
 // test that mounts a screen directly, and any future one) reads.
+// One shared empty list, so a default prop does not hand the memo a fresh array on every render.
+const NO_UNITS: readonly { unit_id: string; unit_name: string }[] = [];
+
 const DEFAULT_ME_IDENTITY: MeIdentity = {
+  unitAdminOf: NO_UNITS,
   operator: true,
   operatorResolved: true,
   securityOperator: true,
@@ -230,6 +238,7 @@ export function OperatorProvider({
   operatorResolved = true,
   securityOperator = true,
   userViewSuperAdmin = false,
+  unitAdminOf = NO_UNITS,
   principal = "",
   identityRevision = 0,
   authGeneration = 0,
@@ -254,6 +263,8 @@ export function OperatorProvider({
   /** GET /me's `user_view_super_admin` — see MeIdentity.userViewSuperAdmin.
    *  Optional, defaulting false (fail closed). */
   userViewSuperAdmin?: boolean;
+  /** GET /me's `unit_admin_of` — see MeIdentity.unitAdminOf. Optional, defaulting empty (fail closed). */
+  unitAdminOf?: readonly { unit_id: string; unit_name: string }[];
   principal?: string;
   identityRevision?: number;
   authGeneration?: number;
@@ -299,6 +310,7 @@ export function OperatorProvider({
       operatorResolved,
       securityOperator,
       userViewSuperAdmin,
+      unitAdminOf,
       principal,
       identityRevision,
       authGeneration,
@@ -308,7 +320,7 @@ export function OperatorProvider({
       confinementPosture,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, userViewSuperAdmin, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, userViewSuperAdmin, unitAdminOf, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -316,6 +328,12 @@ export function OperatorProvider({
 // The member's local_dir root constraint label — see MeIdentity.memberLocalDirRoot above.
 export function useMemberLocalDirRoot(): string | null {
   return React.useContext(MeIdentityContext).memberLocalDirRoot;
+}
+
+// The units the caller holds a unit-admin grant on — see MeIdentity.unitAdminOf above. UX only: it decides
+// what the console shows, and the server's requireUnitScope is what refuses.
+export function useUnitAdminOf(): readonly { unit_id: string; unit_name: string }[] {
+  return React.useContext(MeIdentityContext).unitAdminOf;
 }
 
 // The caller's own user type — see MeIdentity.userType above.

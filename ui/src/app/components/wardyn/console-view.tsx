@@ -10,7 +10,7 @@ import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { health } from "../../lib/api/health";
 import { notifyAuthChange } from "../../lib/api/core";
-import { useRoleResolved } from "./operator-context";
+import { useRoleResolved, useUnitAdminOf } from "./operator-context";
 import { Refusal } from "./refusal";
 import { REFUSAL } from "./copy/refusal";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
@@ -81,10 +81,14 @@ export type ViewVerdict =
   | { kind: "to-user" }
   | { kind: "admin-token" };
 
-export function viewVerdict(path: string, access: ViewAccess): ViewVerdict {
+// The only admin paths a role `user` with a unit-admin grant may open, matched exactly (query strings are not
+// part of the pathname). Every other /admin/* path still refuses them. UX only: the server's authz is the gate.
+export const UNIT_ADMIN_SCREENS: readonly string[] = ["/admin/governance", "/admin/audit"];
+
+export function viewVerdict(path: string, access: ViewAccess, unitAdmin = false): ViewVerdict {
   const p = path.length > 1 ? path.replace(/\/+$/, "") : path;
   if (viewOfPath(p) === "admin") {
-    if (access === "user-only") return { kind: "refuse" };
+    if (access === "user-only") return unitAdmin && UNIT_ADMIN_SCREENS.includes(p) ? { kind: "pass" } : { kind: "refuse" };
     // Entering admin authority is always a click: there is no user→admin twin.
     if (access === "session-user") return { kind: "to-admin" };
     return { kind: "pass" };
@@ -338,8 +342,9 @@ export function ViewGate({ fallback }: { fallback: React.ReactNode }) {
   const access = useViewAccess();
   const navigate = useNavigate();
   const roleResolved = useRoleResolved();
+  const unitAdmin = useUnitAdminOf().length > 0;
   if (!roleResolved) return <>{fallback}</>;
-  const verdict = viewVerdict(pathname, access);
+  const verdict = viewVerdict(pathname, access, unitAdmin);
   switch (verdict.kind) {
     case "pass":
       return <Outlet />;

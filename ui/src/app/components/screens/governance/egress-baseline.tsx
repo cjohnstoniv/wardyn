@@ -12,6 +12,7 @@
 import * as React from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
+import type { GovernanceChange } from "../../../lib/types";
 import { egressBaseline, type EgressBaseline } from "../../../lib/api/egress-baseline";
 import { getErrorMessage } from "../../../lib/format";
 import { BASELINE } from "../../../lib/governance-copy";
@@ -48,7 +49,7 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
   const [stored, setStored] = React.useState<EgressBaseline>({ baseline_hosts: [], internal_host_suffixes: [] });
   const [draft, setDraft] = React.useState<Draft>({ hosts: "", suffixes: "" });
-  const [outcome, setOutcome] = React.useState<{ kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null>(null);
+  const [outcome, setOutcome] = React.useState<{ kind: "saved" } | { kind: "submitted"; change: GovernanceChange } | { kind: "refused"; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [savedElsewhere, setSavedElsewhere] = React.useState<string | null>(null);
   const etagRef = React.useRef<string | null>(null);
@@ -104,7 +105,7 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
         load();
       } else if (e instanceof PendingChangeError) {
         setSubmittedJson(json);
-        setOutcome({ kind: "submitted" });
+        setOutcome({ kind: "submitted", change: e.change });
         onSubmitted?.();
       } else {
         setOutcome({ kind: "refused", message: e instanceof HttpError ? e.message : getErrorMessage(e) });
@@ -183,7 +184,7 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
           <div className="flex flex-col gap-2 px-6 py-4">
             {savedElsewhere !== null && <SavedElsewhereBanner reloaded documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
             {outcome?.kind === "saved" && <Note role="status">{BASELINE.SAVED}</Note>}
-            {outcome?.kind === "submitted" && <SubmittedNote />}
+            {outcome?.kind === "submitted" && <SubmittedNote change={outcome.change} />}
             {outcome?.kind === "refused" && (
               <Note tone="red" role="alert">
                 <h3 ref={refusedRef} tabIndex={-1} className="font-semibold outline-none">
