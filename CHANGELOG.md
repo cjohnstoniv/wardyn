@@ -33,6 +33,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Before you downgrade: an older binary ignores a portal's `run_in_under`, so the portal can start runs in any of the person's contexts.
 - A kubectl row with `access: restart` (below) is not understood by an older wardynd or proxy image. After a downgrade an older wardynd still loads the row, because it reads `access` as plain text, but it refuses to attach or save it (`cli.kubectl.access: "restart" is not read or write`). An older proxy image refuses to start on a run config that carries `restart`. Move such rows to `read` or `write` first, and update the proxy image before using `restart`.
 - Unit admins now read the audit rows of runs in the units they govern, on `GET /audit` only, with no export, without personal walls, restriction names, secret names or error text. This is on at upgrade. To keep a person out, remove their unit-admin grant.
+- A held change to a unit's own walls, locks, mode, name or parent is now decided only by a security admin or an admin of a unit above it, never by an admin granted on that unit itself, and a move needs an admin above the new parent as well. Changes already waiting are decided under this rule. Where a unit's admins are granted only on that unit, these changes now go to security.
 
 ### Before you downgrade
 
@@ -78,6 +79,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A unit admin no longer decides a held change to the unit they are granted on: a unit's own walls, locks, mode, name and parent are decided from above it.
 - The desktop viewer and the run page no longer show the line about a macOS login window. The macOS VM docs note that the macOS 27 prepare flow creates only the setup account and that nothing beyond macOS 26 is promised as tested.
 - A Codex Model stored on a custom endpoint or OpenAI key provider now takes effect: runs with the Codex CLI use it. With none stored, Codex keeps its own default.
 - The proposer of a held governance change may withdraw it with `POST /governance/changes/{id}/reject`, even when only others may approve it, such as a unit admin's change held for the security tier. The `governance.change.reject` row then carries `withdrawn: true`.

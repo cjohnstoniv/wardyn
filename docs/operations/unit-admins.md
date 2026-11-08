@@ -66,9 +66,10 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 | setting a unit's deciders | — | always |
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
-- A held change may be decided by a security admin, or by a unit admin who governs every unit it touches. For a grant that means strictly above the granted unit.
+- A held change may be decided by a security admin, or by a unit admin who governs every unit it touches.
+- For a grant, and for a change to a unit itself (its walls, locks, mode, name or parent), that means strictly above the unit. An admin granted on a unit never decides a change to that unit, and a move needs someone above the new parent too.
 - A held change is checked again when decided; if what let it in has changed since, it answers stale and changes nothing.
-- Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening. Nobody sets deciders on their own unit either, for the same reason.
+- Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening. Nobody sets deciders on their own unit either, for the same reason. Nor do they decide a change to their own unit.
 - The change read and the dry-run report list `approvers`: who could decide it, the proposer left out.
 
 ## Locks
