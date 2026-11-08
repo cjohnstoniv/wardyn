@@ -391,7 +391,7 @@ func TestApprovalRuleKindsAreClosed(t *testing.T) {
 	classified := map[types.ApprovalKind]bool{
 		types.ApprovalToolCall: true, types.ApprovalEgressDomain: true,
 		types.ApprovalCredential: false, types.ApprovalCredentialReauth: false, types.ApprovalPushContent: false,
-		types.ApprovalHumanTakeover: false,
+		types.ApprovalHumanTakeover: false, types.ApprovalFileDownload: false,
 	}
 	for _, k := range types.ApprovalKinds {
 		want, ok := classified[k]
