@@ -97,6 +97,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - When the runner fails to create the sandbox of a run that was keeping a new machine, the dropped machine now has a `machine.create` audit row with outcome `failure` and `reason` `sandbox_not_created`; before, only the earlier success row was there.
 - A macOS VM runner now signs the guest agent in its own process with this Mac's signing identity, with no keychain and no trust setting, so the agent can keep Full Disk Access across tools updates. codesign could refuse that self-signed identity ("no identity found"), and the agent then went in signed ad hoc. codesign stays as the fallback, now given the designated requirement and the signing keychain on the search list for the call. Each signed copy must pass `codesign --verify --strict` and read back the designated requirement before it is pushed. This is on by default.
 - Review's "Sandbox barrier" row reads the barriers of the runner or pool the run will land on, not the control plane's own runner. A runner Review cannot reach shows the row as unverified, "Checked at the runner when the run starts."
+- A run that has reached its lifetime cap is refused at once, before the lease sweep ends it: its credential and approval requests, its token renewal and decisions on its pending approvals (`409 approval_run_past_lifetime`). A queued run whose cap passed while it waited ends without starting (`max_lifetime_reached`).
 
 ### Security
 

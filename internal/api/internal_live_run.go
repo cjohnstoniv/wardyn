@@ -113,6 +113,8 @@ func liveRunFromContext(ctx context.Context) (types.AgentRun, bool) {
 // here, deliberately: http.go is at the file-size gate and the reasoning belongs
 // with the function that acts on it, not with the middleware that calls it.
 //
+// A run at its lifetime cap is refused as terminal is, before the lease sweep ends it (pastLifetimeCap).
+//
 // Liveness is not authenticity. Verify answers "was this token minted by us, for
 // this audience, unexpired and unrevoked". It cannot answer "is the run behind
 // it still running", and a run that went terminal while its revocation write
@@ -160,6 +162,16 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	if run.State == types.RunQueued {
 		s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "run_state", string(run.State))
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunNotFound), "run has not started")
+		return nil, false
+	}
+	// A run at its lifetime cap is over even before the lease sweep kills it: no mint, injection or
+	// decision is answered for it. Its tail uploads keep their grace, counted from the cap.
+	if pastLifetimeCap(run, now) {
+		if pathHasAny(r.URL.Path, terminalGraceRoutes) && uploadGraceOpen(*run.LifetimeCapAt, now) {
+			return &run, true
+		}
+		s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, "lifetime_cap_at", run.LifetimeCapAt.UTC().Format(time.RFC3339))
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run has reached its lifetime cap")
 		return nil, false
 	}
 	if !runIsKept(run) {

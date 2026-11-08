@@ -517,6 +517,11 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run is terminal")
 		return
 	}
+	if pastLifetimeCap(run, s.cfg.Now().UTC()) {
+		s.auditRenewDenied(r, claims, "run_past_lifetime")
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunTerminal), "run has reached its lifetime cap")
+		return
+	}
 	// A kept run (ended or lost) has no proxy on purpose; only a revive gives
 	// it one, with a token of its own. Nothing may carry its identity forward.
 	if runIsKept(run) {
