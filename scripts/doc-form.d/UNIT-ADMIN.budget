@@ -19,4 +19,5 @@
 # docs/operations/unit-admins.md 1336 measured with both sides merged: the export, strictly-from-above and elevation requests rows (1171) and the governance rows in the unit view, the model-usage route row and the actor-filter rule (+165).
 # docs/operations/unit-admins.md 1340 adds 4 over 1336, measured: a person's withdrawal of their own request shows them as the actor.
 # docs/operations/unit-admins.md 1405 adds 65 over 1340, measured: the envelope rows in the four-eyes table and the platform tenancy link.
-docs/operations/unit-admins.md=1405 share=35
+# docs/operations/unit-admins.md 1421 adds 16 over 1405, measured: the root row says what applies directly and what only security decides.
+docs/operations/unit-admins.md=1421 share=35

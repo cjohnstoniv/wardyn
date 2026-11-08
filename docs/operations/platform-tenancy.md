@@ -21,7 +21,7 @@ An envelope names the unit that roots a platform and the IdP groups security app
 | At run time | Nothing. No run is affected until a unit admin writes inside the envelope |
 
 - `GET /governance` lists the envelopes. A unit admin reads each one's setter as `security`.
-- The audit row is `governance.envelope.set` ([audit actions](../AUDIT-ACTIONS.md)).
+- The audit rows are `governance.envelope.set` and, for a removal, `governance.envelope.delete` ([audit actions](../AUDIT-ACTIONS.md)).
 
 ## What applies directly and what is held
 
@@ -29,15 +29,15 @@ The table is for a unit admin who governs the unit. A security admin's writes fo
 
 | Write | Applies directly | Needs a second person | Only security decides |
 |---|---|---|---|
-| A unit below the root: walls or parent | The new walls stay within the root's ceiling and limits, with no higher member CPU and memory cap, and the unit stays below the same root | Otherwise, unless the change only narrows. A change that removes a lock or changes the contact is held whatever the walls | — |
+| A unit below the root: walls or parent | The new walls stay within the root's ceiling and limits, with no higher member CPU and memory cap, and the unit stays below the same root | Otherwise, unless the change only narrows. A change that removes a lock, re-parents out from under one, or changes the contact is held whatever the walls | — |
 | Renaming a profile | The rename cannot change which profile a person is given | It could: a group assignment of the profile shares its priority with another profile's. This is checked before the envelope, so an envelope never admits it | — |
-| The root itself | — | — | Every held change of the unit itself (walls, locks, contact, name, parent, delete), and every unit admin grant or revoke on it |
+| The root itself | A narrowing edit, a lock added, or a rename that cannot change which profile a person is given: as without an envelope | — | Every held change of the unit itself (walls, locks, contact, name, parent, delete), and every unit admin grant or revoke on it |
 | A group in the unit's membership | Adding a group on the approved list to the root or a unit below it, or moving that group's membership between two units of the envelope | A group off the list, as without an envelope. A write that changes which membership selects a person's profile | — |
 | A person or user type in the unit's membership | — | Always, as without an envelope | — |
 | Deleting a membership | — | As without an envelope ([four-eyes](unit-admins.md#four-eyes)) | — |
 | A unit admin grant or revoke below the root | — | Always, decided strictly from above | — |
 | Deciders on a unit | — | Always, as without an envelope | — |
-| An envelope that cannot be read | — | The envelope admits nothing: each write takes the path it takes without one | The root's changes |
+| An envelope that cannot be read | — | The envelope admits nothing: each write takes the path it takes without one | Every held change of a unit, and every unit admin grant or revoke, until the envelopes can be read again |
 
 - A held change is decided as in [four-eyes](unit-admins.md#four-eyes): a security admin, or a unit admin strictly above the unit. For the root it is a security admin alone, and a unit admin above the root who proposes one still sees it, can add a note and can withdraw it.
 - Composition already keeps a unit below the root within the root's walls, so the comparison with the root's walls is a guard.
@@ -59,7 +59,7 @@ The table is for a unit admin who governs the unit. A security admin's writes fo
 ### Platform tools as inline components
 
 1. The platform's portal sends the tool as an inline component in `POST /runs`, so it travels with the run and names no organisation secret ([custom components](custom-components.md)).
-2. Anything that names a secret, a CLI card or MCP authentication stays an organisation component.
+2. Anything that uses a shared secret, a CLI credential card or an MCP gateway audience stays an organisation component; a person's own secrets may be named inline.
 
 ### Keep production out
 
@@ -105,4 +105,4 @@ What a run may send out is the [`data_out`](../POLICIES.md#data_out) rule, set b
 
 ## Before you downgrade
 
-An older version ignores envelopes. A held change of the root, and a unit admin grant or revoke on it, can again be approved by a unit admin who governs it, and writes below the root are held again. Read the "Before you downgrade" notes in the [changelog](../../CHANGELOG.md).
+An older version ignores envelopes. A held change of the root, and a unit admin grant or revoke on it, can again be approved by a unit admin above it, and writes below the root are held again. Read the "Before you downgrade" notes in the [changelog](../../CHANGELOG.md).

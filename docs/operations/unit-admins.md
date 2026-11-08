@@ -71,7 +71,7 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 | granting or revoking a unit admin | — | always |
 | setting a unit's deciders | — | always |
 | a write inside a platform envelope | the cases the [platform tenancy](platform-tenancy.md#what-applies-directly-and-what-is-held) table lists as applying directly | otherwise, including renaming a profile when the rename could change which profile a person is given |
-| a change to an envelope's root, or a grant or revoke on it | — | always, for security only |
+| a change to an envelope's root, or a grant or revoke on it | a narrowing edit, a lock added or a safe rename of the root, as for any unit | otherwise, for security only |
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
 - A held change may be decided by a security admin, or by a unit admin who governs every unit it touches.
