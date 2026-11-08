@@ -151,7 +151,8 @@ The row, as `PUT /api/v1/components/{id}` takes it:
 - The proxy sends the query and body that were shown, once. A second identical request asks again.
 - A declined change stays refused for the rest of the run.
 - A body must be JSON, not encoded, and at most 32 KiB. Anything else is refused: protobuf, a YAML apply, a repeated key, a `Content-Encoding`.
-- The approval kind is `tool_call`. The run's owner decides it, as for one MCP call. With `WARDYN_CAPABILITY_SECOND_HUMAN` set, someone other than the run's creator must.
+- A unit's [deciders](deciders.md) rule for `kube_call` changes who decides (owner, unit admins or a group), may require a second person and caps the scope; an owner the rule leaves out gets 403 `not_a_decider`.
+- The approval kind is `tool_call`. Without a rule the run's owner decides it, as for one MCP call. With `WARDYN_CAPABILITY_SECOND_HUMAN` set, someone other than the run's creator must.
 
 **The hold window.**
 
