@@ -301,10 +301,10 @@ func (s *Server) requestRuleFor(ctx context.Context, q store.Querier, unitID uui
 func requestApprover(ch types.GovernanceChange, kind string) govApprover {
 	return govApprover{
 		allowed: func(s *Server, r *http.Request) bool {
-			ctx := r.Context()
-			if s.isSecurityOperator(ctx) {
+			if securityApprover.allowed(s, r) { // the security tier always decides, rule or none
 				return true
 			}
+			ctx := r.Context()
 			unitID, ok := requestUnitOf(ch)
 			if !ok {
 				return false
