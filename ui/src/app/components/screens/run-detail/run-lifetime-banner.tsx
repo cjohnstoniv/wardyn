@@ -27,6 +27,7 @@ import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import { elevationCapAt, keptUntilText, weekdayClock } from "./run-ends-row";
 import { ChangeEndDialog } from "./change-end-dialog";
 import { reviveWithToasts } from "../runs/revive-run";
+import { ElevationRequestDialog } from "../elevation/elevation-request-dialog";
 
 // Same three thresholds the board row's own chip warns at (runs-model.ts).
 function endsWarningStageNow(run: RunDetail): RL.EndsWarningStage | null {
@@ -101,6 +102,7 @@ export function RunLifetimeBanner({
   const [changeOpen, setChangeOpen] = React.useState(false);
   // UXR-15: End run asks first, through the same confirm as the header's Kill.
   const [confirmEnd, setConfirmEnd] = React.useState(false);
+  const [requestOpen, setRequestOpen] = React.useState(false);
   const operator = useOperator();
   const principal = usePrincipal();
   // F16 (PR #1317 review): every action here is owner-or-super-admin on the
@@ -431,6 +433,23 @@ export function RunLifetimeBanner({
   // Without this guard, a KILLED run that was lost or lease-ended kept
   // showing Revive/Extend/End run forever after End run, and every
   // lease-ended run the grace eventually stops did the same.
+  // The one terminal run that still speaks: the server killed it at its elevation's end, so a new request is the way on.
+  if (run.state === "KILLED" && run.status_reason === "max_lifetime_reached" && run.lifetime_cap_source === "elevation") {
+    return (
+      <>
+        <Banner data-testid="run-lifetime-elevation-ended" tone="plain" title={RL.ELEVATION_ENDED_TITLE} body={RL.ELEVATION_ENDED_BODY}>
+          {canAct && (
+            <div className="mt-2.5">
+              <Button size="sm" onClick={() => setRequestOpen(true)}>
+                {RL.REQUEST_ELEVATION}
+              </Button>
+            </div>
+          )}
+        </Banner>
+        {canAct && <ElevationRequestDialog open={requestOpen} onOpenChange={setRequestOpen} unitId={run.unit_id} />}
+      </>
+    );
+  }
   if (isTerminalRunState(run.state)) return null;
 
   return (

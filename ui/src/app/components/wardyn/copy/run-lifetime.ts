@@ -118,6 +118,10 @@ export function endsElevation(dateText: string): string {
 export function warnBodyElevation(dateText: string): string {
   return `At ${dateText} the run stops, because your elevation ends then. Push or save anything you need before then.`;
 }
+// A run the server ended at its elevation's end. It is gone, so the only way on is a new request and a new run.
+export const ELEVATION_ENDED_TITLE = "This run ended when your elevation ended";
+export const ELEVATION_ENDED_BODY = "To keep working, ask for elevation again and start a new run.";
+export const REQUEST_ELEVATION = "Request elevation";
 export const WARN_EXTEND_1_DAY = "Extend 1 day";
 export const WARN_CHANGE_END = "Change end…";
 export const WARN_DISMISS = "Dismiss";
