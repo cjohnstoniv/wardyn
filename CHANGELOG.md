@@ -88,6 +88,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A person who holds a unit admin grant sees Governance and Audit in the console: the profiles their grant reaches, read only, and their units' audit rows.
 - Docs: OPERATIONS says Codex CLI on a `custom_endpoint` calls the OpenAI Responses API, and AZURE-DEVOPS says a member's run under a unit's `deny_with_review` cannot loosen it to `wait_for_review`.
 - A unit admin no longer decides a held change to the unit they are granted on: a unit's own walls, locks, mode, name and parent are decided from above it.
 - Azure DevOps `pr` is now three capabilities: `pr_create` (open, update, comment on, label and abandon a pull request), `pr_vote` (vote, add or remove reviewers, post pull-request statuses, resolve comment threads) and `pr_complete` (complete or set auto-complete, without bypassing a policy). GitHub `pr` is now two: `pr_write` (open, update and comment on a pull request, request reviewers) and `pr_review` (submit, approve, request changes on or dismiss a review). `pr` still means all of them, so nothing changes at upgrade and a list that says `pr` still lets an agent approve. To stop that, name `pr_create` (Azure DevOps) or `pr_write` (GitHub) in its place; on Azure DevOps a vote inside the provider's ceiling is then held for the person.
