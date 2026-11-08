@@ -612,6 +612,7 @@ That has two consequences:
 - **`push_rules` read what a `git push` leaves out through the Git REST API**, version 7.1, with the run's own credential: see [`require_review_paths`](POLICIES.md#push_rules--pushrulesspec). A push whose paths cannot be worked out is held or refused, and says so.
 - **A push that removes a file at a review path is not held.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file. That is true on every forge: Azure DevOps' own branch policy is what protects that file.
 - **A review-path match on an unattended run stays refused and cannot be approved later.** Git prints what to do: remove those paths, or run the task interactively.
+- **Pipelines.** A push or pull request can start a pipeline. See [Keep run branches from starting pipelines](operations/ci-trigger-guard.md).
 
 ## A template for contributing to a repository
 

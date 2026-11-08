@@ -76,6 +76,7 @@
 | Offboard a person: sessions, tokens, runs, credentials, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
 | Keep a run declared from a file or a WardynWorkload resource | [operations/workloads.md](operations/workloads.md) |
 | Set a run's lease, extend it, or revive a kept run | [operations/run-lifetime.md](operations/run-lifetime.md) |
+| Keep run branches and pull requests from starting pipelines | [operations/ci-trigger-guard.md](operations/ci-trigger-guard.md) |
 
 ## Govern as an admin
 
