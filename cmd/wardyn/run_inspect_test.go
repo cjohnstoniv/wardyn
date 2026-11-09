@@ -92,12 +92,12 @@ func TestRunGetCmd_PrintsTheADOLaneDecline(t *testing.T) {
 	}
 }
 
-// `run get` names the hosts whose credentials were withheld because the run's policy did not allow them exactly,
+// `run get` names the hosts whose credentials were withheld (the run's policy did not allow them exactly, or a wall denied them),
 // from the dropped_injection_hosts of the run.ceiling.reassert and run.revive rows, and prints nothing of the kind
 // when no row names a host.
 func TestRunGetCmd_PrintsWithheldCredentialHosts(t *testing.T) {
 	runID := uuid.New()
-	const want = "credentials withheld for api.anthropic.com, api.other.test: the run's policy does not allow the host exactly; name it in allowed_domains to deliver it"
+	const want = "credentials withheld for api.anthropic.com, api.other.test: the run's policy does not allow these hosts exactly, or a wall denies them; the run's run.ceiling.reassert and run.revive audit rows say which"
 	for _, withRow := range []bool{true, false} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/v1/audit" {

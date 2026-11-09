@@ -81,7 +81,7 @@ describe("EffectivePolicyWidget", () => {
     );
     expect(
       screen.getByText(
-        "credentials withheld for api.anthropic.com, api.other.test: the run's policy does not allow the host exactly; name it in allowed_domains to deliver it",
+        "credentials withheld for api.anthropic.com, api.other.test: the run's policy does not allow these hosts exactly, or a wall denies them; the run's run.ceiling.reassert and run.revive audit rows say which",
       ),
     ).toBeInTheDocument();
   });

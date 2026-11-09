@@ -23,7 +23,7 @@ import { AGENTS } from "../../../../lib/workspace-providers-copy";
 import { WidgetCard } from "../../../wardyn/primitives";
 
 // The hosts whose credentials the run was started or revived without because its policy did not allow
-// them exactly: the dropped_injection_hosts of its run.ceiling.reassert and run.revive rows, in the order
+// them exactly or a wall denied them: the dropped_injection_hosts of its run.ceiling.reassert and run.revive rows, in the order
 // first seen. Host names only.
 export function withheldCredentialHosts(audit: AuditEvent[]): string[] {
   const hosts: string[] = [];
@@ -57,7 +57,7 @@ export function EffectivePolicyWidget({ audit }: { audit: AuditEvent[] }) {
       )}
       {withheld.length > 0 && (
         <p className="mt-2 text-xs text-warning">
-          {`credentials withheld for ${withheld.join(", ")}: the run's policy does not allow the host exactly; name it in allowed_domains to deliver it`}
+          {`credentials withheld for ${withheld.join(", ")}: the run's policy does not allow these hosts exactly, or a wall denies them; the run's run.ceiling.reassert and run.revive audit rows say which`}
         </p>
       )}
     </WidgetCard>

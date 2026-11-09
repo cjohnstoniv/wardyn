@@ -128,7 +128,7 @@ func TestRestrictionAllowlistClosesOpenEgressAtCreate(t *testing.T) {
 }
 
 // TestRestrictionCreateNamingAllowlistIsHeld: with the switch on, a create that names allowed_domains is held
-// for a second person (202) and stores nothing until it is approved, as a first list on an update is; a create
+// for a second person (202), which its proposer cannot approve, and stores nothing until it is approved, as a first list on an update is; a create
 // that names none only narrows and applies directly (201).
 func TestRestrictionCreateNamingAllowlistIsHeld(t *testing.T) {
 	e := newGovEnv(t)
@@ -146,6 +146,9 @@ func TestRestrictionCreateNamingAllowlistIsHeld(t *testing.T) {
 	ch := e.pending(w)
 	if ch.TargetKind != govKindRestriction || ch.Op != "create" || stored() != 0 {
 		t.Errorf("held create: kind %s op %s, %d stored, want a restriction create with nothing stored", ch.TargetKind, ch.Op, stored())
+	}
+	if w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden || wireReason(t, w) != "second_human_required" || stored() != 0 {
+		t.Errorf("the proposer approving their own create: %d %s, %d stored, want 403 second_human_required and nothing stored", w.Code, w.Body, stored())
 	}
 	e.approve(ch.ID)
 	if stored() != 1 {

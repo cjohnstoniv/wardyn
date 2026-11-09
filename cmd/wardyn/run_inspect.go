@@ -90,7 +90,7 @@ func runGetCmd(client clientFn) *cobra.Command {
 			if detail := adoLaneDeclineDetail(cmd.Context(), client(), run.ID); detail != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nazure devops: %s\n", detail)
 			}
-			// Credentials the run's policy did not allow exactly were withheld (run.ceiling.reassert, run.revive).
+			// Credentials whose hosts the run's policy did not allow exactly, or a wall denied, were withheld (run.ceiling.reassert, run.revive).
 			if line := withheldCredentialDetail(cmd.Context(), client(), run.ID); line != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", line)
 			}
@@ -190,8 +190,8 @@ func adoLaneDeclineDetail(ctx context.Context, c *sdk.Client, runID uuid.UUID) s
 	return ""
 }
 
-// withheldCredentialDetail is the line telling that credentials were withheld from the run because its
-// policy does not allow their hosts exactly: the hosts named by the dropped_injection_hosts of its
+// withheldCredentialDetail is the line telling that credentials were withheld from the run, because its
+// policy does not allow their hosts exactly or a wall denies them: the hosts named by the dropped_injection_hosts of its
 // run.ceiling.reassert and run.revive rows, in the order first seen. "" when no row names a host or the
 // trail could not be read. Host names only; no credential value or grant name is read.
 func withheldCredentialDetail(ctx context.Context, c *sdk.Client, runID uuid.UUID) string {
@@ -219,7 +219,7 @@ func withheldCredentialDetail(ctx context.Context, c *sdk.Client, runID uuid.UUI
 		return ""
 	}
 	return "credentials withheld for " + strings.Join(hosts, ", ") +
-		": the run's policy does not allow the host exactly; name it in allowed_domains to deliver it"
+		": the run's policy does not allow these hosts exactly, or a wall denies them; the run's run.ceiling.reassert and run.revive audit rows say which"
 }
 
 func runKillCmd(client clientFn) *cobra.Command {
