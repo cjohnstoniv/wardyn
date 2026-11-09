@@ -259,7 +259,7 @@ RUN set -eu; \
         *) echo "unsupported arch '$arch' for gh" >&2; exit 1;; \
     esac; \
     printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
+    curl -fsSL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" -o /tmp/gh.deb; \
     echo "$sum  /tmp/gh.deb" | sha256sum --strict -c -; \
     dpkg -i /tmp/gh.deb; \
     rm -f /tmp/gh.deb

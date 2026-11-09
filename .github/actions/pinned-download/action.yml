@@ -41,7 +41,7 @@ runs:
           exit 0
         fi
         mkdir -p "$(dirname "$DEST")"
-        curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 -o "$DEST" "$URL"
+        curl -fsSL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 -o "$DEST" "$URL"
         echo "$SUM  $DEST" | sha256sum --strict -c -
     - name: Save the pinned file (push to main only)
       if: steps.restore.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'

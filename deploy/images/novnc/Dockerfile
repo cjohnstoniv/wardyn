@@ -86,8 +86,8 @@ ARG WEBSOCKIFY_VERSION=0.13.0
 RUN set -eu; \
 	novnc_sum=5066103959ef4e9b10f37e5a148627360dd8414e4cf8a7db92bdbd022e728aaa; \
 	wsock_sum=b6413e364efd04f3c92ec8c17747e3c4adc20157c2ef1c5d019a26d944a46df8; \
-	curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz" -o /tmp/novnc.tar.gz; \
-	curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz" -o /tmp/websockify.tar.gz; \
+	curl -fsSL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz" -o /tmp/novnc.tar.gz; \
+	curl -fsSL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz" -o /tmp/websockify.tar.gz; \
 	echo "$novnc_sum  /tmp/novnc.tar.gz" | sha256sum -c -; \
 	echo "$wsock_sum  /tmp/websockify.tar.gz" | sha256sum -c -; \
 	mkdir -p /usr/local/lib/novnc /usr/local/lib/websockify; \
