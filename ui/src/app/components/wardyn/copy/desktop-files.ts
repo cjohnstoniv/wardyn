@@ -56,4 +56,5 @@ export const DESKTOP_FILES = {
   notAsked: "Not asked",
   requestsUnreadable: "Couldn't check this run's download requests.",
   retry: "Try again",
+  loadFailed: "Couldn't load this desktop's files. Check the connection and try again.",
 } as const;

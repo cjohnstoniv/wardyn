@@ -63,10 +63,12 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
   // The run's data_out rule; unknown (undefined) draws nothing new.
   const dataOut = useRunDataOut(runId);
   const [view, setView] = React.useState<DesktopFilesView | null>(null);
-  const [loadError, setLoadError] = React.useState<{ text: string; reason?: string } | null>(null);
+  const [loadError, setLoadError] = React.useState<{ text: string; retry: boolean } | null>(null);
   const [paused, setPaused] = React.useState<string | null>(null);
   const [uploads, setUploads] = React.useState<UploadRow[]>([]);
   const [marks, setMarks] = React.useState<Record<string, DownloadMark>>({});
+  // Files whose download is in flight: a second click must not start a second transfer.
+  const [fetching, setFetching] = React.useState<ReadonlySet<string>>(new Set());
   // This run's file_download requests, newest first. null until read; `requestsFailed` when the read was refused.
   const [requests, setRequests] = React.useState<ApprovalRequest[] | null>(null);
   const [requestsFailed, setRequestsFailed] = React.useState(false);
@@ -96,7 +98,11 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
         setPaused(e.message);
         setLoadError(null);
       } else {
-        setLoadError({ text: message(e), reason: e instanceof HttpError ? e.reason : undefined });
+        // A dropped connection or a 5xx may pass on its own, so it gets a plain sentence and a retry; a refusal
+        // the server worded (4xx) is printed as it is and is not retried, because asking again gets the same answer.
+        const unreadable = e instanceof HttpError && e.reason === "data_out_unreadable";
+        const transient = !(e instanceof HttpError) || e.status >= 500;
+        setLoadError({ text: transient && !unreadable ? C.loadFailed : message(e), retry: transient || unreadable });
         setPaused(null);
       }
     }
@@ -127,6 +133,7 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
   }
 
   async function fetchFile(name: string) {
+    setFetching((f) => new Set(f).add(name));
     try {
       const { blob, sha256 } = await desktopFiles.download(runId, name);
       const url = URL.createObjectURL(blob);
@@ -138,6 +145,12 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
       setMarks((m) => ({ ...m, [name]: { line: C.downloaded(clock(), sha256) } }));
     } catch (e) {
       setMarks((m) => ({ ...m, [name]: { error: message(e) } }));
+    } finally {
+      setFetching((f) => {
+        const next = new Set(f);
+        next.delete(name);
+        return next;
+      });
     }
   }
 
@@ -146,7 +159,7 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
       <section aria-label={C.title} data-testid="desktop-files" className="mt-4">
         <p className="text-xs font-medium text-foreground">{C.title}</p>
         <p className="mt-1 font-mono text-meta text-muted-foreground">{loadError.text}</p>
-        {loadError.reason === "data_out_unreadable" && (
+        {loadError.retry && (
           <Button size="sm" variant="outline" className="mt-1.5" onClick={() => void load()}>
             <RotateCw aria-hidden="true" />
             {DATA_OUT_RUN.RETRY}
@@ -294,7 +307,7 @@ export function DesktopFilesPanel({ runId, vm = false, noDesktop = false }: { ru
                         <span className="truncate text-foreground">{f.name}</span>
                         <span className="flex shrink-0 items-center gap-2 text-meta text-muted-foreground">
                           {transferSize(f.bytes)}
-                          <Button size="sm" variant="outline" aria-label={`${C.download} ${f.name}`} onClick={() => void fetchFile(f.name)}>
+                          <Button size="sm" variant="outline" aria-label={`${C.download} ${f.name}`} disabled={fetching.has(f.name)} onClick={() => void fetchFile(f.name)}>
                             {C.download}
                           </Button>
                         </span>
