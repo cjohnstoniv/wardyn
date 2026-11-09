@@ -124,10 +124,9 @@ func TestRestrictionAllowlistClosesOpenEgressAtCreate(t *testing.T) {
 // deny. A swap to another host, port or literal, the same name on another port, an added port or literal
 // entry, a wildcard for a name, a list where the old one closed open egress with none, a dropped list and a
 // dropped deny are each held. So is a name for the wildcard over it (a run naming that host gets nothing
-// under the wildcard and the host under the name). A first list is held when open egress reads an entry of
-// it, a name or a wildcard on 80 or 443, by Leq's rule that open egress covers no entry; one naming only
-// another port is exempt, since open egress reads none of it and closes to nothing. A dropped entry, a
-// narrower wildcard, and a reorder with a duplicate are exempt.
+// under the wildcard and the host under the name). Every first list is held, whatever it names (a name, a
+// wildcard, or only another port): there is no old list to judge it within, and it is met with each run's
+// own list. A dropped entry, a narrower wildcard, and a reorder with a duplicate are exempt.
 func TestRestrictionAllowlistSwapIsNotAtLeastAsStrict(t *testing.T) {
 	off := false
 	for _, tc := range []struct {
@@ -142,11 +141,12 @@ func TestRestrictionAllowlistSwapIsNotAtLeastAsStrict(t *testing.T) {
 		{"the same name on another port", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, false},
 		{"a port entry added", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example", "evil.example:8443")}, false},
 		{"a literal added", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example", "203.0.113.7")}, false},
+		{"a port added beside its bare name", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "b.example:22")}, false},
 		{"a wildcard for a name", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("*.example")}, false},
 		{"a name for the wildcard over it", types.RestrictionSpec{AllowedDomains: strs("*.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
 		{"a first list naming a host", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
 		{"a first list naming a wildcard", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("*.example")}, false},
-		{"a first list naming only another port", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, true},
+		{"a first list naming only another port", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, false},
 		{"a list where none closed open egress", types.RestrictionSpec{AllowAllEgress: &off}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
 		{"the list dropped", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowAllEgress: &off}, false},
 		{"a deny dropped", types.RestrictionSpec{AllowedDomains: strs("b.example"), DeniedDomains: strs("x.b.example", "y.b.example")},

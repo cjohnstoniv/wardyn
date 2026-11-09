@@ -200,7 +200,9 @@ func restrictionEffective(sp types.RestrictionSpec, l types.RestrictionLimits) (
 // reading does not seed), the contact is unchanged (a contact is who a refused person is told to ask), and
 // next covers every member old does, or everyone. Both read an allowlist as a desktop VM run does, with
 // the port rule on, so a bare entry reaches 80 and 443 only; a change that narrows a container run with
-// the rule off can be held for a second human, and that false hold is intended.
+// the rule off can be held for a second human, and that false hold is intended. A first allowlist, where
+// old named none, always waits for a second human: there is no old list to judge it within, and it is met
+// with each run's own list.
 func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWrite) bool {
 	a, err := restrictionEffective(next.Spec, next.Limits)
 	if err != nil {
@@ -211,6 +213,9 @@ func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWri
 		return false
 	}
 	if !composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits) || !sameJSON(old.Contact, next.Contact) {
+		return false
+	}
+	if old.Spec.AllowedDomains == nil && next.Spec.AllowedDomains != nil {
 		return false
 	}
 	if ol := old.Spec.AllowedDomains; ol != nil && (next.Spec.AllowedDomains == nil || !composer.AllowlistWithin(*next.Spec.AllowedDomains, *ol)) {
