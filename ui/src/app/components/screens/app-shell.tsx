@@ -481,6 +481,12 @@ export function AppShell({
   const confinementPosture = resolveConfinementPosture(meta.runner, meta.networkPolicy);
   const location = useLocation();
   const navigate = useNavigate();
+  // <main> outlives every route, so its scrollTop would otherwise carry into the next screen.
+  // Keyed on pathname only: a search-param change on a list must not jump to the top.
+  const mainRef = React.useRef<HTMLElement>(null);
+  React.useLayoutEffect(() => {
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+  }, [location.pathname]);
   const { access, view } = useShellView(meta);
   useViewResync(
     access,
@@ -563,7 +569,7 @@ export function AppShell({
         {/* #217 — above BOTH the sidebar that can navigate away and every
           screen below it that can register a dirty form (lib/use-unsaved-guard.tsx). */}
         <UnsavedGuardProvider>
-          <div className="flex h-screen flex-col bg-background text-foreground">
+          <div className="relative flex h-dvh flex-col overflow-clip bg-background text-foreground">
             {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
             {/* Hidden in focus mode: its target is inert then, and the focus overlay is what is on screen. */}
@@ -685,7 +691,7 @@ export function AppShell({
           `role="status"` region announces CHANGES to its content, so a region
           that arrives WITH its first sentence (as a lazy chunk does) announces
           nothing. The wrapper is here from the first paint; the chunk fills it. */}
-            <div role="status">
+            <div role="status" className="scroll-thin max-h-[30dvh] shrink-0 overflow-y-auto overscroll-contain">
               {/* #659 Q2 — first in the stack: a one-time answer to a redirect
               the person is actively watching for, not a standing deployment
               condition like the bands below it. */}
@@ -728,7 +734,7 @@ export function AppShell({
             </div>
             <div className="flex min-h-0 flex-1">
               {!focus && (
-                <aside className="hidden w-[228px] shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+                <aside className="scroll-thin relative hidden w-[228px] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
                   <SidebarNav
                     pendingApprovals={pendingApprovals}
                     attentionCount={attentionCount}
@@ -744,7 +750,8 @@ export function AppShell({
                 // beneath it, so they must leave the tab order and the accessibility tree while it is on. The
                 // overlay, the terminal and the banners all live outside this element and stay reachable.
                 inert={focus}
-                className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none"
+                ref={mainRef}
+                className="scroll-thin relative min-w-0 flex-1 overflow-y-auto overscroll-contain focus:outline-none"
               >
                 {/* Keyed by pathname so navigating away from a screen that threw
               clears the caught error instead of wedging the console. */}
