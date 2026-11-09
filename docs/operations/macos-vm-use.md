@@ -75,6 +75,7 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 | Fresh start | `--resume-machine <id\|name> --fresh` deletes what is on the machine and starts again from the Mac's current base, under the same name and base |
 | Idle expiry | A machine unused past its date is deleted. A resume of one past it is refused `410` and starts its delete. The Mac enforces the date too, offline included. A machine a run holds does not expire |
 
+- **A machine that no longer signs in.** A kept machine whose `agent` no longer signs in automatically now fails at start after 5 minutes, where it used to run agent-only. Start it with `--fresh`. If that fails too, check the base in `edit-base` or prepare it again.
 - **Each machine has its own date.** Changing `macos_vm.kept_machine_idle_days` does not move the date of a machine already kept. `wardyn machines` shows each machine's date.
 - **Older runners.** This needs the Mac's runner from 0.10.0-rc.12. A Mac still on an older runner dates the machine from the site's setting at the stop, as before. Update the Mac's runner.
 - **Resume ends the old run.** A macOS run cannot be revived. If you resume a machine while its last run is still in its ended-run grace, that run ends at once. While the machine is still marked in use, the resume is refused (`kept_machine_in_use`). Stop the last run first.
@@ -200,7 +201,8 @@ A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your 
 - The window shows the VM's screen and takes your keys and pointer.
 - Only what goes through the run's proxy settings counts as activity: Terminal, the harness, and tools that honour `HTTPS_PROXY`. The window, a terminal and SSH count too.
 - Requests the guest makes on its own never count, allowed or refused: macOS's services, and tools that ignore the proxy settings (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls still count, as do requests to a host with a `via_org` credential (a known issue). A Mac runner needs upgrading first.
-- If Setup Assistant opens in the first 2 minutes of a run, the guest agent ends it within 2 seconds.
+- Setup Assistant's Apple Account pane can show in the window. The step that quits it is off by default: see [What Wardyn sets in the base](macos-vm-base-image.md#what-wardyn-sets-in-the-base).
+- A run with a desktop fails if the guest is not signed in as `agent` 5 minutes after boot: "the Mac guest never reached the agent's desktop: still at the login window".
 - It is not recorded, because it is drawn on your Mac and never crosses the gateway. A run at Screen and actions can't open one.
 - While it is open, the run's browser desktop is view only. A browser desktop that had control is ended first, and the open waits up to 5 seconds for it.
 
