@@ -54,6 +54,7 @@ import { announceAuthChange, onRemoteAuthChange } from "../../lib/api/auth-sync"
 import { appURL } from "../../lib/base-path";
 import { useSessionPoll } from "./use-session-poll";
 import { isSwitching } from "./console-view";
+import { focusNextPageHeading } from "../ui/opener-focus";
 
 // A function, not a constant: the base path is read when the link is used.
 const ssoLoginURL = () => appURL("/auth/login");
@@ -414,6 +415,8 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (narrowed) carryOn(narrowed.me);
     reauth.clearWriteDropped();
     reauth.setPhase("none");
+    // The page is replaced under the person and the shell does not announce a replace: say where they are.
+    if (location.pathname !== "/runs") focusNextPageHeading();
     void navigate("/runs", { replace: true });
   };
 

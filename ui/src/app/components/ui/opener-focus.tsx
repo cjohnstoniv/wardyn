@@ -102,6 +102,27 @@ function watchLoss(opener: Element, slot: Slot | null) {
   if (!opener.isConnected) arm();
 }
 
+/**
+ * For a caller that replaces the page under the person (a replace navigation, which the shell does not announce):
+ * once the new page has drawn a heading different from the one on screen now, focus goes to it. A one-shot
+ * observer, no timer; it gives up on the first DOM change after WATCH_MS.
+ */
+export function focusNextPageHeading() {
+  const before = document.querySelector("#main-content h1");
+  const until = Date.now() + WATCH_MS;
+  const place = () => {
+    const heading = document.querySelector<HTMLElement>("#main-content h1");
+    if (!heading || heading === before) return false;
+    if (!heading.hasAttribute("tabindex")) heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+    return true;
+  };
+  const observer = new MutationObserver(() => {
+    if (Date.now() > until || place()) observer.disconnect();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
 /** Rendered inside the dialog content, so its first render reads the focused element before autofocus moves it. */
 export function RememberOpener({ into }: { into: React.MutableRefObject<Element | null> }) {
   if (into.current === null) {

@@ -512,10 +512,10 @@ export function AppShell({
   // Each route names itself in the tab title ("<page> - <console>") and, after a navigation, takes focus on its
   // heading, so a screen reader hears the page change and a keyboard user starts at the new content. A screen
   // that already placed focus inside the page (the New Run steps do) keeps it. Most screens draw the heading only
-  // once their first read has landed, so <main> is watched until one appears and the heading itself after that.
-  // Observers only: nothing here schedules a timer.
+  // once their first read has landed, and some remount it (the cockpit's focus mode), so one observer on <main>
+  // re-reads the title for as long as the route is open. Observers only: nothing here schedules a timer.
   // A replace is a redirect (the console landing on its home screen, a guard sending you elsewhere), not a page
-  // the person chose, so it is titled but does not take focus.
+  // the person chose, so it is titled but does not take focus. A re-auth that replaces the page announces itself.
   const navigationType = useNavigationType();
   const arrived = React.useRef(location.pathname);
   React.useEffect(() => {
@@ -524,7 +524,8 @@ export function AppShell({
     const heading = () => main?.querySelector<HTMLElement>("h1") ?? null;
     const sync = () => {
       const text = heading()?.textContent?.trim();
-      document.title = text ? `${text} - ${base}` : base;
+      const title = text ? `${text} - ${base}` : base;
+      if (document.title !== title) document.title = title;
     };
     sync();
     if (!main) return;
@@ -539,22 +540,9 @@ export function AppShell({
         target.focus({ preventScroll: true });
       }
     }
-    const opts = { childList: true, subtree: true, characterData: true };
-    const titleObserver = new MutationObserver(sync);
-    const mainObserver = new MutationObserver(() => {
-      const h = heading();
-      if (!h) return;
-      sync();
-      titleObserver.observe(h, opts);
-      mainObserver.disconnect();
-    });
-    const h = heading();
-    if (h) titleObserver.observe(h, opts);
-    else mainObserver.observe(main, { childList: true, subtree: true });
-    return () => {
-      titleObserver.disconnect();
-      mainObserver.disconnect();
-    };
+    const observer = new MutationObserver(sync);
+    observer.observe(main, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
   }, [view, location.pathname, navigationType]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
