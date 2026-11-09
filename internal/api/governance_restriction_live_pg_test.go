@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -104,18 +105,54 @@ func TestRestrictionAllowlistClosesOpenEgressAtSeal(t *testing.T) {
 	}
 }
 
-// TestRestrictionAllowlistClosesOpenEgressAtCreate: a create meets a restriction's allowlist into an open
-// ceiling as the seal does, so a person under the restriction in a unit that allows all egress is closed
-// to the restriction's list, not to nothing.
+// TestRestrictionAllowlistClosesOpenEgressAtCreate: a restriction created with an allowlist waits for a second
+// person; once approved, a create meets its allowlist into an open ceiling as the seal does, so a person
+// under the restriction in a unit that allows all egress is closed to the restriction's list, not to nothing.
 func TestRestrictionAllowlistClosesOpenEgressAtCreate(t *testing.T) {
+	e := newGovEnv(t)
 	open := governanceCeiling{Unit: &ResolvedUnit{ID: uuid.New(), Name: "open"}, Spec: types.RunPolicySpec{AllowAllEgress: true}}
-	r := types.Restriction{ID: uuid.New(), Name: "rl-create", Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}}
-	c, err := (&Server{}).withRestrictions(context.Background(), open, []types.Restriction{r})
+	w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, types.RestrictionWrite{Name: "rl-create",
+		Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}, Members: []types.RestrictionMember{userMember("sub-rl-create")}}))
+	e.approve(e.pending(w).ID)
+	list, err := e.pg.ListRestrictions(context.Background())
+	if err != nil || len(list) != 1 {
+		t.Fatalf("restrictions after the approval: %v %v, want the one created", list, err)
+	}
+	c, err := e.srv.withRestrictions(context.Background(), open, list)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Spec.AllowAllEgress || !slices.Equal(c.Spec.AllowedDomains, []string{"b.example"}) {
 		t.Errorf("ceiling egress = %v %v, want closed with [b.example]", c.Spec.AllowAllEgress, c.Spec.AllowedDomains)
+	}
+}
+
+// TestRestrictionCreateNamingAllowlistIsHeld: with the switch on, a create that names allowed_domains is held
+// for a second person (202) and stores nothing until it is approved, as a first list on an update is; a create
+// that names none only narrows and applies directly (201).
+func TestRestrictionCreateNamingAllowlistIsHeld(t *testing.T) {
+	e := newGovEnv(t)
+	post := func(body types.RestrictionWrite) *httptest.ResponseRecorder {
+		return e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, body))
+	}
+	stored := func() int {
+		list, err := e.pg.ListRestrictions(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(list)
+	}
+	w := post(types.RestrictionWrite{Name: "held-create", Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}})
+	ch := e.pending(w)
+	if ch.TargetKind != govKindRestriction || ch.Op != "create" || stored() != 0 {
+		t.Errorf("held create: kind %s op %s, %d stored, want a restriction create with nothing stored", ch.TargetKind, ch.Op, stored())
+	}
+	e.approve(ch.ID)
+	if stored() != 1 {
+		t.Errorf("after the approval: %d stored, want 1", stored())
+	}
+	if w := post(types.RestrictionWrite{Name: "direct-create", Spec: types.RestrictionSpec{DeniedDomains: strs("x.example")}}); w.Code != http.StatusCreated {
+		t.Errorf("create naming no allowed_domains: %d %s, want 201", w.Code, w.Body)
 	}
 }
 
