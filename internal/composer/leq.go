@@ -28,11 +28,9 @@ import (
 // fails a field with no rule here.
 //
 // Each rule is the inverse of the meet's for the same field: ApplyOverlay(b, o)
-// is at most as permissive as b, so Leq(ApplyOverlay(b, o), b) holds, except where
-// o names a port other than 80 or 443 of an entry b names bare: the meet keeps
-// host:port, which Leq reads under the port rule (coversOnPort) as a port b does
-// not reach. eligible_grants are judged by GrantWithin, the one grant-dominance
-// contract.
+// is at most as permissive as b, so Leq(ApplyOverlay(b, o), b) holds. Both read an
+// allowlist entry's port under the port rule (portCovers). eligible_grants are
+// judged by GrantWithin, the one grant-dominance contract.
 func Leq(a, b types.RunPolicySpec, la, lb types.GovernanceLimits) bool {
 	return leqEgress(a, b) && leqPosture(a, b) && leqPush(a.PushRules, b.PushRules) &&
 		leqLimits(la, lb) && leqRunLimits(la, lb) &&
@@ -114,9 +112,7 @@ func leqAllowedDomains(a, b []string) bool {
 // covers a port-qualified entry only on those two ports. With the rule off a bare entry reaches every port,
 // so a container run there may see a narrowing judged a widening and held for a second human; that false
 // hold is accepted, never the reverse.
-func coversOnPort(f, e domEntry) bool {
-	return f.covers(e) && (f.port == e.port || e.port == 80 || e.port == 443)
-}
+func coversOnPort(f, e domEntry) bool { return f.covers(e) && portCovers(f.port, e.port) }
 
 // AllowlistWithin reports whether every entry of next is covered by an entry of old on the whole entry,
 // as Leq reads an allowlist (leqAllowedDomains). It compares two lists as written, so a list a policy open

@@ -86,6 +86,44 @@ func TestMeetAllowedDomains(t *testing.T) {
 	}
 }
 
+// The meet reads a bare entry under the port rule: it reaches 80 and 443 only, so met with another
+// port it is nothing, in either direction, for a name, a wildcard and a literal IP alike, and met with
+// 443 it is 443. A port both sides name beside a bare host is kept.
+func TestMeetAllowedDomainsReadsABareEntryUnderThePortRule(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		base, ov, want []string
+		bad            bool // refused at write
+	}{
+		{"a bare base met with another port", []string{"b.example"}, []string{"b.example:8443"}, []string{}, true},
+		{"another port met with a bare overlay", []string{"b.example:8443"}, []string{"b.example"}, []string{}, true},
+		{"a bare base met with 443", []string{"b.example"}, []string{"b.example:443"}, []string{"b.example:443"}, false},
+		{"a bare wildcard met with another port", []string{"*.corp.example"}, []string{"*.corp.example:8443"}, []string{}, true},
+		{"a bare wildcard met with 443", []string{"*.corp.example"}, []string{"*.corp.example:443"}, []string{"*.corp.example:443"}, false},
+		{"a bare literal IP met with another port", []string{"10.0.0.5"}, []string{"10.0.0.5:22"}, []string{}, true},
+		{"a bare literal IP met with 443", []string{"10.0.0.5"}, []string{"10.0.0.5:443"}, []string{"10.0.0.5:443"}, false},
+		{"a port both name beside a bare host", []string{"b.example", "b.example:22"}, []string{"b.example", "b.example:22"}, []string{"b.example", "b.example:22"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Authority{Ceiling: types.RunPolicySpec{AllowedDomains: tc.base}}
+			ov := overlayOf(types.CeilingOverlay{AllowedDomains: &tc.ov})
+			err := ValidateOverlay(b, ov)
+			if tc.bad {
+				wantOverlayErr(t, err, ReasonOverlayInvalid, "allowed_domains")
+			} else if err != nil {
+				t.Fatalf("ValidateOverlay: %v", err)
+			}
+			got, _, aerr := ApplyOverlay(b, ov)
+			if aerr != nil {
+				t.Fatal(aerr)
+			}
+			if !slices.Equal(got.Ceiling.AllowedDomains, tc.want) {
+				t.Errorf("allowed_domains = %v, want %v", got.Ceiling.AllowedDomains, tc.want)
+			}
+		})
+	}
+}
+
 // The meet minimises an overlay's allowed_domains quadratically, so the overlay is count-capped
 // before it, at write and at resolve alike.
 func TestOverlayAllowedDomainsCountCap(t *testing.T) {
