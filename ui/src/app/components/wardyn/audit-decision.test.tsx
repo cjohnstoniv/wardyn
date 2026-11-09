@@ -93,6 +93,12 @@ describe("ruleSourceLabel", () => {
       label: "Released by approval",
       tone: "neutral",
     });
+    // A held or refused request is never "released": only an approval id means it went through.
+    expect(ruleSourceLabel("approval:pending")).toEqual({ label: "Held for approval", tone: "info" });
+    expect(ruleSourceLabel("approval:denied")).toEqual({ label: "Denied by an approver", tone: "danger" });
+    for (const reason of ["expired", "stale", "refused", "host-cap"]) {
+      expect(ruleSourceLabel(`approval:${reason}`)?.tone).toBe("danger");
+    }
     // The address-range floor names its own cause: a refused private endpoint
     // otherwise reads as a policy or an entitlement gap and sends the operator
     // to their IAM team over a permission that was never the problem.
