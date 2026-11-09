@@ -20,7 +20,7 @@ import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { EmptyState, ErrorState, StaleNote, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
@@ -100,6 +100,8 @@ export function CredentialsScreen() {
   const [screenStatus, setStatus] = React.useState<ScreenStatus | "no_meta">("loading");
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>(undefined);
   const [filter, setFilter] = React.useState<string | null>(null);
+  // A quiet re-read (after an erase) failed: the list on screen is the last one that loaded.
+  const [stale, setStale] = React.useState(false);
   // The one erase dialog: opened for a row's person, or with no person (the header's search).
   const [erase, setErase] = React.useState<{ person: ErasePerson | null } | null>(null);
 
@@ -114,9 +116,14 @@ export function CredentialsScreen() {
         // The erased person may have held the last credential of the filtered provider: its chip is gone, so "All" is the view.
         setFilter((f) => (f && d.counts.by_provider[f] ? f : null));
         setStatus("ready");
+        setStale(false);
       })
       .catch((e) => {
-        if (quiet) return;
+        if (quiet) {
+          // The list on screen may still show an erased person's row: say it may be old, with a way to read again.
+          setStale(true);
+          return;
+        }
         const msg = getErrorMessage(e);
         setErrorMessage(msg);
         setStatus(msg === NO_META_ERROR ? "no_meta" : loadFailStatus(e));
@@ -175,6 +182,7 @@ export function CredentialsScreen() {
         <p className="mt-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
+          {stale && screenStatus === "ready" && <StaleNote onRetry={() => load(true)} />}
           {screenStatus === "loading" ? (
             <TableSkeleton rows={5} cols={5} />
           ) : screenStatus === "no_meta" ? (

@@ -44,6 +44,7 @@ import { HttpError } from "../../lib/api/core";
 import type { CredentialInventory } from "../../lib/api/credentials";
 import type { SetupStatus } from "../../lib/types";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { STALE_NOTE } from "../wardyn/states";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { INVENTORY, ERASE, ERASE_DATA, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
@@ -329,6 +330,20 @@ describe("after an erase the screen re-reads in place", () => {
     await eraseAlice();
     expect(await screen.findByText("bob@corp.example")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: INVENTORY.FILTER_ALL }).className).toContain("border-primary");
+  });
+
+  it("a failed re-read keeps the list and shows the stale note, whose Retry reads again", async () => {
+    listInventoryMock.mockResolvedValueOnce(inventory([aliceRow, bobRow], { "corp-gw": 1, "other-gw": 1 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    listInventoryMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+    await eraseAlice();
+    expect(await screen.findByRole("status")).toHaveTextContent(STALE_NOTE);
+    expect(screen.getByText("alice@corp.example")).toBeInTheDocument();
+    listInventoryMock.mockResolvedValue(inventory([bobRow], { "other-gw": 1 }));
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText("alice@corp.example")).toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("keeps the minted-token section mounted instead of reloading it", async () => {
