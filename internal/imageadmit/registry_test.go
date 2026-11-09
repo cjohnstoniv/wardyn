@@ -560,8 +560,13 @@ func TestUnavailableCauses(t *testing.T) {
 		}
 	})
 	t.Run("timeout", func(t *testing.T) {
-		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+		// The handler answers only once the client has returned. Waiting on r.Context() instead answered 200 with an
+		// empty body as soon as the client's cancel closed the connection, and net/http hands back a response that
+		// races the context's end, so the client could read "not JSON" at the deadline.
+		release := make(chan struct{})
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
 		defer srv.Close()
+		defer close(release)
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 		defer cancel()
 		_, err := newTestClient(t, nil, testGuard(), nil, srv).Manifest(ctx, mustRef(t, host(srv)+"/team/app:1.0"))
