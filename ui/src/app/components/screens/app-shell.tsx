@@ -522,20 +522,29 @@ export function AppShell({
 
   // The z-50 banners stay above focus mode's overlay, so the overlay starts below them: their bottom edge, published
   // as --shell-banner-h (focus-mode.tsx and the run page's expanded widget read it).
+  // --shell-main-top is where the row under EVERY banner starts, including the second group the stack above does not
+  // wrap; a screen that bounds itself to <main>'s visible height (the setup phase rail) reads it.
   const bannerStackRef = React.useRef<HTMLDivElement>(null);
+  const rowRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const el = bannerStackRef.current;
     if (!el) return;
+    const row = rowRef.current;
     const root = document.documentElement;
-    const sync = () => root.style.setProperty("--shell-banner-h", `${Math.round(el.getBoundingClientRect().bottom)}px`);
+    const sync = () => {
+      root.style.setProperty("--shell-banner-h", `${Math.round(el.getBoundingClientRect().bottom)}px`);
+      if (row) root.style.setProperty("--shell-main-top", `${Math.round(row.getBoundingClientRect().top)}px`);
+    };
     sync();
     const ro = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
     ro?.observe(el);
+    if (row) ro?.observe(row);
     window.addEventListener("resize", sync);
     return () => {
       ro?.disconnect();
       window.removeEventListener("resize", sync);
       root.style.removeProperty("--shell-banner-h");
+      root.style.removeProperty("--shell-main-top");
     };
   }, [focus]);
 
@@ -732,7 +741,7 @@ export function AppShell({
                 <ConfinementPostureBanner view={view} />
               </React.Suspense>
             </div>
-            <div className="flex min-h-0 flex-1">
+            <div ref={rowRef} className="flex min-h-0 flex-1">
               {!focus && (
                 <aside className="scroll-thin relative hidden w-[228px] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
                   <SidebarNav

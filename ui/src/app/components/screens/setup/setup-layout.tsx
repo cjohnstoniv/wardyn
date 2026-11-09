@@ -183,13 +183,13 @@ export function SetupLayout({
             (the phase rail's later steps). Bounded to the viewport with its
             own scroll.
             The sticky container is app-shell.tsx's <main> (its own
-            overflow-y:auto scroller), which starts BELOW the header and any
-            banners: --shell-banner-h (the bottom edge of that stack, 3.5rem
+            overflow-y:auto scroller), which starts BELOW the header and every
+            banner: --shell-main-top (where the shell's row starts, 3.5rem
             with no banner) is what the visible <main> loses off the top.
             sticky's `top-6` (1.5rem) offset is relative to THAT scroller,
             so the rail's bottom gap needs 1.5rem more: viewport height minus
             the banner stack minus 3rem. */}
-        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-var(--shell-banner-h,3.5rem)-3rem)] lg:self-start lg:overflow-y-auto">
+        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-var(--shell-main-top,3.5rem)-3rem)] lg:self-start lg:overflow-y-auto">
           {rail}
         </aside>
 

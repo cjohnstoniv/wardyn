@@ -67,6 +67,17 @@ describe("AppShell scroll containment", () => {
     expect(root.classList.contains("relative")).toBe(true);
   });
 
+  it("publishes where the row under every banner starts, and clears it on unmount", async () => {
+    const { unmount } = renderShell();
+    await screen.findByRole("main");
+    const root = document.documentElement.style;
+    // jsdom lays nothing out, so the row's top is 0; the property being set is what the setup rail reads.
+    expect(root.getPropertyValue("--shell-main-top")).toBe("0px");
+    expect(root.getPropertyValue("--shell-banner-h")).toBe("0px");
+    unmount();
+    expect(root.getPropertyValue("--shell-main-top")).toBe("");
+  });
+
   it("opens the next route at the top of <main>, but not on a search-param change", async () => {
     renderShell();
     const main = await screen.findByRole("main");
