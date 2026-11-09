@@ -28,7 +28,7 @@ func guestAgentStage(rec macvm.ToolsRecord, warnings []string) doctor.Stage {
 		if len(rec.AgentSignErrors) > 0 {
 			detail += ". Why each signer failed: " + strings.Join(rec.AgentSignErrors, "; ")
 		}
-		return doctor.FailStage(name, detail+warn, "", "the next tools update signs it again; if it fails the same way, send this output and tools-update.log")
+		return doctor.FailStage(name, detail+warn, "", "the next tools update signs it again (`wardyn-runnerd macos-vm update-tools` starts one now); if it fails the same way, send this output and tools-update.log")
 	}
 	detail := "signed with this Mac's cert"
 	switch rec.AgentSigner {

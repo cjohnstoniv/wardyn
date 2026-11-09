@@ -42,8 +42,8 @@ func TestBaseSettingsWarnings(t *testing.T) {
 		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}
 	// The old-agent line says what to do.
-	old := []basesettings.Skipped{{Name: "base-settings", Reason: "agent predates this setting; run the tools update again"}}
-	if got, want := BaseSettingsWarnings(old), []string{"base settings skipped, agent predates this setting; run the tools update again: base-settings"}; !slices.Equal(got, want) {
+	old := []basesettings.Skipped{{Name: "base-settings", Reason: "agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again"}}
+	if got, want := BaseSettingsWarnings(old), []string{"base settings skipped, agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again: base-settings"}; !slices.Equal(got, want) {
 		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}
 }

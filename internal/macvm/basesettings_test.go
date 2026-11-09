@@ -62,7 +62,7 @@ func (g *baseGuest) stage(f *toolsFixture) *macvm.ToolsStage {
 
 func newBaseGuest() *baseGuest { return &baseGuest{itemGuest: newItemGuest()} }
 
-const predates = "agent predates this setting; run the tools update again"
+const predates = "agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again"
 
 // A tools update applies the base settings after it has read the posture and before the launcher's self-test.
 func TestToolsUpdateAppliesBaseSettingsBetweenPostureAndSelftest(t *testing.T) {

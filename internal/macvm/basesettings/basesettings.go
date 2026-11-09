@@ -50,6 +50,9 @@ type Row struct {
 	Stage2Only bool
 	// Read, when set, is read back by running it as the row's user, once and with no retry.
 	Read *Read
+	// Protected marks a row whose write goes into a container macOS protects: a write macOS refuses with
+	// "Could not write domain" needs Full Disk Access for the guest agent.
+	Protected bool
 }
 
 // Read is a read-back by command: Argv, run as the row's user, must print Want (trailing space aside).
