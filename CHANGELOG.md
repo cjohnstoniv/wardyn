@@ -61,6 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A macOS VM run's window no longer opens on Setup Assistant's Apple Account pane: the guest agent ends Setup Assistant in the agent's session at run start. The Setup Assistant keys in the base did not stop it: the pane opened on every run. The same step also runs on a drive-open boot, where it finds nothing. Run the tools update once to get the new guest agent.
 - An organisation runner pool whose only members are organisation runners, such as runners in a Kubernetes cluster, now shows as available, with those runners counted in its capacity and offered in its barrier options. Runs could already be placed on them. An organisation pool with both remote-hosted and organisation runners now stays available under a deny of remote placement, as its runs already did.
 - Approving an elevation request now answers stale when the unit's elevation rule no longer names a group the person matched when they asked.
 - After a revive, a run's recorded policy and its policy view showed the organisation's recording level instead of the run's own; the recording itself was never changed. A revive now starts from the run's recorded policy and is refused (503) when that cannot be read.
