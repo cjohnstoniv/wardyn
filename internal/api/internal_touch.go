@@ -23,7 +23,8 @@ const touchDebounce = lifecycle.TouchDebounce
 // predicate every idle clock shares (an allowed request, not a refusal, a hold, a token count or the toolgate's
 // approval poll), minus one case. A macOS guest calls Apple's boot hosts in the background; a run that allows
 // all egress, or whose allow covers one, gets those calls allowed, so on a macOS VM run they never count,
-// allowed or refused. A runner's proxy applies the same list (proxy.Config.ActivityIgnoreHosts).
+// allowed or refused. A runner's proxy applies the same list (proxy.Config.ActivityIgnoreHosts). On a VM run the
+// proxy also marks every request that arrives on the vmnet relay lane (egress.Request.Relayed), and those never count.
 func decisionIsActivity(kind types.MachineKind, dl egress.DecisionLog) bool {
 	return egress.CountsAsActivityFor(dl, activityIgnoreHosts(kind))
 }

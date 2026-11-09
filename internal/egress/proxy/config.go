@@ -363,7 +363,8 @@ type Config struct {
 	// not name forge_hosts is refused the run.
 	ForgeHosts []string `json:"forge_hosts,omitempty"`
 	// ActivityIgnoreHosts are hosts whose allowed requests are not the run working, so they do not move its
-	// idle clock (egress.CountsAsActivityFor): a macOS guest's Apple boot hosts, on a run that allows them.
+	// idle clock (egress.CountsAsActivityFor): a macOS guest's Apple boot hosts, on a run that allows them. A VM
+	// guest's request on the vmnet relay lane never counts either (egress.Request.Relayed), whatever its host.
 	// Control-plane-authored and omitted when empty, because an older proxy refuses a key it does not know.
 	ActivityIgnoreHosts []string `json:"activity_ignore_hosts,omitempty"`
 	// HarnessToolRules are the tool rules per included harness, also the product
