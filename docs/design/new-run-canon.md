@@ -724,11 +724,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NET_NEEDS_APPROVAL` | mock | Needs approval |
 | `NET_REQUESTED` | pending (W-35) | Requested |
 | `NET_NOT_ALLOWED` | pending (W-35) | Not allowed |
-| `NET_POLICY_DENY_REVIEW_YOU` | pending (W-36) | Anything else is refused the first time the run asks for it and raises a request. Once you approve it, the run can try again. |
-| `NET_POLICY_DENY_REVIEW_ADMIN` | pending (W-36) | Anything else is refused the first time the run asks for it and raises a request. Once an admin approves it, the run can try again. |
+| `NET_POLICY_DENY_REVIEW_YOU` | pending (W-36) | Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once you approve it, the run can try again. |
+| `NET_POLICY_DENY_REVIEW_ADMIN` | pending (W-36) | Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once an admin approves it, the run can try again. |
 | `NET_POLICY_ALWAYS_DENY` | pending (W-36) | Anything else is refused and logged. |
-| `NET_POLICY_HELD_YOU` | mock | Anything else is held for your review the first time the run asks for it. |
-| `NET_POLICY_HELD_ADMIN` | pending (W-36) | Anything else is held for an admin's review the first time the run asks for it. |
+| `NET_POLICY_HELD_YOU` | mock | Another host is held for your review the first time the run asks for it, unless it is always blocked. |
+| `NET_POLICY_HELD_ADMIN` | pending (W-36) | Another host is held for an admin's review the first time the run asks for it, unless it is always blocked. |
 | `NET_POLICY_TIMEOUT(n)` | pending (W-36) | If nobody decides within {n} seconds, it's refused. |
 | `NET_POLICY_ALLOW_ALL` | pending (W-36) | Any other public host is allowed, except ones your organisation blocks. |
 | `NET_POLICY_CEILING` | mock | Your organisation's ceiling still narrows this list at review. |

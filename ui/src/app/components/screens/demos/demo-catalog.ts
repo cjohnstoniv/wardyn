@@ -339,7 +339,7 @@ export const DEMOS: Demo[] = [
         cmd: "curl -sSI https://example.com",
         text: "The same policy still holds against the agent's box: any host off the allowlist is refused. The agent can reach api.anthropic.com to think and nothing else.",
       },
-      { text: "Open the Audit panel below the terminal — every egress decision (allowed to Anthropic, denied elsewhere) is on the record, attributed to the run." },
+      { text: "Open the Audit panel below the terminal — each recorded egress decision (allowed to Anthropic, denied elsewhere) is on the record, attributed to the run." },
     ],
     setupUi: [
       "First connect a model (Getting started → Model/Harness Provider) — this demo only appears once one is connected.",

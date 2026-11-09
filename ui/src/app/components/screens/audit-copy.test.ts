@@ -228,13 +228,13 @@ describe("the unit admin's Audit copy", () => {
 
   it("names the first unit in the empty state", () => {
     expect(AUDIT.unitEmptyBody("payments")).toBe(
-      "Every egress decision, brokered credential, approval and enforcement action of a run in `payments` or below it appears here once that run starts.",
+      "Recorded egress decisions, brokered credentials, approvals and enforcement actions of a run in `payments` or below it appears here once that run starts.",
     );
   });
 
   it("holds the fixed unit texts", () => {
     expect(AUDIT.UNIT_DESCRIPTION).toBe(
-      "Append-only. Every egress decision, brokered credential, approval and enforcement action, across the runs in your units.",
+      "Append-only. Recorded egress decisions, brokered credentials, approvals and enforcement actions, across the runs in your units.",
     );
     expect(AUDIT.UNIT_NOTE_TITLE).toBe("Runs in your units");
     expect(AUDIT.UNIT_EMPTY_TITLE).toBe("No runs in your units yet.");

@@ -256,15 +256,15 @@ export const NR_TOOLS = {
   NET_NOT_ALLOWED: "Not allowed",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_DENY_REVIEW_YOU:
-    "Anything else is refused the first time the run asks for it and raises a request. Once you approve it, the run can try again.",
+    "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once you approve it, the run can try again.",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_DENY_REVIEW_ADMIN:
-    "Anything else is refused the first time the run asks for it and raises a request. Once an admin approves it, the run can try again.",
+    "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once an admin approves it, the run can try again.",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_ALWAYS_DENY: "Anything else is refused and logged.",
-  NET_POLICY_HELD_YOU: "Anything else is held for your review the first time the run asks for it.",
+  NET_POLICY_HELD_YOU: "Another host is held for your review the first time the run asks for it, unless it is always blocked.",
   /** pending W-36: the recommended text until the owner answers. */
-  NET_POLICY_HELD_ADMIN: "Anything else is held for an admin's review the first time the run asks for it.",
+  NET_POLICY_HELD_ADMIN: "Another host is held for an admin's review the first time the run asks for it, unless it is always blocked.",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_TIMEOUT: (n: string | number) => `If nobody decides within ${n} seconds, it's refused.`,
   /** pending W-36: the recommended text until the owner answers. */

@@ -406,7 +406,7 @@ export function AuditScreen() {
         description={
           unitAdmin
             ? AUDIT.UNIT_DESCRIPTION
-            : "Append-only. Every egress decision, brokered credential, approval and enforcement action, across every run."
+            : "Append-only. Recorded egress decisions, brokered credentials, approvals and enforcement actions, across the runs you can see."
         }
       />
 
@@ -560,7 +560,7 @@ export function AuditScreen() {
             <EmptyState
               icon={ScrollText}
               title="The trail starts with your first run."
-              description="Every egress decision, brokered credential, approval, and enforcement action gets recorded here the moment you launch a run."
+              description="Recorded egress decisions, brokered credentials, approvals and enforcement actions appear here the moment you launch a run."
               action={
                 // An audit screen doesn't need to own a run-launcher — /runs
                 // is already the canonical "Launch your first run" CTA (its
