@@ -556,7 +556,7 @@ describe("IdentityWidget: where the run ran", () => {
     expect(rows({ placement: "remote", runner_target }).placement).toBe(expected);
   });
 
-  it("prefers the executor the run was placed on over the deployment's runner_target", () => {
+  it("prefers the substrate the run was placed on over the deployment's runner_target", () => {
     expect(rows({ placement: "remote", runner_target: "docker", remote_runner_id: "k8s" }).placement).toBe("Kubernetes cluster");
   });
 
