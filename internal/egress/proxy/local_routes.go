@@ -510,12 +510,13 @@ func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, 
 // Paired with decisionLog (policy.go), which wraps it into a DecisionLog.
 func (p *Proxy) reqOf(r *http.Request, host string, port int) egress.Request {
 	return egress.Request{AuditReservation: spoolTicket(r.Context()),
-		RunID:  p.runID,
-		Host:   host,
-		Port:   port,
-		Method: strings.ToUpper(r.Method),
-		Path:   r.URL.Path,
-		Time:   p.now(),
+		RunID:   p.runID,
+		Host:    host,
+		Port:    port,
+		Method:  strings.ToUpper(r.Method),
+		Path:    r.URL.Path,
+		Time:    p.now(),
+		Relayed: p.relayLane(r.Context()),
 	}
 }
 

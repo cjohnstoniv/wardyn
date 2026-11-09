@@ -625,7 +625,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		Method:           strings.ToUpper(method),
 		Path:             path,
 		Time:             p.now(),
-		Relayed:          p.vm && onVMNetLane(ctx),
+		Relayed:          p.relayLane(ctx),
 	}
 
 	// 0. Unconditional literal-IP guard, before policy and before first-use
@@ -894,7 +894,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// Opaque tunnel: mark its allow row whatever the scanner does; llm.scan.bypass only when inspection was expected.
 		log.MarkModelTunnel()
 		if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff {
-			p.emitLLMBlindOnce(host, port, http.MethodConnect)
+			p.emitLLMBlindOnce(r.Context(), host, port, http.MethodConnect)
 		}
 	}
 	p.openTunnel(w, r, host, port, target, log, p.countActivity, resumed)

@@ -759,7 +759,7 @@ func (p *Proxy) emitLLMDecision(r *http.Request, host string, port int, decision
 // opaque tunnel (or plain-HTTP forward) inspection couldn't see into, keyed on
 // host and port, with the real port and method on the row. The request is allowed
 // separately; this is purely the honest coverage signal.
-func (p *Proxy) emitLLMBlindOnce(host string, port int, method string) {
+func (p *Proxy) emitLLMBlindOnce(ctx context.Context, host string, port int, method string) {
 	if p.sink == nil {
 		return
 	}
@@ -788,11 +788,12 @@ func (p *Proxy) emitLLMBlindOnce(host string, port int, method string) {
 
 	p.sink.emit(egress.DecisionLog{
 		Request: egress.Request{
-			RunID:  p.runID,
-			Host:   h,
-			Port:   port,
-			Method: method,
-			Time:   p.now(),
+			RunID:   p.runID,
+			Host:    h,
+			Port:    port,
+			Method:  method,
+			Time:    p.now(),
+			Relayed: p.relayLane(ctx),
 		},
 		Decision:   egress.Allow,
 		RuleSource: ruleSourceLLMBlind,

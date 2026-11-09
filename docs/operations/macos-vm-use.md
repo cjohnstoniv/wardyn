@@ -199,7 +199,7 @@ A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your 
 
 - The window shows the VM's screen and takes your keys and pointer.
 - Only what goes through the run's proxy settings counts as activity: Terminal, the harness, and tools that honour `HTTPS_PROXY`. The window, a terminal and SSH count too.
-- Requests the guest makes on its own never count, allowed or refused: macOS's services, and tools that ignore the proxy settings (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls still count, as do direct HTTPS requests to a host Wardyn inspects (a known issue). A Mac runner needs upgrading first.
+- Requests the guest makes on its own never count, allowed or refused: macOS's services, and tools that ignore the proxy settings (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls still count, as do requests to a host with a `via_org` credential (a known issue). A Mac runner needs upgrading first.
 - If Setup Assistant opens in the first 2 minutes of a run, the guest agent ends it within 2 seconds.
 - It is not recorded, because it is drawn on your Mac and never crosses the gateway. A run at Screen and actions can't open one.
 - While it is open, the run's browser desktop is view only. A browser desktop that had control is ended first, and the open waits up to 5 seconds for it.

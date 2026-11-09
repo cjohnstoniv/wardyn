@@ -99,6 +99,22 @@ func onVMNetLane(ctx context.Context) bool {
 	return on
 }
 
+// relayLane is egress.Request.Relayed for a request: a VM guest's flow that came in on the relay's listener.
+// Every decision row built from a request takes it from here.
+func (p *Proxy) relayLane(ctx context.Context) bool {
+	return p.vm && onVMNetLane(ctx)
+}
+
+// vmnetLaneOnly is the base context of a terminated CONNECT's inner requests: empty but for the CONNECT's
+// relay-lane mark, so a guest flow's inner requests stay Relayed and nothing else of the CONNECT's context
+// (its audit reservation) reaches them.
+func vmnetLaneOnly(ctx context.Context) context.Context {
+	if onVMNetLane(ctx) {
+		return context.WithValue(context.Background(), vmnetLaneKey{}, true)
+	}
+	return context.Background()
+}
+
 // vmnetReasons are the refusals only the relay sees, each logged as rule_source
 // "vmnet:<reason>" with this sentence as its cause. Closed: a report naming any
 // other reason is refused.
