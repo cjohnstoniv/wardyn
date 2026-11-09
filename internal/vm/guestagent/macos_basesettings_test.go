@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -422,7 +423,7 @@ func TestBaseSettingsRouteSafariReadBackMismatchIsSkipped(t *testing.T) {
 // guest agent, not with the raw defaults error; a failing unprotected row keeps its exit reason.
 func TestBaseSettingsRouteSafariRefusedWriteNeedsFullDiskAccess(t *testing.T) {
 	rig := newBaseRig(t)
-	rig.failOut = "2026-11-09 10:00:00.000 defaults[1:2] \nCould not write domain /Users/agent/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari; exiting"
+	rig.failOut = time.Now().Format("2006-01-02 15:04:05.000") + " defaults[1:2] \nCould not write domain /Users/agent/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari; exiting"
 	rig.failArgv = func(a []string) bool {
 		return slices.Contains(a, "write") && slices.Contains(a, safariKey) || slices.Equal(a, []string{"/usr/bin/mdutil", "-a", "-i", "off"})
 	}
