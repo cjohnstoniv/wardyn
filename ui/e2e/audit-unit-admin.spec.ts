@@ -5,6 +5,7 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect, asRealMember } from "./fixtures";
+import { AUDIT } from "../src/app/components/screens/audit-copy";
 
 // The Audit page for a unit admin: a person who administers a unit and is not a security admin. The server's
 // unit-scoped audit read is pinned in Go; this spec walks what the console shows from /me's `unit_admin_of` and
@@ -41,8 +42,7 @@ async function serveAudit(page: Page, rows: unknown[]): Promise<void> {
   await page.route(/\/api\/v1\/audit(\?|$)/, (route) => route.fulfill({ json: rows }));
 }
 
-const DESCRIPTION =
-  "Append-only. Every egress decision, brokered credential, approval and enforcement action, across the runs in your units.";
+const DESCRIPTION = AUDIT.UNIT_DESCRIPTION;
 
 test("a unit admin sees the unit description, a note naming their unit, and the rows", async ({ page }) => {
   await asUnitAdmin(page);
