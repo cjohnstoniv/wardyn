@@ -59,6 +59,7 @@ vi.mock("../../../lib/api/permissions", async () => {
 import { toast } from "sonner";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
+import { WORKSPACE_HOSTS } from "../../wardyn/copy/workspace-hosts";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -473,7 +474,24 @@ describe("WorkspaceDetailScreen — Allowed hosts card", () => {
     expect(await screen.findByText("Allowed hosts · 2")).toBeInTheDocument();
     expect(screen.getByText("approved for this workspace")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove registry.npmjs.org" }));
+    // Asks first, naming the host and the workspace; nothing is written until the confirm.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(WORKSPACE_HOSTS.ALLOWED_TITLE("registry.npmjs.org", "payments"))).toBeInTheDocument();
+    expect(setApprovedEgressMock).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
     await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", []));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(WORKSPACE_HOSTS.REMOVED_ALLOWED("registry.npmjs.org")));
+  });
+
+  it("Cancel in the remove confirm writes nothing", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["registry.npmjs.org"] }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    await user.click(await screen.findByRole("button", { name: "Remove registry.npmjs.org" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CANCEL }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(setApprovedEgressMock).not.toHaveBeenCalled();
   });
 
   it("a host promoted from a recorded session is attributed to it by name", async () => {
@@ -510,7 +528,14 @@ describe("WorkspaceDetailScreen — Denied hosts card", () => {
     expect(await screen.findByText("Denied hosts · 1")).toBeInTheDocument();
     expect(screen.getByText("denied for this workspace")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove evil.example.com" }));
+    // Lifting a permanent block asks first, and says it is a block being lifted and not an approval.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(WORKSPACE_HOSTS.DENIED_TITLE("evil.example.com", "payments"))).toBeInTheDocument();
+    expect(within(dialog).getByText(WORKSPACE_HOSTS.DENIED_BODY)).toBeInTheDocument();
+    expect(setDeniedEgressMock).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
     await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", []));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(WORKSPACE_HOSTS.REMOVED_DENIED("evil.example.com")));
   });
 });
 
@@ -767,6 +792,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, the two-tier remove", () => {
     expect(await screen.findByText("Allowed hosts · 2")).toBeInTheDocument();
     expect(screen.getByText("approved for this workspace")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove registry.npmjs.org" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
 
     await waitFor(() => expect(setRequirementsMock).toHaveBeenCalled());
     // The landed half was published: the row re-renders from the FIRST write's
@@ -780,6 +806,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, the two-tier remove", () => {
       { description: "operator role required" },
     );
     expect(toast.error).not.toHaveBeenCalledWith("Failed to remove registry.npmjs.org", expect.anything());
+    expect(toast.success).not.toHaveBeenCalledWith(WORKSPACE_HOSTS.REMOVED_ALLOWED("registry.npmjs.org"));
   });
 });
 
@@ -855,6 +882,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     renderDetail();
 
     await user.click(await screen.findByRole("button", { name: "Remove pypi.org" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
     await waitFor(() =>
       expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["registry.npmjs.org"]),
     );
