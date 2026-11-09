@@ -84,6 +84,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - After a revive, a run's recorded policy and its policy view showed the organisation's recording level instead of the run's own; the recording itself was never changed. A revive now starts from the run's recorded policy and is refused (503) when that cannot be read.
 - A run that has reached its lifetime cap is refused at once, before the lease sweep ends it: its credential and approval requests, its token renewal and decisions on its pending approvals (`409 approval_run_past_lifetime`). A queued run whose cap passed while it waited ends without starting (`max_lifetime_reached`).
 - An inbound web app now obeys the run's `data_out` rule: under `review` or `blocked`, a request with an inbound token is refused as the browser entry is.
+- A workspace's generated environment build now retries its Claude Code downloads from downloads.claude.ai (up to 20 tries over 5 minutes) instead of failing the whole build on one dropped connection. The exported `.devcontainer/Dockerfile` carries the same retries; its `curl` needs version 7.71 or later.
 
 ## [0.10.0-rc.16] — 2026-11-08
 

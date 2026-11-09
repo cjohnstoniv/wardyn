@@ -128,6 +128,10 @@ func claudeInstall(pin *InstallerPin, pinFile bool) string {
 const (
 	claudePinFile = "/usr/local/share/wardyn/inputs/claude-code"
 
+	// claudeCurl retries every error, as the image Dockerfiles' release downloads do: one
+	// dropped connection to downloads.claude.ai otherwise fails the whole workspace build.
+	claudeCurl = "curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20"
+
 	claudeArch = `case "$(dpkg --print-architecture)" in \
       amd64) plat=linux-x64 ;; \
       arm64) plat=linux-arm64 ;; \
@@ -135,12 +139,12 @@ const (
     esac; \
     base=https://downloads.claude.ai/claude-code-releases; \
 `
-	claudeResolve = `    ver="$(curl -fsSL "$base/stable")"; \
-    curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
+	claudeResolve = `    ver="$(` + claudeCurl + ` "$base/stable")"; \
+    ` + claudeCurl + ` "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
     sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
     [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
 `
-	claudeFetch = `    curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
+	claudeFetch = `    ` + claudeCurl + ` "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
 `
 	claudeVerify = `    echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
 `

@@ -169,6 +169,31 @@ func TestGenAgentToolInstalls(t *testing.T) {
 	}
 }
 
+// TestGenAgentToolDockerfile_EveryCurlRetries: a workspace build fails on one dropped
+// connection to downloads.claude.ai unless every fetch in the RUN retries, in the export,
+// the unpinned build and the pinned build alike.
+func TestGenAgentToolDockerfile_EveryCurlRetries(t *testing.T) {
+	pins := pinTestPins()
+	for name, df := range map[string]string{
+		"export":   genAgentToolDockerfile(genStandardTools, "", nil),
+		"unpinned": genAgentToolDockerfile(genStandardTools, "", &Pins{}),
+		"pinned":   genAgentToolDockerfile(genStandardTools, "", &pins),
+	} {
+		curls := 0
+		for _, line := range strings.Split(df, "\n") {
+			if strings.Contains(line, "curl ") {
+				curls++
+				if !strings.Contains(line, "curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 ") {
+					t.Errorf("%s: a fetch without the retry flags: %s", name, line)
+				}
+			}
+		}
+		if curls == 0 {
+			t.Errorf("%s: no curl fetch found, so nothing was checked:\n%s", name, df)
+		}
+	}
+}
+
 // TestGenAgentToolDockerfile pins the emitted Dockerfile: it FROMs the same
 // base a no-tools devcontainer names directly, and every RUN leads with
 // "set -eu" so a failed install fails the BUILD rather than shipping an image

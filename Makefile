@@ -513,6 +513,8 @@ test-conformance-stub: ## Run the driver-agnostic conformance honesty stub (no c
 # daemon" skip cases in integration_test.go / agent_tool_integration_test.go
 # have to actually SUCCEED on this target's own provisioned daemon+registry,
 # so a skip here is real news, not a self-skip disguised as green.
+# WARDYN_TEST_REPORT_TAIL=210 puts a failed build's last 200 log lines (the step
+# that failed) in the job log, where the default 8 showed only envbuilder's trailer.
 test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs Docker)
 	@echo "Running real-daemon envbuild integration tests (U064; requires Docker)..."
 	@set -eu; \
@@ -531,6 +533,7 @@ test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs D
 	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
 	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
 	WARDYN_TEST_REPORT_COVER=0 \
+	WARDYN_TEST_REPORT_TAIL=210 \
 	./scripts/test-report.sh envbuild -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI|TestFinalizeBase_IDEqualsTheDaemonsAuxID' -timeout 40m ./internal/envbuild/
 
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
