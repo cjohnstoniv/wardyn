@@ -52,14 +52,16 @@ test.describe("shell scroll containment", () => {
 
   for (const height of [720, 480]) {
     test(`New run Tools step at 1280x${height}: the document is no taller than the window and a wheel over the sidebar does not move the shell`, async ({ page }) => {
-      await page.setViewportSize({ width: 1280, height });
       await mockPreflightClear(page);
       await gotoConsole(page);
       await openNewRun(page);
       await walkGuidedToFiles(page);
       await chooseFiles(page);
       await continueNewRun(page, NR_TOOLS.TITLE);
-      // At 480 the step is certainly longer than <main>; at 720 it may or may not be, and holds either way.
+      // The steps are walked at the default 720; the viewport shrinks only once the Tools step is up, and the layout settles
+      // before anything is read. At 480 the step is certainly longer than <main>; at 720 it may or may not be, and holds either way.
+      await page.setViewportSize({ width: 1280, height });
+      await settle(page);
       if (height === 480) expect(await mainScrolls(page)).toBe(true);
       await expectShellHolds(page);
     });
