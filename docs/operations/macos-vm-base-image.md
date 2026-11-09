@@ -291,7 +291,7 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 | `com.apple.loginwindow` `TALLogoutSavesState` (per host) | bool false | agent | yes | 1 and 2 |
 | `mdutil -a -i off` (Spotlight indexing) | off | root | yes | 1 and 2 |
 | `DiagnosticMessagesHistory.plist` `AutoSubmit`, `ThirdPartyDataSubmit`, with mode 644 and group admin | bool false | root | yes | 1 and 2 |
-| Setup Assistant and Terminal asked to quit, Terminal's saved state removed | SIGTERM once the desktop is up, then `rm -rf` as the agent | agent | no | 2, and edit-base's finish for Terminal |
+| Setup Assistant and Terminal ended, Terminal's saved state removed | by signal, then `rm -rf` as the agent | agent | no | 2, and edit-base's finish for Terminal |
 | Safari `WarnAboutFraudulentWebsites` (Safe Browsing) | bool false, read back once | agent | yes | 2 |
 | Setup Assistant asked to quit in the agent's session for 2 minutes once the desktop is up | SIGTERM, off unless the base has `/Library/Wardyn/setup-assistant-quit` | agent | no | run |
 
@@ -299,7 +299,6 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 - To turn it on in a base, run `sudo touch /Library/Wardyn/setup-assistant-quit` in `edit-base`'s admin Terminal. Remove the file to turn it off.
 - The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` skips the whole table.
 - The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" or "the console is not the agent account's", and the next update applies them.
-- The two quits also wait until Dock and Finder run as `agent`. Before that they are skipped as "the agent's desktop is not up yet (Dock and Finder)".
 - The first update after an upgrade is answered by the base's old guest agent, which has no route for this: `tools.json` says "agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again". Run that command twice; it updates even when the base looks current.
 - Rows are read back from disk with `plutil -p`. A key that did not land is skipped as "not found when read back". Key names other than the `DidSee*` panes a real guest listed and the documented global and `mdutil` rows come from community references and are unverified on macOS 26.
 

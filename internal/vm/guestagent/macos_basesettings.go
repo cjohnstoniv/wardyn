@@ -28,9 +28,8 @@ import (
 // nothing runs. The guest reads its own macOS version and build (sw_vers) and checks them against the
 // fixed patterns before it renders the stamps. It adds no exec: ToolsExecAllowed is unchanged.
 //
-// Order: ask the processes to quit (SIGTERM, never SIGKILL, and only once the agent's desktop is up:
-// desktopUp; before that they are skipped, so a login still coming up is never cut), write the rows, remove
-// the saved state, then read the files back from disk with plutil. Root rows run
+// Order: end the processes (by signal, with no quit handler, so they cannot save their state over the rows),
+// write the rows, remove the saved state, then read the files back from disk with plutil. Root rows run
 // directly. Agent rows run in the console session as the agent (asUserHome), never through AgentExec, which
 // is outside the GUI session and would miss its preferences daemon. A row that failed or did not read back
 // is skipped by name and does not fail the route. With nobody at the console, or another account there,
@@ -49,7 +48,6 @@ const (
 	reasonNoConsole    = "nobody at the console"
 	reasonOtherConsole = "the console is not the agent account's"
 	reasonConsoleRead  = "the console user was not read"
-	reasonDesktopNotUp = "the agent's desktop is not up yet (Dock and Finder)"
 	// reasonNeedsFullDiskAccess is the skip reason of a protected row macOS refused to write.
 	reasonNeedsFullDiskAccess = "needs Full Disk Access for the guest agent"
 
@@ -169,22 +167,6 @@ func shortOutput(o []byte) string {
 	return ": " + line
 }
 
-// desktopUp is the run-start step's desktopUp, checked before each quit, its commands bounded as exec's.
-func (b *baseSettingsRun) desktopUp() bool {
-	ctx, cancel := context.WithTimeout(b.ctx, baseSettingsCmdTimeout)
-	defer cancel()
-	return b.t.Desktop.desktopUp(ctx, b.uid, b)
-}
-
-// Run makes the route's runner a CmdRunner for desktopUp: a non-zero exit is an error.
-func (b *baseSettingsRun) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	o, code, err := b.run(ctx, append([]string{name}, args...))
-	if err == nil && code != 0 {
-		err = fmt.Errorf("%s: exit %d", name, code)
-	}
-	return o, err
-}
-
 // asAgent is the command to run argv in the agent's console session.
 func (b *baseSettingsRun) asAgent(argv ...string) []string {
 	cmd, args := asUserHome(b.uid, argv...)
@@ -214,12 +196,8 @@ func (b *baseSettingsRun) apply() {
 			b.skip(k.Name, b.noSession)
 			continue
 		}
-		if !b.desktopUp() {
-			b.skip(k.Name, reasonDesktopNotUp)
-			continue
-		}
 		// pkill exits 1 when nothing matched, which is fine: the process was not running.
-		if _, why := b.exec([]string{"/usr/bin/pkill", "-TERM", "-U", strconv.FormatUint(uint64(b.uid), 10), "-x", k.Process}, 1); why != "" {
+		if _, why := b.exec([]string{"/usr/bin/pkill", "-KILL", "-U", strconv.FormatUint(uint64(b.uid), 10), "-x", k.Process}, 1); why != "" {
 			b.skip(k.Name, why)
 			continue
 		}

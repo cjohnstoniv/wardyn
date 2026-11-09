@@ -153,8 +153,8 @@ func TestBaseSettingsRouteOrderAndUserSplit(t *testing.T) {
 	}
 	cmds := rig.ran()
 
-	killSA := index(cmds, -1, "/usr/bin/pkill", "-TERM", "-U", "502", "-x", "Setup Assistant")
-	killTerm := index(cmds, -1, "/usr/bin/pkill", "-TERM", "-U", "502", "-x", "Terminal")
+	killSA := index(cmds, -1, "/usr/bin/pkill", "-KILL", "-U", "502", "-x", "Setup Assistant")
+	killTerm := index(cmds, -1, "/usr/bin/pkill", "-KILL", "-U", "502", "-x", "Terminal")
 	didSee := index(cmds, 502, "/usr/bin/defaults", "write", saPath, "DidSeeCloudSetup", "-bool", "true")
 	stamp := index(cmds, 502, "/usr/bin/defaults", "write", saPath, "LastSeenCloudProductVersion", "-string", "26.6.2")
 	global := index(cmds, 502, "/usr/bin/defaults", "write", "-g", "NSQuitAlwaysKeepsWindows", "-bool", "false")
@@ -287,58 +287,11 @@ func TestBaseSettingsRouteTerminalScope(t *testing.T) {
 		t.Fatalf("= %d %v", code, out)
 	}
 	want := []ranCmd{
-		{pgrepDock, -1},
-		{pgrepFinder, -1},
-		{[]string{"/usr/bin/pkill", "-TERM", "-U", "502", "-x", "Terminal"}, -1},
+		{[]string{"/usr/bin/pkill", "-KILL", "-U", "502", "-x", "Terminal"}, -1},
 		{[]string{"/bin/rm", "-rf", "--", termSaved}, 502},
 	}
 	if got := rig.ran(); !slices.EqualFunc(got, want, func(a, b ranCmd) bool { return a.asUID == b.asUID && slices.Equal(a.argv, b.argv) }) {
 		t.Fatalf("ran\n%v\nwant\n%v", got, want)
-	}
-}
-
-var (
-	pgrepDock   = []string{"/usr/bin/pgrep", "-U", "502", "-x", "Dock"}
-	pgrepFinder = []string{"/usr/bin/pgrep", "-U", "502", "-x", "Finder"}
-)
-
-// The route never sends SIGKILL. It asks Setup Assistant and Terminal to quit with SIGTERM only once the
-// agent's desktop is up, checked right before each signal: with Dock or Finder not running as the agent,
-// both are skipped, nothing is signalled, and the rows still apply, so the update is never blocked.
-func TestBaseSettingsRouteQuitsGentlyOnlyOnceTheDesktopIsUp(t *testing.T) {
-	for _, down := range []string{"", "Dock", "Finder"} {
-		t.Run("not running: "+cmp.Or(down, "none"), func(t *testing.T) {
-			rig := newBaseRig(t)
-			rig.failArgv = func(a []string) bool { return a[0] == "/usr/bin/pgrep" && a[len(a)-1] == down }
-			code, out := rig.post(baseSettings, "")
-			if code != 200 {
-				t.Fatalf("base-settings = %d %v", code, out)
-			}
-			cmds := rig.ran()
-			pkills := 0
-			for i, c := range cmds {
-				if slices.Contains(c.argv, "-KILL") || slices.Contains(c.argv, "-9") || slices.Contains(c.argv, "-SIGKILL") {
-					t.Fatalf("a kill was sent: %q", c.argv)
-				}
-				if c.argv[0] != "/usr/bin/pkill" {
-					continue
-				}
-				pkills++
-				if c.argv[1] != "-TERM" || i < 2 || !slices.Equal(cmds[i-2].argv, pgrepDock) || !slices.Equal(cmds[i-1].argv, pgrepFinder) {
-					t.Errorf("signal %q was not SIGTERM right after the Dock and Finder checks; ran:\n%v", c.argv, cmds)
-				}
-			}
-			sk := skippedNames(t, out)
-			switch {
-			case down == "" && (pkills != 2 || len(sk) != 0):
-				t.Errorf("desktop up: %d quits, skipped %v; want 2 and none", pkills, sk)
-			case down != "" && (pkills != 0 || sk["kill.setup-assistant"] != reasonDesktopNotUp || sk["kill.terminal"] != reasonDesktopNotUp):
-				t.Errorf("no %s: %d quits, skipped %v; want none sent and both skipped", down, pkills, sk)
-			}
-			if index(cmds, 502, "/usr/bin/defaults", "write", saPath, "DidSeeCloudSetup", "-bool", "true") < 0 {
-				t.Error("the rows did not apply")
-			}
-		})
 	}
 }
 
@@ -408,9 +361,6 @@ func TestBaseSettingsRouteRefusesAnUnpatternedSwVers(t *testing.T) {
 func TestBaseSettingsAddsNoAllowedExec(t *testing.T) {
 	for _, argv := range [][]string{
 		{"/usr/bin/pkill", "-KILL", "-x", "Terminal"},
-		{"/usr/bin/pkill", "-TERM", "-U", "502", "-x", "Terminal"},
-		pgrepDock,
-		pgrepFinder,
 		{"/usr/bin/defaults", "write", saPath, "DidSeeCloudSetup", "-bool", "true"},
 		{"/usr/bin/mdutil", "-a", "-i", "off"},
 		{"/usr/bin/plutil", "-p", saPath + ".plist"},

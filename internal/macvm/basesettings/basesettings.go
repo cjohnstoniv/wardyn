@@ -85,10 +85,8 @@ func (c Check) Holds(plutilOutput string) bool {
 	return false
 }
 
-// Kill is a process the guest agent's route asks to quit with SIGTERM before it writes, so it does not save
-// its resume state over the rows. It is sent only once the agent's desktop is up (Dock and Finder running),
-// and is skipped before that: a kill while the login was still coming up could end the session. A process
-// that is not running counts as ended.
+// Kill is a process the guest agent's route ends by signal before it writes: with no quit handler it cannot
+// save its resume state over the rows. A process that is not running counts as ended.
 type Kill struct {
 	Name    string
 	Process string // the process name, as `pkill -x` matches it
@@ -110,11 +108,11 @@ type Skipped struct {
 	Reason string `json:"reason"`
 }
 
-// Kills are ended first, by the agent's uid. Setup Assistant is ended so it does not rewrite its keys
+// Kills are ended first, by the agent's uid. Setup Assistant is killed so it does not rewrite its keys
 // over the ones the route writes; Terminal so that the saved state removed afterwards is not written
-// back. The guest agent's run-start step takes kill.setup-assistant's process name from here too: it is
-// off unless the base has its switch file (guestagent.MacSetupAssistantSwitchPath), and sends SIGTERM the
-// same way. Neither ever sends SIGKILL.
+// back. The guest agent's run-start step takes kill.setup-assistant's process name from here, but never
+// kills it: it is off unless the base has its switch file, and then sends SIGTERM once the agent's
+// desktop is up (guestagent.MacSetupAssistantSwitchPath).
 var Kills = []Kill{
 	{Name: "kill.setup-assistant", Process: "Setup Assistant"},
 	{Name: "kill.terminal", Process: "Terminal", Terminal: true},
