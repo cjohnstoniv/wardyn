@@ -14,7 +14,8 @@ import { shortTime } from "../../../../lib/format";
 import { whenText } from "../../../../lib/schedule";
 import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
 import type { RunnerPoolList } from "../../../../lib/types/runner-pools";
-import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
+import { NR_LAUNCH, NR_LAUNCH_STALE } from "../../../wardyn/copy/new-run/launch";
+import { RUN_NOT_FOUND } from "../../../wardyn/copy/refusal";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type LaunchedState } from "../new-run-route";
 import { LaunchedScreen } from "./launched-screen";
@@ -253,10 +254,28 @@ describe("Launched: reload and identity", () => {
     expect(getRun).toHaveBeenCalledTimes(2);
   });
 
-  it("says so when the run cannot be found", async () => {
+  it("says the run was not found, with no retry, and a way back to Runs", async () => {
     getRun.mockResolvedValue(undefined);
     open();
-    expect(await screen.findByRole("heading", { level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: RUN_NOT_FOUND.TITLE })).toBeInTheDocument();
     expect(screen.queryByText(NR_LAUNCH.BADGE_STARTING)).not.toBeInTheDocument();
+    expect(screen.queryByText(/isn't answering/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again|retry/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: RUN_NOT_FOUND.CTA })).toHaveAttribute("href", "/runs");
+  });
+
+  it("keeps the run on screen and says it cannot refresh when a later read fails", async () => {
+    vi.useFakeTimers();
+    getRun.mockResolvedValueOnce(run({ state: "QUEUED", queue: queue() })).mockRejectedValue(new Error("Failed to fetch"));
+    open();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(screen.queryByTestId("launched-stale")).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4100);
+    });
+    expect(screen.getByTestId("launched-stale")).toHaveTextContent(NR_LAUNCH_STALE);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("nightly build");
   });
 });

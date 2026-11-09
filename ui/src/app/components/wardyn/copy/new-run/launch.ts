@@ -36,3 +36,6 @@ export const NR_LAUNCH = {
   START_ANOTHER: "Start another run",
   VIEW_RUN: "View run",
 } as const;
+
+// Not in the canon doc (new-run-copy.test.ts holds NR_LAUNCH to it): the note under the title when a refresh fails.
+export const NR_LAUNCH_STALE = "Can't refresh right now. What you see may be out of date.";

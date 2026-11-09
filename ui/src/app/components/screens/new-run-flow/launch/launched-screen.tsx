@@ -15,10 +15,12 @@ import { runs } from "../../../../lib/api/runs";
 import { getErrorMessage } from "../../../../lib/format";
 import { runHeadline } from "../../../../lib/types/runs";
 import { Button, buttonVariants } from "../../../ui/button";
-import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
+import { NR_LAUNCH, NR_LAUNCH_STALE } from "../../../wardyn/copy/new-run/launch";
 import { KillRunDialog } from "../../../wardyn/kill-run-dialog";
 import { Chip, RunStateBadge } from "../../../wardyn/primitives";
 import { ErrorState } from "../../../wardyn/states";
+import { Refusal } from "../../../wardyn/refusal";
+import { REFUSAL, RUN_NOT_FOUND } from "../../../wardyn/copy/refusal";
 import { useRequestIdentity } from "../../../wardyn/operator-context";
 import { useNewRunDispatch, useNewRunDraft, type LaunchedState, type NewRunScreenProps } from "../new-run-route";
 import { givesUp, placeInLine, waitingBody, waitingSince, type LaunchedRun } from "./launched-model";
@@ -69,8 +71,30 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
     wasWaiting.current = waiting;
   }, [waiting]);
 
-  if (run === null || (failed && !loaded)) {
-    return <ErrorState as="h1" onRetry={failed ? reload : undefined} />;
+  // The server answered and has no such run: nothing to retry, so say so and leave through Runs.
+  if (run === null) {
+    return (
+      <div className="flex justify-center">
+        <Refusal
+          tone="absent"
+          ariaLabel={RUN_NOT_FOUND.TITLE}
+          title={RUN_NOT_FOUND.TITLE}
+          chip={RUN_NOT_FOUND.CHIP}
+          body={RUN_NOT_FOUND.BODY}
+          rows={[
+            { label: REFUSAL.WALL, value: RUN_NOT_FOUND.WALL, muted: true },
+            { label: REFUSAL.CAN_CHANGE, value: RUN_NOT_FOUND.CAN_CHANGE },
+          ]}
+        >
+          <Link to="/runs" className={buttonVariants({ size: "sm" })}>
+            {RUN_NOT_FOUND.CTA}
+          </Link>
+        </Refusal>
+      </div>
+    );
+  }
+  if (failed && !loaded) {
+    return <ErrorState as="h1" onRetry={reload} />;
   }
   // UXR-48: the badge and the title, drawn as placeholders while the launched run loads, not a blank page.
   if (!loaded) {
@@ -115,6 +139,11 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
       </span>}
       {badge ? <Chip tone={waiting ? "info" : "success"}>{badge}</Chip> : <RunStateBadge state={run.state} />}
       <h1 ref={heading} tabIndex={-1} className="text-display outline-none">{runHeadline(run)}</h1>
+      {failed && (
+        <p role="status" data-testid="launched-stale" className="text-meta text-muted-foreground">
+          {NR_LAUNCH_STALE}
+        </p>
+      )}
       {body && <p className="text-muted-foreground">{body}</p>}
       {queue && scheduled === "scheduled" && (
         <div data-testid="launched-scheduled" className="flex flex-col gap-1">
