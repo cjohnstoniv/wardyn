@@ -8,7 +8,7 @@
 // pins the click itself. runs-model.test.ts already pins that a lost `by=you`
 // row gets action:"revive" in the first place.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { makeRun } from "../../../../test/factories";
@@ -17,6 +17,7 @@ import type { AgentRun } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
+import { CANCEL_NOT_STARTED } from "../../wardyn/copy/cancel-not-started";
 import { RunRow } from "./run-row";
 import { rowPresentation } from "./runs-model";
 
@@ -246,7 +247,12 @@ describe("RunRow — a scheduled run", () => {
     expect(screen.queryByText(/started/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(killRunMock).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole("button", { name: "End run" }));
+    // A scheduled run has no sandbox, so the question is a plain cancel and does not talk about tearing one down.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    expect(dialog).not.toHaveTextContent(/sandbox|credentials/i);
+    expect(screen.queryByRole("button", { name: "End run" })).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
     await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9"));
   });
 

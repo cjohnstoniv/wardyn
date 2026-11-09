@@ -14,6 +14,7 @@ import { shortTime } from "../../../../lib/format";
 import { whenText } from "../../../../lib/schedule";
 import { SCHEDULED_RUN } from "../../../wardyn/copy/scheduled-runs";
 import type { RunnerPoolList } from "../../../../lib/types/runner-pools";
+import { CANCEL_NOT_STARTED } from "../../../wardyn/copy/cancel-not-started";
 import { NR_LAUNCH, NR_LAUNCH_STALE } from "../../../wardyn/copy/new-run/launch";
 import { RUN_NOT_FOUND } from "../../../wardyn/copy/refusal";
 import { OperatorProvider } from "../../../wardyn/operator-context";
@@ -147,6 +148,28 @@ describe("Launched: a scheduled run", () => {
     expect(screen.queryByText(NR_LAUNCH.POSITION)).not.toBeInTheDocument();
     expect(screen.queryByText(NR_LAUNCH.WAITING_BODY("CI jobs", 40))).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: NR_LAUNCH.CANCEL_RUN })).toBeInTheDocument();
+  });
+
+  it("Cancel run asks a plain cancel question, not the sandbox teardown one", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "scheduled", start_at: START, time_zone: "UTC", position: 0 }) }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Cancel nightly build?" });
+    expect(confirm).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    expect(within(confirm).queryByRole("button", { name: "End run" })).toBeNull();
+    await userEvent.click(within(confirm).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
+    await waitFor(() => expect(killRun).toHaveBeenCalledWith(ID));
+  });
+});
+
+// A run that waits for a pool slot keeps the End run confirm: only the states known to hold nothing changed.
+describe("Launched: a run waiting for a pool slot", () => {
+  it("still asks the End run question", async () => {
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue() }));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: NR_LAUNCH.CANCEL_RUN }));
+    const confirm = await screen.findByRole("alertdialog", { name: "End nightly build?" });
+    expect(confirm).toHaveTextContent("tears down the sandbox");
   });
 });
 
