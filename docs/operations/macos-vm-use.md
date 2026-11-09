@@ -370,7 +370,7 @@ The Mac never mounts, checks or repairs the volume. It hands the file to the VM 
 2. Wait about a minute. The VM starts from the ready base with the drive and nothing else: no environment, secret, file or CA, and no agent.
 3. The files are copied to `~/Wardyn Drives/<name>`. The command prints how many files and bytes it copied, and what it skipped. The volume's own folders (`.Trashes`, `.Spotlight-V100`, `.fseventsd`, `.TemporaryItems`) and extended attributes are left out of the copy and are not counted as unread.
 4. Change the files. Press Return to write the changes back, or Ctrl-C to discard them. A second Ctrl-C stops at once.
-5. The command then removes the folder and says so: "The folder ~/Wardyn Drives/<name> was removed." Ctrl-C does the same after "Discarded: nothing was written back."
+5. The command then moves the folder to the Trash and says so: "The folder ~/Wardyn Drives/<name> was moved to the Trash." Ctrl-C does the same after "Discarded: nothing was written back."
 6. The next run that uses the drive sees the written-back files, owned by `agent`.
 
 - **Network.** The VM's network device is wired to one end of a socket pair that carries nothing, so the guest has nothing to reach by design. The command says the VM has no internet.
