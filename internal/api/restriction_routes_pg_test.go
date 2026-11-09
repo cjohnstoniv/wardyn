@@ -190,10 +190,21 @@ func TestRestrictionAllowlistSwapHeld(t *testing.T) {
 		}
 		base := types.RestrictionWrite{Name: "sw-" + strings.ReplaceAll(tc.name, " ", "-"), Spec: spec(tc.old, tc.oldDeny),
 			Members: []types.RestrictionMember{userMember("sub-sw")}}
+		// A create naming an allowlist waits for a second person; once approved it is the restriction replaced below.
 		w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, base))
+		e.approve(e.pending(w).ID)
 		var created types.Restriction
-		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
-			t.Fatalf("%s: create %d %s", tc.name, w.Code, w.Body)
+		list, err := e.pg.ListRestrictions(context.Background())
+		if err != nil {
+			t.Fatalf("%s: list %v", tc.name, err)
+		}
+		for _, r := range list {
+			if r.Name == base.Name {
+				created = r
+			}
+		}
+		if created.ID == uuid.Nil {
+			t.Fatalf("%s: the approved create stored no restriction named %s", tc.name, base.Name)
 		}
 		next := base
 		next.Spec = spec(tc.next, tc.nextDeny)

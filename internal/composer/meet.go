@@ -85,23 +85,30 @@ func ApplyOverlay(base Authority, ov Overlay) (Authority, []string, error) {
 // policy's own before the meet, so it is not dropped as uncovered. (The seal's boundary layer is not read
 // this way: it meets open egress with ApplyOverlay and keeps none of the list.) An IP literal or another
 // port is not added: an exact literal is trusted where allow-all is not, and the port rule keeps allow-all
-// to 80 and 443, so either is kept only where the policy's own list names it. A name added this way is an
-// exact entry, so it also enrols proxy-side credential injection (proxy.Policy.AllowedExactHost) for a
-// credential the run holds for that host, as a name MeetWalls adds already does. A unit's overlay keeps
-// ApplyOverlay's rule, where open egress covers no entry.
+// to 80 and 443, so either is kept only where the policy's own list names it (openSeed, which MeetWalls
+// shares). A name added this way is an exact entry, so it also enrols proxy-side credential injection
+// (proxy.Policy.AllowedExactHost) for a credential the run holds for that host, as a name MeetWalls adds
+// already does. A unit's overlay keeps ApplyOverlay's rule, where open egress covers no entry.
 func ApplyRestrictionOverlay(base Authority, ov Overlay) (Authority, []string, error) {
 	closes := ov.Ceiling.AllowAllEgress != nil && !*ov.Ceiling.AllowAllEgress
 	if base.Ceiling.AllowAllEgress && closes && ov.Ceiling.AllowedDomains != nil {
-		seeded := slices.Clone(base.Ceiling.AllowedDomains)
-		for _, s := range *ov.Ceiling.AllowedDomains {
-			e, ok := parseDomEntry(s)
-			if ok && (e.port == 0 || e.port == 80 || e.port == 443) && net.ParseIP(strings.Trim(e.host, "[]")) == nil {
-				seeded = append(seeded, s)
-			}
-		}
-		base.Ceiling.AllowedDomains = seeded
+		base.Ceiling.AllowedDomains = openSeed(base.Ceiling.AllowedDomains, *ov.Ceiling.AllowedDomains)
 	}
 	return ApplyOverlay(base, ov)
+}
+
+// openSeed is own plus each entry of list that open egress reaches: a name or wildcard on a port allow-all
+// reaches (none named, 80 or 443, portCovers). An IP literal or another port is left out, so the meet keeps
+// it only where own names it.
+func openSeed(own, list []string) []string {
+	out := slices.Clone(own)
+	for _, s := range list {
+		e, ok := parseDomEntry(s)
+		if ok && portCovers(0, e.port) && net.ParseIP(strings.Trim(e.host, "[]")) == nil {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ValidateOverlay is the write-time reading of the same meet: it refuses an

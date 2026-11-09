@@ -104,14 +104,18 @@ func TestUnitAdminWideningHeld(t *testing.T) {
 	e.approve(ch.ID)
 }
 
-// TestUnitAdminOffWebPortHeld: a unit admin's edit that names another port of an entry the walls name bare is held
-// (Leq reads the list under the port rule: a bare entry reaches 80 and 443 only), and one naming 443 applies directly.
-func TestUnitAdminOffWebPortHeld(t *testing.T) {
+// TestUnitAdminOffWebPortRefused: a unit admin's edit that names another port of an entry the walls name bare
+// is refused as an overlay the walls do not cover (the meet reads a bare entry as 80 and 443 only, as Leq does),
+// and one naming 443 applies directly.
+func TestUnitAdminOffWebPortRefused(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	path := "/api/v1/governance/units/" + e.a1.ID.String()
-	e.pending(e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:22", "github.com"), nil)))
+	w := e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:22", "github.com"), nil))
+	if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonGovernanceOverlayInvalid {
+		t.Fatalf("pypi.org:22 under a bare pypi.org = %d %s, want 400 %s", w.Code, w.Body, reasonGovernanceOverlayInvalid)
+	}
 	if got := e.domainsOf(e.a1); !slices.Equal(got, []string{"pypi.org", "github.com"}) {
-		t.Fatalf("a held port change altered ua-a1 to %v", got)
+		t.Fatalf("a refused port change altered ua-a1 to %v", got)
 	}
 	if w := e.call(e.adminA1, http.MethodPut, path, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org:443", "github.com"), nil)); w.Code != http.StatusOK {
 		t.Fatalf("pypi.org:443 = %d %s, want 200", w.Code, w.Body)

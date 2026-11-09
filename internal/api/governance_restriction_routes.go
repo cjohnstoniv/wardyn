@@ -22,9 +22,11 @@ import (
 
 // The restriction write surface: POST /governance/restrictions, PUT and DELETE
 // /governance/restrictions/{id}, on the security tier (routes.go). A write is a covered governance
-// write: held for a second human when WARDYN_GOVERNANCE_SECOND_HUMAN is on, except a create and a
-// replacement that is at least as strict as what it replaces (restrictionAtLeastAsStrict). A delete
-// is always held: it frees the people it bound.
+// write: held for a second human when WARDYN_GOVERNANCE_SECOND_HUMAN is on, except a create that names no
+// allowed_domains and a replacement that is at least as strict as what it replaces
+// (restrictionAtLeastAsStrict). A create that names allowed_domains is held, as a first list on an update
+// is: it is met with each run's own list and can admit a host the run's policy did not allow exactly. A
+// delete is always held: it frees the people it bound.
 
 const (
 	govKindRestriction      = types.GovernanceTargetRestriction
@@ -200,7 +202,9 @@ func restrictionEffective(sp types.RestrictionSpec, l types.RestrictionLimits) (
 // reading does not seed), the contact is unchanged (a contact is who a refused person is told to ask), and
 // next covers every member old does, or everyone. Both read an allowlist as a desktop VM run does, with
 // the port rule on, so a bare entry reaches 80 and 443 only; a change that narrows a container run with
-// the rule off can be held for a second human, and that false hold is intended.
+// the rule off can be held for a second human, and that false hold is intended. A first allowlist, where
+// old named none, always waits for a second human: there is no old list to judge it within, and it is met
+// with each run's own list.
 func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWrite) bool {
 	a, err := restrictionEffective(next.Spec, next.Limits)
 	if err != nil {
@@ -211,6 +215,9 @@ func restrictionAtLeastAsStrict(old types.Restriction, next types.RestrictionWri
 		return false
 	}
 	if !composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits) || !sameJSON(old.Contact, next.Contact) {
+		return false
+	}
+	if old.Spec.AllowedDomains == nil && next.Spec.AllowedDomains != nil {
 		return false
 	}
 	if ol := old.Spec.AllowedDomains; ol != nil && (next.Spec.AllowedDomains == nil || !composer.AllowlistWithin(*next.Spec.AllowedDomains, *ol)) {
@@ -283,8 +290,8 @@ func (s *Server) writeRestriction(w http.ResponseWriter, r *http.Request, id uui
 			return
 		}
 	}
-	if mode == govQueue && !create && !restrictionAtLeastAsStrict(cur, body) {
-		s.holdRestrictionWrite(w, r, id, cur, body)
+	if mode == govQueue && (create && body.Spec.AllowedDomains != nil || !create && !restrictionAtLeastAsStrict(cur, body)) {
+		s.holdRestrictionWrite(w, r, id, create, cur, body)
 		return
 	}
 	var saved types.Restriction
@@ -294,7 +301,7 @@ func (s *Server) writeRestriction(w http.ResponseWriter, r *http.Request, id uui
 	})
 	if errors.Is(err, errHoldForApproval) {
 		// The restriction changed since it was read, and this write is no longer as strict as it now is.
-		s.holdRestrictionWrite(w, r, id, cur, body)
+		s.holdRestrictionWrite(w, r, id, create, cur, body)
 		return
 	}
 	if notFoundIf(w, err, "restriction", reasonRestrictionNotFound) {
@@ -325,8 +332,13 @@ func (s *Server) writeRestriction(w http.ResponseWriter, r *http.Request, id uui
 }
 
 // holdRestrictionWrite stores the replacement of restriction id, cur as the proposal saw it, by body as
-// a pending change.
-func (s *Server) holdRestrictionWrite(w http.ResponseWriter, r *http.Request, id uuid.UUID, cur types.Restriction, body types.RestrictionWrite) {
+// a pending change. A create stores the new restriction body under its new id; it has no cur.
+func (s *Server) holdRestrictionWrite(w http.ResponseWriter, r *http.Request, id uuid.UUID, create bool, cur types.Restriction, body types.RestrictionWrite) {
+	if create {
+		s.proposeGovernanceChange(w, r, govProposal{kind: govKindRestriction, op: "create", key: id.String(),
+			payload: restrictionChangePayload{ID: id, Write: &body}, after: body, changed: changedPaths(nil, body)})
+		return
+	}
 	s.proposeGovernanceChange(w, r, govProposal{kind: govKindRestriction, op: "update", key: id.String(),
 		payload: restrictionChangePayload{ID: id, Write: &body},
 		before:  restrictionState(cur), after: body, changed: changedPaths(restrictionState(cur), body), baseState: restrictionState(cur)})
@@ -403,15 +415,15 @@ func (s *Server) handleDeleteRestriction(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// restrictionChangePayload is a held restriction write: Write nil is a delete. A create is never held.
+// restrictionChangePayload is a held restriction write: Write nil is a delete. A create is held only when it names allowed_domains.
 type restrictionChangePayload struct {
 	ID    uuid.UUID               `json:"id"`
 	Write *types.RestrictionWrite `json:"write,omitempty"`
 }
 
-// applyRestrictionChange applies a held restriction update or delete inside the decision transaction:
-// the target lock, the restriction as it now stands compared with what the proposal reviewed, then the
-// write on q.
+// applyRestrictionChange applies a held restriction create, update or delete inside the decision
+// transaction: the target lock, the restriction as it now stands compared with what the proposal
+// reviewed (a create finds none under its id), then the write on q.
 func applyRestrictionChange(_ *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	var p restrictionChangePayload
@@ -422,15 +434,21 @@ func applyRestrictionChange(_ *Server, r *http.Request, q store.Querier, ch type
 		return govApplied{}, err
 	}
 	cur, err := store.GetRestrictionQ(ctx, q, p.ID)
-	if errors.Is(err, store.ErrNotFound) {
+	create := ch.Op == "create"
+	var before any
+	switch {
+	case create && err == nil:
 		return govApplied{}, store.ErrGovernanceChangeStale
-	}
-	if err != nil {
+	case create && errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound):
+		return govApplied{}, store.ErrGovernanceChangeStale
+	case err != nil:
 		return govApplied{}, err
-	}
-	before := restrictionState(cur)
-	if computeETag(before) != ch.BaseHash {
-		return govApplied{}, store.ErrGovernanceChangeStale
+	default:
+		before = restrictionState(cur)
+		if computeETag(before) != ch.BaseHash {
+			return govApplied{}, store.ErrGovernanceChangeStale
+		}
 	}
 	if ch.Op == "delete" {
 		if _, err := store.DeleteRestrictionQ(ctx, q, p.ID); err != nil {

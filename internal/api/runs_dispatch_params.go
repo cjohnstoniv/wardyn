@@ -149,4 +149,8 @@ type dispatchParams struct {
 	// modelLimit is the run's governed allowed-models limit. Never set by a caller: dispatchRun copies it
 	// from the required ceiling before any phase reads it, so a lane cannot leave it out.
 	modelLimit allowedModelsLimit
+	// unboundInjections are the injections reassertCeilingDenies withheld because the policy the proxy
+	// starts with does not bind their host exactly. Never set by a caller: settleCredentialHosts still
+	// counts them, so two credentials for one host fail the run closed however the second is spelled.
+	unboundInjections []runner.InjectionGrant
 }

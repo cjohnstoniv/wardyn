@@ -6,7 +6,6 @@ package composer_test
 import (
 	"encoding/json"
 	"math/rand"
-	"net"
 	"reflect"
 	"slices"
 	"strings"
@@ -77,38 +76,17 @@ func (leqCase) Generate(r *rand.Rand, _ int) reflect.Value {
 	c.base.Ceiling.EligibleGrants = leqBaseGrants()
 	c.o1.Ceiling.EligibleGrants = overlayGrants(r)
 	c.o2.Ceiling.EligibleGrants = overlayGrants(r)
-	dropOffWebPortsOfBareEntries(&c.o1, c.base.Ceiling.AllowedDomains)
-	dropOffWebPortsOfBareEntries(&c.o2, c.base.Ceiling.AllowedDomains)
 	return reflect.ValueOf(leqCase{c})
-}
-
-// dropOffWebPortsOfBareEntries removes from ov's allowlist each entry naming a port other than 80 or 443
-// of a host the base names bare (the generator's one such entry is 10.0.0.5:22): the composition
-// TestLeqRefusesAnOffWebPortOfABareBaseEntry pins.
-func dropOffWebPortsOfBareEntries(ov *composer.Overlay, base []string) {
-	if ov.Ceiling.AllowedDomains == nil {
-		return
-	}
-	kept := []string{}
-	for _, d := range *ov.Ceiling.AllowedDomains {
-		if h, p, err := net.SplitHostPort(d); err == nil && p != "80" && p != "443" && slices.Contains(base, h) {
-			continue
-		}
-		kept = append(kept, d)
-	}
-	ov.Ceiling.AllowedDomains = &kept
 }
 
 func leqOf(a, b composer.Authority) bool {
 	return composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits)
 }
 
-// A composed ceiling is at most as permissive as its base. Two compositions are outside
-// this on purpose and the generator never makes them: an overlay that adds an
+// A composed ceiling is at most as permissive as its base. One composition is outside
+// this on purpose and the generator never makes it: an overlay that adds an
 // llm_inspection naming a detector sidecar over a base with none, which Leq refuses
-// so the change waits for a second approver (TestLeqRefusesAnAddedSidecarComposition),
-// and an overlay naming another port of an entry the base names bare
-// (TestLeqRefusesAnOffWebPortOfABareBaseEntry).
+// so the change waits for a second approver (TestLeqRefusesAnAddedSidecarComposition).
 func TestLeqHoldsForEveryComposition(t *testing.T) {
 	err := quick.Check(func(c leqCase) bool {
 		got, _, err := composer.ApplyOverlay(c.base, c.o1)
@@ -142,20 +120,40 @@ func TestLeqRefusesAnAddedSidecarComposition(t *testing.T) {
 	}
 }
 
-// TestLeqRefusesAnOffWebPortOfABareBaseEntry pins the second composition
-// TestLeqHoldsForEveryComposition leaves out: an overlay naming a port other than 80
-// or 443 of an entry the base names bare. The meet keeps it as host:port, a port the
-// base reaches only with the port rule off, so Leq does not prove it within the base
-// and the change waits for a second approver.
+// TestLeqRefusesAnOffWebPortOfABareBaseEntry: a port other than 80 or 443 of an entry the base
+// names bare is a port the base reaches only with the port rule off, so Leq does not prove it
+// within the base and the change waits for a second approver. The meet reads the bare entry the
+// same way: an overlay naming that port composes to nothing, which Leq proves within the base.
 func TestLeqRefusesAnOffWebPortOfABareBaseEntry(t *testing.T) {
 	base := composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"b.example"}}}
 	port := []string{"b.example:8443"}
-	got, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &port}})
-	if err != nil || !slices.Equal(got.Ceiling.AllowedDomains, port) {
-		t.Fatalf("ApplyOverlay = %v (%v), want %v", got.Ceiling.AllowedDomains, err, port)
-	}
-	if leqOf(got, base) {
+	if leqOf(composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: port}}, base) {
 		t.Error("Leq holds for b.example:8443 under a base naming b.example bare")
+	}
+	got, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &port}})
+	if err != nil || len(got.Ceiling.AllowedDomains) != 0 {
+		t.Fatalf("ApplyOverlay = %v (%v), want []", got.Ceiling.AllowedDomains, err)
+	}
+	if !leqOf(got, base) {
+		t.Error("Leq refuses the empty meet")
+	}
+}
+
+// TestLeqRefusesAPortAddedBesideABareEntry: under a base naming h and h:22, a composition that goes
+// from [h] to [h, h:22] keeps the port (both sides name it), and Leq does not prove it within [h].
+func TestLeqRefusesAPortAddedBesideABareEntry(t *testing.T) {
+	base := composer.Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"b.example", "b.example:22"}}}
+	compose := func(list ...string) composer.Authority {
+		t.Helper()
+		got, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &list}})
+		if err != nil || !slices.Equal(got.Ceiling.AllowedDomains, list) {
+			t.Fatalf("ApplyOverlay(%v) = %v (%v), want it kept", list, got.Ceiling.AllowedDomains, err)
+		}
+		return got
+	}
+	before, after := compose("b.example"), compose("b.example", "b.example:22")
+	if leqOf(after, before) {
+		t.Error("Leq holds for [b.example b.example:22] within [b.example]")
 	}
 }
 

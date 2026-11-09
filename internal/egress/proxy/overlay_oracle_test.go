@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand"
 	"net"
 	"slices"
@@ -355,6 +356,144 @@ func TestOverlayOracleRandomCompositions(t *testing.T) {
 		assertNoWiderReach(t, "random composition "+string(rune('A'+i%26)), base.Ceiling, got.Ceiling)
 		if t.Failed() {
 			t.Fatalf("case %d: base %+v overlay %+v", i, base.Ceiling, c)
+		}
+	}
+}
+
+// substrate is one reading of an allowlist entry's port: a VM is always under the port rule, a container
+// follows WARDYN_EGRESS_PORT_RULE (on or off).
+type substrate struct {
+	name string
+	vm   bool
+	rule string
+}
+
+var substrates = []substrate{{"vm", true, ""}, {"container, rule on", false, PortRuleOn}, {"container, rule off", false, PortRuleOff}}
+
+// substrateReach is oracleReach on one substrate, over ports that tell the rule apart.
+func substrateReach(t *testing.T, s substrate, spec types.RunPolicySpec) map[string]bool {
+	t.Helper()
+	p := oracleProxy(t, spec)
+	p.vm, p.portRule = s.vm, effectivePortRule(s.vm, s.rule)
+	out := map[string]bool{}
+	for _, h := range oracleHosts {
+		for _, port := range []int{22, 80, 443, 8443} {
+			for _, m := range oracleMethods {
+				if d, _, _ := p.evaluate(context.Background(), h, port, m, ""); d == egress.Allow {
+					out[fmt.Sprintf("%s|%s|%d", h, m, port)] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// portMeetDomains is a pool of entries that tell the port rule apart: bare and port-qualified names,
+// wildcards and a private literal IP.
+var portMeetDomains = []string{
+	"git.corp.example", "git.corp.example:22", "git.corp.example:443", "git.corp.example:8443", "corp.example",
+	"*.corp.example", "*.corp.example:443", "*.corp.example:8443", "api.vendor.example", "api.vendor.example:8443",
+	"10.0.0.5", "10.0.0.5:22", "10.0.0.5:443", "*.pypi.org", "files.pypi.org:80",
+}
+
+// meetLists is ApplyOverlay with a as the base's allowlist and b as the overlay's.
+func meetLists(t *testing.T, a, b []string) []string {
+	t.Helper()
+	got, _, err := composer.ApplyOverlay(authority(types.RunPolicySpec{AllowedDomains: a}), composer.Overlay{Ceiling: types.CeilingOverlay{AllowedDomains: &b}})
+	if err != nil {
+		t.Fatalf("ApplyOverlay(%v, %v): %v", a, b, err)
+	}
+	return got.Ceiling.AllowedDomains
+}
+
+// assertWithinBoth: on every substrate, the meet of a and b reaches nothing a or b does not.
+func assertWithinBoth(t *testing.T, a, b []string) {
+	t.Helper()
+	got := meetLists(t, a, b)
+	for _, s := range substrates {
+		ra, rb := substrateReach(t, s, types.RunPolicySpec{AllowedDomains: a}), substrateReach(t, s, types.RunPolicySpec{AllowedDomains: b})
+		for k := range substrateReach(t, s, types.RunPolicySpec{AllowedDomains: got}) {
+			if !ra[k] || !rb[k] {
+				t.Errorf("%s: meet(%v, %v) = %v reaches %s, which %v reaches %v and %v reaches %v", s.name, a, b, got, k, a, ra[k], b, rb[k])
+			}
+		}
+	}
+}
+
+// The meet's port cases, judged on each substrate: a bare entry met with another port, a bare wildcard
+// met with another port, a bare literal IP met with another port, each in both directions, and a port
+// both name beside a bare host.
+func TestOverlayOracleMeetReadsABareEntryUnderThePortRule(t *testing.T) {
+	for _, c := range [][2][]string{
+		{{"api.vendor.example"}, {"api.vendor.example:8443"}},
+		{{"api.vendor.example:8443"}, {"api.vendor.example"}},
+		{{"api.vendor.example"}, {"api.vendor.example:443"}},
+		{{"*.corp.example"}, {"*.corp.example:8443"}},
+		{{"*.corp.example:8443"}, {"*.corp.example"}},
+		{{"10.0.0.5"}, {"10.0.0.5:22"}},
+		{{"10.0.0.5:22"}, {"10.0.0.5"}},
+		{{"git.corp.example", "git.corp.example:22"}, {"git.corp.example", "git.corp.example:22"}},
+	} {
+		assertWithinBoth(t, c[0], c[1])
+	}
+	// The bare-against-another-port meet reaches nothing, where reading the bare entry as every port
+	// would hand a VM run the port it never reached.
+	if got := meetLists(t, []string{"api.vendor.example"}, []string{"api.vendor.example:8443"}); len(got) != 0 {
+		t.Errorf("meet(bare, :8443) = %v, want []", got)
+	}
+	if got := meetLists(t, []string{"git.corp.example", "git.corp.example:22"}, []string{"git.corp.example", "git.corp.example:22"}); !slices.Equal(got, []string{"git.corp.example", "git.corp.example:22"}) {
+		t.Errorf("meet([h, h:22], [h, h:22]) = %v, want both kept", got)
+	}
+}
+
+// Random pairs and triples from portMeetDomains, on every substrate: the meet reaches nothing either side
+// does not, and meet(meet(a, b), c) reaches what meet(a, meet(b, c)) reaches.
+func TestOverlayOracleMeetPortPropertiesOnEverySubstrate(t *testing.T) {
+	r := rand.New(rand.NewSource(7))
+	pickSome := func() []string {
+		out := []string{}
+		for _, d := range portMeetDomains {
+			if r.Intn(3) == 0 {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	for i := 0; i < 120; i++ {
+		a, b, c := pickSome(), pickSome(), pickSome()
+		assertWithinBoth(t, a, b)
+		left, right := meetLists(t, meetLists(t, a, b), c), meetLists(t, a, meetLists(t, b, c))
+		for _, s := range substrates {
+			if l, rr := substrateReach(t, s, types.RunPolicySpec{AllowedDomains: left}), substrateReach(t, s, types.RunPolicySpec{AllowedDomains: right}); !maps.Equal(l, rr) {
+				t.Errorf("%s: a %v b %v c %v: (a∧b)∧c = %v and a∧(b∧c) = %v reach differently", s.name, a, b, c, left, right)
+			}
+		}
+		if t.Failed() {
+			t.Fatalf("case %d", i)
+		}
+	}
+}
+
+// An open VM run under walls naming another port or a literal IP reaches neither: the seed adds only what
+// open egress reaches, a name on 80 or 443. The walls' list alone reaches each, or this proves nothing.
+func TestOverlayOracleOpenRunUnderPortOrLiteralWallsReachesNeither(t *testing.T) {
+	vm := substrates[0]
+	for _, c := range []struct {
+		list []string
+		key  string
+	}{
+		{[]string{"api.vendor.example:8443"}, "api.vendor.example|GET|8443"},
+		{[]string{"10.0.0.5"}, "10.0.0.5|GET|443"},
+	} {
+		if !substrateReach(t, vm, types.RunPolicySpec{AllowedDomains: c.list})[c.key] {
+			t.Fatalf("%v alone does not reach %s on a VM", c.list, c.key)
+		}
+		got, err := composer.MeetWalls(types.RunPolicySpec{AllowAllEgress: true}, types.PersonalWallsSpec{AllowedDomains: &c.list}.Overlay())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := substrateReach(t, vm, got); len(r) != 0 {
+			t.Errorf("an open run under walls %v reaches %v on a VM, want nothing", c.list, slices.Sorted(maps.Keys(r)))
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -104,13 +105,20 @@ func TestRestrictionAllowlistClosesOpenEgressAtSeal(t *testing.T) {
 	}
 }
 
-// TestRestrictionAllowlistClosesOpenEgressAtCreate: a create meets a restriction's allowlist into an open
-// ceiling as the seal does, so a person under the restriction in a unit that allows all egress is closed
-// to the restriction's list, not to nothing.
+// TestRestrictionAllowlistClosesOpenEgressAtCreate: a restriction created with an allowlist waits for a second
+// person; once approved, a create meets its allowlist into an open ceiling as the seal does, so a person
+// under the restriction in a unit that allows all egress is closed to the restriction's list, not to nothing.
 func TestRestrictionAllowlistClosesOpenEgressAtCreate(t *testing.T) {
+	e := newGovEnv(t)
 	open := governanceCeiling{Unit: &ResolvedUnit{ID: uuid.New(), Name: "open"}, Spec: types.RunPolicySpec{AllowAllEgress: true}}
-	r := types.Restriction{ID: uuid.New(), Name: "rl-create", Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}}
-	c, err := (&Server{}).withRestrictions(context.Background(), open, []types.Restriction{r})
+	w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, types.RestrictionWrite{Name: "rl-create",
+		Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}, Members: []types.RestrictionMember{userMember("sub-rl-create")}}))
+	e.approve(e.pending(w).ID)
+	list, err := e.pg.ListRestrictions(context.Background())
+	if err != nil || len(list) != 1 {
+		t.Fatalf("restrictions after the approval: %v %v, want the one created", list, err)
+	}
+	c, err := e.srv.withRestrictions(context.Background(), open, list)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,15 +127,46 @@ func TestRestrictionAllowlistClosesOpenEgressAtCreate(t *testing.T) {
 	}
 }
 
+// TestRestrictionCreateNamingAllowlistIsHeld: with the switch on, a create that names allowed_domains is held
+// for a second person (202), which its proposer cannot approve, and stores nothing until it is approved, as a first list on an update is; a create
+// that names none only narrows and applies directly (201).
+func TestRestrictionCreateNamingAllowlistIsHeld(t *testing.T) {
+	e := newGovEnv(t)
+	post := func(body types.RestrictionWrite) *httptest.ResponseRecorder {
+		return e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, body))
+	}
+	stored := func() int {
+		list, err := e.pg.ListRestrictions(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(list)
+	}
+	w := post(types.RestrictionWrite{Name: "held-create", Spec: types.RestrictionSpec{AllowedDomains: strs("b.example")}})
+	ch := e.pending(w)
+	if ch.TargetKind != govKindRestriction || ch.Op != "create" || stored() != 0 {
+		t.Errorf("held create: kind %s op %s, %d stored, want a restriction create with nothing stored", ch.TargetKind, ch.Op, stored())
+	}
+	if w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden || wireReason(t, w) != "second_human_required" || stored() != 0 {
+		t.Errorf("the proposer approving their own create: %d %s, %d stored, want 403 second_human_required and nothing stored", w.Code, w.Body, stored())
+	}
+	e.approve(ch.ID)
+	if stored() != 1 {
+		t.Errorf("after the approval: %d stored, want 1", stored())
+	}
+	if w := post(types.RestrictionWrite{Name: "direct-create", Spec: types.RestrictionSpec{DeniedDomains: strs("x.example")}}); w.Code != http.StatusCreated {
+		t.Errorf("create naming no allowed_domains: %d %s, want 201", w.Code, w.Body)
+	}
+}
+
 // TestRestrictionAllowlistSwapIsNotAtLeastAsStrict: a replacement is exempt from a second human only when
 // its allowlist is a subset of the old one on the whole entry (host, port and literal) and it keeps every
 // deny. A swap to another host, port or literal, the same name on another port, an added port or literal
 // entry, a wildcard for a name, a list where the old one closed open egress with none, a dropped list and a
 // dropped deny are each held. So is a name for the wildcard over it (a run naming that host gets nothing
-// under the wildcard and the host under the name). A first list is held when open egress reads an entry of
-// it, a name or a wildcard on 80 or 443, by Leq's rule that open egress covers no entry; one naming only
-// another port is exempt, since open egress reads none of it and closes to nothing. A dropped entry, a
-// narrower wildcard, and a reorder with a duplicate are exempt.
+// under the wildcard and the host under the name). Every first list is held, whatever it names (a name, a
+// wildcard, or only another port): there is no old list to judge it within, and it is met with each run's
+// own list. A dropped entry, a narrower wildcard, and a reorder with a duplicate are exempt.
 func TestRestrictionAllowlistSwapIsNotAtLeastAsStrict(t *testing.T) {
 	off := false
 	for _, tc := range []struct {
@@ -142,11 +181,12 @@ func TestRestrictionAllowlistSwapIsNotAtLeastAsStrict(t *testing.T) {
 		{"the same name on another port", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, false},
 		{"a port entry added", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example", "evil.example:8443")}, false},
 		{"a literal added", types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "c.example", "203.0.113.7")}, false},
+		{"a port added beside its bare name", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example", "b.example:22")}, false},
 		{"a wildcard for a name", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowedDomains: strs("*.example")}, false},
 		{"a name for the wildcard over it", types.RestrictionSpec{AllowedDomains: strs("*.example")}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
 		{"a first list naming a host", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
 		{"a first list naming a wildcard", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("*.example")}, false},
-		{"a first list naming only another port", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, true},
+		{"a first list naming only another port", types.RestrictionSpec{}, types.RestrictionSpec{AllowedDomains: strs("b.example:8443")}, false},
 		{"a list where none closed open egress", types.RestrictionSpec{AllowAllEgress: &off}, types.RestrictionSpec{AllowedDomains: strs("b.example")}, false},
 		{"the list dropped", types.RestrictionSpec{AllowedDomains: strs("b.example")}, types.RestrictionSpec{AllowAllEgress: &off}, false},
 		{"a deny dropped", types.RestrictionSpec{AllowedDomains: strs("b.example"), DeniedDomains: strs("x.b.example", "y.b.example")},

@@ -248,7 +248,8 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 		RunToken:          "old-token",
 		ControlPlaneURL:   "http://127.0.0.1:8081",
 		ControlPlaneCAPEM: string(oldCA.CertPEM),
-		Policy:            types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com"}},
+		// Every injection's host is listed exactly, as the proxy that ran needed to start with it.
+		Policy: types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com", "artifactory.corp.example"}},
 		Injection: []runner.InjectionGrant{
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.openai.com", Header: "Authorization", Format: "Bearer %s"}},
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "artifactory.corp.example", Header: "x-api-key", Format: "%s"}},
@@ -352,7 +353,7 @@ func TestReviveRun_TheOwnersCeilingNotTheCallers(t *testing.T) {
 	if err != nil || claims.RunID != f.run.ID || claims.Sub != f.run.CreatedBy {
 		t.Errorf("fresh token claims %+v (err %v); want this run, minted for its owner %q", claims, err, f.run.CreatedBy)
 	}
-	if cfg.MITMCAKeyPEM != "ca-key" || cfg.MITMCACertPEM != "ca-cert" || !slices.Equal(cfg.Policy.AllowedDomains, []string{"api.openai.com", "api.anthropic.com"}) {
+	if cfg.MITMCAKeyPEM != "ca-key" || cfg.MITMCACertPEM != "ca-cert" || !slices.Equal(cfg.Policy.AllowedDomains, []string{"api.openai.com", "api.anthropic.com", "artifactory.corp.example"}) {
 		t.Error("the revive changed the MITM CA or the allowlist; it may only add denies and a token")
 	}
 

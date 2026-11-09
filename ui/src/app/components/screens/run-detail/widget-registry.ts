@@ -38,6 +38,7 @@ import { isMacOSVM, isVMKind } from "../../../lib/types/machine-kind";
 import { DesktopCard } from "../run-detail-desktop";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import { MachineWidget } from "./widgets/machine-card";
+import { withheldCredentialHosts } from "./widgets/effective-policy";
 import { ServicePanel } from "./service-panel";
 import {
   CredentialsWidget,
@@ -267,7 +268,8 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // and a null inside a grid tile is a reserved hole mid-canvas, plus a dock
     // button that opens a blank pane (focus-mode.tsx). Same reason ssh carries
     // one: the predicate must mirror the component's own gate exactly.
-    available: (ctx) => createRequestFromAudit(ctx.audit).clamp_warnings !== undefined,
+    available: (ctx) =>
+      createRequestFromAudit(ctx.audit).clamp_warnings !== undefined || withheldCredentialHosts(ctx.audit).length > 0,
   },
   // A VM run's desktop, in its own tile between Identity and Attach (it was a block inside the ssh tile).
   desktop: {
