@@ -46,14 +46,14 @@ var accessSentences = map[string]string{
 	"delivery." + deliveryShortLived:  "In the sandbox, short-lived",
 
 	"unlisted.always_deny":                    "Anything else is refused and logged.",
-	"unlisted.deny_with_review." + deciderYou: "Anything else is refused the first time the run asks for it and raises a request. Once you approve it, the run can try again.",
-	"unlisted.deny_with_review." + deciderAdmin: "Anything else is refused the first time the run asks for it and raises a request. " +
+	"unlisted.deny_with_review." + deciderYou: "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. Once you approve it, the run can try again.",
+	"unlisted.deny_with_review." + deciderAdmin: "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. " +
 		"Once an admin approves it, the run can try again.",
-	"unlisted.deny_with_review." + deciderYouOrAdmin: "Anything else is refused the first time the run asks for it and raises a request. " +
+	"unlisted.deny_with_review." + deciderYouOrAdmin: "Another host is refused the first time the run asks for it and raises a request, unless it is always blocked. " +
 		"Once you or an admin approves it, the run can try again.",
-	"unlisted.wait_for_review." + deciderYou:        "Anything else is held for your review the first time the run asks for it.",
-	"unlisted.wait_for_review." + deciderAdmin:      "Anything else is held for an admin's review the first time the run asks for it.",
-	"unlisted.wait_for_review." + deciderYouOrAdmin: "Anything else is held for your or an admin's review the first time the run asks for it.",
+	"unlisted.wait_for_review." + deciderYou:        "Another host is held for your review the first time the run asks for it, unless it is always blocked.",
+	"unlisted.wait_for_review." + deciderAdmin:      "Another host is held for an admin's review the first time the run asks for it, unless it is always blocked.",
+	"unlisted.wait_for_review." + deciderYouOrAdmin: "Another host is held for your or an admin's review the first time the run asks for it, unless it is always blocked.",
 	"unlisted.hold_timeout":                         "If nobody decides within {n} seconds, it's refused.",
 	"unlisted.allow_all":                            "Any other public host is allowed, except ones your organisation blocks.",
 	"unlisted.requested":                            "Your organisation's ceiling still narrows this list at review.",
