@@ -377,7 +377,11 @@
 
 /* thin, console-style scrollbars */
 @layer utilities {
-  .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  /* Firefox only: Chromium ignores ::-webkit-scrollbar once either standard property is set, which would swap the
+     pill below for its own thumb. */
+  @supports not selector(::-webkit-scrollbar) {
+    .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  }
   .scroll-thin::-webkit-scrollbar { width: 10px; height: 10px; }
   .scroll-thin::-webkit-scrollbar-thumb {
     background: var(--border-strong);
