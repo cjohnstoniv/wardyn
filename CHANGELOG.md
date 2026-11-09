@@ -29,7 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- `wardyn-runnerd macos-vm update-tools` starts a tools update of the macOS VM base now, even when the base looks current. The doctor, `tools.json` and docs text that said to run the tools update again now names it.
+- `wardyn-runnerd macos-vm update-tools` starts a tools update of the macOS VM base now, even when the base looks current. The doctor, `tools.json` and docs text that said to run the tools update again now names it. Not yet tried on a real Mac; to check it, run it on the runner and watch `status` and `tools-update.log`.
 - On Approvals, a group decider approves or denies an image request under Waiting on you, with the person, the image and its full digest, and what approving grants.
 - On Approvals, a person whose default profile offers image requests can ask for one image by digest and follow it under Your requests, one card for elevation and images. Governance › Changes shows an image request with the person, the full digest and what approving writes. Your requests now also lists withdrawn and not-applied elevation requests.
 - On Approvals, a person whose unit offers elevation can request it (unit, how long, why, and an optional ticket), follow it under Your requests and withdraw it. A group decider can approve or deny elevation requests under Waiting on you.
@@ -64,8 +64,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - The AWS sign-in steps in the operations guide now say what to do when the person is not already signed in to the AWS portal: its sign-in redirect drops the code from the link, so open the verification link a second time.
 - A run refused for a missing model sign-in or key no longer points to a banner on every page that is not there. The refusal, and the Bedrock one for an AWS sign-in that can no longer be renewed, now say to connect in the console's User view, under Settings, in Your model connections.
-- On a macOS VM base, the Safari Safe Browsing setting that macOS refuses to write now says it needs Full Disk Access for the guest agent, not the raw `defaults` "Could not write domain" error. The raw error goes to the guest agent's log.
-- On a macOS VM runner, a tools update paused until the Mac is on AC power now shows in `wardyn-runnerd macos-vm status` and `wardyn-runnerd doctor` as "tools update waiting for AC power"; it showed only in `tools-update.log`.
+- On a macOS VM base, the Safari Safe Browsing setting that macOS refuses to write now says it needs Full Disk Access for the guest agent, not the raw `defaults` "Could not write domain" error. The raw error goes to the guest agent's log. Not yet tried on a real Mac; to check it, run the tools update and read the skip reason in `tools.json`.
+- On a macOS VM runner, a tools update paused until the Mac is on AC power now shows in `wardyn-runnerd macos-vm status` and `wardyn-runnerd doctor` as "tools update waiting for AC power"; it showed only in `tools-update.log`. Not yet tried on a real Mac; to check it, start a tools update on battery and read `status` and `doctor`.
 - An organisation runner pool whose only members are organisation runners, such as runners in a Kubernetes cluster, now shows as available, with those runners counted in its capacity and offered in its barrier options. Runs could already be placed on them. An organisation pool with both remote-hosted and organisation runners now stays available under a deny of remote placement, as its runs already did.
 - Approving an elevation request now answers stale when the unit's elevation rule no longer names a group the person matched when they asked.
 - After a revive, a run's recorded policy and its policy view showed the organisation's recording level instead of the run's own; the recording itself was never changed. A revive now starts from the run's recorded policy and is refused (503) when that cannot be read.

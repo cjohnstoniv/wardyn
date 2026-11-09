@@ -84,7 +84,7 @@
 `wardyn-runnerd macos-vm update-tools` starts a tools update of the ready base now: the update a stale guest agent or a changed install list starts by itself.
 
 - It runs in the background; see `tools-update.log` and `status`. It updates even when the base looks current.
-- Run it in Terminal on the Mac with the runner serving. It refuses without a ready base, and while a tools update or prepare runs.
+- Run it in Terminal on the Mac with the runner serving. It refuses without a ready base, and while a prepare, a tools update or edit-base runs.
 - A tools update starts only on AC power. While it waits, `status` and `doctor` say "tools update waiting for AC power".
 
 ## Editing a base
