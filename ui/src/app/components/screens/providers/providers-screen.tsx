@@ -52,7 +52,7 @@ import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { RoleRefusal } from "../../wardyn/console-view";
 import { PROVIDERS_SUPER_ONLY } from "../../wardyn/copy/console-view";
-import { PageTabs } from "../../wardyn/page-tabs";
+import { PageTabs, pageTabPanelProps } from "../../wardyn/page-tabs";
 import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";
@@ -282,6 +282,7 @@ export function ProvidersScreen() {
       ) : (
         <section className="mt-6 space-y-4 rounded-xl border border-border bg-card p-5">
           <PageTabs
+            idPrefix="providers"
             value={tab}
             onValueChange={handleTabChange}
             tabs={[
@@ -318,6 +319,7 @@ export function ProvidersScreen() {
             </div>
           )}
 
+          <div {...pageTabPanelProps("providers", tab)}>
           {tab === "git" && (
             <AdoRowsContext.Provider value={{ refusal: saveError, saveAndEnable, saveBlocked: saving || invalidGitRow }}>
               <GitTab
@@ -369,6 +371,7 @@ export function ProvidersScreen() {
           )}
           {/* Images reads and writes itself too; its one teal is Add image. */}
           {tab === "images" && <ImagesTab />}
+          </div>
           {/* One teal button at a time (CONSOLE-RULES §6, prompt §4): in
               the legacy-open empty state the Git tab's own banner action is
               the state's one affirmative, so the screen's Save providers is

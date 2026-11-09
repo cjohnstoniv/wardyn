@@ -90,11 +90,13 @@ beforeEach(() => {
 });
 
 describe("PermissionsScreen — the add-a-grant row", () => {
-  // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line.
-  it("sizes the Who and effect columns to their content at lg", async () => {
+  // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line. The
+  // breakpoint is a viewport query, and the sidebar takes 228px of it, so the four columns wait for xl.
+  it("sizes the Who and effect columns to their content at xl, not lg", async () => {
     const { container } = renderScreen();
     await screen.findByText(PERM.DEFAULT_POSTURE);
-    expect(container.querySelector('[class~="lg:grid-cols-[auto_1fr_1fr_auto]"]')).not.toBeNull();
+    expect(container.querySelector('[class~="xl:grid-cols-[auto_1fr_1fr_auto]"]')).not.toBeNull();
+    expect(container.querySelector('[class*="lg:grid-cols-"]')).toBeNull();
   });
 });
 

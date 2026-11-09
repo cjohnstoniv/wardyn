@@ -253,14 +253,16 @@ describe("a row where each person adds their own token", () => {
 
   it("11: another account's token is refused under the Token field, never naming the account", async () => {
     const dialog = await refuse("ado_own_pat_identity_mismatch");
-    expect(await within(dialog).findByText(ADO_PAT.OWN_MISMATCH)).toBeInTheDocument();
+    expect(await within(dialog).findByText(ADO_PAT.OWN_MISMATCH)).toHaveAttribute("role", "alert");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).toHaveAccessibleDescription(ADO_PAT.OWN_MISMATCH);
   });
 
   it("11: an expiry past the administrator's limit is refused under Expires on", async () => {
     const dialog = await refuse("ado_own_pat_expiry_too_long");
-    expect(await within(dialog).findByText(ADO_PAT.OWN_TOO_LONG(30))).toBeInTheDocument();
+    expect(await within(dialog).findByText(ADO_PAT.OWN_TOO_LONG(30))).toHaveAttribute("role", "alert");
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_EXPIRES)).toHaveAccessibleDescription(ADO_PAT.OWN_TOO_LONG(30));
     expect(within(dialog).getByLabelText(ADO_PAT.OWN_FIELD_TOKEN)).not.toHaveAttribute("aria-invalid", "true");
   });
 

@@ -114,10 +114,15 @@ export function AdoOwnTokenDialog({
             autoComplete="off"
             className="font-mono"
             aria-invalid={!!tokenError}
+            aria-describedby={tokenError ? `${uid}-token-error` : undefined}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
-          {tokenError && <p className="text-meta text-danger">{tokenError}</p>}
+          {tokenError && (
+            <p id={`${uid}-token-error`} role="alert" className="text-meta text-danger">
+              {tokenError}
+            </p>
+          )}
         </div>
         <div className="space-y-1">
           <Label htmlFor={`${uid}-expires`} className="text-meta font-medium text-muted-foreground">
@@ -128,10 +133,15 @@ export function AdoOwnTokenDialog({
             type="date"
             className="max-w-[12rem]"
             aria-invalid={!!expiresError}
+            aria-describedby={expiresError ? `${uid}-expires-error` : undefined}
             value={expires}
             onChange={(e) => setExpires(e.target.value)}
           />
-          {expiresError && <p className="text-meta text-danger">{expiresError}</p>}
+          {expiresError && (
+            <p id={`${uid}-expires-error`} role="alert" className="text-meta text-danger">
+              {expiresError}
+            </p>
+          )}
         </div>
         <DialogFooter>
           <Button

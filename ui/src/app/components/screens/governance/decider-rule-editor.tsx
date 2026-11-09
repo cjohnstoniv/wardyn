@@ -107,10 +107,15 @@ function DurationRow({
         }}
         unitLabel={RL.UNIT_PICKER_LABEL(label)}
         invalid={error !== null}
+        describedBy={error !== null ? `${id}-error` : undefined}
         inputClassName="max-w-[8rem] font-mono"
         selectClassName="w-[8rem]"
       />
-      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+      {error && (
+        <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-danger">
+          {error}
+        </p>
+      )}
     </Field>
   );
 }

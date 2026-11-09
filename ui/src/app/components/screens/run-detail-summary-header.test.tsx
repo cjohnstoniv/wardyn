@@ -835,6 +835,27 @@ describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
     expect(screen.queryByLabelText("Title")).toBeNull();
   });
 
+  // The edit row unmounts with the field that held focus; focus must land on the Rename button, not the body.
+  describe.each([
+    ["Cancel", async () => user.click(screen.getByRole("button", { name: "Cancel" }))],
+    ["Save", async () => user.click(screen.getByRole("button", { name: "Save" }))],
+    ["Escape in the field", async () => user.keyboard("{Escape}")],
+  ])("closing the edit row with %s", (_name, close) => {
+    it("puts focus back on the Rename button", async () => {
+      const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };
+      renderHeader(
+        <OperatorProvider operator={false} principal="me">
+          <SummaryHeader run={run} terminal={false} onKill={() => {}} onRename={() => {}} />
+        </OperatorProvider>,
+      );
+      await user.click(screen.getByRole("button", { name: "Rename" }));
+      expect(screen.getByLabelText("Title")).toHaveFocus();
+      await close();
+      expect(screen.queryByLabelText("Title")).toBeNull();
+      expect(screen.getByRole("button", { name: "Rename" })).toHaveFocus();
+    });
+  });
+
   it("still submits a non-empty edited draft", async () => {
     const onRename = vi.fn();
     const run: AgentRun = { ...ownedRun, title: "Has a title", task: "irrelevant" };

@@ -88,6 +88,7 @@ export function DirectoryCombobox({
   // re-runs the search for the claim value just resolved and re-opens the list
   // under the admin's cursor.
   const picked = React.useRef<string | null>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
   // The list was closed (Escape, blur, outside click) while its rows are still the answer; the next
   // keystroke opens it again.
   const [dismissed, setDismissed] = React.useState(false);
@@ -143,6 +144,8 @@ export function DirectoryCombobox({
     setPickedGroup(e.kind === "group" ? { claim: e.claim_value, name: e.display_name } : null);
     setStatus(QUIET);
     onChange(e.claim_value);
+    // The suggestion button unmounts with the list; leave focus in the field, not on the body.
+    inputRef.current?.focus();
   };
 
   return (
@@ -153,6 +156,7 @@ export function DirectoryCombobox({
       }}
     >
       <Input
+        ref={inputRef}
         id={id}
         aria-label={label}
         aria-describedby={describedBy}
@@ -195,9 +199,12 @@ export function DirectoryCombobox({
         </ul>
       )}
 
-      {status.kind === "searching" && <Hint>{DIRECTORY.SEARCHING}</Hint>}
-      {status.kind === "rows" && status.rows.length === 0 && !dismissed && <Hint>{DIRECTORY.NO_MATCHES}</Hint>}
-      {status.kind === "failed" && <Hint>{DIRECTORY.LOOKUP_FAILED}</Hint>}
+      {/* Always mounted, so a screen reader is already watching it when a lookup message lands in it. */}
+      <div role="status">
+        {status.kind === "searching" && <Hint>{DIRECTORY.SEARCHING}</Hint>}
+        {status.kind === "rows" && status.rows.length === 0 && !dismissed && <Hint>{DIRECTORY.NO_MATCHES}</Hint>}
+        {status.kind === "failed" && <Hint>{DIRECTORY.LOOKUP_FAILED}</Hint>}
+      </div>
 
       {pickedGroup !== null && q === pickedGroup.claim && (
         <p className="mt-2 flex flex-wrap items-center gap-2 text-xs leading-snug text-muted-foreground">

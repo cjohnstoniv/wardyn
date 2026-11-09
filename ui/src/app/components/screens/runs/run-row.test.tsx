@@ -50,7 +50,7 @@ describe("RunRow — Revive (F1)", () => {
     reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: [], proxy_release: "r1" });
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 } });
     renderRow(run);
-    const button = screen.getByRole("button", { name: "Revive" });
+    const button = screen.getByRole("button", { name: /^Revive/ });
     await user.click(button);
     await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith(run.id));
   });
@@ -61,10 +61,10 @@ describe("RunRow — Revive (F1)", () => {
     reviveRunMock.mockReturnValue(new Promise((_res, rej) => { reject = rej; }));
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 } });
     renderRow(run);
-    await user.click(screen.getByRole("button", { name: "Revive" }));
-    expect(await screen.findByRole("button", { name: "Reviving… (about a minute)" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Revive/ }));
+    expect(await screen.findByRole("button", { name: /^Reviving… \(about a minute\)/ })).toBeInTheDocument();
     reject(new Error("boom"));
-    expect(await screen.findByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^Revive/ })).toBeInTheDocument();
     expect(toastErrorMock).toHaveBeenCalled();
   });
 
@@ -72,7 +72,7 @@ describe("RunRow — Revive (F1)", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
     renderRow(makeRun({ attention: { kind: "lost", by: "you", pending: 0 } }));
-    await user.click(screen.getByRole("button", { name: "Revive" }));
+    await user.click(screen.getByRole("button", { name: /^Revive/ }));
     await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again."));
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
@@ -80,7 +80,7 @@ describe("RunRow — Revive (F1)", () => {
   it("by=owner (not you): no action button at all", () => {
     const run = makeRun({ attention: { kind: "lost", by: "owner", pending: 0 } });
     renderRow(run);
-    expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Revive/ })).not.toBeInTheDocument();
   });
 
   // F12 (PR #1317 round-2 review): the run page's own Revive already reports
@@ -91,7 +91,7 @@ describe("RunRow — Revive (F1)", () => {
     reviveRunMock.mockResolvedValue({ run_id: "run-1", denied_added: ["evil.example"], proxy_release: "r1" });
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 } });
     renderRow(run);
-    await user.click(screen.getByRole("button", { name: "Revive" }));
+    await user.click(screen.getByRole("button", { name: /^Revive/ }));
     await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 1 host now blocked."));
   });
 
@@ -101,7 +101,7 @@ describe("RunRow — Revive (F1)", () => {
   it("F18: a k8s lost row I own offers no Revive at all", () => {
     const run = makeRun({ attention: { kind: "lost", by: "you", pending: 0 }, runner_target: "k8s" });
     renderRow(run);
-    expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Revive/ })).not.toBeInTheDocument();
   });
 });
 
@@ -136,8 +136,18 @@ describe("RunRow — a waiting sign-in (M2)", () => {
     renderMine(signInRun());
     await flush();
     expect(screen.getByText(RUNS_ROW_WORD.WAITING_SIGN_IN)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) })).toBeInTheDocument();
     expect(screen.getByTestId("run-row")).not.toHaveAttribute("data-attention");
+  });
+
+  it("names the Sign in button after its run, so a list of them is not N identical buttons", async () => {
+    signInMock.mockResolvedValue({ state: "waiting", verification_url: "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH", user_code: "ABCD-EFGH" });
+    const run = signInRun();
+    renderMine(run);
+    await flush();
+    const button = screen.getByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) });
+    expect(button.getAttribute("aria-label")).toMatch(new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}: .+`));
+    expect(button).toHaveTextContent(RUNS_ROW_ACTION.SIGN_IN);
   });
 
   it("answers not_waiting: the row is the plain Running row", async () => {
@@ -146,7 +156,7 @@ describe("RunRow — a waiting sign-in (M2)", () => {
     await flush();
     expect(signInMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) })).not.toBeInTheDocument();
   });
 
   it("a run that queued for minutes still gets its grace once it is RUNNING: not_waiting, then waiting", async () => {
@@ -245,7 +255,7 @@ describe("RunRow — a scheduled run", () => {
     expect(screen.getByText("Scheduled")).toBeInTheDocument();
     expect(screen.getByTitle(/· starts Wed 21 Oct, 02:00 \(UTC\)$/)).toBeInTheDocument();
     expect(screen.queryByText(/started/)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    await user.click(screen.getByRole("button", { name: /^Cancel run/ }));
     expect(killRunMock).not.toHaveBeenCalled();
     // A scheduled run has no sandbox, so the question is a plain cancel and does not talk about tearing one down.
     const dialog = await screen.findByRole("alertdialog");
@@ -260,7 +270,7 @@ describe("RunRow — a scheduled run", () => {
     renderRow(queued("owner_sign_in"));
     expect(screen.getByText(RUNS_ROW_WORD.WAITING_SIGN_IN)).toBeInTheDocument();
     expect(screen.getByTitle(/· was due Wed 21 Oct, 02:00 \(UTC\)$/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(`^${RUNS_ROW_ACTION.SIGN_IN}`) })).toBeInTheDocument();
   });
 
   it("says a run that waited out its sign-in was not started, in place of its times", () => {
@@ -274,7 +284,7 @@ describe("RunRow — a scheduled run", () => {
     renderRow(queued("runner_pool_at_capacity"));
     expect(screen.getByText("Queued")).toBeInTheDocument();
     expect(screen.getByTitle(/· started /)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Cancel run/ })).not.toBeInTheDocument();
   });
 });
 

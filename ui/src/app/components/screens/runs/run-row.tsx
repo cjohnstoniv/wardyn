@@ -182,6 +182,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             variant="outline"
             className="h-7 shrink-0"
             disabled={p.action === "revive" && reviving}
+            // The visible word first, then which run it acts on, so a list of buttons is not N copies of "Review".
+            aria-label={`${actionLabel}: ${title}`}
             onClick={(e) => {
               e.stopPropagation();
               if (p.action === "revive") void revive(e);

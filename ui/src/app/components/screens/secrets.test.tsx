@@ -68,6 +68,11 @@ describe("SecretsScreen — delete error handling", () => {
     await user.click(confirm);
   }
 
+  it("names each row's actions menu after the secret", async () => {
+    render(<SecretsScreen />);
+    expect(await screen.findByRole("button", { name: "Secret actions: anthropic-api-key" })).toBeInTheDocument();
+  });
+
   it("surfaces a toast.error when deleteSecret() rejects (no longer silent)", async () => {
     deleteSecretMock.mockRejectedValue(new Error("HTTP 403: forbidden"));
     render(<SecretsScreen />);

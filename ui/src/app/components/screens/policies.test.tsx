@@ -89,6 +89,11 @@ describe("PoliciesScreen — table row semantics (ui-secretsPolicies-1)", () => 
     expect(screen.getByRole("row", { name: /payments-strict/i })).toBe(row);
   });
 
+  it("names each row's actions menu after the policy", async () => {
+    render(<PoliciesScreen />);
+    expect(await screen.findByRole("button", { name: "Policy actions: payments-strict" })).toBeInTheDocument();
+  });
+
   it("stays keyboard-operable (tabIndex + Enter opens the detail sheet)", async () => {
     render(<PoliciesScreen />);
     const cell = await screen.findByText("payments-strict");

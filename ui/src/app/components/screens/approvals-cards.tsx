@@ -578,12 +578,15 @@ export function DecidedRow({
   const { status } = useShellSetupStatus();
   const hold = oidcHoldProvider({ oidc: scope.lane === OIDC_HOLD_LANE, holdUID: String(scope.provider_id ?? "") }, status);
   const basis = basisSentence(item.decision_basis, unitNames);
+  const title = deriveTitle(item.kind, scope, hold ? hold.name || hold.id : undefined);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} scope={scope} />
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        {deriveTitle(item.kind, scope, hold ? hold.name || hold.id : undefined)}
+      {/* The title takes the first row at phone width and a 12rem floor from sm up, so the chips and the meta wrap
+          before it is cut down to a few characters; what was decided is also in the tooltip. */}
+      <span className="min-w-0 grow basis-full truncate text-sm text-foreground sm:min-w-[12rem] sm:basis-0" title={title}>
+        {title}
       </span>
       {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}
       <ApprovalStateBadge state={item.state} />

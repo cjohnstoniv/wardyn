@@ -45,6 +45,16 @@ function renderStep(props: Partial<React.ComponentProps<typeof EnvironmentStep>>
 }
 
 describe("EnvironmentStep — matrix-as-picker", () => {
+  // The tier table scrolls sideways inside the content column, which is the viewport minus the sidebar and the
+  // rail. Sized from its content (a 160px label column and three 160px tiers), it fits from a narrower window.
+  it("sizes the tier table from its content: a 160px label column and a 640px floor", () => {
+    renderStep();
+    const table = screen.getByRole("radiogroup", { name: "Barrier tier" }).querySelector("table")!;
+    expect(table.className).toContain("min-w-[640px]");
+    expect(table.className).not.toContain("min-w-[720px]");
+    expect(table.querySelector("th")!.className).toContain("w-[160px]");
+  });
+
   it("(1) renders a radiogroup with three tier radios named Fence/Wall/Vault", () => {
     renderStep();
     expect(screen.getByRole("radiogroup", { name: "Barrier tier" })).toBeInTheDocument();

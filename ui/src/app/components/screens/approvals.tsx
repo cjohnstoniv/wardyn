@@ -635,19 +635,21 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     });
     onChanged?.();
   };
+  // data-focus-row: when a decision removes the card whose button opened the dialog, focus moves to the next card.
   const approvalCard = (a: ApprovalRequest, waiting: boolean) => (
-    <ApprovalCard
-      key={a.id}
-      item={wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a}
-      presetBlocked={presetRefused.has(a.id)}
-      caps={caps}
-      waiting={waiting}
-      onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind, maxScope: a.max_scope })}
-      onAdoDecide={decideAdoDirect}
-      onPushDecide={decidePushDirect}
-      onDecline={declineTakeover}
-      refused={refused.has(a.id)}
-    />
+    <div key={a.id} data-focus-row>
+      <ApprovalCard
+        item={wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a}
+        presetBlocked={presetRefused.has(a.id)}
+        caps={caps}
+        waiting={waiting}
+        onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind, maxScope: a.max_scope })}
+        onAdoDecide={decideAdoDirect}
+        onPushDecide={decidePushDirect}
+        onDecline={declineTakeover}
+        refused={refused.has(a.id)}
+      />
+    </div>
   );
 
   const waitingCount = (waitingStatus === "ready" ? waitingRows.length : 0) + deciderRequests.length;

@@ -339,6 +339,7 @@ function AvailabilityFields({
     <Field label={AVAILABILITY.LABEL}>
       <RadioGroup
         aria-label={AVAILABILITY.LABEL}
+        aria-describedby={choiceError ? `${id}-choice-error` : undefined}
         value={onlyChosen ? "only" : "first"}
         onValueChange={(v) => onRestrictedChange(v === "only")}
         disabled={disabled}
@@ -373,7 +374,11 @@ function AvailabilityFields({
           {AVAILABILITY.COVERED_BY_PREFIX(c.prefix, chipText(c.who, typeName))}
         </p>
       ))}
-      {choiceError && <p className="text-xs leading-snug text-danger">{choiceError}</p>}
+      {choiceError && (
+        <p id={`${id}-choice-error`} role="alert" className="text-xs leading-snug text-danger">
+          {choiceError}
+        </p>
+      )}
       {onlyChosen && (
         <div className="ml-6 space-y-2" data-testid="availability-audience">
           {pendingOnly && audiences.length === 0 && (
@@ -423,6 +428,8 @@ function AvailabilityFields({
             <Input
               aria-label={AUDIENCES.find((a) => a.value === audienceType)?.hint}
               placeholder={AVAILABILITY.ADD_PLACEHOLDER}
+              aria-invalid={listError ? true : undefined}
+              aria-describedby={listError ? `${id}-list-error` : undefined}
               value={audience}
               onChange={(e) => setAudience(e.target.value)}
               onKeyDown={(e) => {
@@ -445,7 +452,11 @@ function AvailabilityFields({
               {AVAILABILITY.ADD_CTA}
             </Button>
           </div>
-          {listError && <p className="text-xs leading-snug text-danger">{listError}</p>}
+          {listError && (
+            <p id={`${id}-list-error`} role="alert" className="text-xs leading-snug text-danger">
+              {listError}
+            </p>
+          )}
 
         </div>
       )}

@@ -372,10 +372,10 @@ export function EnvironmentStep({
         // radios are already disabled and the cells carry their own opacity (#2840).
         className="relative overflow-x-auto rounded-xl border"
       >
-        <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
+        <table className="w-full min-w-[640px] table-fixed border-collapse text-sm">
           <thead>
             <tr>
-              <th className="w-[220px] border-b bg-muted/40 px-4 py-3 text-left align-bottom font-normal">
+              <th className="w-[160px] border-b bg-muted/40 px-4 py-3 text-left align-bottom font-normal">
                 <span className="label-eyebrow">
                   Barrier tier
                 </span>
@@ -554,7 +554,7 @@ function RowLabelled({
       <th
         scope="row"
         className={cn(
-          "w-[220px] px-4 py-3 text-left align-top font-normal text-foreground",
+          "w-[160px] px-4 py-3 text-left align-top font-normal text-foreground",
           !foot && "border-b",
         )}
       >

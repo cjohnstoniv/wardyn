@@ -173,3 +173,111 @@ describe("a dialog opened from a dropdown item", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Actions" })).toHaveFocus());
   });
 });
+
+// A dialog that confirms the removal of the very row that opened it: the opener is gone when the dialog closes,
+// so focus would fall to the body and a keyboard user would restart from the top of the page.
+function ListHarness({ initial, rowsAs = "tr", refetchMs = 0 }: { initial: string[]; rowsAs?: "tr" | "card"; refetchMs?: number }) {
+  const [names, setNames] = React.useState(initial);
+  const [target, setTarget] = React.useState<string | null>(null);
+  const rows = names.map((n) =>
+    rowsAs === "tr" ? (
+      <tr key={n}>
+        <td>{n}</td>
+        <td>
+          <button type="button" onClick={() => setTarget(n)}>Delete {n}</button>
+        </td>
+      </tr>
+    ) : (
+      <div key={n} data-focus-row>
+        <span>{n}</span>
+        <button type="button" onClick={() => setTarget(n)}>Delete {n}</button>
+      </div>
+    ),
+  );
+  return (
+    <main id="main-content" tabIndex={-1}>
+      <h1>Things</h1>
+      <button type="button">Elsewhere</button>
+      {rowsAs === "tr" ? (
+        <table>
+          <tbody>{rows}</tbody>
+        </table>
+      ) : (
+        <div>{rows}</div>
+      )}
+      <AlertDialog open={!!target} onOpenChange={(o) => !o && setTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogTitle>Delete {target}?</AlertDialogTitle>
+          <AlertDialogDescription>Body</AlertDialogDescription>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <button
+            type="button"
+            onClick={() => {
+              const gone = target;
+              // A list refetches after the dialog has closed, so the row can outlive it.
+              if (refetchMs) setTimeout(() => setNames((all) => all.filter((n) => n !== gone)), refetchMs);
+              else setNames((all) => all.filter((n) => n !== gone));
+              setTarget(null);
+            }}
+          >
+            Confirm
+          </button>
+        </AlertDialogContent>
+      </AlertDialog>
+    </main>
+  );
+}
+
+describe.each(["tr", "card"] as const)("a dialog confirming the removal of its own %s", (rowsAs) => {
+  async function confirmDelete(user: ReturnType<typeof userEvent.setup>, name: string) {
+    await user.click(screen.getByRole("button", { name: `Delete ${name}` }));
+    await user.click(await screen.findByRole("button", { name: "Confirm" }));
+  }
+
+  it("moves focus to the same control in the next row", async () => {
+    const user = userEvent.setup();
+    render(<ListHarness initial={["a", "b", "c"]} rowsAs={rowsAs} />);
+    await confirmDelete(user, "b");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete c" })).toHaveFocus());
+  });
+
+  it("moves focus to the next row when the list refetches after the dialog has closed", async () => {
+    const user = userEvent.setup();
+    render(<ListHarness initial={["a", "b", "c"]} rowsAs={rowsAs} refetchMs={150} />);
+    await confirmDelete(user, "b");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete c" })).toHaveFocus(), { timeout: 2000 });
+  });
+
+  it("moves focus to the previous row when the last row was removed", async () => {
+    const user = userEvent.setup();
+    render(<ListHarness initial={["a", "b"]} rowsAs={rowsAs} />);
+    await confirmDelete(user, "b");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete a" })).toHaveFocus());
+  });
+
+  it("moves focus to the page heading when no row is left", async () => {
+    const user = userEvent.setup();
+    render(<ListHarness initial={["a"]} rowsAs={rowsAs} />);
+    await confirmDelete(user, "a");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Things" })).toHaveFocus());
+  });
+
+  it("returns focus to the opener, and does not move it later, when the row stays", async () => {
+    const user = userEvent.setup();
+    render(<ListHarness initial={["a", "b"]} rowsAs={rowsAs} />);
+    await user.click(screen.getByRole("button", { name: "Delete a" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete a" })).toHaveFocus());
+    await new Promise((r) => setTimeout(r, 250));
+    expect(screen.getByRole("button", { name: "Delete a" })).toHaveFocus();
+  });
+
+  it("leaves focus alone when the user moved it before the row went", async () => {
+    const user = userEvent.setup();
+    render(<ListHarness initial={["a", "b"]} rowsAs={rowsAs} />);
+    await confirmDelete(user, "a");
+    screen.getByRole("button", { name: "Elsewhere" }).focus();
+    await new Promise((r) => setTimeout(r, 250));
+    expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+  });
+});

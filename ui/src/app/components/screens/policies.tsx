@@ -308,7 +308,7 @@ export function PoliciesScreen() {
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-8" aria-label="Policy actions">
+                          <Button variant="ghost" size="icon" className="size-8" aria-label={`Policy actions: ${p.name}`}>
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -393,7 +393,7 @@ function PolicyDetail({
     <Sheet open={!!policy} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[560px]">
         <SheetHeader className="border-b border-border pb-4">
-          <SheetTitle className="flex items-center gap-2">
+          <SheetTitle className="flex min-w-0 items-center gap-2 break-words">
             <ShieldCheck className="size-4 text-primary" />
             {policy?.name}
           </SheetTitle>

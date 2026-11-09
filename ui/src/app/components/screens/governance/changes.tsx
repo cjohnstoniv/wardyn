@@ -422,11 +422,11 @@ export function ChangeDrawer({
 
   return (
     <Sheet open={!!change} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]" style={{ maxWidth: "98vw" }}>
+      <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]">
         {change && (
           <>
-            <SheetHeader className="border-b border-border p-5">
-              <SheetTitle className="flex flex-wrap items-baseline gap-x-2">
+            <SheetHeader className="border-b border-border p-5 pr-10">
+              <SheetTitle className="flex min-w-0 flex-wrap items-baseline gap-x-2 break-words">
                 {changeLabel(change)}
                 <Mono className="text-foreground">
                   {elevation

@@ -242,7 +242,7 @@ export function CredentialsScreen() {
                       g.rows.map((r, i) => (
                         <TableRow key={`${r.person}-${r.provider}`}>
                           {i === 0 && (
-                            <TableCell rowSpan={g.rows.length} className="whitespace-nowrap align-top font-medium">
+                            <TableCell rowSpan={g.rows.length} className="max-w-[18rem] break-words align-top font-medium whitespace-normal" title={g.email ? `${g.email} ${g.person}` : g.person}>
                               {g.email || g.person}
                               {g.email && <span className="ml-1.5 text-xs text-muted-foreground">{g.person}</span>}
                             </TableCell>

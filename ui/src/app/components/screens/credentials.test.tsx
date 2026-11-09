@@ -104,6 +104,17 @@ describe("the inventory", () => {
     expect(screen.getByRole("button", { name: "Corp gateway · 1" })).toBeInTheDocument();
   });
 
+  // The shared table never wraps a cell. Left that way, an email plus an SSO subject id pushed the Erase column
+  // off the right edge of the table.
+  it("lets the person cell wrap and carry the full identity in its title, so Erase stays reachable", async () => {
+    listInventoryMock.mockResolvedValue(inventory([{ ...aliceRow, email: "alice.longname@subsidiary.contoso.com" }], { "corp-gw": 1 }));
+    renderScreen();
+    const cell = (await screen.findByText("alice.longname@subsidiary.contoso.com")).closest("td")!;
+    expect(cell.className).toContain("whitespace-normal");
+    expect(cell.className).not.toContain("whitespace-nowrap");
+    expect(cell).toHaveAttribute("title", "alice.longname@subsidiary.contoso.com sub-alice");
+  });
+
   it("no one has stored a credential yet", async () => {
     listInventoryMock.mockResolvedValue(inventory([], { "corp-gw": 0 }));
     renderScreen();
