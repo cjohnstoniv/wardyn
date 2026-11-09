@@ -584,3 +584,24 @@ describe("SecretsScreen / AddSecretDialog — chrome (#2890, #2891)", () => {
     expect(screen.getByPlaceholderText(/search secrets by name/i)).toHaveClass("min-w-0");
   });
 });
+
+describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIALS.md)", () => {
+  it("the page header says the exception and no longer promises a short-lived credential", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    listSecretsMineMock.mockResolvedValue([]);
+    render(<SecretsScreen />);
+    await screen.findByText("anthropic-api-key");
+    expect(
+      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/short-lived, scoped credential/i)).not.toBeInTheDocument();
+  });
+
+  it("the Add secret dialog names the exception and no longer says injected proxy-side", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} />);
+    expect(
+      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/injected proxy-side/i)).not.toBeInTheDocument();
+  });
+});

@@ -79,6 +79,11 @@ export const CAPABILITY = {
   // with mint/TTL claims there. cloud_sts can't be minted at all (needs SPIRE).
   brokerLine:
     "The run works through a short-lived, scoped credential — your stored key stays in Wardyn.",
+  // The Secrets page header. brokerLine is true only for a minted credential,
+  // and a stored secret is not one: a run can have it delivered as a variable
+  // or a file inside its sandbox (docs/CREDENTIALS.md, "Delivered inside").
+  storedSecretLine:
+    "A stored value stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox, where any code running there can read it.",
   // #381: since 0.7 WARDYN_GIT_PAT_BROKER defaults ON, so a git_pat grant's
   // stored token is rewritten to a broker path and attached by the proxy on
   // the outbound leg — it never enters the sandbox, the same posture
