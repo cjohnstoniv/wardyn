@@ -311,7 +311,7 @@ func (p *Proxy) recordTooLarge(r *http.Request, mitmHost string) {
 	}
 	clip := func(v string) string { return strings.ToValidUTF8(v[:min(len(v), tooLargeFieldBytes)], "") }
 	p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: clip(strings.ToLower(host)), Method: clip(strings.ToUpper(r.Method)),
-		Path: clip(path), Time: p.now()}, egress.Deny, ruleSourceAuditRecordTooLarge))
+		Path: clip(path), Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Deny, ruleSourceAuditRecordTooLarge))
 }
 
 // refuseUnaudited answers a request the audit could not record with its status
