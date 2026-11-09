@@ -147,11 +147,12 @@ func TestPG_OrgPoolOfClusterRunnersOnlyIsAvailable(t *testing.T) {
 	if got.Availability != client.RunnerPoolAvailable || got.Reason != "" || got.Capacity == nil || got.Capacity.Runners != 1 {
 		t.Errorf("cluster runner only: %s %q capacity %+v, want available with 1 runner", got.Availability, got.Reason, got.Capacity)
 	}
-	// The runner is online and offers every class (orgRunner), so the barriers are known: all three
-	// available, the strongest the server's default.
+	// The runner is online and offers every class (orgRunner), so the barriers are known: CC1 is below
+	// the test deployment's CC2 floor (govTestPolicy), CC2 and CC3 are available, the strongest the default.
 	for _, o := range got.BarrierOptions {
-		if !o.Available || o.Default != (o.Class == types.CC3) {
-			t.Errorf("cluster runner only: barrier %+v, want available, and only %s the default", o, types.CC3)
+		below := o.Class == types.CC1
+		if o.Available == below || (below && o.ReasonCode != runnerpool.BarrierBelowFloor) || o.Default != (o.Class == types.CC3) {
+			t.Errorf("cluster runner only: barrier %+v, want CC1 below the floor, CC2 and CC3 available, only %s the default", o, types.CC3)
 		}
 	}
 	if len(got.BarrierOptions) != 3 {
