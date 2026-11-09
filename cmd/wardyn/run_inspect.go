@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -87,6 +89,10 @@ func runGetCmd(client clientFn) *cobra.Command {
 			// A run the per-person Azure DevOps lane declined says why (run.ado_lane.skip).
 			if detail := adoLaneDeclineDetail(cmd.Context(), client(), run.ID); detail != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nazure devops: %s\n", detail)
+			}
+			// Credentials the run's policy did not allow exactly were withheld (run.ceiling.reassert, run.revive).
+			if line := withheldCredentialDetail(cmd.Context(), client(), run.ID); line != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", line)
 			}
 			// A FAILED run must not hide its reason on the default surface. Surface
 			// the failure reason from audit inline; fall back to a pointer so the
@@ -182,6 +188,38 @@ func adoLaneDeclineDetail(ctx context.Context, c *sdk.Client, runID uuid.UUID) s
 		}
 	}
 	return ""
+}
+
+// withheldCredentialDetail is the line telling that credentials were withheld from the run because its
+// policy does not allow their hosts exactly: the hosts named by the dropped_injection_hosts of its
+// run.ceiling.reassert and run.revive rows, in the order first seen. "" when no row names a host or the
+// trail could not be read. Host names only; no credential value or grant name is read.
+func withheldCredentialDetail(ctx context.Context, c *sdk.Client, runID uuid.UUID) string {
+	var hosts []string
+	for _, action := range []string{"run.ceiling.reassert", "run.revive"} {
+		events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{ActionPrefix: action})
+		if err != nil {
+			continue
+		}
+		for _, e := range events {
+			var d struct {
+				Hosts []string `json:"dropped_injection_hosts"`
+			}
+			if e.Action != action || json.Unmarshal(e.Data, &d) != nil {
+				continue
+			}
+			for _, h := range d.Hosts {
+				if h != "" && !slices.Contains(hosts, h) {
+					hosts = append(hosts, h)
+				}
+			}
+		}
+	}
+	if len(hosts) == 0 {
+		return ""
+	}
+	return "credentials withheld for " + strings.Join(hosts, ", ") +
+		": the run's policy does not allow the host exactly; name it in allowed_domains to deliver it"
 }
 
 func runKillCmd(client clientFn) *cobra.Command {

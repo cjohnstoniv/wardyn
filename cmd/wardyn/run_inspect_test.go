@@ -92,6 +92,52 @@ func TestRunGetCmd_PrintsTheADOLaneDecline(t *testing.T) {
 	}
 }
 
+// `run get` names the hosts whose credentials were withheld because the run's policy did not allow them exactly,
+// from the dropped_injection_hosts of the run.ceiling.reassert and run.revive rows, and prints nothing of the kind
+// when no row names a host.
+func TestRunGetCmd_PrintsWithheldCredentialHosts(t *testing.T) {
+	runID := uuid.New()
+	const want = "credentials withheld for api.anthropic.com, api.other.test: the run's policy does not allow the host exactly; name it in allowed_domains to deliver it"
+	for _, withRow := range []bool{true, false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/audit" {
+				var rows []types.AuditEvent
+				if withRow {
+					switch r.URL.Query().Get("action_prefix") {
+					case "run.ceiling.reassert":
+						data, _ := json.Marshal(map[string]any{"dropped_injection_hosts": []string{"api.anthropic.com"}})
+						rows = append(rows, types.AuditEvent{RunID: &runID, Action: "run.ceiling.reassert", Outcome: "success", Data: data})
+					case "run.revive":
+						data, _ := json.Marshal(map[string]any{"dropped_injection_hosts": []string{"api.anthropic.com", "api.other.test"}})
+						rows = append(rows, types.AuditEvent{RunID: &runID, Action: "run.revive", Outcome: "success", Data: data})
+					}
+				} else if r.URL.Query().Get("action_prefix") == "run.ceiling.reassert" {
+					data, _ := json.Marshal(map[string]any{"dropped_injection_hosts": []string{}})
+					rows = append(rows, types.AuditEvent{RunID: &runID, Action: "run.ceiling.reassert", Outcome: "success", Data: data})
+				}
+				_ = json.NewEncoder(w).Encode(rows)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, Agent: "claude-code", State: types.RunRunning})
+		}))
+		out := &strings.Builder{}
+		root := rootCmd()
+		root.SetArgs([]string{"run", "get", runID.String(), "--url", srv.URL, "--token", "tok"})
+		root.SetOut(out)
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		if got := strings.Contains(out.String(), want); got != withRow {
+			t.Errorf("row=%v: output carries the withheld line = %v:\n%s", withRow, got, out)
+		}
+		if !withRow && strings.Contains(out.String(), "credentials withheld") {
+			t.Errorf("no host named, yet output has a withheld line:\n%s", out)
+		}
+	}
+}
+
 // `run get` prints a service's health on one line, Wardyn's own check on a second for a service that opted in, and
 // nothing of the kind for a run that is not a service.
 func TestServiceLine(t *testing.T) {
