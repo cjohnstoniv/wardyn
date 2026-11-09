@@ -113,7 +113,7 @@ func (d *Desktop) awaitAgentConsole(ctx context.Context, agentUID uint32, booted
 		}
 		left := time.Until(end)
 		if left <= 0 {
-			return fmt.Errorf("%w: %s %v after boot", ErrNeverAtDesktop, consoleSaw(uid, err), wait)
+			return fmt.Errorf("%w: %s %s after boot", ErrNeverAtDesktop, consoleSaw(uid, err), inWords(wait))
 		}
 		select {
 		case <-ctx.Done():
@@ -132,4 +132,15 @@ func consoleSaw(uid uint32, err error) string {
 		return fmt.Sprintf("the console could not be read (%v)", err)
 	}
 	return fmt.Sprintf("another account (uid %d) at the console", uid)
+}
+
+// inWords says d as a person would: whole minutes as minutes, anything else as Go prints it.
+func inWords(d time.Duration) string {
+	switch {
+	case d == time.Minute:
+		return "1 minute"
+	case d > time.Minute && d%time.Minute == 0:
+		return strconv.Itoa(int(d/time.Minute)) + " minutes"
+	}
+	return d.String()
 }
