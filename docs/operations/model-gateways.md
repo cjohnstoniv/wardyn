@@ -14,6 +14,13 @@
 4. Add a `custom_endpoint` provider whose `base_url` is the gateway. Each person's key is stored as for any provider. Wardyn sends it in the `auth` header and format you set (`Authorization` and `Bearer %s` by default) and drops the sandbox's own value.
 5. Put any header the gateway routes on in the provider's `extra_headers` (below).
 
+## Codex CLI on a Responses-style endpoint
+
+- A `custom_endpoint` provider can serve `codex-cli`: enable `codex-cli` on the provider's harness list and set its Model. The harness catalogue accepts that kind for it (`harnessCatalog`, [`harness.go`](../../internal/api/harness.go)).
+- The run's Codex CLI calls the proxy's `/wardyn/llm/openai` route with a placeholder key. The proxy sends `POST .../responses` to `base_url` plus the harness entry's `path`, with the person's own token in the provider's auth header.
+- The endpoint must serve the OpenAI Responses API at that path. The base URL given to Codex CLI ends in `/v1` unless `base_url` plus `path` already carries a path (`codexBaseURL`, [`runs_dispatch_provider.go`](../../internal/api/runs_dispatch_provider.go)).
+- Tests pin the path handling ([`codex_route_test.go`](../../internal/egress/proxy/codex_route_test.go)). No gateway's Responses support is tested.
+
 ## Recipes
 
 ### LiteLLM
