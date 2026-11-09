@@ -528,6 +528,10 @@ What the check does and does not settle:
 
 
 - Empty or unrecognised normalises to `always_deny` at runtime (fail closed), but an unrecognised literal is rejected at write time.
+- A run's own `first_use_approval` can be stricter than its unit's, never looser.
+  - A run that asks for `wait_for_review` under a unit set to `deny_with_review` is not refused. It runs at `deny_with_review`.
+  - The warning reads `first_use_approval raised from "wait_for_review" to operator minimum "deny_with_review"` (`Clamp`, [`internal/composer/clamp.go`](../internal/composer/clamp.go)).
+  - Its first request to an unlisted site is denied while the approval is raised, and passes only on a retry after approval.
 - `wait_for_review`'s one built-in user today is a workspace's confined record replay ([`docs/TRY-IT.md`](TRY-IT.md) "record a session, rerun it as a governed unit"): `launchRecordRun` sets it for exactly that session, never for a learning (open-egress) one.
 - Approving a hold there does more than release the parked connection.
 - The decision funnels through the same chokepoint every approval does (`decide`, [`internal/api/approvals.go`](../internal/api/approvals.go)),
