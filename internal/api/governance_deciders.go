@@ -77,6 +77,7 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var saved types.UnitDeciders
+	var idempotentClear bool
 	err = s.writeGovernance(ctx, func(q store.Querier) (err error) {
 		if err := lockDecidersKey(ctx, q, unit); err != nil {
 			return err
@@ -88,10 +89,21 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 		if err := s.deciderBoundRefusal(ctx, q, row, all, rules); err != nil {
 			return err
 		}
+		// The stored rules are read under the key lock, so "already empty" cannot change before the write.
+		_, cur, err := unitDecidersState(ctx, q, unit, true)
+		if err != nil {
+			return err
+		}
+		idempotentClear = len(rules) == 0 && (cur == nil || len(cur.Rules) == 0)
 		saved, err = store.SetUnitDecidersQ(ctx, q, unit, rules, principalFromRequest(r))
 		return err
 	})
 	if s.writeDecidersError(w, r, err) {
+		return
+	}
+	if idempotentClear {
+		// Clearing a unit that has no rules changed nothing, so it leaves no row and no bypass row.
+		writeJSON(w, http.StatusOK, saved)
 		return
 	}
 	data := unitDecidersAuditData(unit, rules, principalFromRequest(r), "")

@@ -189,6 +189,48 @@ func TestDecidersSecurityWriteFollowsSwitch(t *testing.T) {
 	}
 }
 
+// TestDecidersClearEmptyUnitWritesNoRow: clearing a unit that has no rules answers 200 as before but
+// writes no governance.deciders.set row; clearing a unit that had rules writes exactly one.
+func TestDecidersClearEmptyUnitWritesNoRow(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	rowsFor := func(u types.GovernanceUnit) int {
+		n := 0
+		for _, r := range e.audits("governance.deciders.set") {
+			if r.Target == u.ID.String() {
+				n++
+			}
+		}
+		return n
+	}
+	w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody())
+	var saved types.UnitDeciders
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.UnitID != e.a.ID || saved.Rules == nil || len(saved.Rules) != 0 {
+		t.Fatalf("clearing an empty unit = %d %s, want 200 with the unit and no rules", w.Code, w.Body)
+	}
+	if n := rowsFor(e.a); n != 0 {
+		t.Errorf("clearing an empty unit wrote %d governance.deciders.set rows, want none", n)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody(egressOwnerRule())); w.Code != http.StatusOK {
+		t.Fatalf("setting a rule = %d %s, want 200", w.Code, w.Body)
+	}
+	before := rowsFor(e.a)
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody()); w.Code != http.StatusOK {
+		t.Fatalf("clearing a unit with rules = %d %s, want 200", w.Code, w.Body)
+	}
+	if got := e.storedDeciders(e.a); got != nil {
+		t.Errorf("after clearing stored %v, want none", got)
+	}
+	if n := rowsFor(e.a); n != before+1 {
+		t.Errorf("clearing a unit that had rules: %d rows, want %d (exactly one more)", n, before+1)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody()); w.Code != http.StatusOK {
+		t.Fatalf("clearing again = %d %s, want 200", w.Code, w.Body)
+	}
+	if n := rowsFor(e.a); n != before+1 {
+		t.Errorf("clearing again: %d rows, want still %d", n, before+1)
+	}
+}
+
 // TestDecidersParentLock409: the knob "deciders" locks the rules of every unit below the locker, and a
 // unit cannot lock it while a unit below states rules.
 func TestDecidersParentLock409(t *testing.T) {
