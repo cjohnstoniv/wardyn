@@ -103,21 +103,26 @@ export function CredentialsScreen() {
   // The one erase dialog: opened for a row's person, or with no person (the header's search).
   const [erase, setErase] = React.useState<{ person: ErasePerson | null } | null>(null);
 
-  const load = React.useCallback(() => {
-    setStatus("loading");
+  // `quiet` is the re-read after an erase: the content stays mounted, so the key-domain and minted-token sections
+  // keep their toggles and notes, and a failed re-read leaves the list that was already on screen.
+  const load = React.useCallback((quiet = false) => {
+    if (!quiet) setStatus("loading");
     credentialsApi
       .listInventory()
       .then((d) => {
         setInv(d);
+        // The erased person may have held the last credential of the filtered provider: its chip is gone, so "All" is the view.
+        setFilter((f) => (f && d.counts.by_provider[f] ? f : null));
         setStatus("ready");
       })
       .catch((e) => {
+        if (quiet) return;
         const msg = getErrorMessage(e);
         setErrorMessage(msg);
         setStatus(msg === NO_META_ERROR ? "no_meta" : loadFailStatus(e));
       });
   }, []);
-  React.useEffect(load, [load]);
+  React.useEffect(() => load(), [load]);
 
   const rows = inv?.credentials ?? [];
   const providerNames = React.useMemo(() => {
@@ -175,7 +180,7 @@ export function CredentialsScreen() {
           ) : screenStatus === "no_meta" ? (
             <EmptyState icon={KeyRound} title={INVENTORY.NO_META_TITLE} description={errorMessage} />
           ) : screenStatus === "error" ? (
-            <ErrorState onRetry={load} />
+            <ErrorState onRetry={() => load()} />
           ) : noProvidersConfigured ? (
             <EmptyState
               icon={KeyRound}
@@ -303,7 +308,7 @@ export function CredentialsScreen() {
         open={erase !== null}
         person={erase?.person}
         onOpenChange={(open) => !open && setErase(null)}
-        onErased={load}
+        onErased={() => load(true)}
       />
     </PageContainer>
   );
