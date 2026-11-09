@@ -65,16 +65,23 @@ function recoverFocus(slot: Slot | null) {
   if (target) focusEl(target);
 }
 
-/** Waits for a vanished opener to leave focus on the body, then hands focus to recoverFocus. Gives up on any real focus move. */
+/**
+ * Waits for a vanished opener to leave focus on the body, then hands focus to recoverFocus. Gives up on any real
+ * focus move, or on the first DOM change after WATCH_MS. It holds no timer of its own while the page is quiet:
+ * the only timer is the short settle wait armed by a DOM change (or at once, if the opener is already gone), and
+ * it ends in stop() or re-arms on the next change.
+ */
 function watchLoss(opener: Element, slot: Slot | null) {
+  const until = Date.now() + WATCH_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => {
     clearTimeout(timer);
-    clearTimeout(expiry);
+    timer = undefined;
     observer.disconnect();
     document.removeEventListener("focusin", stop, true);
   };
   const check = () => {
+    timer = undefined;
     const active = document.activeElement;
     const lost = !active || active === document.body || !active.isConnected;
     if (opener.isConnected) {
@@ -85,14 +92,14 @@ function watchLoss(opener: Element, slot: Slot | null) {
     stop();
   };
   const arm = () => {
+    if (Date.now() > until) return stop();
     clearTimeout(timer);
     timer = setTimeout(check, SETTLE_MS);
   };
   const observer = new MutationObserver(arm);
-  const expiry = setTimeout(stop, WATCH_MS);
   observer.observe(document.body, { childList: true, subtree: true });
   document.addEventListener("focusin", stop, true);
-  arm();
+  if (!opener.isConnected) arm();
 }
 
 /** Rendered inside the dialog content, so its first render reads the focused element before autofocus moves it. */

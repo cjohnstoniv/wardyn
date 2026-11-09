@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "./alert-dialog";
@@ -279,5 +279,35 @@ describe.each(["tr", "card"] as const)("a dialog confirming the removal of its o
     screen.getByRole("button", { name: "Elsewhere" }).focus();
     await new Promise((r) => setTimeout(r, 250));
     expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+  });
+});
+
+// The focus watch must not leave a timer behind: tests (and the cold-load probe) assert none is pending.
+describe("the opener focus watch leaves no timer behind", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("holds none while the page is quiet, and none once a vanished opener has been handled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    render(<ListHarness initial={["a", "b", "c"]} />);
+    await user.click(screen.getByRole("button", { name: "Delete b" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm" }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(screen.getByRole("button", { name: "Delete c" })).toHaveFocus();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("holds none after a cancel that kept the opener, or after the page is torn down", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    const { unmount } = render(<ListHarness initial={["a", "b"]} />);
+    await user.click(screen.getByRole("button", { name: "Delete a" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(screen.getByRole("button", { name: "Delete a" })).toHaveFocus();
+    expect(vi.getTimerCount()).toBe(0);
+    unmount();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
