@@ -32,6 +32,7 @@ import {
   DENY_SCOPE_HINT,
   DENY_SCOPE_LABEL,
   SECURITY_ONLY_REASON,
+  UNTIL_MISSING,
   UNTIL_PAST,
   UNTIL_PRESETS,
 } from "./copy";
@@ -218,6 +219,11 @@ export function ReasonDialog({
                     setUntil(e.target.value ? new Date(e.target.value).toISOString() : null);
                   }}
                 />
+                {untilMissing && (
+                  <p id="reason-until-missing" className="w-full text-meta text-muted-foreground">
+                    {UNTIL_MISSING}
+                  </p>
+                )}
                 {untilPast && (
                   <p role="alert" className="w-full text-meta text-danger">
                     {UNTIL_PAST}
@@ -229,9 +235,12 @@ export function ReasonDialog({
         )}
 
         <div className="space-y-2 py-1">
-          <Label htmlFor="reason">Reason {approve && <span className="text-muted-foreground">(optional)</span>}</Label>
+          <Label htmlFor="reason">
+            Reason <span className="text-muted-foreground">{approve ? "(optional)" : "(required)"}</span>
+          </Label>
           <Textarea
             id="reason"
+            aria-required={!approve}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             // The server refuses a reason over 512 characters (approvals.go); stop typing there instead of at a 400.

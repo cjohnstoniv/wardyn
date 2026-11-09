@@ -117,6 +117,8 @@ export const DENY_SCOPE_HINT: Record<ApprovalScope, string> = {
 // callers do `new Date(Date.now() + ms)`.
 // Shown beside a picked time that has already passed; the server refuses it with decision_expires_at in the past.
 export const UNTIL_PAST = "That time has already passed. Pick a later one.";
+// Beside the time picker while "Until…" is chosen and no time is, which is why the confirm button is off.
+export const UNTIL_MISSING = "Pick a time for this to run until, or choose another scope.";
 
 export const UNTIL_PRESETS: { label: string; ms: number }[] = [
   { label: "15 minutes", ms: 15 * 60_000 },
