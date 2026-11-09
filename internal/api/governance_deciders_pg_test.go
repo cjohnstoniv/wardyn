@@ -231,6 +231,42 @@ func TestDecidersClearEmptyUnitWritesNoRow(t *testing.T) {
 	}
 }
 
+// TestDecidersClearEmptyUnitQueueModeHoldsNothing: with the second-human switch on, clearing a unit
+// that has no rules answers 200 as the direct write does and holds nothing: no pending change, no
+// governance.change.propose row, no governance.deciders.set row. Clearing a unit that has rules is still held.
+func TestDecidersClearEmptyUnitQueueModeHoldsNothing(t *testing.T) {
+	e := newUnitAdminEnv(t, true)
+	proposeRows := len(e.audits("governance.change.propose"))
+	w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody())
+	var saved types.UnitDeciders
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.UnitID != e.a.ID || saved.Rules == nil || len(saved.Rules) != 0 {
+		t.Fatalf("clearing an empty unit with the switch on = %d %s, want 200 with the unit and no rules", w.Code, w.Body)
+	}
+	if n := e.pendingCount(); n != 0 {
+		t.Errorf("clearing an empty unit held %d changes, want none", n)
+	}
+	if n := len(e.audits("governance.change.propose")); n != proposeRows {
+		t.Errorf("clearing an empty unit wrote %d governance.change.propose rows, want none", n-proposeRows)
+	}
+	if n := len(e.audits("governance.deciders.set")); n != 0 {
+		t.Errorf("clearing an empty unit wrote %d governance.deciders.set rows, want none", n)
+	}
+
+	set := e.pending(e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody(egressOwnerRule())))
+	e.approve(set.ID)
+	if got := e.storedDeciders(e.a); !slices.Equal(kindsOf(got), []string{"egress_domain"}) {
+		t.Fatalf("after approval stored %v, want the rule", got)
+	}
+	proposeRows = len(e.audits("governance.change.propose"))
+	e.pending(e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody()))
+	if n := e.pendingCount(); n != 1 {
+		t.Errorf("clearing a unit with rules held %d changes, want one", n)
+	}
+	if n := len(e.audits("governance.change.propose")); n != proposeRows+1 {
+		t.Errorf("clearing a unit with rules wrote %d propose rows, want one", n-proposeRows)
+	}
+}
+
 // TestDecidersParentLock409: the knob "deciders" locks the rules of every unit below the locker, and a
 // unit cannot lock it while a unit below states rules.
 func TestDecidersParentLock409(t *testing.T) {
