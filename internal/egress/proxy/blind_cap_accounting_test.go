@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"testing"
@@ -42,7 +43,7 @@ func TestBlindCapSuppressionIsAccountedNotSilent(t *testing.T) {
 	})
 
 	for i := range maxBlindHosts + over {
-		p.emitLLMBlindOnce(fmt.Sprintf("h%d.bedrock-runtime.us-east-1.amazonaws.com", i), 443, http.MethodConnect)
+		p.emitLLMBlindOnce(context.Background(), fmt.Sprintf("h%d.bedrock-runtime.us-east-1.amazonaws.com", i), 443, http.MethodConnect)
 	}
 
 	// The cap still holds: exactly maxBlindHosts rows reach the sink and the
@@ -65,7 +66,7 @@ func TestBlindCapSuppressionIsAccountedNotSilent(t *testing.T) {
 	// A repeat of an ALREADY-EMITTED host is ordinary dedup, not suppression:
 	// its coverage row is on the stream, so it must not inflate the count.
 	before := sink.droppedCount()
-	p.emitLLMBlindOnce("h0.bedrock-runtime.us-east-1.amazonaws.com", 443, http.MethodConnect)
+	p.emitLLMBlindOnce(context.Background(), "h0.bedrock-runtime.us-east-1.amazonaws.com", 443, http.MethodConnect)
 	if got := sink.droppedCount(); got != before {
 		t.Fatalf("droppedCount() = %d after re-emitting an already-reported host, want %d: "+
 			"dedup of a host whose coverage row IS on the stream is not a suppression", got, before)
@@ -83,9 +84,9 @@ func TestBlindRowCarriesTheRealPortAndDedupsPerPort(t *testing.T) {
 		Resolver: publicResolver{},
 		Scanner:  scanEngine(t, "alert", scanTestSecret),
 	})
-	p.emitLLMBlindOnce("litellm.corp", 4000, http.MethodConnect)
-	p.emitLLMBlindOnce("litellm.corp", 4000, http.MethodConnect) // the same destination again: deduped
-	p.emitLLMBlindOnce("litellm.corp", 8443, http.MethodPost)
+	p.emitLLMBlindOnce(context.Background(), "litellm.corp", 4000, http.MethodConnect)
+	p.emitLLMBlindOnce(context.Background(), "litellm.corp", 4000, http.MethodConnect) // the same destination again: deduped
+	p.emitLLMBlindOnce(context.Background(), "litellm.corp", 8443, http.MethodPost)
 	if len(sink.ch) != 2 {
 		t.Fatalf("blind rows = %d, want 2 (one per host:port)", len(sink.ch))
 	}

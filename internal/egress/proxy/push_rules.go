@@ -497,7 +497,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		fcancel()
 		if forge != nil && forge.reads > 0 {
 			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
-				Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+				Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
 		}
 		if why != "" {
 			p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -600,7 +600,7 @@ func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]
 	}
 	if forge != nil && forge.reads > 0 {
 		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
-			Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+			Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,

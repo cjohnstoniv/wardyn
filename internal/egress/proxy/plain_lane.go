@@ -134,7 +134,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// the allow imply coverage.
 	if scanning && p.isLLMHost(host) && channel == contentscan.ChannelGeneric &&
 		summary == nil && hasScannableBody(r) {
-		p.emitLLMBlindOnce(host, port, r.Method)
+		p.emitLLMBlindOnce(r.Context(), host, port, r.Method)
 	}
 	outReq := r.Clone(context.WithValue(r.Context(), vettedIPKey{}, target))
 	// RequestURI must be empty for client requests.

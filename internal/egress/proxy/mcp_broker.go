@@ -210,7 +210,7 @@ func (p *Proxy) handleMCPBroker(w http.ResponseWriter, r *http.Request) {
 		x.server, host, port = s, s.host, s.port
 	}
 	x.req = egress.Request{AuditReservation: spoolTicket(r.Context()), RunID: p.runID, Host: host, Port: port,
-		Method: strings.ToUpper(r.Method), Path: mcpRedactedPath(harness, key), Time: p.now()}
+		Method: strings.ToUpper(r.Method), Path: mcpRedactedPath(harness, key), Time: p.now(), Relayed: p.relayLane(r.Context())}
 	switch {
 	case harness == "":
 		x.deny(w, ruleSourceMCPUnbound, "this MCP address is not bound to a harness of this run", http.StatusForbidden)

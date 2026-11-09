@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -394,7 +395,10 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// being served; wait for the conn itself to end so the tunnel stays tracked for a drain to close.
 	connDone := make(chan struct{})
 	var connOnce sync.Once
+	base := vmnetLaneOnly(r.Context())
 	srv := &http.Server{
+		// Every inner request's context derives from this, so a relayed CONNECT's inner requests are Relayed too.
+		BaseContext: func(net.Listener) context.Context { return base },
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, rr *http.Request) {
 			p.serveMITMRequest(rw, rr, host, port)
 		}),
