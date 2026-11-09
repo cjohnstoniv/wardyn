@@ -30,8 +30,8 @@ import (
 // grant at each update. The helper therefore signs each build, before it pushes it, with a code signing
 // identity made once on this Mac: the requirement names the identifier and this Mac's certificate, and
 // stays the same for every build. The key stays on the host, in the login's VM directory, and never
-// enters a guest, so code in a run cannot sign a binary that meets the requirement. Nothing on the host
-// trusts the certificate; the base trusts it for code signing only.
+// enters a guest, so code in a run cannot sign a binary that meets the requirement. Nothing trusts the
+// certificate, on the host or in the base: the requirement is a hash match and needs no trust.
 
 // AgentSigningID is the identifier every guest agent build is signed with.
 const AgentSigningID = "com.wardyn.guest-agent"
@@ -180,8 +180,8 @@ type AgentSigner interface {
 	SignAgent(ctx context.Context, path string) (SignedAgent, error)
 }
 
-// SignedAgent is a signed copy of the guest agent: Path is the copy, Cert the signing certificate (DER)
-// the base trusts for code signing, and Done removes the copy. Signer is the signer that made it
+// SignedAgent is a signed copy of the guest agent: Path is the copy, Cert the signing certificate (DER),
+// and Done removes the copy. Signer is the signer that made it
 // (AgentSignerWardyn or AgentSignerCodesign), and Errors why each signer tried before it failed, path-free.
 type SignedAgent struct {
 	Path   string
@@ -363,39 +363,4 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b) // crypto/rand.Read never returns an error
 	return hex.EncodeToString(b)
-}
-
-// agentSigningCertPath is where the base keeps the guest agent's signing certificate.
-func agentSigningCertPath() string {
-	return guestagent.ItemDir(guestagent.AgentSigningItem) + "/" + guestagent.ItemCert
-}
-
-// trustAgentCert puts the signing certificate in the base, trusts it as a root for code signing only, and
-// says whether the guest trusts it (ItemTrusted or ItemNotTrusted). macOS 26 refuses that trust from root
-// without a person, and a guest agent from before this build refuses the command; either way the
-// certificate reads not trusted and edit-base lists the command that trusts it. Like the signing, it never
-// fails the update: a step the guest refuses is logged and the certificate reads not trusted.
-func trustAgentCert(ctx context.Context, g ToolsGuest, der []byte, log *slog.Logger) string {
-	cer := agentSigningCertPath()
-	err := runItem(ctx, g, "/bin/mkdir", "-p", "-m", "0700", filepath.Dir(cer))
-	if err == nil {
-		err = g.Push(ctx, cer, 0o644, strings.NewReader(string(der)), int64(len(der)))
-	}
-	if err != nil {
-		log.Warn("macvm: the agent signing certificate was not put in the base", "err", err.Error())
-		return ItemNotTrusted
-	}
-	out, exit, err := g.Run(ctx, []string{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", guestagent.MacSystemKeychain, cer})
-	if err != nil || exit != 0 {
-		log.Warn("macvm: the base did not trust the agent signing certificate; edit-base lists the command that does", "exit", exit, "err", fmt.Sprint(err), "out", outputTail(out))
-	}
-	return verifyAgentCert(ctx, g)
-}
-
-// verifyAgentCert is whether the guest trusts the agent's signing certificate for code signing.
-func verifyAgentCert(ctx context.Context, g ToolsGuest) string {
-	if _, exit, err := g.Run(ctx, []string{"/usr/bin/security", "verify-cert", "-L", "-p", "codeSign", "-c", agentSigningCertPath()}); err == nil && exit == 0 {
-		return ItemTrusted
-	}
-	return ItemNotTrusted
 }

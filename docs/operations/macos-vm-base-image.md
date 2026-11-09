@@ -90,6 +90,7 @@
    - The copy is meant to have no internet during the session.
    - **Who you are signed in as.** The base turns on auto-login for `agent`, so the copy may open at `agent`'s desktop, not at a login window. As `agent` you have no `sudo` and cannot read `/Library/Wardyn/stage`.
    - **Administrator steps.** Click Open admin Terminal in the window. It opens Terminal in the guest at `su - wardyn-admin`: click Type code, then press Return.
+     - If a button fails, the window shows the guest's reason.
      - By hand, open Terminal (Spotlight may not answer in the guest; use Finder > Go > Utilities), run `su wardyn-admin` and give the one-time code as the password.
    - **If the window opens on macOS's setup pages.** Continue without a network, as in setup by hand. The recheck refuses any account Wardyn did not make, so make none.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
@@ -97,15 +98,15 @@
      - By hand, click +, press Command-Shift-G, type that path, and turn it on.
    - The grant is meant to stay in the base and reach every run's guest, where Full Disk Access lifts macOS's privacy prompts for every process the run starts.
    - Grant it once. Wardyn signs the guest agent on this Mac, so the grant can last through tools updates. The first tools update after an upgrade changes the signature: grant it once more.
-   - The base trusts the signing certificate for code signing only. When the base could not trust it (macOS 26 can refuse), the Terminal where you started `edit-base` lists the "guest agent signing certificate" with a `-p codeSign` command, and Trust the list's CAs includes it.
-   - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact `sudo security add-trusted-cert` command.
-     - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate, and each asks for the code.
+   - The base does not need to trust the agent's signing certificate: Full Disk Access keeps to the agent's designated requirement.
+   - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact trust command.
+     - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate. Each asks for the code, then macOS shows a dialog: enter `wardyn-admin` and the code.
      - Check each subject and SHA-256 and confirm macOS's prompt. With nothing to trust the button does nothing and says so.
    - **Rosetta is off unless you press Install Rosetta**, for Intel-only tools. It runs Apple's installer in the guest through the prep proxy ([The prep proxy](#the-prep-proxy)).
      - A TLS-inspecting proxy must exempt Apple's hosts (Apple support article 101555).
      - From macOS 26.4, an Intel app's first launch shows an end-of-Rosetta notice. macOS 27 is the last release with full Rosetta.
    - **FileVault stays off.** The window and the recheck warn when it reads on. Turn it off in System Settings > Privacy & Security. The base is kept either way.
-5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
+5. Leave Remote Login off and add no accounts. When you are done, close the window: the guest shuts down with no dialog. If macOS still asks, click Shut Down. The window closes once the guest has shut down.
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a fresh random password, which the copy keeps for the next edit, and the code file is deleted.
   - Then, in order: the control check, the accounts, Remote Login, and the launcher's self-test for a command and for each harness the base offers.
@@ -122,10 +123,10 @@
   - The edit prints the same lines, with the desktop mode, when the recheck finishes.
   - They record that boot. They are not live, and a read that failed says it could not be read, never trusted or allowed.
   - The Full Disk Access read is one open of macOS's protected TCC database by the guest agent. It reads nothing from the file and writes nothing.
-  - `status` also says how the base's guest agent is signed: on this Mac, or ad hoc, which loses Full Disk Access at each tools update. A signing certificate the base does not trust yet is named, with the instruction to run `edit-base`.
+  - `status` also says how the base's guest agent is signed: on this Mac, or ad hoc, which loses Full Disk Access at each tools update.
   - After a tools update, `status` can say Full Disk Access is unknown. Recheck it in `edit-base`.
   - `doctor` shows a `file-vault` line when the base last read FileVault as on. It is never a failure.
-  - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signing_cert` (`trusted` or `not_trusted`), `agent_signer` (`wardyn`, `codesign` or `ad_hoc`), `agent_sign_errors` (path-free) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
+  - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signer` (`wardyn`, `codesign` or `ad_hoc`), `agent_sign_errors` (path-free) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
 
 ## The prep proxy
 
@@ -175,7 +176,7 @@ What Wardyn automates, and what the operator does by hand in `wardyn-runnerd mac
 | Folder shares | By hand in edit: Full Disk Access for the guest agent |
 
 - **Refused destinations.** A `file` item may not write a harness's managed settings (`/Library/Application Support/ClaudeCode`, `/etc/codex`), because a run writes those per run. Your own agent rules go in your policy instead.
-  - Nor may it write Wardyn's own files, the stage directory, `/var/run/wardyn` or `/Library/Keychains`. Paths compare without case, as APFS does.
+  - Nor may it write Wardyn's own files, the stage directory, `/var/run/wardyn`, `/Library/Wardyn/run` or `/Library/Keychains`. Paths compare without case, as APFS does.
 - **Secret files.** A `pkg` item's `secret_files`, such as an EDR licence, are each a mode 0600 file on the Mac. A file others can read is refused.
   - Each is pushed root's and 0600 beside the package, for its installer to read, and removed with the stage directory after the install, on every path.
   - Its value is never in a command line, a log, `tools.json` or the caps. The list's digest covers its pin only, so to rotate a licence, change its `sha256`.
@@ -190,7 +191,8 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
 2. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
 3. Stage 2 goes on either way: a CA that reads `not_trusted` does not stop preparing.
 
-- `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
+- `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in the admin Terminal, run `sudo launchctl asuser $(stat -f %u /dev/console) security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's dialog.
+  - `launchctl asuser` runs it in the desktop session, where macOS can show that dialog; from `su` alone macOS denies it.
   - `edit-base` prints this command for each such item, with its subject and SHA-256, and runs nothing itself. The Trust the list's CAs button in its window opens a Terminal that runs them, as the admin.
   - A certificate trusted by hand reaches hosts that need only the system trust store. A host marked Inspected still needs the run's proxy certificate.
   - The list is a file on the Mac ([Customising the base](#customising-the-base)). Whoever can write that file decides which certificates `edit-base` offers; the console does not edit it.
@@ -283,6 +285,7 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 | `DiagnosticMessagesHistory.plist` `AutoSubmit`, `ThirdPartyDataSubmit`, with mode 644 and group admin | bool false | root | yes | 1 and 2 |
 | Setup Assistant and Terminal ended, Terminal's saved state removed | by signal, then `rm -rf` as the agent | agent | no | 2, and edit-base's finish for Terminal |
 | Safari `WarnAboutFraudulentWebsites` (Safe Browsing) | bool false, read back once | agent | yes | 2 |
+| Setup Assistant ended in the agent's session for the first 2 minutes of each run | by signal | agent | no | run |
 
 - The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` skips the whole table.
 - The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" or "the console is not the agent account's", and the next update applies them.

@@ -29,11 +29,15 @@ type editActionLog struct {
 
 func (l *editActionLog) serve(next http.Handler) http.Handler {
 	mux := http.NewServeMux()
-	for _, p := range []string{"/edit/admin-terminal", "/edit/trust-cas", "/edit/full-disk-access"} {
+	for _, p := range []string{"/edit/admin-terminal", "/edit/trust-cas", "/edit/full-disk-access", "/edit/shut-down"} {
 		mux.HandleFunc("POST "+p, func(w http.ResponseWriter, _ *http.Request) {
 			l.mu.Lock()
 			l.paths = append(l.paths, p)
 			l.mu.Unlock()
+			if p == "/edit/shut-down" {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(guestagent.EditActionResult{Opened: true})
 		})
 	}
@@ -127,7 +131,14 @@ func TestStage2WindowBootTakesItsNICAndKeepsEditActionsOnTheToolsSession(t *test
 			t.Fatalf("edit action: %+v %v", r, err)
 		}
 	}
-	if got, want := tools.got(), []string{"/edit/admin-terminal", "/edit/trust-cas", "/edit/full-disk-access"}; !slices.Equal(got, want) {
+	sg, ok := g.(macvm.ShutDownGuest)
+	if !ok {
+		t.Fatalf("the window boot's guest %T cannot ask its agent to shut down", g)
+	}
+	if err := sg.EditShutDown(ctx); err != nil {
+		t.Fatalf("shut-down: %v", err)
+	}
+	if got, want := tools.got(), []string{"/edit/admin-terminal", "/edit/trust-cas", "/edit/full-disk-access", "/edit/shut-down"}; !slices.Equal(got, want) {
 		t.Errorf("the tools session served %q, want %q", got, want)
 	}
 	if got := control.got(); len(got) != 0 {

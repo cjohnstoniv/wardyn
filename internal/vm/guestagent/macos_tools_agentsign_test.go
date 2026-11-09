@@ -8,15 +8,14 @@ import (
 	"testing"
 )
 
-// Tools mode trusts and checks the guest agent's signing certificate for code signing, and only that
-// certificate: a base item's certificate stays SSL only.
-func TestToolsAllowsTrustingOnlyTheAgentSigningCertForCodeSigning(t *testing.T) {
+// Tools mode trusts and checks a staged certificate for SSL (the org CA path) and refuses code signing for
+// every certificate, the guest agent's own included: the base does not trust the agent's signing certificate.
+func TestToolsRefusesCodeSigningTrustAndAllowsSSL(t *testing.T) {
 	cert := ItemDir(AgentSigningItem) + "/" + ItemCert
 	other := ItemDir("org-root") + "/" + ItemCert
 	allowed := [][]string{
-		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", MacSystemKeychain, cert},
-		{"/usr/bin/security", "verify-cert", "-L", "-p", "codeSign", "-c", cert},
 		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl", "-k", MacSystemKeychain, other},
+		{"/usr/bin/security", "verify-cert", "-L", "-p", "ssl", "-c", other},
 	}
 	for _, argv := range allowed {
 		if err := ToolsExecAllowed(argv, "/usr/local/bin"); err != nil {
@@ -24,6 +23,8 @@ func TestToolsAllowsTrustingOnlyTheAgentSigningCertForCodeSigning(t *testing.T) 
 		}
 	}
 	refused := [][]string{
+		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", MacSystemKeychain, cert},
+		{"/usr/bin/security", "verify-cert", "-L", "-p", "codeSign", "-c", cert},
 		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", MacSystemKeychain, other},
 		{"/usr/bin/security", "verify-cert", "-L", "-p", "codeSign", "-c", other},
 		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "basic", "-k", MacSystemKeychain, cert},

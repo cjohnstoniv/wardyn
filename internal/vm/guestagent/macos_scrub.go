@@ -194,15 +194,17 @@ func (m MacScrub) Scrub(ctx context.Context, when string) ScrubReport {
 	return r
 }
 
-// scrubRunDirs removes the delivered-secret directory and every detached exec's output; the output
-// directory itself stays, since the agent writes there.
+// scrubRunDirs removes the delivered-secret directory, the run's settings directory and every detached
+// exec's output; the output directory itself stays, since the agent writes there.
 func (m MacScrub) scrubRunDirs(s *scrubbing, when string) {
-	if _, err := os.Lstat(m.path(MacRunDir)); err == nil {
-		err = os.RemoveAll(m.path(MacRunDir))
-		if err == nil {
-			s.add(ScrubRunDirs, 1)
+	for _, dir := range []string{MacRunDir, MacSessionEnvDir} {
+		if _, err := os.Lstat(m.path(dir)); err == nil {
+			err = os.RemoveAll(m.path(dir))
+			if err == nil {
+				s.add(ScrubRunDirs, 1)
+			}
+			s.fail(dir, err)
 		}
-		s.fail(MacRunDir, err)
 	}
 	if m.OutDir != "" {
 		entries, err := os.ReadDir(m.path(m.OutDir))

@@ -157,6 +157,7 @@ func TestParseBaseListRefuses(t *testing.T) {
 		"claude managed, another case": listJSON(t, file("/library/application support/claudecode/managed-settings.json")),
 		"codex requirements":           listJSON(t, file(guestagent.MacCodexRequirementsPath)),
 		"the run secrets dir":          listJSON(t, file(guestagent.MacRunDir+"/x")),
+		"the run settings dir":         listJSON(t, file(guestagent.MacSessionEnvPath)),
 		"the stage dir":                listJSON(t, file(guestagent.MacItemStageDir+"/edr/item.pkg")),
 		"a harness CLI":                listJSON(t, file("/usr/local/bin/claude")),
 		"the agent":                    listJSON(t, file(guestagent.MacAgentBinaryPath)),

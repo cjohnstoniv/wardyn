@@ -236,8 +236,6 @@ func agentSignatureLines(rec macvm.ToolsRecord) []string {
 	switch {
 	case rec.AgentSignature == macvm.AgentSignedAdHoc:
 		lines = append(lines, "guest agent: signed ad hoc; Full Disk Access is lost at each tools update")
-	case rec.AgentSignature == macvm.AgentSignedThisMac && rec.AgentSigningCert == macvm.ItemNotTrusted:
-		lines = append(lines, "guest agent: signed on this Mac; the base does not trust its certificate yet: run macos-vm edit-base and trust it")
 	case rec.AgentSignature == macvm.AgentSignedThisMac:
 		lines = append(lines, "guest agent: signed on this Mac")
 	}

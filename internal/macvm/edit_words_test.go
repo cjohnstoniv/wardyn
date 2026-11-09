@@ -106,7 +106,7 @@ func TestEditBasePrintsOnlyTheUntrustedCertificates(t *testing.T) {
 		"Not yet trusted in this base. Click Trust the list's CAs in the window, or run each command in the admin Terminal. Check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.\nacme-proxy\n",
 		"  subject  \"CN=acme-proxy\"\n",
 		"  SHA-256  " + strings.Join(colon, ":") + "\n",
-		"  sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/acme-proxy/item.cer\n",
+		"  sudo launchctl asuser $(stat -f %u /dev/console) security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/acme-proxy/item.cer\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the output lacks %q:\n%s", want, out)

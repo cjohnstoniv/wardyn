@@ -419,9 +419,6 @@ func ReadBackItems(ctx context.Context, g ToolsGuest, dir string) error {
 			}
 		}
 	}
-	if rec.AgentSignature == AgentSignedThisMac {
-		rec.AgentSigningCert = verifyAgentCert(ctx, g)
-	}
 	rec.Guest = readPosture(ctx, g, rec.Items)
 	return writeJSONAtomic(filepath.Join(dir, ToolsRecordFile), rec, 0o600)
 }

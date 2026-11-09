@@ -200,6 +200,7 @@ A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your 
 - The window shows the VM's screen and takes your keys and pointer.
 - Only what goes through the run's proxy settings counts as activity: Terminal, the harness, and tools that honour `HTTPS_PROXY`. The window, a terminal and SSH count too.
 - Requests the guest makes on its own never count, allowed or refused: macOS's services, and tools that ignore the proxy settings (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls still count. On a Mac runner this holds once the runner is upgraded.
+- If Setup Assistant opens in a run, the guest agent ends it; a run's disk is thrown away, so nothing it asks is kept.
 - It is not recorded, because it is drawn on your Mac and never crosses the gateway. A run at Screen and actions can't open one.
 - While it is open, the run's browser desktop is view only. A browser desktop that had control is ended first, and the open waits up to 5 seconds for it.
 
@@ -262,7 +263,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 - **While they are pending.** `wardyn window <run> --status` says `preparing` with the sentence above. A window asked for at create waits for them, up to about 10 minutes, and the run's start is not held.
 - **If they fail.** The window opens, and the status says why: "the agent account was not signed in", "the desktop session did not take them" or "they were not confirmed in time". Run `agent-run --session-env-retry` in the window's Terminal to retry.
 - **After a logout inside a run.** The window's apps lose the proxy settings until you run that retry command. Nothing applies them again by itself.
-- In the guest, `cat /var/run/wardyn/session-env.status` reads `session_env=pending`, `session_env=set vars=<n> via=<asuser|user|retry|none>` or `session_env=failed reason=<not_signed_in|setenv_failed>`.
+- In the guest, `cat /Library/Wardyn/run/session-env.status` reads `session_env=pending`, `session_env=set vars=<n> via=<asuser|user|retry|none>` or `session_env=failed reason=<not_signed_in|setenv_failed>`.
 
 ### Closing a window
 

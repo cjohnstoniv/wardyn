@@ -308,6 +308,7 @@ func (s *Server) initDesktop(ctx context.Context, env, secret map[string]string,
 		uid = s.Cred.Uid
 	}
 	s.Desktop.StartSessionEnv(s.sessionCtx(), SessionEnvPaths{}, uid, env, secret, ca)
+	go s.Desktop.endSetupAssistant(s.sessionCtx(), uid, ExecRunner{})
 	return set
 }
 
