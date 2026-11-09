@@ -74,6 +74,7 @@ func (s *Server) poolCapacity(row store.RunnerPoolCatalogueRow, fits map[string]
 	for _, id := range row.OwnRunnerIDs {
 		keys = append(keys, id.String())
 	}
+	keys = append(keys, row.OrgRunnerIDs...)
 	out := &client.PoolCapacity{Runners: len(keys)}
 	active := row.Pool.State == types.RunnerPoolActive
 	for _, k := range keys {
