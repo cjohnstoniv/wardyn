@@ -30,7 +30,7 @@ module reportfixture
 go 1.23
 EOF
 
-mkdir -p "$TMP/failpkg" "$TMP/testpanicpkg" "$TMP/buildbrokenpkg" "$TMP/mainexitpkg" "$TMP/initpanicpkg"
+mkdir -p "$TMP/failpkg" "$TMP/tailpkg" "$TMP/testpanicpkg" "$TMP/buildbrokenpkg" "$TMP/mainexitpkg" "$TMP/initpanicpkg"
 cat > "$TMP/testpanicpkg/p_test.go" <<'EOF'
 package testpanicpkg
 
@@ -47,6 +47,18 @@ import "testing"
 
 func TestNamedFailure(t *testing.T) {
 	t.Fatal("this test always fails")
+}
+EOF
+cat > "$TMP/tailpkg/t_test.go" <<'EOF'
+package tailpkg
+
+import "testing"
+
+func TestLongLog(t *testing.T) {
+	for i := 1; i <= 20; i++ {
+		t.Logf("tail line %02d", i)
+	}
+	t.Fatal("long log failure")
 }
 EOF
 cat > "$TMP/buildbrokenpkg/b_test.go" <<'EOF'
@@ -98,6 +110,18 @@ echo "$OUT" | grep "thisIdentifierDoesNotExist" >/dev/null \
   || fail "stderr must surface the compiler's own error text — got:
 $OUT"
 echo "ok  surfaces the compile error"
+
+# A failing test echoes its last 8 lines by default; WARDYN_TEST_REPORT_TAIL widens that, so a
+# suite whose cause sits further up (envbuild's build log) can still name it in the job log.
+echo "$OUT" | grep -F "tail line 20" >/dev/null && ! echo "$OUT" | grep -F "tail line 01" >/dev/null \
+  || fail "by default a failing test must echo only its last lines — got:
+$OUT"
+OUT_TAIL="$( (cd "$TMP" && WARDYN_TEST_REPORT_TAIL=30 ./scripts/test-report.sh fixture ./tailpkg/ 2>&1 >/dev/null) )" && \
+  fail "test-report.sh must exit non-zero when the suite has a failing test"
+echo "$OUT_TAIL" | grep -F "tail line 01" >/dev/null \
+  || fail "WARDYN_TEST_REPORT_TAIL=30 must echo the failing test's first log line too — got:
+$OUT_TAIL"
+echo "ok  WARDYN_TEST_REPORT_TAIL widens a failing test's echoed tail"
 
 for want in "mainexitpkg" "setup: cannot reach the fixture database" "initpanicpkg" "panic: fixture init exploded"; do
   echo "$OUT" | grep -F "$want" >/dev/null \
