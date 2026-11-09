@@ -162,7 +162,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
                 return (
                   <TableRow key={p.principal} className="cursor-pointer" onClick={() => onOpen(p)}>
                     <TableCell className="font-medium">
-                      <button type="button" className="text-left hover:underline" onClick={(e) => { e.stopPropagation(); onOpen(p); }}>
+                      <button type="button" className="max-w-[16rem] truncate text-left hover:underline" title={p.email || p.principal} onClick={(e) => { e.stopPropagation(); onOpen(p); }}>
                         {p.email || p.principal}
                       </button>
                     </TableCell>
@@ -173,7 +173,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
                     <TableCell>
                       <Chip tone={STATE_TONE[state]}>{STATE_LABEL[state]}</Chip>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="whitespace-normal text-muted-foreground">
                       {P.HOLDS({ sessions: p.active_sessions, tokens: p.api_tokens, keys: p.ssh_keys, credentials: p.credentials, running: p.active_runs })}
                     </TableCell>
                   </TableRow>

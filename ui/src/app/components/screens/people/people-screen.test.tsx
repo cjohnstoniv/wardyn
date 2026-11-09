@@ -116,6 +116,17 @@ describe("the people table", () => {
     expect(within(left).getByText("3 credentials")).toBeInTheDocument();
   });
 
+  it("bounds a long identity with a tooltip and lets the Holds sentence wrap, so the table stays in its column", async () => {
+    const long = "firstname.lastname.contractor@subsidiary.contoso.com";
+    listMock.mockResolvedValue({ people: [person({ principal: "sub-long", email: long })] });
+    renderScreen();
+    const button = await screen.findByRole("button", { name: long });
+    expect(button).toHaveAttribute("title", long);
+    expect(button.className).toContain("truncate");
+    const holds = within(button.closest("tr")!).getByText(/session|token|key|credential/);
+    expect(holds.closest("td")!.className).toContain("whitespace-normal");
+  });
+
   it("labels a role the server could not derive from truncated groups as Unknown", async () => {
     listMock.mockResolvedValue({ people: [person({ role: "unknown" })] });
     renderScreen();

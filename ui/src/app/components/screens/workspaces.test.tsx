@@ -94,6 +94,16 @@ describe("WorkspacesScreen — list columns", () => {
     expect(screen.getByText("acme/payments @main")).toBeInTheDocument();
   });
 
+  it("bounds a long workspace name with a tooltip instead of widening the table past its actions menu", async () => {
+    const name = "payments-platform-service-account-rotation-with-a-very-long-name-12345";
+    listWorkspacesMock.mockResolvedValue([ws({}, { name })]);
+    renderScreen();
+    const label = await screen.findByText(name);
+    expect(label).toHaveAttribute("title", name);
+    expect(label.className).toContain("truncate");
+    expect(screen.getByRole("button", { name: `Workspace actions: ${name}` })).toBeInTheDocument();
+  });
+
   it("each row's actions menu is named after the workspace", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments" }), ws({}, { id: "ws-2", name: "billing" })]);
     renderScreen();
