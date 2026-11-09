@@ -652,7 +652,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 			})
 		}
 	}
-	droppedInjection = append(droppedInjection, withholdUnboundInjections(policy, p, injections)...)
+	droppedInjection = append(droppedInjection, withholdUnboundDispatchInjections(policy, p, injections)...)
 	if len(droppedInjection) > 0 || len(droppedLane) > 0 {
 		slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile or the Wardyn boundary denies, or the run's policy does not bind",
 			slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
