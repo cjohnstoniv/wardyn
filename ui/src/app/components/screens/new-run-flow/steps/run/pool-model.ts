@@ -112,14 +112,22 @@ export interface LimitCell {
 export const limitsFor = (pool: RunnerPoolCatalogueEntry, asked: RunnerPoolRunType | undefined): EffectiveRunLimits | undefined =>
   pool.limits?.find((l) => l.run_type === asked) ?? (asked ? undefined : pool.limits?.[0]);
 
+/**
+ * The server's own ceiling on any run limit in seconds (Go: types.RunnerPoolSecondsMax, 2147483647, about 68 years).
+ * A member whose profile sets no maximum end and offers no "No end" is bounded by it alone (runnerpool.GovernanceSource),
+ * so the wire carries that ceiling as a finite cap: it is the absence of a maximum, and reads as one.
+ */
+export const RUN_LIMIT_CEILING_SEC = 2147483647;
+
 export function limitCells(limits: EffectiveRunLimits, allowance: PersonAllowance | undefined): LimitCell[] {
-  const cap = (l: EffectiveLimit, text: (n: number) => string) => (l.cap.unlimited ? NR_RUN.LIMIT_NO_MAXIMUM : text(l.cap.value));
-  const cell = (key: LimitCell["key"], label: string, l: EffectiveLimit, text: (n: number) => string, note: string = NR_RUN.LIMIT_MAXIMUM): LimitCell =>
-    ({ key, label, value: cap(l, text), note, source: sourceText(l.cap_source, allowance) });
+  const cap = (l: EffectiveLimit, text: (n: number) => string, ceiling = Infinity) =>
+    l.cap.unlimited || l.cap.value >= ceiling ? NR_RUN.LIMIT_NO_MAXIMUM : text(l.cap.value);
+  const cell = (key: LimitCell["key"], label: string, l: EffectiveLimit, text: (n: number) => string, note: string = NR_RUN.LIMIT_MAXIMUM, ceiling?: number): LimitCell =>
+    ({ key, label, value: cap(l, text, ceiling), note, source: sourceText(l.cap_source, allowance) });
   return [
     cell("cpu", NR_RUN.LIMIT_CPU, limits.cpu_millis, cpuText),
     cell("memory", NR_RUN.LIMIT_MEMORY, limits.memory_mib, memoryText),
-    cell("lifetime", NR_RUN.LIMIT_LIFETIME, limits.lifetime_sec, lifetimeText),
+    cell("lifetime", NR_RUN.LIMIT_LIFETIME, limits.lifetime_sec, lifetimeText, NR_RUN.LIMIT_MAXIMUM, RUN_LIMIT_CEILING_SEC),
     cell("drive", NR_RUN.LIMIT_MAIN_DRIVE, limits.disk_mib, sizeWords, NR_RUN.LIMIT_EXTRA_DRIVES),
   ];
 }

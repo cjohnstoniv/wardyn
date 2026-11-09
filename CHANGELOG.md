@@ -61,6 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The New Run page showed an unlimited run lifetime as "596523.24 hours" for a member whose profile sets no maximum end. It now says "No maximum", as it does for the other limits.
 - A run's header said "Runs on: Remote-hosted runner" even when the run was on this server's Docker host. It now says "Docker host", or "Kubernetes cluster" for a run there.
 - An organisation runner pool whose only members are organisation runners, such as runners in a Kubernetes cluster, now shows as available, with those runners counted in its capacity and offered in its barrier options. Runs could already be placed on them. An organisation pool with both remote-hosted and organisation runners now stays available under a deny of remote placement, as its runs already did.
 - Approving an elevation request now answers stale when the unit's elevation rule no longer names a group the person matched when they asked.
