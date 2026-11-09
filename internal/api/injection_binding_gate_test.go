@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -329,4 +331,72 @@ func TestSealAddsNoPortTheRunNeverReached(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Allow-all, no seal layer, one api_key grant: the injection run create authors for the grant
+// (runs_create_grants.go), on a host allow_all_egress gives no exact entry. At eb5a6eea5 this config
+// reached the proxy's exact-allowlist refusal and the run never started
+// (TestProxyBoot_AllowAllRefusesAnAPIKeyInjection in internal/egress/proxy). Now the run starts with
+// the credential withheld and its egress still open, the row names the host, and the sidecar boots
+// over the run's own dispatched config.
+func TestDispatch_AllowAllAPIKeyGrantIsWithheld(t *testing.T) {
+	rule, err := injectionRuleFromScope(apiKeyGrant(gateVendor, "vendor-key").Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, audit, fr, run := dispatchComponents(t, dispatchParams{
+		Policy:     types.RunPolicySpec{AllowAllEgress: true},
+		Injections: []runner.InjectionGrant{{GrantID: uuid.New(), Rule: rule}},
+	})
+	if fr.createCalls != 1 {
+		t.Fatalf("CreateSandbox calls = %d, want 1: the run did not start; events %s", fr.createCalls, auditDump(audit.snapshot(), run.ID))
+	}
+	pc := fr.lastSpec.ProxyConfig
+	if !pc.Policy.AllowAllEgress {
+		t.Error("the run's egress was closed: the gate only withholds")
+	}
+	for _, in := range pc.Injection {
+		if in.Rule.Host == gateVendor {
+			t.Errorf("the api_key credential on %s reached the proxy, whose policy does not bind it", gateVendor)
+		}
+	}
+	assertAllBound(t, pc.Policy, pc.Injection)
+	row := reassertRow(t, audit, run)
+	if row == nil {
+		t.Fatal("no run.ceiling.reassert row for the withheld credential: it went silently")
+	}
+	if hosts, _ := row["dropped_injection_hosts"].([]any); len(hosts) != 1 || hosts[0] != gateVendor {
+		t.Errorf("dropped_injection_hosts = %v, want [%s]", row["dropped_injection_hosts"], gateVendor)
+	}
+	if note, _ := row["note"].(string); !strings.Contains(note, "does not allow these hosts exactly") {
+		t.Errorf("note = %q, want the binding sentence", note)
+	}
+
+	// The sidecar boots over the config this run was dispatched with.
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/internal/injection/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: "Bearer k",
+			ExpiresAt: time.Now().Add(time.Hour).UnixMilli()})
+	}))
+	t.Cleanup(cp.Close)
+	pc.ControlPlaneURL = cp.URL // the harness's own is plain http to a name, which the proxy refuses
+	raw, err := runner.BuildProxyConfig(fr.lastSpec.RunID, pc, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
+		t.Fatalf("LoadConfigBytes over the dispatched config: %v", err)
+	}
+	cfg.Listen = "127.0.0.1:0"
+	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, nil)
+	if err != nil {
+		t.Fatalf("proxy.NewServer over an allow-all run's dispatched config: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = psrv.Shutdown(ctx)
 }
