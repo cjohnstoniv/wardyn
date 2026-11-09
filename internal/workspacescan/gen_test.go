@@ -183,7 +183,7 @@ func TestGenAgentToolDockerfile_EveryCurlRetries(t *testing.T) {
 		for _, line := range strings.Split(df, "\n") {
 			if strings.Contains(line, "curl ") {
 				curls++
-				if !strings.Contains(line, "curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 ") {
+				if !strings.Contains(line, "curl -fsSL --retry 20 --retry-connrefused --retry-max-time 300 --retry-delay 10 --connect-timeout 20 ") {
 					t.Errorf("%s: a fetch without the retry flags: %s", name, line)
 				}
 			}

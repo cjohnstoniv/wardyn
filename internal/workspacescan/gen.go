@@ -128,9 +128,11 @@ func claudeInstall(pin *InstallerPin, pinFile bool) string {
 const (
 	claudePinFile = "/usr/local/share/wardyn/inputs/claude-code"
 
-	// claudeCurl retries every error, as the image Dockerfiles' release downloads do: one
-	// dropped connection to downloads.claude.ai otherwise fails the whole workspace build.
-	claudeCurl = "curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20"
+	// claudeCurl retries a timeout, a refused connection and a 408, 429 or 5xx answer for up to
+	// five minutes: one dropped connection to downloads.claude.ai otherwise fails the whole
+	// workspace build. No --retry-all-errors: it needs curl 7.71, and an exported build may sit
+	// on an older base.
+	claudeCurl = "curl -fsSL --retry 20 --retry-connrefused --retry-max-time 300 --retry-delay 10 --connect-timeout 20"
 
 	claudeArch = `case "$(dpkg --print-architecture)" in \
       amd64) plat=linux-x64 ;; \

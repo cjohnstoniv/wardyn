@@ -255,12 +255,12 @@ RUN set -eu; \
             fi; \
             [ -n "$manifest_sum" ] || { echo "native download of $ver requires CLAUDE_MANIFEST_SHA256" >&2; exit 1; }; \
             printf '%s' "$manifest_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
-            curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
+            curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
             echo "$manifest_sum  /tmp/claude-manifest.json" | sha256sum --strict -c -; \
             sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
             [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
             printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
-            curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
+            curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
             echo "$sum  /usr/local/bin/claude" | sha256sum --strict -c -; \
             chmod 0755 /usr/local/bin/claude; \
             rm -f /tmp/claude-manifest.json; \
@@ -398,8 +398,8 @@ RUN set -eu; \
         printf '%s' "$sig_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
         base="https://awscli.amazonaws.com"; \
         url="${base}/awscli-exe-linux-${plat}-${AWS_CLI_VERSION}.zip"; \
-        curl -fsSL "$url" -o /tmp/awscliv2.zip; \
-        curl -fsSL "${url}.sig" -o /tmp/awscliv2.sig; \
+        curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "$url" -o /tmp/awscliv2.zip; \
+        curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "${url}.sig" -o /tmp/awscliv2.sig; \
         echo "$zip_sum  /tmp/awscliv2.zip" | sha256sum --strict -c -; \
         echo "$sig_sum  /tmp/awscliv2.sig" | sha256sum --strict -c -; \
         gpg --batch --no-tty --import /aws-cli-pubkey.asc; \
