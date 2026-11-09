@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// withholdUnboundInjections withholds every credential the run's proxy would refuse to start with, and
+// withholdUnboundDispatchInjections withholds every credential the run's proxy would refuse to start with, and
 // returns their hosts. The proxy starts only with an injection its policy binds exactly
 // (buildInjectorFor), and a policy can allow a host without binding it: by a wildcard or
 // allow_all_egress, or, after a layer's allowlist, by another port of the host only (layerWithheld
@@ -21,7 +21,7 @@ import (
 // still counts it in the one-credential-per-host check (p.unboundInjections). A remote MCP server's
 // credential is the broker's, on a host no allowlist names (rawEgressHosts), so dispatchMCP keeps
 // deciding it.
-func withholdUnboundInjections(policy *types.RunPolicySpec, p *dispatchParams, injections *[]runner.InjectionGrant) []string {
+func withholdUnboundDispatchInjections(policy *types.RunPolicySpec, p *dispatchParams, injections *[]runner.InjectionGrant) []string {
 	bound := proxy.CompilePolicy(sidecarPolicy(*policy, *p)).AllowedExactHost
 	var dropped []string
 	p.unboundInjections = nil
