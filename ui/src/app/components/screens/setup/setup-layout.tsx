@@ -10,7 +10,7 @@
 // (that comes from the caller). Reads the step data layer (./steps.ts) and
 // the StatusChip API. Review is the last step and has no launch CTA of its own
 // (step-bodies.tsx): the top bar's New run button is the one launch point.
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
@@ -119,6 +119,11 @@ export function SetupLayout({
 }) {
   const [showIntro, setShowIntro] = useState(false);
   const gateId = useId();
+  // A step change is state, not navigation, so the shell's <main> keeps its scroll offset: open each step at its top.
+  useEffect(() => {
+    const main = document.getElementById("main-content");
+    if (main) main.scrollTop = 0;
+  }, [current]);
   // #213 — `order` is now the REQUIRED walk only (steps.ts's REQUIRED_STEPS,
   // 4 long): `current` not being in it means an OPTIONAL step, reached via
   // the rail or Review rather than by walking Next through it. That is the
@@ -177,13 +182,14 @@ export function SetupLayout({
             rail taller than the viewport had no way to reach its own bottom
             (the phase rail's later steps). Bounded to the viewport with its
             own scroll.
-            100vh - 5rem, not -3rem: the sticky container is app-shell.tsx's
-            <main> (its own overflow-y:auto scroller), which starts BELOW the
-            h-14 (3.5rem/56px) header — sticky's `top-6` (1.5rem/24px) offset
-            is relative to THAT scroller, not the viewport, so the rail's
-            stuck position sits at 3.5rem+1.5rem = 5rem from the viewport
-            top, not 1.5rem. */}
-        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-5rem)] lg:self-start lg:overflow-y-auto">
+            The sticky container is app-shell.tsx's <main> (its own
+            overflow-y:auto scroller), which starts BELOW the header and any
+            banners: --shell-banner-h (the bottom edge of that stack, 3.5rem
+            with no banner) is what the visible <main> loses off the top.
+            sticky's `top-6` (1.5rem) offset is relative to THAT scroller,
+            so the rail's bottom gap needs 1.5rem more: viewport height minus
+            the banner stack minus 3rem. */}
+        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-var(--shell-banner-h,3.5rem)-3rem)] lg:self-start lg:overflow-y-auto">
           {rail}
         </aside>
 
