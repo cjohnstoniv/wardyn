@@ -94,6 +94,13 @@ describe("WorkspacesScreen — list columns", () => {
     expect(screen.getByText("acme/payments @main")).toBeInTheDocument();
   });
 
+  it("each row's actions menu is named after the workspace", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments" }), ws({}, { id: "ws-2", name: "billing" })]);
+    renderScreen();
+    expect(await screen.findByRole("button", { name: "Workspace actions: payments" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace actions: billing" })).toBeInTheDocument();
+  });
+
   it("Source column: a multi-source workspace shows the composition summary instead", async () => {
     const w = ws({}, {
       status: "scanned",

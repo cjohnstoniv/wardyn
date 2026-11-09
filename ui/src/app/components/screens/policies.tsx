@@ -308,7 +308,7 @@ export function PoliciesScreen() {
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-8" aria-label="Policy actions">
+                          <Button variant="ghost" size="icon" className="size-8" aria-label={`Policy actions: ${p.name}`}>
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>

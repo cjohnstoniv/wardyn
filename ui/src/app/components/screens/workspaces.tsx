@@ -348,7 +348,7 @@ export function WorkspacesScreen() {
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-8" aria-label="Workspace actions">
+                          <Button variant="ghost" size="icon" className="size-8" aria-label={`Workspace actions: ${w.name}`}>
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>

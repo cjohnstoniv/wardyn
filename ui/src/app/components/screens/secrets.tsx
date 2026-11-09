@@ -236,7 +236,7 @@ export function SecretsScreen() {
                     {ownSet.has(name) && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="size-8" aria-label="Secret actions">
+                        <Button variant="ghost" size="icon" className="size-8" aria-label={`Secret actions: ${name}`}>
                           <MoreHorizontal className="size-4" />
                         </Button>
                       </DropdownMenuTrigger>
