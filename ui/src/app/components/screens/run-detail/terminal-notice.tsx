@@ -286,9 +286,11 @@ function PaneFrame({
 
 function PaneNotice({ text, action }: { text: string; action?: React.ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-      <p className="max-w-md text-sm text-muted-foreground">{text}</p>
-      {action}
+    <div className="scroll-thin flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-6 text-center">
+      <div className="my-auto flex flex-col items-center gap-2">
+        <p className="max-w-md text-sm text-muted-foreground">{text}</p>
+        {action}
+      </div>
     </div>
   );
 }

@@ -73,8 +73,8 @@ export function StartupProgress({
   return (
     // The hero frame is dark in both themes (terminal-notice.tsx); `dark`
     // scopes the tokens so the list stays readable in the light theme.
-    <div className="dark flex min-h-0 flex-1 flex-col items-center justify-center p-6">
-      <div className="w-full max-w-sm space-y-2.5">
+    <div className="dark scroll-thin flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-6">
+      <div className="my-auto w-full max-w-sm space-y-2.5">
         <ProgressSteps rows={view.rows} testId="run-startup-progress" variant="run" />
         {view.hint && (
           <p role="status" className="text-xs leading-relaxed text-muted-foreground">
