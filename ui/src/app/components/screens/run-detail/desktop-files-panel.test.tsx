@@ -96,7 +96,7 @@ describe("DesktopFilesPanel", () => {
     await waitFor(() => expect(within(panel).getAllByTestId("desktop-upload")).toHaveLength(2));
     const [ok, big] = within(panel).getAllByTestId("desktop-upload");
     await waitFor(() => expect(ok.textContent).toContain(C.delivered));
-    expect(ok.textContent).toMatch(/sha256 c3a1…0e9d · \d\d:\d\d/);
+    expect(ok.textContent).toMatch(/sha256 c3a1…0e9d · [^·]*\d{1,2}:\d\d[^·]*/);
     await waitFor(() => expect(big.textContent).toContain(C.tooLarge));
     expect(big.textContent).toContain(C.tooLargeSub);
   });

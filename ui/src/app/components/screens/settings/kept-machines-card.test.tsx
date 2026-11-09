@@ -9,7 +9,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
-import { shortDate } from "../../../lib/format";
+import { mediumDate, shortDate } from "../../../lib/format";
 import { aheadByHours } from "../../../lib/test-clock";
 import { expandCard } from "../../../lib/test-dom";
 import type { KeptMachine, MyMachines } from "../../../lib/types";
@@ -66,7 +66,7 @@ describe("Your kept machines", () => {
     const a = rowOf(card, "dev");
     expect(within(a).getByText(T.CHIP_KEPT)).toBeInTheDocument();
     expect(within(a).getByText(T.META("Maya's MacBook", "Standard", 12))).toBeInTheDocument();
-    expect(within(a).getByText(T.DATES(shortDate(dev().last_used_at), shortDate(dev().expires_at)))).toBeInTheDocument();
+    expect(within(a).getByText(T.DATES(mediumDate(dev().last_used_at), mediumDate(dev().expires_at)))).toBeInTheDocument();
     const b = rowOf(card, "design-review");
     expect(within(b).getByText(T.CHIP_IN_USE)).toBeInTheDocument();
     expect(within(b).getByText(T.META("Maya's MacBook", "Xcode 26", 31))).toBeInTheDocument();

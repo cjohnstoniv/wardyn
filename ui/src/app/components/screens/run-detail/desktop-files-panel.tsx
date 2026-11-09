@@ -11,6 +11,7 @@ import { RotateCw } from "lucide-react";
 import { desktopFiles, type DesktopFilesView } from "../../../lib/api/desktop-files";
 import { approvals as approvalsApi } from "../../../lib/api/approvals";
 import { HttpError } from "../../../lib/api/core";
+import { shortTime } from "../../../lib/format";
 import type { ApprovalRequest, FileDownloadScope } from "../../../lib/types/approvals";
 import { usePoll } from "../../../lib/use-poll";
 import { Button } from "../../ui/button";
@@ -44,7 +45,7 @@ const PAUSED_POLL_MS = 4000;
 // Under review a decider answers the requests without this browser: read them while the From tab is open.
 export const REVIEW_POLL_MS = 5000;
 
-const clock = () => new Date().toTimeString().slice(0, 5);
+const clock = () => shortTime(new Date().toISOString());
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function Blocked({ title, why }: { title: string; why?: string }) {
