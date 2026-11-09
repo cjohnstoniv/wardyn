@@ -379,7 +379,7 @@ The Mac never mounts, checks or repairs the volume. It hands the file to the VM 
   - Wardyn sets the `com.apple.quarantine` attribute on every file and folder, which is what macOS reads to treat a file as downloaded.
 - **Limits on a copy.** At most 250,000 files and folders, and no more bytes than the Mac has free less 5 GiB. A name part over 255 bytes, a path over 1,024 bytes, an absolute name or a `..` ends the copy and removes it.
 - **The folder.** A copy goes only into an empty folder, which the command makes private (mode 0700) under your home. A link in its place is refused.
-  - After a discard, or a write-back that sent everything, the command removes what it copied, and the folder too if it made it. A folder that was already there stays, empty, and the closing line says so.
+  - After a discard, or a write-back that sent everything, the command moves a folder it made to the Trash. A folder that was already there is kept with what was copied into it, as is one changed after the write-back. The closing line says so.
   - The folder is kept when a write-back failed, or when some items (links, devices, pipes, set-id files) could not be written back, because it then holds the only copy of those changes. The closing line says which. Delete it yourself before the next `drive open` of that name.
   - A lock file, `.<name>.lock`, beside the folder keeps a second `drive open` of the same name out while the first runs. The lock goes with the command that holds it, even if that command is killed.
 - **A partial copy.** If the VM's `tar` could not read some items, the copy is kept and the command says how many are missing and what the VM said. Write back then replaces nothing, and `--delete` removes nothing, that the copy does not hold.
