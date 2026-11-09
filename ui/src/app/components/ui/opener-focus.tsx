@@ -1,4 +1,5 @@
 import * as React from "react";
+import { routerPath } from "../../lib/base-path";
 
 // Radix hands focus back on close only to a DialogTrigger. A dialog opened from state has none, so focus
 // fell to the page body. The content remembers the element that had focus when it mounted and, on close,
@@ -59,7 +60,10 @@ function recoverFocus(slot: Slot | null) {
     const row = rows[Math.min(slot.index, rows.length - 1)];
     const controls = row ? controlsOf(row) : [];
     const control = controls[Math.min(Math.max(slot.control, 0), controls.length - 1)];
-    if (control instanceof HTMLElement) return control.focus();
+    if (control instanceof HTMLElement) {
+      control.focus();
+      if (document.activeElement === control) return;
+    }
   }
   const target = document.querySelector<HTMLElement>("#main-content h1") ?? document.getElementById("main-content");
   if (target) focusEl(target);
@@ -85,7 +89,14 @@ function watchLoss(opener: Element, slot: Slot | null) {
     const active = document.activeElement;
     const lost = !active || active === document.body || !active.isConnected;
     if (opener.isConnected) {
-      if (active !== opener && !lost) stop();
+      if (active !== opener && !lost) return stop();
+      // Still there but focus is on the body: it was disabled under the focus (a request in flight). Take it back
+      // if it can hold focus again, else go to the next usable control.
+      if (lost) {
+        (opener as HTMLElement).focus?.();
+        if (document.activeElement !== opener) recoverFocus(slot);
+        stop();
+      }
       return;
     }
     if (lost) recoverFocus(slot);
@@ -97,30 +108,47 @@ function watchLoss(opener: Element, slot: Slot | null) {
     timer = setTimeout(check, SETTLE_MS);
   };
   const observer = new MutationObserver(arm);
-  observer.observe(document.body, { childList: true, subtree: true });
+  // `disabled` is watched too: a button disabled while it holds focus loses it without any node leaving the page.
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled"] });
   document.addEventListener("focusin", stop, true);
   if (!opener.isConnected) arm();
 }
 
 /**
  * For a caller that replaces the page under the person (a replace navigation, which the shell does not announce):
- * once the new page has drawn a heading different from the one on screen now, focus goes to it. A one-shot
- * observer, no timer; it gives up on the first DOM change after WATCH_MS.
+ * once the page at `arrival` has drawn a heading different from the one on screen now, focus goes to it. A
+ * one-shot observer, no timer. It gives up, without moving focus, when the person types or presses after it was
+ * armed, when they navigate somewhere other than `arrival`, when the page put focus inside itself, and on the
+ * first DOM change after WATCH_MS.
  */
-export function focusNextPageHeading() {
+export function focusNextPageHeading(arrival: string) {
   const before = document.querySelector("#main-content h1");
+  const start = routerPath();
   const until = Date.now() + WATCH_MS;
+  const stop = () => {
+    observer.disconnect();
+    document.removeEventListener("keydown", stop, true);
+    document.removeEventListener("pointerdown", stop, true);
+  };
+  // true: done (placed or abandoned); false: keep waiting.
   const place = () => {
+    const now = routerPath();
+    if (now !== arrival) return now !== start;
     const heading = document.querySelector<HTMLElement>("#main-content h1");
     if (!heading || heading === before) return false;
+    const main = document.getElementById("main-content");
+    const active = document.activeElement;
+    if (active && main?.contains(active) && active !== main) return true;
     if (!heading.hasAttribute("tabindex")) heading.tabIndex = -1;
     heading.focus({ preventScroll: true });
     return true;
   };
   const observer = new MutationObserver(() => {
-    if (Date.now() > until || place()) observer.disconnect();
+    if (Date.now() > until || place()) stop();
   });
   observer.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("keydown", stop, true);
+  document.addEventListener("pointerdown", stop, true);
 }
 
 /** Rendered inside the dialog content, so its first render reads the focused element before autofocus moves it. */
@@ -154,6 +182,12 @@ export function restoreOpenerFocus(
     if (el.isConnected) {
       event.preventDefault();
       el.focus();
+      // Connected is not focusable: a disabled opener (its action still in flight) takes no focus, which would
+      // sit on the body. Go to the next usable control instead.
+      if (document.activeElement !== el) {
+        recoverFocus(slots.get(el) ?? null);
+        return;
+      }
     }
     watchLoss(el, slots.get(el) ?? null);
   };

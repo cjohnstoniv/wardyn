@@ -416,7 +416,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     reauth.clearWriteDropped();
     reauth.setPhase("none");
     // The page is replaced under the person and the shell does not announce a replace: say where they are.
-    if (location.pathname !== "/runs") focusNextPageHeading();
+    if (location.pathname !== "/runs") focusNextPageHeading("/runs");
     void navigate("/runs", { replace: true });
   };
 
