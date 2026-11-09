@@ -59,7 +59,11 @@ export function IdentityWidget({
       ? RUN_PLACEMENT.MINE(runnerLabel(run))
       : RUN_PLACEMENT.OTHERS(runnerLabel(run), run.created_by)
     : run.placement === "remote"
-      ? RUN_PLACEMENT.REMOTE
+      ? run.runner_target === "docker"
+        ? RUN_PLACEMENT.DOCKER_HOST
+        : run.runner_target === "k8s"
+          ? RUN_PLACEMENT.KUBERNETES
+          : RUN_PLACEMENT.REMOTE
       : null;
   const runner = run.runner_name || run.runner_id || run.remote_runner_id || run.runner_target;
   const pool = run.runner_pool_name || run.runner_pool_id;

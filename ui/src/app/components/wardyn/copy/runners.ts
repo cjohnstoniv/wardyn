@@ -176,6 +176,9 @@ export const RUN_PLACEMENT = {
   LABEL: "Runs on",
   /** pending W-52: the recommended text until the owner answers. */
   REMOTE: "Remote-hosted runner",
+  /** A remote-hosted run says which kind of place it is when the run's runner_target names it. */
+  DOCKER_HOST: "Docker host",
+  KUBERNETES: "Kubernetes cluster",
   /** pending W-51: the recommended text until the owner answers. */
   MINE: (name: string) => `${name} · your computer`,
   OTHERS: (name: string, owner: string) => `${name} · ${owner}'s runner`,
