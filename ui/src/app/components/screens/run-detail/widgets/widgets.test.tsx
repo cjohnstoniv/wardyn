@@ -542,7 +542,7 @@ describe("IdentityWidget: where the run ran", () => {
 
   it("names the remote-hosted runner and its pool on a completed run that was not filled", () => {
     expect(rows({ placement: "remote", remote_runner_id: "k8s", runner_name: "Cluster A", runner_pool_id: "p1", runner_pool_name: "Build farm" })).toEqual({
-      placement: "Docker host",
+      placement: "Kubernetes cluster",
       runner: "Cluster A",
       pool: "Build farm",
     });
@@ -554,6 +554,10 @@ describe("IdentityWidget: where the run ran", () => {
     ["", "Remote-hosted runner"],
   ])("a remote run on runner_target %j reads %j", (runner_target, expected) => {
     expect(rows({ placement: "remote", runner_target }).placement).toBe(expected);
+  });
+
+  it("prefers the executor the run was placed on over the deployment's runner_target", () => {
+    expect(rows({ placement: "remote", runner_target: "docker", remote_runner_id: "k8s" }).placement).toBe("Kubernetes cluster");
   });
 
   it("names the person's own computer, and falls back to the ids when no names are known", () => {
