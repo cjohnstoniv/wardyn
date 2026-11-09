@@ -13,7 +13,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import * as React from "react";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ReauthLayer } from "./reauth-layer";
 import { OperatorProvider } from "./operator-context";
@@ -162,11 +163,24 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
   }
 
   // The page under the dialog: its h1 names the route, so a test can see which page took focus.
-  function PageHeading() {
-    return <h1>{useLocation().pathname === "/runs" ? "Runs" : "Settings"}</h1>;
+  // `lateRunsHeading` holds the Runs heading back until "reveal heading" is pressed, as a lazy chunk would.
+  function PageHeading({ lateRunsHeading }: { lateRunsHeading?: boolean }) {
+    const { pathname } = useLocation();
+    const navigate = useNavigate();
+    const [revealed, setRevealed] = React.useState(!lateRunsHeading);
+    // MemoryRouter never moves window.location; BrowserRouter does (before the page draws), and the heading watch reads it.
+    React.useLayoutEffect(() => window.history.replaceState(null, "", pathname), [pathname]);
+    return (
+      <>
+        {pathname === "/runs" ? revealed && <h1 key="runs">Runs</h1> : pathname === "/elsewhere" ? <h1 key="elsewhere">Elsewhere</h1> : <h1 key="settings">Settings</h1>}
+        <button type="button" onClick={() => setRevealed(true)}>reveal heading</button>
+        <button type="button" onClick={() => void navigate("/elsewhere")}>go elsewhere</button>
+        <button type="button">other control</button>
+      </>
+    );
   }
 
-  function Renewing({ from, onResumed, reloadAs, withHeading }: { from: Renewal; onResumed: (me: Me) => void; reloadAs: (path: string) => void; withHeading?: boolean }) {
+  function Renewing({ from, onResumed, reloadAs, withHeading, lateRunsHeading }: { from: Renewal; onResumed: (me: Me) => void; reloadAs: (path: string) => void; withHeading?: boolean; lateRunsHeading?: boolean }) {
     const { reauth, lapse } = useReauthController(reloadAs);
     return (
       <ReauthContext.Provider value={reauth}>
@@ -180,15 +194,16 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
         <output data-testid="signed-out">{String(reauth.signedOut)}</output>
         {/* The shell's own rule (app-shell.tsx): a watched sign-in keeps the layer. */}
         {(reauth.phase !== "none" || reauth.watch) && <ReauthLayer onResumed={onResumed} />}
+        {withHeading && <button type="button">outside control</button>}
         <main id="main-content" tabIndex={-1}>
-          {withHeading && <PageHeading />}
+          {withHeading && <PageHeading lateRunsHeading={lateRunsHeading} />}
         </main>
       </ReauthContext.Provider>
     );
   }
 
   /** Alice, an admin on /admin/settings, has clicked the banner's button. */
-  function startRenewal(over: Partial<Renewal> = {}, withHeading = false) {
+  function startRenewal(over: Partial<Renewal> = {}, withHeading = false, lateRunsHeading = false) {
     const popup = signInWindow();
     const onResumed = vi.fn();
     const reloadAs = vi.fn();
@@ -204,7 +219,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     render(
       <MemoryRouter initialEntries={["/admin/settings"]}>
         <OperatorProvider operator operatorResolved principal="alice">
-          <Renewing from={from} onResumed={onResumed} reloadAs={reloadAs} withHeading={withHeading} />
+          <Renewing from={from} onResumed={onResumed} reloadAs={reloadAs} withHeading={withHeading} lateRunsHeading={lateRunsHeading} />
         </OperatorProvider>
       </MemoryRouter>,
     );
@@ -273,6 +288,50 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     const runs = screen.getByRole("heading", { name: "Runs" });
     expect(runs).toHaveFocus();
     expect(document.activeElement).not.toBe(document.body);
+  });
+
+  // The Runs heading can arrive seconds later (a lazy chunk). What the person did meanwhile outranks it.
+  async function goToRunsWithLateHeading() {
+    answer = { body: alice({ role: "user", operator: false, security_operator: false }), status: 200 };
+    startRenewal({}, true, true);
+    await poll();
+    fireEvent.click(screen.getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.queryByRole("heading", { name: "Runs" })).toBeNull();
+  }
+  const reveal = () => act(() => void fireEvent.click(screen.getByRole("button", { name: "reveal heading" })));
+
+  it("T2c: a key pressed and focus moved before the Runs heading arrives keep that focus", async () => {
+    await goToRunsWithLateHeading();
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    screen.getByRole("button", { name: "outside control" }).focus();
+    await reveal();
+    expect(screen.getByRole("heading", { name: "Runs" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "outside control" })).toHaveFocus();
+  });
+
+  it("T2c2: focus the page placed inside itself before its heading arrives is kept", async () => {
+    await goToRunsWithLateHeading();
+    screen.getByRole("button", { name: "other control" }).focus();
+    await reveal();
+    expect(screen.getByRole("button", { name: "other control" })).toHaveFocus();
+  });
+
+  it("T2d: navigating elsewhere before the Runs heading arrives, the late Runs heading takes no focus", async () => {
+    await goToRunsWithLateHeading();
+    await act(async () => {
+      screen.getByRole("button", { name: "go elsewhere" }).click();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByRole("heading", { name: "Elsewhere" })).toBeInTheDocument();
+    // Runs is no longer the page; its heading cannot arrive, and nothing is pulled to it.
+    expect(document.activeElement).not.toBe(screen.getByRole("heading", { name: "Elsewhere" }));
+  });
+
+  it("T2e: a Runs heading that arrives late with the person idle still takes focus", async () => {
+    await goToRunsWithLateHeading();
+    await reveal();
+    expect(screen.getByRole("heading", { name: "Runs" })).toHaveFocus();
   });
 
   it("T3: the same person, expiry unchanged, keeps waiting until the window closes", async () => {
