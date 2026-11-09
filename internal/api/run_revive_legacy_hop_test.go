@@ -128,7 +128,7 @@ func TestReviveRun_PreTLSConfigKeepsMITMCAAndPolicy(t *testing.T) {
 	if cfg.RunID != f.run.ID || cfg.MITMCACertPEM != "ca-cert" || cfg.MITMCAKeyPEM != "ca-key" {
 		t.Errorf("run %s, MITM CA %q/%q; want this run and its own MITM CA carried over", cfg.RunID, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM)
 	}
-	if !slices.Equal(cfg.Policy.AllowedDomains, []string{"api.openai.com", "api.anthropic.com"}) {
+	if !slices.Equal(cfg.Policy.AllowedDomains, []string{"api.openai.com", "api.anthropic.com", "artifactory.corp.example"}) {
 		t.Errorf("allowed_domains = %v; want the frozen allowlist", cfg.Policy.AllowedDomains)
 	}
 	for _, host := range f.profile.Ceiling.DeniedDomains {

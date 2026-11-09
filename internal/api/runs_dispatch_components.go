@@ -440,9 +440,11 @@ func (s *Server) settleCredentialHosts(ctx context.Context, run types.AgentRun, 
 		return nil, false
 	}
 	p.Components.pruneUnpaired(injections)
-	grants, found := componentHostCollision(p.Components, site, policy, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run), injections)
+	// The ones withheld as unbound (reassertCeilingDenies) are counted too, as the proxy would have counted them.
+	composed := slices.Concat(injections, p.unboundInjections)
+	grants, found := componentHostCollision(p.Components, site, policy, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run), composed)
 	if !found {
-		grants, found = credentialHostCollision(injections, patGrants, p.Components.GitHubAPI)
+		grants, found = credentialHostCollision(composed, patGrants, p.Components.GitHubAPI)
 	}
 	if !found {
 		return patGrants, true

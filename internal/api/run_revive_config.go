@@ -32,7 +32,8 @@ type reasserted struct {
 // it unions the ceiling's denies into the frozen policy and drops every
 // injection, MCP server, brokered PAT host and MITM host withheld from the run:
 // the ceiling denies it, or a layer the revive's seal read (layers: the Wardyn
-// boundary) denies it or does not allow it (withholding). It runs after that
+// boundary) denies it or does not allow it (withholding), and every injection
+// the policy leaves unbound (withholdUnboundInjections). It runs after that
 // seal, never re-resolves the policy and never widens it.
 //
 // One lane cannot be dropped here. Dispatch withholds the git broker by
@@ -49,6 +50,7 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 	var re reasserted
 	w := withholding{deny: c.deny, layers: layers}
 	if !w.binds() {
+		re.droppedInjection = withholdUnboundInjections(cfg)
 		return re, nil
 	}
 	if len(cfg.GitGrants) > 0 && w.withheldAny(gitBrokerManagedHosts) {
@@ -103,6 +105,7 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		}
 		return false
 	})
+	re.droppedInjection = append(re.droppedInjection, withholdUnboundInjections(cfg)...)
 	// An MCP server keeps its header credential on its broker entry, not in Injection, so the drop
 	// above never sees it. A server on a withheld host goes, as dispatch drops one (dispatchMCP), and so
 	// do the harness bindings that name it.
@@ -133,6 +136,22 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		return ceilingDenies(c.deny, h) || w.layerWithheld(interceptionEntryHost(h))
 	})
 	return re, nil
+}
+
+// withholdUnboundInjections drops every injection the revived config's policy does not bind exactly
+// and returns their hosts, as dispatch withholds one (reassertCeilingDenies): the proxy refuses to
+// start with it (buildInjectorFor). It reads the policy the proxy starts with, after the seal and the
+// ceiling's denies. A remote MCP server's credential rides its broker entry, never Injection.
+func withholdUnboundInjections(cfg *proxy.Config) (hosts []string) {
+	bound := proxy.CompilePolicy(cfg.Policy).AllowedExactHost
+	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
+		if bound(strings.TrimSpace(in.Host)) { // as buildInjectorFor reads it
+			return false
+		}
+		hosts = append(hosts, in.Host)
+		return true
+	})
+	return hosts
 }
 
 // pruneUnpairedInterception drops every interception entry of a revived

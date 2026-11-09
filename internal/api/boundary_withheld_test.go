@@ -129,7 +129,7 @@ func TestBrokeredLanesWithheldByBoundary(t *testing.T) {
 // hosts it names (an injection and a PAT host here) and keeps the rest, with no allowlist of its own.
 func TestBrokeredLanesWithheldByARestrictionLayer(t *testing.T) {
 	srv, _, _, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
-	policy := types.RunPolicySpec{AllowAllEgress: true}
+	policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "gitlab.example"}} // a credential's host is listed exactly
 	gitID, patID := uuid.New(), uuid.New()
 	injections := []runner.InjectionGrant{componentRule("api.anthropic.com"), componentRule("gitlab.example")}
 	p := dispatchParams{GitGrants: map[string]uuid.UUID{"acme/app": gitID}, GitPATGrants: map[string]string{"gitlab.example": patID.String()}}
@@ -155,7 +155,7 @@ func TestBrokeredLanesWithheldByARestrictionLayer(t *testing.T) {
 // a launch-added one included — a grant outside them is dropped with its injection and listed.
 func TestBrokeredGrantEligibilityStrip(t *testing.T) {
 	srv, _, audit, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
-	policy := types.RunPolicySpec{AllowAllEgress: true}
+	policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "api.other.test"}} // a credential's host is listed exactly
 	kept, gone := types.CredentialGrant{ID: uuid.New(), Spec: anthropicKey}, types.CredentialGrant{ID: uuid.New(), Spec: otherKey}
 	injections := []runner.InjectionGrant{
 		{GrantID: kept.ID, Rule: egress.InjectionRule{Host: "api.anthropic.com"}},
@@ -283,6 +283,7 @@ func TestReviveWithheldByBoundary(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New()}
 	layers := boundaryOnly("api.anthropic.com")
 	cfg := &proxy.Config{RunID: run.ID,
+		Policy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}, // as the boundary's seal leaves it
 		Injection: []proxy.InjectionConfig{
 			{InjectionRule: egress.InjectionRule{Host: "api.anthropic.com"}, GrantID: uuid.New()},
 			{InjectionRule: egress.InjectionRule{Host: "api.other.test"}, GrantID: uuid.New()},

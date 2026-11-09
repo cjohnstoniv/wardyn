@@ -450,7 +450,7 @@ func TestReassertNamesOnlyTheLayersPresent(t *testing.T) {
 		{"boundary", listLayer("boundary", []string{"api.anthropic.com"}), true, false},
 	} {
 		srv, _, audit, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
-		policy := types.RunPolicySpec{AllowAllEgress: true}
+		policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "gitlab.example"}} // a credential's host is listed exactly
 		injections := []runner.InjectionGrant{componentRule("api.anthropic.com"), componentRule("gitlab.example")}
 		var p dispatchParams
 		var llm llmTransport
