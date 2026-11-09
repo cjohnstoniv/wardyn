@@ -89,7 +89,11 @@ export function RunsScreen() {
     [setSearchParams],
   );
 
-  const { workspaces: workspaceList } = useWorkspaceList();
+  const { workspaces: workspaceList, reload: reloadWorkspaces } = useWorkspaceList();
+  // The hook fetches nothing until asked; the names are what a run on a named workspace shows in place of "no repo".
+  React.useEffect(() => {
+    reloadWorkspaces();
+  }, [reloadWorkspaces]);
   const workspaceNames = React.useMemo(() => Object.fromEntries(workspaceList.map((w) => [w.id, w.name])), [workspaceList]);
 
   const [runsList, setRunsList] = React.useState<AgentRun[]>([]);
