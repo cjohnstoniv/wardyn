@@ -252,6 +252,25 @@ func TestDecidersClearEmptyUnitQueueModeHoldsNothing(t *testing.T) {
 		t.Errorf("clearing an empty unit wrote %d governance.deciders.set rows, want none", n)
 	}
 
+	// The admin token is the break-glass (govBypass): the same clear leaves no deciders.set row and no
+	// bypass row of the deciders kind, and total bypass rows do not grow.
+	bypassRows := len(e.audits("governance.change.bypass"))
+	if w := e.admin(http.MethodPut, decidersPath(e.a), decidersBody()); w.Code != http.StatusOK {
+		t.Fatalf("admin token clearing an empty unit = %d %s, want 200", w.Code, w.Body)
+	}
+	for _, row := range e.audits("governance.change.bypass") {
+		var data map[string]any
+		if json.Unmarshal(row.Data, &data) == nil && data["target_kind"] == govKindUnitDeciders {
+			t.Errorf("admin token clearing an empty unit left a deciders bypass row: %s", row.Data)
+		}
+	}
+	if n := len(e.audits("governance.change.bypass")); n != bypassRows {
+		t.Errorf("admin token clearing an empty unit grew bypass rows from %d to %d", bypassRows, n)
+	}
+	if n := len(e.audits("governance.deciders.set")); n != 0 {
+		t.Errorf("admin token clearing an empty unit wrote %d governance.deciders.set rows, want none", n)
+	}
+
 	set := e.pending(e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody(egressOwnerRule())))
 	e.approve(set.ID)
 	if got := e.storedDeciders(e.a); !slices.Equal(kindsOf(got), []string{"egress_domain"}) {
