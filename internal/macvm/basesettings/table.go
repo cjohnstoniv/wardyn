@@ -100,7 +100,7 @@ var table = []Row{
 	// macOS 26, and a plain `defaults write` into Safari's container can exit 0 and change nothing when the
 	// agent has no access to it, so the route reads the value back and skips the row if it did not land.
 	// Stage 2 only.
-	{Name: "safari-safe-browsing", User: Agent, Optional: true, Step: Step, Stage2Only: true,
+	{Name: "safari-safe-browsing", User: Agent, Optional: true, Step: Step, Stage2Only: true, Protected: true,
 		Argv: []string{defaultsTool, "write", safariPrefs, "WarnAboutFraudulentWebsites", "-bool", "false"},
 		Read: &Read{Argv: []string{defaultsTool, "read", safariPrefs, "WarnAboutFraudulentWebsites"}, Want: "0"}},
 

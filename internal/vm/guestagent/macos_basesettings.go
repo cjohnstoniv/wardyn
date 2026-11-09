@@ -48,6 +48,8 @@ const (
 	reasonNoConsole    = "nobody at the console"
 	reasonOtherConsole = "the console is not the agent account's"
 	reasonConsoleRead  = "the console user was not read"
+	// reasonNeedsFullDiskAccess is the skip reason of a protected row macOS refused to write.
+	reasonNeedsFullDiskAccess = "needs Full Disk Access for the guest agent"
 
 	// baseSettingsCmdTimeout bounds each command the route runs.
 	baseSettingsCmdTimeout = 30 * time.Second
@@ -211,7 +213,12 @@ func (b *baseSettingsRun) apply() {
 			}
 			argv = b.asAgent(argv...)
 		}
-		if _, why := b.exec(argv); why != "" {
+		if o, why := b.exec(argv); why != "" {
+			// The refusal can sit past the output's first line, which is all the reason keeps.
+			if r.Protected && strings.Contains(o, "Could not write domain") {
+				slog.Warn("guest agent: tools mode: base settings: a protected container refused the write", "row", r.Name, "output", strings.TrimSpace(o))
+				why = reasonNeedsFullDiskAccess
+			}
 			b.skip(r.Name, why)
 			continue
 		}

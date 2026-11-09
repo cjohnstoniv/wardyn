@@ -4,6 +4,7 @@
 package guestagent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,7 @@ type baseRig struct {
 	store    map[string]map[string]string // plist path -> key -> printed value
 	dropKeys map[string]bool              // keys whose write the guest silently loses
 	failArgv func(argv []string) bool
+	failOut  string // what a failed command prints; "boom" when empty
 	swVers   map[string]string
 }
 
@@ -56,7 +58,7 @@ func newBaseRig(t *testing.T) *baseRig {
 		}
 		rig.log = append(rig.log, c)
 		if rig.failArgv != nil && rig.failArgv(c.argv) {
-			return []byte("boom"), 1, nil
+			return []byte(cmp.Or(rig.failOut, "boom")), 1, nil
 		}
 		switch a := c.argv; {
 		case a[0] == "/usr/bin/sw_vers" && len(a) == 2:
@@ -413,5 +415,26 @@ func TestBaseSettingsRouteSafariReadBackMismatchIsSkipped(t *testing.T) {
 	sk := skippedNames(t, out)
 	if len(sk) != 1 || sk["safari-safe-browsing"] != "did not land" {
 		t.Fatalf("skipped %v", sk)
+	}
+}
+
+// A Safari write macOS refuses with "Could not write domain" is skipped as needing Full Disk Access for the
+// guest agent, not with the raw defaults error; a failing unprotected row keeps its exit reason.
+func TestBaseSettingsRouteSafariRefusedWriteNeedsFullDiskAccess(t *testing.T) {
+	rig := newBaseRig(t)
+	rig.failOut = "2026-11-09 10:00:00.000 defaults[1:2] \nCould not write domain /Users/agent/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari; exiting"
+	rig.failArgv = func(a []string) bool {
+		return slices.Contains(a, "write") && slices.Contains(a, safariKey) || slices.Equal(a, []string{"/usr/bin/mdutil", "-a", "-i", "off"})
+	}
+	code, out := rig.post(baseSettings, "")
+	if code != 200 {
+		t.Fatalf("= %d", code)
+	}
+	sk := skippedNames(t, out)
+	if got := sk["safari-safe-browsing"]; got != "needs Full Disk Access for the guest agent" {
+		t.Fatalf("safari reason %q", got)
+	}
+	if got := sk["spotlight-off"]; !strings.HasPrefix(got, "exit 1") || strings.Contains(got, "Full Disk Access") {
+		t.Fatalf("an unprotected row's reason %q, want the exit reason", got)
 	}
 }
