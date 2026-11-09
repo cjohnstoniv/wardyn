@@ -292,6 +292,20 @@ describe("RunRow — the status pill", () => {
 });
 
 // Mock r15 T1-b: a live service says its health in place of Running, on the same row and under the same group.
+describe("RunRow — the glyph and the chip are one colour", () => {
+  const glyphOf = (container: HTMLElement) => container.querySelector("svg[aria-hidden='true']") as SVGElement;
+
+  it.each([
+    ["RUNNING", "text-success"],
+    ["COMPLETED", "text-success"],
+    ["KILLED", "text-danger"],
+    ["PENDING", "text-muted-foreground"],
+  ] as const)("a %s row draws its glyph in %s", (state, cls) => {
+    const { container } = renderRow(makeRun({ state }));
+    expect(glyphOf(container).getAttribute("class")).toContain(cls);
+  });
+});
+
 describe("RunRow: a live service's health chip", () => {
   const pillOf = (word: string) => screen.getByText(word).closest("span[class*='rounded']") as HTMLElement;
   const service = (service_status?: AgentRun["service_status"], over: Partial<AgentRun> = {}) =>

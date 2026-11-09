@@ -191,6 +191,9 @@ const runStateMeta: Record<
   KILLED: { tone: "danger", label: "Killed", Icon: ShieldX, solid: true },
 };
 
+/** The badge's tone for a run state: the one colour a state has, which the runs row's glyph follows. */
+export const runStateTone = (s: string): Tone => metaFor(runStateMeta, s, { tone: "neutral", label: s }).tone;
+
 /** The badge's label for a run state, for surfaces that name states in prose. */
 export const runStateLabel = (s: string): string => metaFor(runStateMeta, s, { tone: "neutral", label: s }).label;
 

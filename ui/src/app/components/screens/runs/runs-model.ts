@@ -28,7 +28,9 @@ import { statusDetailSentence } from "../run-status-detail";
 import { scheduledWait } from "./scheduled-state";
 import { ordinal } from "../../../lib/ordinal";
 
-export type RowHue = "blue" | "amber" | "red" | "grey";
+// green, blue, red and grey follow the state badge's success, info, danger and neutral tones (CONSOLE-RULES section 5);
+// amber is the needs-you hue and has no badge tone of its own.
+export type RowHue = "green" | "blue" | "amber" | "red" | "grey";
 export type RowAction = "review" | "sign-in" | "revive" | "take-over" | "cancel" | null;
 
 export interface RowPresentation {
@@ -148,7 +150,7 @@ export function rowPresentation(run: AgentRun, adminView = false): RowPresentati
       // upcoming warning stays the plain Running word.
       const stage = endsWarningStage(run.ends_at, Date.now(), Date.parse(run.ends_at ?? "") - Date.parse(run.created_at));
       if (stage) return { hue: "amber", word: endsWarningWord(stage), action: null, needsYou: false };
-      return { hue: "blue", word: RUNS_ROW_WORD.RUNNING, action: null, needsYou: false };
+      return { hue: "green", word: RUNS_ROW_WORD.RUNNING, action: null, needsYou: false };
     }
     case "STARTING":
       return {
@@ -163,7 +165,7 @@ export function rowPresentation(run: AgentRun, adminView = false): RowPresentati
       };
     case "PENDING":
       return {
-        hue: "blue",
+        hue: "grey",
         word: RUNS_ROW_WORD.PENDING,
         subword: statusDetailSentence(run.status_detail, run.status_reason) || undefined,
         action: null,
@@ -191,11 +193,11 @@ export function rowPresentation(run: AgentRun, adminView = false): RowPresentati
       // but degrade to the live word rather than the terminal grey below.
       return { hue: "blue", word: RUNS_ROW_WORD.RUNNING, action: null, needsYou: false };
     case "COMPLETED":
-      return { hue: "grey", word: "Completed", action: null, needsYou: false };
+      return { hue: "green", word: "Completed", action: null, needsYou: false };
     case "FAILED":
       return { hue: "red", word: "Failed", action: null, needsYou: false };
     case "KILLED":
-      return { hue: "grey", word: "Killed", action: null, needsYou: false };
+      return { hue: "red", word: "Killed", action: null, needsYou: false };
     case "STOPPED":
       return { hue: "grey", word: "Stopped", action: null, needsYou: false };
     case "ARCHIVED":
