@@ -28,6 +28,8 @@ type elevationPayload struct {
 	UnitID   uuid.UUID `json:"unit_id"`
 	Subject  string    `json:"subject"`
 	Duration string    `json:"duration"` // types.CanonicalDuration
+	// Groups are the rule's eligible_requesters entries the requester matched when asking, in the rule's order.
+	Groups []string `json:"groups,omitempty"`
 }
 
 // elevationAfter is the diff's after side.
@@ -69,7 +71,7 @@ func proposeElevation(s *Server, w http.ResponseWriter, r *http.Request, body go
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "image is not a field of an elevation request")
 		return
 	}
-	unit, rule, ref, err := s.elevationUnitAndRule(ctx, body.UnitID)
+	unit, rule, groups, ref, err := s.elevationUnitAndRule(ctx, body.UnitID)
 	if err == nil && ref == nil {
 		ref = elevationDuration(unit, *rule, body.Duration)
 	}
@@ -97,7 +99,7 @@ func proposeElevation(s *Server, w http.ResponseWriter, r *http.Request, body go
 		return
 	}
 	dur, _ := time.ParseDuration(body.Duration)
-	payload := elevationPayload{UnitID: unit.ID, Subject: types.CanonicalUserSubject(who.principal), Duration: types.CanonicalDuration(dur)}
+	payload := elevationPayload{UnitID: unit.ID, Subject: types.CanonicalUserSubject(who.principal), Duration: types.CanonicalDuration(dur), Groups: groups}
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: types.GovernanceTargetElevation, op: "create", key: key, payload: payload,
 		after:   elevationAfter{UnitID: unit.ID, UnitName: unit.Name, Subject: payload.Subject, Duration: payload.Duration},
@@ -118,33 +120,33 @@ func proposeElevation(s *Server, w http.ResponseWriter, r *http.Request, body go
 }
 
 // elevationUnitAndRule is create steps 4.1-4.2a: the unit (not Default, known), its met elevation rule,
-// and the caller's eligibility under it. Every miss is notOffered.
-func (s *Server) elevationUnitAndRule(ctx context.Context, rawUnit string) (types.GovernanceUnit, *types.DeciderRule, *elevationRefusal, error) {
+// the caller's eligibility under it and the eligible_requesters entries they matched. Every miss is notOffered.
+func (s *Server) elevationUnitAndRule(ctx context.Context, rawUnit string) (types.GovernanceUnit, *types.DeciderRule, []string, *elevationRefusal, error) {
 	id, err := uuid.Parse(rawUnit)
 	if err != nil {
-		return types.GovernanceUnit{}, nil, notOffered("this unit"), nil
+		return types.GovernanceUnit{}, nil, nil, notOffered("this unit"), nil
 	}
 	units, err := s.unitOutlines(ctx)
 	if err != nil {
-		return types.GovernanceUnit{}, nil, nil, err
+		return types.GovernanceUnit{}, nil, nil, nil, err
 	}
 	i := slices.IndexFunc(units, func(u types.GovernanceUnit) bool { return u.ID == id })
 	if i < 0 || isDefaultUnit(units[i]) {
-		return types.GovernanceUnit{}, nil, notOffered("this unit"), nil
+		return types.GovernanceUnit{}, nil, nil, notOffered("this unit"), nil
 	}
 	unit := units[i]
 	rule, _, err := s.requestRuleFor(ctx, nil, unit.ID, types.DeciderKindElevation)
 	if err != nil {
-		return unit, nil, nil, fmt.Errorf("%w: %w", errDecidersRead, err)
+		return unit, nil, nil, nil, fmt.Errorf("%w: %w", errDecidersRead, err)
 	}
-	ok, err := s.elevationEligible(ctx, rule)
+	groups, err := s.elevationMatchedGroups(ctx, rule)
 	if err != nil {
-		return unit, nil, nil, err
+		return unit, nil, nil, nil, err
 	}
-	if !ok {
-		return unit, nil, notOffered(unit.Name), nil
+	if len(groups) == 0 {
+		return unit, nil, nil, notOffered(unit.Name), nil
 	}
-	return unit, rule, nil, nil
+	return unit, rule, groups, nil, nil
 }
 
 // isDefaultUnit is whether u is the Default unit, which offers no elevation.
@@ -153,22 +155,33 @@ func isDefaultUnit(u types.GovernanceUnit) bool {
 }
 
 // elevationEligible is create step 2a: a rule, a usable group snapshot, and a group of the rule's
-// eligible_requesters the caller is in (callerInGroup: a bare API token only with WARDYN_ROLE_STAMP_TTL set).
+// eligible_requesters the caller is in.
 func (s *Server) elevationEligible(ctx context.Context, rule *types.DeciderRule) (bool, error) {
+	groups, err := s.elevationMatchedGroups(ctx, rule)
+	return len(groups) > 0, err
+}
+
+// elevationMatchedGroups is the rule's eligible_requesters entries the caller is in, in the rule's order
+// (callerInGroup: a bare API token only with WARDYN_ROLE_STAMP_TTL set). None for no rule or a stale or
+// truncated group snapshot.
+func (s *Server) elevationMatchedGroups(ctx context.Context, rule *types.DeciderRule) ([]string, error) {
 	if rule == nil {
-		return false, nil
+		return nil, nil
 	}
 	subj, err := s.callerSubjects(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if subj.stale || oidcGroupsTruncatedFromContext(ctx) {
-		return false, nil
+		return nil, nil
 	}
-	return slices.ContainsFunc(rule.EligibleRequesters, func(entry string) bool {
-		g, ok := types.DeciderGroupOf(entry)
-		return ok && s.callerInGroup(ctx, g)
-	}), nil
+	var matched []string
+	for _, entry := range rule.EligibleRequesters {
+		if g, ok := types.DeciderGroupOf(entry); ok && s.callerInGroup(ctx, g) {
+			matched = append(matched, entry)
+		}
+	}
+	return matched, nil
 }
 
 // elevationDuration is create step 4.3: at least 15m and at most the met rule's max_elevation.
@@ -400,6 +413,10 @@ func applyElevationChange(s *Server, r *http.Request, q store.Querier, ch types.
 		return govApplied{}, err
 	}
 	if rule == nil || dur > rule.MaxElevationDuration() {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	// The rule must still name a group the person matched when asking; a request saved without groups fails closed.
+	if !slices.ContainsFunc(p.Groups, func(g string) bool { return slices.Contains(rule.EligibleRequesters, g) }) {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	now := s.cfg.Now().UTC()

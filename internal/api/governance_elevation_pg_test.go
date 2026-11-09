@@ -890,6 +890,28 @@ func TestElevationApplyStaleWhenRuleRemoved(t *testing.T) {
 	}
 }
 
+// TestElevationApplyStaleWhenRequesterGroupDropped: a request asked under eligible_requesters [support] is
+// stale once the rule names only ops, and still applies while the rule keeps the group.
+func TestElevationApplyStaleWhenRequesterGroupDropped(t *testing.T) {
+	e := newElevEnv(t)
+	other, sub := e.requester()
+	dropped := e.ask(other, e.a1, "1h", "")
+	e.setRules(e.a1, elevationRule(func(r *types.DeciderRule) { r.EligibleRequesters = []string{"group:el-ops"} }))
+	_ = e.call(e.alice, http.MethodPost, requestPath(dropped.Pending.ID, "approve"), "")
+	if s := e.changeState(dropped.Pending.ID); s != types.GovernanceChangeStale || e.elevation(e.a1, sub) != nil {
+		t.Errorf("a request whose requester group left the rule = %s, want stale and no membership", s)
+	}
+	kept, sub2 := e.requester()
+	still := e.ask(kept, e.a1, "1h", "")
+	e.setRules(e.a1, elevationRule(func(r *types.DeciderRule) { r.EligibleRequesters = []string{"group:el-ops", "group:" + elevRequesters} }))
+	if w := e.call(e.alice, http.MethodPost, requestPath(still.Pending.ID, "approve"), ""); w.Code != http.StatusOK {
+		t.Fatalf("approve with the group still named = %d %s, want 200", w.Code, w.Body)
+	}
+	if e.elevation(e.a1, sub2) == nil {
+		t.Errorf("no membership after approving with the group still named")
+	}
+}
+
 func TestElevationApplyReplacesExpiredUnsweptRow(t *testing.T) {
 	e := newElevEnv(t)
 	got := e.ask(e.req, e.a1, "1h", "")
