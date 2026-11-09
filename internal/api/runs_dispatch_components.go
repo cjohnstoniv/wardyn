@@ -433,7 +433,7 @@ const credentialHostCollisionHint = "This run was not launched: two of its crede
 // The audit row names the grants involved, never the host (the run's own
 // grant rows carry it).
 func (s *Server) settleCredentialHosts(ctx context.Context, run types.AgentRun, p *dispatchParams, policy types.RunPolicySpec,
-	site types.SiteConfig, rows []types.CredentialGrant, injections []runner.InjectionGrant,
+	site types.SiteConfig, rows []types.CredentialGrant, injections, unbound []runner.InjectionGrant,
 ) (map[string]proxy.PATGrant, bool) {
 	patGrants, ok := s.scopedPATGrants(ctx, run, *p, rows)
 	if !ok {
@@ -441,7 +441,7 @@ func (s *Server) settleCredentialHosts(ctx context.Context, run types.AgentRun, 
 	}
 	p.Components.pruneUnpaired(injections)
 	// The ones withheld as unbound (reassertCeilingDenies) are counted too, as the proxy would have counted them.
-	composed := slices.Concat(injections, p.unboundInjections)
+	composed := slices.Concat(injections, unbound)
 	grants, found := componentHostCollision(p.Components, site, policy, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run), composed)
 	if !found {
 		grants, found = credentialHostCollision(composed, patGrants, p.Components.GitHubAPI)

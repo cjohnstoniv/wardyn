@@ -13,27 +13,34 @@ import (
 )
 
 // withholdUnboundDispatchInjections withholds every credential the run's proxy would refuse to start with, and
-// returns their hosts. The proxy starts only with an injection its policy binds exactly
+// returns them. The proxy starts only with an injection its policy binds exactly
 // (buildInjectorFor), and a policy can allow a host without binding it: by a wildcard or
 // allow_all_egress, or, after a layer's allowlist, by another port of the host only (layerWithheld
 // reads both as allowing it). Each such credential is withheld here, read from the policy the sidecar
 // starts with, so the run starts without it; settleCredentialHosts drops its interception entry and
-// still counts it in the one-credential-per-host check (p.unboundInjections). A remote MCP server's
+// still counts it in the one-credential-per-host check (dispatchRun hands it over; it never rides
+// dispatchParams, so nothing withheld can travel with a dispatch). A remote MCP server's
 // credential is the broker's, on a host no allowlist names (rawEgressHosts), so dispatchMCP keeps
 // deciding it.
-func withholdUnboundDispatchInjections(policy *types.RunPolicySpec, p *dispatchParams, injections *[]runner.InjectionGrant) []string {
-	bound := proxy.CompilePolicy(sidecarPolicy(*policy, *p)).AllowedExactHost
-	var dropped []string
-	p.unboundInjections = nil
+func withholdUnboundDispatchInjections(policy *types.RunPolicySpec, p dispatchParams, injections *[]runner.InjectionGrant) (unbound []runner.InjectionGrant) {
+	bound := proxy.CompilePolicy(sidecarPolicy(*policy, p)).AllowedExactHost
 	*injections = slices.DeleteFunc(slices.Clone(*injections), func(in runner.InjectionGrant) bool {
 		if bound(strings.TrimSpace(in.Rule.Host)) || brokeredMCPRule(p.Components.MCP, in.Rule.Host) { // as buildInjectorFor reads it
 			return false
 		}
-		p.unboundInjections = append(p.unboundInjections, in)
-		dropped = append(dropped, in.Rule.Host)
+		unbound = append(unbound, in)
 		return true
 	})
-	return dropped
+	return unbound
+}
+
+// hostsOfInjections is the hosts of ins, in order.
+func hostsOfInjections(ins []runner.InjectionGrant) []string {
+	hosts := make([]string, 0, len(ins))
+	for _, in := range ins {
+		hosts = append(hosts, in.Rule.Host)
+	}
+	return hosts
 }
 
 // brokeredMCPRule reports whether an injection on host is a remote MCP server's credential, the one

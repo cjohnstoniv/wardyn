@@ -81,7 +81,7 @@ func TestUnboundInjectionWithheldWithNoLayer(t *testing.T) {
 			var p dispatchParams
 			var llm llmTransport
 			var bedrock []string
-			srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, dispatchCeiling{resolved: true}, nil,
+			_, unbound := srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, dispatchCeiling{resolved: true}, nil,
 				nil, &p, map[string]string{}, &llm, &bedrock, nil)
 
 			want := []runner.InjectionGrant{kept, vendor}
@@ -94,8 +94,8 @@ func TestUnboundInjectionWithheldWithNoLayer(t *testing.T) {
 			assertAllBound(t, policy, injections)
 			row := reassertRow(t, audit, run)
 			if !tc.held {
-				if row != nil || len(p.unboundInjections) != 0 {
-					t.Errorf("row %v, unbound %v: a run that withheld nothing wrote a row", row, p.unboundInjections)
+				if row != nil || len(unbound) != 0 {
+					t.Errorf("row %v, unbound %v: a run that withheld nothing wrote a row", row, unbound)
 				}
 				return
 			}
