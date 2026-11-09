@@ -198,6 +198,8 @@ type poolState struct {
 	availability string
 	reason       runnerpool.Reason
 	own          []poolTarget
+	// org is an available organization pool's claimed organization runners (orgRunnerTargets), none while local is denied.
+	org []poolTarget
 }
 
 func (st poolState) choice(row store.RunnerPoolCatalogueRow) client.RunnerPoolChoice {
@@ -222,16 +224,16 @@ func (s *Server) poolAvailability(ctx context.Context, ps store.RunnerPoolStore,
 	case row.Pool.State != types.RunnerPoolActive:
 		return unavailable(runnerpool.ReasonUnavailable)
 	case row.Pool.Scope == types.RunnerPoolOrganization:
-		if s.anyConfigured(row) && !remoteDenied {
-			return poolState{availability: client.RunnerPoolAvailable}, nil
-		}
 		// Claimed organization runners are candidates of the local kind (poolTarget.placement), as placement offers them.
 		org, refusal := s.orgRunnerTargets(ctx, ps, row)
 		switch {
 		case refusal != nil:
 			return poolState{}, refusal
-		case len(org) > 0 && !localDenied:
-			return poolState{availability: client.RunnerPoolAvailable}, nil
+		case s.anyConfigured(row) && !remoteDenied, len(org) > 0 && !localDenied:
+			if localDenied {
+				org = nil // a local deny holds the organization runners, so they are no candidates
+			}
+			return poolState{availability: client.RunnerPoolAvailable, org: org}, nil
 		case remoteDenied || len(org) > 0:
 			return unavailable(runnerpool.AvailabilityPlacementDenied)
 		}

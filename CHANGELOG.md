@@ -108,7 +108,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- An organisation runner pool holding only cluster runners now shows as available, with those runners in its capacity; runs already placed on them.
+- An organisation runner pool holding only organisation runners now shows as available, with those runners in its capacity and its barrier options; runs already placed on them. An organisation pool with remote-hosted runners and organisation runners now stays available under a deny of remote placement, as runs already did.
 - After a revive, a run's recorded policy and its policy view showed the organisation's recording level instead of the run's own; the recording itself was never changed. A revive now starts from the run's recorded policy and is refused (503) when that cannot be read.
 - A run that has reached its lifetime cap is refused at once, before the lease sweep ends it: its credential and approval requests, its token renewal and decisions on its pending approvals (`409 approval_run_past_lifetime`). A queued run whose cap passed while it waited ends without starting (`max_lifetime_reached`).
 - A run's model token usage now counts a call to the OpenAI Responses API that went through a gateway such as LiteLLM: the gateway ends the stream with the chat stream's `data: [DONE]` line, which the meter read as a malformed answer and showed the call as not counted.

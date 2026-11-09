@@ -143,11 +143,23 @@ func TestPG_OrgPoolOfClusterRunnersOnlyIsAvailable(t *testing.T) {
 	}
 
 	list, _ := e.list(e.person, "")
-	if got := entryOf(t, list, cluster.ID); got.Availability != client.RunnerPoolAvailable || got.Reason != "" || got.Capacity == nil || got.Capacity.Runners != 1 {
+	got := entryOf(t, list, cluster.ID)
+	if got.Availability != client.RunnerPoolAvailable || got.Reason != "" || got.Capacity == nil || got.Capacity.Runners != 1 {
 		t.Errorf("cluster runner only: %s %q capacity %+v, want available with 1 runner", got.Availability, got.Reason, got.Capacity)
 	}
-	if got := entryOf(t, list, foreign.ID); got.Availability != client.RunnerPoolUnavailable || got.Reason != runnerpool.ReasonNoEligibleMember {
-		t.Errorf("another organisation's runner: %s %q, want unavailable no_eligible_member", got.Availability, got.Reason)
+	// The runner is online and offers every class (orgRunner), so the barriers are known: all three
+	// available, the strongest the server's default.
+	for _, o := range got.BarrierOptions {
+		if !o.Available || o.Default != (o.Class == types.CC3) {
+			t.Errorf("cluster runner only: barrier %+v, want available, and only %s the default", o, types.CC3)
+		}
+	}
+	if len(got.BarrierOptions) != 3 {
+		t.Errorf("cluster runner only: %d barrier options, want 3", len(got.BarrierOptions))
+	}
+	if got := entryOf(t, list, foreign.ID); got.Availability != client.RunnerPoolUnavailable || got.Reason != runnerpool.ReasonNoEligibleMember ||
+		got.Capacity == nil || got.Capacity.Runners != 0 {
+		t.Errorf("another organisation's runner: %s %q capacity %+v, want unavailable no_eligible_member with 0 runners", got.Availability, got.Reason, got.Capacity)
 	}
 	if got := entryOf(t, list, remote.ID); got.Availability != client.RunnerPoolAvailable || got.Reason != "" {
 		t.Errorf("remote-hosted pool: %s %q, want available", got.Availability, got.Reason)
@@ -161,9 +173,10 @@ func TestPG_OrgPoolOfClusterRunnersOnlyIsAvailable(t *testing.T) {
 // does: a local deny makes a cluster-runner pool placement_denied, a remote deny leaves it available.
 func TestPG_OrgPoolOfClusterRunnersFollowsDenyPlacements(t *testing.T) {
 	for _, tc := range []struct {
-		deny types.Placement
-		want runnerpool.Reason
-	}{{types.PlacementLocal, runnerpool.AvailabilityPlacementDenied}, {types.PlacementRemote, ""}} {
+		deny  types.Placement
+		want  runnerpool.Reason
+		avail string
+	}{{types.PlacementLocal, runnerpool.AvailabilityPlacementDenied, client.RunnerPoolUnavailable}, {types.PlacementRemote, "", client.RunnerPoolAvailable}} {
 		e := newPlacementEnv(t)
 		pool := e.createPool("Cluster", types.RunnerPoolOrganization)
 		if w := e.admin(http.MethodPut, orgRunnerPath(pool.ID, e.orgRunner()), ""); w.Code != http.StatusCreated {
@@ -171,8 +184,9 @@ func TestPG_OrgPoolOfClusterRunnersFollowsDenyPlacements(t *testing.T) {
 		}
 		e.assignProfile("deny "+string(tc.deny), types.GovernanceLimits{DenyPlacements: []types.Placement{tc.deny}})
 		list, _ := e.list(e.person, "")
-		if got := entryOf(t, list, pool.ID); got.Reason != tc.want {
-			t.Errorf("deny %s: reason %q, want %q", tc.deny, got.Reason, tc.want)
+		got := entryOf(t, list, pool.ID)
+		if got.Reason != tc.want || got.Availability != tc.avail || (got.Reason == "") != (got.Availability == client.RunnerPoolAvailable) {
+			t.Errorf("deny %s: %s %q, want %s %q", tc.deny, got.Availability, got.Reason, tc.avail, tc.want)
 		}
 	}
 }
