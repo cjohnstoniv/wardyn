@@ -304,6 +304,9 @@ describe("AvailabilityControl — states.html", () => {
     await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
 
     const err = await screen.findByText(UNKNOWN_TYPE);
+    // Announced, and tied to the field it is about.
+    expect(err).toHaveAttribute("role", "alert");
+    expect(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveAccessibleDescription(UNKNOWN_TYPE);
     expect(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER)).toHaveValue("analyst");
     // Under the adder, above the note — not a toast.
     const input = screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER);

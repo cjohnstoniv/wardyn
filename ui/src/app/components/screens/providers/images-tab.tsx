@@ -357,10 +357,15 @@ function AddImageDialog({
                 onChange={(e) => setRef(e.target.value)}
                 disabled={saving}
                 aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "add-image-error" : undefined}
                 className="font-mono"
               />
             </Field>
-            {error && <p className="text-xs leading-snug text-danger">{error}</p>}
+            {error && (
+              <p id="add-image-error" role="alert" className="text-xs leading-snug text-danger">
+                {error}
+              </p>
+            )}
             <div className="border-t border-border pt-4">
               <AvailabilityDraft draft={draft} onChange={setDraft} disabled={saving} adminsOnly />
             </div>

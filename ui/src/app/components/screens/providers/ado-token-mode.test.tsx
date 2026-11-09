@@ -184,7 +184,8 @@ describe("state 3: setup errors", () => {
     const field = screen.getByLabelText(ADO_PAT.TOKEN_LIFE_LABEL);
     await userEvent.clear(field);
     await userEvent.type(field, "400");
-    expect(screen.getByText(ADO_PAT.TOKEN_LIFE_RANGE)).toBeInTheDocument();
+    expect(screen.getByText(ADO_PAT.TOKEN_LIFE_RANGE)).toHaveAttribute("role", "alert");
+    expect(field).toHaveAccessibleDescription(ADO_PAT.TOKEN_LIFE_RANGE);
     expect(screen.queryByText(ADO_PAT.TOKEN_LIFE_HINT)).not.toBeInTheDocument();
     expect(field).toHaveAttribute("aria-invalid", "true");
     expect(gitRowInvalid(latest!)).toBe(true);

@@ -236,8 +236,9 @@ describe("ImagesTab", () => {
 
     await userEvent.type(within(dialog).getByLabelText(IMAGES.REF), "bad{Enter}");
 
-    expect(await within(dialog).findByText("image must not contain whitespace or control characters")).toBeInTheDocument();
+    expect(await within(dialog).findByText("image must not contain whitespace or control characters")).toHaveAttribute("role", "alert");
     expect(within(dialog).getByLabelText(IMAGES.REF)).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByLabelText(IMAGES.REF)).toHaveAccessibleDescription(/image must not contain whitespace/);
     expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
