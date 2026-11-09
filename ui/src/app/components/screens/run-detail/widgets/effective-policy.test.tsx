@@ -28,6 +28,10 @@ function createRow(data: Record<string, unknown> = {}): AuditEvent {
   };
 }
 
+function ceilingRow(data: Record<string, unknown>, action = "run.ceiling.reassert"): AuditEvent {
+  return { ...createRow(data), id: "a2", action };
+}
+
 describe("EffectivePolicyWidget", () => {
   it("renders nothing when no run.create row exists", () => {
     const { container } = render(<EffectivePolicyWidget audit={[]} />);
@@ -65,6 +69,33 @@ describe("EffectivePolicyWidget", () => {
     expect(screen.queryByText(AGENTS.EFFECTIVE_NONE)).not.toBeInTheDocument();
   });
 
+  it("names the hosts whose credentials were withheld, from the reassert and revive rows", () => {
+    render(
+      <EffectivePolicyWidget
+        audit={[
+          createRow({ clamp_warnings: [] }),
+          ceilingRow({ dropped_injection_hosts: ["api.anthropic.com"] }),
+          ceilingRow({ dropped_injection_hosts: ["api.anthropic.com", "api.other.test"] }, "run.revive"),
+        ]}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "credentials withheld for api.anthropic.com, api.other.test: the run's policy does not allow the host exactly; name it in allowed_domains to deliver it",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the withheld line alone when the run.create row stamped nothing, and none when no host was dropped", () => {
+    const { container, rerender } = render(
+      <EffectivePolicyWidget audit={[ceilingRow({ dropped_injection_hosts: ["api.anthropic.com"] })]} />,
+    );
+    expect(screen.getByText(/credentials withheld for api\.anthropic\.com/)).toBeInTheDocument();
+    expect(screen.queryByText(AGENTS.EFFECTIVE_NONE)).not.toBeInTheDocument();
+    rerender(<EffectivePolicyWidget audit={[ceilingRow({ dropped_injection_hosts: [] })]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("ignores non-string entries the same way createRequestFromAudit does", () => {
     render(<EffectivePolicyWidget audit={[createRow({ clamp_warnings: ["ok", 42, null] })]} />);
     expect(screen.getByText("ok")).toBeInTheDocument();
@@ -97,5 +128,10 @@ describe("the registry gates the tile on the same datum the widget does", () => 
 
   it("a row with tightenings => the tile is placed", () => {
     expect(avail([createRow({ clamp_warnings: ["confinement raised"] })])).toBe(true);
+  });
+
+  it("only a withheld-credential row => the tile is placed", () => {
+    expect(avail([ceilingRow({ dropped_injection_hosts: ["api.anthropic.com"] })])).toBe(true);
+    expect(avail([ceilingRow({ dropped_injection_hosts: [] })])).toBe(false);
   });
 });
