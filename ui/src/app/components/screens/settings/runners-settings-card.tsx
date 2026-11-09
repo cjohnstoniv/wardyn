@@ -27,7 +27,7 @@ const notSuper = (e: unknown): never => {
 
 export function RunnersSettingsCard() {
   const [state, setState] = React.useState<"loading" | "ready" | "failed">("loading");
-  const [stored, setStored] = React.useState<RunnerSettings>({ enabled: false });
+  const [stored, setStored] = React.useState<RunnerSettings>({ enabled: false, require_managed_device: false });
   const [confirming, setConfirming] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [offError, setOffError] = React.useState("");
