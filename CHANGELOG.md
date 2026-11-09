@@ -61,6 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The Runs page's "Start a run" workspace picker listed no workspaces, because the page never loaded them. It now loads them when the page opens.
 - The Runs list labelled every run on a named workspace "Ephemeral scratch — no repo". It now shows the workspace's name, and Group by Workspace groups by it.
 - The New Run page showed an unlimited run lifetime as "596523.24 hours" for a member whose profile sets no maximum end. It now says "No maximum", as it does for the other limits.
 - A run's header said "Runs on: Remote-hosted runner" even when the run was on this server's Docker host. It now says "Docker host", or "Kubernetes cluster" for a run there.
