@@ -447,6 +447,7 @@ export function AddSecretDialog({
             {lockName
               ? "The value is write-only — it can be replaced or removed, never read back."
               : "The value is stored write-only: it is never returned by the API or shown again. It stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox."}
+            {!lockName && !patBrokerEnabled && " With the token broker off, a stored Git token is handed to git inside the sandbox."}
           </DialogDescription>
         </DialogHeader>
 

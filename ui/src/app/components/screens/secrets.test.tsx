@@ -603,5 +603,17 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
       screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/injected proxy-side/i)).not.toBeInTheDocument();
+    // Broker on (the default): the git token is not a sandbox exception, so the dialog does not claim it is.
+    expect(screen.queryByText(/token broker off/i)).not.toBeInTheDocument();
+  });
+
+  it("the Add secret dialog also names the git token exception when the token broker is off", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} patBrokerEnabled={false} />);
+    expect(
+      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/With the token broker off, a stored Git token is handed to git inside the sandbox\./),
+    ).toBeInTheDocument();
   });
 });
