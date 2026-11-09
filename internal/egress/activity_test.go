@@ -28,6 +28,9 @@ func TestCountsAsActivity_Matrix(t *testing.T) {
 		{"dial failed deny", DecisionLog{Decision: Deny, RuleSource: "builtin:dial-failed"}, false},
 		{"reauth timeout deny", DecisionLog{Decision: Deny, RuleSource: "credential:reauth-timeout"}, false},
 		{"first-use hold", DecisionLog{Decision: Pending, RuleSource: "policy:first-use"}, false},
+		{"relayed allow", DecisionLog{Request: Request{Relayed: true}, Decision: Allow, RuleSource: "policy:allowlist"}, false},
+		{"relayed deny", DecisionLog{Request: Request{Relayed: true}, Decision: Deny, RuleSource: "policy:denied"}, false},
+		{"agent-listener allow", DecisionLog{Request: Request{Relayed: false}, Decision: Allow, RuleSource: "policy:allowlist"}, true},
 		{"model usage row", DecisionLog{Decision: Allow, RuleSource: "llm:usage", Usage: &ModelUsage{}}, false},
 		{"empty decision", DecisionLog{RuleSource: "policy:allowlist"}, false},
 	}

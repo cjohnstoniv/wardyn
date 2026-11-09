@@ -124,7 +124,7 @@
   - The `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30.
 - `0` = never reaped;
 - `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle).
-- Idleness is `updated_at` age — an attach or an allowed egress request resets it.
+- Idleness is `updated_at` age — an attach or an allowed egress request resets it (on a VM run, only a request made through the run's proxy settings; the guest's own background requests do not).
   - So does CPU use above 10% of one core read from the substrate (a metrics-server read on Kubernetes, the daemon's container stats on Docker; never an exec into the sandbox),
   - while file writes do not (`internal/lifecycle`, [`internal/api/run_activity.go`](../internal/api/run_activity.go)).
 - Without metrics-server the CPU signal is off, `/setup/status` says so (the Idle detection row), and idleness is the attach and egress clock alone;

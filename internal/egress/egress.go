@@ -46,6 +46,11 @@ type Request struct {
 	Method           string // HTTP method, or "CONNECT" for tunneled TLS
 	Path             string // empty for CONNECT (hostname-only visibility)
 	Time             time.Time
+	// Relayed: the request came in on a VM run's relay listener, so it is a guest flow that did not use the
+	// run's proxy settings (the guest OS's own services, apps that ignore HTTPS_PROXY). Never idle activity.
+	// It stays inside the proxy process and is never on the wire: a control plane that decodes runner records
+	// strictly would refuse a new key from a runner upgraded first.
+	Relayed bool `json:"-"`
 }
 
 // DecisionLog is the structured record streamed to the control plane for

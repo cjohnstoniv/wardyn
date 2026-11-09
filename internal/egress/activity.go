@@ -12,10 +12,11 @@ const RuleSourceApprovals = "brokered:approvals"
 // the pause's presence clock. Only an allowed request is: a refused or held one is the run being told no,
 // not the run working, and a run that is only being refused should still idle out. A model call's token
 // counts (Usage) are a count and not a request, and the toolgate's poll of the approval it is blocked on is
-// waiting. A re-auth hold that timed out is a deny, so it needs no rule of its own. Every ingest path that
+// waiting. A request that arrived on a VM run's relay listener (Request.Relayed) is a guest flow that ignored the
+// run's proxy settings, the guest OS's own services, and is not the run working either. A re-auth hold that timed out is a deny, so it needs no rule of its own. Every ingest path that
 // moves an idle clock calls this one function.
 func CountsAsActivity(d DecisionLog) bool {
-	return d.Decision == Allow && d.Usage == nil && d.RuleSource != RuleSourceApprovals
+	return d.Decision == Allow && d.Usage == nil && d.RuleSource != RuleSourceApprovals && !d.Request.Relayed
 }
 
 // CountsAsActivityFor is CountsAsActivity less the allowed requests to a host on ignore, matched like the
