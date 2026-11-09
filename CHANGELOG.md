@@ -113,7 +113,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Known issues
 
-- On a macOS VM run, allowed HTTPS requests that a guest program sends straight to a host Wardyn inspects (not through the run's proxy) still count as activity, so they can keep the run from stopping when idle. macOS's own background requests go to hosts Wardyn does not inspect and do not count. A fix is planned for the next release candidate.
+- On a macOS VM run, allowed HTTPS requests that a guest program sends straight to a host Wardyn inspects (not through the run's proxy) still count as activity, so they can keep the run from stopping when idle. By default, macOS's own background requests go to hosts Wardyn does not inspect, so they do not count. A fix is planned for the next release candidate.
 - A run's data_out limit stops applying on output and replay reads, web apps, SSH (file transfer, commands, port forwards and `wardyn sync` down) and computer-folder bring-back once audit retention removes the run's policy records; the Files panel refuses every transfer instead.
 
 ## [0.10.0-rc.16] — 2026-11-08
