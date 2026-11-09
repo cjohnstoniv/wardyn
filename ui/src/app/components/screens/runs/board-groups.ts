@@ -17,6 +17,7 @@
 // grouping (titleGroups) is also gone: the Runs landing page groups by need
 // then time (design.md H-6), not by title — "Group by Title" is an L4 filter
 // option, not a standing grouping rule.
+import * as React from "react";
 import type { AgentRun } from "../../../lib/types";
 
 // The last rung of the headline chain, and the repo slot's stand-in — both
@@ -47,12 +48,19 @@ export function rowHeadline(run: AgentRun): string {
   );
 }
 
+/** Onboarded workspace names by id. A run on a named workspace carries the id
+ *  only (no repo, no path), so the Runs screen supplies the names. */
+export const WorkspaceNamesContext = React.createContext<Readonly<Record<string, string>>>({});
+
 /** The meta line's workspace slot: the repo, else the workspace it mounted,
- *  else the honest note that there is neither. Only a real path gets mono
- *  type — the fallback is a phrase. */
-export function repoLabel(run: AgentRun): { text: string; mono: boolean } {
+ *  else the named workspace it ran on, else the honest note that there is
+ *  none. Only a real path gets mono type — a name and the fallback are phrases. */
+export function repoLabel(run: AgentRun, names: Readonly<Record<string, string>> = {}): { text: string; mono: boolean } {
   const text = run.repo || run.workspace_path || "";
-  return text ? { text, mono: true } : { text: NO_REPO, mono: false };
+  if (text) return { text, mono: true };
+  const ids = run.workspace_ids?.length ? run.workspace_ids : run.workspace_id ? [run.workspace_id] : [];
+  const named = ids.map((id) => names[id]).filter(Boolean);
+  return named.length ? { text: named.join(", "), mono: false } : { text: NO_REPO, mono: false };
 }
 
 // shortId (the Run ID column) was removed here: the
