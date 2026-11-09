@@ -11,12 +11,20 @@ import { Chip } from "./primitives";
 // The one look for a page's sections (#3062): underline tabs on the Radix Tabs, so arrow keys rove
 // focus and selection. List filters are Segmented instead. The panels stay with the caller (a screen
 // that keeps its own state per tab, or syncs the tab to the URL); this draws the strip only.
+//
+// Given an `idPrefix`, every tab points at one panel element the caller draws with `pageTabPanelProps`, so a
+// screen reader hears the content under the strip as the selected tab's panel.
+export function pageTabPanelProps(idPrefix: string, value: string) {
+  return { role: "tabpanel" as const, id: `${idPrefix}-panel`, "aria-labelledby": `${idPrefix}-tab-${value}` };
+}
+
 export function PageTabs<T extends string>({
   value,
   onValueChange,
   tabs,
   label,
   className,
+  idPrefix,
 }: {
   value: T;
   onValueChange: (v: T) => void;
@@ -24,6 +32,8 @@ export function PageTabs<T extends string>({
   /** The strip's accessible name; omit where the page title already names it. */
   label?: string;
   className?: string;
+  /** Names the tabs and the panel they control; pair with `pageTabPanelProps`. */
+  idPrefix?: string;
 }) {
   const byKey = useRef(false);
   return (
@@ -45,7 +55,13 @@ export function PageTabs<T extends string>({
         }}
       >
         {tabs.map((t) => (
-          <TabsTrigger key={t.value} variant="underline" value={t.value} data-page-tab={t.value}>
+          <TabsTrigger
+            key={t.value}
+            variant="underline"
+            value={t.value}
+            data-page-tab={t.value}
+            {...(idPrefix ? { id: `${idPrefix}-tab-${t.value}`, "aria-controls": `${idPrefix}-panel` } : {})}
+          >
             {t.label}
             {t.dirty && (
               // aria-hidden, as Segmented's: the chip echoes a fact announced elsewhere and must not
