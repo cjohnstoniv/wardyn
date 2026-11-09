@@ -78,6 +78,12 @@ const (
 	// inboundDenyUnreadable is no inbound.deny reason: the run or its policy could not be read, which is no
 	// verdict on the caller. It answers 503 run_unreadable and writes no row.
 	inboundDenyUnreadable = "unreadable"
+	// inboundDenyDataOut is the run's data_out rule keeping a web app other than the desktop closed (review or
+	// blocked), as refuseAppDataOut does the browser entry. It answers 403 data_out_blocked.
+	inboundDenyDataOut = "data_out"
+	// inboundDenyDataOutUnreadable is no inbound.deny reason: the run's data_out rule could not be read, which
+	// is no verdict on the caller. It answers 503 data_out_unreadable and writes no inbound.deny row.
+	inboundDenyDataOutUnreadable = "data_out_unreadable"
 )
 
 const (
@@ -386,7 +392,9 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // admitInboundToken is the bearer arm's admission, uncached: a bearer that is not a live inbound token is
 // 401 inbound_credential_invalid; a live one that may not call this app — no run, no such app, an app that
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
-// all four; and one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running. Each
+// all four; one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running; and one
+// that may, on a run whose data_out rule is review or blocked, is 403 data_out_blocked (refuseAppDataOut's
+// answer, with its run.data_out.deny row) for any app but the desktop. Each
 // refusal returns the writer of its inbound.deny row, for the caller to run (a stream runs it after its
 // close); nil for no row. A run or policy that cannot be read is 503 run_unreadable and no row: no verdict on
 // the caller (readmitInbound keeps a stream on it). ok=false when it has answered.
@@ -406,7 +414,7 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 		writeErrorReason(w, http.StatusUnauthorized, reasonInboundCredentialInvalid, inboundCredentialInvalidMsg)
 		return uiSession{}, refused(principal, tokenID, inboundDenyCredentialInvalid), false
 	}
-	sess, deny := s.inboundSessionFor(r.Context(), runID, app, v)
+	sess, deny, rule := s.inboundSessionFor(r.Context(), runID, app, v)
 	switch deny {
 	case "":
 		return sess, nil, true
@@ -415,6 +423,16 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 	case inboundDenyUnreadable:
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, uiSessionUnverifiableMsg)
 		return uiSession{}, nil, false
+	case inboundDenyDataOutUnreadable:
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDataOutUnreadable, dataOutUnreadableMsg)
+		return uiSession{}, nil, false
+	case inboundDenyDataOut:
+		actorType := types.ActorHuman
+		if isServicePrincipal(v.Principal) {
+			actorType = serviceActorType
+		}
+		s.auditDataOutDenied(r.Context(), runID, actorType, v.Principal, "app", rule)
+		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutAppsMsg)
 	default:
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
 	}
@@ -451,8 +469,8 @@ func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool
 			return false, "", refusal
 		}
 		var body errorBody
-		if json.Unmarshal(w.body, &body) == nil && body.Reason == reasonRunUnreadable {
-			return false, reasonRunUnreadable, nil
+		if json.Unmarshal(w.body, &body) == nil && (body.Reason == reasonRunUnreadable || body.Reason == reasonDataOutUnreadable) {
+			return false, body.Reason, nil
 		}
 		return false, reasonTokenLookupUnavailable, nil
 	}
@@ -608,31 +626,46 @@ func (c *inboundStream) Close() error {
 // (asked after reach, so the state is no oracle). A run or policy that cannot be read is unreadable (logged),
 // not a verdict: the request fails closed, and a retry asks again.
 //
+// After reach and state, so a caller with none learns nothing of the rule, a web app other than the desktop
+// on a run whose data_out rule is review or blocked is data_out (the rule is returned for its audit row), as
+// refuseAppDataOut keeps the browser entry; a rule that cannot be read is data_out_unreadable.
+//
 // The session's authority time is the token's creation, so the re-assert's revocation cutoff and sponsor
 // check order it as they do the token itself. It carries no role: no role gives inbound reach.
-func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app string, v verifiedAPIToken) (uiSession, string) {
+func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app string, v verifiedAPIToken) (uiSession, string, types.TransferRule) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return uiSession{}, inboundDenyNotFound
+			return uiSession{}, inboundDenyNotFound, ""
 		}
 		slog.ErrorContext(ctx, "wardynd: ui gateway inbound run lookup failed", "run_id", runID, "err", err)
-		return uiSession{}, inboundDenyUnreadable
+		return uiSession{}, inboundDenyUnreadable, ""
 	}
 	declared, ok, err := s.inboundAppRead(ctx, runID, app)
 	if err != nil {
-		return uiSession{}, inboundDenyUnreadable
+		return uiSession{}, inboundDenyUnreadable, ""
 	}
 	if !ok {
-		return uiSession{}, inboundDenyNotFound
+		return uiSession{}, inboundDenyNotFound, ""
 	}
 	caller, ok := s.inboundCaller(ctx, run, declared, v.Principal, v.Email, v.Groups, v.CreatedAt)
 	if !ok {
-		return uiSession{}, inboundDenyNotFound
+		return uiSession{}, inboundDenyNotFound, ""
 	}
 	// uiDial's state check, made here so a call it would refuse is never admitted (inbound.allow).
 	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
-		return uiSession{}, inboundDenyNotRunning
+		return uiSession{}, inboundDenyNotRunning, ""
+	}
+	// refuseAppDataOut's rule for the browser entry: the desktop is a display, any other app can carry content out.
+	if !uiDesktopApp(declared.Name) {
+		rule, _, err := s.runDataOutRule(ctx, runID)
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: a run's data_out rule is unreadable; the inbound app is refused", "run_id", runID, "err", err)
+			return uiSession{}, inboundDenyDataOutUnreadable, ""
+		}
+		if rule != types.TransferAllowed {
+			return uiSession{}, inboundDenyDataOut, rule
+		}
 	}
 	now := s.cfg.Now()
 	sess := uiSession{
@@ -648,7 +681,7 @@ func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app str
 	if v.service != nil {
 		sess.sponsor = v.service.Sponsor
 	}
-	return sess, ""
+	return sess, "", ""
 }
 
 // inboundApp is app as the run's effective policy declares it, when it is declared inbound. A policy that
