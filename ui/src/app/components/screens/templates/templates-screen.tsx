@@ -154,7 +154,7 @@ export function TemplatesScreen() {
       // A table by role, not by element: the rows stay the grid cards that collapse below 760 px, where the
       // per-cell labels name each value and the header row is not shown.
       <div role="table" aria-label={T.LIST_ARIA}>
-        <div role="row" className={`label-eyebrow hidden gap-x-4 bg-surface-2 px-4 py-2.5 md:grid ${ROW_GRID}`}>
+        <div role="row" className={`label-eyebrow hidden gap-x-4 bg-surface-2 px-4 py-2.5 lg:grid ${ROW_GRID}`}>
           <span role="columnheader">{T.COL_NAME}</span>
           <span role="columnheader">{T.COL_AVAILABLE}</span>
           <span role="columnheader">{T.COL_OWNER}</span>

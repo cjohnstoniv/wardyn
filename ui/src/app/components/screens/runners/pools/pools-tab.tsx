@@ -5,7 +5,7 @@
 
 // The Admin -> Runners "Pools" tab (mock M-POOLS v6 poolsPage): Organization pools (with the organization
 // default) and User pools (every person's own, read-only). The page header and the Runners | Pools strip are the
-// caller's. Both tables are a CSS grid with table roles; below 860px each row folds to two columns with the
+// caller's. Both tables are a CSS grid with table roles; below 1040px each row folds to two columns with the
 // column name over each cell. A pool opens in the details sheet; Edit goes to the pool form. Making a pool the
 // default keeps the organization's default barrier: the write sends back the barrier it just read.
 import * as React from "react";
@@ -29,10 +29,10 @@ import { usePoolsData, type PoolEntry } from "./use-pools-data";
 
 const GRID_ORG = "grid-cols-[minmax(150px,1.2fr)_minmax(130px,1fr)_minmax(190px,1.6fr)_minmax(120px,.9fr)_minmax(104px,.8fr)]";
 const GRID_USER = "grid-cols-[minmax(120px,1fr)_minmax(150px,1.3fr)_minmax(130px,1fr)_minmax(110px,.8fr)_minmax(130px,1.2fr)]";
-const ROW = "grid items-center gap-x-3.5 gap-y-1.5 px-1 text-body max-[860px]:grid-cols-2";
+const ROW = "grid items-center gap-x-3.5 gap-y-1.5 px-1 text-body max-[1040px]:grid-cols-2";
 // The column name over a cell, only where the grid has folded (the header row is hidden there).
 const CELL =
-  "min-w-0 break-words max-[860px]:before:block max-[860px]:before:text-meta max-[860px]:before:font-semibold max-[860px]:before:uppercase max-[860px]:before:tracking-[0.06em] max-[860px]:before:text-muted-foreground max-[860px]:before:content-[attr(data-col)]";
+  "min-w-0 break-words max-[1040px]:before:block max-[1040px]:before:text-meta max-[1040px]:before:font-semibold max-[1040px]:before:uppercase max-[1040px]:before:tracking-[0.06em] max-[1040px]:before:text-muted-foreground max-[1040px]:before:content-[attr(data-col)]";
 const SUB = "mt-0.5 block text-xs text-muted-foreground";
 const LINK = "text-info underline underline-offset-4";
 
@@ -95,7 +95,7 @@ function PoolRow({
   return (
     <div role="row" data-default-row={isDefault ? "true" : undefined} className="border-b border-border py-3.5">
       <div role="presentation" className={`${ROW} ${user ? GRID_USER : GRID_ORG}`}>
-        <div role="cell" className="min-w-0 break-words max-[860px]:col-span-2">
+        <div role="cell" className="min-w-0 break-words max-[1040px]:col-span-2">
           <button type="button" className={`${LINK} -ml-1 rounded-md px-1 text-left text-sm font-medium hover:bg-accent`} onClick={() => onOpen(pool.id)}>
             {pool.name}
           </button>
@@ -161,7 +161,7 @@ function PoolRow({
 function Header({ user }: { user: boolean }) {
   const cols = user ? [POOLS.COL_POOL, POOLS.COL_OWNER, POOLS.COL_ALLOWS, POOLS.COL_RUNNERS, POOLS.COL_STATE] : [POOLS.COL_POOL, POOLS.COL_ALLOWS, POOLS.COL_RUNNERS, POOLS.COL_STATE];
   return (
-    <div role="row" className={`${ROW} label-eyebrow border-b border-border py-2 max-[860px]:hidden ${user ? GRID_USER : GRID_ORG}`}>
+    <div role="row" className={`${ROW} label-eyebrow border-b border-border py-2 max-[1040px]:hidden ${user ? GRID_USER : GRID_ORG}`}>
       {cols.map((c) => (
         <span key={c} role="columnheader">
           {c}

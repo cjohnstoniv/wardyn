@@ -177,7 +177,7 @@ export function DirectoryCombobox({
           has in absent mode, which is the same control. */}
       {listOpen && status.kind === "rows" && (
         <ul
-          className="absolute inset-x-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-floating"
+          className="mt-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-floating"
           // A click on a row must not blur the input first and close the list under the pointer.
           onMouseDown={(e) => e.preventDefault()}
         >
