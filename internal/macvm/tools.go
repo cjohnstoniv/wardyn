@@ -214,10 +214,9 @@ type ToolsResult struct {
 	ItemsDigest string
 	// Guest is the guest posture read at the end of stage 2.
 	Guest *GuestPosture
-	// AgentSignature is how the pushed agent is signed, AgentSigningCert whether the guest trusts the
-	// signing certificate, and AgentSigningCertSHA256 that certificate's SHA-256.
-	AgentSignature, AgentSigningCert string
-	AgentSigningCertSHA256           string
+	// AgentSignature is how the pushed agent is signed, and AgentSigningCertSHA256 the SHA-256 of the
+	// certificate it is signed with.
+	AgentSignature, AgentSigningCertSHA256 string
 	// BaseSettingsSkipped are the base settings that did not apply, with why.
 	BaseSettingsSkipped []basesettings.Skipped
 	AgentSignRecord
@@ -442,7 +441,6 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		if signed != nil {
 			sum := sha256.Sum256(signed.Cert)
 			res.AgentSignature, res.AgentSigningCertSHA256 = AgentSignedThisMac, hex.EncodeToString(sum[:])
-			res.AgentSigningCert = trustAgentCert(ctx, g, signed.Cert, o.Log)
 		}
 	}
 	var cltErr error
@@ -748,10 +746,8 @@ type ToolsRecord struct {
 	// Guest is the guest posture read when the base was last prepared, updated or edited.
 	Guest *GuestPosture `json:"guest,omitempty"`
 	// AgentSignature is how the guest agent stage 2 pushed is signed (AgentSignedThisMac or
-	// AgentSignedAdHoc), and AgentSigningCert whether the base trusts this Mac's signing certificate for
-	// code signing (ItemTrusted or ItemNotTrusted).
-	AgentSignature   string `json:"agent_signature,omitempty"`
-	AgentSigningCert string `json:"agent_signing_cert,omitempty"`
+	// AgentSignedAdHoc). An older tools.json may carry an agent_signing_cert key, which nothing reads.
+	AgentSignature string `json:"agent_signature,omitempty"`
 	// AgentSigningCertSHA256 is the SHA-256 of the certificate the agent is signed with (this_mac only).
 	AgentSigningCertSHA256 string `json:"agent_signing_cert_sha256,omitempty"`
 	// BaseSettingsSkipped are the base settings the last prepare or tools update could not apply.
@@ -771,7 +767,7 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
-		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature, AgentSigningCert: r.AgentSigningCert,
+		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest, AgentSignature: r.AgentSignature,
 		AgentSigningCertSHA256: r.AgentSigningCertSHA256, AgentSignRecord: r.AgentSignRecord}
 	rec.BaseSettingsSkipped = r.BaseSettingsSkipped
 	for id, err := range r.Withheld {

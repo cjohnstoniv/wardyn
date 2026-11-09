@@ -54,11 +54,10 @@ type editButtons struct {
 }
 
 // wire gives text the buttons' callbacks and whether Trust the list's CAs has anything to trust: a ca item
-// in staging's tools.json, or this Mac's agent signing certificate that the base reads as not trusted. A
-// guest without the edit actions gets no callbacks, so its buttons do nothing.
+// in staging's tools.json. A guest without the edit actions gets no callbacks, so its buttons do nothing.
 func (b *editButtons) wire(text *WindowText) {
 	rec, _ := ReadToolsRecord(b.staging)
-	text.CanTrust = hasCA(rec.Items) || rec.AgentSignature == AgentSignedThisMac && rec.AgentSigningCert == ItemNotTrusted
+	text.CanTrust = hasCA(rec.Items)
 	eg, ok := b.g.(EditActionGuest)
 	if !ok {
 		return
@@ -170,9 +169,6 @@ func (b *editButtons) readGuest(ctx context.Context) string {
 		if r.Kind == ItemKindCA {
 			parts = append(parts, "certificate "+r.Name+" "+verify("ssl", guestagent.ItemDir(r.Name)+"/"+guestagent.ItemCert))
 		}
-	}
-	if rec.AgentSignature == AgentSignedThisMac {
-		parts = append(parts, "the agent's signing certificate "+verify("codeSign", agentSigningCertPath()))
 	}
 	fda, fileVault := unread, ""
 	if p, ok := b.g.(interface {
