@@ -18,10 +18,10 @@ func TestEndSetupAssistant(t *testing.T) {
 		name    string
 		console fakeConsole
 		answers []error // the answer to each pkill call, in order; the last repeats
-		calls   int     // exact pkill calls; 0 with polls set means "at least 2, until the watch ends"
+		calls   int     // exact pkill calls; 0 with polls set means "at least 6, until the watch ends"
 		polls   bool
 	}{
-		{"found then quiet: one kill plus one quiet poll", fakeConsole{uid: 502}, []error{nil, none}, 2, false},
+		{"found, quiet, found again: keeps polling until the watch ends", fakeConsole{uid: 502}, []error{nil, none, none, nil, none}, 0, true},
 		{"never found: keeps polling until the watch ends", fakeConsole{uid: 502}, []error{none}, 0, true},
 		{"other uid at the console: no call", fakeConsole{uid: 0}, []error{nil}, 0, false},
 		{"no console user: no call", fakeConsole{err: ErrNoConsoleUser}, []error{nil}, 0, false},
@@ -36,7 +36,7 @@ func TestEndSetupAssistant(t *testing.T) {
 			}}
 			d := &Desktop{Console: c.console, SessionEnvEvery: time.Millisecond, SetupAssistantWatch: 50 * time.Millisecond}
 			d.endSetupAssistant(context.Background(), 502, r)
-			if c.polls && len(r.calls) < 2 || !c.polls && len(r.calls) != c.calls {
+			if c.polls && len(r.calls) < 6 || !c.polls && len(r.calls) != c.calls {
 				t.Fatalf("pkill calls = %d, want %d (polls=%v)", len(r.calls), c.calls, c.polls)
 			}
 			for _, got := range r.calls {
