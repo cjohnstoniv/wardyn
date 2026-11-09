@@ -602,6 +602,29 @@ describe("WorkspaceLLMCredDialog", () => {
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
     expect(await screen.findByRole("radio", { name: /provider-gone \(not in the Model providers list\)/i })).toBeChecked();
   });
+
+  it("a failed providers read says so with Try again, never that the stored provider is gone", async () => {
+    getModelProvidersMock.mockReset().mockRejectedValueOnce(new Error("HTTP 500"));
+    const workspace = ws({}, { llm_cred: { provider_ref: "anthropic-key" } });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    expect(await screen.findByText(/Couldn't load the model providers/)).toBeInTheDocument();
+    expect(screen.queryByText(/Loading model providers/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not in the Model providers list/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /anthropic-key \(current\)/ })).toBeChecked();
+    getModelProvidersMock.mockResolvedValue(providersList([{ id: "anthropic-key", name: "Anthropic API", kind: "anthropic_api_key" }]));
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("radio", { name: /anthropic api/i })).toBeChecked();
+    expect(screen.queryByText(/Couldn't load the model providers/)).not.toBeInTheDocument();
+  });
+
+  it("a successful empty list is not an error: no failure note, only None", async () => {
+    const workspace = ws({}, { llm_cred: {} });
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText(/Loading model providers/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/Couldn't load the model providers/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /none — each run chooses/i })).toBeChecked();
+  });
 });
 
 // The /drives door (0.7 user drives, prompt §6). This screen has no nav item to
