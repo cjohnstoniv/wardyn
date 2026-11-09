@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { ReauthLayer } from "./reauth-layer";
 import { OperatorProvider } from "./operator-context";
@@ -161,7 +161,12 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     return popup;
   }
 
-  function Renewing({ from, onResumed, reloadAs }: { from: Renewal; onResumed: (me: Me) => void; reloadAs: (path: string) => void }) {
+  // The page under the dialog: its h1 names the route, so a test can see which page took focus.
+  function PageHeading() {
+    return <h1>{useLocation().pathname === "/runs" ? "Runs" : "Settings"}</h1>;
+  }
+
+  function Renewing({ from, onResumed, reloadAs, withHeading }: { from: Renewal; onResumed: (me: Me) => void; reloadAs: (path: string) => void; withHeading?: boolean }) {
     const { reauth, lapse } = useReauthController(reloadAs);
     return (
       <ReauthContext.Provider value={reauth}>
@@ -175,13 +180,15 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
         <output data-testid="signed-out">{String(reauth.signedOut)}</output>
         {/* The shell's own rule (app-shell.tsx): a watched sign-in keeps the layer. */}
         {(reauth.phase !== "none" || reauth.watch) && <ReauthLayer onResumed={onResumed} />}
-        <main id="main-content" tabIndex={-1} />
+        <main id="main-content" tabIndex={-1}>
+          {withHeading && <PageHeading />}
+        </main>
       </ReauthContext.Provider>
     );
   }
 
   /** Alice, an admin on /admin/settings, has clicked the banner's button. */
-  function startRenewal(over: Partial<Renewal> = {}) {
+  function startRenewal(over: Partial<Renewal> = {}, withHeading = false) {
     const popup = signInWindow();
     const onResumed = vi.fn();
     const reloadAs = vi.fn();
@@ -197,7 +204,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     render(
       <MemoryRouter initialEntries={["/admin/settings"]}>
         <OperatorProvider operator operatorResolved principal="alice">
-          <Renewing from={from} onResumed={onResumed} reloadAs={reloadAs} />
+          <Renewing from={from} onResumed={onResumed} reloadAs={reloadAs} withHeading={withHeading} />
         </OperatorProvider>
       </MemoryRouter>,
     );
@@ -252,6 +259,20 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     fireEvent.click(screen.getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
     expect(onResumed).toHaveBeenCalledWith(narrowed);
     expect(reloadAs).not.toHaveBeenCalled();
+  });
+
+  // goToRuns replaces the page, the dialog's return target goes with it, and the shell does not move focus for a
+  // replace: without help focus is left on the body and nothing says the person is now on Runs.
+  it("T2b: Go to Runs ends with focus on the Runs heading, not on the body", async () => {
+    answer = { body: alice({ role: "user", operator: false, security_operator: false }), status: 200 };
+    startRenewal({}, true);
+    await poll();
+    expect(screen.getByRole("heading", { name: "Settings", hidden: true })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const runs = screen.getByRole("heading", { name: "Runs" });
+    expect(runs).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("T3: the same person, expiry unchanged, keeps waiting until the window closes", async () => {
