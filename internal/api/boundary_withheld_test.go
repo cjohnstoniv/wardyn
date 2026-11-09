@@ -283,7 +283,8 @@ func TestReviveWithheldByBoundary(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New()}
 	layers := boundaryOnly("api.anthropic.com")
 	cfg := &proxy.Config{RunID: run.ID,
-		Policy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}, // as the boundary's seal leaves it
+		// The policy names api.other.test exactly, so the binding gate keeps its injection: only the boundary layer withholds it.
+		Policy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "api.other.test"}},
 		Injection: []proxy.InjectionConfig{
 			{InjectionRule: egress.InjectionRule{Host: "api.anthropic.com"}, GrantID: uuid.New()},
 			{InjectionRule: egress.InjectionRule{Host: "api.other.test"}, GrantID: uuid.New()},
@@ -297,6 +298,9 @@ func TestReviveWithheldByBoundary(t *testing.T) {
 	}
 	if len(cfg.Injection) != 1 || cfg.Injection[0].Host != "api.anthropic.com" {
 		t.Errorf("injections = %+v, want only the model provider's", cfg.Injection)
+	}
+	if !slices.Equal(re.droppedInjection, []string{"api.other.test"}) {
+		t.Errorf("dropped injections = %v, want api.other.test, which the policy names but the boundary withholds", re.droppedInjection)
 	}
 	if len(cfg.PATGrants) != 0 || !slices.Equal(re.droppedLane, []string{"gitlab.example"}) {
 		t.Errorf("PAT broker = %v (dropped %v), want gitlab.example withheld", cfg.PATGrants, re.droppedLane)
