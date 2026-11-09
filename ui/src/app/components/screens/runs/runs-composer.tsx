@@ -27,7 +27,7 @@ const NO_WORKSPACE = "__none__";
 
 export function RunsComposer() {
   const navigate = useNavigate();
-  const { workspaces, reload } = useWorkspaceList();
+  const { workspaces, loading, error, reload } = useWorkspaceList();
   // The hook fetches nothing until asked, so without this the picker lists no workspace.
   React.useEffect(() => {
     reload();
@@ -84,7 +84,16 @@ export function RunsComposer() {
               ))}
             </SelectContent>
           </Select>
+          {loading && <span role="status">{RUNS_COMPOSER.WORKSPACES_LOADING}</span>}
         </label>
+        {error && !loading && (
+          <span role="alert" className="flex items-center gap-2 text-xs text-danger">
+            {RUNS_COMPOSER.WORKSPACES_UNAVAILABLE}
+            <Button type="button" variant="outline" size="sm" onClick={() => reload()}>
+              {RUNS_COMPOSER.WORKSPACES_RETRY}
+            </Button>
+          </span>
+        )}
         <Button type="submit" disabled={!task.trim()}>
           {RUNS_COMPOSER.GO}
         </Button>

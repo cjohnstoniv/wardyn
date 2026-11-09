@@ -57,6 +57,9 @@ export const RUNS_COMPOSER = {
   PLACEHOLDER: "Describe the task in your own words. It becomes the run's title.",
   WORKSPACE: "Workspace",
   GO: "Start run",
+  WORKSPACES_LOADING: "Loading workspaces…",
+  WORKSPACES_UNAVAILABLE: "Couldn't load your workspaces, so none are listed.",
+  WORKSPACES_RETRY: "Try again",
 } as const;
 
 export const RUNS_FILTERS = {
