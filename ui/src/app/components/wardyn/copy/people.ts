@@ -38,6 +38,10 @@ export const PEOPLE_PAGE = {
     ].filter(Boolean);
     return parts.length ? parts.join(" · ") : "—";
   },
+  LOAD_MORE: "Load more",
+  LOADING_MORE: "Loading…",
+  MORE_FAILED: "Couldn't load more people. The ones above are still shown.",
+  MORE_RETRY: "Try again",
   EMPTY_TITLE: "No people yet",
   EMPTY_FILTERED_TITLE: "No one matches",
   EMPTY_FILTERED: "Nothing matches this search or filter.",
