@@ -59,6 +59,7 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 | The helper's desktop check (CoreGraphics' session) refuses on a Mac with nobody signed in at its desktop | The helper's own refusal before AppKit starts. Over SSH while someone is signed in, it likely passes |
 | A prepare run with sudo from Terminal reaching the signed-in desktop's window | Nothing today: setup by hand refuses root. Allowing root would need this |
 | A macOS 26 Mac boots its installed guest into Setup Assistant with no start options | The macOS 26 prepare |
+| SIGTERM to Setup Assistant once Dock and Finder run as `agent` leaves `agent` signed in | The run-start Setup Assistant step, off by default |
 | `systemsetup -setremotelogin off` runs over SSH without Full Disk Access | Stage 1's Remote Login step. A refusal fails it and publishes no base |
 | A macOS 26 guest's agent reaches the runner over the virtual socket | Every run on a macOS 26 base |
 | A rebooted or reset guest sends a new DHCP request | The same-boot half of the Remote Login proof |

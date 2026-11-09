@@ -53,8 +53,13 @@ type Desktop struct {
 	// SessionEnvEvery is StartSessionEnv's console poll, and SessionEnvWait bounds its whole GUI step, the set included;
 	// zero is 2 s and 10 min.
 	SessionEnvEvery, SessionEnvWait time.Duration
-	// SetupAssistantWatch bounds endSetupAssistant; zero is 2 min.
+	// SetupAssistantWatch bounds endSetupAssistant once the desktop is up; zero is 2 min.
 	SetupAssistantWatch time.Duration
+	// SetupAssistantSwitch is the file that turns endSetupAssistant on; "" is MacSetupAssistantSwitchPath.
+	SetupAssistantSwitch string
+	// LoginWait is how long after boot a run with a desktop waits for the agent account at the console
+	// (awaitAgentConsole); zero is 5 min.
+	LoginWait time.Duration
 	// AgentUID is the agent account's uid: the console view signs in only while it is at the console.
 	AgentUID uint32
 	// KCPassword is the agent account's auto-login password file; "" is MacKCPasswordPath.

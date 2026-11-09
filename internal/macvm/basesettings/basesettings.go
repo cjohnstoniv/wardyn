@@ -110,7 +110,9 @@ type Skipped struct {
 
 // Kills are ended first, by the agent's uid. Setup Assistant is killed so it does not rewrite its keys
 // over the ones the route writes; Terminal so that the saved state removed afterwards is not written
-// back.
+// back. The guest agent's run-start step takes kill.setup-assistant's process name from here, but never
+// kills it: it is off unless the base has its switch file, and then sends SIGTERM once the agent's
+// desktop is up (guestagent.MacSetupAssistantSwitchPath).
 var Kills = []Kill{
 	{Name: "kill.setup-assistant", Process: "Setup Assistant"},
 	{Name: "kill.terminal", Process: "Terminal", Terminal: true},

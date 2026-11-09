@@ -293,8 +293,10 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 | `DiagnosticMessagesHistory.plist` `AutoSubmit`, `ThirdPartyDataSubmit`, with mode 644 and group admin | bool false | root | yes | 1 and 2 |
 | Setup Assistant and Terminal ended, Terminal's saved state removed | by signal, then `rm -rf` as the agent | agent | no | 2, and edit-base's finish for Terminal |
 | Safari `WarnAboutFraudulentWebsites` (Safe Browsing) | bool false, read back once | agent | yes | 2 |
-| Setup Assistant ended in the agent's session for the first 2 minutes of each run | by signal | agent | no | run |
+| Setup Assistant asked to quit in the agent's session for 2 minutes once the desktop is up | SIGTERM, off unless the base has `/Library/Wardyn/setup-assistant-quit` | agent | no | run |
 
+- The run-start Setup Assistant step is off by default, so the Apple Account pane can stay up in a run's window. When on, it waits until Dock and Finder run as `agent`, and never kills. Not yet tried on a real Mac.
+- To turn it on in a base, run `sudo touch /Library/Wardyn/setup-assistant-quit` in `edit-base`'s admin Terminal. Remove the file to turn it off.
 - The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` skips the whole table.
 - The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" or "the console is not the agent account's", and the next update applies them.
 - The first update after an upgrade is answered by the base's old guest agent, which has no route for this: `tools.json` says "agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again". Run that command twice; it updates even when the base looks current.
