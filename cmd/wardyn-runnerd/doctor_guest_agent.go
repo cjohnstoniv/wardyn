@@ -15,9 +15,8 @@ import (
 // guestAgentStage says how the last tools update signed the base's guest agent (rec is the base's tools.json).
 // It fails when that update pushed the agent signed ad hoc, which loses Full Disk Access at each update, and
 // quotes why each signer failed. It passes when this Mac's cert signed it, by Wardyn's signer or by codesign.
-// Whether the base trusts that cert is information only: Full Disk Access keeps to the designated requirement,
-// and whether macOS also wants the self-signed root trusted is not known. warnings are lines that do not fail
-// the stage (guestAgentWarnings).
+// The base does not trust that cert: Full Disk Access keeps to the designated requirement. warnings are lines
+// that do not fail the stage (guestAgentWarnings).
 func guestAgentStage(rec macvm.ToolsRecord, warnings []string) doctor.Stage {
 	const name = "guest-agent"
 	warn := strings.Join(append([]string{""}, warnings...), "; warning: ")
@@ -37,12 +36,6 @@ func guestAgentStage(rec macvm.ToolsRecord, warnings []string) doctor.Stage {
 		detail += " (by Wardyn's signer)"
 	case macvm.AgentSignerCodesign:
 		detail += " (by codesign)"
-	}
-	switch rec.AgentSigningCert {
-	case macvm.ItemTrusted:
-		detail += "; information: the base trusts the cert for code signing"
-	case macvm.ItemNotTrusted:
-		detail += "; information: the base does not trust the cert for code signing"
 	}
 	return doctor.OKStage(name, detail+warn)
 }

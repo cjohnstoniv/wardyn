@@ -25,7 +25,7 @@ func (g *buttonGuest) EditInstallRosetta(context.Context) (guestagent.EditAction
 // what came of it.
 func TestEditWindowInstallRosettaButton(t *testing.T) {
 	var got []string
-	e, g := buttonEdit(t, nil, "", "", func(text macvm.WindowText, w *liveWin) {
+	e, g := buttonEdit(t, nil, "", func(text macvm.WindowText, w *liveWin) {
 		if !w.waitFor("Read by the guest now") {
 			got = append(got, "no first read")
 			return
@@ -58,7 +58,7 @@ func TestEditWindowWarnsWhenFileVaultIsOn(t *testing.T) {
 	}{{guestagent.FileVaultOn, true}, {guestagent.FileVaultOff, false}, {"", false}} {
 		t.Run("fv="+tc.fv, func(t *testing.T) {
 			var got []string
-			e, g := buttonEdit(t, nil, "", "", func(_ macvm.WindowText, w *liveWin) {
+			e, g := buttonEdit(t, nil, "", func(_ macvm.WindowText, w *liveWin) {
 				if !w.waitFor("Read by the guest now") {
 					got = append(got, "no first read")
 					return

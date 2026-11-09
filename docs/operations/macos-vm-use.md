@@ -198,6 +198,7 @@ A saved cast says how complete it is, on its row and in its header. A row carrie
 A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your own Mac. The run's own helper (`wardyn-macvm run`) draws it with Apple's virtual machine view. Wardyn's server decides each open and tells the run's runner to draw it. Nothing rests on the Mac between opens.
 
 - The window shows the VM's screen and takes your keys and pointer.
+- If Setup Assistant opens in a run, the guest agent ends it; a run's disk is thrown away, so nothing it asks is kept.
 - A macOS guest's own background requests keep a run active only when your policy allows them.
 - Its Apple boot hosts never do, allowed or refused. On a Mac runner this holds once the runner is upgraded.
 - It is not recorded, because it is drawn on your Mac and never crosses the gateway. A run at Screen and actions can't open one.

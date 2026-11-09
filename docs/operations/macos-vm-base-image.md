@@ -97,7 +97,7 @@
      - By hand, click +, press Command-Shift-G, type that path, and turn it on.
    - The grant is meant to stay in the base and reach every run's guest, where Full Disk Access lifts macOS's privacy prompts for every process the run starts.
    - Grant it once. Wardyn signs the guest agent on this Mac, so the grant can last through tools updates. The first tools update after an upgrade changes the signature: grant it once more.
-   - The base trusts the signing certificate for code signing only. When the base could not trust it (macOS 26 can refuse), the Terminal where you started `edit-base` lists the "guest agent signing certificate" with a `-p codeSign` command, and Trust the list's CAs includes it.
+   - The base does not need to trust the agent's signing certificate: Full Disk Access keeps to the agent's designated requirement.
    - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact `sudo security add-trusted-cert` command.
      - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate, and each asks for the code.
      - Check each subject and SHA-256 and confirm macOS's prompt. With nothing to trust the button does nothing and says so.
@@ -122,10 +122,10 @@
   - The edit prints the same lines, with the desktop mode, when the recheck finishes.
   - They record that boot. They are not live, and a read that failed says it could not be read, never trusted or allowed.
   - The Full Disk Access read is one open of macOS's protected TCC database by the guest agent. It reads nothing from the file and writes nothing.
-  - `status` also says how the base's guest agent is signed: on this Mac, or ad hoc, which loses Full Disk Access at each tools update. A signing certificate the base does not trust yet is named, with the instruction to run `edit-base`.
+  - `status` also says how the base's guest agent is signed: on this Mac, or ad hoc, which loses Full Disk Access at each tools update.
   - After a tools update, `status` can say Full Disk Access is unknown. Recheck it in `edit-base`.
   - `doctor` shows a `file-vault` line when the base last read FileVault as on. It is never a failure.
-  - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signing_cert` (`trusted` or `not_trusted`), `agent_signer` (`wardyn`, `codesign` or `ad_hoc`), `agent_sign_errors` (path-free) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
+  - `status` reads the base's `tools.json`: `agent_signature` (`this_mac` or `ad_hoc`), `agent_signer` (`wardyn`, `codesign` or `ad_hoc`), `agent_sign_errors` (path-free) and `guest.full_disk_access`. `doctor`'s folder-shares stage reads the first and the last.
 
 ## The prep proxy
 
@@ -283,6 +283,7 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 | `DiagnosticMessagesHistory.plist` `AutoSubmit`, `ThirdPartyDataSubmit`, with mode 644 and group admin | bool false | root | yes | 1 and 2 |
 | Setup Assistant and Terminal ended, Terminal's saved state removed | by signal, then `rm -rf` as the agent | agent | no | 2, and edit-base's finish for Terminal |
 | Safari `WarnAboutFraudulentWebsites` (Safe Browsing) | bool false, read back once | agent | yes | 2 |
+| Setup Assistant ended in the agent's session for the first 2 minutes of each run | by signal | agent | no | run |
 
 - The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` skips the whole table.
 - The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" or "the console is not the agent account's", and the next update applies them.

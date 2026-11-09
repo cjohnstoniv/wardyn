@@ -166,9 +166,9 @@ func (s *liveScreen) Open(vm unsafe.Pointer, text macvm.WindowText) (macvm.Windo
 }
 
 // buttonEdit is an edit whose window boot's guest is a buttonGuest, whose base's tools.json holds items and
-// agent signing state sig/cert, and whose window person runs on the live window. The live line is read every
+// agent signature sig, and whose window person runs on the live window. The live line is read every
 // 10 ms.
-func buttonEdit(t *testing.T, items []macvm.ItemRecord, sig, cert string, person func(macvm.WindowText, *liveWin)) (*editFix, *buttonGuest) {
+func buttonEdit(t *testing.T, items []macvm.ItemRecord, sig string, person func(macvm.WindowText, *liveWin)) (*editFix, *buttonGuest) {
 	t.Helper()
 	t.Cleanup(macvm.SetEditLiveEvery(10 * time.Millisecond))
 	e := newEdit(t)
@@ -176,7 +176,7 @@ func buttonEdit(t *testing.T, items []macvm.ItemRecord, sig, cert string, person
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec.Items, rec.AgentSignature, rec.AgentSigningCert = items, sig, cert
+	rec.Items, rec.AgentSignature = items, sig
 	b, _ := json.Marshal(rec)
 	if err := os.WriteFile(filepath.Join(e.base, macvm.ToolsRecordFile), b, 0o600); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ var corpCA = []macvm.ItemRecord{{Kind: macvm.ItemKindCA, Name: "corp", State: ma
 func TestEditWindowButtonsAskTheGuestAndSayWhatHappened(t *testing.T) {
 	var got []string
 	var g *buttonGuest
-	e, g := buttonEdit(t, corpCA, "", "", func(text macvm.WindowText, w *liveWin) {
+	e, g := buttonEdit(t, corpCA, "", func(text macvm.WindowText, w *liveWin) {
 		if !w.waitFor("Read by the guest now") {
 			got = append(got, "no first read")
 			return
@@ -238,15 +238,15 @@ func TestEditWindowButtonsAskTheGuestAndSayWhatHappened(t *testing.T) {
 func TestEditWindowShowsTheGuestsLiveRead(t *testing.T) {
 	var g *buttonGuest
 	var got []string
-	e, g := buttonEdit(t, corpCA, macvm.AgentSignedThisMac, macvm.ItemTrusted, func(_ macvm.WindowText, w *liveWin) {
-		read := "Read by the guest now: certificate corp trusted; the agent's signing certificate not trusted; Full Disk Access allowed."
+	e, g := buttonEdit(t, corpCA, macvm.AgentSignedThisMac, func(_ macvm.WindowText, w *liveWin) {
+		read := "Read by the guest now: certificate corp trusted; Full Disk Access allowed."
 		if !w.waitFor(read) {
 			got = append(got, fmt.Sprintf("the live line %q, want %q", w.last(), read))
 		}
 		g.bmu.Lock()
 		g.down = true
 		g.bmu.Unlock()
-		unread := "Read by the guest now: certificate corp could not be read; the agent's signing certificate could not be read; Full Disk Access could not be read."
+		unread := "Read by the guest now: certificate corp could not be read; Full Disk Access could not be read."
 		if !w.waitFor(unread) {
 			got = append(got, fmt.Sprintf("after the reads failed the live line %q, want %q", w.last(), unread))
 		}
@@ -260,25 +260,24 @@ func TestEditWindowShowsTheGuestsLiveRead(t *testing.T) {
 	}
 }
 
-// Trust the list's CAs is enabled only when it has something to trust: a ca item in the list, or this Mac's
-// agent signing certificate that the base reads as not trusted. With no ca item the window says the list
-// has none.
+// Trust the list's CAs is enabled only when it has a ca item to trust, whatever the agent's signature. With
+// no ca item the window says the list has none.
 func TestEditWindowTrustNeedsACertificate(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		items     []macvm.ItemRecord
-		sig, cert string
-		want      bool
+		name  string
+		items []macvm.ItemRecord
+		sig   string
+		want  bool
 	}{
-		{"no certificate", nil, "", "", false},
-		{"signing certificate trusted", nil, macvm.AgentSignedThisMac, macvm.ItemTrusted, false},
-		{"signing certificate not trusted", nil, macvm.AgentSignedThisMac, macvm.ItemNotTrusted, true},
-		{"a ca item", corpCA, "", "", true},
+		{"no certificate", nil, "", false},
+		{"signed on this Mac, no ca item", nil, macvm.AgentSignedThisMac, false},
+		{"a ca item", corpCA, "", true},
+		{"a ca item, signed on this Mac", corpCA, macvm.AgentSignedThisMac, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var canTrust bool
 			var line string
-			e, _ := buttonEdit(t, tc.items, tc.sig, tc.cert, func(text macvm.WindowText, w *liveWin) {
+			e, _ := buttonEdit(t, tc.items, tc.sig, func(text macvm.WindowText, w *liveWin) {
 				canTrust = text.CanTrust
 				w.waitFor("Read by the guest now")
 				line = w.last()

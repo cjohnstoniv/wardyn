@@ -542,8 +542,7 @@ func (o *EditOptions) reportRead(staging, desktop, fda string) EditRecord {
 // SHA-256 and the command that trusts it once a person signed in as wardyn-admin runs it. Nothing runs it
 // for them. With no such item it prints nothing. The subject and hash come from the install list's file for
 // that item when the file is the one the base was built from; otherwise the base's recorded fingerprint
-// and no subject. Last, when the base reads this Mac's guest agent signing certificate as not trusted, the
-// same for it, trusted for code signing only.
+// and no subject. The guest agent's signing certificate is never listed: the base does not need to trust it.
 func (o *EditOptions) printUntrusted(base string) {
 	rec, err := ReadToolsRecord(base)
 	if err != nil {
@@ -595,21 +594,6 @@ func (o *EditOptions) printUntrusted(base string) {
 		fmt.Fprintf(o.Out, "%s\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p ssl -k %s %s/%s\n",
 			r.Name, subject, colons(sum), guestagent.MacSystemKeychain, guestagent.ItemDir(r.Name), guestagent.ItemCert)
 	}
-	if rec.AgentSignature != AgentSignedThisMac || rec.AgentSigningCert != ItemNotTrusted {
-		return
-	}
-	if !header {
-		fmt.Fprintln(o.Out)
-		fmt.Fprintln(o.Out, "Not yet trusted in this base. Click Trust the list's CAs in the window, or run each command in the admin Terminal. Check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
-	}
-	sum := "not available: this Mac's signing certificate does not read"
-	if cert, err := readAgentSigningCert(o.Layout.AgentSigningDir()); err == nil {
-		sum = colons(sum256(cert.Raw))
-	}
-	// Code signing only: the guest agent keeps Full Disk Access through tools updates once the base
-	// trusts the certificate it is signed with.
-	fmt.Fprintf(o.Out, "guest agent signing certificate (this Mac's, for code signing only)\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p codeSign -k %s %s\n",
-		strconv.Quote("CN="+agentSigningCN), sum, guestagent.MacSystemKeychain, agentSigningCertPath())
 }
 
 // macOSAccounts are macOS's own accounts below uid 500 that have no leading "_".

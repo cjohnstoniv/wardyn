@@ -281,9 +281,7 @@ func (m *markSigner) SignAgent(_ context.Context, path string) (macvm.SignedAgen
 // does), with Full Disk Access fda, and takes a push at any mode (the certificate's is 0644).
 type signGuest struct {
 	*guest
-	fda       string
-	certTrust int  // verify-cert's exit for the signing certificate
-	noCert    bool // the guest refuses the certificate's push, as an older agent may
+	fda string
 }
 
 func (g *signGuest) Posture(context.Context) (guestagent.ToolsPosture, error) {
@@ -291,9 +289,6 @@ func (g *signGuest) Posture(context.Context) (guestagent.ToolsPosture, error) {
 }
 
 func (g *signGuest) Push(_ context.Context, dest string, _ fs.FileMode, r io.Reader, _ int64) error {
-	if g.noCert && dest == signCert() {
-		return errors.New("403 a push to " + dest)
-	}
 	b, err := io.ReadAll(r)
 	g.mu.Lock()
 	g.files[dest] = b
@@ -301,23 +296,13 @@ func (g *signGuest) Push(_ context.Context, dest string, _ fs.FileMode, r io.Rea
 	return err
 }
 
-func (g *signGuest) Run(ctx context.Context, argv []string) (string, int, error) {
-	if len(argv) > 2 && argv[1] == "verify-cert" && slices.Contains(argv, "codeSign") {
-		g.mu.Lock()
-		g.runs = append(g.runs, argv)
-		g.mu.Unlock()
-		return "", g.certTrust, nil
-	}
-	return g.guest.Run(ctx, argv)
-}
-
 func signCert() string {
 	return guestagent.ItemDir(guestagent.AgentSigningItem) + "/" + guestagent.ItemCert
 }
 
-// A tools update pushes the signed copy to both the agent's path and the run launcher's, puts the signing
-// certificate in the base and trusts it for code signing only, and records the signature and the
-// certificate's trust. Full Disk Access is read by the agent the boot started with, so it is recorded only
+// A tools update pushes the signed copy to both the agent's path and the run launcher's, and records the
+// signature and the certificate's hash. It puts no certificate in the base and runs no trust or verify for
+// code signing. Full Disk Access is read by the agent the boot started with, so it is recorded only
 // when that agent was signed on this Mac too: the new build then has the same designated requirement.
 func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 	f := newTools(t)
@@ -344,17 +329,16 @@ func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 	if ms.done.Load() != 1 {
 		t.Fatalf("the signed copy was cleaned up %d times, want 1", ms.done.Load())
 	}
-	if string(g.files[signCert()]) != "the cert's DER" {
-		t.Fatalf("signing certificate not in the base: %q", g.files[signCert()])
+	if _, ok := g.files[signCert()]; ok {
+		t.Fatalf("the signing certificate was put in the base: %q", g.files[signCert()])
 	}
-	trust := []string{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", guestagent.MacSystemKeychain, signCert()}
-	verify := []string{"/usr/bin/security", "verify-cert", "-L", "-p", "codeSign", "-c", signCert()}
-	if !slices.ContainsFunc(g.runs, func(a []string) bool { return slices.Equal(a, trust) }) ||
-		!slices.ContainsFunc(g.runs, func(a []string) bool { return slices.Equal(a, verify) }) {
-		t.Fatalf("the certificate was not trusted for code signing and checked: %q", g.runs)
+	for _, argv := range g.runs {
+		if slices.Contains(argv, "codeSign") || slices.Contains(argv, "add-trusted-cert") && slices.Contains(argv, signCert()) {
+			t.Fatalf("the update ran %q, want no code-signing trust or verify", argv)
+		}
 	}
-	if res.AgentSignature != macvm.AgentSignedThisMac || res.AgentSigningCert != macvm.ItemTrusted {
-		t.Fatalf("signature %q cert %q", res.AgentSignature, res.AgentSigningCert)
+	if res.AgentSignature != macvm.AgentSignedThisMac {
+		t.Fatalf("signature %q", res.AgentSignature)
 	}
 	if res.Guest == nil || res.Guest.FullDiskAccess != "allowed" || res.AgentSigningCertSHA256 != shaHex(ms.cert) {
 		t.Fatalf("Full Disk Access not recorded: %+v, certificate %q", res.Guest, res.AgentSigningCertSHA256)
@@ -383,52 +367,28 @@ func TestToolsUpdatePushesTheSignedAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec, err := macvm.ReadToolsRecord(pf.opts.Layout.BaseDir(0))
-	if err != nil || rec.AgentSignature != macvm.AgentSignedThisMac || rec.AgentSigningCert != macvm.ItemTrusted || rec.Guest == nil || rec.Guest.FullDiskAccess != "" {
+	if err != nil || rec.AgentSignature != macvm.AgentSignedThisMac || rec.Guest == nil || rec.Guest.FullDiskAccess != "" {
 		t.Fatalf("record %+v %v", rec, err)
 	}
 }
 
-// Where macOS refuses the trust without a person (macOS 26 does from root), the certificate reads not
-// trusted, the signed agent is still pushed, and edit-base lists the command that trusts it for code
-// signing in the admin Terminal.
-func TestAgentSigningCertTrustFallsBackToEditBase(t *testing.T) {
-	f := newTools(t)
-	g := &signGuest{guest: newGuest(), certTrust: 1}
-	bin := filepath.Join(t.TempDir(), "agent")
-	if err := os.WriteFile(bin, []byte("new agent"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f.opts.Agent = &macvm.AgentPin{Version: "0.10.1", Path: bin, Dest: guestagent.MacAgentBinaryPath}
-	f.opts.Signer = &markSigner{cert: []byte("der")}
-	stage := &macvm.ToolsStage{ToolsOptions: f.opts, Boot: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
-		return g, func(context.Context) error { return nil }, nil
-	}}
-	res := runStage(t, stage)
-	if res.AgentSignature != macvm.AgentSignedThisMac || res.AgentSigningCert != macvm.ItemNotTrusted || string(g.files[guestagent.MacAgentBinaryPath]) != "signed:new agent" {
-		t.Fatalf("signature %q cert %q agent %q", res.AgentSignature, res.AgentSigningCert, g.files[guestagent.MacAgentBinaryPath])
-	}
-	// A guest that refuses the certificate itself: the update still ends, the certificate not trusted.
-	g.noCert, g.certTrust = true, 0
-	if res := runStage(t, stage); res.AgentSigningCert != macvm.ItemNotTrusted || string(g.files[guestagent.MacAgentRunPath]) != "signed:new agent" {
-		t.Fatalf("refused certificate push: cert %q", res.AgentSigningCert)
-	}
+// edit-base lists no command for the agent's signing certificate, whatever an older tools.json recorded of
+// its trust, and the base list still reserves the certificate's name.
+func TestEditBaseListsNoAgentSigningCertificate(t *testing.T) {
 	base := t.TempDir()
-	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), []byte(`{"agent_signature":"this_mac","agent_signing_cert":"not_trusted"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	(&macvm.EditOptions{Out: &out, Log: slog.New(slog.DiscardHandler)}).PrintUntrusted(base)
-	want := fmt.Sprintf("sudo security add-trusted-cert -d -r trustRoot -p codeSign -k %s %s\n", guestagent.MacSystemKeychain, signCert())
-	if !strings.Contains(out.String(), want) {
-		t.Fatalf("edit-base did not list the signing certificate's trust:\n%s", out.String())
-	}
-	out.Reset()
-	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), []byte(`{"agent_signature":"this_mac","agent_signing_cert":"trusted"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	(&macvm.EditOptions{Out: &out, Log: slog.New(slog.DiscardHandler)}).PrintUntrusted(base)
-	if strings.Contains(out.String(), "codeSign") {
-		t.Fatalf("a trusted signing certificate is listed:\n%s", out.String())
+	for _, rec := range []string{
+		`{"agent_signature":"this_mac","agent_signing_cert":"not_trusted"}`,
+		`{"agent_signature":"this_mac","agent_signing_cert":"trusted"}`,
+		`{"agent_signature":"this_mac"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), []byte(rec), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		(&macvm.EditOptions{Out: &out, Log: slog.New(slog.DiscardHandler)}).PrintUntrusted(base)
+		if out.Len() != 0 {
+			t.Fatalf("record %s printed:\n%s", rec, out.String())
+		}
 	}
 }
 

@@ -724,18 +724,17 @@ var ItemSecretPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 var ItemAppPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,95}\.app$`)
 
 // AgentSigningItem is the stage directory of the guest agent's signing certificate: the certificate of the
-// identity the host signs every agent build with, which the base trusts for code signing so the agent's
-// designated requirement holds from build to build. An install list may not use the name.
+// identity the host signs every agent build with. The base does not trust it: the agent's designated requirement
+// holds from build to build on its hash. An install list may not use the name, and a copy an older tools update
+// staged stays harmlessly.
 const AgentSigningItem = "wardyn-agent-signing"
 
 // trustPolicyAllowed says whether tools mode may trust or verify cert for policy: a staged certificate for
-// SSL, and the agent's signing certificate, only, for code signing.
+// SSL only.
 func trustPolicyAllowed(policy, cert string) bool {
 	switch policy {
 	case "ssl":
 		return isItemFile(cert, ItemCert)
-	case "codeSign":
-		return cert == ItemDir(AgentSigningItem)+"/"+ItemCert
 	}
 	return false
 }
@@ -813,11 +812,9 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/hdiutil detach -force S/<name>/mnt
 //	/usr/bin/profiles list                            the profiles installed, read back
 //	/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain S/<name>/item.cer
-//	/usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain S/wardyn-agent-signing/item.cer
 //	/usr/bin/security remove-trusted-cert -d S/<name>/item.cer   a rotated CA's admin trust, before its delete
 //	/usr/bin/security delete-certificate -t -Z <SHA-1> /Library/Keychains/System.keychain
 //	/usr/bin/security verify-cert -L -p ssl -c S/<name>/item.cer
-//	/usr/bin/security verify-cert -L -p codeSign -c S/wardyn-agent-signing/item.cer
 //	/usr/bin/sw_vers -productVersion|-buildVersion     the guest posture's reads
 //	/usr/bin/csrutil status
 //	/usr/sbin/spctl --status
