@@ -1048,6 +1048,8 @@ jobs:
           load: true
           cache-from: type=gha,scope=wardyn-proxy
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
+      - uses: ./.github/actions/kind-binary
+        if: needs.changes.outputs.backend != 'false'
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         if: needs.changes.outputs.backend != 'false'
         with:
@@ -1321,6 +1323,7 @@ jobs:
       # own doc and deploy/kind/Dockerfile.conformance-agent.
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
+      - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: wardyn-conformance-k8s
@@ -1469,6 +1472,9 @@ jobs:
       # Kubernetes v1.30 by digest, with the kind release that image was built for: the docs claim the
       # backend was tested on v1.30, and kind-action's default node image is newer. The version is
       # printed after the Calico rollout so the log shows what ran.
+      - uses: ./.github/actions/kind-binary
+        with:
+          version: v0.23.0
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           version: v0.23.0
@@ -1503,13 +1509,16 @@ jobs:
           echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
       # sha256 published with the v1.0.9 release. The manifest names the controller by tag, so the one
       # image line is replaced with the index digest, and no image may be left that is not by digest.
-      - name: Fetch agent-sandbox v1.0.9 (sha256-checked) and pin its controller by digest
+      - name: Fetch agent-sandbox v1.0.9 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.9/sandbox.yaml
+          sha256: 3eeb27fa821659593ba92c5454571f08c84abb07096bb9d372c1c6c750f6d7d2
+          path: ${{ runner.temp }}/agent-sandbox.yaml
+      - name: Pin the agent-sandbox controller by digest
         run: |
           set -euo pipefail
           f="$RUNNER_TEMP/agent-sandbox.yaml"
-          curl -fsSL --retry 3 -o "$f" \
-            https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.9/sandbox.yaml
-          echo "3eeb27fa821659593ba92c5454571f08c84abb07096bb9d372c1c6c750f6d7d2  $f" | sha256sum -c -
           tagged='registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.9'
           [ "$(grep -cF "image: $tagged" "$f")" = 1 ] || { echo "::error::expected exactly one '$tagged' image line in sandbox.yaml"; exit 1; }
           sed -i "s|image: $tagged\$|image: $AGENT_SANDBOX_CONTROLLER_IMAGE|" "$f"
@@ -1529,14 +1538,17 @@ jobs:
           key: cache-trivy-${{ steps.cache-date.outputs.date }}
           restore-keys: |
             cache-trivy-
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
       - name: Install trivy 0.70.0 (pinned, checksum-verified)
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/trivy-bin"
           mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
       - name: Trivy scan of the agent-sandbox controller digest
@@ -2650,14 +2662,17 @@ jobs:
             cache-trivy-
       # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
       # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Fetch trivy 0.70.0 (pinned sha256, retried, cached)
+        uses: ./.github/actions/pinned-download
+        with:
+          url: https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          path: ${{ runner.temp }}/trivy.tar.gz
       - name: Install trivy 0.70.0 (pinned, checksum-verified)
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/trivy-bin"
           mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
-            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

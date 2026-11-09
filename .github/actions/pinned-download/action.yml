@@ -1,0 +1,51 @@
+name: Pinned download
+description: >-
+  Downloads one file to `path` and checks it against a pinned sha256, so a job
+  that needs a third-party release asset does not depend on GitHub's release
+  CDN answering at that moment (504s and HTML error bodies failed trivy,
+  conformance-k8s-agent-sandbox and the kind installs in runs 42566593752,
+  42571152634 and 42566616802). The verified file is restored from the Actions
+  cache by its sha256, and only a push to main saves it, like the repository's
+  other caches. A miss, or a restored file that fails the check, is fetched
+  with retries. The check runs on every path, so a cache entry can never stand
+  in for the pinned bytes.
+inputs:
+  url:
+    description: The asset URL.
+    required: true
+  sha256:
+    description: The asset's sha256, copied from the release's published checksum file.
+    required: true
+  path:
+    description: Where the verified file is written.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Restore the pinned file
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.path }}
+        key: pinned-download-${{ inputs.sha256 }}
+    - name: Fetch and check the pinned file
+      shell: bash
+      env:
+        URL: ${{ inputs.url }}
+        SUM: ${{ inputs.sha256 }}
+        DEST: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$SUM" | grep -Exq '[0-9a-f]{64}' || { echo "::error::pinned-download: '$SUM' is not a sha256"; exit 1; }
+        if [ -f "$DEST" ] && echo "$SUM  $DEST" | sha256sum --strict -c -; then
+          exit 0
+        fi
+        mkdir -p "$(dirname "$DEST")"
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 -o "$DEST" "$URL"
+        echo "$SUM  $DEST" | sha256sum --strict -c -
+    - name: Save the pinned file (push to main only)
+      if: steps.restore.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.path }}
+        key: pinned-download-${{ inputs.sha256 }}

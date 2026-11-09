@@ -71,7 +71,7 @@ RUN set -eu; \
 	esac; \
 	printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
 	url="https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${plat}.tar.gz"; \
-	curl -fsSL "$url" -o /tmp/code-server.tar.gz; \
+	curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 "$url" -o /tmp/code-server.tar.gz; \
 	echo "$sum  /tmp/code-server.tar.gz" | sha256sum --strict -c -; \
 	mkdir -p /usr/local/lib/code-server; \
 	tar -xzf /tmp/code-server.tar.gz -C /usr/local/lib/code-server --strip-components=1; \
