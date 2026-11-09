@@ -508,9 +508,40 @@ export function AppShell({
   // route for them to open.
   const canReachEnvironmentStep =
     meta.operator || (access === "session-user" && meta.userViewSuperAdmin);
+  // Each route names itself in the tab title ("<page> - <console>") and, after a navigation, takes focus on its
+  // heading, so a screen reader hears the page change and a keyboard user starts at the new content. A screen
+  // that already placed focus inside the page (the New Run steps do) keeps it. The heading is read again for
+  // two seconds because most screens draw it only once their first read has landed.
+  const arrived = React.useRef(location.pathname);
   React.useEffect(() => {
-    document.title = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
-  }, [view]);
+    const base = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
+    const main = mainRef.current;
+    const heading = () => main?.querySelector<HTMLElement>("h1") ?? null;
+    const sync = () => {
+      const text = heading()?.textContent?.trim();
+      document.title = text ? `${text} - ${base}` : base;
+    };
+    sync();
+    if (!main) return;
+    if (arrived.current !== location.pathname) {
+      arrived.current = location.pathname;
+      if (!main.contains(document.activeElement)) {
+        const target = heading() ?? main;
+        if (!target.hasAttribute("tabindex")) {
+          target.tabIndex = -1;
+          target.classList.add("outline-none");
+        }
+        target.focus({ preventScroll: true });
+      }
+    }
+    const observer = new MutationObserver(sync);
+    observer.observe(main, { childList: true, subtree: true, characterData: true });
+    const stop = setTimeout(() => observer.disconnect(), 2000);
+    return () => {
+      clearTimeout(stop);
+      observer.disconnect();
+    };
+  }, [view, location.pathname]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
