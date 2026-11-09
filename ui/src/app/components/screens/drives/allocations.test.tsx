@@ -224,9 +224,9 @@ describe("DrivesScreen — allocations", () => {
   });
 
   it("lays the add form out in three columns at xl, not lg (the sidebar takes 228px of the viewport)", async () => {
-    const { container } = renderScreen();
+    renderScreen();
     await screen.findByText(DRIVES.ALLOC_TITLE);
-    const grid = container.querySelector('[class~="xl:grid-cols-3"]');
+    const grid = document.body.querySelector('[class~="xl:grid-cols-3"]');
     expect(grid).not.toBeNull();
     expect(grid!.className).not.toContain("lg:grid-cols-");
   });
