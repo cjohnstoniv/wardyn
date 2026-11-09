@@ -124,6 +124,49 @@ func TestMeetAllowedDomainsReadsABareEntryUnderThePortRule(t *testing.T) {
 	}
 }
 
+// An overlay stored before MEET-PORT-RULE named a port the base only names bare (h:8443 under h). The older
+// write check passed it; ValidateOverlay now refuses it (M2). Resolve still runs the lenient ApplyOverlay on
+// what is stored: it warns that the entry is uncovered (M2') but keeps it in the overlay set, and the base's
+// bare h (80/443) met with h:8443 is nothing (M1), so the run keeps neither h nor h:8443 and reaches h on no
+// port unless another overlay entry covers it. The meet takes no substrate: the result is the same for a VM,
+// a container with the port rule on and one with it off (the reach per substrate is pinned in
+// internal/egress/proxy TestOverlayOracleStoredOverlayNamingAPortUnderABareBase).
+func TestMeetStoredOverlayNamingAPortUnderABareBase(t *testing.T) {
+	const warn = "allowed_domains: 1 entr(y/ies) the base's own allowed_domains do not cover: h.example:8443"
+	for _, tc := range []struct {
+		name           string
+		base, ov, want []string
+		warns          []string
+		bad            bool // refused at write now
+	}{
+		{"M2/M2': h:8443 under a bare h keeps nothing, with a warning", []string{"h.example"}, []string{"h.example:8443"}, []string{}, []string{warn}, true},
+		{"M2/M2': h beside h:8443 under a bare h keeps h only, with a warning", []string{"h.example"}, []string{"h.example", "h.example:8443"}, []string{"h.example"}, []string{warn}, true},
+		{"the documented way: base names h:8443 first, so h:8443 is kept", []string{"h.example:8443"}, []string{"h.example:8443"}, []string{"h.example:8443"}, nil, false},
+		{"h:443 under a bare h is covered and kept as h:443, no warning", []string{"h.example"}, []string{"h.example:443"}, []string{"h.example:443"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Authority{Ceiling: types.RunPolicySpec{AllowedDomains: tc.base}}
+			ov := overlayOf(types.CeilingOverlay{AllowedDomains: &tc.ov})
+			err := ValidateOverlay(b, ov)
+			if tc.bad {
+				wantOverlayErr(t, err, ReasonOverlayInvalid, "allowed_domains")
+			} else if err != nil {
+				t.Fatalf("ValidateOverlay: %v", err)
+			}
+			got, warns, aerr := ApplyOverlay(b, ov)
+			if aerr != nil {
+				t.Fatal(aerr)
+			}
+			if !slices.Equal(got.Ceiling.AllowedDomains, tc.want) {
+				t.Errorf("allowed_domains = %v, want %v", got.Ceiling.AllowedDomains, tc.want)
+			}
+			if !slices.Equal(warns, tc.warns) {
+				t.Errorf("warnings = %q, want %q", warns, tc.warns)
+			}
+		})
+	}
+}
+
 // The meet minimises an overlay's allowed_domains quadratically, so the overlay is count-capped
 // before it, at write and at resolve alike.
 func TestOverlayAllowedDomainsCountCap(t *testing.T) {

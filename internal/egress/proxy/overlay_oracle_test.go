@@ -497,3 +497,49 @@ func TestOverlayOracleOpenRunUnderPortOrLiteralWallsReachesNeither(t *testing.T)
 		}
 	}
 }
+
+// getPorts is the ports (of 22, 80, 443, 8443) the pipeline lets a GET through to host, in order.
+func getPorts(reach map[string]bool, host string) []int {
+	var out []int
+	for _, port := range []int{22, 80, 443, 8443} {
+		if reach[fmt.Sprintf("%s|GET|%d", host, port)] {
+			out = append(out, port)
+		}
+	}
+	return out
+}
+
+// An overlay stored before MEET-PORT-RULE named h:8443 under a base that names h bare. At resolve the
+// lenient meet keeps neither entry (M2'), so on every substrate the run reaches h on no port: on a VM and a
+// container with the rule on that drops the base's 80/443 too, and with the rule off it drops every port a
+// bare h reached. An overlay that names h, h:8443 or h:443 beside the base's h keeps what it names.
+func TestOverlayOracleStoredOverlayNamingAPortUnderABareBase(t *testing.T) {
+	const h = "api.vendor.example"
+	all, web := []int{22, 80, 443, 8443}, []int{80, 443}
+	for _, tc := range []struct {
+		name         string
+		base, ov     []string
+		want         []string
+		vmReach      []int // a VM or a container with the rule on
+		ruleOffReach []int
+	}{
+		{"base h, overlay h:8443", []string{h}, []string{h + ":8443"}, []string{}, nil, nil},
+		{"base h, overlay h and h:8443", []string{h}, []string{h, h + ":8443"}, []string{h}, web, all},
+		{"base h:8443, overlay h:8443", []string{h + ":8443"}, []string{h + ":8443"}, []string{h + ":8443"}, []int{8443}, []int{8443}},
+		{"base h, overlay h:443", []string{h}, []string{h + ":443"}, []string{h + ":443"}, []int{443}, []int{443}},
+	} {
+		got := meetLists(t, tc.base, tc.ov)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: met allowlist = %v, want %v", tc.name, got, tc.want)
+		}
+		for _, s := range substrates {
+			want := tc.vmReach
+			if !s.vm && s.rule == PortRuleOff {
+				want = tc.ruleOffReach
+			}
+			if r := getPorts(substrateReach(t, s, types.RunPolicySpec{AllowedDomains: got}), h); !slices.Equal(r, want) {
+				t.Errorf("%s on %s: met %v reaches ports %v, want %v (base alone reaches %v)", tc.name, s.name, got, r, want, getPorts(substrateReach(t, s, types.RunPolicySpec{AllowedDomains: tc.base}), h))
+			}
+		}
+	}
+}
