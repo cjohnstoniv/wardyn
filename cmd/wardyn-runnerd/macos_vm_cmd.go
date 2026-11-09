@@ -243,8 +243,10 @@ type macOSVMStatus struct {
 	ToolsDial     string   `json:"tools_dial"`      // how the newest tools-port dial ended, "" before one
 	// ToolsDialRead says where ToolsDial was read from and when, and any log that could not be read to its end.
 	ToolsDialRead string `json:"tools_dial_read,omitempty"`
-	Error         string `json:"error"`
-	Failure       string `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
+	// ToolsUpdateWaiting: a tools update is paused until the Mac is on AC power.
+	ToolsUpdateWaiting bool   `json:"tools_update_waiting_for_ac,omitempty"`
+	Error              string `json:"error"`
+	Failure            string `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
 	// Bases are the Mac's other bases (macos_vm_bases_dir), with a failed one's reason.
 	Bases []runnerwire.MacVMDerivedBase `json:"bases,omitempty"`
 	// Kept is the kept machines this Mac holds and the disk they may take (`macos-vm machines` lists them).
@@ -288,6 +290,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		st.setupCode, st.Phase = p, "setup_by_hand"
 	}
 	st.ToolsDial, st.ToolsDialRead = lastToolsDial(m.layout.Root)
+	st.ToolsUpdateWaiting = toolsUpdateWaiting(m.layout.Root)
 	counted, err := m.ledger.Counted()
 	if err != nil {
 		return st, err
@@ -371,6 +374,9 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		for _, l := range st.editRead {
 			fmt.Fprintln(out, l)
 		}
+	}
+	if st.ToolsUpdateWaiting {
+		fmt.Fprintln(out, toolsUpdateWaitingLine)
 	}
 	if st.Kept != nil {
 		st.Kept.writeText(out)
@@ -511,7 +517,7 @@ func macOSVMDoctorStages(roots []string, rootsSource string) []doctor.Stage {
 	if rec, ok := macvm.ReadEditRecord(base, man); ok && rec.FullDiskAccess == fda {
 		readAt = rec.ReadAt
 	}
-	stages = append(stages, guestAgentStage(tools, guestAgentWarnings(tools)))
+	stages = append(stages, guestAgentStage(tools, append(guestAgentWarnings(tools), toolsUpdateWaitWarnings(root)...)))
 	return append(stages, folderSharesStage(roots, rootsSource, fda, tools.AgentSignature == macvm.AgentSignedAdHoc, readAt, tools.TriedAt))
 }
 
