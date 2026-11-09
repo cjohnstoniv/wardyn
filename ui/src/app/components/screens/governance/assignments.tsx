@@ -300,7 +300,7 @@ function AddAssignmentForm({
     <div className="mt-4 border-t border-border px-6 py-5">
       <h3 className="text-sm font-medium text-foreground">{GOV.ADD_TITLE}</h3>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr]">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[auto_1fr_1fr]">
         <Field label={PERM.FIELD_WHO} hint={whoHint}>
           <div className="space-y-2">
             <Segmented

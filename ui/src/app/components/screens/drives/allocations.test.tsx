@@ -223,6 +223,14 @@ describe("DrivesScreen — allocations", () => {
     expect(screen.getByText(DRIVES.HOME_OVERRIDE_HINT)).toBeInTheDocument();
   });
 
+  it("lays the add form out in three columns at xl, not lg (the sidebar takes 228px of the viewport)", async () => {
+    const { container } = renderScreen();
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    const grid = container.querySelector('[class~="xl:grid-cols-3"]');
+    expect(grid).not.toBeNull();
+    expect(grid!.className).not.toContain("lg:grid-cols-");
+  });
+
   it("an upsert that repointed an existing row says so inline — and a fresh one does not", async () => {
     upsertGrantMock.mockResolvedValueOnce({ grant: {}, replaced: true });
     renderScreen();

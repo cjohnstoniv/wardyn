@@ -413,7 +413,7 @@ function AddAllocationForm({
       <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DRIVES.EFFECT_NOTE}</p>
       <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DRIVES.SIGNIN_NOTE}</p>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <Field label={PERM.FIELD_WHO} hint={whoHint}>
           <div className="space-y-2">
             <Segmented
