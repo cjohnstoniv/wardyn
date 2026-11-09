@@ -613,7 +613,8 @@ export function LiveApprovals({
             <Button
               size="sm"
               variant="info"
-              className="h-7 rounded-r-none border-r-0"
+              // Squared on the right only when the scope caret is drawn next to it.
+              className={scoped && !a.walls_block ? "h-7 rounded-r-none border-r-0" : "h-7"}
               disabled={!canDecide(a) || !!a.walls_block || busy === a.id}
               onClick={() => decide(a, true)}
             >
@@ -636,7 +637,7 @@ export function LiveApprovals({
             <Button
               size="sm"
               variant="outline"
-              className="h-7 ml-1 rounded-r-none border-r-0"
+              className={scoped ? "h-7 ml-1 rounded-r-none border-r-0" : "h-7 ml-1"}
               disabled={!canDecide(a) || busy === a.id}
               onClick={() => setDenyTarget({ request: a, scope: "run" })}
             >

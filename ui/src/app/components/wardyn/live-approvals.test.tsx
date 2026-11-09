@@ -584,6 +584,26 @@ describe("LiveApprovals", () => {
       expect(within(panel).getByRole("button", { name: /^Deny$/ })).not.toBeDisabled();
     });
 
+    // Approve and Deny are the left half of a split button only when the scope caret is drawn beside them.
+    it.each([
+      ["a tool_call row has no caret, so both buttons keep their full outline", { id: "t1", kind: "tool_call", requested_scope: {}, decidable: true }, false, false],
+      ["an egress row the walls block has a Deny caret only, so Approve stays whole", { id: "w1", requested_scope: { host: "paste.example.net" }, decidable: true, walls_block: true }, false, true],
+      ["an egress row with both carets squares both buttons on the right", { id: "e1", requested_scope: { host: "ok.example.net" }, decidable: true }, true, true],
+    ] as const)("%s", async (_name, row, approveSplit, denySplit) => {
+      listApprovalsMock.mockResolvedValue([pending(row as never)]);
+      render(
+        <OperatorProvider operator securityOperator>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      for (const [name, split] of [["Approve", approveSplit], ["Deny", denySplit]] as const) {
+        const cls = within(panel).getByRole("button", { name: new RegExp(`^${name}$`) }).className;
+        expect(cls.includes("rounded-r-none"), `${name} rounded-r-none`).toBe(split);
+        expect(cls.includes("border-r-0"), `${name} border-r-0`).toBe(split);
+      }
+    });
+
     it("decidable=true enables a row role+kind alone would have closed", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "t1", kind: "tool_call", requested_scope: {}, decidable: true })]);
       render(
