@@ -652,23 +652,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 			})
 		}
 	}
-	// The proxy starts only with an injection its policy binds exactly (buildInjectorFor), and a policy
-	// can allow a host without binding it: by a wildcard or allow_all_egress, or, after a layer's
-	// allowlist, by another port of the host only (layerWithheld reads both as allowing it). Each such
-	// credential is withheld here, read from the policy the sidecar starts with, so the run starts
-	// without it; settleCredentialHosts drops its interception entry and still counts it in the
-	// one-credential-per-host check. A remote MCP server's credential is the broker's, on a host no
-	// allowlist names (rawEgressHosts), so dispatchMCP keeps deciding it.
-	bound := proxy.CompilePolicy(sidecarPolicy(*policy, *p)).AllowedExactHost
-	p.unboundInjections = nil
-	*injections = slices.DeleteFunc(slices.Clone(*injections), func(in runner.InjectionGrant) bool {
-		if bound(strings.TrimSpace(in.Rule.Host)) || brokeredMCPRule(p.Components.MCP, in.Rule.Host) { // as buildInjectorFor reads it
-			return false
-		}
-		p.unboundInjections = append(p.unboundInjections, in)
-		droppedInjection = append(droppedInjection, in.Rule.Host)
-		return true
-	})
+	droppedInjection = append(droppedInjection, withholdUnboundInjections(policy, p, injections)...)
 	if len(droppedInjection) > 0 || len(droppedLane) > 0 {
 		slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile or the Wardyn boundary denies, or the run's policy does not bind",
 			slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
@@ -724,16 +708,8 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		}
 		data["withheld_grants"] = nonNilStrings(droppedGrant)
 	}
-	if unboundOnly {
-		data["note"] = "the policy this run's proxy starts with does not allow these hosts exactly, so their credentials are withheld instead of stopping the proxy's start"
-	} else if c.profile == "" && boundaryLayer {
-		data["note"] = "the Wardyn boundary denies these hosts or does not allow them, so every credential lane that reaches one is withheld"
-	} else if c.profile == "" {
-		data["note"] = "a restriction, the run owner's walls or the run's wall preset deny these hosts or keep these credentials out, so every credential lane that reaches one is withheld"
-	} else if len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
-		data["note"] = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
-			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
-			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them"
+	if note := ceilingReassertNote(c.profile, unboundOnly, boundaryLayer, len(added)+len(droppedInjection)+len(droppedLane) > 0); note != "" {
+		data["note"] = note
 	}
 	// The SIZE half of the profile, present only when the profile sets one — so a
 	// profile that sets no size adds no size fields to the row. applyEphemeralDisk
@@ -751,12 +727,6 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ceiling.reassert",
 		run.ID.String(), "success", mustJSON(data)))
 	return grantRows
-}
-
-// brokeredMCPRule reports whether an injection on host is a remote MCP server's credential, the one
-// dispatchMCP moves to the broker entry (it pairs them by host as here).
-func brokeredMCPRule(servers []componentMCP, host string) bool {
-	return slices.ContainsFunc(servers, func(m componentMCP) bool { return m.Launch == nil && m.Credentialed && hostEqual(m.Host, host) })
 }
 
 // dropWithheldGrants keeps from the run every grant the outer layers do not let it be given
