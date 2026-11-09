@@ -41,7 +41,7 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove, confi
   canRemove: boolean;
   removing: string | null;
   onRemove: (host: string) => void;
-  /** What the confirm names: a removal changes what every run on the workspace can reach, so it asks first. */
+  /** What the confirm names: a removal changes what new runs on the workspace can reach, so it asks first. */
   confirm: { title: (host: string) => string; body: string };
 }) {
   const [target, setTarget] = React.useState<string | null>(null);

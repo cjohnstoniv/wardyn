@@ -181,6 +181,8 @@ describe("WorkspaceDetailScreen — Allowed hosts card", () => {
     // Asks first, naming the host and the workspace; nothing is written until the confirm.
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(WORKSPACE_HOSTS.ALLOWED_TITLE("registry.npmjs.org", "payments"))).toBeInTheDocument();
+    // The write reaches new runs only; a run already started keeps its frozen rules, and the confirm says so.
+    expect(within(dialog).getByText(/^New runs on this workspace can no longer reach this host.*Runs already started keep their current rules\.$/)).toBeInTheDocument();
     expect(setApprovedEgressMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
     await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", []));
@@ -236,6 +238,7 @@ describe("WorkspaceDetailScreen — Denied hosts card", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(WORKSPACE_HOSTS.DENIED_TITLE("evil.example.com", "payments"))).toBeInTheDocument();
     expect(within(dialog).getByText(WORKSPACE_HOSTS.DENIED_BODY)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^New runs on this workspace stop being blocked.*Runs already started keep their current rules\.$/)).toBeInTheDocument();
     expect(setDeniedEgressMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
     await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", []));
