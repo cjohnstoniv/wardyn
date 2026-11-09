@@ -398,8 +398,8 @@ RUN set -eu; \
         printf '%s' "$sig_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
         base="https://awscli.amazonaws.com"; \
         url="${base}/awscli-exe-linux-${plat}-${AWS_CLI_VERSION}.zip"; \
-        curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "$url" -o /tmp/awscliv2.zip; \
-        curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 "${url}.sig" -o /tmp/awscliv2.sig; \
+        curl -fsSL "$url" -o /tmp/awscliv2.zip; \
+        curl -fsSL "${url}.sig" -o /tmp/awscliv2.sig; \
         echo "$zip_sum  /tmp/awscliv2.zip" | sha256sum --strict -c -; \
         echo "$sig_sum  /tmp/awscliv2.sig" | sha256sum --strict -c -; \
         gpg --batch --no-tty --import /aws-cli-pubkey.asc; \
