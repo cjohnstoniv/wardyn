@@ -105,7 +105,7 @@ const APPROVAL_REASON_LABELS: Record<string, RuleSourceLabel> = {
   "approval:expired": { label: "Refused: the approval expired undecided", tone: "danger" },
   "approval:stale": { label: "Refused: the approval could not be re-checked", tone: "danger" },
   "approval:refused": { label: "Refused: no approval could be raised", tone: "danger" },
-  "approval:host-cap": { label: "Refused: too many hosts waiting on approval", tone: "danger" },
+  "approval:host-cap": { label: "Refused: this run reached its limit of hosts it can ask about", tone: "danger" },
 };
 
 export function ruleSourceLabel(source: string): RuleSourceLabel | null {
