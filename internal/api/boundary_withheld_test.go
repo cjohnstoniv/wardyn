@@ -166,7 +166,7 @@ func TestBrokeredGrantEligibilityStrip(t *testing.T) {
 	var bedrock []string
 	layers := []sealLayer{{rec: boundaryProvenance, grants: &[]types.GrantSpec{anthropicKey}}}
 
-	rows := srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, dispatchCeiling{resolved: true}, layers,
+	rows, _ := srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, dispatchCeiling{resolved: true}, layers,
 		[]types.CredentialGrant{kept, gone}, &p, map[string]string{}, &llm, &bedrock, nil)
 
 	if len(rows) != 1 || rows[0].ID != kept.ID {

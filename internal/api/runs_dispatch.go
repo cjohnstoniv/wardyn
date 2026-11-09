@@ -334,7 +334,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// denies or does not allow is withheld as one the profile denies is (#3238).
 	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 	signsBedrock := llm.signsBedrock()
-	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	grantRows, unboundInjections := s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	withdrawADOLane(withholding{deny: ceiling.deny, layers: layers}, &ado, &policy, p.Policy.AllowedDomains) // no gate or interception entry ships for a withdrawn lane
 	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
@@ -398,7 +398,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
 	// with each narrowed grant's scope read from its stored row — and, with every
 	// credential now authored, the one-credential-per-host re-check.
-	patGrants, ok := s.settleCredentialHosts(ctx, run, &p, policy, siteCfg, grantRows, injections)
+	patGrants, ok := s.settleCredentialHosts(ctx, run, &p, policy, siteCfg, grantRows, injections, unboundInjections)
 	if !ok {
 		return
 	}
