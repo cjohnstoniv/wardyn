@@ -2805,6 +2805,7 @@ The residuals an operator should plan for:
   - They open Getting Started (or the New Run screen) and choose the provider's sign-in.
   - Wardyn launches a throwaway container-login sandbox: default-deny egress pinned to the AWS SSO endpoints, a 30-minute idle cap, no workspace, no repo, no credential mounts, never recorded.
   - The sandbox prints a device code; they finish the sign-in in their own browser.
+  - If they are not already signed in to the AWS portal, the portal's sign-in redirect drops the `?user_code=` and lands on the portal home. They open the verification link a second time.
   - The route (`POST /model-providers/{id}/sign-in`, no body) admits anyone who may launch an agent the provider serves and is granted the provider — admins included, each capturing their OWN session.
 - **The sign-in run carries its own allow-list, and a governance profile's `denied_domains` still binds it.**
   - The sign-in sandbox's `allowed_domains` are its own: `*.awsapps.com` (the access portal) and the provider's region-scoped AWS SSO hosts (`oidc.<region>`, `portal.sso.<region>` and `device.sso.<region>` under `amazonaws.com`).

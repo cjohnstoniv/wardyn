@@ -62,6 +62,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The AWS sign-in steps in the operations guide now say what to do when the person is not already signed in to the AWS portal: its sign-in redirect drops the code from the link, so open the verification link a second time.
 - A run refused for a missing model sign-in or key no longer points to a banner on every page that is not there. The refusal, and the Bedrock one for an AWS sign-in that can no longer be renewed, now say to connect under Settings, in Your model connections.
 - On a macOS VM base, the Safari Safe Browsing setting that macOS refuses to write now says it needs Full Disk Access for the guest agent, not the raw `defaults` "Could not write domain" error. The raw error goes to the guest agent's log.
 - On a macOS VM runner, a tools update paused until the Mac is on AC power now shows in `wardyn-runnerd macos-vm status` and `wardyn-runnerd doctor` as "tools update waiting for AC power"; it showed only in `tools-update.log`.
