@@ -99,6 +99,15 @@ export function isAttributedRefusal(event: AuditEvent): boolean {
   return event.action === "egress.deny" && typeof source === "string" && ATTRIBUTED_RULE_SOURCES.has(source);
 }
 
+const APPROVAL_REASON_LABELS: Record<string, RuleSourceLabel> = {
+  "approval:pending": { label: "Held for approval", tone: "info" },
+  "approval:denied": { label: "Denied by an approver", tone: "danger" },
+  "approval:expired": { label: "Refused: the approval expired undecided", tone: "danger" },
+  "approval:stale": { label: "Refused: the approval could not be re-checked", tone: "danger" },
+  "approval:refused": { label: "Refused: no approval could be raised", tone: "danger" },
+  "approval:host-cap": { label: "Refused: this run reached its limit of hosts it can ask about", tone: "danger" },
+};
+
 export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
   // Every refusal of the gate reads the same, whatever the cause text on the row says; the cause names which.
@@ -108,6 +117,10 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // default-deny, method, evaluator-error) — the row's outcome column already
   // says deny; this names WHY at the same weight as the builtin refusals.
   if (source.startsWith("policy:")) return { label: "Refused by policy", tone: "danger" };
+  // The proxy's approval:* reasons (internal/egress/proxy/approvals.go, proxy.go): only an approval id
+  // means the request went through; every named reason is a request that was held or refused.
+  const approvalReason = APPROVAL_REASON_LABELS[source];
+  if (approvalReason) return approvalReason;
   if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
   // #181 — a push_rules refusal (never a held request: deny_paths refuses
   // synchronously, before any approval row exists — push_rules.go), named
