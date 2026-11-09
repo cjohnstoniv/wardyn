@@ -542,10 +542,22 @@ describe("IdentityWidget: where the run ran", () => {
 
   it("names the remote-hosted runner and its pool on a completed run that was not filled", () => {
     expect(rows({ placement: "remote", remote_runner_id: "k8s", runner_name: "Cluster A", runner_pool_id: "p1", runner_pool_name: "Build farm" })).toEqual({
-      placement: "Remote-hosted runner",
+      placement: "Kubernetes cluster",
       runner: "Cluster A",
       pool: "Build farm",
     });
+  });
+
+  it.each([
+    ["docker", "Docker host"],
+    ["k8s", "Kubernetes cluster"],
+    ["", "Remote-hosted runner"],
+  ])("a remote run on runner_target %j reads %j", (runner_target, expected) => {
+    expect(rows({ placement: "remote", runner_target }).placement).toBe(expected);
+  });
+
+  it("prefers the executor the run was placed on over the deployment's runner_target", () => {
+    expect(rows({ placement: "remote", runner_target: "docker", remote_runner_id: "k8s" }).placement).toBe("Kubernetes cluster");
   });
 
   it("names the person's own computer, and falls back to the ids when no names are known", () => {
@@ -767,7 +779,7 @@ describe("IdentityWidget: Runs on and Evidence", () => {
   // C2: a remote run says where it ran (0.9.1: placed or not), and never carries the Evidence row or note.
   it.each(["substrate", "runner_asserted"] as const)("a remote run has no Evidence, whatever its evidence_source (%s)", (evidence_source) => {
     renderAs({ ...base, placement: "remote", runner_id: undefined, runner_name: undefined, evidence_source } as AgentRun, "me");
-    expect(screen.getByText("Remote-hosted runner")).toBeInTheDocument();
+    expect(screen.getByText("Docker host")).toBeInTheDocument();
     expect(screen.queryByText("The only place this run could run.")).not.toBeInTheDocument();
     expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
     expect(screen.queryByText(/your computer/)).not.toBeInTheDocument();
@@ -789,7 +801,7 @@ describe("IdentityWidget: Runs on and Evidence", () => {
 
   it("a remote run the resolver placed says where, and that it was the only place", () => {
     renderAs({ ...base, placement: "remote", placement_filled: true, runner_id: undefined, runner_name: undefined, evidence_source: "substrate" } as AgentRun, "me");
-    expect(screen.getByText("Remote-hosted runner")).toBeInTheDocument();
+    expect(screen.getByText("Docker host")).toBeInTheDocument();
     expect(screen.getByText("The only place this run could run.")).toBeInTheDocument();
   });
 });

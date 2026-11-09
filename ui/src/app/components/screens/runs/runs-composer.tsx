@@ -27,7 +27,11 @@ const NO_WORKSPACE = "__none__";
 
 export function RunsComposer() {
   const navigate = useNavigate();
-  const { workspaces } = useWorkspaceList();
+  const { workspaces, reload } = useWorkspaceList();
+  // The hook fetches nothing until asked, so without this the picker lists no workspace.
+  React.useEffect(() => {
+    reload();
+  }, [reload]);
   const [task, setTask] = React.useState("");
   const [workspaceId, setWorkspaceId] = React.useState(NO_WORKSPACE);
 

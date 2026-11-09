@@ -50,6 +50,8 @@ import {
 } from "./runs/runs-filters";
 import { isTopQuiet, nonAttentionRuns, sectionRuns, type RunSections } from "./runs/runs-model";
 import { groupRunsBy } from "./runs/runs-groups";
+import { WorkspaceNamesContext } from "./runs/board-groups";
+import { useWorkspaceList } from "../../lib/use-workspace-list";
 import { BUILTIN_RUNS_VIEWS, loadSavedRunsViews, saveRunsView, type SavedRunsView } from "./runs/runs-saved-views";
 import {
   RUNS_AGED_WINDOW_LABEL,
@@ -86,6 +88,13 @@ export function RunsScreen() {
     (next: RunsFilterState) => setSearchParams(serializeRunsFilters(next), { replace: true }),
     [setSearchParams],
   );
+
+  const { workspaces: workspaceList, reload: reloadWorkspaces } = useWorkspaceList();
+  // The hook fetches nothing until asked; the names are what a run on a named workspace shows in place of "no repo".
+  React.useEffect(() => {
+    reloadWorkspaces();
+  }, [reloadWorkspaces]);
+  const workspaceNames = React.useMemo(() => Object.fromEntries(workspaceList.map((w) => [w.id, w.name])), [workspaceList]);
 
   const [runsList, setRunsList] = React.useState<AgentRun[]>([]);
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
@@ -257,6 +266,7 @@ export function RunsScreen() {
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
   return (
+    <WorkspaceNamesContext.Provider value={workspaceNames}>
     <PageContainer width="list">
       <PageHeader title="Runs" description={description} />
 
@@ -354,7 +364,7 @@ export function RunsScreen() {
                 // H-6: Group by Workspace/Title replaces the time sections
                 // with one section per group — Needs you / Waiting on the
                 // owner above still show their own fixed sections either way.
-                groupRunsBy(nonAttentionRuns(shownRuns), filters.group).map((g) => (
+                groupRunsBy(nonAttentionRuns(shownRuns), filters.group, workspaceNames).map((g) => (
                   <RunsSection key={g.label} title={g.label} runs={g.runs} />
                 ))
               )}
@@ -372,6 +382,7 @@ export function RunsScreen() {
         </>
       )}
     </PageContainer>
+    </WorkspaceNamesContext.Provider>
   );
 }
 

@@ -11,8 +11,9 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
+const reloadMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/use-workspace-list", () => ({
-  useWorkspaceList: () => ({ workspaces: [], loading: false, error: false, reload: vi.fn() }),
+  useWorkspaceList: () => ({ workspaces: [], loading: false, error: false, reload: reloadMock }),
 }));
 
 import { RunsComposer } from "./runs-composer";
@@ -24,6 +25,12 @@ function LocationProbe() {
 }
 
 describe("RunsComposer — 'Start a run'", () => {
+  it("asks for the workspace list on mount, since the hook fetches nothing until asked", () => {
+    reloadMock.mockClear();
+    render(<MemoryRouter><RunsComposer /></MemoryRouter>);
+    expect(reloadMock).toHaveBeenCalledTimes(1);
+  });
+
   it("sends source: 'composer' alongside the typed task, so New run skips the clone banner", async () => {
     render(
       <MemoryRouter initialEntries={["/runs"]}>
