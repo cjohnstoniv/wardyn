@@ -45,6 +45,13 @@ vi.mock("../../../lib/api/ado-pat", async () => {
 });
 
 import { AdoConnectionCard } from "./ado-connection";
+import { shortTime } from "../../../lib/format";
+
+// Clock times follow the reader's locale (lib/format.ts shortTime), so the expected text is built the same way.
+const hm = (s: string) => {
+  const [h, m] = s.split(":").map(Number);
+  return shortTime(new Date(2000, 8, 29, h, m).toISOString());
+};
 
 const ORG = "https://dev.azure.com/wardyn-live-test";
 const at = (h: number, m: number) => new Date(2000, 8, 29, h, m).toISOString();
@@ -100,7 +107,7 @@ describe("a row that creates a token for each run", () => {
     expect(screen.getByText(ADO_PAT.CHIP_CONNECTED)).toBeInTheDocument();
     await expandCard("Azure DevOps");
     expect(screen.getByText(ADO_PAT.MEMBER_CONNECTED)).toBeInTheDocument();
-    expect(screen.getByText("Last token: created 09:02, revoked 09:41.")).toBeInTheDocument();
+    expect(screen.getByText(`Last token: created ${hm("09:02")}, revoked ${hm("09:41")}.`)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).not.toBeInTheDocument();
   });
 

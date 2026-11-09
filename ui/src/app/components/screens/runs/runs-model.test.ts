@@ -8,6 +8,7 @@ import type { AgentRun, RunState } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
 import { rowPresentation, isPausedRun, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
+import { runStateTone } from "../../wardyn/primitives";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
 // check-fixture-dates.sh) — every case below offsets from this by a fixed
@@ -159,12 +160,12 @@ describe("rowPresentation — STARTING/PENDING carry the substrate's stage line"
 
 describe("rowPresentation — plain state words with no attention", () => {
   it.each([
-    ["RUNNING", "blue", "Running"],
+    ["RUNNING", "green", "Running"],
     ["STARTING", "blue", "Starting"],
-    ["PENDING", "blue", "Pending"],
-    ["COMPLETED", "grey", "Completed"],
+    ["PENDING", "grey", "Pending"],
+    ["COMPLETED", "green", "Completed"],
     ["FAILED", "red", "Failed"],
-    ["KILLED", "grey", "Killed"],
+    ["KILLED", "red", "Killed"],
     ["STOPPED", "grey", "Stopped"],
     ["ARCHIVED", "grey", "Archived"],
   ] as const)("%s -> hue %s, word %s", (state, hue, word) => {
@@ -173,6 +174,25 @@ describe("rowPresentation — plain state words with no attention", () => {
     expect(p.word).toBe(word);
     expect(p.action).toBeNull();
     expect(p.needsYou).toBe(false);
+  });
+});
+
+// CONSOLE-RULES section 5: the state badge and the row glyph are one state in one colour. The badge's tone is the
+// source; the glyph's hue is its colour name.
+describe("rowPresentation — the glyph hue follows the state badge's tone", () => {
+  const HUE_OF_TONE = { success: "green", info: "blue", neutral: "grey", danger: "red" } as const;
+  it.each(["RUNNING", "STARTING", "PENDING", "COMPLETED", "FAILED", "KILLED", "STOPPED", "ARCHIVED"] as const)(
+    "%s",
+    (state) => {
+      expect(rowPresentation(run({ state })).hue).toBe(HUE_OF_TONE[runStateTone(state) as keyof typeof HUE_OF_TONE]);
+    },
+  );
+
+  it("a killed run keeps its filled square, though its hue is now red like a failed run's", () => {
+    const p = rowPresentation(run({ state: "KILLED" }));
+    expect(glyphKindFor(p.hue, p.word, "KILLED")).toBe("square-fill");
+    const failed = rowPresentation(run({ state: "FAILED" }));
+    expect(glyphKindFor(failed.hue, failed.word, "FAILED")).toBe("fail");
   });
 });
 

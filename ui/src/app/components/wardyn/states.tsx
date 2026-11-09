@@ -20,6 +20,26 @@ export const STATES = {
   RETRY: "Retry",
 } as const;
 
+// A refresh that failed after the list had loaded: the rows stay, and this says they may be old.
+export const STALE_NOTE = "Couldn't refresh. Showing the last list that loaded.";
+
+/** The server's own sentence when it worded this failure (it gave a reason); otherwise undefined, so the caller shows the
+ *  default line rather than "Failed to fetch" or "Internal Server Error". */
+export function failureSentence(e: unknown): string | undefined {
+  return e instanceof HttpError && e.reason ? e.message : undefined;
+}
+
+export function StaleNote({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-xs text-muted-foreground">
+      <span>{STALE_NOTE}</span>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        <RotateCw className="size-3.5" /> {STATES.RETRY}
+      </Button>
+    </div>
+  );
+}
+
 // X3-F5 — the third arm every gated screen needs. A 403 is not "we couldn't
 // reach the control plane": the daemon answered, and answered about this
 // caller's tier, so a Retry over it retries forever. Screens that already had

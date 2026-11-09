@@ -295,6 +295,44 @@ async function openMenuItem(name: string) {
   await userEvent.click(await screen.findByRole("menuitem", { name }));
 }
 
+describe("after an erase the screen re-reads in place", () => {
+  const bobRow = { ...aliceRow, person: "sub-bob", email: "bob@corp.example", provider: "other-gw", provider_name: "Other gateway" };
+
+  async function eraseAlice() {
+    eraseMock.mockResolvedValue({ count: 1 });
+    const aliceCell = (await screen.findByText("alice@corp.example")).closest("tr")!;
+    await userEvent.click(within(aliceCell).getByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE_DATA.CONFIRM }));
+    await screen.findByText("Erased 1 credential for alice@corp.example.");
+    // The re-read happens when the dialog closes.
+    await userEvent.click(within(screen.getByRole("dialog")).getAllByRole("button", { name: ERASE.CLOSE })[0]);
+  }
+
+  it("falls back to All when the erased person held the last credential of the filtered provider", async () => {
+    listInventoryMock.mockResolvedValueOnce(inventory([aliceRow, bobRow], { "corp-gw": 1, "other-gw": 1 }));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Corp gateway · 1" }));
+    expect(screen.queryByText("bob@corp.example")).toBeNull();
+    listInventoryMock.mockResolvedValue(inventory([bobRow], { "other-gw": 1 }));
+    await eraseAlice();
+    expect(await screen.findByText("bob@corp.example")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: INVENTORY.FILTER_ALL }).className).toContain("border-primary");
+  });
+
+  it("keeps the minted-token section mounted instead of reloading it", async () => {
+    listInventoryMock.mockResolvedValueOnce(inventory([aliceRow, bobRow], { "corp-gw": 1, "other-gw": 1 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    await waitFor(() => expect(listMintedMock).toHaveBeenCalled());
+    const reads = listMintedMock.mock.calls.length;
+    listInventoryMock.mockResolvedValue(inventory([bobRow], { "other-gw": 1 }));
+    await eraseAlice();
+    await waitFor(() => expect(screen.queryByText("alice@corp.example")).toBeNull());
+    expect(listMintedMock).toHaveBeenCalledTimes(reads);
+  });
+});
+
 describe("erasing someone not listed (design F-5)", () => {
   it("by email or subject: Erase is enabled once something is typed, no second field", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));

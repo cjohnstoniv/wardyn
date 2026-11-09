@@ -128,10 +128,10 @@ export function SecretsScreen() {
       <PageHeader
         title="Secrets"
         // #381 F3: "Exception" only reads true when the broker is OFF (the
-        // resident posture really is an exception to brokerLine's claim); on
+        // resident posture really is an exception to gitPatLine's claim); on
         // (the default), gitPatLine's own text just elaborates on the same
         // claim, so the word is dropped rather than reading as a contradiction.
-        description={`Write-only: values go in and never come out. ${CAPABILITY.brokerLine} ${
+        description={`Write-only: values go in and never come out. ${CAPABILITY.storedSecretLine} ${
           patBrokerEnabled ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`
         }`}
         actions={
@@ -446,7 +446,7 @@ export function AddSecretDialog({
           <DialogDescription>
             {lockName
               ? "The value is write-only — it can be replaced or removed, never read back."
-              : "The value is stored write-only — it is injected proxy-side at use time and is never returned by the API or shown again."}
+              : "The value is stored write-only: it is never returned by the API or shown again. It stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox."}
           </DialogDescription>
         </DialogHeader>
 

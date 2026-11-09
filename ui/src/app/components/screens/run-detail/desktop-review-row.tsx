@@ -8,6 +8,7 @@
 // The server decides every state and every refusal; the row prints its sentences as they come.
 import * as React from "react";
 import { desktopFiles } from "../../../lib/api/desktop-files";
+import { absoluteTime, shortTime } from "../../../lib/format";
 import type { ApprovalRequest } from "../../../lib/types/approvals";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
@@ -16,7 +17,12 @@ import { DECIDERS_INBOX } from "../../wardyn/copy/deciders-inbox";
 import { deciderPhrase, joinOr } from "../../wardyn/decider-lines";
 import { transferSize } from "./desktop-files-panel";
 
-const clockOf = (iso?: string) => (iso ? new Date(iso) : new Date()).toTimeString().slice(0, 5);
+// The clock the rest of the console uses (shortTime); a request from an earlier day also names the day, as the
+// run page's identity card does, so "17:04" is never a time with no date.
+const clockOf = (iso?: string) => {
+  const at = iso ? new Date(iso) : new Date();
+  return at.toDateString() === new Date().toDateString() ? shortTime(at.toISOString()) : absoluteTime(at.toISOString());
+};
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const shaOf = (r: ApprovalRequest) => String(r.requested_scope.sha256 ?? "");
 

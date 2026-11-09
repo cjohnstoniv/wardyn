@@ -13,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
+import { CANCEL_NOT_STARTED as NS } from "./copy/cancel-not-started";
 import { toastRunName } from "./copy/run-lifetime";
 import { RunRef } from "./run-ref";
 
@@ -28,6 +29,7 @@ export function KillRunDialog({
   title,
   onOpenChange,
   onConfirm,
+  notStarted = false,
 }: {
   // The run to kill; also doubles as the "is the dialog open" flag (null = closed).
   runId: string | null;
@@ -38,6 +40,9 @@ export function KillRunDialog({
   // Called with the id the dialog is showing, so the kill can only ever hit
   // the run the title names.
   onConfirm: (runId: string) => void;
+  // A run that has not started (scheduled, or waiting for its owner's sign-in) holds no sandbox and no credential,
+  // so the question is a plain cancel and says nothing about tearing anything down.
+  notStarted?: boolean;
 }) {
   // First line, bounded: a run named by its task can be a paragraph.
   const line = (title ?? "").trim().split("\n")[0];
@@ -46,24 +51,25 @@ export function KillRunDialog({
     <AlertDialog open={!!runId} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className="break-words">End {toastRunName({ title })}?</AlertDialogTitle>
+          <AlertDialogTitle className="break-words">{notStarted ? NS.TITLE(toastRunName({ title })) : `End ${toastRunName({ title })}?`}</AlertDialogTitle>
           <AlertDialogDescription>
             {name && runId && (
               <>
                 <RunRef runId={runId} />.{" "}
               </>
             )}
-            This terminates the agent run, tears down the sandbox, and revokes any brokered
-            credentials. Ending the run is recorded in the audit trail. This cannot be undone.
+            {notStarted
+              ? NS.BODY
+              : "This terminates the agent run, tears down the sandbox, and revokes any brokered credentials. Ending the run is recorded in the audit trail. This cannot be undone."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{notStarted ? NS.KEEP : "Cancel"}</AlertDialogCancel>
           <AlertDialogAction
             onClick={() => runId && onConfirm(runId)}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >
-            End run
+            {notStarted ? NS.CONFIRM : "End run"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

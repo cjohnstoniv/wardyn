@@ -8,7 +8,7 @@
 // pins the click itself. runs-model.test.ts already pins that a lost `by=you`
 // row gets action:"revive" in the first place.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { makeRun } from "../../../../test/factories";
@@ -17,6 +17,7 @@ import type { AgentRun } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
+import { CANCEL_NOT_STARTED } from "../../wardyn/copy/cancel-not-started";
 import { RunRow } from "./run-row";
 import { rowPresentation } from "./runs-model";
 
@@ -246,7 +247,12 @@ describe("RunRow — a scheduled run", () => {
     expect(screen.queryByText(/started/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(killRunMock).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole("button", { name: "End run" }));
+    // A scheduled run has no sandbox, so the question is a plain cancel and does not talk about tearing one down.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(CANCEL_NOT_STARTED.BODY);
+    expect(dialog).not.toHaveTextContent(/sandbox|credentials/i);
+    expect(screen.queryByRole("button", { name: "End run" })).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: CANCEL_NOT_STARTED.CONFIRM }));
     await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-9"));
   });
 
@@ -292,6 +298,20 @@ describe("RunRow — the status pill", () => {
 });
 
 // Mock r15 T1-b: a live service says its health in place of Running, on the same row and under the same group.
+describe("RunRow — the glyph and the chip are one colour", () => {
+  const glyphOf = (container: HTMLElement) => container.querySelector("svg[aria-hidden='true']") as SVGElement;
+
+  it.each([
+    ["RUNNING", "text-success"],
+    ["COMPLETED", "text-success"],
+    ["KILLED", "text-danger"],
+    ["PENDING", "text-muted-foreground"],
+  ] as const)("a %s row draws its glyph in %s", (state, cls) => {
+    const { container } = renderRow(makeRun({ state }));
+    expect(glyphOf(container).getAttribute("class")).toContain(cls);
+  });
+});
+
 describe("RunRow: a live service's health chip", () => {
   const pillOf = (word: string) => screen.getByText(word).closest("span[class*='rounded']") as HTMLElement;
   const service = (service_status?: AgentRun["service_status"], over: Partial<AgentRun> = {}) =>
