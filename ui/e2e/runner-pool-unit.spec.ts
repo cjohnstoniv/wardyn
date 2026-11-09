@@ -53,7 +53,10 @@ test.describe("runner pools — a policy names a unit", () => {
     await sheet.getByRole("combobox", { name: POOL_UNIT.LABEL }).click();
     await page.getByRole("option", { name: UNIT_NAME, exact: true }).click();
     await sheet.getByRole("button", { name: POOL_DRAWER.ADD_TO_LIST }).click();
+    // The draft row reads exactly as the saved one, so the save is awaited on the wire before the read below.
+    const put = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith(`/runner-pools/${poolId}/use-policy`) && r.request().method() === "PUT");
     await sheet.getByRole("button", { name: POOL_DRAWER.SAVE_WHO }).click();
+    expect((await put).status()).toBe(200);
     const saved = sheet.getByRole("listitem").filter({ hasText: UNIT_NAME });
     await expect(saved).toContainText(POOL_DRAWER.SUBJECT.unit);
     await expect(saved).toContainText(POOL_UNIT.BELOW);
