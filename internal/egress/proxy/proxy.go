@@ -625,6 +625,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		Method:           strings.ToUpper(method),
 		Path:             path,
 		Time:             p.now(),
+		Relayed:          p.vm && onVMNetLane(ctx),
 	}
 
 	// 0. Unconditional literal-IP guard, before policy and before first-use

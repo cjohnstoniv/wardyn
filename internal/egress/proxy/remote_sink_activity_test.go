@@ -32,6 +32,7 @@ func TestRemoteSinkActivity_OnlyAllowedDecisions(t *testing.T) {
 		{"approvals poll allow", egress.DecisionLog{Decision: egress.Allow, RuleSource: ruleSourceApprovals}, false},
 		{"reauth timeout deny", egress.DecisionLog{Decision: egress.Deny, RuleSource: ruleSourceCredentialReauthTimeout}, false},
 		{"model usage row", egress.DecisionLog{Decision: egress.Allow, RuleSource: ruleSourceLLMUsage, Usage: &egress.ModelUsage{}}, false},
+		{"relayed allow", egress.DecisionLog{Request: egress.Request{Relayed: true}, Decision: egress.Allow, RuleSource: "policy:allowlist"}, false},
 	}
 	rs, f := startedSink(t)
 	c := accept(t, rs, f.next(), 1, 0, int64(len(cases)), 1<<20)

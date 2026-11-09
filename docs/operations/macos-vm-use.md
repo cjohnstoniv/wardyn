@@ -198,8 +198,8 @@ A saved cast says how complete it is, on its row and in its header. A row carrie
 A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your own Mac. The run's own helper (`wardyn-macvm run`) draws it with Apple's virtual machine view. Wardyn's server decides each open and tells the run's runner to draw it. Nothing rests on the Mac between opens.
 
 - The window shows the VM's screen and takes your keys and pointer.
-- A macOS guest's own background requests keep a run active only when your policy allows them.
-- Its Apple boot hosts never do, allowed or refused. On a Mac runner this holds once the runner is upgraded.
+- Only what goes through the run's proxy settings counts as activity: Terminal, the harness, and tools that honour `HTTPS_PROXY`. The window, a terminal and SSH count too.
+- Requests the guest makes on its own never count, allowed or refused: macOS's services, and tools that ignore the proxy settings (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls still count. On a Mac runner this holds once the runner is upgraded.
 - It is not recorded, because it is drawn on your Mac and never crosses the gateway. A run at Screen and actions can't open one.
 - While it is open, the run's browser desktop is view only. A browser desktop that had control is ended first, and the open waits up to 5 seconds for it.
 

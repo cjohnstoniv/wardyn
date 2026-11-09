@@ -61,6 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- On a macOS or Linux VM run, a request the guest makes without the run's proxy settings no longer counts as idle activity, even when allowed: macOS's own background requests, and tools that ignore `HTTPS_PROXY` (xcodebuild and Swift Package Manager downloads, Gradle, Maven). The harness's model calls and what goes through the run's proxy settings still count. A Mac runner needs the runner upgrade for this. To check it, leave a macOS VM run idle with macOS's own background traffic flowing, and confirm it idle-stops at its cap.
 - An organisation runner pool whose only members are organisation runners, such as runners in a Kubernetes cluster, now shows as available, with those runners counted in its capacity and offered in its barrier options. Runs could already be placed on them. An organisation pool with both remote-hosted and organisation runners now stays available under a deny of remote placement, as its runs already did.
 - Approving an elevation request now answers stale when the unit's elevation rule no longer names a group the person matched when they asked.
 - After a revive, a run's recorded policy and its policy view showed the organisation's recording level instead of the run's own; the recording itself was never changed. A revive now starts from the run's recorded policy and is refused (503) when that cannot be read.
