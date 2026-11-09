@@ -79,6 +79,10 @@
 
 - Stage 1's first step replaces the code with a random password, signs in again with that, and only then deletes the file. Preparing also deletes it when it discards the base or ends.
 
+## Updating the tools
+
+`wardyn-runnerd macos-vm update-tools` starts a tools update of the ready base now: the update a stale guest agent or a changed install list starts by itself. It runs in the background; see `tools-update.log` and `status`. It updates even when the base looks current. Run it in Terminal on the Mac with the runner serving. It refuses without a ready base, and while a tools update or prepare runs.
+
 ## Editing a base
 
 `wardyn-runnerd macos-vm edit-base` boots the ready base once, in a window, for an attended session. Use it to turn on Screen Sharing with control when `status` says `view only` (on a macOS 26 base the desktop stays view only, [#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)), or to change the guest by hand. Runs keep using the current base until the edited one passes its checks.
@@ -286,7 +290,7 @@ Stage 1 writes these when it prepares a base. Every tools update writes them aga
 
 - The version and build values come from the guest's `sw_vers`. A value outside `^\d+\.\d+(\.\d+)?$` or `^[0-9]{2}[A-Z][0-9]{1,4}[a-z]?$` skips the whole table.
 - The agent's rows run in the console session as the agent. With nobody at the console, or another account there, they are skipped as "nobody at the console" or "the console is not the agent account's", and the next update applies them.
-- The first update after an upgrade is answered by the base's old guest agent, which has no route for this: `tools.json` says "agent predates this setting; run the tools update again". Run the update twice.
+- The first update after an upgrade is answered by the base's old guest agent, which has no route for this: `tools.json` says "agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again". Run that command twice; it updates even when the base looks current.
 - Rows are read back from disk with `plutil -p`. A key that did not land is skipped as "not found when read back". Key names other than the `DidSee*` panes a real guest listed and the documented global and `mdutil` rows come from community references and are unverified on macOS 26.
 
 ## Apple's boot-time hosts

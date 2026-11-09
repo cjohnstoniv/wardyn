@@ -28,7 +28,7 @@ var baseSettingsDeadline = 10 * time.Minute
 
 // BaseSettingsOldAgent is what tools.json says when the base's agent has no base-settings route: the old
 // agent answers the first update after an upgrade, and the next update applies the rows.
-const BaseSettingsOldAgent = "agent predates this setting; run the tools update again"
+const BaseSettingsOldAgent = "agent predates this setting; run `wardyn-runnerd macos-vm update-tools` again"
 
 func (g *toolsGuest) BaseSettings(ctx context.Context, scope string) (guestagent.BaseSettingsResult, error) {
 	ctx, done := g.bound(ctx)

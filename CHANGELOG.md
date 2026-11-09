@@ -29,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- `wardyn-runnerd macos-vm update-tools` starts a tools update of the macOS VM base now, even when the base looks current. The doctor, `tools.json` and docs text that said to run the tools update again now names it.
 - On Approvals, a group decider approves or denies an image request under Waiting on you, with the person, the image and its full digest, and what approving grants.
 - On Approvals, a person whose default profile offers image requests can ask for one image by digest and follow it under Your requests, one card for elevation and images. Governance › Changes shows an image request with the person, the full digest and what approving writes. Your requests now also lists withdrawn and not-applied elevation requests.
 - On Approvals, a person whose unit offers elevation can request it (unit, how long, why, and an optional ticket), follow it under Your requests and withdraw it. A group decider can approve or deny elevation requests under Waiting on you.

@@ -736,9 +736,28 @@ const toolsUpdateLog = "tools-update.log"
 // its own ledger entry, a guest at the base's minimum CPUs and the per-run memory (or the minimum), and
 // the helper's `update-tools`, which takes the base's update lock, works on a staging copy and swaps it
 // in, so runs keep cloning the old base meanwhile. It is an automatic update, so it passes no --force,
-// which is for an update someone asks for (design 3.12, "an update someone asks for retries every pin"):
-// the helper compares the base's agent with its own build (macvm.NeedsToolsUpdate) and pushes its own.
+// which is for an update someone asks for (design 3.12, "an update someone asks for retries every pin";
+// updateTools): the helper compares the base's agent with its own build (macvm.NeedsToolsUpdate) and pushes its own.
 func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) error {
+	return m.startToolsUpdateWith(ctx, man, false)
+}
+
+// updateTools is `macos-vm update-tools`: the same update, asked for by the operator. It passes --force,
+// so the helper updates a base that looks current and retries every withheld harness.
+func (m *macOSVMs) updateTools(ctx context.Context) error {
+	if m.ledger == nil {
+		return errors.New(cmp.Or(m.refusal, m.why))
+	}
+	m.reconcilePrepare()
+	man, err := macvm.ReadyBase(m.layout.BaseDir(0))
+	if err != nil {
+		return macvm.ErrEditNoBase
+	}
+	return m.startToolsUpdateWith(ctx, man, true)
+}
+
+// startToolsUpdateWith is startToolsUpdate, with force for an update someone asked for.
+func (m *macOSVMs) startToolsUpdateWith(ctx context.Context, man macvm.Manifest, force bool) error {
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
@@ -748,6 +767,9 @@ func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) err
 	items, err := m.baseFileArgs(nil)
 	if err != nil {
 		return err
+	}
+	if force {
+		items = append(items, "--"+macvm.FlagForce)
 	}
 	err = m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),

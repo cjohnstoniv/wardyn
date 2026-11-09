@@ -32,7 +32,7 @@ import (
 // newMacOSVMCommand is `wardyn-runnerd macos-vm`: this Mac's macOS VM state, its base's preparation, and
 // the base's removal.
 func newMacOSVMCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "macos-vm", Short: "Show, prepare or remove this Mac's macOS VM base", Args: cobra.NoArgs}
+	cmd := &cobra.Command{Use: "macos-vm", Short: "Show, prepare, update or remove this Mac's macOS VM base", Args: cobra.NoArgs}
 	open := func(cmd *cobra.Command) (*macOSVMs, string, error) {
 		cfg, err := serveConfig(cmd, "")
 		if err != nil {
@@ -146,7 +146,21 @@ func newMacOSVMCommand() *cobra.Command {
 		}
 		return m.editBase(cmd.Context(), cmd.OutOrStdout(), runnerID)
 	}}
-	cmd.AddCommand(status, prepare, editBase, remove, newMacOSVMMachinesCommand(open))
+	updateTools := &cobra.Command{Use: "update-tools", Short: "Start a tools update of this Mac's macOS base now (it continues in the background)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if err := checkServingHelper(); err != nil {
+			return err
+		}
+		m, _, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		if err := m.updateTools(cmd.Context()); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Updating this Mac's macOS base tools in the background; progress is in %s and in `wardyn-runnerd macos-vm status`.\n", filepath.Join(m.layout.Root, toolsUpdateLog))
+		return nil
+	}}
+	cmd.AddCommand(status, prepare, updateTools, editBase, remove, newMacOSVMMachinesCommand(open))
 	return cmd
 }
 
