@@ -62,6 +62,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A run refused for a missing model sign-in or key no longer points to a banner on every page that is not there. The refusal, and the Bedrock one for an AWS sign-in that can no longer be renewed, now say to connect under Settings, in Your model connections.
 - On a macOS VM base, the Safari Safe Browsing setting that macOS refuses to write now says it needs Full Disk Access for the guest agent, not the raw `defaults` "Could not write domain" error. The raw error goes to the guest agent's log.
 - On a macOS VM runner, a tools update paused until the Mac is on AC power now shows in `wardyn-runnerd macos-vm status` and `wardyn-runnerd doctor` as "tools update waiting for AC power"; it showed only in `tools-update.log`.
 - An organisation runner pool whose only members are organisation runners, such as runners in a Kubernetes cluster, now shows as available, with those runners counted in its capacity and offered in its barrier options. Runs could already be placed on them. An organisation pool with both remote-hosted and organisation runners now stays available under a deny of remote placement, as its runs already did.

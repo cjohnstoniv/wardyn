@@ -25,7 +25,7 @@ import (
 const (
 	svcRefusalPrincipal = "service:ci-bot"
 	svcRefusalRemedy    = "a service identity cannot sign in, so choose a model provider whose credential it stores as a key or token."
-	humanRefusalRemedy  = "connect it from Getting started in the console, or from the banner the console shows on every page."
+	humanRefusalRemedy  = "connect it in the console, under Settings, in Your model connections."
 )
 
 func svcRefusalText(id, state, remedy string) string {
