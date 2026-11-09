@@ -23,7 +23,7 @@ func TestEditTrustCAsNeverTrustsTheSigningCert(t *testing.T) {
 		return nil, 0, nil
 	}
 	line := func(name string) string {
-		return "/usr/bin/su - " + MacAdminUser + " -c '/usr/bin/sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k " +
+		return "/usr/bin/su - " + MacAdminUser + " -c '/usr/bin/sudo /bin/launchctl asuser 502 /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k " +
 			MacSystemKeychain + " " + filepath.Join(stage, name, ItemCert) + "'"
 	}
 	// Only the signing certificate is staged: no ca item, so 409 and nothing run.

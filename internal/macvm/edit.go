@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -47,11 +48,11 @@ type ScreenText struct {
 // checks the recheck makes.
 var editScreen = WindowText{
 	Title: "Wardyn: edit this macOS VM base",
-	Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+	Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window: the VM shuts down (if macOS asks, click Shut Down). Wardyn checks the base before runs use it.\n" +
 		"The first time, macOS may ask setup questions. Finish them without adding an Apple account. What you click stays for every run.\n" +
 		"The VM signs in as agent by itself; stay signed in. For administrator steps click Open admin Terminal and type the code when it asks for wardyn-admin's password. If a login window shows instead, sign in there as wardyn-admin with the code.\n" +
 		"Full Disk Access, for folder shares: click Full Disk Access, then drag the guest agent (" + guestagent.MacAgentBinaryPath + ") from Finder into the list. Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
-		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Click Trust the list's CAs, check each one, and type the one-time code when it asks.\n" +
+		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Click Trust the list's CAs, check each one, and type the one-time code when it asks; in macOS's dialog, enter wardyn-admin and the code.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
 }
@@ -397,7 +398,20 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec, scr WindowSc
 	}
 	text := editScreen
 	text.CodeFile = o.Layout.SetupCode()
+	// The first close asks the guest agent to shut the guest down. A guest without that action or whose
+	// agent did not accept, and any later close, gets the VM's stop request, which macOS confirms with
+	// its shut-down dialog.
+	var askedAgent atomic.Bool
 	text.AskStop = func() {
+		if sg, ok := g.(ShutDownGuest); ok && !askedAgent.Swap(true) {
+			sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := sg.EditShutDown(sctx)
+			cancel()
+			if err == nil {
+				return
+			}
+			o.Log.Warn("macvm: the guest agent did not shut the edit window's guest down; asking the VM", "err", err.Error())
+		}
 		if err := wg.RequestStop(); err != nil {
 			o.Log.Warn("macvm: the edit window's close did not reach the guest", "err", err.Error())
 		}
@@ -591,7 +605,9 @@ func (o *EditOptions) printUntrusted(base string) {
 				subject, sum = strconv.Quote(cert.Subject.String()), sum256(der)
 			}
 		}
-		fmt.Fprintf(o.Out, "%s\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p ssl -k %s %s/%s\n",
+		// launchctl asuser runs security in the console's GUI session, where macOS can show the dialog that
+		// approves the trust; from the admin Terminal's su shell alone it is denied (guestagent's trustScript).
+		fmt.Fprintf(o.Out, "%s\n  subject  %s\n  SHA-256  %s\n  sudo launchctl asuser $(stat -f %%u /dev/console) security add-trusted-cert -d -r trustRoot -p ssl -k %s %s/%s\n",
 			r.Name, subject, colons(sum), guestagent.MacSystemKeychain, guestagent.ItemDir(r.Name), guestagent.ItemCert)
 	}
 }

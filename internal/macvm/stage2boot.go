@@ -373,6 +373,13 @@ func (g *windowGuest) EditFullDiskAccess(ctx context.Context) (guestagent.EditAc
 	return g.tools.ToolsEditFullDiskAccess(ctx)
 }
 
+// EditShutDown asks the guest agent to shut the guest down as root, which macOS does not confirm.
+func (g *windowGuest) EditShutDown(ctx context.Context) error {
+	ctx, cancel := g.bound(ctx)
+	defer cancel()
+	return g.tools.ToolsEditShutDown(ctx)
+}
+
 func cmpDuration(d, def time.Duration) time.Duration {
 	if d > 0 {
 		return d

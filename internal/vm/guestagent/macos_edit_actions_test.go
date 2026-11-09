@@ -16,12 +16,15 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -173,7 +176,7 @@ func TestEditTrustCAsWritesOneSudoLinePerStagedCA(t *testing.T) {
 		}
 	}
 	line := func(name string) string {
-		return "/usr/bin/su - " + MacAdminUser + " -c '/usr/bin/sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k " +
+		return "/usr/bin/su - " + MacAdminUser + " -c '/usr/bin/sudo /bin/launchctl asuser 502 /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k " +
 			MacSystemKeychain + " " + filepath.Join(stage, name, ItemCert) + "'"
 	}
 	if want := []string{line("a-corp"), line("b-corp")}; !slices.Equal(su, want) {
@@ -219,7 +222,7 @@ func TestEditTrustCAsPrintsAHostileSubjectAsText(t *testing.T) {
 			cmds = append(cmds, l)
 		}
 	}
-	if len(cmds) != 1 || !strings.HasPrefix(cmds[0], "/usr/bin/su - "+MacAdminUser+" -c '/usr/bin/sudo /usr/bin/security add-trusted-cert ") {
+	if len(cmds) != 1 || !strings.HasPrefix(cmds[0], "/usr/bin/su - "+MacAdminUser+" -c '/usr/bin/sudo /bin/launchctl asuser 502 /usr/bin/security add-trusted-cert ") {
 		t.Fatalf("script commands %q", cmds)
 	}
 	for _, l := range strings.Split(body, "\n") {
@@ -352,5 +355,147 @@ func TestEditActionsAddNoExecFormAndTakePostOnly(t *testing.T) {
 	}
 	if len(rig.ran) != 0 {
 		t.Errorf("ran %q", rig.ran)
+	}
+}
+
+// The edit scripts live in the directory stage 1 makes root:wheel 0755 for the pairing key, not under
+// /private/var/run, which a stock guest has as root:daemon 0775. Laid out with those modes under a test
+// root, the new parents pass the root-only write walk and the script is written; a parent that a group the
+// walk does not trust can change, as daemon's /private/var/run, is refused, and the answer says why.
+func TestEditScriptsLiveUnderARootOnlyParent(t *testing.T) {
+	if MacEditDir != "/Library/Wardyn/edit" || filepath.Dir(MacEditDir) != filepath.Dir(MacPairKeyPath) {
+		t.Fatalf("MacEditDir = %s, want /Library/Wardyn/edit, beside the pairing key", MacEditDir)
+	}
+	root := t.TempDir()
+	mkdirMode(t, mkdirMode(t, filepath.Join(root, "Library"), 0o755)+"/Wardyn", 0o755)
+	rig, _, _ := newEditRig(t)
+	rig.t.EditDir = root + MacEditDir
+	if w := rig.do("POST", "/edit/admin-terminal", ""); w.Code != 200 {
+		t.Fatalf("admin-terminal under %s = %d %s", rig.t.EditDir, w.Code, w.Body)
+	}
+	// The directory and the script are root's (the tests' stand-in) and 0755: the console user reads and
+	// runs the script, and no group can write either.
+	for _, p := range []string{rig.t.EditDir, filepath.Join(rig.t.EditDir, EditAdminTerminalScript)} {
+		fi, err := os.Lstat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := fi.Sys().(*syscall.Stat_t); st.Uid != trustedOwnerUID || fi.Mode().Perm() != 0o755 {
+			t.Errorf("%s is uid %d mode %o, want root's 0755", p, st.Uid, fi.Mode().Perm())
+		}
+	}
+	// A script directory a group can write is refused, even a group the walk trusts for a parent (admin).
+	if err := os.Chmod(rig.t.EditDir, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(rig.t.EditDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setVar(t, &trustedGroupGIDs, []uint32{0, 80, fi.Sys().(*syscall.Stat_t).Gid})
+	rig.ran = nil
+	if w := rig.do("POST", "/edit/admin-terminal", ""); w.Code != 500 || !strings.Contains(w.Body.String(), "is not root's alone") || len(rig.ran) != 0 {
+		t.Errorf("admin-terminal with a group-writable script directory = %d %q, ran %q", w.Code, w.Body, rig.ran)
+	}
+	trustedGroupGIDs = []uint32{0, 80}
+
+	run := mkdirMode(t, mkdirMode(t, mkdirMode(t, filepath.Join(root, "private"), 0o755)+"/var", 0o755)+"/run", 0o775)
+	if fi, err = os.Stat(run); err != nil {
+		t.Fatal(err)
+	}
+	if gid := fi.Sys().(*syscall.Stat_t).Gid; slices.Contains(trustedGroupGIDs, gid) {
+		t.Skipf("the test's group %d is one the walk trusts", gid)
+	}
+	rig.ran = nil
+	rig.t.EditDir = filepath.Join(run, "wardyn-edit")
+	w := rig.do("POST", "/edit/admin-terminal", "")
+	if body := w.Body.String(); w.Code != 500 || !strings.HasPrefix(body, "the Terminal script was not written: ") ||
+		!strings.Contains(body, "is writable by gid") || !strings.Contains(body, ErrUnsafeParent.Error()) {
+		t.Errorf("admin-terminal under a group-writable parent = %d %q", w.Code, body)
+	}
+	if len(rig.ran) != 0 {
+		t.Errorf("ran %q after the script was refused", rig.ran)
+	}
+}
+
+// The trust line runs security as root through `launchctl asuser` for the console user, so macOS can show
+// the dialog that approves the trust in that user's GUI session; `su` alone leaves it no session to show it
+// in. The line is exact, with the console user's own uid.
+func TestEditTrustCAsRunsSecurityInTheConsoleSession(t *testing.T) {
+	got := (&Tools{}).trustScript([]stagedCA{{name: "corp", subject: "CN=Corp Root", sha256: "AA:BB"}}, 503)
+	want := "/usr/bin/su - wardyn-admin -c '/usr/bin/sudo /bin/launchctl asuser 503 /usr/bin/security add-trusted-cert" +
+		" -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/corp/item.cer'\n"
+	if !strings.Contains(got, want) || strings.Count(got, "add-trusted-cert") != 1 {
+		t.Errorf("trust script:\n%s\nwant the line\n%s", got, want)
+	}
+
+	rig, dir, stage := newEditRig(t)
+	stageCA(t, stage, "corp", "Corp Root", false)
+	rig.t.Desktop.Console = fakeConsole{uid: 503}
+	if w := rig.do("POST", "/edit/trust-cas", ""); w.Code != 200 {
+		t.Fatalf("trust-cas = %d %s", w.Code, w.Body)
+	}
+	body, _ := readEditFile(t, filepath.Join(dir, EditTrustCAsScript))
+	if !strings.Contains(body, " -c '/usr/bin/sudo /bin/launchctl asuser 503 /usr/bin/security add-trusted-cert ") {
+		t.Errorf("the trust line is not for the console user 503:\n%s", body)
+	}
+}
+
+// The window's close shuts the guest down as root with shutdown(8), never through a dialog: the agent
+// answers 202 and flushes it before the shutdown runs, so the host has its answer before the agent is
+// stopped. A shutdown that fails still answers 202 (the window's next close asks the VM).
+func TestEditShutDownAnswersThenHaltsAsRoot(t *testing.T) {
+	for _, code := range []int{0, 1} {
+		rig := newToolsRig(t)
+		w := httptest.NewRecorder()
+		var ran [][]string
+		rig.t.run = func(_ context.Context, argv []string) ([]byte, int, error) {
+			if !w.Flushed || w.Code != http.StatusAccepted {
+				t.Errorf("%q ran before the 202 was flushed (code %d, flushed %v)", argv, w.Code, w.Flushed)
+			}
+			ran = append(ran, argv)
+			return nil, code, nil
+		}
+		rig.t.ToolsHandler().ServeHTTP(w, httptest.NewRequest("POST", "/edit/shut-down", strings.NewReader(`{"argv":["/bin/sh"]}`)))
+		if w.Code != http.StatusAccepted {
+			t.Errorf("shut-down (exit %d) = %d %s", code, w.Code, w.Body)
+		}
+		if want := [][]string{{"/sbin/shutdown", "-h", "now"}}; !slices.EqualFunc(ran, want, slices.Equal[[]string]) {
+			t.Errorf("shut-down ran %q, want %q", ran, want)
+		}
+	}
+	rig := newToolsRig(t)
+	if w := rig.do("GET", "/edit/shut-down", ""); w.Code != 405 || len(rig.ran) != 0 {
+		t.Errorf("GET shut-down = %d, ran %q", w.Code, rig.ran)
+	}
+	if err := ToolsExecAllowed([]string{"/sbin/shutdown", "-h", "now"}, rig.bin); err == nil {
+		t.Error("tools exec allows the shutdown argv")
+	}
+}
+
+// Over the tools session the host gets the guest's own words: a failure in the guest is ErrEditFailed with
+// its reason, never a bare status, and the shut-down answer is accepted.
+func TestEditActionClientSurfacesTheGuestsError(t *testing.T) {
+	rig, _, _ := newEditRig(t)
+	ww := mkdirMode(t, filepath.Join(t.TempDir(), "ww"), 0o777)
+	rig.t.EditDir = filepath.Join(ww, "wardyn-edit")
+	c := rawGuest(t, rig.t.ToolsHandler())
+	ctx := context.Background()
+	_, err := c.ToolsEditAdminTerminal(ctx)
+	if !errors.Is(err, ErrEditFailed) || errors.Is(err, ErrEditRefused) || !strings.Contains(err.Error(), "the Terminal script was not written: ") ||
+		!strings.Contains(err.Error(), "is world-writable") {
+		t.Errorf("admin-terminal under a world-writable parent: %v", err)
+	}
+	nobody := newToolsRig(t)
+	nobody.t.Desktop.Console = fakeConsole{err: ErrNoConsoleUser}
+	if _, err := rawGuest(t, nobody.t.ToolsHandler()).ToolsEditTrustCAs(ctx); !errors.Is(err, ErrEditRefused) || errors.Is(err, ErrEditFailed) {
+		t.Errorf("trust-cas with nobody at the console: %v", err)
+	}
+	if err := c.ToolsEditShutDown(ctx); err != nil {
+		t.Errorf("shut-down: %v", err)
+	}
+	old := rawGuest(t, http.NotFoundHandler())
+	if err := old.ToolsEditShutDown(ctx); !errors.Is(err, ErrNoExec) {
+		t.Errorf("shut-down on an agent without it: %v, want ErrNoExec", err)
 	}
 }

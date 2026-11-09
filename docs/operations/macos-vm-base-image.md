@@ -90,6 +90,7 @@
    - The copy is meant to have no internet during the session.
    - **Who you are signed in as.** The base turns on auto-login for `agent`, so the copy may open at `agent`'s desktop, not at a login window. As `agent` you have no `sudo` and cannot read `/Library/Wardyn/stage`.
    - **Administrator steps.** Click Open admin Terminal in the window. It opens Terminal in the guest at `su - wardyn-admin`: click Type code, then press Return.
+     - If a button fails, the window shows the guest's reason.
      - By hand, open Terminal (Spotlight may not answer in the guest; use Finder > Go > Utilities), run `su wardyn-admin` and give the one-time code as the password.
    - **If the window opens on macOS's setup pages.** Continue without a network, as in setup by hand. The recheck refuses any account Wardyn did not make, so make none.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
@@ -98,14 +99,14 @@
    - The grant is meant to stay in the base and reach every run's guest, where Full Disk Access lifts macOS's privacy prompts for every process the run starts.
    - Grant it once. Wardyn signs the guest agent on this Mac, so the grant can last through tools updates. The first tools update after an upgrade changes the signature: grant it once more.
    - The base does not need to trust the agent's signing certificate: Full Disk Access keeps to the agent's designated requirement.
-   - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact `sudo security add-trusted-cert` command.
-     - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate, and each asks for the code.
+   - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact trust command.
+     - Click Trust the list's CAs in the window. It opens Terminal in the guest with one such command per certificate. Each asks for the code, then macOS shows a dialog: enter `wardyn-admin` and the code.
      - Check each subject and SHA-256 and confirm macOS's prompt. With nothing to trust the button does nothing and says so.
    - **Rosetta is off unless you press Install Rosetta**, for Intel-only tools. It runs Apple's installer in the guest through the prep proxy ([The prep proxy](#the-prep-proxy)).
      - A TLS-inspecting proxy must exempt Apple's hosts (Apple support article 101555).
      - From macOS 26.4, an Intel app's first launch shows an end-of-Rosetta notice. macOS 27 is the last release with full Rosetta.
    - **FileVault stays off.** The window and the recheck warn when it reads on. Turn it off in System Settings > Privacy & Security. The base is kept either way.
-5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
+5. Leave Remote Login off and add no accounts. When you are done, close the window: the guest shuts down with no dialog. If macOS still asks, click Shut Down. The window closes once the guest has shut down.
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a fresh random password, which the copy keeps for the next edit, and the code file is deleted.
   - Then, in order: the control check, the accounts, Remote Login, and the launcher's self-test for a command and for each harness the base offers.
@@ -190,7 +191,8 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
 2. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
 3. Stage 2 goes on either way: a CA that reads `not_trusted` does not stop preparing.
 
-- `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
+- `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in the admin Terminal, run `sudo launchctl asuser $(stat -f %u /dev/console) security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's dialog.
+  - `launchctl asuser` runs it in the desktop session, where macOS can show that dialog; from `su` alone macOS denies it.
   - `edit-base` prints this command for each such item, with its subject and SHA-256, and runs nothing itself. The Trust the list's CAs button in its window opens a Terminal that runs them, as the admin.
   - A certificate trusted by hand reaches hosts that need only the system trust store. A host marked Inspected still needs the run's proxy certificate.
   - The list is a file on the Mac ([Customising the base](#customising-the-base)). Whoever can write that file decides which certificates `edit-base` offers; the console does not edit it.

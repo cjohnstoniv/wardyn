@@ -66,6 +66,7 @@ type buttonGuest struct {
 	fda     string
 	fv      string // FileVault as the posture reads it
 	down    bool
+	termErr error // what Open admin Terminal answers, when set
 }
 
 func (g *buttonGuest) record(name string) {
@@ -76,6 +77,11 @@ func (g *buttonGuest) record(name string) {
 
 func (g *buttonGuest) EditAdminTerminal(context.Context) (guestagent.EditActionResult, error) {
 	g.record("admin-terminal")
+	g.bmu.Lock()
+	defer g.bmu.Unlock()
+	if g.termErr != nil {
+		return guestagent.EditActionResult{}, g.termErr
+	}
 	return guestagent.EditActionResult{Opened: true}, nil
 }
 
@@ -93,6 +99,11 @@ func (g *buttonGuest) EditFullDiskAccess(context.Context) (guestagent.EditAction
 	g.record("full-disk-access")
 	return guestagent.EditActionResult{Opened: true, Revealed: true}, nil
 }
+
+func (g *buttonGuest) setTermErr(err error) { g.bmu.Lock(); g.termErr = err; g.bmu.Unlock() }
+
+// walkRefusal is the guest's words for a script directory under a parent the daemon group can change.
+const walkRefusal = `"/private/var/run/wardyn-edit": "/private/var/run" is writable by gid 1: a link or a directory not only root can change`
 
 func (g *buttonGuest) isDown() bool { g.bmu.Lock(); defer g.bmu.Unlock(); return g.down }
 
@@ -193,7 +204,8 @@ func buttonEdit(t *testing.T, items []macvm.ItemRecord, sig string, person func(
 var corpCA = []macvm.ItemRecord{{Kind: macvm.ItemKindCA, Name: "corp", State: macvm.ItemNotTrusted}}
 
 // Each of the window's buttons asks the window boot's guest for its action and shows what came of it in the
-// window: what to do next, or the guest's own words when it refused with nothing done.
+// window: what to do next, or the guest's own words when it refused with nothing done or failed. Only an
+// answer that never came says the click did not reach the guest agent.
 func TestEditWindowButtonsAskTheGuestAndSayWhatHappened(t *testing.T) {
 	var got []string
 	var g *buttonGuest
@@ -207,9 +219,16 @@ func TestEditWindowButtonsAskTheGuestAndSayWhatHappened(t *testing.T) {
 			want  string
 		}{
 			{text.AdminTerminal, "Terminal is open in the VM at su - wardyn-admin. Type the one-time code there (Type code types it), then press Return."},
-			{text.TrustCAs, "Terminal is open in the VM with 2 certificates to trust."},
+			{text.TrustCAs, "Terminal is open in the VM with 2 certificates to trust. Check each one, and type the one-time code each time it asks (Type code types it). In macOS's dialog, enter wardyn-admin and the code."},
 			{func() { g.bmu.Lock(); g.refuse = true; g.bmu.Unlock(); text.TrustCAs() }, "Trust the list's CAs did nothing: nobody is signed in at the guest's console."},
 			{text.FullDiskAccess, "System Settings is open at Full Disk Access in the VM, and Finder shows the guest agent: drag it into the list and turn it on."},
+			{func() {
+				g.setTermErr(fmt.Errorf("%w: the Terminal script was not written: %s", guestagent.ErrEditFailed, walkRefusal))
+				text.AdminTerminal()
+			},
+				"Open admin Terminal failed in the VM: the Terminal script was not written: " + walkRefusal + "."},
+			{func() { g.setTermErr(errors.New("the tools session is down")); text.AdminTerminal() },
+				"Open admin Terminal did not reach the guest agent. Try again, or follow the steps above by hand."},
 		} {
 			if step.click == nil {
 				got = append(got, "a button with no callback")
@@ -227,7 +246,7 @@ func TestEditWindowButtonsAskTheGuestAndSayWhatHappened(t *testing.T) {
 	for _, f := range got {
 		t.Error(f)
 	}
-	if want := []string{"admin-terminal", "trust-cas", "trust-cas", "full-disk-access"}; !slices.Equal(g.calls, want) {
+	if want := []string{"admin-terminal", "trust-cas", "trust-cas", "full-disk-access", "admin-terminal", "admin-terminal"}; !slices.Equal(g.calls, want) {
 		t.Errorf("the guest was asked %q, want %q", g.calls, want)
 	}
 }
@@ -392,5 +411,53 @@ func TestEditWindowTypeCodeIgnoresASecondClickWhileTyping(t *testing.T) {
 		t.Error("the first key is scheduled before the sequence is marked in progress")
 	case last < 0 || last > off || !strings.Contains(body, "(int64_t)(i * 50 * NSEC_PER_MSEC)"):
 		t.Error("the sequence is not cleared after its last key (keys at i*50 ms, the clear at length*50 ms)")
+	}
+}
+
+// shutGuest is an edit window's guest whose agent shuts the guest down itself: EditShutDown stops the VM, as
+// the guest's own shutdown does, or fails with err.
+type shutGuest struct {
+	*windowGuest
+	smu   sync.Mutex
+	asked int
+	err   error
+}
+
+func (g *shutGuest) EditShutDown(context.Context) error {
+	g.smu.Lock()
+	defer g.smu.Unlock()
+	g.asked++
+	if g.err != nil {
+		return g.err
+	}
+	g.end()
+	return nil
+}
+
+// Closing the edit window asks the guest agent to shut the guest down, which macOS does not confirm with its
+// "Are you sure you want to shut down your computer now?" dialog; the VM's stop request, which macOS does
+// confirm, is not sent. An agent that does not accept (one without the action) gets the VM's stop request
+// instead, and the edit goes on to its check either way.
+func TestEditWindowCloseShutsTheGuestDownThroughTheAgent(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		e := newEdit(t)
+		var sg *shutGuest
+		e.opts.WindowBoot = func(context.Context, macvm.MachineSpec, *os.File) (macvm.ToolsGuest, func(context.Context) error, error) {
+			sg = &shutGuest{windowGuest: &windowGuest{editGuest: e.g, done: make(chan struct{})}}
+			if fail {
+				sg.err = fmt.Errorf("%w: \"404 page not found\"", guestagent.ErrNoExec)
+			}
+			return sg, func(context.Context) error { return nil }, nil
+		}
+		if _, err := macvm.EditBase(editCtx(t), e.opts); err != nil {
+			t.Fatalf("agent fails %v: %v", fail, err)
+		}
+		wantStops := -1 // the VM stopped with no stop request
+		if fail {
+			wantStops = 1
+		}
+		if sg.asked != 1 || sg.stopsAsked() != wantStops {
+			t.Errorf("agent fails %v: the agent was asked %d times and the VM's stop request %d, want 1 and %d", fail, sg.asked, sg.stopsAsked(), wantStops)
+		}
 	}
 }

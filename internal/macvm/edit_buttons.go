@@ -26,6 +26,14 @@ type EditActionGuest interface {
 // The stage-2 window boot's guest is the one the edit window's buttons reach.
 var _ EditActionGuest = (*windowGuest)(nil)
 
+// ShutDownGuest is a window boot's guest whose agent shuts the guest down itself when the edit window
+// closes, with no "Are you sure you want to shut down" dialog for the person to answer.
+type ShutDownGuest interface {
+	EditShutDown(ctx context.Context) error
+}
+
+var _ ShutDownGuest = (*windowGuest)(nil)
+
 // LiveWindow is a Window with a line of its strip that Go rewrites: the edit window's read of the guest and
 // what its last button did.
 type LiveWindow interface {
@@ -70,7 +78,8 @@ func (b *editButtons) wire(text *WindowText) {
 		if r.Certificates == 1 {
 			n = "1 certificate"
 		}
-		return "Terminal is open in the VM with " + n + " to trust. Check each one, and type the one-time code each time it asks (Type code types it)."
+		return "Terminal is open in the VM with " + n + " to trust. Check each one, and type the one-time code each time it asks (Type code types it). " +
+			"In macOS's dialog, enter wardyn-admin and the code."
 	})
 	text.FullDiskAccess = b.act("Full Disk Access", eg.EditFullDiskAccess, func(r guestagent.EditActionResult) string {
 		if r.Revealed {
@@ -81,14 +90,20 @@ func (b *editButtons) wire(text *WindowText) {
 	b.wireRosetta(text)
 }
 
-// act is a button's callback: it asks the guest for the action and shows what came of it.
+// act is a button's callback: it asks the guest for the action and shows what came of it: the guest's own
+// words when it refused or failed, and "did not reach" only when no answer came back.
 func (b *editButtons) act(name string, call func(context.Context) (guestagent.EditActionResult, error), done func(guestagent.EditActionResult) string) func() {
+	words := func(err, kind error) string {
+		return strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(err.Error(), kind.Error()), ":"))
+	}
 	return func() {
 		res, err := call(b.ctx)
 		switch {
 		case errors.Is(err, guestagent.ErrEditRefused):
-			why := strings.TrimPrefix(err.Error(), guestagent.ErrEditRefused.Error())
-			b.show("", name+" did nothing: "+strings.TrimSpace(strings.TrimPrefix(why, ":"))+".")
+			b.show("", name+" did nothing: "+words(err, guestagent.ErrEditRefused)+".")
+		case errors.Is(err, guestagent.ErrEditFailed):
+			b.o.Log.Warn("macvm: an edit window button failed in the guest", "button", name, "err", err.Error())
+			b.show("", name+" failed in the VM: "+words(err, guestagent.ErrEditFailed)+".")
 		case err != nil:
 			b.o.Log.Warn("macvm: an edit window button did not reach the guest agent", "button", name, "err", err.Error())
 			b.show("", name+" did not reach the guest agent. Try again, or follow the steps above by hand.")

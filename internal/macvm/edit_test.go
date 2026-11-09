@@ -279,11 +279,11 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	}
 	wantText := macvm.WindowText{
 		Title: "Wardyn: edit this macOS VM base",
-		Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+		Strip: "The one-time code is wardyn-admin's password: click Type code to type it at a password prompt, or Show code to see it. Make your changes, then close this window: the VM shuts down (if macOS asks, click Shut Down). Wardyn checks the base before runs use it.\n" +
 			"The first time, macOS may ask setup questions. Finish them without adding an Apple account. What you click stays for every run.\n" +
 			"The VM signs in as agent by itself; stay signed in. For administrator steps click Open admin Terminal and type the code when it asks for wardyn-admin's password. If a login window shows instead, sign in there as wardyn-admin with the code.\n" +
 			"Full Disk Access, for folder shares: click Full Disk Access, then drag the guest agent (/usr/local/libexec/wardyn-guest-agent) from Finder into the list. Grant it once: Wardyn signs the agent on this Mac so the grant can last through tools updates. It lets every program a run starts in this VM read protected folders, in every run.\n" +
-			"Certificates that are not trusted are listed in the Terminal where you started edit-base. Click Trust the list's CAs, check each one, and type the one-time code when it asks.\n" +
+			"Certificates that are not trusted are listed in the Terminal where you started edit-base. Click Trust the list's CAs, check each one, and type the one-time code when it asks; in macOS's dialog, enter wardyn-admin and the code.\n" +
 			"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 			"Leave Remote Login off and add no accounts: the check refuses a base with either.",
 		CodeFile: e.f.opts.Layout.SetupCode(),
