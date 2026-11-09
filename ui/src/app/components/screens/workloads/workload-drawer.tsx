@@ -157,7 +157,7 @@ export function WorkloadDrawer({
       <Sheet open onOpenChange={(o) => !o && onClose()}>
         <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[560px]">
           <SheetHeader className="border-b border-border pb-4">
-            <SheetTitle className="flex items-center gap-2.5 pr-8">
+            <SheetTitle className="flex items-center gap-2.5">
               <span className="font-mono text-base">{w.name}</span>
               <WorkloadBadge workload={w} />
             </SheetTitle>

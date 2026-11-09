@@ -95,10 +95,9 @@ export function ProfileReview({
       <Sheet open={!!runId} onOpenChange={(o) => !o && onClose()}>
         <SheetContent
           className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]"
-          style={{ maxWidth: "98vw" }}
         >
-          <SheetHeader className="border-b border-border p-5">
-            <SheetTitle className="flex items-center gap-2">
+          <SheetHeader className="border-b border-border p-5 pr-10">
+            <SheetTitle className="flex min-w-0 items-center gap-2 break-words">
               <Sparkles className="size-4 text-primary" />
               Synthesized profile
             </SheetTitle>

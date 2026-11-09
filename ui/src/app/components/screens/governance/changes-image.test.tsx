@@ -75,6 +75,17 @@ beforeEach(() => {
   approveMock.mockReset();
 });
 
+describe("the change drawer's size", () => {
+  // An inline max-width of 98vw beat the 680px cap, so the drawer filled the screen at every width.
+  it("is capped by its class, not widened by an inline max-width, and keeps the title clear of Close", async () => {
+    renderTab([image()]);
+    const dialog = await open();
+    expect(dialog.style.maxWidth).toBe("");
+    expect(dialog.className).toContain("sm:max-w-[680px]");
+    expect(dialog.querySelector('[data-slot="sheet-header"]')!.className).toContain("pr-10");
+  });
+});
+
 describe("an image request in the list", () => {
   it("reads as an image request: label, its line with the ticket, and the person → image target in mono", () => {
     renderTab([image()]);
