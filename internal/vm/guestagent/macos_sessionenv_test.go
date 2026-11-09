@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -271,6 +272,112 @@ func TestSessionEnvPathsNameNoLinkedMacDirectory(t *testing.T) {
 	}
 	if err := SessionEnvFile(at(filepath.Join(root, "private", "var", "run", "wardyn")), []string{"A=b"}); err != nil {
 		t.Errorf("a write through the link's target: %v", err)
+	}
+}
+
+// stockLayout is a test root with a stock guest's modes on both places the settings could go: /Library and
+// the /Library/Wardyn stage 1 makes, 0755, and /private/var/run, which a stock guest has as root:daemon
+// 0775 (here the test's own group, which the walk does not trust either: skipIfTrustedGroup).
+func stockLayout(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	mkdirMode(t, mkdirMode(t, filepath.Join(root, "Library"), 0o755)+"/Wardyn", 0o755)
+	mkdirMode(t, mkdirMode(t, mkdirMode(t, filepath.Join(root, "private"), 0o755)+"/var", 0o755)+"/run", 0o775)
+	return root
+}
+
+// skipIfTrustedGroup skips where dir's group is one the walk trusts, as a BSD directory under a wheel one is.
+func skipIfTrustedGroup(t *testing.T, dir string) {
+	t.Helper()
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gid := fi.Sys().(*syscall.Stat_t).Gid; slices.Contains(trustedGroupGIDs, gid) {
+		t.Skipf("the test's group %d is one the walk trusts", gid)
+	}
+}
+
+// startUnder runs a run's settings and one desktop view status write with the guest's files in dir under
+// root, and returns the paths.
+func startUnder(t *testing.T, root, dir string) (SessionEnvPaths, string) {
+	t.Helper()
+	p := SessionEnvPaths{Dir: root + dir, Script: root + dir + "/session-env.zsh", Status: root + dir + "/session-env.status",
+		Zshenv: filepath.Join(root, "zshenv")}
+	d := &Desktop{Run: newGUIFake(true), Console: fakeConsole{uid: 502}, ViewStatus: root + dir + "/desktop-view.status"}
+	<-d.StartSessionEnv(context.Background(), p, 502, map[string]string{"WARDYN_RUN_ID": "r1"}, nil, nil)
+	d.writeViewStatus("view=console")
+	return p, d.ViewStatus
+}
+
+// The settings file and the two status files live beside the pairing key, in a directory root's alone
+// (0755) under the root:wheel 0755 one stage 1 makes: on a stock layout every write goes in, and the zsh
+// hook names the new file.
+func TestSessionEnvFilesLiveUnderARootOnlyParent(t *testing.T) {
+	if MacSessionEnvDir != "/Library/Wardyn/run" || filepath.Dir(MacSessionEnvDir) != filepath.Dir(MacPairKeyPath) {
+		t.Fatalf("MacSessionEnvDir = %s, want /Library/Wardyn/run, beside the pairing key", MacSessionEnvDir)
+	}
+	for _, p := range []string{MacSessionEnvPath, MacSessionEnvStatusPath, MacDesktopViewStatusPath, DefaultSessionEnvPaths().Script} {
+		if filepath.Dir(p) != MacSessionEnvDir {
+			t.Errorf("%s is not in %s", p, MacSessionEnvDir)
+		}
+	}
+	root := stockLayout(t)
+	p, view := startUnder(t, root, MacSessionEnvDir)
+	fi, err := os.Lstat(p.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := fi.Sys().(*syscall.Stat_t); !fi.IsDir() || st.Uid != trustedOwnerUID || fi.Mode().Perm() != 0o755 {
+		t.Errorf("%s is uid %d mode %v, want root's directory at 0755", p.Dir, st.Uid, fi.Mode())
+	}
+	for _, f := range []string{p.Script, p.Status, view} {
+		if fi, err := os.Lstat(f); err != nil || fi.Mode().Perm() != 0o644 {
+			t.Errorf("%s = %v, %v; want written at 0644", f, fi, err)
+		}
+	}
+	if b, err := os.ReadFile(p.Status); err != nil || string(b) != "session_env=set vars=1 via=asuser\n" {
+		t.Errorf("status = %q, %v", b, err)
+	}
+	if b, err := os.ReadFile(p.Zshenv); err != nil || !strings.Contains(string(b), "] && . "+p.Script+" "+sessionEnvHookMarker) {
+		t.Errorf("zshenv = %q, %v; want the hook sourcing %s", b, err, p.Script)
+	}
+}
+
+// The walk is the same at the new place: a /Library/Wardyn that a group it does not trust can write, as
+// daemon's /private/var/run is, refuses every write, and the file is never sourced.
+func TestSessionEnvRefusesADaemonStyleParent(t *testing.T) {
+	root := stockLayout(t)
+	skipIfTrustedGroup(t, root+"/Library/Wardyn")
+	if err := os.Chmod(root+"/Library/Wardyn", 0o775); err != nil {
+		t.Fatal(err)
+	}
+	p, view := startUnder(t, root, MacSessionEnvDir)
+	if err := SessionEnvFile(p, []string{"A=b"}); !errors.Is(err, ErrUnsafeParent) || !strings.Contains(err.Error(), `/Library/Wardyn" is writable by gid`) {
+		t.Errorf("the settings file under a group-writable parent = %v", err)
+	}
+	for _, f := range []string{p.Dir, p.Zshenv, view} {
+		if _, err := os.Lstat(f); err == nil {
+			t.Errorf("%s exists after the walk refused its parent", f)
+		}
+	}
+}
+
+// The old place, /private/var/run/wardyn, on a stock layout: the walk refuses /private/var/run, so the
+// settings file, the zsh hook (a restored Terminal's zsh got no run settings) and both status files (the
+// control plane could not say where the settings stood) were never written.
+func TestTheOldSessionEnvDirIsRefusedOnAStockLayout(t *testing.T) {
+	const oldDir = "/private/var/run/wardyn"
+	root := stockLayout(t)
+	skipIfTrustedGroup(t, root+"/private/var/run")
+	p, view := startUnder(t, root, oldDir)
+	if err := SessionEnvFile(p, []string{"A=b"}); !errors.Is(err, ErrUnsafeParent) || !strings.Contains(err.Error(), `/private/var/run" is writable by gid`) {
+		t.Errorf("the settings file at the old place = %v", err)
+	}
+	for _, f := range []string{p.Dir, p.Zshenv, view} {
+		if _, err := os.Lstat(f); err == nil {
+			t.Errorf("%s exists at the old place on a stock layout", f)
+		}
 	}
 }
 

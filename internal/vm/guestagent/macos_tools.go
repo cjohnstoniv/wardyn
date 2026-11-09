@@ -752,8 +752,8 @@ func ItemDir(name string) string { return MacItemStageDir + "/" + name }
 // know folds onto one; the write's walk then refuses each by its inode (replaceFileOutside, makeDirAll).
 var (
 	itemDestRoots   = []string{"/Library", "/usr/local", "/opt"}
-	itemDestRefused = []string{MacClaudeCodeManagedDir, MacCodexManagedDir, MacRunDir, MacItemStageDir, MacToolsBinDir,
-		MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains"}
+	itemDestRefused = []string{MacClaudeCodeManagedDir, MacCodexManagedDir, MacRunDir, MacSessionEnvDir, MacItemStageDir,
+		MacToolsBinDir, MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains"}
 )
 
 // ErrItemDest is a file item's destination the guest does not allow.

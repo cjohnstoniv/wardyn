@@ -263,7 +263,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 - **While they are pending.** `wardyn window <run> --status` says `preparing` with the sentence above. A window asked for at create waits for them, up to about 10 minutes, and the run's start is not held.
 - **If they fail.** The window opens, and the status says why: "the agent account was not signed in", "the desktop session did not take them" or "they were not confirmed in time". Run `agent-run --session-env-retry` in the window's Terminal to retry.
 - **After a logout inside a run.** The window's apps lose the proxy settings until you run that retry command. Nothing applies them again by itself.
-- In the guest, `cat /var/run/wardyn/session-env.status` reads `session_env=pending`, `session_env=set vars=<n> via=<asuser|user|retry|none>` or `session_env=failed reason=<not_signed_in|setenv_failed>`.
+- In the guest, `cat /Library/Wardyn/run/session-env.status` reads `session_env=pending`, `session_env=set vars=<n> via=<asuser|user|retry|none>` or `session_env=failed reason=<not_signed_in|setenv_failed>`.
 
 ### Closing a window
 

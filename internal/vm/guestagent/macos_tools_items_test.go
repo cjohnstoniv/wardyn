@@ -76,7 +76,7 @@ func TestToolsPushBaseItems(t *testing.T) {
 		}
 	}
 	for _, dest := range []string{MacItemStageDir + "/edr/mnt", MacItemStageDir + "/edr/.hidden", MacItemStageDir + "/edr/a/b", MacItemStageDir + "/item.pkg", MacItemStageDir + "/Edr/item.pkg",
-		MacClaudeCodeManagedSettingsPath, strings.ToUpper(MacClaudeCodeManagedMCPPath), MacCodexRequirementsPath, MacRunDir + "/secret",
+		MacClaudeCodeManagedSettingsPath, strings.ToUpper(MacClaudeCodeManagedMCPPath), MacCodexRequirementsPath, MacRunDir + "/secret", MacSessionEnvPath,
 		MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains/System.keychain", "/Users/agent/x", "/etc/sudoers", "/private/etc/codex/requirements.toml", "/Library/../etc/codex/requirements.toml"} {
 		if err := tl.pushAllowed(dest); err == nil {
 			t.Errorf("%s allowed", dest)

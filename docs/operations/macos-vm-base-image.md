@@ -176,7 +176,7 @@ What Wardyn automates, and what the operator does by hand in `wardyn-runnerd mac
 | Folder shares | By hand in edit: Full Disk Access for the guest agent |
 
 - **Refused destinations.** A `file` item may not write a harness's managed settings (`/Library/Application Support/ClaudeCode`, `/etc/codex`), because a run writes those per run. Your own agent rules go in your policy instead.
-  - Nor may it write Wardyn's own files, the stage directory, `/var/run/wardyn` or `/Library/Keychains`. Paths compare without case, as APFS does.
+  - Nor may it write Wardyn's own files, the stage directory, `/var/run/wardyn`, `/Library/Wardyn/run` or `/Library/Keychains`. Paths compare without case, as APFS does.
 - **Secret files.** A `pkg` item's `secret_files`, such as an EDR licence, are each a mode 0600 file on the Mac. A file others can read is refused.
   - Each is pushed root's and 0600 beside the package, for its installer to read, and removed with the stage directory after the install, on every path.
   - Its value is never in a command line, a log, `tools.json` or the caps. The list's digest covers its pin only, so to rotate a licence, change its `sha256`.

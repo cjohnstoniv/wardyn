@@ -45,9 +45,11 @@ const (
 	// MacRunDir is the guest's counterpart of the Linux /run/wardyn, where a delivered secret lands: a
 	// macOS guest has no /run (its system volume is sealed).
 	MacRunDir = "/var/run/wardyn"
-	// MacSessionEnvDir is MacRunDir spelled through /private: /var is a link to /private/var on macOS, and
-	// the root-only write walk (walkDir) refuses a link anywhere on the way.
-	MacSessionEnvDir = "/private" + MacRunDir
+	// MacSessionEnvDir holds a run's settings file and its two status files, beside the pairing key in the
+	// directory stage 1 makes root:wheel 0755, so the root-only write walk (walkDir) passes every parent.
+	// Not MacRunDir: a stock guest has /private/var/run as root:daemon 0775, which the walk refuses, so no
+	// file was written there. A boot does not clear it as it does /var/run; the boot scrub does.
+	MacSessionEnvDir = "/Library/Wardyn/run"
 	// MacSessionEnvPath is the shell file of a run's non-secret settings, which the agent account's zsh
 	// reads through the hook in MacZshEnvPath: root's and read-only to the agent account, so only the agent
 	// process changes what it sources.
