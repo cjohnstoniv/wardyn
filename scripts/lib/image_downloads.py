@@ -299,8 +299,11 @@ def curl_output(words, variables):
             output = attached or args.pop(0)
         elif arg == "--remote-name" or re.fullmatch(r"-[fsSLO]+", arg):
             remote |= arg == "--remote-name" or "O" in arg
-        elif arg in {"--fail", "--silent", "--show-error", "--location"}:
+        elif arg in {"--fail", "--silent", "--show-error", "--location", "--retry-all-errors"}:
             pass
+        elif arg in {"--retry", "--retry-delay", "--retry-max-time", "--connect-timeout"}:
+            if not args or not re.fullmatch(r"[0-9]+", args.pop(0)):
+                raise ValueError(f"curl {arg} needs a literal number")
         elif arg.startswith("-"):
             raise ValueError(f"unsupported curl option {arg!r}")
         else:
