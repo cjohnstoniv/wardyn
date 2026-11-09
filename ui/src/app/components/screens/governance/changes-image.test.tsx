@@ -84,6 +84,19 @@ describe("the change drawer's size", () => {
     expect(dialog.className).toContain("sm:max-w-[680px]");
     expect(dialog.querySelector('[data-slot="sheet-header"]')!.className).toContain("pr-10");
   });
+
+  // jsdom measures no layout; this pins the structure. Each part of the title is a flex item of its own that may
+  // shrink and break anywhere, since min-w-0 on the title does not reach an anonymous text item.
+  it("makes every part of the drawer title shrinkable and breakable", async () => {
+    renderTab([image()]);
+    const dialog = await open();
+    const title = dialog.querySelector('[data-slot="sheet-title"]')!;
+    expect(title.children.length).toBeGreaterThanOrEqual(2);
+    for (const part of Array.from(title.children)) {
+      expect(part.className).toContain("min-w-0");
+      expect(part.className).toContain("[overflow-wrap:anywhere]");
+    }
+  });
 });
 
 describe("an image request in the list", () => {

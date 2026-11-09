@@ -158,8 +158,10 @@ export function WorkloadDrawer({
         <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[560px]">
           <SheetHeader className="border-b border-border pb-4">
             <SheetTitle className="flex items-center gap-2.5">
-              <span className="font-mono text-base">{w.name}</span>
-              <WorkloadBadge workload={w} />
+              <span className="min-w-0 font-mono text-base [overflow-wrap:anywhere]">{w.name}</span>
+              <span className="shrink-0">
+                <WorkloadBadge workload={w} />
+              </span>
             </SheetTitle>
             <SheetDescription className="sr-only">{W.TITLE}</SheetDescription>
           </SheetHeader>
