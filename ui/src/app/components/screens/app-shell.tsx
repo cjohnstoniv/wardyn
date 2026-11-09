@@ -385,8 +385,8 @@ function SidebarNav({
         {isCustomTrustDomain(meta.trustDomain) && (
           <div className="rounded-lg border border-sidebar-border bg-card/50 p-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Fingerprint className="size-3.5 text-muted-foreground" />
-              <span className="font-mono">{meta.trustDomain}</span>
+              <Fingerprint className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 break-all font-mono">{meta.trustDomain}</span>
             </div>
             <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
               All agent identities anchored to this trust domain.
