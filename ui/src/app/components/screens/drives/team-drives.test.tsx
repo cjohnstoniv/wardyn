@@ -150,6 +150,37 @@ describe("Drives list, team drive rows", () => {
   });
 });
 
+describe("Drives list, the team-drive switch cannot be read", () => {
+  async function renderUnread() {
+    getDrivesMock.mockResolvedValue(snapshot({ drives: [drive({ writable: true, single_host: true }), drive({ id: "p1", name: "plain", team: false })], grants: [grant()] }));
+    getProvidersMock.mockRejectedValueOnce(new Error("HTTP 403"));
+    render(<DrivesScreen />);
+    await screen.findAllByRole("table");
+    return screen.findByText(DRIVES.TEAM_UNCHECKED);
+  }
+
+  it("a team drive claims no access, cleanup or allocation, and the note offers Try again", async () => {
+    await renderUnread();
+    const row = within(table().getByRole("row", { name: /platform-ref/ }));
+    expect(row.getAllByText(DRIVES.TEAM_UNKNOWN_CELL)).toHaveLength(3);
+    for (const t of [DRIVES.TEAM_CHIP, DRIVES.TEAM_RECLAIM_CELL, DRIVES.RECLAIM_RETAIN, DRIVES.MODE_RW, DRIVES.MODE_RO, DRIVES.ALLOCATED_COUNT(1)]) {
+      expect(row.queryByText(t)).toBeNull();
+    }
+    expect(screen.getByRole("button", { name: `${DRIVES.EDIT} platform-ref` })).toBeDisabled();
+    // An ordinary drive is unaffected: the switch only changes what a team drive says.
+    expect(within(table().getByRole("row", { name: /plain/ })).getByText(DRIVES.RECLAIM_RETAIN)).toBeInTheDocument();
+  });
+
+  it("Try again reads the switch and then shows the team row", async () => {
+    await renderUnread();
+    getProvidersMock.mockResolvedValue({ providers: { storage: { user_drive: { team_drives: true } } }, etag: null });
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.TEAM_UNCHECKED_RETRY }));
+    expect(await screen.findByText(DRIVES.TEAM_CHIP)).toBeInTheDocument();
+    expect(screen.queryByText(DRIVES.TEAM_UNCHECKED)).toBeNull();
+    expect(screen.getByText(DRIVES.TEAM_RECLAIM_CELL)).toBeInTheDocument();
+  });
+});
+
 describe("Drive editor, Team drive", () => {
   it("Team drive replaces Writable with the one Members can write toggle, off, and drops the per-person fields", async () => {
     await renderScreen(snapshot({ drives: [drive({ team: false, writable: true, grant_count: 0 })], grants: [] }));

@@ -239,6 +239,10 @@ export const DRIVES = {
   TEAM_CHIP: "Team drive",
   TEAM_ONE_HOST_CHIP: "One host only",
   TEAM_RECLAIM_CELL: "Kept (team drive)",
+  // The team-drive switch could not be read: a drive the server marks as team shows no access, reclaim or allocation claim.
+  TEAM_UNKNOWN_CELL: "Not shown",
+  TEAM_UNCHECKED: "Couldn't check whether team drives are on, so team drives show no access, cleanup or allocation details.",
+  TEAM_UNCHECKED_RETRY: "Try again",
   // ---- where a drive mounts from (M10, #113 + #112) ----
   // COL_MOUNTS_FROM heads the table column and the preview line; both values
   // are the server's mounts_from, printed as it is.
