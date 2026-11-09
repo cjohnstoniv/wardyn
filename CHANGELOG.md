@@ -61,6 +61,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Clearing a governance unit's deciders with `{"rules": []}` when the unit already has none still answers 200, but no longer writes a `governance.deciders.set` audit row, because nothing changed. With the second-human switch on it no longer raises a pending change for a second person to approve either.
+- `GET /api/v1/runners/settings` now always includes `require_managed_device`, `false` included. It was left out when the requirement was off.
 - An organisation runner pool whose only members are organisation runners, such as runners in a Kubernetes cluster, now shows as available, with those runners counted in its capacity and offered in its barrier options. Runs could already be placed on them. An organisation pool with both remote-hosted and organisation runners now stays available under a deny of remote placement, as its runs already did.
 - Approving an elevation request now answers stale when the unit's elevation rule no longer names a group the person matched when they asked.
 - After a revive, a run's recorded policy and its policy view showed the organisation's recording level instead of the run's own; the recording itself was never changed. A revive now starts from the run's recorded policy and is refused (503) when that cannot be read.

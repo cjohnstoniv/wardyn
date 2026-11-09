@@ -96,7 +96,7 @@ An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1
 | `GET /api/v1/me/runners`, `GET /api/v1/me/runners/{id}` | the owner | The caller's own runners only; another person's runner and an absent id answer alike. An unclaimed runner's fingerprint is abbreviated here, so it cannot be copied from the console into the claim. |
 | `GET /api/v1/runners/tokens?owner=&limit=&offset=` | admin or `security_admin` | Unused, unexpired registration tokens, optionally one person's. No token value is ever returned. |
 | `DELETE /api/v1/runners/tokens/{id}` | admin or `security_admin` | The token stops being redeemable at once; audited as `runner.token.revoke`. Minting stays admin only. |
-| `GET /api/v1/runners/settings` | admin or `security_admin` | `{"enabled": bool}`, readable while the runner routes refuse. |
+| `GET /api/v1/runners/settings` | admin or `security_admin` | `{"enabled": bool, "require_managed_device": bool}`, both always present (`false` included), readable while the runner routes refuse. |
 | `PUT /api/v1/me/runners/{id}` | the owner | `{"limits": {...}}` declares the runner's limits; see [Runner limits](#runner-limits). |
 | `GET /api/v1/me/runners/{id}/folders?path=&survey=1` | the owner | A folder-only runner's folders under `path` (its roots when empty): names, file counts and sizes; `survey=1` adds what a run would get. See [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox). |
 | `GET /api/v1/me/runner-pools` | any signed-in person | The pools you may use (for an admin, without the oversight rows); accepts `run_type`. |

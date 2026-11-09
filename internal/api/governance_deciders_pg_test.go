@@ -189,6 +189,103 @@ func TestDecidersSecurityWriteFollowsSwitch(t *testing.T) {
 	}
 }
 
+// TestDecidersClearEmptyUnitWritesNoRow: clearing a unit that has no rules answers 200 as before but
+// writes no governance.deciders.set row; clearing a unit that had rules writes exactly one.
+func TestDecidersClearEmptyUnitWritesNoRow(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	rowsFor := func(u types.GovernanceUnit) int {
+		n := 0
+		for _, r := range e.audits("governance.deciders.set") {
+			if r.Target == u.ID.String() {
+				n++
+			}
+		}
+		return n
+	}
+	w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody())
+	var saved types.UnitDeciders
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.UnitID != e.a.ID || saved.Rules == nil || len(saved.Rules) != 0 {
+		t.Fatalf("clearing an empty unit = %d %s, want 200 with the unit and no rules", w.Code, w.Body)
+	}
+	if n := rowsFor(e.a); n != 0 {
+		t.Errorf("clearing an empty unit wrote %d governance.deciders.set rows, want none", n)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody(egressOwnerRule())); w.Code != http.StatusOK {
+		t.Fatalf("setting a rule = %d %s, want 200", w.Code, w.Body)
+	}
+	before := rowsFor(e.a)
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody()); w.Code != http.StatusOK {
+		t.Fatalf("clearing a unit with rules = %d %s, want 200", w.Code, w.Body)
+	}
+	if got := e.storedDeciders(e.a); got != nil {
+		t.Errorf("after clearing stored %v, want none", got)
+	}
+	if n := rowsFor(e.a); n != before+1 {
+		t.Errorf("clearing a unit that had rules: %d rows, want %d (exactly one more)", n, before+1)
+	}
+	if w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody()); w.Code != http.StatusOK {
+		t.Fatalf("clearing again = %d %s, want 200", w.Code, w.Body)
+	}
+	if n := rowsFor(e.a); n != before+1 {
+		t.Errorf("clearing again: %d rows, want still %d", n, before+1)
+	}
+}
+
+// TestDecidersClearEmptyUnitQueueModeHoldsNothing: with the second-human switch on, clearing a unit
+// that has no rules answers 200 as the direct write does and holds nothing: no pending change, no
+// governance.change.propose row, no governance.deciders.set row. Clearing a unit that has rules is still held.
+func TestDecidersClearEmptyUnitQueueModeHoldsNothing(t *testing.T) {
+	e := newUnitAdminEnv(t, true)
+	proposeRows := len(e.audits("governance.change.propose"))
+	w := e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody())
+	var saved types.UnitDeciders
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.UnitID != e.a.ID || saved.Rules == nil || len(saved.Rules) != 0 {
+		t.Fatalf("clearing an empty unit with the switch on = %d %s, want 200 with the unit and no rules", w.Code, w.Body)
+	}
+	if n := e.pendingCount(); n != 0 {
+		t.Errorf("clearing an empty unit held %d changes, want none", n)
+	}
+	if n := len(e.audits("governance.change.propose")); n != proposeRows {
+		t.Errorf("clearing an empty unit wrote %d governance.change.propose rows, want none", n-proposeRows)
+	}
+	if n := len(e.audits("governance.deciders.set")); n != 0 {
+		t.Errorf("clearing an empty unit wrote %d governance.deciders.set rows, want none", n)
+	}
+
+	// The admin token is the break-glass (govBypass): the same clear leaves no deciders.set row and no
+	// bypass row of the deciders kind, and total bypass rows do not grow.
+	bypassRows := len(e.audits("governance.change.bypass"))
+	if w := e.admin(http.MethodPut, decidersPath(e.a), decidersBody()); w.Code != http.StatusOK {
+		t.Fatalf("admin token clearing an empty unit = %d %s, want 200", w.Code, w.Body)
+	}
+	for _, row := range e.audits("governance.change.bypass") {
+		var data map[string]any
+		if json.Unmarshal(row.Data, &data) == nil && data["target_kind"] == govKindUnitDeciders {
+			t.Errorf("admin token clearing an empty unit left a deciders bypass row: %s", row.Data)
+		}
+	}
+	if n := len(e.audits("governance.change.bypass")); n != bypassRows {
+		t.Errorf("admin token clearing an empty unit grew bypass rows from %d to %d", bypassRows, n)
+	}
+	if n := len(e.audits("governance.deciders.set")); n != 0 {
+		t.Errorf("admin token clearing an empty unit wrote %d governance.deciders.set rows, want none", n)
+	}
+
+	set := e.pending(e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody(egressOwnerRule())))
+	e.approve(set.ID)
+	if got := e.storedDeciders(e.a); !slices.Equal(kindsOf(got), []string{"egress_domain"}) {
+		t.Fatalf("after approval stored %v, want the rule", got)
+	}
+	proposeRows = len(e.audits("governance.change.propose"))
+	e.pending(e.call(e.alice, http.MethodPut, decidersPath(e.a), decidersBody()))
+	if n := e.pendingCount(); n != 1 {
+		t.Errorf("clearing a unit with rules held %d changes, want one", n)
+	}
+	if n := len(e.audits("governance.change.propose")); n != proposeRows+1 {
+		t.Errorf("clearing a unit with rules wrote %d propose rows, want one", n-proposeRows)
+	}
+}
+
 // TestDecidersParentLock409: the knob "deciders" locks the rules of every unit below the locker, and a
 // unit cannot lock it while a unit below states rules.
 func TestDecidersParentLock409(t *testing.T) {

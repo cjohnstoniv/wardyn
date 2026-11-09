@@ -77,6 +77,7 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var saved types.UnitDeciders
+	var idempotentClear bool
 	err = s.writeGovernance(ctx, func(q store.Querier) (err error) {
 		if err := lockDecidersKey(ctx, q, unit); err != nil {
 			return err
@@ -88,10 +89,21 @@ func (s *Server) handlePutUnitDeciders(w http.ResponseWriter, r *http.Request) {
 		if err := s.deciderBoundRefusal(ctx, q, row, all, rules); err != nil {
 			return err
 		}
+		// The stored rules are read under the key lock, so "already empty" cannot change before the write.
+		_, cur, err := unitDecidersState(ctx, q, unit, true)
+		if err != nil {
+			return err
+		}
+		idempotentClear = len(rules) == 0 && (cur == nil || len(cur.Rules) == 0)
 		saved, err = store.SetUnitDecidersQ(ctx, q, unit, rules, principalFromRequest(r))
 		return err
 	})
 	if s.writeDecidersError(w, r, err) {
+		return
+	}
+	if idempotentClear {
+		// Clearing a unit that has no rules changed nothing, so it leaves no row and no bypass row.
+		writeJSON(w, http.StatusOK, saved)
 		return
 	}
 	data := unitDecidersAuditData(unit, rules, principalFromRequest(r), "")
@@ -280,7 +292,8 @@ func (s *Server) boundaryDeciderLockRefusal(ctx context.Context, q store.Querier
 		"%s cannot be locked by the boundary: %s set rules; clear them first", types.DeciderLockKnob, strings.Join(differ, ", "))
 }
 
-// holdUnitDeciders stores a write as a pending change.
+// holdUnitDeciders stores a write as a pending change, except a clear of a unit that has no rules: that
+// answers 200 and holds nothing.
 func (s *Server) holdUnitDeciders(w http.ResponseWriter, r *http.Request, p unitDecidersPayload) {
 	ctx := r.Context()
 	var base any
@@ -298,6 +311,12 @@ func (s *Server) holdUnitDeciders(w http.ResponseWriter, r *http.Request, p unit
 		return err
 	})
 	if s.writeDecidersError(w, r, err) {
+		return
+	}
+	if len(p.Rules) == 0 && (cur == nil || len(cur.Rules) == 0) {
+		// Clearing a unit that has no rules changes nothing: nobody has anything to approve, so no
+		// change is held and no propose row is written. It answers what the direct write answers.
+		writeJSON(w, http.StatusOK, types.UnitDeciders{UnitID: p.UnitID, Rules: []types.DeciderRule{}, UpdatedBy: principalFromRequest(r)})
 		return
 	}
 	before := &unitDecidersDiffView{UnitID: p.UnitID, UnitName: row.Name, Rules: []types.DeciderRule{}}

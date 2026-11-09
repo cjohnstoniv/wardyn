@@ -367,5 +367,6 @@ type RunnerSettings struct {
 	// runner a security operator marked managed_device (or an organisation's cluster runner) takes one.
 	// Default off: an existing install keeps placing on personal runners until an admin turns this on.
 	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
-	RequireManagedDevice bool `json:"require_managed_device,omitempty"`
+	// Always on the wire, false included, so GET /runners/settings states it when it is off.
+	RequireManagedDevice bool `json:"require_managed_device"`
 }

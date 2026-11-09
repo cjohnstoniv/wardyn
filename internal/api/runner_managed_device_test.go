@@ -85,4 +85,8 @@ func TestRunnerSettingsRequireManagedDeviceRoundTrip(t *testing.T) {
 	if w := put(`{"require_managed_device":false}`); w.Code != http.StatusOK || f.siteCfg.Runners.RequireManagedDevice || !f.siteCfg.Runners.Enabled {
 		t.Fatalf("turn the requirement off: %d %+v", w.Code, f.siteCfg.Runners)
 	}
+	// Off is still stated: GET /runners/settings always carries require_managed_device, false included.
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/runners/settings", admin, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"require_managed_device":false`) {
+		t.Fatalf("settings read with the requirement off: %d %s", w.Code, w.Body.String())
+	}
 }
