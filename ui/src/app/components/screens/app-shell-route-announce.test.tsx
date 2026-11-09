@@ -24,6 +24,7 @@ function Screen({ name, ownFocus }: { name: string; ownFocus?: boolean }) {
         filter
       </button>
       {ownFocus && <input aria-label="own field" ref={(el) => el?.focus()} />}
+      <Link to="/b" replace>redirect to b</Link>
     </div>
   );
 }
@@ -95,5 +96,45 @@ describe("AppShell route announcement", () => {
     await screen.findByRole("heading", { name: "Screen C" });
     await waitFor(() => expect(document.title).toMatch(/^Screen C - /));
     expect(screen.getByLabelText("own field")).toHaveFocus();
+  });
+
+  it("does not take focus for a replace (a redirect, not a page the person chose), but still titles it", async () => {
+    renderShell();
+    await screen.findByRole("heading", { name: "Screen A" });
+    act(() => screen.getByRole("link", { name: "redirect to b" }).click());
+    const b = await screen.findByRole("heading", { name: "Screen B" });
+    await waitFor(() => expect(document.title).toMatch(/^Screen B - /));
+    expect(b).not.toHaveFocus();
+  });
+
+  // The cold-load probe asserts no timer is pending once the console is entered. The title and focus work uses
+  // observers only: no timer is scheduled from app-shell.tsx by a navigation, with or without focus moving.
+  it("schedules no timer from the shell on a navigation", async () => {
+    renderShell();
+    await screen.findByRole("heading", { name: "Screen A" });
+    vi.useFakeTimers();
+    const scheduled: string[] = [];
+    for (const name of ["setTimeout", "setInterval"] as const) {
+      const real = globalThis[name];
+      vi.spyOn(globalThis, name).mockImplementation(((...args: Parameters<typeof real>) => {
+        if (new Error().stack?.includes("screens/app-shell.tsx")) scheduled.push(name);
+        return (real as (...a: unknown[]) => unknown)(...args);
+      }) as never);
+    }
+    try {
+      act(() => screen.getByRole("link", { name: "go to b" }).click());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(screen.getByRole("heading", { name: "Screen B" })).toHaveFocus();
+      act(() => screen.getByRole("link", { name: "redirect to b" }).click());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(scheduled).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
   });
 });

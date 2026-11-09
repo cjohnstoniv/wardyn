@@ -9,6 +9,7 @@ import {
   Outlet,
   useLocation,
   useNavigate,
+  useNavigationType,
 } from "react-router-dom";
 import {
   Activity,
@@ -510,8 +511,12 @@ export function AppShell({
     meta.operator || (access === "session-user" && meta.userViewSuperAdmin);
   // Each route names itself in the tab title ("<page> - <console>") and, after a navigation, takes focus on its
   // heading, so a screen reader hears the page change and a keyboard user starts at the new content. A screen
-  // that already placed focus inside the page (the New Run steps do) keeps it. The heading is read again for
-  // two seconds because most screens draw it only once their first read has landed.
+  // that already placed focus inside the page (the New Run steps do) keeps it. Most screens draw the heading only
+  // once their first read has landed, so <main> is watched until one appears and the heading itself after that.
+  // Observers only: nothing here schedules a timer.
+  // A replace is a redirect (the console landing on its home screen, a guard sending you elsewhere), not a page
+  // the person chose, so it is titled but does not take focus.
+  const navigationType = useNavigationType();
   const arrived = React.useRef(location.pathname);
   React.useEffect(() => {
     const base = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
@@ -525,7 +530,7 @@ export function AppShell({
     if (!main) return;
     if (arrived.current !== location.pathname) {
       arrived.current = location.pathname;
-      if (!main.contains(document.activeElement)) {
+      if (navigationType !== "REPLACE" && !main.contains(document.activeElement)) {
         const target = heading() ?? main;
         if (!target.hasAttribute("tabindex")) {
           target.tabIndex = -1;
@@ -534,14 +539,23 @@ export function AppShell({
         target.focus({ preventScroll: true });
       }
     }
-    const observer = new MutationObserver(sync);
-    observer.observe(main, { childList: true, subtree: true, characterData: true });
-    const stop = setTimeout(() => observer.disconnect(), 2000);
+    const opts = { childList: true, subtree: true, characterData: true };
+    const titleObserver = new MutationObserver(sync);
+    const mainObserver = new MutationObserver(() => {
+      const h = heading();
+      if (!h) return;
+      sync();
+      titleObserver.observe(h, opts);
+      mainObserver.disconnect();
+    });
+    const h = heading();
+    if (h) titleObserver.observe(h, opts);
+    else mainObserver.observe(main, { childList: true, subtree: true });
     return () => {
-      clearTimeout(stop);
-      observer.disconnect();
+      titleObserver.disconnect();
+      mainObserver.disconnect();
     };
-  }, [view, location.pathname]);
+  }, [view, location.pathname, navigationType]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
