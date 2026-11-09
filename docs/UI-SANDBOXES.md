@@ -476,6 +476,8 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 | `429` `inbound_rate_limited`, `Retry-After: 1` | Past 50 requests a second, burst 100: the run's inbound apps together, or one caller over all runs. The owner's browser spends only the run's |
 | `409` `ui_gateway_not_running` | The run is not running, is kept or has no sandbox |
 | `503` `run_unreadable` | The run or its policy is unreadable |
+| `403` `data_out_blocked` | The run's `data_out` is `review` or `blocked` and the app is not the desktop. Audited as `inbound.deny` `data_out` and `run.data_out.deny` |
+| `503` `data_out_unreadable` | The run's `data_out` rule is unreadable. No row |
 | `503` `runner_offline` | The runner holding the run is offline. Retry when it reconnects |
 | `403` `ui_gateway_cross_site` | A cookie session request from another site, in host mode (see "What Wardyn checks" below) |
 

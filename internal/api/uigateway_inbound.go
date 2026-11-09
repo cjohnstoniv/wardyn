@@ -394,7 +394,7 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
 // all four; one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running; and one
 // that may, on a run whose data_out rule is review or blocked, is 403 data_out_blocked (refuseAppDataOut's
-// answer, with its run.data_out.deny row) for any app but the desktop. Each
+// answer) for any app but the desktop, its writer adding a run.data_out.deny row. Each
 // refusal returns the writer of its inbound.deny row, for the caller to run (a stream runs it after its
 // close); nil for no row. A run or policy that cannot be read is 503 run_unreadable and no row: no verdict on
 // the caller (readmitInbound keeps a stream on it). ok=false when it has answered.
@@ -427,12 +427,20 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDataOutUnreadable, dataOutUnreadableMsg)
 		return uiSession{}, nil, false
 	case inboundDenyDataOut:
-		actorType := types.ActorHuman
-		if isServicePrincipal(v.Principal) {
-			actorType = serviceActorType
-		}
-		s.auditDataOutDenied(r.Context(), runID, actorType, v.Principal, "app", rule)
 		writeErrorReason(w, http.StatusForbidden, reasonDataOutBlocked, dataOutAppsMsg)
+		// Both rows are the writer's, within auth.fail's bound: a refused session is never cached, so a token's
+		// holder could otherwise write a run.data_out.deny row for every request.
+		inbound := refused(v.Principal, v.ID, deny)
+		return uiSession{}, func(ctx context.Context) {
+			if s.authFailedAllowed() {
+				actorType := types.ActorHuman
+				if isServicePrincipal(v.Principal) {
+					actorType = serviceActorType
+				}
+				s.auditDataOutDenied(ctx, runID, actorType, v.Principal, "app", rule)
+			}
+			inbound(ctx)
+		}, false
 	default:
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
 	}

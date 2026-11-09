@@ -1295,6 +1295,9 @@ func TestUIGateway_InboundTokenObeysDataOut(t *testing.T) {
 			if len(rows) != 1 || rows[0].Actor != h.owner || !strings.Contains(string(rows[0].Data), `"path":"app"`) || !strings.Contains(string(rows[0].Data), `"rule":"`+string(rule)+`"`) {
 				t.Errorf("run.data_out.deny rows = %+v, want one by %s for the app under %s", rows, h.owner, rule)
 			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyDataOut) {
+				t.Errorf("inbound.deny rows = %+v, want one data_out by %s", rows, h.owner)
+			}
 			if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != 0 {
 				t.Errorf("inbound.allow rows = %+v, want none", rows)
 			}
