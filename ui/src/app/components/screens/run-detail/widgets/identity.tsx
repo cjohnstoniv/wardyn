@@ -54,16 +54,16 @@ export function IdentityWidget({
   const macOSTerminalRecorded = isMacOSVM(run) && run.not_recorded === "runner_declined" && run.recording_level !== "off";
   const vmKind = isMacOSVM(run) ? RUN_VM_PAGE.machineMacOS : RUN_VM_PAGE.machineLinux;
   const machine = isMacOSVM(run) && run.vm_machine?.macos_base ? RUN_VM_PAGE.machineWithBase(vmKind, run.vm_machine.macos_base) : vmKind;
-  // The executor the run was placed on (a remote-hosted runner's id is "docker" or "k8s"), else the deployment's own.
-  const executor = run.remote_runner_id === "docker" || run.remote_runner_id === "k8s" ? run.remote_runner_id : run.runner_target;
+  // The substrate the run was placed on (a remote-hosted runner's id is "docker" or "k8s"), else the deployment's own.
+  const placedOn = run.remote_runner_id === "docker" || run.remote_runner_id === "k8s" ? run.remote_runner_id : run.runner_target;
   const runsOn = local
     ? principal && run.created_by === principal
       ? RUN_PLACEMENT.MINE(runnerLabel(run))
       : RUN_PLACEMENT.OTHERS(runnerLabel(run), run.created_by)
     : run.placement === "remote"
-      ? executor === "docker"
+      ? placedOn === "docker"
         ? RUN_PLACEMENT.DOCKER_HOST
-        : executor === "k8s"
+        : placedOn === "k8s"
           ? RUN_PLACEMENT.KUBERNETES
           : RUN_PLACEMENT.REMOTE
       : null;
