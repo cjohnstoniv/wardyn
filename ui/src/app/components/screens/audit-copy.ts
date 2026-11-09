@@ -75,7 +75,7 @@ export const AUDIT = {
   // A unit admin (not a security admin): the Audit page lists the rows of the runs in their units, and the
   // changes made to those units. The note names the units `/me` serves, as served.
   UNIT_DESCRIPTION:
-    "Append-only. Every egress decision, brokered credential, approval and enforcement action, across the runs in your units.",
+    "Append-only. Recorded egress decisions, brokered credentials, approvals and enforcement actions, across the runs in your units.",
   UNIT_NOTE_TITLE: "Runs in your units",
   unitNoteBody: (names: string[]): string => piecesText(unitNotePieces(names)),
   UNIT_EMPTY_TITLE: "No runs in your units yet.",
@@ -116,7 +116,7 @@ export function unitNotePieces(names: string[]): CopyPiece[] {
 
 export function unitEmptyPieces(unit: string): CopyPiece[] {
   return [
-    "Every egress decision, brokered credential, approval and enforcement action of a run in ",
+    "Recorded egress decisions, brokered credentials, approvals and enforcement actions of a run in ",
     { mono: unit },
     " or below it appears here once that run starts.",
   ];

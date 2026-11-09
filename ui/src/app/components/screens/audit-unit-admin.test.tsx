@@ -50,9 +50,9 @@ function ev(partial: Partial<AuditEvent> & { id: string }): AuditEvent {
 // a unit admin (not a security admin) reads the rows of the runs in their units.
 describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
   const DESCRIPTION =
-    "Append-only. Every egress decision, brokered credential, approval and enforcement action, across the runs in your units.";
+    "Append-only. Recorded egress decisions, brokered credentials, approvals and enforcement actions, across the runs in your units.";
   const TODAY =
-    "Append-only. Every egress decision, brokered credential, approval and enforcement action, across every run.";
+    "Append-only. Recorded egress decisions, brokered credentials, approvals and enforcement actions, across the runs you can see.";
   const unitsOf = (...names: string[]) => ({
     unit_admin_of: names.map((n, i) => ({ unit_id: `u${i + 1}`, unit_name: n })),
   });
@@ -100,7 +100,7 @@ describe("a unit admin's Audit page", { timeout: 15_000 }, () => {
 
     expect(await screen.findByText("No runs in your units yet.")).toBeInTheDocument();
     expect(
-      screen.getByText(/Every egress decision, brokered credential, approval and enforcement action of a run in/),
+      screen.getByText(/Recorded egress decisions, brokered credentials, approvals and enforcement actions of a run in/),
     ).toHaveTextContent(/of a run in payments or below it appears here once that run starts\.$/);
     expect(screen.getByRole("button", { name: "Open Runs" })).toBeInTheDocument();
     expect(screen.queryByText(/admin-only/i)).not.toBeInTheDocument();
