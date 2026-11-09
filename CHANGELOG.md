@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.17] — 2026-11-09
+
 ### Before you upgrade
 
 - Walls that name a port other than 80 or 443 of a host the walls above them name bare no longer reach that host, on any runner. Before upgrading, name that host with that port in the walls above.
