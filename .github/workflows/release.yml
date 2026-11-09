@@ -601,7 +601,7 @@ jobs:
           SYFT_VERSION: v1.46.0
           SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 -o "${RUNNER_TEMP}/syft.tar.gz" \
+          curl -sSfL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 -o "${RUNNER_TEMP}/syft.tar.gz" \
             "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
           echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
           sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
@@ -781,7 +781,7 @@ jobs:
           SYFT_VERSION: v1.46.0
           SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 -o "${RUNNER_TEMP}/syft.tar.gz" \
+          curl -sSfL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 -o "${RUNNER_TEMP}/syft.tar.gz" \
             "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
           echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
           sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
@@ -938,7 +938,7 @@ jobs:
           SYFT_VERSION: v1.46.0
           SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 -o "${RUNNER_TEMP}/syft.tar.gz" \
+          curl -sSfL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 -o "${RUNNER_TEMP}/syft.tar.gz" \
             "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
           echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
           sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft

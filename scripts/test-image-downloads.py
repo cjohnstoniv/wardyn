@@ -48,7 +48,7 @@ class ImageDownloads(unittest.TestCase):
             "lowercase_tab": f"run\tset -e; {DOWNLOAD}; {VERIFY}",
             "long_output": f"RUN curl --fail --location https://example.invalid/a --output /tmp/a.tgz && {VERIFY}",
             "equals_output": f"RUN curl --output=/tmp/a.tgz https://example.invalid/a && {VERIFY}",
-            "retry_options": f"RUN curl -fsSL --retry 8 --retry-all-errors --retry-max-time 180 --retry-delay 5 --connect-timeout 20 https://example.invalid/a -o /tmp/a.tgz && {VERIFY}",
+            "retry_options": f"RUN curl -fsSL --retry 20 --retry-all-errors --retry-max-time 300 --retry-delay 10 --connect-timeout 20 https://example.invalid/a -o /tmp/a.tgz && {VERIFY}",
             "joined_output": f"RUN curl -o/tmp/a.tgz https://example.invalid/a && {VERIFY}",
             "bundled_output": f"RUN curl -fsSLo /tmp/a.tgz https://example.invalid/a && {VERIFY}",
             "remote": f'RUN curl -fSLO https://example.invalid/a.tgz && echo "{HASH}  a.tgz" | sha256sum -c - && tar -xzf a.tgz',
