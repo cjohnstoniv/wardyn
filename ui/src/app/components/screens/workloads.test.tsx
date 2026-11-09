@@ -6,11 +6,12 @@
 // The Workloads screen and its drawer (mock r16 T3-a). The strings are written out, not read from the copy
 // module, so a drift in it fails this suite.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { Workload } from "../../lib/types/workloads";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { STALE_NOTE, STATES } from "../wardyn/states";
 import { WorkloadsScreen } from "./workloads";
 
 const listMock = vi.fn();
@@ -106,12 +107,52 @@ describe("Workloads list", () => {
     expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("a failed read shows the error with a retry", async () => {
-    listMock.mockRejectedValueOnce(new Error("boom"));
+  it("a failed first read shows a sentence, not the raw error, with a retry", async () => {
+    listMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     renderScreen();
-    expect(await screen.findByText("boom")).toBeInTheDocument();
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
+    expect(screen.queryByText("Failed to fetch")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("table")).toBeInTheDocument();
+  });
+
+  it("a failed refresh keeps the rows and says they may be old, and the next good read clears it", async () => {
+    vi.useFakeTimers();
+    try {
+      renderScreen();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getAllByTestId("workload-row")).toHaveLength(6);
+      listMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(screen.getByRole("status")).toHaveTextContent(STALE_NOTE);
+      expect(screen.getAllByTestId("workload-row")).toHaveLength(6);
+      expect(screen.queryByText("Failed to fetch")).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not stack reads while the previous one is still out", async () => {
+    vi.useFakeTimers();
+    try {
+      listMock.mockReturnValue(new Promise(() => {}));
+      renderScreen();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(46_000);
+      });
+      // The mount read is not tracked by the poll's guard, so the first tick reads once; the ticks after it are dropped.
+      expect(listMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("links a run to its page in the view's own path", async () => {
