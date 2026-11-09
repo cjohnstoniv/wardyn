@@ -172,7 +172,7 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
 - What happens: the run's model provider (`--model-provider anthropic`) supplies your own credential for `api.anthropic.com`, not a policy grant;
   - the proxy resolves the key **at startup, into proxy memory only** (the sandbox never sees it — check: `docker exec
     wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel `wardyn-proxy-injected`, never your key);
-  - Claude Code talks to `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the proxy injects `x-api-key` and records its model calls as `brokered:llm` decisions in the audit trail. A "Decisions dropped" row in the Audit page counts any the proxy had to drop
+  - Claude Code talks to `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the proxy injects `x-api-key` and records its model calls as `brokered:llm` decisions in the audit trail. A "Decisions dropped" row in the Audit page reports decisions the proxy had to drop, but no such row does not prove none were lost
   - (an admin can re-point that brokered dial at an internal gateway through the provider's base URL under Settings → Model providers, with no sandbox-visible change at all).
 - Watch the session live via Attach (`wardyn attach
 <id>`, or the console's Live terminal) — the **Recording** tab plays back the captured cast only after the fact, it has no live view.
