@@ -467,6 +467,8 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 	case fate == relostUnwritten:
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
 			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it", err))
+	case fate == relostUnknown && unconfirmed:
+		msg = "the revive failed and this revive's lost mark did not land, so the run is being lost or ended by another operation; stopping its proxy is not confirmed yet, and a later sweep settles it"
 	case fate == relostUnknown:
 		msg = "the revive failed and this revive's lost mark did not land, so the run is being lost or ended by another operation; a later sweep settles it"
 	case fate == relostEnded:
@@ -873,6 +875,9 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate relose
 			}
 			return relostUnwritten, nil
 		case loseApplied:
+			if errors.Is(err, runner.ErrEndUnsupported) {
+				return relostEnded, nil // the mark landed, but its substrate cannot keep a sandbox: loseRunStopped tore it down
+			}
 			return relostLost, err
 		case loseNotApplied:
 			return relostUnknown, errors.New("the run's lost mark did not land, so this revive did not stop its proxy")
@@ -883,18 +888,6 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate relose
 	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "its proxy could not be replaced at revive")
 	return relostEnded, nil
 }
-
-// reloseFate is what reloseRun persisted for a run: nothing (no reloseRun ran), lost again (the mark written), the mark
-// not written (unresolved), the mark not applied (another writer moved the run first), or the run ended as unkeepable.
-type reloseFate int
-
-const (
-	relostNone reloseFate = iota
-	relostLost
-	relostUnwritten
-	relostUnknown
-	relostEnded
-)
 
 // adminRestartRequest is POST /api/v1/admin/runs/restart's body.
 type adminRestartRequest struct {

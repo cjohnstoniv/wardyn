@@ -756,8 +756,9 @@ func (r *failSandboxStopRunner) StopSandbox(context.Context, string) error {
 }
 
 // failedAfterClaim makes the fixture's run live, with a store and runner that persist fate when a revive fails after
-// its claim: lost (the mark written), unknown (the mark not applied), or ended (a headless run on a remote runner,
-// which the mark cannot keep, finalized; "ended, stop fails" also fails its sandbox stops).
+// its claim: lost (the mark written), unknown (the mark not applied), ended (a headless run on a remote runner,
+// which the mark cannot keep, finalized; "ended, stop fails" also fails its sandbox stops), or torn down (the mark
+// written on a substrate that cannot keep a sandbox, so the run is torn down).
 func (f *readbackFixture) failedAfterClaim(fate string) {
 	fs := &failMarkStore{readbackStore: f.rb}
 	f.srv.cfg.Store = fs
@@ -767,6 +768,8 @@ func (f *readbackFixture) failedAfterClaim(fate string) {
 	switch fate {
 	case "unknown":
 		fs.notApplied.Store(true)
+	case "torn down":
+		f.setProxyStopErr(runner.ErrEndUnsupported)
 	case "ended, stop fails":
 		f.srv.cfg.Runner = &failSandboxStopRunner{hashedReviveRunner: f.hr}
 		fallthrough
@@ -785,12 +788,14 @@ func TestRestart_FailureAfterTheClaimAnswersThePersistedFate(t *testing.T) {
 			fate         string
 			lostAgain    bool
 			say          string
-			notConfirmed bool // the readback's stop did not land
+			notConfirmed bool // the stop did not land
+			ended        bool
 		}{
-			{"lost", true, "lost until revived", false},
-			{"unknown", false, "being lost or ended by another operation", true},
-			{"ended", false, "being ended", false},
-			{"ended, stop fails", false, "being ended", true},
+			{"lost", true, "lost until revived", false, false},
+			{"unknown", false, "being lost or ended by another operation", true, false},
+			{"ended", false, "being ended", false, true},
+			{"ended, stop fails", false, "being ended", true, true},
+			{"torn down", false, "being ended", true, true}, // the readback's retry still asks a substrate that cannot stop a proxy
 		} {
 			f := newReadbackFixture(t)
 			f.failedAfterClaim(c.fate)
@@ -805,14 +810,15 @@ func TestRestart_FailureAfterTheClaimAnswersThePersistedFate(t *testing.T) {
 				(c.say != "lost until revived" && strings.Contains(res.Error, "lost until revived")) {
 				t.Errorf("readback=%v %s: %+v, want %s, lost_again %v, saying %q", readback, c.fate, res, want, c.lostAgain, c.say)
 			}
-			if readback && strings.Contains(res.Error, "not confirmed") != c.notConfirmed {
-				t.Errorf("readback %s: %q, want the stop named not confirmed only when it did not land", c.fate, res.Error)
+			// A failed replace never runs the readback's sandbox stop, so only its unknown fate's proxy stop is unconfirmed.
+			if notConfirmed := c.notConfirmed && (readback || c.fate == "unknown"); strings.Contains(res.Error, "not confirmed") != notConfirmed {
+				t.Errorf("readback=%v %s: %q, want the stop named not confirmed only when it did not land", readback, c.fate, res.Error)
 			}
 			ev := f.audit.eventsFor(f.run.ID, "run.revive")
 			if len(ev) != 1 || leaseAuditData(t, ev[0])["lost_again"] != c.lostAgain {
 				t.Errorf("readback=%v %s: run.revive rows %+v, want one with lost_again %v", readback, c.fate, ev, c.lostAgain)
 			}
-			if ended := isTerminalRunState(f.st.State()); ended != strings.HasPrefix(c.fate, "ended") {
+			if ended := isTerminalRunState(f.st.State()); ended != c.ended {
 				t.Errorf("readback=%v %s: state %s, want terminal only for an ended fate", readback, c.fate, f.st.State())
 			}
 		}
