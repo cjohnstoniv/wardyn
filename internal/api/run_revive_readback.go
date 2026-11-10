@@ -107,7 +107,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	fate := ""
 	if rerr.reason == reasonRevivePolicyUnconfirmedLost {
 		fate = s.storedRunFate(ctx, run.ID)
-		rerr.msg += fate
+		rerr.msg += fate + unconfirmedImageCause
 	}
 	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) || errors.Is(c.Err, errRunEndUnwritten) {
 		return rerr
@@ -120,7 +120,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	switch rerr.reason {
 	case reasonRevivePolicyUnconfirmedLost:
 		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy"+fate+"; "+
-			"stopping that proxy is not confirmed yet"+retry, errors.New(why))
+			"stopping that proxy is not confirmed yet"+retry+unconfirmedImageCause, errors.New(why))
 	case reasonReviveRecoveryUnresolved:
 		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, "+
 			"but stopping its proxy is not confirmed yet"+retry, errors.New(why))

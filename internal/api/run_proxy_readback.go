@@ -45,7 +45,7 @@ const readbackRelease = "0.10.0-rc.18"
 var readbackReleaseRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
 
 // releaseBefore reports whether v parses as a release older than readbackRelease. Anything that does
-// not parse (empty, a development build, a digest) is not evidence, and reads as not older. A build from
+// not parse (empty, a development tag, a digest) is not evidence, and reads as not older. A build from
 // a checkout reports its release with a "+<commit>[-dirty]" suffix (internal/version), which is dropped
 // first: such a build at an older release has no hash to report, so it reads as that release.
 func releaseBefore(v string) bool {
@@ -499,11 +499,12 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (ha
 }
 
 // unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy and was
-// stopped; unconfirmedStopPendingHint the same while that stop is not confirmed. Both name the likely
-// cause: a proxy image pin older than the server that the server cannot read a release from (a
-// digest, no tag, :latest) is read as current, and that proxy never reports.
+// stopped; unconfirmedStopPendingHint the same while that stop is not confirmed. Both name one possible
+// cause, not the cause (the audit row's reason says which check failed): a proxy image from before the
+// readback, read as current because its reference names no release (digest only, no tag, :latest), or
+// pinned on a runner whose own version decides, never reports.
 const (
-	unconfirmedImageCause      = ". A proxy image older than this server, pinned by digest, untagged or :latest, never confirms: move the proxy image pin (WARDYN_PROXY_IMAGE, or a runner's --proxy-image) with the server"
+	unconfirmedImageCause      = ". One possible cause: a proxy image from before 0.10.0-rc.18, which never confirms; check WARDYN_PROXY_IMAGE, or a runner's --proxy-image, when upgrading the server"
 	unconfirmedPolicyHint      = "The run's proxy did not confirm the policy it loaded, so it was stopped" + unconfirmedImageCause
 	unconfirmedStopPendingHint = "The run's proxy did not confirm the policy it loaded; stopping it is not confirmed yet and is retried" + unconfirmedImageCause
 )

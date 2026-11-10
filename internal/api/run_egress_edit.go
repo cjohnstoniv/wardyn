@@ -260,7 +260,8 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 // (storedRunFate): a confirmed stop is not a recorded end or lost mark. An unresolved containment that
 // recorded neither says what will happen once its stop is done: a run that can be kept is lost until
 // revived, and one that cannot (a headless run off the person's own machine) is ended
-// (lostRunKeepable, the predicate the stop itself follows).
+// (lostRunKeepable, the predicate the stop itself follows). An unconfirmed edit's answer then names
+// the likely cause (unconfirmedImageCause), as a run's failure hint does.
 func (s *Server) withRunFate(ctx context.Context, run types.AgentRun, rerr *reviveError) *reviveError {
 	if rerr == nil || (rerr.reason != reasonEgressEditUnconfirmed && rerr.reason != reasonEgressEditContainmentUnresolved) {
 		return rerr
@@ -274,6 +275,9 @@ func (s *Server) withRunFate(ctx context.Context, run types.AgentRun, rerr *revi
 		out.msg += "; once that is done, the run will be lost until revived"
 	default:
 		out.msg += "; once that is done, the run will be ended, since a headless run off your own machine cannot be kept"
+	}
+	if rerr.reason == reasonEgressEditUnconfirmed {
+		out.msg += unconfirmedImageCause
 	}
 	return &out
 }
