@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { LaggingRouter } from "../../../test/lagging-router";
@@ -117,9 +117,11 @@ describe("WorkspacesScreen — list columns", () => {
     );
     await screen.findByText("payments");
     const box = screen.getByPlaceholderText("Search by name or source…");
-    const user = userEvent.setup({ delay: null });
-    await user.type(box, "abc");
-    expect(box).toHaveValue("abc");
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
     await new Promise((r) => setTimeout(r, 80));
     expect(box).toHaveValue("abc");
   });

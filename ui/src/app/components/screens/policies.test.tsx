@@ -160,9 +160,11 @@ describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () 
     );
     await screen.findByText("one");
     const box = screen.getByPlaceholderText(/search policies/i);
-    const user = userEvent.setup({ delay: null });
-    await user.type(box, "abc");
-    expect(box).toHaveValue("abc");
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
     await new Promise((r) => setTimeout(r, 80));
     expect(box).toHaveValue("abc");
   });
