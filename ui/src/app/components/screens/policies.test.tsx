@@ -146,6 +146,13 @@ describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () 
     await userEvent.type(screen.getByPlaceholderText(/search policies/i), "one");
     await waitFor(() => expect(screen.getByText("1 of 2 policies")).toBeInTheDocument());
   });
+
+  it("names the search box, not only by its placeholder", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ id: "a", name: "one" })]);
+    render(<PoliciesScreen />);
+    await screen.findByText("one");
+    expect(screen.getByRole("textbox", { name: "Search policies" })).toBeInTheDocument();
+  });
 });
 
 describe("PoliciesScreen — required fields + error announcement (ui-secretsPolicies-2/3)", () => {

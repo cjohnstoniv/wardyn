@@ -104,6 +104,13 @@ describe("WorkspacesScreen — list columns", () => {
     expect(screen.getByRole("button", { name: `Workspace actions: ${name}` })).toBeInTheDocument();
   });
 
+  it("names the search box, not only by its placeholder", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments" })]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.getByRole("textbox", { name: "Search workspaces" })).toBeInTheDocument();
+  });
+
   it("each row's actions menu is named after the workspace", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments" }), ws({}, { id: "ws-2", name: "billing" })]);
     renderScreen();

@@ -181,6 +181,7 @@ export function PoliciesScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search policies by name or id…"
+            aria-label="Search policies"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="max-w-sm"
