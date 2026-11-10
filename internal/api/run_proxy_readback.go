@@ -249,7 +249,7 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, runID uuid.UUID) {
 }
 
 // unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy.
-const unconfirmedPolicyHint = "the run's proxy did not confirm the policy it loaded, so it was stopped"
+const unconfirmedPolicyHint = "The run's proxy did not confirm the policy it loaded, so it was stopped"
 
 func (s *Server) auditReadback(ctx context.Context, runID uuid.UUID, action, outcome string, gen int, data map[string]any) {
 	data["generation"] = gen
