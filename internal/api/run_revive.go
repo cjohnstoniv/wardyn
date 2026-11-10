@@ -354,7 +354,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
 	// return above this point leaves the old proxy running unrevoked.
 	if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil {
-		return reviveResult{}, rerr
+		return reviveResult{generation: gen}, rerr // the start an edit waits on for its containment
 	}
 	// The stored config becomes the one now running: best-effort for a revive, fail closed for an edit.
 	if rerr := s.storeRevivedConfig(ctx, run, storedJSON, data, actorType, actor, edits); rerr != nil {

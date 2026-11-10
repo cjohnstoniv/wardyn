@@ -482,11 +482,34 @@ func TestEgressEdit_SupersededStartStopsNothing(t *testing.T) {
 	}
 	gen := f.active(t).Generation
 	stops := f.lr.proxyStopCount()
-	rerr := f.srv.awaitEgressEditReadback(context.Background(), f.run.ID, gen-1)
+	rerr := f.srv.awaitEgressEditReadback(context.Background(), f.run.ID, gen+1) // any start other than the active one
 	if rerr == nil || rerr.reason != reasonEgressEditUnconfirmed || strings.Contains(rerr.msg, "was stopped") {
 		t.Fatalf("superseded start: %+v, want egress_edit_unconfirmed that does not claim a stop", rerr)
 	}
 	if f.lr.proxyStopCount() != stops {
 		t.Error("a superseded edit start must not stop the run's newer proxy")
+	}
+}
+
+// A new proxy that reports other bytes while its driver answers fails the revive itself: the edit
+// answers stopped only once that start is contained, and unresolved while its stop does not land.
+func TestEgressEdit_RevivesOwnFailedStartAnswersByItsContainment(t *testing.T) {
+	for _, stopErr := range []error{nil, errors.New("the runner did not answer the stop")} {
+		f := newEgressEditFixture(t)
+		f.rr.onReplace = func(cfg []byte) { // once the proxy is replaced: its stop is the containment's
+			f.setProxyStopErr(stopErr)
+			postLoaded(t, f.srv, f.run.ID, f.tokenJTI(t, cfg), hashHex([]byte("other bytes")))
+		}
+		w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+		want := reasonEgressEditUnconfirmed
+		if stopErr != nil {
+			want = reasonEgressEditContainmentUnresolved
+		}
+		if w.Code != http.StatusServiceUnavailable || errorReason(w) != want {
+			t.Fatalf("stop error %v: %d %s, want 503 %s", stopErr, w.Code, w.Body.String(), want)
+		}
+		if stopErr != nil && strings.Contains(w.Body.String(), "was stopped") {
+			t.Errorf("an unresolved stop must not be answered as stopped: %s", w.Body.String())
+		}
 	}
 }

@@ -228,8 +228,8 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	defer s.reviving.Delete(egressEditMark(run.ID))
 	res, rerr := s.reviveFromRequest(r, run, false, edit)
 	switch {
-	case rerr != nil && rerr.reason == reasonRevivePolicyUnconfirmedLost:
-		return egressEditResult{}, s.editReviveUnconfirmed(context.WithoutCancel(r.Context()), run.ID)
+	case rerr != nil && rerr.reason == reasonRevivePolicyUnconfirmedLost: // the revive failed its own start: stopped once contained
+		return egressEditResult{}, s.containEditStart(r.Context(), run.ID, res.generation)
 	case rerr != nil:
 		return egressEditResult{}, egressEditRefusal(rerr)
 	}
@@ -310,6 +310,9 @@ func stopCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 
 // containEditStart answers a failed start gen once containProxyStart has confirmed its proxy stopped.
 func (s *Server) containEditStart(ctx context.Context, runID uuid.UUID, gen int) *reviveError {
+	if gen < 1 { // egressEditSupported refuses a deployment with no starts before any change
+		return egressEditUnresolved("start_failed", errors.New("no proxy start to contain"))
+	}
 	ctx, cancel := stopCtx(ctx)
 	defer cancel()
 	switch c := s.containProxyStart(ctx, runID, gen); {
@@ -407,22 +410,6 @@ func egressEditUnresolved(why string, err error) *reviveError {
 		msg += ": " + err.Error()
 	}
 	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditContainmentUnresolved, lost: true, msg: msg}
-}
-
-// editReviveUnconfirmed answers an edit whose revive put the run back to lost because its new proxy
-// could not run (settleRevivedProxy). That stop is claimed only when the run's active start is failed
-// and its containment recorded; anything else is unresolved.
-func (s *Server) editReviveUnconfirmed(ctx context.Context, runID uuid.UUID) *reviveError {
-	const why = "readback failed"
-	st, ok := s.cfg.Store.(store.RunProxyStarts)
-	if !ok {
-		return egressEditUnresolved(why, nil)
-	}
-	p, found, err := st.ActiveProxyStart(ctx, runID)
-	if err == nil && found && p.State == types.ProxyStartFailed && p.ContainedAt != nil {
-		return egressEditUnconfirmed(why)
-	}
-	return egressEditUnresolved(why, err)
 }
 
 // egressEditRefusal is a revive refusal as an edit answers it: a new proxy that did not confirm its
