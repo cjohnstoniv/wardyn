@@ -1627,7 +1627,7 @@ func TestMacWindowEndsWithItsCredential(t *testing.T) {
 	})
 	t.Run("the request's CLI session wins over its access token", func(t *testing.T) {
 		tok, sess := uuid.New(), uuid.New()
-		ctx := withCLISessionID(withAPITokenID(context.Background(), tok), sess)
+		ctx := withTokenKind(withCLISessionID(withAPITokenID(context.Background(), tok), sess), types.APITokenKindCLIAccess)
 		if a := macWindowAuthorityFrom(ctx, types.ActorHuman, "alice", time.Now()); !a.Token || a.CLISessionID != sess || a.TokenID != uuid.Nil {
 			t.Fatalf("authority = %+v, want bound to session %s alone", a, sess)
 		}
