@@ -16,18 +16,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// keptFolderStore is readbackStore with a computer folder's pass record, read as rec or failing with err.
-type keptFolderStore struct {
+// readbackFolderStore is readbackStore with a computer folder's pass record, read as rec or failing with err.
+type readbackFolderStore struct {
 	*readbackStore
 	rec types.RunLocalFolderStatus
 	err error
 }
 
-func (s *keptFolderStore) RunLocalFolderStatus(context.Context, uuid.UUID) (types.RunLocalFolderStatus, error) {
+func (s *readbackFolderStore) RunLocalFolderStatus(context.Context, uuid.UUID) (types.RunLocalFolderStatus, error) {
 	return s.rec, s.err
 }
 
-func (s *keptFolderStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
+func (s *readbackFolderStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
 	return false, errors.New("this store records no pass")
 }
 
@@ -46,7 +46,7 @@ func endedWithFailedStart(t *testing.T, rec types.RunLocalFolderStatus, err erro
 	if ref == "" {
 		t.Fatal("the run has no sandbox ref")
 	}
-	f.srv.cfg.Store = &keptFolderStore{readbackStore: f.rb, rec: rec, err: err}
+	f.srv.cfg.Store = &readbackFolderStore{readbackStore: f.rb, rec: rec, err: err}
 	return f, gen, ref
 }
 
@@ -65,13 +65,13 @@ func assertSandboxKept(t *testing.T, f *readbackFixture, ref string, proxyStops,
 	}
 }
 
-var keptResume = types.RunLocalFolderStatus{Resume: &types.FolderResume{Unsynced: 2}}
+var readbackKeptResume = types.RunLocalFolderStatus{Resume: &types.FolderResume{Unsynced: 2}}
 
 // An ended run whose sandbox is kept for its computer folder's copy back has only its failed
 // start's proxy stopped; the sandbox and its ref stay, and the start is contained once that stop
 // is confirmed.
 func TestReadbackContainment_AKeptFolderSandboxHasOnlyItsProxyStopped(t *testing.T) {
-	f, gen, ref := endedWithFailedStart(t, keptResume, nil)
+	f, gen, ref := endedWithFailedStart(t, readbackKeptResume, nil)
 	f.setProxyStopErr(nil)
 	proxyStops, sandboxStops := f.lr.proxyStopCount(), f.lr.stopCount()
 	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Contained || c.Err != nil {
@@ -124,7 +124,7 @@ func TestReadbackContainment_AnEndedRunNotKeptForItsFolderHasItsSandboxStopped(t
 // and audited, with nothing claimed stopped and the sandbox not stopped in its place; the retry
 // that stops it resolves it.
 func TestReadbackContainment_AKeptFolderSandboxsFailedProxyStopStaysUnresolved(t *testing.T) {
-	f, gen, ref := endedWithFailedStart(t, keptResume, nil)
+	f, gen, ref := endedWithFailedStart(t, readbackKeptResume, nil)
 	proxyStops, sandboxStops := f.lr.proxyStopCount(), f.lr.stopCount()
 	rows := len(f.audit.eventsFor(f.run.ID, "run.reconcile"))
 	c := f.srv.containProxyStart(context.Background(), f.run.ID, gen)
