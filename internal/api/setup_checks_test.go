@@ -346,24 +346,34 @@ func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
 	}
 }
 
-// TestK8sEgressContainmentCheck_RecheckFailedNamesItsCheckTime: the failed
-// re-check row says when the check behind it ran and never claims the operator
-// set WARDYN_K8S_ALLOW_UNENFORCED_NETPOL.
-func TestK8sEgressContainmentCheck_RecheckFailedNamesItsCheckTime(t *testing.T) {
-	at := time.Now().UTC().Truncate(time.Second)
-	chk, ok := k8sEgressContainmentCheck("k8s", "refused", false, at)
-	if !ok || chk.Status != "fail" {
-		t.Fatalf("ok %v status %q, want a fail row", ok, chk.Status)
-	}
-	if !strings.Contains(chk.Detail, at.Format(time.RFC3339)) {
-		t.Errorf("Detail %q does not name the check time %s", chk.Detail, at.Format(time.RFC3339))
-	}
-	if strings.Contains(chk.Detail+chk.Fix, "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") {
-		t.Errorf("row names the override the operator did not set: %q / %q", chk.Detail, chk.Fix)
-	}
-	unenforced, _ := k8sEgressContainmentCheck("k8s", "unenforced", false, at)
-	if chk.Detail == unenforced.Detail {
-		t.Error("a failed re-check reads the same as the operator's override")
+// TestK8sEgressContainmentCheck_ReCheckedRows pins the rows a re-checking
+// substrate gets, byte for byte, with {time} the check that produced the
+// verdict as "2006-01-02 15:04 UTC". None says "boot-time", and the refusing
+// rows never name the override the operator did not set.
+func TestK8sEgressContainmentCheck_ReCheckedRows(t *testing.T) {
+	at := time.Now().UTC().Truncate(time.Minute)
+	when := at.Format("2006-01-02 15:04") + " UTC"
+	for _, tc := range []struct {
+		verdict, status, detail, fix string
+	}{
+		{"enforced", "ok", "Enforcing · NetworkPolicy. A canary pod showed that a deny-all policy blocks egress. Last confirmed " + when + "; checked again every 10 minutes.", ""},
+		{"refused", "fail", "Not enforcing. The check at " + when + " showed that this cluster no longer blocks egress with a deny-all NetworkPolicy, so new sandboxes are refused. Runs already going keep going.",
+			"Restore NetworkPolicy enforcement in the cluster's CNI. Wardyn checks again every 10 minutes, and a restart checks at once."},
+		{"unenforced", "fail", "Not enforcing. The check at " + when + " showed that this cluster does not block egress with a deny-all NetworkPolicy. The operator accepted that risk with WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL), so new sandboxes are still created with egress unconfined. Agent-sandbox runs are refused.",
+			"Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's CNI/NetworkPolicy support to restore real confinement."},
+		{"not_proven", "fail", "Not proven. The last 3 checks could not run, so Wardyn can't confirm that this cluster blocks egress with a deny-all NetworkPolicy. New sandboxes are refused until a check passes.",
+			"Check that the cluster's API answers and that Wardyn can create pods and NetworkPolicies in the runs namespace. Wardyn checks again every 10 minutes."},
+	} {
+		chk, ok := k8sEgressContainmentCheck("k8s", tc.verdict, false, at)
+		if !ok || chk.Status != tc.status || chk.Detail != tc.detail || chk.Fix != tc.fix {
+			t.Errorf("%s: got %q / %q / %q, want %q / %q / %q", tc.verdict, chk.Status, chk.Detail, chk.Fix, tc.status, tc.detail, tc.fix)
+		}
+		if strings.Contains(chk.Detail, "boot-time") || strings.Contains(chk.Detail, "—") {
+			t.Errorf("%s: %q says boot-time or holds an em dash", tc.verdict, chk.Detail)
+		}
+		if tc.verdict != "unenforced" && strings.Contains(chk.Detail+chk.Fix, "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") {
+			t.Errorf("%s: names the override the operator did not set", tc.verdict)
+		}
 	}
 }
 

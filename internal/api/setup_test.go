@@ -310,8 +310,8 @@ func TestSetupStatus_K8sEgressContainmentCheck_RecheckFailed(t *testing.T) {
 		if c.ID != "k8s_egress_containment" {
 			continue
 		}
-		if c.Status != "fail" || !strings.Contains(c.Detail, at.Format(time.RFC3339)) {
-			t.Errorf("row %+v, want fail naming %s", c, at.Format(time.RFC3339))
+		if when := at.Format("2006-01-02 15:04") + " UTC"; c.Status != "fail" || !strings.Contains(c.Detail, "The check at "+when+" showed") {
+			t.Errorf("row %+v, want fail naming %s", c, when)
 		}
 		return
 	}

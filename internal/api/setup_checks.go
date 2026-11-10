@@ -239,27 +239,50 @@ func formatStartDeadline(seconds int) string {
 // substrate_health, since no upgrade changes a runner that did not answer.
 //
 // "refused" and "not_proven" are a later re-check of the canary that stopped
-// proving enforcement: FAIL, with checkedAt (the check that produced the
-// verdict), and never the "unenforced" row's claim that the operator set the
-// override.
+// proving enforcement: FAIL, and never the "unenforced" row's claim that the
+// operator set the override. checkedAt is the check that produced the verdict;
+// a substrate that reports none (it predates the re-check) keeps the boot-time
+// rows.
 func k8sEgressContainmentCheck(driver, netpolProven string, capsUnreadable bool, checkedAt time.Time) (SetupCheck, bool) {
 	if driver != "k8s" {
 		return SetupCheck{}, false
 	}
 	const id, label = "k8s_egress_containment", "Egress containment"
-	switch netpolProven {
-	case "refused", "not_proven":
-		when := ""
-		if !checkedAt.IsZero() {
-			when = " (last check " + checkedAt.UTC().Format(time.RFC3339) + ")"
-		}
+	at := checkedAt.UTC().Format("2006-01-02 15:04") + " UTC"
+	switch {
+	case netpolProven == "enforced" && !checkedAt.IsZero():
+		return SetupCheck{
+			ID: id, Label: label, Status: "ok",
+			Detail: "Enforcing · NetworkPolicy. A canary pod showed that a deny-all policy blocks egress. Last confirmed " + at +
+				"; checked again every 10 minutes.",
+		}, true
+	case netpolProven == "refused":
 		return SetupCheck{
 			ID: id, Label: label, Status: "fail",
-			Detail: "Not proven — a re-check of the egress canary" + when + " no longer shows a deny-all NetworkPolicy " +
-				"blocking egress. New sandboxes are refused; running ones keep running.",
-			Fix: "Check the cluster's CNI and its NetworkPolicy support. The canary re-runs every 10 minutes and new sandboxes " +
-				"start again once it proves enforcement; restarting the daemon checks at once.",
+			Detail: "Not enforcing. The check at " + at + " showed that this cluster no longer blocks egress with a deny-all " +
+				"NetworkPolicy, so new sandboxes are refused. Runs already going keep going.",
+			Fix: "Restore NetworkPolicy enforcement in the cluster's CNI. Wardyn checks again every 10 minutes, and a restart checks at once.",
 		}, true
+	case netpolProven == "unenforced" && !checkedAt.IsZero():
+		return SetupCheck{
+			ID: id, Label: label, Status: "fail",
+			Detail: "Not enforcing. The check at " + at + " showed that this cluster does not block egress with a deny-all " +
+				"NetworkPolicy. The operator accepted that risk with WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 (helm: " +
+				"env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL), so new sandboxes are still created with egress unconfined. " +
+				"Agent-sandbox runs are refused.",
+			Fix: "Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's " +
+				"CNI/NetworkPolicy support to restore real confinement.",
+		}, true
+	case netpolProven == "not_proven":
+		return SetupCheck{
+			ID: id, Label: label, Status: "fail",
+			Detail: "Not proven. The last 3 checks could not run, so Wardyn can't confirm that this cluster blocks egress with a " +
+				"deny-all NetworkPolicy. New sandboxes are refused until a check passes.",
+			Fix: "Check that the cluster's API answers and that Wardyn can create pods and NetworkPolicies in the runs namespace. " +
+				"Wardyn checks again every 10 minutes.",
+		}, true
+	}
+	switch netpolProven {
 	case "enforced":
 		return SetupCheck{
 			ID: id, Label: label, Status: "ok",
