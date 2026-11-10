@@ -68,7 +68,7 @@ const pushRulesDenyAll = "deny_all"
 
 var policyFieldOrder = []string{
 	fieldAllowed, fieldDenied, "allow_all_egress", "refuse_ip_literals", "first_use_approval", "first_use_hold_seconds", "max_holds",
-	fieldMethods, fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
+	fieldMethods, "host_rules", fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
 	"resources.cpu_millis", "resources.memory_mib", "resources.pids_limit", fieldDisk,
 	fieldToolRules, "git_push_any_branch", fieldADOCaps, fieldGHCaps,
 }
@@ -472,6 +472,9 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 	}
 	for _, g := range sp.EligibleGrants {
 		m[fieldGrants] = append(m[fieldGrants], grantKey(g))
+	}
+	for _, s := range sp.HostRules { // one entry per set: layers' sets apply side by side, never merged
+		m["host_rules"] = append(m["host_rules"], types.HostRuleSetKey(s))
 	}
 	for _, mnt := range sp.WorkspaceMounts {
 		m[fieldMounts] = append(m[fieldMounts], mnt.Target)

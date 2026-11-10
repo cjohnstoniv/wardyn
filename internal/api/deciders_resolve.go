@@ -73,8 +73,8 @@ func deciderSwitchName(unit uuid.UUID) string { return "unit deciders (" + unit.
 
 // deciderKindOf is the kind a rule names for ap. Seven of the nine kinds are run holds: egress_domain,
 // credential, push_content, a reviewed download (file_download), and the three tool_calls a person may decide, an
-// Azure DevOps escalation, one MCP call and one kubectl write (kube_call). image and elevation name requests that
-// are not run holds, so no approval maps to them and a rule for one of them governs no run hold. Any other row (a
+// Azure DevOps escalation, one MCP call and one kubectl write (kube_call); a host rule hold is an egress_domain
+// decision. image and elevation name requests that are not run holds, so no approval maps to them and a rule for one of them governs no run hold. Any other row (a
 // plain tool_call, credential_reauth, human_takeover) maps to none and is decided exactly as without deciders.
 func deciderKindOf(ap types.ApprovalRequest) string {
 	switch ap.Kind {
@@ -92,6 +92,9 @@ func deciderKindOf(ap types.ApprovalRequest) string {
 		}
 		if isKubeCallRow(ap) {
 			return types.DeciderKindKubeCall
+		}
+		if isHostCallRow(ap) { // a host rule hold is a network egress decision, finer than a host
+			return types.DeciderKindEgressDomain
 		}
 		if isMCPCallRow(ap) {
 			return types.DeciderKindMCPCall

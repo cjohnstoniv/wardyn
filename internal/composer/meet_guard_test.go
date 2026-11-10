@@ -45,6 +45,7 @@ var meetRules = map[string]meetRule{
 	"first_use_approval":               {"always_deny (Normalize)", "stricter by firstUseApprovalRank"},
 	"first_use_hold_seconds":           {"30 s, cut to 600 s", "smaller after normalising"},
 	"max_holds":                        {"16, cut to 256", "smaller after normalising"},
+	"host_rules":                       {"no rules: nothing imposed", "each side's sets appended, never merged; de-duplicated and sorted (meetHostRules)"},
 	"allowed_methods":                  {"all methods", "intersection; empty on one side yields the other; disjoint is unsatisfiable; empty overlay refused"},
 	"min_confinement_class":            {"lowest rank", "higher by confinementRank"},
 	"eligible_grants":                  {"none", "the overlay's pass through; the resolver re-intersects against the resolved base"},
@@ -130,6 +131,7 @@ var atomicMeetTypes = map[reflect.Type]bool{
 	reflect.TypeOf(types.WorkspaceRepo{}):     true,
 	reflect.TypeOf(types.UIApp{}):             true,
 	reflect.TypeOf(types.ToolRule{}):          true,
+	reflect.TypeOf(types.HostRuleSet{}):       true,
 }
 
 // leafField is one meetable field: its wire path and the Go name the meet reads.

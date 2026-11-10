@@ -74,6 +74,7 @@ type Policy struct {
 	deniedExactPort     map[string]struct{}
 	deniedWildPort      []domainmatch.WildPort
 	allowedMeth         map[string]struct{} // empty == all methods allowed
+	hostRules           []types.HostRuleSet // per-layer host rule sets (host_rules.go); empty imposes nothing
 	firstUse            types.FirstUseMode
 	// toolRules is tool name -> effect, compiled from RunPolicySpec.ToolRules.
 	// Nil/empty means "no rules": every gated call raises an approval. "*" is
@@ -110,6 +111,7 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		allowedMeth:         make(map[string]struct{}),
 		firstUse:            spec.FirstUseApproval.Normalize(),
 		allowAll:            spec.AllowAllEgress,
+		hostRules:           types.CloneHostRuleSets(spec.HostRules),
 		refuseIPLiterals:    spec.RefuseIPLiterals,
 		gitPushAnyBranch:    spec.GitPushAnyBranch,
 		pushRules:           compilePushRules(spec.PushRules),

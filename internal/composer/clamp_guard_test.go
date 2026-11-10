@@ -29,6 +29,7 @@ var clampRules = map[string]string{
 	"first_use_approval":               "raised to the ceiling's rank",
 	"first_use_hold_seconds":           "lowered to the ceiling's",
 	"max_holds":                        "lowered to the ceiling's",
+	"host_rules":                       "the ceiling's sets appended, never merged (types.AppendHostRuleSets)",
 	"allowed_methods":                  "intersected with the ceiling's (clampMethods)",
 	"min_confinement_class":            "raised to the ceiling's minimum",
 	"eligible_grants":                  "each grant bounded by the ceiling's grant of its kind (clampGrants)",

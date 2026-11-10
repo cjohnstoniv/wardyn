@@ -118,14 +118,24 @@ type mcpCallKey struct {
 // here, in the same step, and comes back apApproved to send; a declined one comes back apDenied.
 // Neither takes a slot. One that cannot wait comes back with why. A pending call comes back with
 // the approval to rejoin; one with no current approval with none.
-func (c *mcpCalls) admit(key string) (uuid.UUID, approvalState, string) {
+func (c *mcpCalls) admit(key string) (uuid.UUID, approvalState, string) { return c.admitAs(key, true) }
+
+// admitKept is admit for a table whose answers hold for the run (host rule holds, host_call_hold.go):
+// an approved key is passed without being spent, so it stays approved.
+func (c *mcpCalls) admitKept(key string) (uuid.UUID, approvalState, string) {
+	return c.admitAs(key, false)
+}
+
+func (c *mcpCalls) admitAs(key string, spendApproved bool) (uuid.UUID, approvalState, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	k := c.byKey[key]
 	switch {
 	case k != nil && k.id != uuid.Nil && k.state == apApproved:
 		id := k.id
-		c.spend(key, k)
+		if spendApproved {
+			c.spend(key, k)
+		}
 		return id, apApproved, ""
 	case k != nil && k.id != uuid.Nil && k.state == apDenied:
 		return k.id, k.state, ""

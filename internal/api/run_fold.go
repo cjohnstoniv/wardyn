@@ -229,6 +229,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepToolPolicy, foldAll},
 	{(*Server).stepNoNetwork, foldAll},
+	{(*Server).stepHostRulesVM, foldAll},
 	{(*Server).stepMacOSHold, foldAll},
 	{(*Server).stepMacWindow, foldAll},
 	{(*Server).stepKeptMachine, foldAll},

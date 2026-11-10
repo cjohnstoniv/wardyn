@@ -54,6 +54,7 @@
 | `first_use_hold_seconds` | `int` | `0` (→ `30`) | Only `wait_for_review`: how long a connection is held awaiting a decision before it fails closed. `0`/absent keeps the built-in **30s**. |
 | `max_holds` | `int` | `0` (→ `16`) | Only `wait_for_review`: cap on concurrent held connections; the next held connection over the cap fails fast. `0`/absent keeps the built-in **16**. |
 | `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction, enforced on the forward, `CONNECT`, TLS-intercepted and brokered model lanes; a refused request is `403` with `rule_source` `policy:method`. See [`allowed_methods`](#allowed_methods). |
+| `host_rules` | `[]HostRuleSet` | `[]` (none) | Per-host method and path rules, one set per layer; each set naming a host must allow a request to it. A `CONNECT` to a rule host is TLS-intercepted; a refusal is `403` `policy:host-rule`. See [`host_rules`](#host_rules--hostruleset). |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. [Which barrier for which agent](CONFINEMENT.md). |
 | `eligible_grants` | `[]GrantSpec` | `[]` | The ceiling of credential scopes this run may request. Eligibility is not issuance — the broker still mints. |
 | `auto_stop_after_sec` | `int` | `0` | Idle auto-stop in seconds: `> 0` stops an idle run after that time plus 30s slack, `0` or negative never reaps it, and a pending request keeps a run alive; details in [`auto_stop_after_sec`](#auto_stop_after_sec). |
@@ -790,6 +791,27 @@ What the check does and does not settle:
 - But `approved-egress` and `denied-egress` are also two independent full-replace PUTs with no cross-list guard between them, so an operator can still hand-place the same host on both by editing each list directly.
 - If that happens, the proxy's own evaluation order — not the egress API — decides it: denied domains are checked, and win, before allowed ones are ever consulted.
 
+### A host rule hold: `effect: hold`
+
+A `host_rules` rule with `effect: hold` makes the proxy hold a matching request until a person decides it.
+
+- The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`.
+- The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
+- An approval lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline refuses them all for the run. The answer lives in the run's proxy, so a new proxy asks again.
+- On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. That engine is let go after 10 minutes with nothing open, or when the runner goes offline, and the call is then asked about again.
+- A request a brokered route or an API door sends is held the same way, on the method and path its host receives. A request a lane already held and let through is not asked about again when it is sent.
+- The approval names no port or scheme. It covers that host, method and path on any port, over HTTP or HTTPS.
+- A hold never outranks a deny. Each request is judged afresh: if any rule set denies it, or names the host and matches nothing, it is refused, approved or not. An approval answers only the hold.
+- Every other set must still allow the request. A plain-HTTP request to a host the policy does not allow is refused without asking anyone.
+- On the lanes the run-wide [`allowed_methods`](#allowed_methods) covers, a method it refuses is refused without asking anyone. The git routes `/wardyn/gh/` and `/wardyn/git/` ignore `allowed_methods`, so a held request there is asked about whatever its method.
+- It fails closed. If the control plane refuses or cannot take the request for an approval, or the proxy cannot read the answer, the request is not sent.
+- At most 16 held requests wait at once, and a retry of a waiting call counts.
+- The proxy remembers at most 1024 different calls at once: those waiting or pending, and those approved or declined. A call whose approval expired or was cancelled frees its place once the proxy sees it closed: while a request for it waits, or when the call is sent again. A request past either limit is refused at once (`policy:host-rule:approval-busy`).
+- The decision takes no `decision_scope`, or `"run"`. The row records `run`, since the answer holds for the rest of the run. A unit's deciders rule whose `max_scope` is below `run` refuses the decision (`decision_scope_above_rule`).
+- The run's owner or a security operator decides it, as for a kubectl write. A unit's `egress_domain` deciders rule governs it, and an approval rule never decides one.
+- `WARDYN_EGRESS_SECOND_HUMAN` or `WARDYN_CAPABILITY_SECOND_HUMAN` makes it four-eyes. Either one is enough, and then someone other than the run's own people decides it.
+- The decision rows are `policy:host-rule:approval-wait`, `-approval-denied`, `-approval-closed`, `-approval-refused` and `-approval-busy`. A request an approval lets through also gets an allow row, `policy:host-rule:approval-approved`, naming the approval.
+
 ## `eligible_grants[]` — `GrantSpec`
 
 - How each grant kind reaches a run, and what the sandbox can read afterwards, is in [CREDENTIALS.md](CREDENTIALS.md).
@@ -1185,6 +1207,51 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 5. Start a background Claude Code run, or a Codex CLI run, and ask it to call `echo`. The call waits for a person to approve it with its exact arguments.
 6. `GET /_seen` on the fake lists every request it received. `tool_calls` stays `0` until you approve and becomes `1` after.
 
+
+## `host_rules` — `[]HostRuleSet`
+
+Rules for what a run may send to one host: which methods, on which paths. `host_rules` is a list of rule sets. You write one set; each layer that adds rules (a ceiling, a profile, a restriction) keeps its own set beside yours, and the sets are not merged.
+
+```json
+"host_rules": [{"rules": [
+  {"host": "api.example.com", "methods": ["DELETE"], "effect": "deny"},
+  {"host": "api.example.com", "methods": ["GET"], "paths": ["/repos"], "effect": "allow"}
+]}]
+```
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `rules` | `[]HostRule` | — (required) | The set's rules, read in order. At most 64 rules per set and 16 sets per policy, the sets other layers add included. |
+| `host` | `string` | — (required) | One exact host, lowercase, with no wildcard, port or path. |
+| `methods` | `[]string` | `[]` (all) | Uppercase HTTP methods the rule matches. |
+| `paths` | `[]string` | `[]` (all) | Paths the rule matches, each with the paths below it: `/repos` matches `/repos` and `/repos/a`, not `/reposx`. Written in normal form (below), with no query or fragment. |
+
+`effect` is `allow`, `deny` or `hold`. A hold waits for a person to decide the request: see [A host rule hold](#a-host-rule-hold-effect-hold).
+
+How a request to a host is decided:
+
+- Each set that names the host decides by its first matching rule. A set that names the host and matches no rule denies.
+- Across sets, any deny wins. Otherwise any hold asks a person ([A host rule hold](#a-host-rule-hold-effect-hold)). Otherwise the request is allowed. A set that does not name the host has no say.
+- [`allowed_methods`](#allowed_methods) still applies on top, on the lanes it covers. `/wardyn/gh/` and `/wardyn/git/` ignore it.
+- A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
+- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or a path, prefix or host override (`X-Original-URL`, `X-Rewrite-URL`, `X-Override-URL`, `X-Forwarded-Prefix`, `X-Script-Name`, `X-Forwarded-Host`), is refused. The git routes `/wardyn/gh/` and `/wardyn/git/` drop these headers instead and send the request on, judged by its request line.
+
+Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.
+
+A path that matches a deny rule's path only when case is ignored (`/Admin` against a deny on `/admin`) is refused too, since some servers ignore case.
+
+A path with an encoded slash is refused on a rule host. GitLab API project, file and branch paths use `%2F` (`/projects/team%2Fapp`, `/repository/files/src%2Fmain.go`), so they are refused there. A numeric project id removes only the project name's `%2F`: a file or branch name holding a slash is still refused on a rule host.
+
+What the proxy does for a rule host:
+
+- It intercepts TLS to a rule host on port 443, so it can read each request. A run with host rules gets a per-run interception certificate for this.
+- A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` without that certificate and on the desktop sign-in lane. When the run's own rules name the host, a `CONNECT` on another port is refused too. A host named only by a set an outer layer adds when the policy is sealed is opened on any port.
+- Plain HTTP to a rule host is checked per request.
+- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A request through an organisation relay route (`via_org`) is checked the same way, at the organisation, per request.
+- A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
+- Requests the proxy sends for itself are not checked: handing a GitHub token back, the push check's reads of the forge, and AWS role credentials.
+
+Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under `allow_all_egress`, a `CONNECT` to the server's IP address, or to another name for it, reads no rule, even when the request inside names the rule host. `refuse_ip_literals` blocks only the IP-address form.
 
 ## `recording`
 

@@ -33,7 +33,7 @@ func Hold(ap types.ApprovalRequest, now time.Time) (held bool, until time.Time) 
 	// An MCP call the proxy holds the open request for (hold_seconds set) is a SHORT hold, like a
 	// push: the call's answer is "waiting" when the window ends and the row stays PENDING for a
 	// retry to rejoin. One the gate raised has no hold_seconds and is live while PENDING, below.
-	if k := TallyKey(ap); k == TallyToolCallMCP || k == TallyToolCallKube { // a held kubectl write: the same short hold
+	if k := TallyKey(ap); k == TallyToolCallMCP || k == TallyToolCallKube || k == TallyToolCallHost { // a held kubectl write or host rule hold: the same short hold
 		if w := mcpCallHoldWindow(ap); w > 0 {
 			return boundedHold(holdStart(ap), now, w)
 		}

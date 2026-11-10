@@ -58,6 +58,14 @@ func secondHumanGate(ap types.ApprovalRequest) (name string, on bool) {
 	if ap.Kind == types.ApprovalEgressDomain {
 		return envEgressSecondHuman, envEnabled(envEgressSecondHuman)
 	}
+	// A host rule hold is both an egress decision and one exact call: either switch makes it four-eyes,
+	// and the capability switch names it when both are on.
+	if isHostCallRow(ap) {
+		if envEnabled(envCapabilitySecondHuman) {
+			return envCapabilitySecondHuman, true
+		}
+		return envEgressSecondHuman, envEnabled(envEgressSecondHuman)
+	}
 	if _, isADO := adoEscalationScope(ap); isADO || isExactCallRow(ap) { // one MCP call or kubectl write: the same owner rule
 		return envCapabilitySecondHuman, envEnabled(envCapabilitySecondHuman)
 	}

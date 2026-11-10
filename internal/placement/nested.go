@@ -67,9 +67,11 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.LLMInspectionSpec]():    strings.Fields("Mode WorkspaceSecretNames WorkspaceSecretValues DetectSecrets DetectSecretPatterns DetectEntropy DetectPII DetectorSidecarURL DetectorSidecarFormat ClassifiedMarkers ScanAttachments InspectForwardEgress MaxScanBytes OnScannerError RequireInspectableLLM InterceptTLS BlockMinSeverity"),
 	reflect.TypeFor[types.PushRulesSpec]():        strings.Fields("DenyPaths MaxInspectPackMiB RequireReviewPaths HoldSeconds DenyNewExecutables MaxFileSizeMiB DenyAll"),
 	reflect.TypeFor[types.ResourceLimits]():       strings.Fields("CPUMillis MemoryMiB PidsLimit DiskMiB"),
-	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress RefuseIPLiterals FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods MinConfinementClass EligibleGrants AutoStopAfterSec " +
+	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress RefuseIPLiterals FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods HostRules MinConfinementClass EligibleGrants AutoStopAfterSec " +
 		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls Desktop Recording DataOut"),
 	reflect.TypeFor[types.ToolRule]():          strings.Fields("Tool Effect"),
+	reflect.TypeFor[types.HostRuleSet]():       strings.Fields("Rules"),
+	reflect.TypeFor[types.HostRule]():          strings.Fields("Host Methods Paths Effect"),
 	reflect.TypeFor[types.PushRuleSet]():       strings.Fields("Provider Host Org BasePath Rules"),
 	reflect.TypeFor[types.HarnessToolRules]():  strings.Fields("Harness Default Rules"),
 	reflect.TypeFor[types.HarnessCredential](): strings.Fields("Harness SHA256"),

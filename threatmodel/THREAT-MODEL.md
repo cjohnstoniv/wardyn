@@ -941,6 +941,19 @@ is not the deployment described above.**
 - **`no_network`** (the `no-network` wall preset) refuses every request at step 0, before a `via_org`
   forward, and in both egress dials; the control-plane dial never reads it.
 - **`refuse_ip_literals`** refuses every IP literal under `allow_all_egress`, except one listed exactly.
+- **`host_rules`** are judged per request on a connection the proxy opens: a `CONNECT` to a rule host
+  without the per-run CA, on a port it does not open, on a VM run or on the sign-in lane is refused
+  (`policy:host-rule-needs-inspection`), and each request's normal-form path is checked inside
+  (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). Each brokered or API-door
+  forward is judged again where it is sent (`roundTripUpstream`, or before an API door's own transport).
+  A `via_org` request is judged per request by the organisation's engine (`ServeInjected`, `ServeBroker`).
+  Exempt: the proxy's own sends (`withProxyOwnSend`). Among them are the push comparison's forge API reads
+  ([`push_forge.go`](../internal/egress/proxy/push_forge.go), `push_forge_ado.go`), which a deny rule does not
+  stop. Their path parts are checked (`gitSegSafe` owner and name, `CheckRefName` and `PathEscape` for refs,
+  hex commit ids), and their answers are decoded for the comparison and not relayed to the sandbox.
+  Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under
+  `allow_all_egress`, a `CONNECT` to the server's IP address or another name for it reads no rule, even when
+  the request inside names the rule host; `refuse_ip_literals` blocks only the IP-address form.
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.

@@ -152,6 +152,8 @@ type Proxy struct {
 	sigv4 *awsSigV4Door
 	// kube is the kubectl door (kube_api_door.go); nil without a kubectl row.
 	kube *kubeAPIDoor
+	// hostCalls is the run's host rule holds and their answers (host_call_hold.go).
+	hostCalls mcpCalls
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -594,7 +596,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleLocalRoute(w, r)
 		return
 	}
-	p.servePlain(w, r)
+	p.servePlainJudged(w, r)
 }
 
 // splitHostPort returns the host (lowercased, no port) and port, defaulting
@@ -658,6 +660,9 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	if gate.refusal != "" {
 		log := decisionLog(req, egress.Deny, gate.refusal)
 		return egress.Deny, "", &log
+	}
+	if log := p.hostRuleConnectDeny(ctx, req); log != nil { // before any approval (host_rules.go)
+		return egress.Deny, "", log
 	}
 	// Under push_rules.deny_all, a code host no door serves (push_deny_all_forge.go).
 	if log := p.pushDenyAllForgeDeny(req, host, gate.verdict); log != nil {
@@ -859,7 +864,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// an ordinary opaque tunnel, still gated by the policy decision above — and
 	// the SAME clamp is inside mitmLLMHost below, so the fall-through cannot be
 	// re-admitted by the LLM branch for a host that is both.
-	if p.ca != nil && p.isCorpMITMHost(host) {
+	// A rule host is always opened here, so each request inside is judged (host_rules.go).
+	if p.ca != nil && (p.isCorpMITMHost(host) || p.policy.namesRuleHost(host)) {
 		if p.mitmPortAllowed(host, port) {
 			if log != nil {
 				p.sink.emit(*log)

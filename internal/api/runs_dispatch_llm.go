@@ -483,7 +483,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	var mitmCACertPEM, mitmCAKeyPEM string
 	if subscription || mitmForInspect || limited || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
 		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 ||
-		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil || s.placeholdersWanted(run, *policy) {
+		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil || s.placeholdersWanted(run, *policy) ||
+		hostRulesNeedCA(policy) {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -557,7 +558,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	return dispatchLLMPlan{
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
-		bedrockMITMHosts:     bedrockMITMHosts,
+		bedrockMITMHosts:     append(bedrockMITMHosts, hostRuleMITMHosts(policy)...),
 		azure:                azure,
 		channelHosts:         providerSubscriptionChannelHosts(llms, azure.channelHosts),
 		azureCLI:             azureCLI,

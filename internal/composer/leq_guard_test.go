@@ -25,6 +25,7 @@ var leqRules = map[string]string{
 	"first_use_approval":               "rank of a >= rank of b",
 	"first_use_hold_seconds":           "a <= b after normalising",
 	"max_holds":                        "a <= b after normalising",
+	"host_rules":                       "every set of b, in normal form, is a set of a (types.HostRuleSetsWithin)",
 	"allowed_methods":                  "b empty: any a; else a non-empty subset of b",
 	"min_confinement_class":            "rank of a >= rank of b",
 	"eligible_grants":                  "every grant of a is within b's grants (GrantWithin)",

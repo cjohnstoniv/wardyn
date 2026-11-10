@@ -255,7 +255,7 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 	var decided []sealDecision
 	for _, l := range layers {
 		in := types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains, AllowAllEgress: spec.AllowAllEgress,
-			ToolRules: spec.ToolRules, PushRules: spec.PushRules, Recording: spec.Recording}
+			ToolRules: spec.ToolRules, PushRules: spec.PushRules, Recording: spec.Recording, HostRules: spec.HostRules}
 		meet := composer.ApplyOverlay
 		if l.rec.Layer == policyref.LayerRestriction {
 			meet = composer.ApplyRestrictionOverlay
@@ -287,6 +287,11 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 		if !reflect.DeepEqual(before.PushRules, after.PushRules) {
 			spec.PushRules = out.PushRules
 			decided = append(decided, sealDecision{"push_rules", l.rec})
+		}
+		// A layer's host rule sets are appended, never merged (types.AppendHostRuleSets).
+		if !reflect.DeepEqual(in.HostRules, out.HostRules) {
+			spec.HostRules = out.HostRules
+			decided = append(decided, sealDecision{"host_rules", l.rec})
 		}
 		if before.Recording != after.Recording {
 			spec.Recording = out.Recording

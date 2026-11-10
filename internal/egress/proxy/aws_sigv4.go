@@ -583,7 +583,7 @@ func (p *Proxy) getRoleCredentials(ctx context.Context, header, value string) (a
 	scheme, defaultPort := p.upstreamSchemeFor(host, awsSigV4Port)
 	u := url.URL{Scheme: scheme, Host: upstreamURLHost(host, awsSigV4Port, defaultPort), Path: awsSSOFederationPath,
 		RawQuery: url.Values{"account_id": {d.cfg.AccountID}, "role_name": {d.cfg.RoleName}}.Encode()}
-	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target), http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(context.WithValue(withProxyOwnSend(ctx), vettedIPKey{}, target), http.MethodGet, u.String(), nil)
 	if err != nil {
 		return aws.Credentials{}, err
 	}

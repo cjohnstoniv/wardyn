@@ -143,6 +143,7 @@ func (m *meeter) run(ov Overlay) {
 	m.meetEgress(ov.Ceiling)
 	m.meetPosture(ov.Ceiling)
 	m.meetPush(ov.Ceiling.PushRules)
+	m.meetHostRules(ov.Ceiling.HostRules)
 	m.meetLimits(ov.Limits)
 	m.impliedByDataOut()
 	m.checkResult()

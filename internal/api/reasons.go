@@ -386,6 +386,7 @@ const (
 	reasonWallPresetUnknown         = "wall_preset_unknown"          // 422: a launch names a preset that does not exist or the caller may not see
 	reasonWallPresetsUnavailable    = "wall_presets_unavailable"     // 501: the store keeps no wall presets (not the Postgres store)
 	reasonNoNetworkNeedsEgress      = "no_network_needs_egress"      // 422: a launch with the No network preset that needs a host; the message names each source
+	reasonHostRulesNeedInspectedVM  = "host_rules_need_inspected_vm" // 422: a VM run whose policy has host_rules, which are not yet judged on a VM guest's flows
 
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
@@ -872,6 +873,8 @@ const (
 	reasonMCPCallTooLarge = "mcp_call_too_large"
 	// 400: a requested_scope naming cluster that is not exactly one kubectl write's scope, on tool_call, hashing to its own call_sha256 (approvals_kube_call.go)
 	reasonKubeCallScopeInvalid = "kube_call_scope_invalid"
+	// 400: a requested_scope naming host and call_sha256 that is not exactly one host rule hold's scope, on tool_call, hashing to its own call_sha256 (approvals_host_call.go)
+	reasonHostCallScopeInvalid = "host_call_scope_invalid"
 )
 
 // The signed audit receipt, checkpoint and key routes (audit_receipt.go).

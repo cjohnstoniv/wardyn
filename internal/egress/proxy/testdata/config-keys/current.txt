@@ -166,6 +166,12 @@ policy.github_capabilities
 policy.harness_inner_walls
 policy.harness_inner_walls.approvals
 policy.harness_inner_walls.sandbox_mode
+policy.host_rules
+policy.host_rules.rules
+policy.host_rules.rules.effect
+policy.host_rules.rules.host
+policy.host_rules.rules.methods
+policy.host_rules.rules.paths
 policy.llm_inspection
 policy.llm_inspection.block_min_severity
 policy.llm_inspection.classified_markers

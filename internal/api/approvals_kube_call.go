@@ -28,9 +28,11 @@ func isKubeCallRow(ap types.ApprovalRequest) bool {
 		types.IsKubeCallScope(ap.RequestedScope)
 }
 
-// isExactCallRow reports whether ap approves one exact call the proxy holds: an MCP call or a kubectl
-// write. The decide gates treat the two alike.
-func isExactCallRow(ap types.ApprovalRequest) bool { return isMCPCallRow(ap) || isKubeCallRow(ap) }
+// isExactCallRow reports whether ap approves one exact call the proxy holds: an MCP call, a kubectl
+// write or a host rule hold (isHostCallRow). The decide gates treat the three alike.
+func isExactCallRow(ap types.ApprovalRequest) bool {
+	return isMCPCallRow(ap) || isKubeCallRow(ap) || isHostCallRow(ap)
+}
 
 // kubeCallScopeKeys are the keys of types.KubeCallScope. Each must appear at most once, spelled
 // exactly so, and no other key may appear.
@@ -84,10 +86,14 @@ func kubeCallScopeKeysExact(scope json.RawMessage) bool {
 }
 
 // refuseBadCallScope is the raise's check of a held call's scope: a kubectl write's when a key folds to
-// cluster, else an MCP call's (refuseBadMCPCallScope, which passes any other scope through).
+// cluster, a host rule hold's when keys fold to host and call_sha256 (approvals_host_call.go), else an MCP
+// call's (refuseBadMCPCallScope, which passes any other scope through).
 func (s *Server) refuseBadCallScope(w http.ResponseWriter, r *http.Request, kind types.ApprovalKind, scope json.RawMessage) (json.RawMessage, bool) {
 	if kubeCallKeyPresent(scope) {
 		return s.refuseBadKubeCallScope(w, r, kind, scope)
+	}
+	if hostCallKeysPresent(scope) {
+		return s.refuseBadHostCallScope(w, r, kind, scope)
 	}
 	return s.refuseBadMCPCallScope(w, r, kind, scope)
 }
