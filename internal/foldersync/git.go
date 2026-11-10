@@ -139,7 +139,7 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 		return err
 	}
 	sy.State.GitSent = &GitSent{Branch: branch, Commit: head}
-	if err := sy.State.Save(sy.StateFile); err != nil {
+	if err := sy.saveState(); err != nil {
 		return err
 	}
 	where := "refs/remotes/laptop/" + branch + " (the sandbox already had a repository)"

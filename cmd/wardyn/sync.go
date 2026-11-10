@@ -147,6 +147,10 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
+	stateRoot, err := foldersync.StateRoot()
+	if err != nil {
+		return err
+	}
 	if err := foldersync.StateOutside(root, stateFile); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
@@ -201,7 +205,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return fmt.Errorf("sync: %w", err)
 	}
 	defer lroot.Close()
-	sy := &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, State: st, StateFile: stateFile, Opts: foldersync.Options{
+	sy := &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, State: st, StateFile: stateFile, StateRoot: stateRoot, Opts: foldersync.Options{
 		Remote: remote, Pull: f.pull, MaxPullBytes: f.maxPullBytes, OrgDeny: rules.Deny,
 		PullDeletes: f.pullDeletes, MaxPullDeletes: f.maxPullDeletes, Notify: cmd.ErrOrStderr(),
 		Trash: filepath.Join(filepath.Dir(stateFile), runID+"-deleted", time.Now().UTC().Format("20060102T150405.000000000Z")),
@@ -259,6 +263,7 @@ func portOr22(port string) string {
 }
 
 func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
+	warned := false // a durability warning is printed once, however many passes hit it
 	for first := true; ; first = false {
 		rep, err := sy.Pass(ctx)
 		if err != nil {
@@ -269,6 +274,10 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer,
 			return fmt.Errorf("sync: %w", err)
 		}
 		sess.report(syncPassReport{Complete: true, DeletedOnLaptop: len(rep.DeletedLocal)})
+		if rep.DurabilityWarning != "" && !warned {
+			warned = true
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", rep.DurabilityWarning)
+		}
 		if f.asJSON {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(rep); err != nil {
 				return err

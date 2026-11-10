@@ -8,11 +8,11 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/folders"
+	"github.com/cjohnstoniv/wardyn/internal/runner/srvclock"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -37,11 +37,14 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 		cancel()
 		return runnerRuntime{}, err
 	}
+	// The hello's server time turns a pass's deadline (organisation wall time) into time left here.
+	clock := srvclock.NewClock(nil)
+	srv.Clock = clock
 	report := connectReport{log: opts.offline}
 	// sendCaps reports the folders caps; always sends them even when no summary waits (a fresh session's are required).
 	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, always bool) error {
 		machine, _ := os.Hostname()
-		caps := runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true}
+		caps := runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true, FolderPassOnce: true}
 		if !report.fill(ctx, &caps, false) && !always {
 			return nil
 		}
@@ -60,7 +63,7 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 		Open: func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error {
 			return runnerwire.Refuse("unsupported runner stream")
 		},
-		Clock: func(runnerwire.Hello, time.Time) error { return nil },
+		Clock: clock.Hello,
 		// The org queues sandbox work only for a runner that held a sandbox: this
 		// identity did, under another substrate, and must finish it there.
 		Pending: func(_ context.Context, _ *runnerwire.Peer, actions []runnerwire.PendingAction) error {

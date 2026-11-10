@@ -462,7 +462,7 @@ func (g *syncRig) syncer(remote string, pull bool) (*foldersync.Syncer, *syncSes
 		g.t.Fatal(err)
 	}
 	g.t.Cleanup(func() { _ = lroot.Close() })
-	return &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, Opts: foldersync.Options{Remote: remote, Pull: pull, MaxPullBytes: foldersync.DefaultMaxPullBytes}, State: st, StateFile: stateFile}, sess, root
+	return &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, Opts: foldersync.Options{Remote: remote, Pull: pull, MaxPullBytes: foldersync.DefaultMaxPullBytes}, State: st, StateFile: stateFile, StateRoot: filepath.Dir(stateFile)}, sess, root
 }
 
 func putSyncFile(t *testing.T, p, body string, mode os.FileMode) {

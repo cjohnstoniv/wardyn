@@ -770,12 +770,21 @@ type lifecycleStopper struct {
 	// snapshotPane is api.Server's SnapshotRunPane: an interactive run's pane
 	// snapshot, taken after the revocations and before StopSandbox. Nil-safe.
 	snapshotPane func(context.Context, uuid.UUID)
+	// lockEnd is api.Server's LockRunEnd: the run's lock, held from the guarded transition through the
+	// computer folder's pass back and the sandbox stop, as every other end of a run holds it, so no sweep
+	// stops the sandbox under that pass. Nil-safe.
+	lockEnd func(context.Context, uuid.UUID) (context.Context, func(), bool)
+	// bringBack is api.Server's BringComputerFolderBack: a "both ways" computer folder's pass back, after
+	// the pane snapshot and before StopSandbox, with the agent stopped and its egress cut first where the
+	// substrate can. true is a pass cut short that keeps the sandbox for a resume: it is not stopped.
+	// Nil-safe.
+	bringBack func(context.Context, uuid.UUID, string) bool
 }
 
 var _ lifecycle.Stopper = lifecycleStopper{}
 
 func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (lifecycle.StopOutcome, error) {
-	return l.stop(ctx, runID, l.cancelApprovals, func() (bool, error) {
+	return l.stop(ctx, runID, l.cancelApprovals, func(ctx context.Context) (bool, error) {
 		return store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
 	})
 }
@@ -783,14 +792,22 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 // StopRunMaxAge is StopRun for a run past WARDYN_RUN_MAX_AGE: the same teardown
 // and revocation, behind a transition guarded on the run's age alone.
 func (l lifecycleStopper) StopRunMaxAge(ctx context.Context, runID uuid.UUID, createdNotAfter time.Time) (lifecycle.StopOutcome, error) {
-	return l.stop(ctx, runID, l.cancelMaxAgeApprovals, func() (bool, error) {
+	return l.stop(ctx, runID, l.cancelMaxAgeApprovals, func(ctx context.Context) (bool, error) {
 		return store.NewPG(l.pool).UpdateRunStateIfCreatedBefore(ctx, runID, types.RunRunning, types.RunStopped, createdNotAfter)
 	})
 }
 
 // stop wins transition (a guarded RUNNING->STOPPED), then tears down and revokes; cancelApprovals is the
 // approval half of the cascade for the cause of this stop.
-func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelApprovals func(context.Context, uuid.UUID), transition func() (bool, error)) (lifecycle.StopOutcome, error) {
+func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelApprovals func(context.Context, uuid.UUID), transition func(context.Context) (bool, error)) (lifecycle.StopOutcome, error) {
+	if l.lockEnd != nil {
+		lctx, unlock, ok := l.lockEnd(ctx, runID)
+		if !ok {
+			return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle stop: the run's lock is held; retried next tick")
+		}
+		defer unlock()
+		ctx = lctx
+	}
 	run, err := store.NewPG(l.pool).GetRun(ctx, runID)
 	if err != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle get run: %w", err)
@@ -804,7 +821,7 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelAppro
 	// keepalive. If a concurrent kill/complete already moved the run terminal, or
 	// an open request is still inside its wait (store.openHoldSQL), the CAS also
 	// no-ops and we leave the run and any teardown/revocation untouched.
-	applied, uerr := transition()
+	applied, uerr := transition(ctx)
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
 	}
@@ -848,7 +865,10 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelAppro
 	if l.snapshotPane != nil {
 		l.snapshotPane(ctx, runID)
 	}
-	if l.runner != nil && run.SandboxRef != "" {
+	// A "both ways" computer folder's changes come back before the sandbox stops, within this stop's own
+	// deadline (the pass leaves the stop its teardown budget). A cut pass keeps the sandbox for a resume.
+	kept := l.bringBack != nil && run.SandboxRef != "" && l.bringBack(ctx, runID, run.SandboxRef)
+	if l.runner != nil && run.SandboxRef != "" && !kept {
 		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
 			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
 				slog.String("run_id", runID.String()),

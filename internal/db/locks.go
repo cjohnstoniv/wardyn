@@ -33,6 +33,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -282,8 +284,48 @@ func LockerFor(pool *pgxpool.Pool) *PGLocker {
 
 // NewPGLocker is a locker of its own with size connection slots (tests).
 func NewPGLocker(pool *pgxpool.Pool, size int) *PGLocker {
-	return &PGLocker{cfg: pool.Config().ConnConfig.Copy(), sem: make(chan struct{}, size)}
+	return &PGLocker{cfg: lockConnConfig(pool.Config().ConnConfig), sem: make(chan struct{}, size)}
 }
+
+// Keepalives on a lock connection free a session lock whose holder vanished without closing its socket
+// (a lost host, a partition) in about a minute, not after the operating system's default of about 2 hours
+// 11 minutes. The server gives up on a silent client after 30 s idle and 3 probes 10 s apart, and at 60 s
+// once data it sent stays unacknowledged (tcp_user_timeout, PostgreSQL 12 and later): the lock is free on
+// the server within about 60 s. They need a dead peer: a slow but live holder or server still acknowledges
+// at the TCP layer, so no lock is lost to slowness. The old holder learns of the loss first, within about
+// 4 s: its watcher's check (watch) has a 3 s deadline every LockWatchInterval, and ends the hold's
+// context with ErrLockLost. The client's dialer probes on the server's schedule too.
+var lockKeepalives = []struct{ name, value string }{
+	{"tcp_keepalives_idle", "30"}, {"tcp_keepalives_interval", "10"}, {"tcp_keepalives_count", "3"}, {"tcp_user_timeout", "60000"},
+}
+
+// lockConnConfig is the pool's connection settings with the client's TCP keepalives on lockKeepalives'
+// schedule; the pool's own settings are left as they are.
+func lockConnConfig(pool *pgx.ConnConfig) *pgx.ConnConfig {
+	cfg := pool.Copy()
+	dialer := &net.Dialer{Timeout: cfg.ConnectTimeout, KeepAliveConfig: net.KeepAliveConfig{
+		Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3,
+	}}
+	cfg.DialFunc = dialer.DialContext
+	return cfg
+}
+
+// setLockKeepalives sets lockKeepalives on a new lock connection, each by its own SET after connect rather
+// than in the startup packet, where a parameter the server does not know fails the connection. A setting
+// the server refuses (a managed service, an older release) is logged once per process and skipped: it
+// never fails the lock or boot.
+func setLockKeepalives(ctx context.Context, exec func(context.Context, string) error) {
+	for _, p := range lockKeepalives {
+		if err := exec(ctx, "SET "+p.name+" = "+p.value); err != nil {
+			if _, warned := keepaliveRefused.LoadOrStore(p.name, true); !warned {
+				slog.WarnContext(ctx, "db: the server refused a lock connection's keepalive setting; a lost holder's lock may outlive it longer",
+					slog.String("setting", p.name), slog.Any("err", err))
+			}
+		}
+	}
+}
+
+var keepaliveRefused sync.Map // setting name -> true, once logged
 
 // lockConn is one dedicated connection and the locks it holds.
 type lockConn struct {
@@ -462,6 +504,7 @@ func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try 
 		free()
 		return ctx, nil, false, fmt.Errorf("%w: connect: %w", ErrLockUnavailable, err)
 	}
+	setLockKeepalives(dctx, func(ctx context.Context, sql string) error { _, err := conn.Exec(ctx, sql); return err })
 	lc := &lockConn{conn: conn}
 	lc.lost, lc.lose = context.WithCancelCause(context.Background())
 	lc.mu.Lock()
