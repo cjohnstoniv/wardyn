@@ -262,7 +262,7 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 
 ## The AI gateway identity key
 
-The key that signs the short-lived token an AI gateway verifies to learn which person, run and runner a model call belongs to. The token format and the key set's address are experimental until 0.11, and either may change before then.
+The key that signs the short-lived token an AI gateway verifies to learn which person, run and runner a model call belongs to. The token format is `1`, and the key set's address is stable through 0.11.
 
 An admin turns identity on per model provider, by setting `gateway_identity` with an `audience`. On an install that has never turned it on, the key row does not exist and everything below stays off. A run started with identity off sends what it always did.
 
