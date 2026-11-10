@@ -642,7 +642,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	}
 	// A drive seed left by a crash between its create and its removal still
 	// holds that drive's volume.
-	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
 	return nil
@@ -686,7 +686,7 @@ func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI,
 			d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
 			continue
 		}
-		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 			errs = append(errs, fmt.Errorf("docker: remove leftover drive seed %s: %w", c.ID, err))
 			continue
 		}

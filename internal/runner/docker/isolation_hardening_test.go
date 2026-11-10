@@ -172,3 +172,26 @@ func TestAgentMounts_ReadOnlyWorkspaceBindIsRecursivelyReadOnly(t *testing.T) {
 		}
 	}
 }
+
+// The containers the driver makes from the run's image or the workspace's, and removes itself (the
+// drive seed, the architecture probe), take their anonymous volumes with them. The seed also mounts
+// the drive's named volume: the option removes anonymous volumes only, so the drive keeps its data.
+func TestSeedAndProbeRemovalTakeTheirAnonymousVolumes(t *testing.T) {
+	f := newFakeDocker()
+	f.imageUsers = map[string]string{"busybox:latest": "1000"}
+	run := testSpec().RunID
+	if _, err := createWithDrives(t, f, run, teamVolumeDrive(false)); err != nil {
+		t.Fatal(err)
+	}
+	if seed := f.containers[driveSeedName(run)]; seed == nil || !seed.removed || !seed.removedVolumes {
+		t.Errorf("seed = %+v, want removed with its anonymous volumes", seed)
+	}
+
+	const ref = "mirror.example/agent:1"
+	d, af := archDriver("aarch64", map[string]string{ref: "amd64"})
+	_ = d.ensureImage(context.Background(), ref, "", nil)
+	p, _ := probes(af)
+	if len(p) != 1 || !p[0].removed || !p[0].removedVolumes {
+		t.Errorf("probes = %+v, want one removed with its anonymous volumes", p)
+	}
+}
