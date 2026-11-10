@@ -719,8 +719,8 @@ func (s *Server) mountRenamedRunRoutes(r chi.Router) {
 	r.Post("/runs/{id}/attach/ticket", s.handleAttachTicket)
 }
 
-// mountRunLeaseRoutes registers a run's end/wait change, its title, its kill
-// and its revive on r — carved out of routes() purely for funlen.
+// mountRunLeaseRoutes registers a run's end/wait change, its title, its kill,
+// its revive and its egress edit on r — carved out of routes() purely for funlen.
 func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// The run's end and wait (#569): owner or SUPER admin, clamped to the
 	// run's captured limits — handleSetRunEndAndWait.
@@ -733,7 +733,7 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// title (ownsRun, no admin bypass), any run state (launch_intent.go).
 	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
-	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go); they open no shell, so #1476 leaves them
+	s.mountRunReviveRoutes(r) // revive and the live egress edit, owner or super admin (run_egress_edit.go)
 	// Desktop sign-ins (#2972): the run's creator only, off unless
 	// WARDYN_DESKTOP_SIGNINS=on (run_desktop_signin.go).
 	r.Post("/runs/{id}/desktop-signin", s.handleBeginDesktopSignin)

@@ -61,3 +61,12 @@ const (
 
 // Image admission at revive (run_revive_image.go).
 const reasonReviveImageNotAdmitted = "revive_image_not_admitted" // the image is held (images.admission enforce, or a profile's required_image_signers) and the run's create pinned no checked digest: started before admission was enforced, or in audit mode
+
+// PATCH /runs/{id}/egress, the live egress edit (run_egress_edit.go). A refusal from the revive path
+// it runs through keeps that path's own reason.
+const (
+	reasonEgressEditInvalid       = "egress_edit_invalid"         // the body names no host, too many, or an entry the proxy cannot match
+	reasonEgressEditRunNotLive    = "egress_edit_run_not_live"    // the run is not running, has no sandbox, or is lost
+	reasonEgressEditInProgress    = "egress_edit_in_progress"     // another egress edit of this run has not answered yet
+	reasonEgressEditHostNotListed = "egress_edit_host_not_listed" // a remove_hosts entry is not an entry on the run's allowlist
+)

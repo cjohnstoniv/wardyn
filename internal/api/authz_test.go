@@ -967,6 +967,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/runs/{id}/revive":             {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/profile":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"POST /api/v1/runs/{id}/profile/synthesize": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+
+	// The live egress edit replaces the run's proxy as revive does: the same authority.
+	"PATCH /api/v1/runs/{id}/egress": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+
 	// Desktop sign-ins (#2972): the run's creator only (run_desktop_signin.go).
 	"POST /api/v1/runs/{id}/desktop-signin":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/desktop-signin/shares": {class: classOwner, entity: entityRun, ownerTier: tierEntry},

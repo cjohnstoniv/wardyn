@@ -116,6 +116,7 @@ type reviveResult struct {
 	DeniedAdded  []string  `json:"denied_added"`
 	ProxyRelease string    `json:"proxy_release"`
 	AgentStarted bool      `json:"agent_started,omitempty"`
+	generation   int       // the policy generation the new proxy enforces, for an egress edit's answer
 }
 
 // handleReviveRun is POST /api/v1/runs/{id}/revive: the owner (or a super
@@ -139,8 +140,8 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // reviveFromRequest applies the local-mode rule, then revives run. startAgent
-// allows a run lost to a reboot, whose agent must be started again.
-func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAgent bool) (reviveResult, *reviveError) {
+// allows a run lost to a reboot, whose agent must be started again. edits are an egress edit's (run_egress_edit.go).
+func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAgent bool, edits ...egressEdit) (reviveResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	// Local mode mints for the host operator (runIdentitySubject), not for the
 	// run's owner, so only the principal that created the run may revive it.
@@ -150,7 +151,7 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 			"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonReviveLocalModeNotOwner})))
 		return reviveResult{}, reviveRefused(http.StatusForbidden, reasonReviveLocalModeNotOwner, "in local mode only the run's owner can revive it")
 	}
-	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent)
+	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent, edits...)
 }
 
 // reviveSupported is what reviveRunProxy needs from this deployment, and whether run's agent must be
@@ -188,8 +189,8 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 // a failure before a live run's old proxy is touched. Otherwise a proxy that
 // cannot be replaced, or an agent that cannot be started, puts the run back to
 // lost with its proxy and agent stopped, so it never runs without the proxy it
-// was promised.
-func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool) (reviveResult, *reviveError) {
+// was promised. edits, from a live egress edit only, narrow the stored config before the seal.
+func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool, edits ...egressEdit) (reviveResult, *reviveError) {
 	reviver, rv, starter, rebooted, rerr := s.reviveSupported(ctx, run, startAgent)
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -225,6 +226,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	if rerr := s.reviveCarryRecordedRules(ctx, run.ID, cfg); rerr != nil {
+		return reviveResult{}, rerr
+	}
+	if rerr := applyEgressEdits(&c, &cfg.Policy, edits); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	corpus := inspectionCorpusOf(cfg.Policy) // the organisation's, before a laptop copy drops it
@@ -387,7 +391,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
-	return reviveResult{RunID: run.ID, DeniedAdded: nonNilStrings(re.added), ProxyRelease: version.Version, AgentStarted: rebooted}, nil
+	return reviveResult{RunID: run.ID, DeniedAdded: nonNilStrings(re.added), ProxyRelease: version.Version, AgentStarted: rebooted, generation: gen}, nil
 }
 
 // claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A
