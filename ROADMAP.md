@@ -23,6 +23,7 @@
 | **v0.10.0-rc.15** | rc.15: a refused request no longer keeps a run awake, gateway rerouting keys refused under the allowed-models list, cleaner macOS VM bases, the guest agent signed in-process. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.15`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.16** | rc.16: unit deciders for held approvals, platform envelopes, file download approvals, kubectl restart and per-write approval, model gateway and detector pages. | **Shipped (pre-alpha)** — `v0.10.0-rc.16`, 2026-11-08 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.17** | rc.17: macOS VM idle and Setup Assistant fixes, working edit-base buttons, `update-tools`, and credentials withheld unless a policy names their host exactly. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.17`, 2026-11-09 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.18** | rc.18: the rc.17 macOS VM login fix, per-host method and path rules, the IP-address switch, a No network preset, proxy policy confirmation and DNS audit rows. The macOS parts are not retested on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.18`, 2026-11-10 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 

@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.18] — 2026-11-10
+
 ### Added
 
 - DNS queries from a run's sandbox are recorded as `run.dns.query` audit rows with name, type and outcome (repeats folded, at most 64 rows a second per proxy; rows over that are dropped and counted in the proxy's warning), on Kubernetes, Docker and VM runs. On Kubernetes and Docker the agent's nameserver is now its own proxy, which refuses every query. On Docker the proxy is the nameserver through a read-only `/etc/resolv.conf` the driver mounts from a per-run Docker volume. Covered by CI tests on runc (every pull request) and gVisor (nightly); Kata and krun use the same mount but are untested. It needs Docker Engine 26 or later and Docker API 1.45 or later; on an older engine run with `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK`, or a client pinned to an older API, lookups fail at Docker's resolver as before and write no row. VM runs keep the relay's answers.
