@@ -148,8 +148,9 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 is required (do
 # lists releases of any kind, newest-created first, which is not the same as
 # highest-version first (a patch on an older line can be published after a newer
 # line), so the highest version is picked here. Releases that are not marked
-# pre-release win; only a repo with none falls back to the highest pre-release,
-# and the line printed below says which it was. RELEASING.md says the same thing
+# pre-release win; only when none is among the fetched releases does it fall back
+# to the highest pre-release, and the line printed below says which it was. Only
+# the first 100 releases are scanned, so a stable release older than that is not seen. RELEASING.md says the same thing
 # about `releases/latest/download/`.
 #
 # pick_release reads the releases JSON on stdin and prints "<tag> <count> <stable|prerelease>".

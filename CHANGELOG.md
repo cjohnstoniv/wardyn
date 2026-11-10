@@ -18,7 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `install.sh` with no `WARDYN_VERSION` now installs the highest released version, not the first row of the releases list, which could be an older line published later. It prefers releases not marked pre-release, falls back to the highest pre-release only when there is none, and prints which version it picked and out of how many.
 - `scripts/verify-release.sh` now downloads every release asset and checks each against the signed `SHA256SUMS`; before, it checked two of them, so a swapped binary, package or installer script passed. It also fails on an asset the list does not name.
 - The `:latest` tag of the `wardynd` image no longer moves back to an older commit when an earlier push's checks finish after a newer one's, and the manual image-publish workflow now writes only the old 0.0.x to 0.4.x backfill tags, so it can no longer overwrite a release image tag or `latest` by hand.
-- The release build no longer runs a binary built from the source tree in the step that holds the release signing identity or the Apple signing and notary credentials, and builds the vscode, novnc and novnc-signin images on the exact, signature-checked digest of the base image the same run published.
+- The release build no longer runs a binary built from the source tree in the step that holds the release signing identity or the Apple signing and notary credentials, and builds the vscode, novnc and novnc-signin images on the exact digest of the base image, checked to be signed by this release workflow at this tag.
 
 ## [0.10.0-rc.17] — 2026-11-09
 
