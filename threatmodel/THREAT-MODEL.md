@@ -1575,6 +1575,7 @@ These risks are **not closed by v1 Wardyn**.
    - The full container path is not proven in default CI, with per-workspace ephemeral-CA injection into arbitrary agent images and QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual channel below the TLS-intercept tier.
+   - On Kubernetes and VM runs the agent's own DNS queries are answered inside the run and each is a `run.dns.query` row ([`internal/egress/proxy/dns_audit.go`](../internal/egress/proxy/dns_audit.go)); the proxy's own lookups of the hosts it is asked for are unchanged, and Docker runs are not yet covered.
 
 4. **Kernel 0-day on CC1 hardened-runc hosts (shared kernel).**
    - runc-as-sole-boundary is explicitly insufficient for LLM-generated code; this tier alone is published as the weakest.

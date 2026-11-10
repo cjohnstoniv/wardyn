@@ -168,6 +168,15 @@ An empty `run` means the label lookup could not establish a run. It does not pro
 - A Wardyn token for the run lookup.
 - Retention for the sensor's events. Wardyn keeps none of them.
 
+## DNS queries
+
+The sensor sees where a packet went, not the name it asked for. Wardyn records each DNS query a run asks as a `run.dns.query` audit row with the name, the type and what the sandbox was told. No query is looked up outside the run.
+
+- **Kubernetes:** the agent pod's one nameserver is its proxy pod. The proxy answers every query `REFUSED` and writes the row, with `via` `proxy`. The agent's NetworkPolicy allows port 53, TCP and UDP, to its proxy pod only. The proxy binds 53 through the pod sysctl `net.ipv4.ip_unprivileged_port_start`, with no added capability.
+- **VM runs:** the relay keeps answering from its own name table, because that answer is how a guest reaches an allowed host by name. Each row says `answered` (with the address the guest got), `refused` (with `cause` `name` or `full`), and `via` `vm_relay`. A base-image preparation has no run proxy, so its `prep_refused` queries are only in the relay's log.
+- **Docker:** not yet. A container agent's lookups still go to Docker's resolver and fail, with no row.
+- Rows are bounded: the first of each name, type and outcome in a second is written, and the rest are counted on the next one (`repeat`). At most 64 rows a second are written per run.
+
 ## Limits
 
 - Pod labels disappear with the pod. Resolve the run at alert time, or copy it into the alert.
