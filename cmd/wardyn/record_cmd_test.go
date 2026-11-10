@@ -221,7 +221,7 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 	}
 
 	_, err = run("record", "save", runID.String(), "--name", "learned")
-	if err == nil || !strings.Contains(err.Error(), "Members can save it as their own template with --template.") {
+	if err == nil || !strings.Contains(err.Error(), "Members can save it as their own template with --template") {
 		t.Errorf("an admin-only 403 without --template: err = %v, want the hint naming the flag", err)
 	}
 	// A 403 from another gate is not about membership: no hint. One with no reason gets the conditional wording.
@@ -230,7 +230,7 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 		t.Errorf("a 403 for another reason: err = %v, want no --template hint", err)
 	}
 	policyReason = ""
-	if _, err = run("record", "save", runID.String(), "--name", "learned"); err == nil || !strings.Contains(err.Error(), "If you are a member, you can save it as your own template with --template.") {
+	if _, err = run("record", "save", runID.String(), "--name", "learned"); err == nil || !strings.Contains(err.Error(), "If you are a member, you can save it as your own template with --template") {
 		t.Errorf("a 403 with no reason: err = %v, want the conditional hint", err)
 	}
 }

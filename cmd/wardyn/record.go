@@ -158,9 +158,9 @@ func templateHint(err error) error {
 	}
 	switch ae.Reason {
 	case "admin_surface":
-		return fmt.Errorf("%w. Members can save it as their own template with --template.", err)
+		return fmt.Errorf("%w. Members can save it as their own template with --template", err)
 	case "":
-		return fmt.Errorf("%w. If you are a member, you can save it as your own template with --template.", err)
+		return fmt.Errorf("%w. If you are a member, you can save it as your own template with --template", err)
 	}
 	return err
 }
