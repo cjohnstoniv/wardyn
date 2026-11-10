@@ -223,4 +223,17 @@ describe("branded console (#1125)", () => {
     expect(unbrandTitle("Example Corp Wardyn", "Example Corp Wardyn")).toBe("Wardyn");
     expect(unbrandTitle("Runs - Wardyn", "Example Corp Wardyn")).toBe("Runs - Wardyn");
   });
+
+  // brandTitle twice is brandTitle once, and leaving the brand restores the console's own title, for
+  // names that themselves end in " - Wardyn", equal "Wardyn", carry regex characters, or are empty.
+  it.each(["Acme -", "Wardyn", "- Wardyn", "Acme - Wardyn", "Wardyn - Wardyn", "A.c+e (x)", ""])(
+    "is idempotent and reversible for the name %j",
+    (name) => {
+      for (const t of ["Wardyn", "Wardyn admin", "Runs - Wardyn", "Runs - Wardyn admin", "Something else"]) {
+        const once = brandTitle(t, name);
+        expect(brandTitle(once, name)).toBe(once);
+        expect(unbrandTitle(once, name)).toBe(t);
+      }
+    },
+  );
 });

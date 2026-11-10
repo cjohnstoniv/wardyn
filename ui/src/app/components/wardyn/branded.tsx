@@ -68,19 +68,24 @@ export function brandColourCSS(b: Branding): string | null {
 /**
  * The tab title a brand shows for the console's own: "Wardyn" -> the product
  * name, "Wardyn admin" -> "<name> admin" (the Admin view cue stays), alone or
- * after a page's "<page> - ". Any other title is left alone. unbrandTitle undoes it.
+ * after a page's "<page> - ". Any other title is left alone. brandTitle leaves a title that already ends
+ * in the name alone, so applying it twice changes nothing; unbrandTitle undoes it.
  */
-function swapTitleName(title: string, from: string, to: string): string {
+function endsInName(title: string, name: string): string | null {
   for (const cue of [" admin", ""]) {
-    const own = from + cue;
-    if (title === own) return to + cue;
-    if (title.endsWith(` - ${own}`)) return title.slice(0, -own.length) + to + cue;
+    const own = name + cue;
+    if (title === own || title.endsWith(` - ${own}`)) return cue;
   }
-  return title;
+  return null;
+}
+
+function swapTitleName(title: string, from: string, to: string): string {
+  const cue = from && to ? endsInName(title, from) : null;
+  return cue === null ? title : title.slice(0, title.length - from.length - cue.length) + to + cue;
 }
 
 export function brandTitle(title: string, name: string): string {
-  return swapTitleName(title, CONSOLE_VIEW.TITLE_USER, name);
+  return endsInName(title, name) !== null ? title : swapTitleName(title, CONSOLE_VIEW.TITLE_USER, name);
 }
 
 export function unbrandTitle(title: string, name: string): string {
