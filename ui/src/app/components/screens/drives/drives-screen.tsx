@@ -287,7 +287,10 @@ export function DrivesScreen() {
                         <TableRow key={d.id}>
                           {/* A drive name is a human-chosen label, never mono. */}
                           <TableCell className="font-medium">
-                            {team ? (
+                            {/* d.team is the server's fact about the drive, so the chip shows
+                                while the switch is unknown too; only the claims that depend on
+                                the switch (mode, cleanup, allocation) are held back. */}
+                            {team || unknownTeam ? (
                               <span className="flex flex-col items-start gap-1.5">
                                 {d.name}
                                 <Chip tone="neutral">{DRIVES.TEAM_CHIP}</Chip>
