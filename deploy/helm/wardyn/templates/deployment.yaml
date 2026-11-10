@@ -688,6 +688,10 @@ spec:
             # Experimental (#3863): internal/runner/k8s creates the agent pod through a Sandbox object.
             - name: WARDYN_K8S_AGENT_SANDBOX
               value: "true"
+            {{- with .Values.k8s.agentSandbox.template }}
+            - name: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- $rtc := list -}}
             {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}

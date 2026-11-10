@@ -280,7 +280,33 @@ func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userTy
 // Already-revoked is ErrNotFound too (`revoked_at IS NULL` in the WHERE):
 // revoke is idempotent, so a second call must not emit a second token.revoke
 // audit row for an act that didn't happen.
+//
+// Revoking a CLI sign-in's access token ends that sign-in (reason "revoked") and revokes all of its
+// tokens, through EndCLISession: a revoked access token otherwise left the session able to mint a new one
+// at its next refresh, from the identity stamped when it last signed in. The token is read first, and that
+// read is the authorization (a live row this principal may revoke); the end then takes the session's row
+// lock, so a refresh that replaced the token in between is still ended with its new token, not turned into
+// a not-found. Only a session that really has ended answers as already revoked. A cli_admin token's revoke
+// ends only itself, since its session goes on.
 func (s PG) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error) {
+	tok, err := scanAPIToken(s.Pool.QueryRow(ctx, `
+		SELECT `+apiTokenCols+` FROM api_tokens
+		WHERE id = $1 AND revoked_at IS NULL AND ($2 = '' OR principal = $2)`, id, principal))
+	if err != nil {
+		return types.APIToken{}, err
+	}
+	if tok.Kind == types.APITokenKindCLIAccess && tok.CLISessionID != nil {
+		_, err := s.EndCLISession(ctx, *tok.CLISessionID, "", types.CLISessionEndRevoked, now)
+		if err == nil {
+			tok.RevokedAt = &now
+			return tok, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return types.APIToken{}, err
+		}
+		// The session had already ended (and revoked its tokens): the plain revoke below answers
+		// ErrNotFound for the revoked row, as a second revoke always has.
+	}
 	const q = `
 		UPDATE api_tokens SET revoked_at = $2
 		WHERE id = $1 AND revoked_at IS NULL AND ($3 = '' OR principal = $3)

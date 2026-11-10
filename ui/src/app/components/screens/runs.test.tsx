@@ -34,6 +34,8 @@ import { RoleProvider, type Role } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { CC_META } from "../wardyn/cc-meta";
 import { baseStatus } from "../../lib/test-fixtures";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run-1",
@@ -100,6 +102,13 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(row).toHaveTextContent("fix-login");
     expect(row).not.toHaveTextContent("Ephemeral scratch");
     expect(workspaceHook.reload).toHaveBeenCalled();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listRunsFilteredMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("error, then Retry recovers", async () => {

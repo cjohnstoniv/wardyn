@@ -125,7 +125,7 @@ func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (pl
 			NetworkPolicyAcknowledged: cs.NetworkPolicyAcknowledged, SessionRecording: cs.SessionRecording,
 			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles,
 			EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement, Freeze: cs.Freeze,
-			ExecOutputUncaptured: cs.ExecOutputUncaptured,
+			ExecOutputUncaptured: cs.ExecOutputUncaptured, NetworkPolicyCheck: cs.NetworkPolicyCheck,
 		},
 		Source: types.RunEvidenceRunnerAsserted, Capacity: reported.Capacity, AllowedRoots: reported.AllowedRoots, impl: ep.sub,
 	}, nil
@@ -215,6 +215,7 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 		out.StructuralEgress = out.StructuralEgress && s.StructuralEgress
 		out.NetworkPolicy = out.NetworkPolicy && s.NetworkPolicy
 		out.NetworkPolicyAcknowledged = out.NetworkPolicyAcknowledged && s.NetworkPolicyAcknowledged
+		out.NetworkPolicyCheck = runner.WorseNetPolCheck(out.NetworkPolicyCheck, s.NetworkPolicyCheck) // the worst verdict, with its own time
 		out.SessionRecording = out.SessionRecording && s.SessionRecording
 		out.UserDrives = out.UserDrives && s.UserDrives
 		out.ManagedFiles = out.ManagedFiles && s.ManagedFiles

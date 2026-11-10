@@ -32,7 +32,7 @@ describe("fromPool and toLimits", () => {
     expect(toLimits(fromPool({ name: "ci", limits: FULL }))).toEqual(FULL);
   });
 
-  it("shows CPUs, GB and the largest whole unit of each duration", () => {
+  it("shows CPUs, GiB and the largest whole unit of each duration", () => {
     const v = fromPool({ name: "ci", limits: FULL });
     expect(v.bg).toMatchObject({ cpuD: "1", cpuC: "4", memD: "2", memC: "16", diskD: "20", diskC: "100", lifeDn: "2", lifeDu: "hours", lifeMn: "12", lifeMu: "hours" });
     expect(v.it).toMatchObject({ idleDn: "30", idleDu: "minutes", idleMn: "2", idleMu: "hours", lifeDn: "8", lifeMn: "1", lifeMu: "days" });
@@ -134,9 +134,9 @@ describe("validate", () => {
     expect(validate(withBg({ memD: "2", memC: "2" }))["bg.mem"]).toBeUndefined();
   });
 
-  it("takes disk in whole GB", () => {
-    expect(validate(withBg({ diskD: "10.5", diskC: "20" }))["bg.disk"]).toBe("Background tasks, disk: set whole numbers of GB.");
-    expect(validate(withBg({ diskD: "10", diskC: "20.5" }))["bg.disk"]).toBe("Background tasks, disk: set whole numbers of GB.");
+  it("takes disk in whole GiB", () => {
+    expect(validate(withBg({ diskD: "10.5", diskC: "20" }))["bg.disk"]).toBe("Background tasks, disk: set whole numbers of GiB.");
+    expect(validate(withBg({ diskD: "10", diskC: "20.5" }))["bg.disk"]).toBe("Background tasks, disk: set whole numbers of GiB.");
     expect(validate(withBg({ diskD: "10", diskC: "20" }))["bg.disk"]).toBeUndefined();
     expect(validate(withBg({ cpuD: "0.5", cpuC: "1.5" }))["bg.cpu"]).toBeUndefined();
   });

@@ -22,6 +22,7 @@ import { recordings as recordingsApi } from "../../../lib/api/recordings";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../../lib/use-poll";
 import { HttpError, LIST_LIMIT } from "../../../lib/api/core";
+import { failureSentence } from "../../wardyn/states";
 import { withNewestEvents } from "./audit-window";
 import { macOSDiskPending } from "./macos-run-facts";
 
@@ -60,6 +61,7 @@ export function useRunDetail(id: string) {
   const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
   const [grantsReadable, setGrantsReadable] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   // ?tab= opens the page on that tab (the Runs list's Review button lands on Approvals).
   const [searchParams] = useSearchParams();
   const [tab, setTab] = React.useState<Tab>(() => {
@@ -159,7 +161,10 @@ export function useRunDetail(id: string) {
             // keeps last-good data silently (matches the Runs board) rather
             // than replacing a live cockpit every DETAIL_POLL_MS during a
             // control-plane hiccup.
-            if (foreground) setStatus("error");
+            if (foreground) {
+              setLoadMessage(failureSentence(r.reason));
+              setStatus("error");
+            }
             return;
           }
           // The first page is the OLDEST 1000 rows; a run past that joins its newest page on, so the live
@@ -298,7 +303,7 @@ export function useRunDetail(id: string) {
   usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling && !macOSDiskPending(run));
 
   return {
-    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, loadMessage, tab, setTab,
     recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   };

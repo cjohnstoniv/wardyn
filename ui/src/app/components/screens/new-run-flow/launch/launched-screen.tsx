@@ -43,7 +43,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   const { principal } = useRequestIdentity();
   const router = useLocation();
   const created = React.useMemo(() => createdFor(router.state, principal, runId), [router.state, principal, runId]);
-  const { run, failed, now, reload, pool } = useLaunchedRun(runId, created);
+  const { run, failed, failMessage, now, reload, pool } = useLaunchedRun(runId, created);
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const heading = React.useRef<HTMLHeadingElement>(null);
@@ -94,7 +94,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
     );
   }
   if (failed && !loaded) {
-    return <ErrorState as="h1" onRetry={reload} />;
+    return <ErrorState as="h1" message={failMessage} onRetry={reload} />;
   }
   // UXR-48: the badge and the title, drawn as placeholders while the launched run loads, not a blank page.
   if (!loaded) {

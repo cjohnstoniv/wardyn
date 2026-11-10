@@ -138,7 +138,8 @@
 - **Before you set it up.**
   - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
   - The gateway sees `wardyn-proxy` as its caller. Unless a provider opts in, Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
-  - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. Both are experimental until 0.11. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
+  - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
+  - The token format is `1`, and the key set's address is stable through 0.11.
   - A Bedrock key provider opts in with its gateway in `bedrock.base_url`. A Bedrock SSO provider cannot.
   - Without it, a per-person limit can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key. With it, a rule can key on the token's `sub`, `wardyn_run` and `wardyn_runner`.
   - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern. Prompt checks can be left to a provider's gateway, except the run's own secret values: see [Who inspects](operations/ai-gateway.md#who-inspects).
@@ -156,7 +157,8 @@
   - It has no per-domain egress decisions, and no credential, approval or audit controls.
 - Wardyn's `k8s` substrate creates its own pods by default. An experimental switch (`k8s.agentSandbox.enabled`, off by default) makes the agent pod through a bare `Sandbox` instead.
   - Wardyn keeps its own NetworkPolicies, proxy pod and managed files, and holds the pod behind a scheduling gate until it has read it back.
-  - Server mode only, no warm pools, templates, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - Server mode only, no claims, warm pools, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - Experimental: `k8s.agentSandbox.template` names a platform-owned `SandboxTemplate`. Wardyn takes only its annotations under one prefix and refuses any other field, placement included, until the boot canary covers template placement. The extensions controller stays uninstalled.
   - It trusts the controller with every run's pod. See [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md).
 - A cluster can run both now, each in its own namespace.
 
@@ -174,9 +176,8 @@
   - compute: the substrate, or a sandbox platform under it (above);
   - network, credentials, approvals and audit: `wardyn-proxy` and `wardynd`;
   - model and tool access: an AI gateway (above), inside what Wardyn lets the run reach.
-- Two gaps today:
-  - the gateway gets no person or run identity (above), so its per-person rules cannot follow a Wardyn run;
-  - stored policies are an administrator's ([who can change what](operations/admin-only-writes.md)), so a person or a machine cannot yet save its own narrower policy.
+- A model gateway can receive a signed person and run token when the provider opts in ([the claims](operations/ai-gateway.md#the-claims-a-gateway-receives)), so its per-person rules can follow a Wardyn run.
+- Stored policies are an administrator's ([who can change what](operations/admin-only-writes.md)). A person saves a synthesized one as their own template with `wardyn record save <run-id> --name <n> --template`; the template is bounded by that person's ceiling when a run uses it.
 
 ## 3. Blessed-default-vs-alternate matrix
 

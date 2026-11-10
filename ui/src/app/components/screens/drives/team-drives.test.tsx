@@ -38,6 +38,7 @@ vi.mock("../../../lib/api/drives", async () => {
   };
 });
 
+// The console no longer reads /workspace-providers for the team-drive switch: GET /drives carries it.
 const getProvidersMock = vi.fn();
 vi.mock("../../../lib/api/providers", () => ({ providers: { getWorkspaceProviders: () => getProvidersMock() } }));
 // No directory configured: the group field is the plain input it falls back to.
@@ -50,6 +51,7 @@ import { HttpError } from "../../../lib/api/core";
 import type { UserDriveGrant, UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
 import { DRIVES, DRIVES_TEAM_UNKNOWN, PERM } from "../../../lib/user-drives-copy";
 import { aheadByHours } from "../../../lib/test-clock";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { DrivesScreen } from "./drives-screen";
 
 const when = aheadByHours(-1);
@@ -88,12 +90,10 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
 }
 
 async function renderScreen(snap: UserDrivesSnapshot, teamDrivesOn = true) {
-  getDrivesMock.mockResolvedValue(snap);
-  getProvidersMock.mockResolvedValue({ providers: { storage: { user_drive: { team_drives: teamDrivesOn || undefined } } }, etag: null });
+  // The switch rides GET /drives, so one read carries it.
+  getDrivesMock.mockResolvedValue({ ...snap, team_drives: teamDrivesOn });
   render(<DrivesScreen />);
   await screen.findAllByRole("table");
-  // The switch is a second read: let it land before the test looks.
-  await waitFor(() => expect(getProvidersMock).toHaveBeenCalled());
   await act(async () => {});
 }
 
@@ -132,10 +132,44 @@ describe("Drives list, team drive rows", () => {
     expect(table().getByText(DRIVES.MODE_RW)).toBeInTheDocument();
   });
 
-  it("a page of allocations shorter than the count cannot prove write, so the row stays read-only", async () => {
+  it("a page of allocations shorter than the count cannot prove write or read-only, so Mode says Not shown", async () => {
     await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
-    expect(table().getByText(DRIVES.MODE_RO)).toBeInTheDocument();
+    const row = within(table().getByRole("row", { name: /platform-ref/ }));
+    expect(row.queryByText(DRIVES.MODE_RO)).toBeNull();
+    expect(row.queryByText(DRIVES.MODE_RW)).toBeNull();
+    expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(1);
     expect(table().getByText(DRIVES.ALLOCATED_COUNT(3))).toBeInTheDocument();
+  });
+
+  // Writability resolves per allocation (writable_override, then members_can_write), not as an AND across groups.
+  const modeCell = (name: RegExp) => within(table().getByRole("row", { name }));
+
+  it("a partial page with a read-only allocation and a hidden writer says Not shown, not Read only", async () => {
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant()] }));
+    const row = modeCell(/platform-ref/);
+    expect(row.queryByText(DRIVES.MODE_RO)).toBeNull();
+    expect(row.queryByText(DRIVES.MODE_RW)).toBeNull();
+    expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(1);
+  });
+
+  it("a complete page with a read-only and a writing allocation says Not shown", async () => {
+    await renderScreen(
+      snapshot({ drives: [drive({ writable: true, grant_count: 2 })], grants: [grant({ id: "gr", subject: "readers" }), grant({ id: "gw", subject: "writers", members_can_write: true })] }),
+    );
+    const row = modeCell(/platform-ref/);
+    expect(row.queryByText(DRIVES.MODE_RO)).toBeNull();
+    expect(row.queryByText(DRIVES.MODE_RW)).toBeNull();
+    expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(1);
+  });
+
+  it("a complete page whose only writer is overridden to read-only says Read only", async () => {
+    await renderScreen(snapshot({ drives: [drive({ writable: true })], grants: [grant({ members_can_write: true, writable_override: false })] }));
+    expect(modeCell(/platform-ref/).getByText(DRIVES.MODE_RO)).toBeInTheDocument();
+  });
+
+  it("a complete page where no allocation lets members write says Read only", async () => {
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 2 })], grants: [grant(), grant({ id: "g2", subject: "qa" })] }));
+    expect(modeCell(/platform-ref/).getByText(DRIVES.MODE_RO)).toBeInTheDocument();
   });
 
   it("switch off: the same drive is today's row, with no chip and no team words", async () => {
@@ -150,10 +184,10 @@ describe("Drives list, team drive rows", () => {
   });
 });
 
-describe("Drives list, the team-drive switch cannot be read", () => {
+describe("Drives list, the answer does not say whether team drives are on", () => {
+  // A daemon older than the team_drives field: the answer carries no switch, which is not "off".
   async function renderUnread() {
     getDrivesMock.mockResolvedValue(snapshot({ drives: [drive({ writable: true, single_host: true }), drive({ id: "p1", name: "plain", team: false })], grants: [grant()] }));
-    getProvidersMock.mockRejectedValueOnce(new Error("HTTP 403"));
     render(<DrivesScreen />);
     await screen.findAllByRole("table");
     return screen.findByText(DRIVES_TEAM_UNKNOWN.NOTE);
@@ -163,21 +197,81 @@ describe("Drives list, the team-drive switch cannot be read", () => {
     await renderUnread();
     const row = within(table().getByRole("row", { name: /platform-ref/ }));
     expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(3);
-    for (const t of [DRIVES.TEAM_CHIP, DRIVES.TEAM_RECLAIM_CELL, DRIVES.RECLAIM_RETAIN, DRIVES.MODE_RW, DRIVES.MODE_RO, DRIVES.ALLOCATED_COUNT(1)]) {
+    // The chip is the server's own fact about the drive, so it shows; the claims that depend on the switch do not.
+    expect(row.getByText(DRIVES.TEAM_CHIP)).toBeInTheDocument();
+    for (const t of [DRIVES.TEAM_RECLAIM_CELL, DRIVES.RECLAIM_RETAIN, DRIVES.MODE_RW, DRIVES.MODE_RO, DRIVES.ALLOCATED_COUNT(1)]) {
       expect(row.queryByText(t)).toBeNull();
     }
+    expect(within(table().getByRole("row", { name: /plain/ })).queryByText(DRIVES.TEAM_CHIP)).toBeNull();
     expect(screen.getByRole("button", { name: `${DRIVES.EDIT} platform-ref` })).toBeDisabled();
     // An ordinary drive is unaffected: the switch only changes what a team drive says.
     expect(within(table().getByRole("row", { name: /plain/ })).getByText(DRIVES.RECLAIM_RETAIN)).toBeInTheDocument();
   });
 
-  it("Try again reads the switch and then shows the team row", async () => {
+  it("Try again reads the drives again and then shows the team row", async () => {
     await renderUnread();
-    getProvidersMock.mockResolvedValue({ providers: { storage: { user_drive: { team_drives: true } } }, etag: null });
+    getDrivesMock.mockResolvedValue(snapshot({ team_drives: true }));
     await userEvent.click(screen.getByRole("button", { name: DRIVES_TEAM_UNKNOWN.RETRY }));
     expect(await screen.findByText(DRIVES.TEAM_CHIP)).toBeInTheDocument();
     expect(screen.queryByText(DRIVES_TEAM_UNKNOWN.NOTE)).toBeNull();
     expect(screen.getByText(DRIVES.TEAM_RECLAIM_CELL)).toBeInTheDocument();
+  });
+});
+
+describe("Drives list, a security admin's answer", () => {
+  it("a team drive shows the Team chip when the answer carries team: true and team_drives: true", async () => {
+    // The projection a security admin gets: no host_root, no storage_class, but the team facts.
+    await renderScreen(snapshot({ drives: [drive({ team: true })], grants: [grant()] }), true);
+    expect(table().getByText(DRIVES.TEAM_CHIP)).toBeInTheDocument();
+    expect(screen.queryByText(DRIVES_TEAM_UNKNOWN.NOTE)).toBeNull();
+  });
+
+  it("never offers Try again and never reads the providers page, whatever the switch says", async () => {
+    for (const on of [true, false]) {
+      getDrivesMock.mockResolvedValue({ ...snapshot(), team_drives: on });
+      const { unmount } = render(<OperatorProvider operator={false} securityOperator><DrivesScreen /></OperatorProvider>);
+      await screen.findAllByRole("table");
+      await act(async () => {});
+      expect(screen.queryByText(DRIVES_TEAM_UNKNOWN.NOTE)).toBeNull();
+      expect(screen.queryByRole("button", { name: DRIVES_TEAM_UNKNOWN.RETRY })).toBeNull();
+      expect(screen.queryByText(DRIVES_TEAM_UNKNOWN.CELL)).toBeNull();
+      unmount();
+    }
+    expect(getProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("Mode follows each allocation's members_can_write, true or false, in that answer", async () => {
+    const writers = drive({ id: "w1", name: "writers-ref", writable: true });
+    const readers = drive({ id: "r1", name: "readers-ref", writable: true });
+    await renderScreen(
+      snapshot({
+        drives: [writers, readers],
+        grants: [
+          grant({ id: "gw", drive_id: "w1", subject: "platform-team", members_can_write: true }),
+          // The projection leaves a false bit out, so this allocation has no members_can_write at all.
+          grant({ id: "gr", drive_id: "r1", subject: "qa" }),
+        ],
+      }),
+      true,
+    );
+    expect(within(table().getByRole("row", { name: /writers-ref/ })).getByText(DRIVES.MODE_RW)).toBeInTheDocument();
+    const ro = within(table().getByRole("row", { name: /readers-ref/ }));
+    expect(ro.getByText(DRIVES.MODE_RO)).toBeInTheDocument();
+    expect(ro.queryByText(DRIVES.MODE_RW)).toBeNull();
+  });
+});
+
+describe("Drive forms read the team-drive switch from the drives answer", () => {
+  it("the add form offers Team drive on the first paint when the answer says on", async () => {
+    await renderScreen(snapshot({ drives: [drive({ id: "other", team: false, name: "home" })], grants: [] }), true);
+    await userEvent.click(await screen.findByRole("button", { name: DRIVES.NEW_CTA }));
+    expect(screen.getByRole("switch", { name: DRIVES.FIELD_TEAM })).toBeInTheDocument();
+  });
+
+  it("the add form has no Team drive switch when the answer says off", async () => {
+    await renderScreen(snapshot({ drives: [drive({ id: "other", team: false, name: "home" })], grants: [] }), false);
+    await userEvent.click(await screen.findByRole("button", { name: DRIVES.NEW_CTA }));
+    expect(screen.queryByRole("switch", { name: DRIVES.FIELD_TEAM })).toBeNull();
   });
 });
 

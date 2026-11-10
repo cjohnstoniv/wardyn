@@ -190,7 +190,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 Don't hand-author the allowlist for a complex task — record it once:
 
 1. In a trusted environment, run the task under a permissive policy.
-2. `wardyn record synthesize <run-id>` previews the least-privilege policy Wardyn derived from the run's audit trail; `wardyn record save <run-id> --name my-ci-task` stores it.
+2. `wardyn record synthesize <run-id>` previews the least-privilege policy Wardyn derived from the run's audit trail; `wardyn record save <run-id> --name my-ci-task` stores it as a policy, which is an administrator's to write. A member runs it with `--template` to keep it as their own template instead.
 3. Export the stored policy's spec to your repo as the pipeline's `WARDYN_CI_POLICY_FILE` (set `first_use_approval` to `always_deny`).
 
 What synthesis does and does not derive:

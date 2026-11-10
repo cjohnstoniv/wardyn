@@ -212,4 +212,24 @@ describe("DeleteConfirmDialog — a very long name", () => {
     expect(screen.getByRole("alertdialog").className).toContain("grid-cols-[minmax(0,1fr)]");
     expect(screen.getByRole("heading", { name: (accessible) => accessible.includes(name) }).className).toContain("break-words");
   });
+
+  it("wording: a Disconnect names its verb and subject in the title, the button and the toast, not the stored name", async () => {
+    const user = userEvent.setup();
+    toastSuccess.mockClear();
+    render(
+      <DeleteConfirmDialog
+        name="git-pat-github-com"
+        entity="credential"
+        wording={{ verb: "Disconnect", past: "disconnected", subject: "Access token for github.com" }}
+        description="test"
+        onOpenChange={() => {}}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+        onDeleted={() => {}}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Disconnect Access token for github.com?" })).toBeInTheDocument();
+    expect(screen.queryByText(/git-pat-github-com/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+    expect(toastSuccess).toHaveBeenCalledWith("Access token for github.com disconnected");
+  });
 });

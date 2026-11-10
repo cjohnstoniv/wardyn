@@ -368,7 +368,9 @@ export function GovernanceScreen() {
                       <TableHead>{GOV.COL_LIMITS}</TableHead>
                       <TableHead>{GOV.COL_GRADE}</TableHead>
                       <TableHead>{GOV.COL_UPDATED}</TableHead>
-                      <TableHead className="w-[140px]" />
+                      <TableHead className="w-[140px]">
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

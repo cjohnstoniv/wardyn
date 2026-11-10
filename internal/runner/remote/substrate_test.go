@@ -435,6 +435,28 @@ func TestTeardownWhileOfflineIsQueuedNotFailed(t *testing.T) {
 	}
 }
 
+// A runner that said it cannot keep an ended sandbox (a Kubernetes runner) is never queued an end it can
+// only refuse: offline, a stop is queued as a kill, and an end answers ErrEndUnsupported, queuing nothing.
+func TestTeardownWhileOfflineQueuesNoEndForARunnerThatCannotKeep(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	sb, _ := create(t, rig, nil)
+	rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: []byte(`{"support":{"Classes":["CC1"]},"version":"0.10.0","ends_unkept":true}`)})
+	rig.Org.Drop()
+	waitOffline(t, rig)
+	ctx := ctxT(t)
+
+	if err := rig.Sub.EndSandbox(ctx, sb.Ref); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Fatalf("offline End = %v, want ErrEndUnsupported", err)
+	}
+	if err := rig.Sub.StopSandbox(ctx, sb.Ref); !errors.Is(err, runner.ErrPendingOnRunner) {
+		t.Fatalf("offline Stop = %v, want ErrPendingOnRunner", err)
+	}
+	want := []string{"kill " + sb.Ref}
+	if got := rig.Queued(); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("queued = %v, want %v", got, want)
+	}
+}
+
 func TestWaitAcrossALinkDropIsRunnerOffline(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
 	sb, _ := create(t, rig, nil)

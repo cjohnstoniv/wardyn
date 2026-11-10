@@ -53,7 +53,7 @@ describe("runner drawer, macOS virtual machines (M-R1)", () => {
     const s = within(section()!);
     expect(s.getByText("Ready: macOS 27.0.1 (26A434)")).toBeInTheDocument();
     expect(s.getByText("Running now: 1 of 2")).toBeInTheDocument();
-    expect(s.getByText("4 CPUs · 8 GB memory")).toBeInTheDocument();
+    expect(s.getByText("4 CPUs · 8 GiB memory")).toBeInTheDocument();
     expect(s.getByText("Claude Code, Codex CLI, Your own tools")).toBeInTheDocument();
     const order = [...document.querySelectorAll("[data-resources], [data-macvm], [data-trust]")].map((e) => Object.keys((e as HTMLElement).dataset)[0]);
     expect(order).toEqual(["resources", "macvm", "trust"]);

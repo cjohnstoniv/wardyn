@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -118,8 +119,9 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the
 	// two pack endpoints, nothing else, or this broker becomes a credentialed
 	// proxy to the whole forge. The forge path is arbitrarily deep (gitlab
-	// subgroups, ADO's "o/p/_git/r"), so this lane takes the last segment as
-	// verb rather than the GitHub lane's closed enum.
+	// subgroups, ADO's "o/p/_git/r"), so the verb is the last segment, and
+	// patGitPath, below, judges the repository path before it: a forge API
+	// route that ends in a verb is refused.
 	verb := rest[strings.LastIndex(rest, "/")+1:]
 	if strings.HasSuffix(rest, "/info/refs") {
 		verb = "info/refs"
@@ -132,9 +134,14 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A host the run's Azure DevOps Entra grant covers takes that lane instead
-	// (pat_broker_entra.go).
+	// (pat_broker_entra.go), which admits only Azure DevOps' own _git paths.
 	if adoLane {
 		p.serveADOGit(w, r, host, rest, verb, ado)
+		return
+	}
+	if !patGitPath(grant.scope().Forge, rest, verb) {
+		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
+		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
 	}
 	// The grant's own narrowing, past the hand-off (an Azure DevOps host may have
@@ -224,8 +231,9 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// decoded path (git_broker.go: "never the raw request path").
 	hostHeader := upstreamURLHost(host, 443, 443) // an IPv6 literal is bracketed in a URL host and in a Host header
 	// Refs discovery forwards exactly the one service value the checks read,
-	// rebuilt, so a repeated key cannot hand the forge a different one.
-	rawQuery := r.URL.RawQuery
+	// rebuilt, so a repeated key cannot hand the forge a different one; a pack
+	// POST takes no query.
+	rawQuery := ""
 	if strings.HasSuffix(rest, "/info/refs") {
 		rawQuery = url.Values{"service": {r.URL.Query().Get("service")}}.Encode()
 	}
@@ -255,6 +263,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
 	p.stripGatewayHeaders(outReq.Header)
+	stripRouteOverrides(outReq.Header)
 	// Strip any sandbox-supplied credential BEFORE injecting ours, through
 	// stripSandboxCredentials (inject.go, the ONE definition) — a local
 	// Header.Del("Authorization") would leave Private-Token, X-Api-Key,
@@ -273,6 +282,19 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	}
 	p.emitDialledAllow(decisionLog(p.reqOf(r, host, 443), egress.Allow, allowSrc), host)
 	return resp, true
+}
+
+// gitPathOverrides are the headers a server or framework may read a request
+// path or path prefix from instead of the request line.
+var gitPathOverrides = []string{"X-Original-URL", "X-Rewrite-URL", "X-Forwarded-Prefix", "X-Script-Name", "X-Forwarded-Host"}
+
+// stripRouteOverrides drops the method- and path-override headers from a
+// brokered git request: the checks judged the request line's method and path,
+// and a forge that honoured an override would run another route.
+func stripRouteOverrides(h http.Header) {
+	for _, k := range slices.Concat(patAPIMethodOverrides, gitPathOverrides) {
+		h.Del(k)
+	}
 }
 
 // patToken returns the brokered PAT with the git username the host expects.

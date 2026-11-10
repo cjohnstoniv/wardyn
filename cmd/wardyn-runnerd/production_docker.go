@@ -432,6 +432,9 @@ type runtimeExtras struct {
 	runsNamespaces []string
 	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
 	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
+	// netPolWatch, set by the k8s runner (the driver's OnNetPolChange), takes the hook a canary re-check
+	// calls when the NetworkPolicy verdict changes; the caps go again after it. nil on Docker.
+	netPolWatch func(func())
 }
 
 // proxySettings are the run proxy settings the caps name: every one this build carries, and the
@@ -545,7 +548,10 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return runnerRuntime{}, err
 	}
 	checkLapsesAtStartup(ctx, manager)
-	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
+	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil, netPol: make(chan struct{}, 1)}
+	if extra.netPolWatch != nil {
+		extra.netPolWatch(caps.netPolChanged)
+	}
 	if extra.macOSVM != nil {
 		reportWindowsOn(ctx, caps.online.Load)
 	}
@@ -600,6 +606,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		extra.macOSVM.start(ctx, func() { caps.resendMacOS(ctx) })
 		if w := extra.report.relay; w != nil {
 			go w.run(ctx, func() { caps.resendRelay(ctx) })
+		}
+		if extra.netPolWatch != nil {
+			go caps.resendNetPol(ctx)
 		}
 		go func() {
 			if manager.IsRevoked() {

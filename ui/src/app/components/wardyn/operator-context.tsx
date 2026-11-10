@@ -136,6 +136,12 @@ export interface MeIdentity {
   // with no <OperatorProvider> (every existing test) must never invent a
   // posture warning nothing has actually reported.
   confinementPosture: ConfinementPosture;
+  // /healthz's network_policy_checked_at, from the same answer as the posture:
+  // the check that produced it, RFC 3339 UTC. "" when absent.
+  confinementCheckedAt: string;
+  // /healthz's network_policy_source, from the same answer: "runner" when the
+  // posture is a connected Kubernetes runner's, "" when it is this cluster's.
+  confinementSource: string;
 
   // #510-F6 — /healthz's `demo_video_base_url`, the operator-run mirror the
   // Getting Started demo episodes stream from on an air-gapped deployment.
@@ -207,7 +213,7 @@ export interface UserTypeMeta {
 }
 
 // See MeIdentity.confinementPosture for the fail-quiet rationale.
-export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "unknown" | "";
+export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "refused" | "not_proven" | "unknown" | "";
 
 // The single fail-open/fail-closed default every field's own doc comment
 // (above) explains — this is what every unwrapped consumer (every existing
@@ -228,6 +234,8 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   userDrive: NO_USER_DRIVE,
   userType: null,
   confinementPosture: "",
+  confinementCheckedAt: "",
+  confinementSource: "",
   demoVideoBaseUrl: undefined,
 };
 
@@ -248,6 +256,8 @@ export function OperatorProvider({
   userDriveUnavailable = "",
   userType = null,
   confinementPosture = "",
+  confinementCheckedAt = "",
+  confinementSource = "",
   demoVideoBaseUrl = undefined,
   children,
 }: {
@@ -282,6 +292,10 @@ export function OperatorProvider({
    *  (no posture reported), so every existing caller keeps today's silent
    *  behaviour. */
   confinementPosture?: ConfinementPosture;
+  /** See MeIdentity.confinementCheckedAt. Optional, defaulting "". */
+  confinementCheckedAt?: string;
+  /** See MeIdentity.confinementSource. Optional, defaulting "". */
+  confinementSource?: string;
   /** #510-F6 — see MeIdentity.demoVideoBaseUrl above. Optional, defaulting
    *  undefined ("no mirror configured"), so every existing caller keeps
    *  today's GitHub-default behaviour. */
@@ -318,9 +332,11 @@ export function OperatorProvider({
       userDrive: drive,
       userType,
       confinementPosture,
+      confinementCheckedAt,
+      confinementSource,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, userViewSuperAdmin, unitAdminOf, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, userViewSuperAdmin, unitAdminOf, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, confinementCheckedAt, confinementSource, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -473,6 +489,16 @@ export function useRoleResolved(): boolean {
 // sites still each read only this one value out of it.
 export function useConfinementPosture(): ConfinementPosture {
   return React.useContext(MeIdentityContext).confinementPosture;
+}
+
+// The time of the check that produced the posture — see MeIdentity.confinementCheckedAt.
+export function useConfinementCheckedAt(): string {
+  return React.useContext(MeIdentityContext).confinementCheckedAt;
+}
+
+// Where the posture comes from — see MeIdentity.confinementSource.
+export function useConfinementSource(): string {
+  return React.useContext(MeIdentityContext).confinementSource;
 }
 
 // The operator-run demo mirror — see MeIdentity.demoVideoBaseUrl above.

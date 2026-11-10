@@ -49,11 +49,12 @@ import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { INVENTORY, ERASE, ERASE_DATA, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
 import { aheadByHours } from "../../lib/test-clock";
+import { STATES } from "../wardyn/states";
 
-function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean } = {}) {
-  const { status = null, operator = true, securityOperator = true } = opts;
+function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean; path?: string } = {}) {
+  const { status = null, operator = true, securityOperator = true, path = "/" } = opts;
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <ModelAccessProvider status={status} onRefresh={() => {}}>
         <OperatorProvider operator={operator} securityOperator={securityOperator} operatorResolved principal="admin@corp.example">
           <CredentialsScreen />
@@ -139,6 +140,21 @@ describe("the inventory", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("reads the provider filter from the URL, so Back from a row lands on the same filtered list", async () => {
+    const bob = { ...aliceRow, person: "sub-bob", email: "bob@corp.example", provider: "bedrock-prod", provider_name: "Bedrock (prod)" };
+    listInventoryMock.mockResolvedValue(inventory([aliceRow, bob], { "corp-gw": 1, "bedrock-prod": 1 }));
+    renderScreen({ path: "/?provider=bedrock-prod" });
+    expect(await screen.findByText("bob@corp.example")).toBeInTheDocument();
+    expect(screen.queryByText("alice@corp.example")).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listInventoryMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("a read failure gets the generic error state, with Retry", async () => {
     listInventoryMock.mockRejectedValueOnce(new HttpError(500, "boom"));
     renderScreen();
@@ -185,6 +201,7 @@ describe("the inventory", () => {
     renderScreen();
     await screen.findByText("alice@corp.example");
     expect(screen.getByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     const cell = (email: string) => screen.getByText(email).closest("tr")!;
     expect(cell("alice@corp.example")).toHaveTextContent(`finance · ${KEY_DOMAINS.SOURCE_GROUP("eng-finance")}`);
     expect(cell("bob@corp.example")).toHaveTextContent(`default · ${KEY_DOMAINS.SOURCE_DEFAULT}`);

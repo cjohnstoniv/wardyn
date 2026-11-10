@@ -5,6 +5,7 @@
 
 // Your account > Your API tokens (r15 T2-d): a person's own tokens, listed with the Inbound only chip, minted
 // through the shared dialog (kind "inbound" only when Calling inbound ports is chosen) and revoked with a confirm.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -82,6 +83,23 @@ describe("ApiTokensCard", () => {
     expect(rowOf("laptop-cli")).not.toHaveTextContent(T.INBOUND_ONLY);
     expect(rowOf("ci-hook")).toHaveTextContent(T.INBOUND_ONLY);
     expect(screen.getAllByText(T.INBOUND_ONLY)).toHaveLength(1);
+  });
+
+  it("a load the server worded shows its sentence, not the default line", async () => {
+    route = () => json({ error: "Your sentence from the server.", reason: "load_failed" }, 500);
+    mount();
+    await openCard();
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    route = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    mount();
+    await openCard();
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("shows nothing where there is no person to own a token (the admin token, local mode)", async () => {

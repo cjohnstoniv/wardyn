@@ -449,6 +449,29 @@ func TestRunLease_EndFailsClosed(t *testing.T) {
 	}
 }
 
+// A router whose target for the run is known not to keep an ended sandbox (a Kubernetes executor or
+// runner) is never asked for the end: on an offline runner that end would be queued, refused, and the
+// run audited kept. The run is stopped and audited kept:false, as when the end itself is refused.
+func TestRunLease_EndOnATargetThatCannotKeepIsNeverAsked(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.srv.cfg.Runner = leaseRouter{leaseRunner: f.rn, keeps: []bool{false}}
+	f.sweep(t)
+
+	if f.rn.endCount() != 0 {
+		t.Fatalf("EndSandbox = %d, want 0 — the target cannot keep an ended sandbox", f.rn.endCount())
+	}
+	if f.st.State() != types.RunStopped || f.rn.stopCount() != 1 {
+		t.Fatalf("state %s, StopSandbox %d; want STOPPED, 1", f.st.State(), f.rn.stopCount())
+	}
+	ended := f.audit.eventsFor(f.run.ID, "run.ended")
+	if len(ended) != 1 {
+		t.Fatalf("run.ended events = %+v, want one", ended)
+	}
+	if d := leaseAuditData(t, ended[0]); d["kept"] != false || d["kept_until"] != nil || d["end_error"] != runner.ErrEndUnsupported.Error() {
+		t.Errorf("run.ended data = %v, want kept:false, no kept_until, end_error %q", d, runner.ErrEndUnsupported)
+	}
+}
+
 // TestRunLease_AFailedEndIsRevokedOnReassert: an end that fails and whose
 // fail-closed stop fails too (the same daemon down, or the pass out of time)
 // leaves the run claimed and RUNNING with its broker credentials live. The next

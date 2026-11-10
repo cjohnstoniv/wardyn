@@ -311,6 +311,7 @@ func (s *Server) unrouteRunner(id uuid.UUID) {
 	s.runnerStreams.subsMu.Lock()
 	ep, ok := s.runnerStreams.subs[id]
 	delete(s.runnerStreams.subs, id)
+	delete(s.runnerStreams.netpolLast, id)
 	s.runnerStreams.subsMu.Unlock()
 	if reg, isReg := s.cfg.Runner.(substrateRegistry); ok && isReg {
 		reg.Remove(ep.sub)

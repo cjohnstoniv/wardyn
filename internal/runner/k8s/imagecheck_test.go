@@ -191,13 +191,22 @@ func TestCheckPrewrappedImage_PinnedPlacementChecksOneArch(t *testing.T) {
 }
 
 func TestPrewrappedCheckUnavailable(t *testing.T) {
-	if got := (&Driver{netPolEnforced: true}).PrewrappedCheckUnavailable(); got != "" {
+	// withLive sets the live verdict: boot proved enforcement, the latest checks found state.
+	withLive := func(cfg Config, state netPolState) *Driver {
+		d := &Driver{netPolEnforced: true, cfg: cfg}
+		d.netPol.Store(&netPolVerdict{byNS: map[string]nsVerdict{"default": {state: state}}})
+		return d
+	}
+	if got := withLive(Config{}, netPolProven).PrewrappedCheckUnavailable(); got != "" {
 		t.Errorf("enforced direct substrate: %q, want available", got)
 	}
 	if got := (&Driver{}).PrewrappedCheckUnavailable(); got == "" {
 		t.Error("unproven NetworkPolicy enforcement: available, want a reason")
 	}
-	if got := (&Driver{netPolEnforced: true, cfg: Config{RunnerID: "r1"}}).PrewrappedCheckUnavailable(); got == "" {
+	if got := withLive(Config{}, netPolNotProven).PrewrappedCheckUnavailable(); got == "" {
+		t.Error("a re-check stopped proving enforcement after boot proved it: available, want a reason")
+	}
+	if got := withLive(Config{RunnerID: "r1"}, netPolProven).PrewrappedCheckUnavailable(); got == "" {
 		t.Error("a runner's substrate: available, want a reason")
 	}
 }

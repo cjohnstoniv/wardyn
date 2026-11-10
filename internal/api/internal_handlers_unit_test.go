@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -67,6 +69,52 @@ func TestInternalDecisions_BadBodyIsRefusedAndRepeatIsAudited(t *testing.T) {
 	}
 	if data["repeat"] != float64(7) || data["host"] != "registry.example.com" {
 		t.Errorf("data = %v, want the host and the streak's repeat count", data)
+	}
+}
+
+// A via_org engine's decision post marked DecisionRelayedHeader is a VM guest's relayed flow, not the run working:
+// it never touches the idle clock. The mark is honoured only on the engine's in-process call for a VM run; a plain
+// call's or a container run's copy is dropped and its allow touches as before. The header never reaches past the
+// handler.
+func TestInternalDecisions_RelayedMarkTrustedOnlyOnAViaOrgVMCall(t *testing.T) {
+	h := newHarness(t)
+	for _, tc := range []struct {
+		name         string
+		kind         types.MachineKind
+		viaOrg, mark bool
+		wantTouch    bool
+	}{
+		{"vm via_org call, marked", types.MachineLinuxVM, true, true, false},
+		{"vm via_org call, no mark", types.MachineLinuxVM, true, false, true},
+		{"vm plain call, marked", types.MachineLinuxVM, false, true, true},
+		{"container via_org call, marked", types.MachineContainer, true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &touchStore{}
+			srv := New(baseTestConfig(h, st))
+			runID := uuid.New()
+			ctx := context.WithValue(context.Background(), claimsCtxKey{}, &identity.Claims{RunID: runID})
+			ctx = contextWithLiveRun(ctx, &types.AgentRun{ID: runID, State: types.RunRunning, MachineKind: tc.kind})
+			if tc.viaOrg {
+				ctx = context.WithValue(ctx, viaOrgCallKey{}, true)
+			}
+			body := `{"request":{"host":"api.corp.example","method":"POST"},"decision":"allow","rule_source":"policy:allowlist"}`
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/decisions", strings.NewReader(body)).WithContext(ctx)
+			if tc.mark {
+				r.Header.Set(proxy.DecisionRelayedHeader, "1")
+			}
+			w := httptest.NewRecorder()
+			srv.handlePostDecision(w, r)
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("decision = %d %s, want 202", w.Code, w.Body.String())
+			}
+			if got := len(st.touched) == 1; got != tc.wantTouch {
+				t.Fatalf("TouchRun calls = %v, want touched=%v", st.touched, tc.wantTouch)
+			}
+			if v := r.Header.Values(proxy.DecisionRelayedHeader); len(v) != 0 {
+				t.Fatalf("%s left on the request: %v", proxy.DecisionRelayedHeader, v)
+			}
+		})
 	}
 }
 

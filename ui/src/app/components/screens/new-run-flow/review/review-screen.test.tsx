@@ -534,7 +534,7 @@ describe("Review groups", () => {
     expect(group("run").getByText(NR_REVIEW.VALUE_AGENT)).toBeInTheDocument();
     expect(group("run").getByText(NR_REVIEW.TIMING_INTERACTIVE)).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.WHERE_VALUE("General"))).toBeInTheDocument();
-    expect(group("where").getByText(NR_REVIEW.WHERE_DETAIL("Organization pool", 6, 10))).toBeInTheDocument();
+    expect(group("where").getByText(NR_REVIEW.WHERE_DETAIL("Organisation pool", 6, 10))).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT)).toBeInTheDocument();
     // #3043: provenance is a caption, not a link-coloured word that goes nowhere.
     expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT).className).toContain("text-muted-foreground");

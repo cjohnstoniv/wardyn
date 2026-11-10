@@ -346,6 +346,37 @@ func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
 	}
 }
 
+// TestK8sEgressContainmentCheck_ReCheckedRows pins the rows a re-checking
+// substrate gets, byte for byte, with {time} the check that produced the
+// verdict as "2006-01-02 15:04 UTC". None says "boot-time", and the refusing
+// rows never name the override the operator did not set.
+func TestK8sEgressContainmentCheck_ReCheckedRows(t *testing.T) {
+	at := time.Now().UTC().Truncate(time.Minute)
+	when := at.Format("2006-01-02 15:04") + " UTC"
+	for _, tc := range []struct {
+		verdict, status, detail, fix string
+	}{
+		{"enforced", "ok", "Enforcing · NetworkPolicy. A canary pod showed that a deny-all policy blocks egress. Last confirmed " + when + "; checked again every 10 minutes.", ""},
+		{"refused", "fail", "Not enforcing. The check at " + when + " showed that this cluster no longer blocks egress with a deny-all NetworkPolicy, so new sandboxes are refused. Runs already going keep going.",
+			"Restore NetworkPolicy enforcement in the cluster's CNI. Wardyn checks again every 10 minutes, and a restart checks at once."},
+		{"unenforced", "fail", "Not enforcing. The check at " + when + " showed that this cluster does not block egress with a deny-all NetworkPolicy. The operator accepted that risk with WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL), so new sandboxes are still created with egress unconfined. Agent-sandbox runs are refused.",
+			"Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's CNI/NetworkPolicy support to restore real confinement."},
+		{"not_proven", "fail", "Not proven. The last 3 checks could not run, so Wardyn can't confirm that this cluster blocks egress with a deny-all NetworkPolicy. New sandboxes are refused until a check passes.",
+			"Check that the cluster's API answers and that Wardyn can create pods and NetworkPolicies in the runs namespace. Wardyn checks again every 10 minutes."},
+	} {
+		chk, ok := k8sEgressContainmentCheck("k8s", tc.verdict, false, at)
+		if !ok || chk.Status != tc.status || chk.Detail != tc.detail || chk.Fix != tc.fix {
+			t.Errorf("%s: got %q / %q / %q, want %q / %q / %q", tc.verdict, chk.Status, chk.Detail, chk.Fix, tc.status, tc.detail, tc.fix)
+		}
+		if strings.Contains(chk.Detail, "boot-time") || strings.Contains(chk.Detail, "—") {
+			t.Errorf("%s: %q says boot-time or holds an em dash", tc.verdict, chk.Detail)
+		}
+		if tc.verdict != "unenforced" && strings.Contains(chk.Detail+chk.Fix, "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") {
+			t.Errorf("%s: names the override the operator did not set", tc.verdict)
+		}
+	}
+}
+
 func TestK8sEgressContainmentCheck(t *testing.T) {
 	cases := []struct {
 		name             string
@@ -364,10 +395,14 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 		// nor fail (the operator made an informed call on a managed cluster,
 		// which is a warn, not a red the checklist blocks on).
 		{"k8s acknowledged (B1): warn, never fail or ok", "k8s", "acknowledged", true, "warn", false},
+		// A failed re-check is not the operator's override: fail, and the fix
+		// never tells them to unset an env var they did not set.
+		{"k8s re-check refused: fail, fix never names the opt-out", "k8s", "refused", true, "fail", false},
+		{"k8s not proven: fail, fix never names the opt-out", "k8s", "not_proven", true, "fail", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := k8sEgressContainmentCheck(tc.driver, tc.netpolProven, false)
+			chk, ok := k8sEgressContainmentCheck(tc.driver, tc.netpolProven, false, time.Time{})
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
@@ -403,7 +438,7 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 // real remedy (exempt Wardyn's pods, then unset the env) rather than just
 // suppressing the warning.
 func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
-	chk, ok := k8sEgressContainmentCheck("k8s", "acknowledged", false)
+	chk, ok := k8sEgressContainmentCheck("k8s", "acknowledged", false, time.Time{})
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
@@ -854,8 +889,8 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, envBuilderCheck(true))
 	assertSetupCheckBlocking(t, envBuilderCheck(false))
 
-	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", ""} {
-		chk, ok := k8sEgressContainmentCheck("k8s", netpol, false)
+	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", "refused", "not_proven", ""} {
+		chk, ok := k8sEgressContainmentCheck("k8s", netpol, false, time.Time{})
 		if !ok {
 			t.Fatalf("k8sEgressContainmentCheck(%q) absent", netpol)
 		}
@@ -1228,14 +1263,14 @@ func TestStaticKeyServiceCheck(t *testing.T) {
 // A k8s runner that did not report its capabilities has no canary verdict to upgrade for: the row
 // points at substrate_health, not at a wardynd upgrade.
 func TestK8sEgressContainmentCheck_UnreadableRunnerPointsAtSubstrateHealth(t *testing.T) {
-	chk, ok := k8sEgressContainmentCheck("k8s", "", true)
+	chk, ok := k8sEgressContainmentCheck("k8s", "", true, time.Time{})
 	if !ok || chk.Status != "fail" {
 		t.Fatalf("check = %+v (ok=%v), want a fail row", chk, ok)
 	}
 	if strings.Contains(chk.Fix, "Upgrade wardynd") || !strings.Contains(chk.Fix, "substrate_health") {
 		t.Errorf("Fix = %q, want it to point at substrate_health and not at an upgrade", chk.Fix)
 	}
-	old, _ := k8sEgressContainmentCheck("k8s", "", false)
+	old, _ := k8sEgressContainmentCheck("k8s", "", false, time.Time{})
 	if !strings.Contains(old.Fix, "Upgrade wardynd") {
 		t.Errorf("a runner that answered without a verdict keeps the upgrade advice, Fix = %q", old.Fix)
 	}

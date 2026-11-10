@@ -210,7 +210,9 @@ export function EnvelopeCard({
                 <TableHead>{ENVELOPE.COL_PLATFORM}</TableHead>
                 <TableHead>{ENVELOPE.COL_GROUPS}</TableHead>
                 <TableHead>{ENVELOPE.COL_SET_BY}</TableHead>
-                <TableHead className="w-[200px]" />
+                <TableHead className="w-[200px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

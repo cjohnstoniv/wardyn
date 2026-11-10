@@ -105,7 +105,7 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     let fail = true;
     await mockRunsList(page, () => (fail ? { runs: [], status: 500 } : { runs: [baseRun("r1", "Recovered run")] }));
     await gotoConsole(page);
-    await expect(page.getByText("Wardyn isn't answering. Try again.")).toBeVisible();
+    await expect(page.getByText("Couldn't load this. Try again.")).toBeVisible();
     fail = false;
     await page.getByRole("button", { name: "Retry" }).click();
     await expect(page.getByText("Recovered run")).toBeVisible();

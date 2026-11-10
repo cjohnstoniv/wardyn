@@ -32,7 +32,7 @@ import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
-import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
 import { compositionSummary, resolvedModelProviders, sourceRunnerLabel, staleRunnerSource, workspaceModelProviderUnavailable, workspaceRunnerRefusal, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
@@ -95,6 +95,7 @@ export function WorkspaceDetailScreen() {
   const caps = useMyCapabilities(!operator);
   const { status: shellStatus } = useShellSetupStatus();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
   // distinct from a REAL false — the member-getting-started.tsx idiom.
   const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
@@ -124,9 +125,12 @@ export function WorkspaceDetailScreen() {
           setWs(w ?? null);
           setStatus("ready");
         })
-        .catch(() => {
+        .catch((e) => {
           if (loadRequestId.current !== requestId) return;
-          if (foreground) setStatus("error");
+          if (foreground) {
+            setLoadMessage(failureSentence(e));
+            setStatus("error");
+          }
         });
     },
     [id],
@@ -333,7 +337,7 @@ export function WorkspaceDetailScreen() {
     return (
       <PageContainer width="form">
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState onRetry={() => load(true)} />
+          <ErrorState message={loadMessage} onRetry={() => load(true)} />
         </div>
       </PageContainer>
     );

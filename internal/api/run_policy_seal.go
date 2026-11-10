@@ -129,6 +129,69 @@ func reassertDenyAllPushes(cfg *proxy.Config, layers []sealLayer) {
 	cfg.PushRuleBase = &base
 }
 
+// sealPerEntryRules seals the rules a stored proxy config carries per entry: every push rule set and the
+// base beside them, and every harness's tool rules. sealRunPolicy met a restriction's push and tool rules
+// into cfg.Policy, the run-wide block, which a config that carries the per-entry form refuses beside it
+// (proxy.Config), so the layers are met into each per-entry rule instead and the run-wide block is left off,
+// as sidecarPolicy leaves it at dispatch. Each rule only ever narrows. A config with no per-entry rules is
+// untouched, and its run-wide block stays as sealRunPolicy left it.
+func sealPerEntryRules(cfg *proxy.Config, layers []sealLayer) {
+	if len(cfg.PushRuleSets) > 0 {
+		cfg.Policy.PushRules = nil
+		sets := slices.Clone(cfg.PushRuleSets)
+		for i := range sets {
+			if r := sealedPushRules(&sets[i].Rules, layers); r != nil {
+				sets[i].Rules = *r
+			}
+		}
+		cfg.PushRuleSets = sets
+		// A base the run never had is made when a layer gives it rules: an entry with no set is held to them.
+		if r := sealedPushRules(cfg.PushRuleBase, layers); r.IsSet() {
+			cfg.PushRuleBase = r
+		}
+	}
+	if len(cfg.HarnessToolRules) > 0 {
+		cfg.Policy.ToolRules = nil
+		sets := slices.Clone(cfg.HarnessToolRules)
+		for i := range sets {
+			sets[i] = sealedHarnessToolRules(sets[i], layers)
+		}
+		cfg.HarnessToolRules = sets
+	}
+}
+
+// sealedPushRules is rules met with every layer's push rules by sealPolicy. rules is not written through.
+func sealedPushRules(rules *types.PushRulesSpec, layers []sealLayer) *types.PushRulesSpec {
+	var spec types.RunPolicySpec
+	if rules != nil {
+		c := *rules
+		c.DenyPaths = slices.Clone(c.DenyPaths)
+		c.RequireReviewPaths = slices.Clone(c.RequireReviewPaths)
+		spec.PushRules = &c
+	}
+	sealPolicy(&spec, layers)
+	return spec.PushRules
+}
+
+// sealedHarnessToolRules is one harness's set met with every layer's tool rules by sealPolicy, the set read as
+// the flat list it was compiled from ("*" is its default).
+func sealedHarnessToolRules(set types.HarnessToolRules, layers []sealLayer) types.HarnessToolRules {
+	spec := types.RunPolicySpec{ToolRules: slices.Clone(set.Rules)}
+	if set.Default != "" {
+		spec.ToolRules = append(spec.ToolRules, types.ToolRule{Tool: "*", Effect: set.Default})
+	}
+	sealPolicy(&spec, layers)
+	out := types.HarnessToolRules{Harness: set.Harness}
+	for _, r := range spec.ToolRules {
+		if r.Tool == "*" {
+			out.Default = r.Effect
+			continue
+		}
+		out.Rules = append(out.Rules, r)
+	}
+	return out
+}
+
 // boundarySealEgress is the boundary's egress as a seal layer: its allowlist when it names one and
 // does not also allow all egress; allow_all_egress as named, or false beside an allowlist, as the
 // resolve meet reads it (types.BoundarySpec.Overlay); its denies either way. An explicit false with
