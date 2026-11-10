@@ -920,3 +920,24 @@ func TestReadback_TornDownRunWithLostAtIsContained(t *testing.T) {
 		t.Errorf("the sweep asked for %d more proxy stops, want none", n)
 	}
 }
+
+// A failed start whose run loseRunStopped tore down (its substrate cannot keep a sandbox) is contained on its first
+// pass once that end and its sandbox stop landed, never left to the sweep as an unconfirmed proxy stop.
+func TestReadback_FailedStartOfATornDownRunIsContainedAtOnce(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.srv.cfg.Store = &failMarkStore{readbackStore: f.rb, st: f.st}
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	_, _, jti := f.lastHandover(t)
+	f.setProxyStopErr(runner.ErrEndUnsupported)
+	if code, state := postLoaded(t, f.srv, f.run.ID, jti, hashHex([]byte("other bytes"))); code != http.StatusOK || state != string(types.ProxyStartFailed) {
+		t.Fatalf("mismatched report: %d %q, want 200 failed", code, state)
+	}
+	if p := f.active(t); p.ContainedAt == nil || p.ContainmentError != "" {
+		t.Errorf("start contained %v, error %q; want contained on the report's own pass", p.ContainedAt, p.ContainmentError)
+	}
+	if !isTerminalRunState(f.st.State()) {
+		t.Errorf("state %s, want the run torn down", f.st.State())
+	}
+}
