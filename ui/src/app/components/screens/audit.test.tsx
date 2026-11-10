@@ -104,7 +104,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
     // #3036: with no title known, the run reference's lead word is the drill-in and the id beside it copies.
-    expect(await screen.findAllByRole("button", { name: /^(111|222)$/ })).toHaveLength(2);
+    expect(await screen.findAllByRole("button", { name: /^Copy run id (111|222)$/ })).toHaveLength(2);
     const drill = (await screen.findAllByRole("button", { name: "Run" }))[0];
     fireEvent.click(drill);
 
@@ -227,7 +227,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const title = await screen.findByRole("button", { name: "payments deps bump" });
     expect(screen.getByText(/^Created the run$/)).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(RID))).toBeNull();
-    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" })).toBeInTheDocument();
     fireEvent.click(title);
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(RID, { newest: true }));
   });
@@ -238,7 +238,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     listAuditMock.mockResolvedValue([ev({ id: "r1", run_id: RID, action: "run.kill", target: RID })]);
     renderScreen();
     expect(await screen.findByRole("button", { name: "Run" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" })).toBeInTheDocument();
   });
 
   // #2850: the toolbar counter drops to its own line whole instead of wrapping inside itself.
