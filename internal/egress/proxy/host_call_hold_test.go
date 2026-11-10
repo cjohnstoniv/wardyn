@@ -739,3 +739,39 @@ func TestHostCallHoldAtTheForwardKeepsADeny(t *testing.T) {
 		}
 	}
 }
+
+// TestHostCallMarkerCoversOnlyItsOwnCall: a forward carrying a lane's admission goes on unasked only while
+// its host, method and path are the ones admitted. Change any of them before the outbound gate and the
+// forward is asked about again, never sent on the old admission.
+func TestHostCallMarkerCoversOnlyItsOwnCall(t *testing.T) {
+	const other = "b.example.com"
+	hold := func(h string) types.HostRule {
+		return types.HostRule{Host: h, Paths: []string{"/admin", "/other"}, Effect: types.HostRuleHold}
+	}
+	p, _ := hcProxy(t, types.RunPolicySpec{AllowedDomains: []string{other}, HostRules: []types.HostRuleSet{{Rules: []types.HostRule{hold(hrHost), hold(other)}}}})
+	cp := newHCCP(t, p)
+	admitted, bad := hostCallScopeOf(hrHost, "POST", "/admin")
+	if bad != nil {
+		t.Fatal(bad.cause)
+	}
+	for _, tc := range []struct {
+		name, method, url string
+		asks              bool
+	}{
+		{"unchanged", "POST", "http://" + hrHost + "/admin", false},
+		{"another host", "POST", "http://" + other + "/admin", true},
+		{"another method", "PUT", "http://" + hrHost + "/admin", true},
+		{"another path", "POST", "http://" + hrHost + "/other", true},
+	} {
+		_, before, _ := cp.counts()
+		req := withHostCallAdmitted(httptest.NewRequest(tc.method, tc.url, nil), admitted)
+		_, err := p.outboundHostRuleRefused(req)
+		_, after, _ := cp.counts()
+		if !tc.asks && (err != nil || after != before) {
+			t.Errorf("%s: err=%v raises %d->%d, want it sent unasked", tc.name, err, before, after)
+		}
+		if tc.asks && (err == nil || after == before) {
+			t.Errorf("%s: err=%v raises %d->%d, want it asked about again and not sent", tc.name, err, before, after)
+		}
+	}
+}
