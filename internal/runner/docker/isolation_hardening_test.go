@@ -231,7 +231,7 @@ func TestCreateSandbox_ImageVolumeAgainstTheDiskLimit(t *testing.T) {
 		{"hard limit, VOLUME covered by a mount", false, []string{"/work/data"},
 			[]runner.Mount{{Source: "/srv/data", Target: "/work/data", ReadOnly: true}}, false, false},
 	} {
-		d, f := quotaDriver(system.Info{})
+		d, f := quotaDriver(infoWithRuntimes())
 		f.imageVolumes = map[string][]string{"busybox:latest": tc.volumes}
 		spec := testSpec()
 		spec.Resources.DiskMiB, spec.Resources.DiskMiBSoft, spec.Mounts = 1024, tc.soft, tc.mounts
@@ -292,7 +292,7 @@ func TestStartSandbox_KeptVolumeAgainstTheDiskLimit(t *testing.T) {
 		{"hard limit, no volume", false, "", false, false},
 		{"hard limit, volume under a Wardyn tmpfs", false, "/tmp", false, false},
 	} {
-		_, f := quotaDriver(system.Info{})
+		_, f := quotaDriver(infoWithRuntimes())
 		f.imageVolumes = nil
 		d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal"})
 		ctx := context.Background()
@@ -397,7 +397,7 @@ func TestStartSandbox_UnreadableKeptAgentUnderADiskLimit(t *testing.T) {
 		fails   int
 		refused bool
 	}{{1, false}, {2, true}} {
-		_, f := quotaDriver(system.Info{})
+		_, f := quotaDriver(infoWithRuntimes())
 		f.imageVolumes = nil
 		a := &agentInspectFails{fakeDocker: f}
 		d := newWithClient(a, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal"})
