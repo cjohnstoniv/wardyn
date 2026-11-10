@@ -244,6 +244,9 @@ func TestCanaryRecheck_AcknowledgedRefusesAgentSandboxOnly(t *testing.T) {
 	if err := d.netPolRefusal(testNamespace); !errors.Is(err, errNetPolNotProven) {
 		t.Errorf("agent-sandbox: refusal %v, want errNetPolNotProven", err)
 	}
+	if got := healthCheck(t, d).Verdict; got != runner.NetPolNotProven {
+		t.Errorf("agent-sandbox: health verdict %q, want %q", got, runner.NetPolNotProven)
+	}
 }
 
 // TestCanaryRecheck_AcknowledgedNeverLiftsAnEscape: with the ambient default-deny acknowledged, no
@@ -328,8 +331,17 @@ func TestCanaryRecheck_AcknowledgedBlipKeepsProof(t *testing.T) {
 		}
 		*clock = clock.Add(canaryRecheckInterval)
 		d.recheckOnce(context.Background())
-		if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolAcknowledged, At: *clock}); got != want {
+		// Health names what happens: agent-sandbox mode refuses on an acknowledged verdict, so it reads
+		// not proven there, the same refusal the setup row and the console then show.
+		want := runner.NetPolCheck{Verdict: runner.NetPolAcknowledged, At: *clock}
+		if agentSandbox {
+			want.Verdict = runner.NetPolNotProven
+		}
+		if got := healthCheck(t, d); got != want {
 			t.Errorf("agent-sandbox %v, after %d acknowledged checks: health %+v, want %+v", agentSandbox, canaryRecheckStrikes, got, want)
+		}
+		if err := d.netPolRefusal(testNamespace); (err != nil) != agentSandbox {
+			t.Errorf("agent-sandbox %v, after %d acknowledged checks: refusal %v, want one only in agent-sandbox mode", agentSandbox, canaryRecheckStrikes, err)
 		}
 	}
 }

@@ -128,13 +128,19 @@ func (d *Driver) netPolCheck() runner.NetPolCheck {
 	return out
 }
 
-// wireVerdict names a namespace state for health: not enforced splits on whether new sandboxes still
-// start, which the override allows for plain sandboxes only, never in agent-sandbox mode.
+// wireVerdict names a namespace state for health by what the driver does with it. Not enforced splits
+// on whether new sandboxes still start, which the override allows for plain sandboxes only, never in
+// agent-sandbox mode. Acknowledged proves nothing, so agent-sandbox mode refuses on it: there it reads
+// "not proven" (refused until a check proves enforcement), never the milder warning, and never
+// "refused", which claims a check showed egress getting through.
 func (d *Driver) wireVerdict(s netPolState) string {
 	switch s {
 	case netPolProven:
 		return runner.NetPolEnforced
 	case netPolAcknowledged:
+		if d.refuses(s) {
+			return runner.NetPolNotProven
+		}
 		return runner.NetPolAcknowledged
 	case netPolUnenforced:
 		if d.refuses(s) {
