@@ -798,6 +798,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
 - An approval lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline refuses them all for the run. The answer lives in the run's proxy, so a new proxy asks again.
+- A request a brokered route or an API door sends is held the same way, on the method and path its host receives. A request a lane already held and let through is not asked about again when it is sent.
 - The approval names no port or scheme. It covers that host, method and path on any port, over HTTP or HTTPS.
 - A hold never outranks a deny. Each request is judged afresh: if any rule set denies it, or names the host and matches nothing, it is refused, approved or not. An approval answers only the hold.
 - Every other set must still allow the request. A plain-HTTP request to a host the policy does not allow is refused without asking anyone.
@@ -1229,7 +1230,7 @@ How a request to a host is decided:
 
 - Each set that names the host decides by its first matching rule. A set that names the host and matches no rule denies.
 - Across sets, any deny wins. Otherwise any hold asks a person ([A host rule hold](#a-host-rule-hold-effect-hold)). Otherwise the request is allowed. A set that does not name the host has no say.
-- `allowed_methods` still applies on top.
+- [`allowed_methods`](#allowed_methods) still applies on top, on the lanes it covers. `/wardyn/gh/` and `/wardyn/git/` ignore it.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
 - A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or a path override (`X-Original-URL`, `X-Rewrite-URL`, `X-Override-URL`), is refused.
 

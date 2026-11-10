@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -742,7 +743,7 @@ func TestHostCallHoldAtTheForwardKeepsADeny(t *testing.T) {
 
 // TestHostCallMarkerCoversOnlyItsOwnCall: a forward carrying a lane's admission goes on unasked only while
 // its host, method and path are the ones admitted. Change any of them before the outbound gate and the
-// forward is asked about again, never sent on the old admission.
+// forward is asked about again, never sent on the old admission; add an override header and it is refused.
 func TestHostCallMarkerCoversOnlyItsOwnCall(t *testing.T) {
 	const other = "b.example.com"
 	hold := func(h string) types.HostRule {
@@ -773,5 +774,78 @@ func TestHostCallMarkerCoversOnlyItsOwnCall(t *testing.T) {
 		if tc.asks && (err == nil || after == before) {
 			t.Errorf("%s: err=%v raises %d->%d, want it asked about again and not sent", tc.name, err, before, after)
 		}
+	}
+	// The admission answers the hold only: a marked request that now carries an override is refused, unasked.
+	_, before, _ := cp.counts()
+	req := withHostCallAdmitted(httptest.NewRequest("POST", "http://"+hrHost+"/admin", nil), admitted)
+	req.Header.Set("X-HTTP-Method-Override", "DELETE")
+	_, err := p.outboundHostRuleRefused(req)
+	var hr *hostRuleRefusal
+	if _, after, _ := cp.counts(); !errors.As(err, &hr) || hr.hold != nil || after != before || hr.log.RuleSource != ruleSourceHostRule {
+		t.Errorf("marked with a method override: err=%v raises %d->%d, want a policy:host-rule refusal, unasked", err, before, after)
+	}
+}
+
+// TestHostCallModelRouteAnswersPending: the brokered model route answers a held forward as the lanes do:
+// the pending 403 while nobody has decided, and the host once a person approves.
+func TestHostCallModelRouteAnswersPending(t *testing.T) {
+	up := newRawUpstream(t, `{}`)
+	p, _ := llmChecksProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcModelsHold()}}, "", up)
+	cp := newHCCP(t, p)
+	rec, reached := hcModels(t, p, up)
+	if reached || rec.Code != http.StatusForbidden || rec.Header().Get(egressHeaderStatus) != egressRefusalPending ||
+		!strings.Contains(rec.Body.String(), `"wardyn":"approval-pending"`) ||
+		!strings.Contains(rec.Header().Get(egressHeaderDetail), "GET /v1/models on "+openaiHost) {
+		t.Fatalf("undecided: %d reached=%v %v %s, want the pending 403 before the host", rec.Code, reached, rec.Header(), rec.Body)
+	}
+	cp.decideAll(types.ApprovalApproved)
+	if rec, reached = hcModels(t, p, up); rec.Code != http.StatusOK || !reached {
+		t.Fatalf("approved: %d reached=%v, want 200 at the host", rec.Code, reached)
+	}
+}
+
+// TestHostCallProxyOwnSendNeverHeld: a request the proxy sends for itself (withProxyOwnSend) is not the
+// sandbox's, so a hold on its host, method and path never asks anyone about it.
+func TestHostCallProxyOwnSendNeverHeld(t *testing.T) {
+	p, _ := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+	cp := newHCCP(t, p)
+	req := httptest.NewRequest("POST", "http://"+hrHost+"/admin", nil)
+	if _, err := p.outboundHostRuleRefused(req.WithContext(withProxyOwnSend(req.Context()))); err != nil {
+		t.Fatalf("own send: %v, want it sent", err)
+	}
+	if _, err := p.outboundHostRuleRefused(req); err == nil {
+		t.Fatal("the same request from the sandbox was sent, want it held")
+	}
+	if rows, _, _ := cp.counts(); rows != 1 {
+		t.Errorf("%d asks, want one, for the sandbox's request only", rows)
+	}
+}
+
+// hcDoorRT is an API door's own transport that records whether it was used.
+type hcDoorRT struct{ sent int }
+
+func (d *hcDoorRT) RoundTrip(*http.Request) (*http.Response, error) {
+	d.sent++
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+}
+
+// TestHostCallAPIDoorHoldIsBounded: a door on its own transport (the kube door) meets a hold in sendAPIDoor.
+// Undecided, it waits no longer than the hold window and is never sent; approved, it goes out.
+func TestHostCallAPIDoorHoldIsBounded(t *testing.T) {
+	p, _ := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+	cp := newHCCP(t, p)
+	rt := &hcDoorRT{}
+	start := time.Now()
+	_, err := p.sendAPIDoor(apiDoor{rt: rt}, httptest.NewRequest("POST", "https://"+hrHost+"/admin", nil))
+	var hr *hostRuleRefusal
+	if !errors.As(err, &hr) || hr.hold == nil || hr.hold.decision != egress.Pending || rt.sent != 0 {
+		t.Fatalf("undecided: err=%v sent=%d, want a pending refusal before the door's transport", err, rt.sent)
+	}
+	if took := time.Since(start); took > 20*hostCallWindow*hostCallSecond {
+		t.Errorf("undecided wait took %v, want it bounded by the %v window", took, hostCallWindow*hostCallSecond)
+	}
+	cp.decideAll(types.ApprovalApproved)
+	if _, err := p.sendAPIDoor(apiDoor{rt: rt}, httptest.NewRequest("POST", "https://"+hrHost+"/admin", nil)); err != nil || rt.sent != 1 {
+		t.Fatalf("approved: err=%v sent=%d, want it sent once", err, rt.sent)
 	}
 }
