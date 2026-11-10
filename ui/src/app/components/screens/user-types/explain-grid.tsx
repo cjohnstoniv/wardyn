@@ -34,6 +34,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../ui/dialo
 import { cn } from "../../ui/utils";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
+import { StaleNote } from "../../wardyn/states";
 import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
 import { AddGrantForm } from "../permissions";
@@ -67,7 +68,10 @@ function onlyPhrase(who: string[]): { visible: string; full: string; elided: boo
 
 export function ExplainGrid({ subject, name, disabled }: { subject: string; name: string; disabled: boolean }) {
   const [rows, setRows] = React.useState<ExplainRow[] | null>(null);
-  const [grants, setGrants] = React.useState<CapabilityGrant[]>([]);
+  // null = no grant read has landed yet. A failed read keeps the last grants that did load, and a failure with
+  // none says so: it must not read as "this type has no direct grants".
+  const [grants, setGrants] = React.useState<CapabilityGrant[] | null>(null);
+  const [grantsFailed, setGrantsFailed] = React.useState(false);
   const [failed, setFailed] = React.useState<string | null>(null);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -78,6 +82,17 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
   const [addKind, setAddKind] = React.useState<CapabilityKind | null>(null);
   const typeName = useUserTypeName();
   const valueName = useValueNames();
+
+  const loadGrants = React.useCallback((isActive: () => boolean = () => true) => {
+    api
+      .getPermissions()
+      .then((snap) => {
+        if (!isActive()) return;
+        setGrants(snap.grants);
+        setGrantsFailed(false);
+      })
+      .catch(() => isActive() && setGrantsFailed(true));
+  }, []);
 
   const load = React.useCallback(() => {
     let active = true;
@@ -93,14 +108,11 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
       .catch((e) => active && setFailed(e instanceof HttpError ? e.message : ""));
     // The grant rows only add Remove and "only …"; without them the grid
     // still answers.
-    api
-      .getPermissions()
-      .then((snap) => active && setGrants(snap.grants))
-      .catch(() => active && setGrants([]));
+    loadGrants(() => active);
     return () => {
       active = false;
     };
-  }, [subject]);
+  }, [subject, loadGrants]);
   React.useEffect(load, [load]);
 
   const remove = async (g: CapabilityGrant) => {
@@ -143,13 +155,14 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
   }
 
   // The grant row this type wrote for exactly this cell — what Remove deletes.
+  const known = grants ?? [];
   const ownGrant = (r: ExplainRow) =>
-    grants.find(
+    known.find(
       (g) => g.subject_type === "user_type" && g.subject === subject && g.capability === r.kind && same(g.value, r.value),
     );
   // Who a restricted value is listed for: the audiences of its allow rows.
   const onlyFor = (r: ExplainRow) =>
-    grants
+    known
       .filter((g) => g.effect === "allow" && g.subject_type !== "all" && g.capability === r.kind && same(g.value, r.value))
       .map((g) =>
         g.subject_type === "user_type"
@@ -163,6 +176,15 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
 
   return (
     <div data-testid="explain-grid">
+      {grantsFailed && grants !== null && <StaleNote onRetry={() => loadGrants()} />}
+      {grantsFailed && grants === null && (
+        <p role="status" className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {UT.EXPLAIN_GRANTS_FAILED}
+          <Button variant="outline" size="sm" onClick={() => loadGrants()}>
+            {EXPLAIN.RETRY}
+          </Button>
+        </p>
+      )}
       {CAPABILITY_KINDS.map((kind) => {
         const list = rows.filter((r) => r.kind === kind);
         if (list.length === 0) return null;

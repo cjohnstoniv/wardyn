@@ -63,6 +63,7 @@ import { KIND, PERM } from "../../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../../lib/types";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { STALE_NOTE } from "../../wardyn/states";
 import { ExplainGrid } from "./explain-grid";
 
 const PM = "portfolio-manager";
@@ -292,6 +293,41 @@ describe("ExplainGrid — Remove", () => {
     await userEvent.click(screen.getByRole("button", { name: PERM.REMOVE }));
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
+  });
+});
+
+describe("ExplainGrid — the grant details cannot be read", () => {
+  const rows: ExplainRow[] = [
+    { kind: "agent", value: "*", state: "everyone" },
+    { kind: "agent", value: "codex", state: "blocked" },
+  ];
+
+  it("keeps the verdicts, says grant details are missing with Try again, and offers no Remove it cannot back", async () => {
+    answer(rows);
+    getPermissionsMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    renderGrid();
+    await row("agent", "codex");
+    expect(await screen.findByText(UT.EXPLAIN_GRANTS_FAILED)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: `${EXPLAIN.REMOVE} Codex` })).toBeNull();
+
+    getPermissionsMock.mockResolvedValue({ grants: [grant({ id: "own-deny" })], enforcement: {} });
+    await userEvent.click(screen.getByRole("button", { name: EXPLAIN.RETRY }));
+    expect(await screen.findByRole("button", { name: `${EXPLAIN.REMOVE} Codex` })).toBeInTheDocument();
+    expect(screen.queryByText(UT.EXPLAIN_GRANTS_FAILED)).toBeNull();
+    expect(explainMock).toHaveBeenCalledTimes(1); // Try again re-reads only the grants
+  });
+
+  it("a refresh that fails keeps the last grants that loaded, with the stale note", async () => {
+    answer(rows, [grant({ id: "own-deny" })]);
+    renderGrid();
+    await screen.findByRole("button", { name: `${EXPLAIN.REMOVE} Codex` });
+    getPermissionsMock.mockRejectedValue(new Error("HTTP 500"));
+    deleteGrantMock.mockResolvedValue(undefined);
+    await userEvent.click(screen.getByRole("button", { name: `${EXPLAIN.REMOVE} Codex` }));
+    await userEvent.click(screen.getByRole("button", { name: PERM.REMOVE }));
+    expect(await screen.findByText(STALE_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `${EXPLAIN.REMOVE} Codex` })).toBeInTheDocument();
+    expect(screen.queryByText(UT.EXPLAIN_GRANTS_FAILED)).toBeNull();
   });
 });
 
