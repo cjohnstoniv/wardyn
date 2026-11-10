@@ -354,9 +354,9 @@ func (s *keptFolderStore) SetRunLocalFolderStatusIf(context.Context, uuid.UUID, 
 	return true, nil
 }
 
-func (s *keptFolderStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, _ store.FolderStatusGuard) (types.RunLocalFolderStatus, bool, error) {
+func (s *keptFolderStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, _ store.FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
 	st, err := s.RunLocalFolderStatus(ctx, id)
-	st.Gen++
+	st.Gen, st.GenAt = st.Gen+1, at
 	return st, err == nil, err
 }
 

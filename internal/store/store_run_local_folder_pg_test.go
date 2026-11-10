@@ -120,8 +120,9 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = NULL WHERE id = $1`, null); err != nil {
 		t.Fatal(err)
 	}
-	if st, ok, err := pg.BumpRunLocalFolderGen(ctx, null, store.FolderStatusGuard{Gen: 0}); !ok || err != nil || st.Gen != 1 || st.Back != nil {
-		t.Fatalf("bump of a NULL record = %+v %v %v, want gen 1 and nothing else", st, ok, err)
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	if st, ok, err := pg.BumpRunLocalFolderGen(ctx, null, store.FolderStatusGuard{Gen: 0}, at); !ok || err != nil || st.Gen != 1 || !st.GenAt.Equal(at) || st.Back != nil {
+		t.Fatalf("bump of a NULL record = %+v %v %v, want gen 1 stamped %v and nothing else", st, ok, err, at)
 	}
 
 	legacy := newFolderRun()
@@ -134,11 +135,11 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, legacy, store.FolderStatusGuard{Gen: 1}, types.RunLocalFolderStatus{}); ok || err != nil {
 		t.Fatalf("a write at gen 1 on a gen-less record landed: %v %v", ok, err)
 	}
-	st, ok, err := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0})
+	st, ok, err := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at)
 	if !ok || err != nil || st.Gen != 1 || st.Back == nil || st.Back.Files != 4 {
 		t.Fatalf("bump of a gen-less record = %+v %v %v, want gen 1 with its back kept", st, ok, err)
 	}
-	if _, ok, _ := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}); ok {
+	if _, ok, _ := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at); ok {
 		t.Error("a second bump from gen 0 landed")
 	}
 	st.Settled = 1

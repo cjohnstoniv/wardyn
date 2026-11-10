@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,43 +44,67 @@ func TestPassBack_ACompletedPassIsSettledAtItsOwnGeneration(t *testing.T) {
 	}
 }
 
-// passFixture is computerFolderFixture seeded, with the record then set to gen and settled and a resume
-// kept, and the folder's runner set by runnerAs.
+// passFixture is computerFolderFixture seeded, on a clock the test moves, with the record then set to gen
+// and settled, sent now, with resume, and the folder's runner set by runnerAs.
 type passFixture struct {
-	s    *Server
-	cs   *computerFolderStore
-	sb   *folderSandboxRunner
-	home string
+	s     *Server
+	cs    *computerFolderStore
+	audit *recRecorder
+	run   types.AgentRun
+	sb    *folderSandboxRunner
+	home  string
+	now   atomic.Int64
 }
 
-func newPassFixture(t *testing.T, gen, settled int) *passFixture {
+func newPassFixture(t *testing.T, gen, settled int, resume *types.FolderResume) *passFixture {
 	t.Helper()
-	s, cs, _, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
+	s, cs, audit, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
 	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
 		t.Fatal(cs.FailureHint())
 	}
-	cs.smu.Lock()
-	cs.status.Gen, cs.status.Settled, cs.status.Resume = gen, settled, &types.FolderResume{Stalled: 1, Unsynced: 1}
-	cs.smu.Unlock()
+	f := &passFixture{s: s, cs: cs, audit: audit, run: run, sb: sb, home: filepath.Dir(filepath.Dir(app))}
+	f.now.Store(time.Now().UnixNano())
+	s.cfg.Now = func() time.Time { return time.Unix(0, f.now.Load()) }
+	f.set(func(st *types.RunLocalFolderStatus) {
+		st.Gen, st.Settled, st.GenAt, st.Resume = gen, settled, s.cfg.Now(), resume
+	})
 	agentWrites(t, sb, "a.txt")
-	return &passFixture{s: s, cs: cs, sb: sb, home: filepath.Dir(filepath.Dir(app))}
+	return f
 }
 
-// runnerAs connects the folder's runner advertising caps, or with caps nil takes it offline.
-func (f *passFixture) runnerAs(t *testing.T, caps *runnerwire.Caps) {
+// set changes the stored record.
+func (f *passFixture) set(change func(*types.RunLocalFolderStatus)) {
+	f.cs.smu.Lock()
+	defer f.cs.smu.Unlock()
+	change(&f.cs.status)
+}
+
+// advance moves the fixture's clock on by d.
+func (f *passFixture) advance(d time.Duration) { f.now.Add(int64(d)) }
+
+// back is one visit's pass back, and whether it kept the sandbox.
+func (f *passFixture) back() bool {
+	return f.s.bringComputerFolderBack(context.Background(), f.run.ID, "sbx")
+}
+
+// runnerAs connects the folder's runner advertising caps, or with caps nil takes it offline. It answers
+// the server's side of the new connection.
+func (f *passFixture) runnerAs(t *testing.T, caps *runnerwire.Caps) *runnerwire.Peer {
 	t.Helper()
 	id := f.cs.runner.ID
 	var ep runnerEndpoint
+	var peer *runnerwire.Peer
 	if caps != nil {
-		ep = folderRunnerEndpointCaps(t, id, *caps, f.home)
+		ep, peer = folderRunnerEndpointPeer(t, id, *caps, f.home)
 	}
 	f.s.runnerStreams.subsMu.Lock()
 	defer f.s.runnerStreams.subsMu.Unlock()
 	if caps == nil {
 		delete(f.s.runnerStreams.subs, id)
-		return
+		return nil
 	}
 	f.s.runnerStreams.subs[id] = ep
+	return peer
 }
 
 var (
@@ -87,53 +112,206 @@ var (
 	onePerRunnerCaps = runnerwire.Caps{Folders: true, FolderPassOnce: true, MachineName: "alice-laptop"}
 )
 
-// An older runner gets no pass back while its last one is unsettled: the record says so, stays unsettled,
-// and the sandbox is kept for a resume. Once settled, the pass runs.
-func TestPassBack_AnOlderRunnerPassesOnlyWhenTheLastPassIsSettled(t *testing.T) {
-	f := newPassFixture(t, 2, 1)
+// An older runner's unanswered pass keeps the sandbox, with nothing sent or written, until oldPassBound has
+// passed since it was sent; then the pass is sent. One that was a stall in a row of them gives up there
+// instead, and the sandbox is stopped with the changes not brought back.
+func TestPassBack_AnOlderRunnersUnansweredPassKeepsTheSandboxUntilItsBound(t *testing.T) {
+	f := newPassFixture(t, 2, 1, &types.FolderResume{Stalled: 1, Unsynced: 1})
 	f.runnerAs(t, &olderRunnerCaps)
 	seen := passSeen(f.sb)
-	if !f.s.bringComputerFolderBack(context.Background(), f.cs.run.ID, "sbx") || seen.Load() {
-		t.Fatalf("pass %v; want no pass and the sandbox kept", seen.Load())
+	before := f.cs.folderStatus()
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
 	}
-	if st := f.cs.folderStatus(); st.Gen != 3 || st.Settled != 1 || st.Resume == nil || st.Back == nil || !strings.Contains(st.Back.Error, "was not confirmed") {
-		t.Errorf("record %+v, want gen 3 unsettled, the resume kept and the unconfirmed pass named", st)
+	if st := f.cs.folderStatus(); !reflect.DeepEqual(st, before) {
+		t.Errorf("record %+v, want it unchanged from %+v", st, before)
+	}
+	f.advance(oldPassBound)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 {
+		t.Errorf("pass %v, record %+v; want the pass sent past the bound, at gen 3, settled", seen.Load(), st)
 	}
 
-	f = newPassFixture(t, 2, 2)
+	f = newPassFixture(t, 2, 1, &types.FolderResume{Stalled: computerFolderStalls, Unsynced: 1})
 	f.runnerAs(t, &olderRunnerCaps)
 	seen = passSeen(f.sb)
-	f.s.bringComputerFolderBack(context.Background(), f.cs.run.ID, "sbx")
-	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 {
-		t.Errorf("pass %v, record %+v; want the pass at gen 3, settled", seen.Load(), st)
+	f.advance(oldPassBound)
+	if err := f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if seen.Load() {
+		t.Error("a pass was sent at the give-up")
+	}
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back")
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "changed files not brought back: 1")
+}
+
+// While the last pass is unanswered, a runner not known to run one pass per run at a time gets none,
+// whatever it is at the visit: offline, then back as an older runner. Neither visit writes anything. A
+// runner that says it runs one per run gets the pass.
+func TestPassBack_AnUnsettledPassGoesOnlyToARunnerThatRunsOnePerRun(t *testing.T) {
+	f := newPassFixture(t, 2, 1, &types.FolderResume{Stalled: 1, Unsynced: 1})
+	seen := passSeen(f.sb)
+	before := f.cs.folderStatus()
+	f.runnerAs(t, nil)
+	if !f.back() || seen.Load() {
+		t.Fatalf("offline: pass %v; want no pass and the sandbox kept", seen.Load())
+	}
+	f.runnerAs(t, &olderRunnerCaps)
+	if !f.back() || seen.Load() {
+		t.Fatalf("older runner back: pass %v; want no pass and the sandbox kept", seen.Load())
+	}
+	if st := f.cs.folderStatus(); !reflect.DeepEqual(st, before) {
+		t.Errorf("record %+v, want it unchanged from %+v", st, before)
+	}
+	f.runnerAs(t, &onePerRunnerCaps)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("pass %v, record %+v; want the pass at gen 3, completed and settled", seen.Load(), st)
 	}
 }
 
-// While the last pass is unsettled, the runner the pass is sent to decides it: one offline at the pass,
-// then back as an older runner, gets no pass, and neither leaves the generation settled for a later one;
-// a runner that says it runs one pass per run at a time gets the pass.
-func TestPassBack_AnUnsettledPassGoesOnlyToARunnerThatRunsOnePerRun(t *testing.T) {
-	f := newPassFixture(t, 2, 1)
-	seen := passSeen(f.sb)
-	back := func() bool { return f.s.bringComputerFolderBack(context.Background(), f.cs.run.ID, "sbx") }
-	f.runnerAs(t, nil)
-	if !back() || seen.Load() {
-		t.Fatalf("offline: pass %v; want no pass and the sandbox kept", seen.Load())
-	}
-	if st := f.cs.folderStatus(); st.Gen != 3 || st.Settled != 1 || st.Resume == nil {
-		t.Errorf("offline: record %+v, want gen 3 unsettled, the resume kept", st)
-	}
+// An unanswered pass whose record has no send time is not past its bound: the first visit stamps it and
+// keeps the sandbox, and the give-up comes only once oldPassBound has passed since that visit.
+func TestPassBack_AnUnansweredPassWithNoSendTimeIsBoundFromItsFirstVisit(t *testing.T) {
+	f := newPassFixture(t, 2, 1, &types.FolderResume{Stalled: computerFolderStalls, Unsynced: 1})
+	f.set(func(st *types.RunLocalFolderStatus) { st.GenAt = time.Time{} })
 	f.runnerAs(t, &olderRunnerCaps)
-	if !back() || seen.Load() {
-		t.Fatalf("older runner back: pass %v; want no pass and the sandbox kept", seen.Load())
+	seen := passSeen(f.sb)
+	stamped := f.s.cfg.Now()
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
 	}
-	if st := f.cs.folderStatus(); st.Gen != 4 || st.Settled != 1 || st.Resume == nil {
-		t.Errorf("older runner back: record %+v, want gen 4 unsettled, the resume kept", st)
+	if st := f.cs.folderStatus(); !st.GenAt.Equal(stamped) || st.Gen != 2 {
+		t.Errorf("record %+v, want gen 2 stamped %v", st, stamped)
+	}
+	f.advance(oldPassBound - time.Second)
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("inside the bound: pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	f.advance(time.Second)
+	if err := f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back")
+}
+
+// rc17Record makes the fixture's record one an earlier release wrote: its seed, and no generation, settled
+// count or send time.
+func (f *passFixture) rc17Record() {
+	f.set(func(st *types.RunLocalFolderStatus) { st.Gen, st.Settled, st.GenAt = 0, 0, time.Time{} })
+}
+
+// A record an earlier release wrote, whose pass back that release may still be running, gets no pass from an
+// older runner until oldPassBound has passed since the first visit that finds it; a runner that says it runs
+// one pass per run at a time gets the pass at once.
+func TestPassBack_AnEarlierReleasesRecordWaitsOnAnOlderRunner(t *testing.T) {
+	f := newPassFixture(t, 0, 0, &types.FolderResume{Stalled: 1, Unsynced: 1})
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	seen := passSeen(f.sb)
+	if !f.back() || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox kept", seen.Load())
+	}
+	if st := f.cs.folderStatus(); st.Gen != 0 || st.GenAt.IsZero() || st.Seed == nil {
+		t.Errorf("record %+v, want it still the earlier release's, stamped now", st)
+	}
+	f.advance(oldPassBound)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 1 || st.Settled != 1 {
+		t.Errorf("pass %v, record %+v; want the pass sent past the bound, at gen 1, settled", seen.Load(), st)
+	}
+
+	f = newPassFixture(t, 0, 0, &types.FolderResume{Stalled: 1, Unsynced: 1})
+	f.rc17Record()
+	f.runnerAs(t, &onePerRunnerCaps)
+	seen = passSeen(f.sb)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 1 || st.Settled != 1 {
+		t.Errorf("pass %v, record %+v; want the pass at once, at gen 1, settled", seen.Load(), st)
+	}
+}
+
+// Found open at a run's first visit, before any keep, the sandbox has its agent and egress stopped first and
+// is kept with a resume, with no pass sent and no generation moved.
+func TestPassBack_AnOpenPassAtTheFirstVisitStopsTheAgentAndKeepsTheSandbox(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	seen := passSeen(f.sb)
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	if !f.sb.proxyStopped.Load() || !f.sb.agentKilled.Load() {
+		t.Errorf("proxy stopped %v, agent killed %v; want both before the keep", f.sb.proxyStopped.Load(), f.sb.agentKilled.Load())
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil || st.Gen != 0 || st.GenAt.IsZero() {
+		t.Errorf("record %+v, want a resume at gen 0, stamped", st)
+	}
+}
+
+// Found open at a run's first visit, a sandbox whose agent and egress cannot be stopped is not kept running:
+// it is stopped with no pass sent, and the record says its changes were not brought back.
+func TestPassBack_AnOpenPassWhoseSandboxCannotBeQuiescedStopsItNotBroughtBack(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	f.sb.proxyErr = errors.New("the proxy is wedged")
+	seen := passSeen(f.sb)
+	if err := f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	if seen.Load() {
+		t.Error("a pass was sent with the agent and egress not stopped")
+	}
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "no pass ran; the runner may still be running its last pass back")
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "its changes not brought back yet, uncounted")
+}
+
+// Found open at a resume visit, the sandbox was kept with its agent and egress stopped already: it stays
+// kept, and is not quiesced again.
+func TestPassBack_AnOpenPassAtAResumeVisitKeepsTheSandboxAsItIs(t *testing.T) {
+	f := newPassFixture(t, 2, 1, &types.FolderResume{Stalled: 1, Unsynced: 1})
+	f.runnerAs(t, &olderRunnerCaps)
+	if !f.back() || f.sb.stopCount() != 0 {
+		t.Fatalf("stops %d; want the sandbox kept", f.sb.stopCount())
+	}
+	if f.sb.proxyStopped.Load() || f.sb.agentKilled.Load() {
+		t.Error("a resume visit quiesced the kept sandbox again")
+	}
+}
+
+// A pass the runner never answered for (its connection dropped as the pass started) does not stop the
+// sandbox at its visit: it is kept as a stall. The next visit inside the bound sends nothing; once the runner
+// says it runs one pass per run at a time, the next visit sends the pass, and its completion tears down.
+func TestPassBack_AnUnansweredPassKeepsTheSandboxUntilTheRunnerIsUpdated(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	peer := f.runnerAs(t, &olderRunnerCaps)
+	var dropped atomic.Bool
+	f.sb.onPass = func() {
+		if !dropped.Swap(true) {
+			peer.Close()
+		}
+	}
+	_, err := boundedFinalize(t, f.s, f.run, time.Second)
+	if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
+		t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
+	}
+	st := f.cs.folderStatus()
+	if st.Gen != 2 || st.Settled != 1 || st.Resume == nil || st.Resume.Stalled != computerFolderStalls || st.Back == nil || !strings.Contains(st.Back.Error, "did not answer for this pass") {
+		t.Fatalf("record %+v, want gen 2 unsettled, kept as a stall, the unanswered pass named", st)
+	}
+	seen := passSeen(f.sb)
+	f.runnerAs(t, &olderRunnerCaps)
+	if !f.back() || seen.Load() {
+		t.Fatalf("inside the bound: pass %v; want no pass and the sandbox kept", seen.Load())
 	}
 	f.runnerAs(t, &onePerRunnerCaps)
-	back()
-	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 5 || st.Settled != 5 || st.Back == nil || st.Back.Error != "" {
-		t.Errorf("pass %v, record %+v; want the pass at gen 5, completed and settled", seen.Load(), st)
+	if f.back() || !seen.Load() {
+		t.Fatalf("updated runner: pass %v; want the pass sent and the sandbox left to its stop", seen.Load())
+	}
+	if st := f.cs.folderStatus(); st.Gen != 3 || st.Settled != 3 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("record %+v, want the completed pass at gen 3, settled", st)
 	}
 }
 

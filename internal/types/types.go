@@ -797,6 +797,9 @@ type RunLocalFolderStatus struct {
 	Gen int `json:"gen,omitempty"`
 	// Settled is the latest generation whose pass the runner answered for, or that sent nothing.
 	Settled int `json:"settled,omitempty"`
+	// GenAt is when the record was moved to Gen, so when that generation's pass was sent at the
+	// earliest. Absent (a record from before it) reads as long ago.
+	GenAt time.Time `json:"gen_at,omitempty"`
 }
 
 // FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that

@@ -84,10 +84,10 @@ type RunLocalFolderStatuses interface {
 	// SetRunLocalFolderStatusIf replaces run id's record when the stored one meets guard, keeping
 	// guard's generation. False when it does not, or the run has no local folder.
 	SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error)
-	// BumpRunLocalFolderGen moves run id's record from guard's generation to the next, changing
-	// nothing else, and answers the record as it then stands. False when the stored record does not
-	// meet guard, or the run has no local folder.
-	BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard) (types.RunLocalFolderStatus, bool, error)
+	// BumpRunLocalFolderGen moves run id's record from guard's generation to the next, stamped at
+	// (GenAt), changing nothing else, and answers the record as it then stands. False when the stored
+	// record does not meet guard, or the run has no local folder.
+	BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error)
 }
 
 // FolderStatusGuard is what a write of a run's folder record requires of the stored one: the
@@ -141,15 +141,15 @@ func (s PG) SetRunLocalFolderStatusIf(ctx context.Context, id uuid.UUID, guard F
 	return tag.RowsAffected() == 1, nil
 }
 
-// BumpRunLocalFolderGen implements RunLocalFolderStatuses. Only gen changes, so a write that landed
-// between the caller's read and this bump is kept.
-func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard) (types.RunLocalFolderStatus, bool, error) {
-	pred, args := guard.sql(3)
+// BumpRunLocalFolderGen implements RunLocalFolderStatuses. Only gen and gen_at change, so a write that
+// landed between the caller's read and this bump is kept.
+func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
+	pred, args := guard.sql(4)
 	var raw []byte
 	err := s.Pool.QueryRow(ctx, `UPDATE agent_runs
-		SET local_folder_status = COALESCE(local_folder_status, '{}'::jsonb) || jsonb_build_object('gen', $2::int)
+		SET local_folder_status = COALESCE(local_folder_status, '{}'::jsonb) || jsonb_build_object('gen', $2::int, 'gen_at', $3::timestamptz)
 		WHERE id = $1 AND local_folder IS NOT NULL AND `+pred+`
-		RETURNING local_folder_status`, append([]any{id, guard.Gen + 1}, args...)...).Scan(&raw)
+		RETURNING local_folder_status`, append([]any{id, guard.Gen + 1, at}, args...)...).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunLocalFolderStatus{}, false, nil
 	}

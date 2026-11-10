@@ -43,6 +43,14 @@ func folderRunnerEndpoint(t *testing.T, id uuid.UUID, shares bool, roots ...stri
 // folderRunnerEndpointCaps is folderRunnerEndpoint advertising caps.
 func folderRunnerEndpointCaps(t *testing.T, id uuid.UUID, caps runnerwire.Caps, roots ...string) runnerEndpoint {
 	t.Helper()
+	ep, _ := folderRunnerEndpointPeer(t, id, caps, roots...)
+	return ep
+}
+
+// folderRunnerEndpointPeer is folderRunnerEndpointCaps and the server's side of its connection, which a
+// test closes to take the runner offline.
+func folderRunnerEndpointPeer(t *testing.T, id uuid.UUID, caps runnerwire.Caps, roots ...string) (runnerEndpoint, *runnerwire.Peer) {
+	t.Helper()
 	fs, err := folderrunner.New(context.Background(), roots, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +73,7 @@ func folderRunnerEndpointCaps(t *testing.T, id uuid.UUID, caps runnerwire.Caps, 
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		if _, ok := sub.Caps(); ok {
-			return runnerEndpoint{sub: sub, link: link}
+			return runnerEndpoint{sub: sub, link: link}, orgPeer
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("the runner's caps never arrived")
@@ -198,7 +206,7 @@ func (s *computerFolderStore) SetRunLocalFolderStatusIf(ctx context.Context, _ u
 	return true, nil
 }
 
-func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.UUID, guard store.FolderStatusGuard) (types.RunLocalFolderStatus, bool, error) {
+func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.UUID, guard store.FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return types.RunLocalFolderStatus{}, false, err
 	}
@@ -207,7 +215,7 @@ func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.
 	if s.status.Gen != guard.Gen {
 		return types.RunLocalFolderStatus{}, false, nil
 	}
-	s.status.Gen++
+	s.status.Gen, s.status.GenAt = s.status.Gen+1, at
 	return s.status, true, nil
 }
 
