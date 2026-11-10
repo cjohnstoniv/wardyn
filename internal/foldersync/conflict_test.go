@@ -18,7 +18,7 @@ const testTag = "ab12cd34"
 func runnerSyncer(t *testing.T, pull bool) (*Syncer, string, string) {
 	t.Helper()
 	sy, box, root := pipeSyncer(t, pull)
-	sy.Opts.Runner, sy.Opts.RunTag = true, testTag
+	sy.Opts.RunnerPass, sy.Opts.RunTag = true, testTag
 	return sy, box, root
 }
 
@@ -213,7 +213,7 @@ func TestLoadState_MovesAnUnreadableRecordAsideAndCompares(t *testing.T) {
 	sy, box, root := runnerSyncer(t, true)
 	file := filepath.Join(t.TempDir(), "run.json")
 	putSyncFile(t, file, `{"local":`, 0o600)
-	st, err := LoadRunnerState(file, root, box)
+	st, err := LoadStateRecover(file, root, box)
 	if err != nil || !strings.HasPrefix(st.Recovered, "run.json.unreadable-") || len(st.Files) != 0 {
 		t.Fatalf("state = %+v, err = %v", st, err)
 	}
@@ -250,7 +250,7 @@ func TestLoadState_MovesAnUnreadableRecordAsideAndCompares(t *testing.T) {
 
 // `wardyn sync` keeps its documented rules: an unreadable record is refused naming the fix, and a
 // file both sides changed is pushed (the laptop wins) and listed, with no copy made.
-func TestSync_TheCLIPassKeepsItsDocumentedRules(t *testing.T) {
+func TestSyncer_WithoutRunnerPassKeepsCLIRules(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "run.json")
 	putSyncFile(t, file, `{"local":`, 0o600)
 	if _, err := LoadState(file, "/l", "/r"); err == nil || !strings.Contains(err.Error(), "delete it to start over") {
@@ -271,6 +271,71 @@ func TestSync_TheCLIPassKeepsItsDocumentedRules(t *testing.T) {
 		}
 		if ents, _ := os.ReadDir(root); len(ents) != 1 {
 			t.Errorf("pull=%v: the laptop holds %d entries, want x.txt alone", pull, len(ents))
+		}
+	}
+}
+
+// A conflict copy whose directory is new on the laptop (the developer moved it away after the walk
+// and is writing it back): the new directories' parents are synced as they are made, then the copy's
+// file, then its link, then its directory, and only after all of them may the push truncate the
+// sandbox's file. A failed directory sync blocks the push.
+func TestInstall_ConflictCopyInANewDirectorySyncsEverythingBeforeThePush(t *testing.T) {
+	for _, failDir := range []bool{false, true} {
+		sy, box, root := runnerSyncer(t, true)
+		sy.ig = newSyncIgnore(nil)
+		rel := "a/b/x.txt"
+		putSyncFile(t, filepath.Join(box, rel), "sandbox edit!", 0o644)
+		r, err := sy.Client.Stat(filepath.Join(box, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		copyRel := conflictNames(rel, testTag)[0]
+		sandbox := func() string { return getSyncFile(t, filepath.Join(box, rel)) }
+		var events []string
+		onSync(t, func(f *os.File) error {
+			if laptopTemp(f) {
+				_, cerr := os.Stat(filepath.Join(root, copyRel))
+				events = append(events, "file, copy absent="+boolStr(os.IsNotExist(cerr))+", sandbox="+sandbox())
+			}
+			return nil
+		}, func(d *os.File) error {
+			for _, p := range []string{".", "a", "a/b"} {
+				if !isDir(d, filepath.Join(root, p)) {
+					continue
+				}
+				_, cerr := os.Stat(filepath.Join(root, copyRel))
+				events = append(events, "dir "+p+", copy present="+boolStr(cerr == nil)+", sandbox="+sandbox())
+				if p == "a/b" && cerr == nil {
+					// The developer's file is back before the push reads it.
+					putSyncFile(t, filepath.Join(root, rel), "laptop edit", 0o644)
+					if failDir {
+						return errFault
+					}
+				}
+			}
+			return nil
+		})
+		l := syncFile{side: Side{Size: int64(len("laptop edit"))}, mode: 0o644}
+		rep := NewReport()
+		pulled := int64(0)
+		if err := sy.conflict(context.Background(), rel, l, r, rep, &pulled); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{
+			"dir a, copy present=false, sandbox=sandbox edit!",
+			"dir ., copy present=false, sandbox=sandbox edit!",
+			"file, copy absent=true, sandbox=sandbox edit!",
+			"dir a/b, copy present=true, sandbox=sandbox edit!",
+		}
+		if !slices.Equal(events, want) {
+			t.Errorf("failDir=%v: events = %q\nwant %q", failDir, events, want)
+		}
+		if failDir {
+			if sandbox() != "sandbox edit!" || len(rep.Pushed) != 0 || !slices.Equal(rep.UnsyncedPaths, []string{rel}) {
+				t.Errorf("a failed directory sync did not block the push: sandbox = %q, report = %+v", sandbox(), rep)
+			}
+		} else if sandbox() != "laptop edit" || !slices.Equal(rep.Pushed, []string{rel}) {
+			t.Errorf("sandbox = %q, pushed = %v", sandbox(), rep.Pushed)
 		}
 	}
 }

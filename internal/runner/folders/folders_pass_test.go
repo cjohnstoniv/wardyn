@@ -100,25 +100,27 @@ func helloClock(t *testing.T, skew time.Duration) (*srvclock.Clock, time.Time) {
 	return c, server
 }
 
-func deadlineIn(ctx context.Context) (time.Duration, bool) {
-	d, ok := ctx.Deadline()
-	return time.Until(d), ok
-}
-
-func TestPassContext_BoundsAPassByTheServersDeadlineOrTheOldRule(t *testing.T) {
+func TestPassEnd_BoundsAPassByTheServersDeadlineOrTheOldRule(t *testing.T) {
 	s := newServer(t, home(t))
-	near := func(got, want time.Duration) bool { return got > want-time.Minute && got <= want }
+	near := func(end time.Time, want time.Duration) bool {
+		left := time.Until(end)
+		return !end.IsZero() && left > want-time.Minute && left <= want
+	}
+	end := func(args runnerwire.SyncFolderArgs) time.Time {
+		t.Helper()
+		e, err := s.passEnd(args)
+		if err != nil {
+			t.Fatalf("passEnd(%+v): %v", args, err)
+		}
+		return e
+	}
 
 	// An older server names no deadline: a seed pass has no limit, a pass back has backPassLimit.
-	seed, cancel := s.passContext(runnerwire.SyncFolderArgs{})
-	defer cancel()
-	if _, ok := deadlineIn(seed); ok {
+	if e := end(runnerwire.SyncFolderArgs{}); !e.IsZero() {
 		t.Error("a seed pass from an older server has a limit")
 	}
-	back, cancel := s.passContext(runnerwire.SyncFolderArgs{Pull: true})
-	defer cancel()
-	if left, ok := deadlineIn(back); !ok || !near(left, backPassLimit) {
-		t.Errorf("a pass back from an older server ends in %v (%v), want %v", left, ok, backPassLimit)
+	if e := end(runnerwire.SyncFolderArgs{Pull: true}); !near(e, backPassLimit) {
+		t.Errorf("a pass back from an older server ends in %v, want %v", time.Until(e), backPassLimit)
 	}
 
 	// The server's deadline is its own wall time: read through the hello clock, a runner whose clock
@@ -126,24 +128,23 @@ func TestPassContext_BoundsAPassByTheServersDeadlineOrTheOldRule(t *testing.T) {
 	clock, server := helloClock(t, time.Hour)
 	s.Clock = clock
 	for _, pull := range []bool{false, true} {
-		ctx, cancel := s.passContext(runnerwire.SyncFolderArgs{Pull: pull, DeadlineUnixMs: server.Add(10 * time.Minute).UnixMilli()})
-		if left, ok := deadlineIn(ctx); !ok || !near(left, 10*time.Minute) || ctx.Err() != nil {
-			t.Errorf("pull=%v: a skewed runner's pass ends in %v (%v, %v), want ten minutes", pull, left, ok, ctx.Err())
+		if e := end(runnerwire.SyncFolderArgs{Pull: pull, DeadlineUnixMs: server.Add(10 * time.Minute).UnixMilli()}); !near(e, 10*time.Minute) {
+			t.Errorf("pull=%v: a skewed runner's pass ends in %v, want ten minutes", pull, time.Until(e))
 		}
-		cancel()
+	}
+	// A deadline the server has already passed is refused at once.
+	if _, err := s.passEnd(runnerwire.SyncFolderArgs{DeadlineUnixMs: server.Add(-time.Second).UnixMilli()}); err == nil ||
+		!strings.Contains(err.Error(), "the pass deadline has passed") {
+		t.Errorf("a passed deadline: err = %v", err)
 	}
 
 	// No clock reading yet: the deadline reads as absent and the old rule applies.
 	s.Clock = srvclock.NewClock(nil)
-	seed, cancel = s.passContext(runnerwire.SyncFolderArgs{DeadlineUnixMs: time.Now().Add(time.Second).UnixMilli()})
-	defer cancel()
-	if _, ok := deadlineIn(seed); ok {
+	if e := end(runnerwire.SyncFolderArgs{DeadlineUnixMs: time.Now().Add(time.Second).UnixMilli()}); !e.IsZero() {
 		t.Error("with no clock reading, a seed pass has a limit")
 	}
-	back, cancel = s.passContext(runnerwire.SyncFolderArgs{Pull: true, DeadlineUnixMs: time.Now().Add(time.Second).UnixMilli()})
-	defer cancel()
-	if left, ok := deadlineIn(back); !ok || !near(left, backPassLimit) {
-		t.Errorf("with no clock reading, a pass back ends in %v (%v), want %v", left, ok, backPassLimit)
+	if e := end(runnerwire.SyncFolderArgs{Pull: true, DeadlineUnixMs: time.Now().Add(time.Second).UnixMilli()}); !near(e, backPassLimit) {
+		t.Errorf("with no clock reading, a pass back ends in %v, want %v", time.Until(e), backPassLimit)
 	}
 }
 

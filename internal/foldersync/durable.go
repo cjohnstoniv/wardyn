@@ -34,8 +34,10 @@ var ErrNotDurable = errors.New("installed but not durable")
 // errNamesTaken is an InstallNew whose every destination holds another file.
 var errNamesTaken = fmt.Errorf("every name is taken: %w", fs.ErrExist)
 
-// InstallError is a failed install. Installed is set only when the new file is in place but its
-// directory sync failed (errors.Is(err, ErrNotDurable)); otherwise every destination is as it was.
+// InstallError is a failed install. Before the install (Step sync-file, close, rename or link) every
+// destination is as it was and the temp file is removed. After it (Step sync-dir, Installed set,
+// errors.Is(err, ErrNotDurable)) the new content is visible at the destination, but not proven
+// durable, and under InstallReplace the old content is gone.
 type InstallError struct {
 	Step      string
 	Installed bool
@@ -60,7 +62,7 @@ var (
 // syncTemp is an install's first step: tmp's bytes reach the disk. It stays open.
 func syncTemp(tmp *os.File) error {
 	if err := fsyncFile(tmp); err != nil {
-		return &InstallError{Step: "sync the file", Err: err}
+		return &InstallError{Step: "sync-file", Err: err}
 	}
 	return nil
 }
@@ -77,63 +79,64 @@ func installDurable(root *os.Root, tmp *os.File, tmpName string, mode InstallMod
 	return installSynced(root, tmp, tmpName, mode, dsts...)
 }
 
-// installSynced is installDurable after syncTemp. With InstallReplace it closes tmp and renames it
-// over dsts[0]. With InstallNew it links the still-open tmp at the first of dsts that is free, never
-// replacing one; a destination already holding tmp's bytes counts as installed.
+// installSynced is installDurable after syncTemp: it closes tmp, then with InstallReplace renames it
+// over dsts[0], and with InstallNew puts it at the first of dsts that is free, trying each on the
+// same temp path and never replacing one; a destination already holding the same bytes counts as
+// installed. The temp is removed after success or after the last name failed.
 func installSynced(root *os.Root, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
-	dst, err := place(root, tmp, tmpName, mode, dsts)
-	_ = tmp.Close()
-	_ = root.Remove(tmpName)
+	defer func() { _ = root.Remove(tmpName) }() // after a rename or move it names nothing
+	if err := tmp.Close(); err != nil {
+		return "", &InstallError{Step: "close", Err: err}
+	}
+	dst, step, err := place(root, tmpName, mode, dsts)
 	if err != nil {
-		return "", &InstallError{Step: "install", Err: err}
+		return "", &InstallError{Step: step, Err: err}
 	}
 	if err := syncDirIn(root, path.Dir(dst)); err != nil {
-		return dst, &InstallError{Step: "sync the directory", Installed: true, Err: err}
+		return dst, &InstallError{Step: "sync-dir", Installed: true, Err: err}
 	}
 	return dst, nil
 }
 
-func place(root *os.Root, tmp *os.File, tmpName string, mode InstallMode, dsts []string) (string, error) {
+// place installs tmpName and names the step that failed.
+func place(root *os.Root, tmpName string, mode InstallMode, dsts []string) (dst, step string, err error) {
 	if mode == InstallReplace {
-		if err := tmp.Close(); err != nil {
-			return "", err
-		}
-		return dsts[0], replaceFile(root, tmpName, dsts[0])
+		return dsts[0], "rename", replaceFile(root, tmpName, dsts[0])
 	}
 	for _, dst := range dsts {
-		err := linkNew(root, tmpName, dst)
+		err := placeNew(root, tmpName, dst)
 		if err == nil {
-			return dst, nil
+			return dst, "", nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
-			return "", err
+			return "", "link", err
 		}
-		if sameContent(root, tmp, dst) {
-			return dst, nil
+		if sameContent(root, tmpName, dst) {
+			return dst, "", nil
 		}
 	}
-	return "", errNamesTaken
+	return "", "link", errNamesTaken
 }
 
-// sameContent reports whether the regular file dst holds tmp's bytes.
-func sameContent(root *os.Root, tmp *os.File, dst string) bool {
-	fi, err := root.Lstat(dst)
-	if err != nil || !fi.Mode().IsRegular() {
-		return false
+// sameContent reports whether the regular file dst holds tmpName's bytes.
+func sameContent(root *os.Root, tmpName, dst string) bool {
+	sum := func(name string) ([]byte, int64, bool) {
+		fi, err := root.Lstat(name)
+		if err != nil || !fi.Mode().IsRegular() {
+			return nil, 0, false
+		}
+		f, err := root.Open(name)
+		if err != nil {
+			return nil, 0, false
+		}
+		defer f.Close()
+		h := sha256.New()
+		n, err := io.Copy(h, io.LimitReader(f, fi.Size()))
+		return h.Sum(nil), n, err == nil && n == fi.Size()
 	}
-	ti, err := tmp.Stat()
-	if err != nil || ti.Size() != fi.Size() {
-		return false
-	}
-	f, err := root.Open(dst)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	a, b := sha256.New(), sha256.New()
-	_, aerr := io.Copy(a, io.NewSectionReader(tmp, 0, ti.Size()))
-	_, berr := io.Copy(b, io.LimitReader(f, fi.Size()))
-	return aerr == nil && berr == nil && bytes.Equal(a.Sum(nil), b.Sum(nil))
+	a, an, aok := sum(tmpName)
+	b, bn, bok := sum(dst)
+	return aok && bok && an == bn && bytes.Equal(a, b)
 }
 
 // createTemp creates an exclusive 0600 file prefix<random>suffix in dir, open for reading and writing.

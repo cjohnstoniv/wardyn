@@ -15,29 +15,29 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// replaceFile first asks Windows to replace to and write the move through to the disk, since a
-// directory cannot be synced there; failing that it renames through root.
+// replaceFile moves from over to and has Windows write the move through to the disk, since a
+// directory cannot be synced there. Only when the directory's path cannot be resolved does it fall
+// back to a rename through root.
 func replaceFile(root *os.Root, from, to string) error {
-	if src, dst, err := nativePaths(root, from, to); err == nil {
-		if windows.MoveFileEx(src, dst, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH) == nil {
-			return nil
-		}
+	src, dst, err := nativePaths(root, from, to)
+	if err != nil {
+		return root.Rename(from, to)
 	}
-	return root.Rename(from, to)
+	return windows.MoveFileEx(src, dst, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
 
-// linkNew fails with fs.ErrExist when to exists. from stays open, so it is linked, not moved.
-func linkNew(root *os.Root, from, to string) error {
-	if src, dst, err := nativePaths(root, from, to); err == nil {
-		err := windows.CreateHardLink(dst, src, 0)
-		if err == nil {
-			return nil
-		}
-		if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
-			return fmt.Errorf("link %s: %w", to, fs.ErrExist)
-		}
+// placeNew moves from to to, written through, never replacing to: it fails with fs.ErrExist when
+// to exists. A hard link is not used, as it has no write-through flag.
+func placeNew(root *os.Root, from, to string) error {
+	src, dst, err := nativePaths(root, from, to)
+	if err != nil {
+		return err
 	}
-	return root.Link(from, to)
+	err = windows.MoveFileEx(src, dst, windows.MOVEFILE_WRITE_THROUGH)
+	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
+		return fmt.Errorf("move to %s: %w", to, fs.ErrExist)
+	}
+	return err
 }
 
 // nativePaths names from and to (in one directory of root) by that directory's resolved path, so

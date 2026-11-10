@@ -345,8 +345,12 @@ What happens:
 - Wardyn copies the folder in, and holds the agent until that copy lands. A
   failed copy fails the run, naming the folder. The run detail shows the first copy's files, bytes and refused paths.
 - One side edits at a time: the sandbox, while the run is live. With **Both ways**, its changes come back when the run
-  ends, before the sandbox is stopped, except as below. A file changed on both sides keeps your computer's copy; nothing there is
-  deleted. With **Copy in only**, nothing comes back.
+  ends, before the sandbox is stopped, except as below. Nothing on your computer is deleted. With **Copy in only**,
+  nothing comes back.
+- A file changed on both sides keeps your computer's copy, and the sandbox's is saved beside it as
+  `<name> (sandbox conflict <run>)<ext>`. If it can't be saved, neither side changes and the file is listed as not
+  brought back. A later run copies these in like any file; a `.wardynignore` line `* (sandbox conflict *)*` leaves
+  them out.
 - Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
   [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
 - Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its

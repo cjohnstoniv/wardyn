@@ -187,7 +187,7 @@ type State struct {
 	Files  map[string]FileSeen `json:"files"`
 	// GitSent is what --git last sent; --pull-commits brings back what came after it.
 	GitSent *GitSent `json:"git_sent,omitempty"`
-	// Recovered is the base name an unreadable record was moved aside to (LoadRunnerState): this
+	// Recovered is the base name an unreadable record was moved aside to (LoadStateRecover): this
 	// state knows nothing, and a runner pass compares every file present on both sides.
 	Recovered string `json:"-"`
 }
@@ -212,10 +212,10 @@ func LoadState(file, local, remote string) (*State, error) {
 	return loadState(file, local, remote, false)
 }
 
-// LoadRunnerState is LoadState for a folder runner's pass: an unreadable record
+// LoadStateRecover is LoadState for a folder runner's pass: an unreadable record
 // is moved aside to <file>.unreadable-<UTC time> and the state is empty, with
 // Recovered set, so the pass compares every file instead of trusting none.
-func LoadRunnerState(file, local, remote string) (*State, error) {
+func LoadStateRecover(file, local, remote string) (*State, error) {
 	return loadState(file, local, remote, true)
 }
 
