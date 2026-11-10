@@ -441,6 +441,8 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 // this transition itself, mirroring casRunState, since it no longer routes
 // through it.
 func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
+	ctx, unlock := s.tryLockRunEnd(ctx, run.ID)
+	defer unlock()
 	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",

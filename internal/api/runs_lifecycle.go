@@ -117,20 +117,26 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 				// can tell "the task never ran" from "it ran but its own
 				// completion accounting failed".
 				data := map[string]any{"exec_started": false, "error": werr.Error()}
-				applied, uerr := s.casRunState(base, runID, types.RunRunning, types.RunFailed)
+				ctx, unlock, locked := s.lockRunEnd(base, runID) // through the tail's computer folder pass
+				if !locked {
+					s.finishRunOutput(base, runID)
+					return
+				}
+				defer unlock()
+				applied, uerr := s.casRunState(ctx, runID, types.RunRunning, types.RunFailed)
 				if uerr != nil {
 					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
-					s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+					s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 						runID.String(), "failure", mustJSON(data)))
 					return
 				}
 				if !applied {
 					// Already terminal (e.g. killed concurrently) — nothing further to
 					// do, but this process may hold the tail the winner does not.
-					s.finishRunOutput(base, runID)
+					s.finishRunOutput(ctx, runID)
 					return
 				}
-				s.finalizeRunTail(base, runID, ref, "run.complete", "failure", data)
+				s.finalizeRunTail(ctx, runID, ref, "run.complete", "failure", data)
 				return
 			}
 			// Audit the watcher's exit for forensics either way.
@@ -223,12 +229,6 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		})
 	}()
 }
-
-// isTerminalRunState reports whether a run is in a terminal (already-ended)
-// state. The kill-switch must not re-kill or clobber a run that already ended
-// (COMPLETED/FAILED by the watcher, or KILLED/STOPPED/ARCHIVED earlier). The set
-// itself lives on types.RunState so the CLI and SDK share one definition.
-func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
 
 // casRunState is the one place this package issues a run's state CAS: it delegates to
 // Store.UpdateRunStateIf and, when the transition BOTH won and NEWLY landed

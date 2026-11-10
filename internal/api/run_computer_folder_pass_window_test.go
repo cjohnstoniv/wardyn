@@ -41,47 +41,59 @@ func (r *passWindowSandbox) SweepOrphanedSandboxes(_ context.Context, _ time.Dur
 
 // An end holds the run's lock from its terminal write through its computer folder's pass back: while that pass
 // runs, the run is terminal with its sandbox ref set and no resume recorded, and neither the terminal-sandbox
-// sweep nor either orphan pass stops the sandbox under it. Only the end's own stop, after the pass, does.
-func TestBringComputerFolderBack_NoSweepStopsTheSandboxDuringItsPass(t *testing.T) {
-	s, cs, _, run, sb, _ := bringBackFixture(t)
-	withoutRunner(cs)
-	rn := &passWindowSandbox{agentSandbox: sb, run: run.ID}
-	s.cfg.Runner, s.cfg.Store = rn, passWindowStore{refStore{cs}}
-	var ran, terminal, orphan bool
-	var stops int
-	sb.onPass = func() {
-		if ran {
-			return
-		}
-		ran = true
-		ctx := context.Background()
-		cur, err := s.cfg.Store.GetRun(ctx, run.ID)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		terminal = isTerminalRunState(cur.State) && cur.SandboxRef != "" && cs.folderStatus().Resume == nil
-		before := sb.stopCount()
-		s.sweepTerminalSandboxRun(ctx, cur)
-		if err := s.reconcileOrphanedSandbox(ctx); err != nil {
-			t.Error(err)
-		}
-		if err := s.sweepOrphanedSandboxes(ctx); err != nil {
-			t.Error(err)
-		}
-		stops, orphan = sb.stopCount()-before, rn.orphan
-	}
-	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
-		t.Fatalf("bring-back = %d %s", res.code, res.body)
-	}
-	if !ran || !terminal {
-		t.Fatalf("the sweeps ran during the pass %v, with the run terminal, its ref set and no resume %v; want both", ran, terminal)
-	}
-	if stops != 0 || orphan {
-		t.Errorf("during the pass back: %d sandbox stops, orphan verdict %v; want none and false", stops, orphan)
-	}
-	if n := sb.stopCount(); n != 1 {
-		t.Errorf("StopSandbox succeeded %d times, want 1: the end's own, after its pass", n)
+// sweep nor either orphan pass stops the sandbox under it. Only the end's own stop, after the pass, does. The
+// person's bring-back and a sweep's finalize (reconcileFinalize) are both such ends.
+func TestEnds_NoSweepStopsTheSandboxDuringItsPass(t *testing.T) {
+	for name, end := range map[string]func(*testing.T, *Server, types.AgentRun){
+		"bring-back": func(t *testing.T, s *Server, run types.AgentRun) {
+			if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
+				t.Fatalf("bring-back = %d %s", res.code, res.body)
+			}
+		},
+		"sweep finalize": func(t *testing.T, s *Server, run types.AgentRun) {
+			s.reconcileFinalize(context.Background(), run.ID, types.RunFailed, "sbx", "reconciled after watcher lease expired")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, cs, _, run, sb, _ := bringBackFixture(t)
+			withoutRunner(cs)
+			rn := &passWindowSandbox{agentSandbox: sb, run: run.ID}
+			s.cfg.Runner, s.cfg.Store = rn, passWindowStore{refStore{cs}}
+			var ran, terminal, orphan bool
+			var stops int
+			sb.onPass = func() {
+				if ran {
+					return
+				}
+				ran = true
+				ctx := context.Background()
+				cur, err := s.cfg.Store.GetRun(ctx, run.ID)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				terminal = isTerminalRunState(cur.State) && cur.SandboxRef != "" && cs.folderStatus().Resume == nil
+				before := sb.stopCount()
+				s.sweepTerminalSandboxRun(ctx, cur)
+				if err := s.reconcileOrphanedSandbox(ctx); err != nil {
+					t.Error(err)
+				}
+				if err := s.sweepOrphanedSandboxes(ctx); err != nil {
+					t.Error(err)
+				}
+				stops, orphan = sb.stopCount()-before, rn.orphan
+			}
+			end(t, s, run)
+			if !ran || !terminal {
+				t.Fatalf("the sweeps ran during the pass %v, with the run terminal, its ref set and no resume %v; want both", ran, terminal)
+			}
+			if stops != 0 || orphan {
+				t.Errorf("during the pass back: %d sandbox stops, orphan verdict %v; want none and false", stops, orphan)
+			}
+			if n := sb.stopCount(); n != 1 {
+				t.Errorf("StopSandbox succeeded %d times, want 1: the end's own, after its pass", n)
+			}
+		})
 	}
 }
 

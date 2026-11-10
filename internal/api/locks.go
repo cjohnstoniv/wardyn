@@ -136,14 +136,31 @@ func (s *Server) tryLockRunOp(ctx context.Context, id uuid.UUID) (context.Contex
 
 // lockRunEnd is lockRunOp for an end that publishes the run's terminal state and then runs its tail:
 // held from that write through the computer folder's pass back (finalizeRunEffects), it keeps every
-// sweep that only tries the lock off a sandbox whose pass is still running. ok=false is logged; the
-// run is then left RUNNING for the stale-watcher sweep.
+// sweep that only tries the lock off a sandbox whose pass is still running. Every writer whose tail
+// reaches finalizeRunEffects takes it; a caller already holding it on ctx re-enters. ok=false is
+// logged; the run is then left as it is for the next pass of whatever ends it.
 func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
 	lctx, unlock, err := s.lockRunOp(ctx, id)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: could not take the run's lock to end it; leaving it for the stale-watcher sweep",
+		slog.WarnContext(ctx, "wardynd: could not take the run's lock to end it; leaving it for the next pass",
 			slog.String("run_id", id.String()), slog.Any("err", err))
 		return ctx, nil, false
 	}
 	return lctx, unlock, true
+}
+
+// tryLockRunEnd is lockRunEnd for a kept run's end (stopKeptRun), which must neither wait on the lock nor be
+// held off by it: an expiry is never dodged by a run revived again and again (leaseRun). It takes the lock
+// when it is free, or already held on ctx, and otherwise goes on without it, as the end did before.
+func (s *Server) tryLockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func()) {
+	if lctx, unlock, ok := s.tryLockRunOp(ctx, id); ok {
+		return lctx, unlock
+	}
+	return ctx, func() {}
+}
+
+// LockRunEnd is lockRunEnd for cmd/wardynd's idle and max-age stop, the one end of a run outside this
+// package: its guarded transition, pass back and sandbox stop run on the context it returns.
+func (s *Server) LockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
+	return s.lockRunEnd(ctx, id)
 }

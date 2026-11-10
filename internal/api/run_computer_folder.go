@@ -278,6 +278,13 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	return keep
 }
 
+// BringComputerFolderBack is bringComputerFolderBack for cmd/wardynd's idle and max-age stop, under the
+// run's lock (LockRunEnd), after its transition to STOPPED and before its StopSandbox. true keeps the
+// sandbox for a resume (resumeComputerFolderBacks), its agent stopped and its egress cut.
+func (s *Server) BringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) bool {
+	return s.bringComputerFolderBack(ctx, runID, ref)
+}
+
 // folderBackVerdict is the resume a pass back leaves (nil: stop the sandbox now) and the error to
 // record for it, read against the resume before it (folderBackResume). Only a sandbox quiesced
 // before the pass (qerr nil) is kept; one that was not is stopped, and the record says why.
