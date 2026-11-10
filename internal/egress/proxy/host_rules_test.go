@@ -258,22 +258,20 @@ func TestHostRulesImposeNothingOnOtherHosts(t *testing.T) {
 	}
 }
 
-// TestConfigRefusesHostRulesABrokerServes: a broker re-originates outside the judged lanes, so a rule on a
-// host one serves is refused at load, as are rules on a VM run.
-func TestConfigRefusesHostRulesABrokerServes(t *testing.T) {
+// TestConfigRefusesHostRulesAViaOrgRouteServes: a via_org route is sent to the organisation, so a rule on a
+// host one serves is refused at load, as are rules on a VM run. A rule on a host a broker serves is judged
+// on each forward (host_rules_broker_test.go), so it loads.
+func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
 	rule := func(h string) []types.HostRuleSet {
 		return []types.HostRuleSet{{Rules: []types.HostRule{{Host: h, Effect: types.HostRuleAllow}}}}
 	}
+	gitGrant := uuid.New()
 	for name, tc := range map[string]struct {
 		c    Config
 		want string
 	}{
-		"model route": {Config{Policy: types.RunPolicySpec{HostRules: rule("api.anthropic.com")}}, "brokered model route"},
-		"git broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}}, "git broker"},
-		"pat broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}}, "git credential broker"},
-		"mcp broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}}, "MCP broker"},
 		"via_org":     {Config{Policy: types.RunPolicySpec{HostRules: rule("corp.example.com")}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}}, "via_org route"},
-		"local model": {Config{Policy: types.RunPolicySpec{HostRules: rule("models.internal")}, LocalModels: map[string]types.LocalModelSettings{"models.internal:11434": {}}}, "brokered model route"},
+		"via_org git": {Config{Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": gitGrant}, ViaOrgRoutes: []ViaOrgRoute{{GrantID: gitGrant}}}, "via_org route"},
 		"vm":          {Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true}, "VM run"},
 		"hold":        {Config{Policy: types.RunPolicySpec{HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: hrHost, Effect: types.HostRuleHold}}}}}}, "later release"},
 	} {
@@ -282,8 +280,16 @@ func TestConfigRefusesHostRulesABrokerServes(t *testing.T) {
 			t.Errorf("%s: err = %v, want one naming %q", name, err, tc.want)
 		}
 	}
-	ok := Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}}
-	if err := ok.validateHostRules(); err != nil {
-		t.Errorf("a rule on a host no broker serves was refused: %v", err)
+	for name, c := range map[string]Config{
+		"model route": {Policy: types.RunPolicySpec{HostRules: rule("api.anthropic.com")}},
+		"git broker":  {Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}},
+		"pat broker":  {Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}},
+		"mcp broker":  {Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}},
+		"local model": {Policy: types.RunPolicySpec{HostRules: rule("models.internal")}, LocalModels: map[string]types.LocalModelSettings{"models.internal:11434": {}}},
+		"other host":  {Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
+	} {
+		if err := c.validateHostRules(); err != nil {
+			t.Errorf("%s: a rule on a host judged per forward was refused: %v", name, err)
+		}
 	}
 }

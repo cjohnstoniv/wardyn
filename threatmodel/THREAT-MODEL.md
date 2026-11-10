@@ -938,10 +938,10 @@ is not the deployment described above.**
 - **`host_rules`** are judged per request on a connection the proxy opens: a `CONNECT` to a rule host
   without the per-run CA, on a port it does not open, on a VM run or on the sign-in lane is refused
   (`policy:host-rule-needs-inspection`), and each request's normal-form path is checked inside
-  (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). A brokered route or
-  API door re-originates outside these lanes, so each forward is judged again where it is sent
-  (`roundTripUpstream` and the egress transport's per-request hook), and a config naming a brokered host
-  is refused at load (`validateHostRules`).
+  (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). Each brokered or API-door
+  forward is judged again where it is sent (`roundTripUpstream`, the egress transport's per-request hook).
+  Residual: the organisation sends a `via_org` request, so a rule on a `via_org` host is refused at load
+  (`validateHostRules`).
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.

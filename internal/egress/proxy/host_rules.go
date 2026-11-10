@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -17,10 +19,10 @@ import (
 // Host rules (types.HostRuleSet) are judged per request, so a rule host is never an opaque tunnel:
 //   - a CONNECT to one is refused in evaluate (ruleSourceHostRuleNeedsInspection) unless this proxy can
 //     open it, and handleConnect then always terminates it (mitmConnect);
-//   - each request inside, and each plain-HTTP request, is judged by types.EvalHostRules (ruleSourceHostRule).
+//   - each request inside, and each plain-HTTP request, is judged by types.EvalHostRules (ruleSourceHostRule);
+//   - each forward a brokered route or API door sends is judged where it is sent (outboundHostRuleRefused).
 //
-// A brokered route re-originates to its host without either lane, so validateHostRules refuses a config
-// whose rules name a host a broker serves.
+// A via_org route is the exception, refused at load (viaOrgHosts).
 const (
 	ruleSourceHostRule                = "policy:host-rule"
 	ruleSourceHostRuleNeedsInspection = "policy:host-rule-needs-inspection"
@@ -166,8 +168,7 @@ func (p *Policy) namesRuleHost(host string) bool {
 }
 
 // validateHostRules is the config's check of policy.host_rules: the shape (types.ValidateHostRuleSets),
-// no rules on a VM run, and no rule host that a brokered route re-originates to, since a broker forwards
-// outside the lanes the rules are judged on.
+// no rules on a VM run, and no rule on a host a via_org route serves (viaOrgHosts).
 func (c *Config) validateHostRules() error {
 	sets := c.Policy.HostRules
 	if len(sets) == 0 {
@@ -179,47 +180,27 @@ func (c *Config) validateHostRules() error {
 	if c.VM {
 		return fmt.Errorf("config: policy.host_rules: host rules are not judged on a VM run's guest flows")
 	}
-	brokered := c.brokeredHosts()
+	viaOrg := c.viaOrgHosts()
 	for _, s := range sets {
 		for _, r := range s.Rules {
-			if lane, ok := brokered[r.Host]; ok {
-				return fmt.Errorf("config: policy.host_rules: %s is reached through the %s, which host rules do not judge", r.Host, lane)
+			if viaOrg[r.Host] {
+				return fmt.Errorf("config: policy.host_rules: %s is reached through a via_org route, which host rules do not judge", r.Host)
 			}
 		}
 	}
 	return nil
 }
 
-// brokeredHosts is every host a brokered local route re-originates to, with the route's name.
-func (c *Config) brokeredHosts() map[string]string {
-	out := map[string]string{anthropicHost: "brokered model route", openaiHost: "brokered model route"}
-	addURL := func(raw, lane string) {
-		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
-			out[hostKey(u.Hostname())] = lane
-		}
-	}
-	for vendor, up := range c.LLMUpstreams {
-		out[hostKey(vendor)] = "brokered model route"
-		addURL(up, "brokered model route")
-	}
-	if len(c.GitGrants) > 0 {
-		out["github.com"] = "git broker"
-	}
-	for h := range c.PATGrants {
-		out[hostKey(h)] = "git credential broker"
-	}
-	for _, s := range c.MCPServers {
-		addURL(s.URL, "MCP broker")
-	}
-	for k := range c.LocalModels {
-		h, _ := splitHostPort(k, 0)
-		out[h] = "brokered model route"
-	}
-	for _, r := range c.GatewayIdentity {
-		out[hostKey(r.Host)] = "brokered model route"
-	}
+// viaOrgHosts is every host a via_org route serves. Every other route's forward is judged where it is sent
+// (outboundHostRuleRefused), but a via_org request goes to the organisation, which reaches the host itself
+// (forwardViaOrg), and its git form names no host (viaOrgRouteFor), so a rule on such a host is refused.
+func (c *Config) viaOrgHosts() map[string]bool {
+	out := map[string]bool{}
 	for _, r := range c.ViaOrgRoutes {
-		out[hostKey(r.Host)] = "via_org route"
+		out[hostKey(r.Host)] = true
+		if slices.Contains(slices.Collect(maps.Values(c.GitGrants)), r.GrantID) {
+			out["github.com"] = true
+		}
 	}
 	return out
 }
