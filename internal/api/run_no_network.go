@@ -128,10 +128,15 @@ func noNetworkKind(kind string) string {
 	return kind
 }
 
+// packageFetchers are the launch commands, by base name, that download the package they run before
+// running it: a local MCP server started by one needs the network, wherever the program sits.
+var packageFetchers = []string{"npx", "pnpx", "bunx", "uvx", "pipx"}
+
 // noNetworkComponentNeedsHost reports whether an attached component needs the network: a built-in Git
 // provider, a CLI credential, a remote MCP server (whose host only the broker reaches, so it is never on
-// the allowlist), a local MCP server npx fetches, a header secret, or any host on its definition. One
-// with only config, env or file secrets, or a local server run from a program in the image, needs none.
+// the allowlist), a local MCP server a package fetcher starts, a header secret, or any host on its
+// definition. One with only config, env or file secrets, or a local server run from another program in
+// the image, needs none.
 func noNetworkComponentNeedsHost(c attachedComponent) bool {
 	if c.builtin != nil {
 		return true
@@ -140,7 +145,7 @@ func noNetworkComponentNeedsHost(c attachedComponent) bool {
 	if len(d.Hosts) > 0 || d.CLI != nil || d.RemoteMCP() {
 		return true
 	}
-	if d.LocalMCP() && d.MCP.Launch != nil && path.Base(d.MCP.Launch.Command) == "npx" {
+	if d.LocalMCP() && d.MCP.Launch != nil && slices.Contains(packageFetchers, path.Base(d.MCP.Launch.Command)) {
 		return true
 	}
 	return slices.ContainsFunc(d.Secrets, func(sec types.ComponentSecret) bool {

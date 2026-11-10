@@ -202,7 +202,14 @@ func TestNoNetwork_ComponentsByWhatTheyNeed(t *testing.T) {
 	}
 	npx := types.ComponentDefinition{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio,
 		Launch: &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "@example/mcp-server@1.4.2"}}}}
-	for name, d := range map[string]types.ComponentDefinition{"remote MCP": remote, "npx MCP": npx} {
+	byPath := func(cmd string) types.ComponentDefinition {
+		return types.ComponentDefinition{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio,
+			Launch: &types.ComponentMCPLaunch{Command: cmd, Args: []string{"mcp-server-files"}}}}
+	}
+	for name, d := range map[string]types.ComponentDefinition{"remote MCP": remote, "npx MCP": npx,
+		"uvx by path": byPath("/usr/local/bin/uvx"), "pipx by path": byPath("/usr/bin/pipx"),
+		"bunx by path": byPath("/usr/local/bin/bunx"), "pnpx by path": byPath("/usr/local/bin/pnpx"),
+		"npx by path": byPath("/usr/local/bin/npx")} {
 		if ok, body := attach(d); ok || !strings.Contains(body, "component c0") {
 			t.Errorf("%s: passed %v, %s; want a refusal naming component c0", name, ok, body)
 		}
