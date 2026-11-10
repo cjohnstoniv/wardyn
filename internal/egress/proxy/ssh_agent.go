@@ -227,7 +227,7 @@ func (p *Proxy) handleSSHAgent(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errSSHAgentClosed) {
 			status = http.StatusForbidden
 		}
-		http.Error(w, "wardyn: ssh agent: "+err.Error(), status)
+		p.httpError(w, "wardyn: ssh agent", err, status)
 		return
 	}
 	if knownHosts {
@@ -332,7 +332,7 @@ func (p *Proxy) sshKeyMaterial(ctx context.Context, id uuid.UUID) (ResidentMint,
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
 	if resp.StatusCode != http.StatusOK {
-		return ResidentMint{}, fmt.Errorf("mint status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return ResidentMint{}, fmt.Errorf("mint status %d", resp.StatusCode)
 	}
 	var mr struct {
 		Kind       types.GrantKind `json:"kind"`
