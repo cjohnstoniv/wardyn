@@ -18,7 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- A run adds a workspace's clone host only for a repository it clones. A workspace attached for its folders alone (`repos: []`) no longer opens its repositories' hosts, at create, Review and the preview alike.
+- A run adds a workspace's clone host only for a repository it clones. A workspace attached for its folders alone (`repos: []`) no longer opens its repositories' hosts, at create, Review and the preview alike. A run that needs a forge it does not clone from keeps it once that host is added to the workspace's approved egress.
 
 ## [0.10.0-rc.17] — 2026-11-09
 
