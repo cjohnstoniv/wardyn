@@ -717,6 +717,14 @@ k8s:
     controller:
       namespace: agent-sandbox-system
       serviceAccount: agent-sandbox-controller
+    # EXPERIMENTAL. The name of a platform-owned SandboxTemplate in the runs namespace that the agent pod takes
+    # its scheduling from (WARDYN_K8S_AGENT_SANDBOX_TEMPLATE). Wardyn still builds the whole pod and copies
+    # only nodeSelector, tolerations, affinity, topologySpreadConstraints, priorityClassName, schedulerName,
+    # runtimeClassName and annotations under sandbox-template.wardyn.dev/; a template that sets anything
+    # else refuses the run (docs/operations/kubernetes-agent-sandbox.md). Install only the SandboxTemplate CRD
+    # from the v1.0.9 extensions.yaml, never its controller. Set adds `get` on that one sandboxtemplate to the
+    # runner Role. Empty (default) uses none. Needs enabled=true.
+    template: ""
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu; the chart README has a Kata example). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime

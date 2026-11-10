@@ -10,6 +10,8 @@
 #     byte-identical to that commit's chart under the same values;
 #   - on renders exactly: pods patch, a sandboxes create/get/list/delete rule, the env, and a
 #     ValidatingAdmissionPolicy + binding that selects the controller identity and requires the gate, a Sandbox owner and an empty nodeName;
+#   - on with k8s.agentSandbox.template adds only get on that one sandboxtemplate and WARDYN_K8S_AGENT_SANDBOX_TEMPLATE;
+#     the template without the backend is refused;
 #   - on without k8s.enabled, or with an unenforced-NetworkPolicy or ambient-default-deny override (value, env, extraEnv or valueFrom), is refused.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
@@ -94,6 +96,15 @@ role='select(.kind == "Role" and (.metadata.name | test("k8s-runner$")))'
   || die "on: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX=true"
 [[ "$(grep -c 'kind: CustomResourceDefinition' "$TMP/on.out")" == 0 ]] || die "on: the chart installs a CRD"
 ok "on: pods patch, one sandboxes rule (create,get,list,delete), WARDYN_K8S_AGENT_SANDBOX=true, no CRD"
+
+# A template adds get on that one SandboxTemplate and its env; no other extensions rule.
+render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.template=platform >"$TMP/tmpl.out"
+[[ "$(y -o=json -I=0 "$role | [.rules[] | select(.apiGroups[0] == \"extensions.agents.x-k8s.io\")]" "$TMP/tmpl.out")" == '[{"apiGroups":["extensions.agents.x-k8s.io"],"resources":["sandboxtemplates"],"resourceNames":["platform"],"verbs":["get"]}]' ]] \
+  || die "template: the runner Role has no, or a wider, sandboxtemplates rule"
+[[ "$(y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_TEMPLATE") | .value' "$TMP/tmpl.out")" == "platform" ]] \
+  || die "template: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_TEMPLATE=platform"
+grep -q sandboxtemplates "$TMP/on.out" && die "on without a template: a sandboxtemplates rule rendered"
+ok "template: get on the one sandboxtemplate, WARDYN_K8S_AGENT_SANDBOX_TEMPLATE set"
 
 # Nothing else changed: the added lines are the rule, the verb, the env and the two policy objects.
 diff "$TMP/key-absent.out" "$TMP/on.out" | grep '^<' | grep -v 'verbs: \["create", "get", "list", "delete", "deletecollection"\]' \
@@ -182,6 +193,7 @@ ok "on: the controller identity values reach the match condition"
 refused "controller identity is wardynd's own ServiceAccount" "is wardynd's own ServiceAccount" -f "$ALLON" --set k8s.agentSandbox.enabled=true \
   --set k8s.agentSandbox.controller.namespace=default --set k8s.agentSandbox.controller.serviceAccount=wardyn-byo -n default
 refused "controller identity with a quote in it" "must be Kubernetes names" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set "k8s.agentSandbox.controller.serviceAccount=x' || true || '"
+refused "template without the backend" "k8s.agentSandbox.template needs k8s.agentSandbox.enabled=true" -f "$ALLON" --set k8s.agentSandbox.template=platform
 
 # A second render in the release namespace (no runsNamespace) binds that namespace.
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.runsNamespace= --set k8s.allowRunsInReleaseNamespace=true -n relns >"$TMP/rel.out"
