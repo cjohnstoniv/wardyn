@@ -204,6 +204,20 @@ func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.
 	return s.status, true, nil
 }
 
+func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.UUID, _ store.FolderGiveUpWhen, back types.FolderPassRecord) (int, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	if folderStatusDone(s.status) {
+		return 0, false, nil
+	}
+	s.status.Gen++
+	s.status.Back, s.status.Resume = &back, nil
+	return s.status.Gen, true, nil
+}
+
 // folderSandboxRunner is execCountRunner whose ExecStream runs an in-memory sftp-server, the sandbox's.
 type folderSandboxRunner struct {
 	*execCountRunner

@@ -88,7 +88,24 @@ type RunLocalFolderStatuses interface {
 	// nothing else, and answers the record as it then stands. False when the stored record does not
 	// meet guard, or the run has no local folder.
 	BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard) (types.RunLocalFolderStatus, bool, error)
+	// GiveUpRunLocalFolder ends run id's pass back as given up, at any generation: back is recorded,
+	// any resume dropped, and the generation moved on, so no owner's later write lands. It answers the
+	// new generation, and false when the record was already done (folderStatusDoneSQL) or the run
+	// has no local folder: the give-up is then not recorded again.
+	GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, when FolderGiveUpWhen, back types.FolderPassRecord) (int, bool, error)
 }
+
+// FolderGiveUpWhen is when a pass back may be given up: only for a terminal run, and only once
+// GiveUpAt has passed or the caller observed that the sandbox cannot be kept with its egress cut
+// (D1). A live run, or one before its time, is never given up.
+type FolderGiveUpWhen struct {
+	GiveUpAt time.Time
+	D1       bool
+}
+
+// folderStatusDoneSQL is a record that is done: a pass back recorded and no resume kept. NULL (no
+// record) is not done.
+const folderStatusDoneSQL = `COALESCE(local_folder_status ? 'back' AND NOT local_folder_status ? 'resume', false)`
 
 // FolderStatusGuard is what a write of a run's folder record requires of the stored one: the
 // generation its writer read or owns. A record with no generation, or no record, is at 0.
@@ -158,4 +175,28 @@ func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard Folde
 	}
 	st, err := unmarshalFolderStatus(raw)
 	return st, err == nil, err
+}
+
+// GiveUpRunLocalFolder implements RunLocalFolderStatuses: one statement, with no generation guard.
+// TODO(finality WHERE text, run-end design rev 2.2): the terminal and time-or-D1 predicate below is
+// the caller-passed form; replace it with the frozen text when it lands.
+func (s PG) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, when FolderGiveUpWhen, back types.FolderPassRecord) (int, bool, error) {
+	raw, err := json.Marshal(back)
+	if err != nil {
+		return 0, false, fmt.Errorf("store: marshal a given-up pass back: %w", err)
+	}
+	var gen int
+	err = s.Pool.QueryRow(ctx, `UPDATE agent_runs
+		SET local_folder_status = (COALESCE(local_folder_status, '{}'::jsonb) - 'resume')
+			|| jsonb_build_object('gen', COALESCE((local_folder_status->>'gen')::int, 0) + 1, 'back', $2::jsonb)
+		WHERE id = $1 AND local_folder IS NOT NULL AND NOT `+folderStatusDoneSQL+`
+		  AND NOT (state = ANY($3)) AND ($4::timestamptz <= now() OR $5::bool)
+		RETURNING (local_folder_status->>'gen')::int`, id, raw, nonTerminalStates(), pgTime(when.GiveUpAt), when.D1).Scan(&gen)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("store: give up a pass back: %w", err)
+	}
+	return gen, true, nil
 }

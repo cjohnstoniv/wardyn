@@ -49,6 +49,10 @@ func (s *folderStatusStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.U
 	return st, err == nil, err
 }
 
+func (s *folderStatusStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord) (int, bool, error) {
+	return 1, true, nil
+}
+
 // keptFolderFailedStart revives the fixture's run and has its new proxy report other bytes while another operation
 // holds the run's lock, so the start fails uncontained. The run then stands as a finalize that kept its sandbox for a
 // computer folder's pass back leaves it: terminal, its sandbox ref still recorded, its folder record as mode says.
@@ -245,6 +249,10 @@ func (s *keptSweepStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID
 	st, err := s.RunLocalFolderStatus(ctx, id)
 	st.Gen++
 	return st, err == nil, err
+}
+
+func (s *keptSweepStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord) (int, bool, error) {
+	return 1, true, nil
 }
 
 // newKeptSweep is a terminal-sandbox sweep over runs, every sandbox probed live, with the folder records fake answers.
