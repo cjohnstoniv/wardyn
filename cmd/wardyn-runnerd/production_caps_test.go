@@ -61,7 +61,7 @@ func TestRunnerRuntimeResendsCapsOnNetPolChange(t *testing.T) {
 	sub := &netPolFake{Fake: runnertest.NewFake()}
 	sub.check.Store(&runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: time.Now().UTC()})
 	var hook func()
-	org := composedRuntime(t, sub, runtimeExtras{noPosture: true, arch: "amd64", netPolWatch: func(f func()) { hook = f }})
+	org := composedRuntime(t, sub, runtimeExtras{noPosture: true, arch: "amd64", netPolWatch: func(f func()) { hook = f }}, nil)
 	if c, _ := org.Caps(); c.Support.NetworkPolicyCheck.Verdict != runner.NetPolEnforced {
 		t.Fatalf("session caps carry verdict %q, want %q", c.Support.NetworkPolicyCheck.Verdict, runner.NetPolEnforced)
 	}
@@ -98,9 +98,10 @@ func TestNetPolChangeWithNoSessionMarksCapsUnsent(t *testing.T) {
 	<-done
 }
 
-// A send that captured its caps and then paused holds every other send until it is acked, so its older
-// capture never lands after a newer one: here a relay change's send captures "enforced" and pauses, a
-// re-check changes the verdict to "refused" meanwhile, and the organisation ends on "refused".
+// A send holds every other send from its capture until its ack, so its older capture never lands after a
+// newer one: here a relay change's send captures "enforced" and the organisation holds its caps event
+// before the ack; a re-check changes the verdict to "refused" meanwhile, no other send may capture until
+// the ack, and the organisation ends on "refused".
 func TestCapsSendsNeverAckAnOlderCapture(t *testing.T) {
 	sub := &netPolFake{Fake: runnertest.NewFake()}
 	sub.check.Store(&runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: time.Now().UTC()})
@@ -113,29 +114,50 @@ func TestCapsSendsNeverAckAnOlderCapture(t *testing.T) {
 		return nil
 	}, nil)
 	relay.ticker = func(time.Duration) (<-chan time.Time, func()) { return tick, func() {} }
+	// held, once set, holds the next caps event at the organisation, so its send waits for the ack.
+	var held atomic.Pointer[capsGate]
+	onEvent := func(ev runnerwire.Event) {
+		if g := held.Load(); ev.Kind == runnerwire.EventCaps && g != nil && held.CompareAndSwap(g, nil) {
+			close(g.paused)
+			<-g.release
+		}
+	}
 	var hook func()
 	org := composedRuntime(t, sub, runtimeExtras{noPosture: true, arch: "amd64", report: connectReport{relay: relay},
-		netPolWatch: func(f func()) { hook = f }})
+		netPolWatch: func(f func()) { hook = f }}, onEvent)
 
 	gate := &capsGate{paused: make(chan struct{}), release: make(chan struct{})}
-	sub.gate.Store(gate)
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate.release) }) }
+	t.Cleanup(release) // before the runtime's own cleanup, so a failed test never leaves the event held
+	held.Store(gate)
 	unreachable.Store(true)
-	tick <- time.Now() // the relay's send captures "enforced", then pauses
-	<-gate.paused
+	// Tick until the relay's caps event is held. A tick that beats the session's start sends nothing, and
+	// the change stays unsent, so the next tick sends it.
+	deadline := time.After(10 * time.Second)
+	for paused := false; !paused; {
+		select {
+		case tick <- time.Now():
+		case <-gate.paused:
+			paused = true
+		case <-deadline:
+			t.Fatal("the relay change's caps never reached the organisation")
+		}
+	}
 	calls := sub.calls.Load()
 	sub.check.Store(&runner.NetPolCheck{Verdict: runner.NetPolRefused, At: time.Now().UTC()})
 	hook()
 	time.Sleep(200 * time.Millisecond)
 	if got := sub.calls.Load(); got != calls {
-		t.Fatalf("a second send captured caps (%d captures, want %d) while the first had not been acked", got, calls)
+		t.Fatalf("a second send captured caps (%d captures, want %d) while the first waited for its ack", got, calls)
 	}
-	close(gate.release)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+	release()
+	for until := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
 		c, _ := org.Caps()
 		if c.Support.NetworkPolicyCheck.Verdict == runner.NetPolRefused && c.Relay != nil && c.Relay.State == types.RelayUnreachable {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(until) {
 			t.Fatalf("the organisation's caps carry %q (relay %+v), want refused with the relay unreachable", c.Support.NetworkPolicyCheck.Verdict, c.Relay)
 		}
 	}
@@ -198,16 +220,16 @@ func TestMacOSCapsFallbackCapturesUnderTheSendLock(t *testing.T) {
 	}
 }
 
-// capsGate pauses the next caps capture after it took its values, until release closes.
+// capsGate holds one caps event at the organisation: paused closes when it arrives, and it is let
+// through when release closes.
 type capsGate struct{ paused, release chan struct{} }
 
 // netPolFake is the fake substrate with a NetworkPolicy verdict a test changes while the runtime reads it.
 type netPolFake struct {
 	*runnertest.Fake
 	check atomic.Pointer[runner.NetPolCheck]
-	// calls counts captures (Classes calls); gate, when set, pauses the next one.
+	// calls counts captures (Classes calls).
 	calls atomic.Int32
-	gate  atomic.Pointer[capsGate]
 }
 
 func (f *netPolFake) Classes(ctx context.Context) (substrate.ClassSupport, error) {
@@ -216,17 +238,13 @@ func (f *netPolFake) Classes(ctx context.Context) (substrate.ClassSupport, error
 		cs.NetworkPolicyCheck = *c
 	}
 	f.calls.Add(1)
-	if g := f.gate.Swap(nil); g != nil {
-		g.paused <- struct{}{}
-		<-g.release
-	}
 	return cs, err
 }
 
 // composedCaps is the caps event the composed runtime with extra sends the organisation.
 func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
 	t.Helper()
-	caps, ok := composedRuntime(t, runnertest.NewFake(), extra).Caps()
+	caps, ok := composedRuntime(t, runnertest.NewFake(), extra, nil).Caps()
 	if !ok {
 		t.Fatal("no caps")
 	}
@@ -234,8 +252,9 @@ func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
 }
 
 // composedRuntime serves the composed runtime on sub with extra to an organisation until the test ends,
-// and returns the organisation's view of the runner once it is READY.
-func composedRuntime(t *testing.T, sub substrate.Substrate, extra runtimeExtras) *remote.Substrate {
+// and returns the organisation's view of the runner once it is READY. onEvent, when set, sees each event
+// the organisation takes before it is acked.
+func composedRuntime(t *testing.T, sub substrate.Substrate, extra runtimeExtras, onEvent func(runnerwire.Event)) *remote.Substrate {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
@@ -261,7 +280,12 @@ func composedRuntime(t *testing.T, sub substrate.Substrate, extra runtimeExtras)
 				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
 				BeginInventory: func(context.Context, string) error { return nil },
 				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
-				Event:          func(context.Context, runnerwire.Event) error { return nil },
+				Event: func(_ context.Context, ev runnerwire.Event) error {
+					if onEvent != nil {
+						onEvent(ev)
+					}
+					return nil
+				},
 			}, nil
 		},
 	})
