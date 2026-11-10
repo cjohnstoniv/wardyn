@@ -11,8 +11,8 @@ import (
 )
 
 // noNetworkProbeScript fetches a public URL twice: through the run's proxy, which with no_network must
-// answer 403, and directly with no proxy, which the sandbox's network must refuse. wget's exit 127 is an
-// image without it.
+// answer 403 though the host is allowlisted, and directly with no proxy, which the sandbox's network must
+// refuse. wget's exit 127 is an image without it.
 const noNetworkProbeScript = `command -v wget >/dev/null 2>&1 || { echo "wget=missing"; exit 0; }
 out=$(http_proxy=http://wardyn-proxy:3128 wget -q -T 10 -O /dev/null http://example.com/ 2>&1); echo "proxied_rc=$?"
 case "$out" in *403*) echo "proxied_refused=1" ;; *) echo "proxied_refused=0" ;; esac
@@ -33,8 +33,12 @@ func testNoNetwork(t *testing.T, r runner.Runner, opts Options) {
 	if len(caps.ConfinementClasses) == 0 {
 		t.Skipf("driver %q declares no confinement classes; the no-network case needs a sandbox", r.Name())
 	}
+	// example.com is on the allowlist, so on the real proxy the 403 can come only from no_network, not from
+	// an empty allowlist's default deny. The docker suites' stand-in proxy relays nothing: there the case
+	// checks only that a spec carrying the switch creates and execs, and that nothing gets out.
 	sb := createStrongestSandboxWith(t, ctx, r, caps, opts, "NoNetwork", func(spec *runner.SandboxSpec) {
 		spec.ProxyConfig.NoNetwork = true
+		spec.ProxyConfig.Policy.AllowedDomains = []string{"example.com"}
 	})
 	got := ExecKeyValues(t, ctx, r, sb.Ref, noNetworkProbeScript)
 	if got["wget"] == "missing" {
