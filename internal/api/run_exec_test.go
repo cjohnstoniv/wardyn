@@ -286,3 +286,48 @@ func TestRunExecForeignRunIsMissing(t *testing.T) {
 		t.Errorf("ExecStream was called %d times for a non-owner", n)
 	}
 }
+
+// TestRunExecSharesTheSSHChannelCap: a command draws one of the run's SSH channel slots
+// (WARDYN_SSH_MAX_SESSIONS_PER_RUN), so a run whose slots are all held answers 429 run_exec_busy without
+// reaching the runner, and a finished command gives its slot back.
+func TestRunExecSharesTheSSHChannelCap(t *testing.T) {
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("ok", "", 0), nil })
+	e.srv.cfg.SSHMaxSessionsPerRun = 1
+	if !e.srv.sshAcquireSession(e.id) {
+		t.Fatal("could not hold the run's one SSH channel slot")
+	}
+	w := e.exec(t, `{"command":"true"}`)
+	if w.Code != http.StatusTooManyRequests || wireReason(t, w) != reasonRunExecBusy {
+		t.Errorf("POST /exec with every slot held = %d %s, want 429 %s", w.Code, w.Body, reasonRunExecBusy)
+	}
+	if n := e.execs.Load(); n != 0 {
+		t.Errorf("ExecStream was called %d times over the cap", n)
+	}
+	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "failure" ||
+		!strings.Contains(string(rows[0].Data), sshCapReasonChannels) {
+		t.Errorf("run.command.exec rows = %v, want one failure naming the channel cap", rows)
+	}
+	e.srv.sshReleaseSession(e.id)
+	execResult(t, e.execWithin(t, `{"command":"true"}`, 10*time.Second))
+	if !e.srv.sshAcquireSession(e.id) {
+		t.Error("the finished command did not give its slot back")
+	}
+	e.srv.sshReleaseSession(e.id)
+}
+
+// TestRunExecKeepsTheRunAwake: while a command runs, the run's idle clock is reset on the keepalive
+// tick, as for an SSH exec, so auto_stop does not end it mid-stream.
+func TestRunExecKeepsTheRunAwake(t *testing.T) {
+	closed := &atomic.Bool{}
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(closed), nil })
+	touches := &touchCountingStore{authzStore: e.ast}
+	e.srv.cfg.Store = touches
+	e.srv.keepaliveEvery = 50 * time.Millisecond
+	res := execResult(t, e.execWithin(t, `{"command":"sleep 3600","timeout_sec":1}`, 10*time.Second))
+	if !res.TimedOut {
+		t.Fatalf("result = %+v, want the timeout to end it", res)
+	}
+	if n := touches.touches(); n < 3 {
+		t.Errorf("the run was touched %d times over a 1 s command with a 50 ms keepalive, want at least 3", n)
+	}
+}

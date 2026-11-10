@@ -22,8 +22,8 @@ import (
 // POST /runs/{id}/exec runs one command in a running run and answers with its output: the SSH
 // gateway's exec channel (bridgeSSHExec) over plain HTTP, and no wider. Before the runner is called it
 // checks, in order, who may enter the run (getRunForEntry), the profile's deny_interactive (as SSH
-// authentication does), the run's data_out rule (as an SSH exec channel does) and the run's state
-// (sshFreshRun). The command runs as an SSH exec runs it (sshExecArgv), with no TTY and no added
+// authentication does), the run's data_out rule (as an SSH exec channel does), the run's state
+// (sshFreshRun) and the run's SSH channel cap, which a command shares with SSH (sshAcquireSession). The command runs as an SSH exec runs it (sshExecArgv), with no TTY and no added
 // environment, and is never recorded: its run.command.exec row names the command and its exit code, never
 // its output.
 
@@ -38,6 +38,8 @@ const (
 	runExecDataOutMsg = "This run's data_out rule (%s) keeps content in, so commands are off; the terminal still works."
 	// runExecSandboxGoneMsg answers a run whose sandbox went away between the state check and the exec.
 	runExecSandboxGoneMsg = "The run's sandbox is gone; the run is ending."
+	// runExecBusyMsg answers a run already holding its most SSH channels and commands at once.
+	runExecBusyMsg = "This run already has %d SSH channels or commands open, the most it may; try again when one ends."
 	// runExecFailedMsg answers a runner that could not start the command; the cause goes to the log.
 	runExecFailedMsg = "The runner could not start the command."
 )
@@ -75,19 +77,39 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, msg)
 		return
 	}
+	// One of the run's SSH channel slots, the same per-run cap an SSH exec draws from.
+	if !s.sshAcquireSession(run.ID) {
+		limit := s.cfg.SSHMaxSessionsPerRun
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": req.Command, "error": fmt.Sprintf("%s (max %d)", sshCapReasonChannels, limit)})
+		writeErrorReason(w, http.StatusTooManyRequests, reasonRunExecBusy, fmt.Sprintf(runExecBusyMsg, limit))
+		return
+	}
+	defer s.sshReleaseSession(run.ID)
+	s.runExec(w, r, fresh, req.Command, timeout)
+}
+
+// runExec runs command in fresh and answers its result. While it runs, the run's idle clock is kept
+// reset (TouchRun and attachKeepalive), as for an SSH exec, so auto_stop does not end a long command.
+func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.AgentRun, command string, timeout time.Duration) {
+	ctx := r.Context()
+	at, actor := actorFromRequest(r)
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	sess, err := s.cfg.Runner.ExecStream(execCtx, fresh.SandboxRef, runner.ExecSpec{Argv: sshExecArgv(req.Command)})
+	sess, err := s.cfg.Runner.ExecStream(execCtx, fresh.SandboxRef, runner.ExecSpec{Argv: sshExecArgv(command)})
 	if err == nil && sess == nil {
 		err = errors.New("the runner returned no exec session")
 	}
 	if err != nil {
-		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": req.Command, "error": err.Error()})
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": err.Error()})
 		writeExecStartError(w, r, err)
 		return
 	}
+	keepCtx, stopKeep := context.WithCancel(ctx)
+	defer stopKeep()
+	_ = s.cfg.Store.TouchRun(keepCtx, fresh.ID)
+	go s.attachKeepalive(keepCtx, fresh.ID)
 	res := collectExec(execCtx, sess)
-	data, outcome := map[string]any{"command": req.Command, "exit": res.ExitCode}, "success"
+	data, outcome := map[string]any{"command": command, "exit": res.ExitCode}, "success"
 	if res.TimedOut {
 		data["error"], outcome = fmt.Sprintf("timed out after %s", timeout), "failure"
 	}
