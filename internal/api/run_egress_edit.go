@@ -201,7 +201,7 @@ func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
 func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	res, rerr := s.editRunEgressOnce(r, run, edit)
-	rerr = s.withRunFate(context.WithoutCancel(r.Context()), run.ID, rerr)
+	rerr = s.withRunFate(run, rerr)
 	data := map[string]any{"subject": run.CreatedBy, "removed_hosts": nonNilStrings(edit.remove), "denied_hosts": nonNilStrings(edit.deny)}
 	outcome := "success"
 	if rerr != nil {
@@ -255,22 +255,18 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	return egressEditResult{PolicyGeneration: res.generation}, nil
 }
 
-// withRunFate ends an edit's stopped or stopping answer with the run's fate as persisted when the
-// edit answers: lost until revived when its lost mark is written, ended when it is terminal, and
-// otherwise (the mark not written yet, or the run unreadable) being lost or ended.
-func (s *Server) withRunFate(ctx context.Context, runID uuid.UUID, rerr *reviveError) *reviveError {
+// withRunFate ends an edit's stopped or stopping answer with what happens to the run: a run that can
+// be kept is lost until revived, and one that cannot (a headless run off the person's own machine) is
+// ended (lostRunKeepable, the predicate the stop itself follows).
+func (s *Server) withRunFate(run types.AgentRun, rerr *reviveError) *reviveError {
 	if rerr == nil || (rerr.reason != reasonEgressEditUnconfirmed && rerr.reason != reasonEgressEditContainmentUnresolved) {
 		return rerr
 	}
 	out := *rerr
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	switch {
-	case err == nil && isTerminalRunState(run.State):
-		out.msg += "; the run is ended"
-	case err == nil && run.LostAt != nil:
+	if s.lostRunKeepable(run, s.cfg.Now()) {
 		out.msg += "; the run is lost until revived"
-	default:
-		out.msg += "; the run is being lost or ended"
+	} else {
+		out.msg += "; the run is ended, since a headless run off your own machine cannot be kept"
 	}
 	return &out
 }

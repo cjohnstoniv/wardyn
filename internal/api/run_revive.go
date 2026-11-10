@@ -451,8 +451,8 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // anyway (reloseRun), and the answer says the recovery is unresolved, for a
 // later sweep to settle. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
 func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
-	fate, stopErr := s.reloseRun(ctx, run)
-	data["lost_again"] = fate == relostLost
+	unresolved, stopErr := s.reloseRun(ctx, run)
+	data["lost_again"] = !unresolved
 	// A readback failure's stop wording is settleRevivedProxy's, from its own containment result.
 	unconfirmed := stopErr != nil && reason != reasonRevivePolicyUnconfirmedLost
 	if unconfirmed {
@@ -460,16 +460,12 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 	switch {
-	case fate == relostUnwritten && unconfirmed:
+	case unresolved && unconfirmed:
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
 			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, but stopping its proxy is not confirmed yet, and a later sweep recovers it", err))
-	case fate == relostUnwritten:
+	case unresolved:
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
 			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it", err))
-	case fate == relostUnknown:
-		msg = "the revive failed and this revive's lost mark did not land, so the run is being lost or ended by another operation; a later sweep settles it"
-	case fate == relostEnded:
-		msg = "the revive failed and the run cannot be kept, so it is being ended"
 	case unconfirmed:
 		msg = "the revive failed and the run is lost until revived; stopping its proxy is not confirmed yet, and a later sweep retries it"
 	}
@@ -846,10 +842,10 @@ func reviveFrom(run types.AgentRun) string {
 // It reports whether the recovery is unresolved: the lost mark could not be
 // written, so nothing says the run is lost. The run is contained anyway, its
 // proxy stopped and its broker credentials revoked, and a sweep settles the
-// rest; the caller must not tell anyone the run is lost. fate is what was
-// persisted (reloseFate), and stopErr is non-nil when the proxy stop is not
-// confirmed, so the caller says "stopped" or "lost" only for what landed.
-func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate reloseFate, stopErr error) {
+// rest; the caller must not tell anyone the run is lost. stopErr is non-nil
+// when the proxy stop is not confirmed (a stop that failed, or a lost mark
+// another writer landed first), so the caller must not say it was stopped.
+func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (unresolved bool, stopErr error) {
 	reason, at := types.LostOutage, s.cfg.Now()
 	switch run.LostReason {
 	case types.LostReboot:
@@ -868,32 +864,20 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate relose
 			if err := s.stopLostSandbox(ctx, run, s.cfg.Now()); err != nil {
 				slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
 					slog.String("run_id", run.ID.String()), slog.Any("err", err))
-				return relostUnwritten, err
+				return true, err
 			}
-			return relostUnwritten, nil
+			return true, nil
 		case loseApplied:
-			return relostLost, err
+			return false, err
 		case loseNotApplied:
-			return relostUnknown, errors.New("the run's lost mark did not land, so this revive did not stop its proxy")
+			return false, errors.New("the run's lost mark did not land, so this revive did not stop its proxy")
 		}
 	}
 	slog.WarnContext(ctx, "wardynd: a run whose proxy could not be replaced cannot be kept; tearing it down",
 		slog.String("run_id", run.ID.String()))
 	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "its proxy could not be replaced at revive")
-	return relostEnded, nil
+	return false, nil
 }
-
-// reloseFate is what reloseRun persisted for a run: lost again (the mark written), the mark not
-// written (unresolved), the mark not applied (another writer moved the run first), or the run ended
-// because it cannot be kept.
-type reloseFate int
-
-const (
-	relostLost reloseFate = iota
-	relostUnwritten
-	relostUnknown
-	relostEnded
-)
 
 // adminRestartRequest is POST /api/v1/admin/runs/restart's body.
 type adminRestartRequest struct {
