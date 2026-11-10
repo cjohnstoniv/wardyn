@@ -87,13 +87,14 @@ type jtiRevoker interface {
 
 // reviveError is a revive refusal: status is the HTTP answer, reason the
 // machine-readable wire reason (#656 slice 3 — the same one recordAudit
-// already wrote for every refusal below), and lost says the proxy is gone
-// and the run was put back to lost (outage).
+// already wrote for every refusal below), lost says the revive failed after its claim with the run's
+// proxy gone or going (so an egress edit awaits its containment), and fate is what reloseRun persisted.
 type reviveError struct {
 	status int
 	msg    string
 	reason string // errorBody.Reason, and adminRestartResult.Reason in a bulk restart
 	lost   bool
+	fate   reloseFate // a bulk restart's lost_again is fate == relostLost, as the audit row's is
 }
 
 func (e *reviveError) Error() string { return e.msg }
@@ -473,7 +474,7 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 	case unconfirmed:
 		msg = "the revive failed and the run is lost until revived; stopping its proxy is not confirmed yet, and a later sweep retries it"
 	}
-	return &reviveError{status: http.StatusBadGateway, reason: reason, lost: true, msg: loggedMsg(ctx, msg, err)}
+	return &reviveError{status: http.StatusBadGateway, reason: reason, lost: true, fate: fate, msg: loggedMsg(ctx, msg, err)}
 }
 
 // reviveRecoverContainment is a revive's answer for a run its runner holds contained after a settled end
@@ -883,13 +884,13 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate relose
 	return relostEnded, nil
 }
 
-// reloseFate is what reloseRun persisted for a run: lost again (the mark written), the mark not
-// written (unresolved), the mark not applied (another writer moved the run first), or the run ended
-// because it cannot be kept.
+// reloseFate is what reloseRun persisted for a run: nothing (no reloseRun ran), lost again (the mark written), the mark
+// not written (unresolved), the mark not applied (another writer moved the run first), or the run ended as unkeepable.
 type reloseFate int
 
 const (
-	relostLost reloseFate = iota
+	relostNone reloseFate = iota
+	relostLost
 	relostUnwritten
 	relostUnknown
 	relostEnded
@@ -942,7 +943,7 @@ func (s *Server) handleAdminRestartRuns(w http.ResponseWriter, r *http.Request) 
 		default:
 			out, rerr := s.reviveFromRequest(r, run, false)
 			if rerr != nil {
-				res.Error, res.Reason, res.LostAgain = rerr.msg, rerr.reason, rerr.lost
+				res.Error, res.Reason, res.LostAgain = rerr.msg, rerr.reason, rerr.fate == relostLost
 			} else {
 				res.OK, res.DeniedAdded = true, out.DeniedAdded
 			}

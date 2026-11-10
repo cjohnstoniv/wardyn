@@ -111,11 +111,23 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	}
 	switch rerr.reason {
 	case reasonRevivePolicyUnconfirmedLost:
-		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy and the run is lost until revived; "+
+		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy and "+readbackFateClause(rerr.fate)+"; "+
 			"stopping that proxy is not confirmed yet"+retry, errors.New(why))
 	case reasonReviveRecoveryUnresolved:
 		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, "+
 			"but stopping its proxy is not confirmed yet"+retry, errors.New(why))
 	}
 	return rerr
+}
+
+// readbackFateClause is reviveFailedAfterClaim's fate wording for a failed readback, so the stop clause
+// settleRevivedProxy adds never replaces what reloseRun persisted.
+func readbackFateClause(fate reloseFate) string {
+	switch fate {
+	case relostEnded:
+		return "the run cannot be kept, so it is being ended"
+	case relostUnknown:
+		return "this revive's lost mark did not land, so the run is being lost or ended by another operation"
+	}
+	return "the run is lost until revived"
 }
