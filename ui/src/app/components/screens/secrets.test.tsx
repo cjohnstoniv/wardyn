@@ -385,7 +385,8 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     expect(await screen.findByText(/Couldn't check how stored Git tokens are handled/)).toBeInTheDocument();
     expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/stays in Wardyn, unless a run delivers it/)).not.toBeInTheDocument();
+    // What a stored value is does not depend on the broker, so it stays; only the Git-token sentence waits.
+    expect(screen.getByText(/A stored value stays in Wardyn, unless a run delivers it/)).toBeInTheDocument();
     getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText(/Exception: A git access token is handed to git inside the sandbox/)).toBeInTheDocument();
@@ -430,6 +431,9 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     );
     await screen.findByText("my-key");
     expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+    // The header still says what a stored value is; only the Git-token sentence needs the switch.
+    expect(screen.getByText(/A stored value stays in Wardyn, unless a run delivers it/)).toBeInTheDocument();
+    expect(screen.queryByText(/stored git access token|Exception:/)).toBeNull();
     await openAdd();
     noExclusiveClaim();
   });
@@ -662,11 +666,10 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
   it("the page header says the exception and no longer promises a short-lived credential", async () => {
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
     listSecretsMineMock.mockResolvedValue([]);
-    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
     render(<SecretsScreen />);
     await screen.findByText("anthropic-api-key");
     expect(
-      await screen.findByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/short-lived, scoped credential/i)).not.toBeInTheDocument();
   });

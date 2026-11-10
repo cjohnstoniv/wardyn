@@ -134,13 +134,11 @@ export function SecretsScreen() {
         // resident posture really is an exception to gitPatLine's claim); on
         // (the default), gitPatLine's own text just elaborates on the same
         // claim, so the word is dropped rather than reading as a contradiction.
-        description={
+        description={`Write-only: values go in and never come out. ${CAPABILITY.storedSecretLine}${
           patBroker === null
-            ? "Write-only: values go in and never come out."
-            : `Write-only: values go in and never come out. ${CAPABILITY.storedSecretLine} ${
-                patBroker ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`
-              }`
-        }
+            ? ""
+            : ` ${patBroker ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`}`
+        }`}
         actions={
           <>
             <Button onClick={() => setAddOpen(true)}>
