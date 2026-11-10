@@ -36,16 +36,17 @@ func (r *Report) notPreserved(why string) {
 	}
 }
 
-// keptFailed is pathFailed for a change the laptop must keep. On a runner pass, a failure that does
-// not end the pass also counts rel as not brought back and marks the report not preserved: the
-// refusal stays, so an older server still shows it. `wardyn sync` keeps pathFailed alone.
+// keptFailed is pathFailed for a change the laptop must keep. On a runner pass, a failure also
+// counts rel as not brought back and marks the report not preserved, whether or not it ends the
+// pass: one that does not keeps its refusal, so an older server still shows it, and one that does
+// is still returned, for the pass to cut. `wardyn sync` keeps pathFailed alone.
 func (sy *Syncer) keptFailed(ctx context.Context, rep *Report, rel, what string, err error) error {
-	if aerr := sy.pathFailed(ctx, rep, rel, what, err); aerr != nil || !sy.Opts.RunnerPass {
-		return aerr
+	aerr := sy.pathFailed(ctx, rep, rel, what, err)
+	if sy.Opts.RunnerPass {
+		rep.unsynced(rel)
+		rep.notPreserved(what + " " + rel + ": " + err.Error())
 	}
-	rep.unsynced(rel)
-	rep.notPreserved(what + " " + rel + ": " + err.Error())
-	return nil
+	return aerr
 }
 
 // conflictNames are the names a sandbox copy of rel may take on the laptop, in order:

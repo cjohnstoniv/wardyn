@@ -5,6 +5,7 @@ package foldersync
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -112,7 +113,7 @@ func blockState(t *testing.T, sy *Syncer) {
 }
 
 // T5: a runner pass whose state save fails still reports what it did, with the save's error, and is
-// not preserved; so does a pass cut short.
+// not preserved; so does a pass cut short, whose first reason is the pull it cut.
 func TestPass_ARunnerPassWhoseSaveFailsIsNotPreserved(t *testing.T) {
 	sy, _, _ := newInSandbox(t)
 	blockState(t, sy)
@@ -134,7 +135,7 @@ func TestPass_ARunnerPassWhoseSaveFailsIsNotPreserved(t *testing.T) {
 		return nil
 	}, nil)
 	rep, err = sy.Pass(ctx)
-	if rep == nil || err == nil || !strings.HasPrefix(rep.NotPreserved, "save sync state:") || rep.Unsynced == 0 {
+	if rep == nil || err == nil || !strings.Contains(err.Error(), "save sync state:") || !strings.HasPrefix(rep.NotPreserved, "replace the local file new.txt:") || rep.Unsynced == 0 {
 		t.Errorf("cut pass: report = %+v, err = %v", rep, err)
 	}
 }
@@ -330,6 +331,38 @@ func TestPass_AFailedCopyIntoTheLaptopIsNotPreserved(t *testing.T) {
 			rep := pass(t, cli)
 			if rep.NotPreserved != "" || rep.Unsynced != 0 || len(rep.Refused) != 1 {
 				t.Errorf("wardyn sync: report = %+v", rep)
+			}
+		})
+	}
+}
+
+// A copy into the laptop that ends the pass (a lost connection, a short read) is not preserved on a
+// runner pass either: the pass still ends with that error, and new.txt is counted once among the
+// files not brought back. `wardyn sync` only ends with the error.
+func TestPass_AFailedCopyThatEndsThePassIsNotPreserved(t *testing.T) {
+	for name, cause := range map[string]error{
+		"short read":      io.ErrUnexpectedEOF,
+		"connection lost": &sftp.StatusError{Code: uint32(sftp.ErrSSHFxConnectionLost)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sy, _, _ := newInSandbox(t)
+			onCopy(t, cause)
+			rep, err := sy.Pass(context.Background())
+			if !errors.Is(err, cause) || rep == nil {
+				t.Fatalf("pass = %+v, %v: want the report and the error", rep, err)
+			}
+			if !strings.Contains(rep.NotPreserved, "copy into the laptop new.txt") || rep.Unsynced != 1 || !slices.Equal(rep.UnsyncedPaths, []string{"new.txt"}) {
+				t.Errorf("report = %+v: want new.txt not brought back and not preserved", rep)
+			}
+			if _, ok := sy.State.Files["new.txt"]; ok {
+				t.Errorf("a pull not kept was recorded")
+			}
+
+			cli, box, _ := pipeSyncer(t, true)
+			putSyncFile(t, filepath.Join(box, "new.txt"), "from the sandbox", 0o644)
+			rep, err = cli.Pass(context.Background())
+			if !errors.Is(err, cause) || rep == nil || rep.NotPreserved != "" {
+				t.Errorf("wardyn sync: pass = %+v, %v", rep, err)
 			}
 		})
 	}
