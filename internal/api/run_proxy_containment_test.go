@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -123,8 +125,13 @@ func TestReadback_ContainmentPausedAcrossARevive(t *testing.T) {
 	old := proxyContainPaused
 	proxyContainPaused = func() {
 		proxyContainPaused = func() {}
+		// The proof: containment holds the run's lock across its read and its stop.
+		if _, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID); ok {
+			unlock()
+			t.Error("the run's lock is free between containment's generation read and its stop")
+		}
 		go func() { revived <- f.revive(t) }()
-		select { // without the lock the revive completes here, before the stop
+		select { // without the lock the revive would complete here, before the stop
 		case code := <-revived:
 			revived <- code
 		case <-time.After(500 * time.Millisecond):
@@ -182,5 +189,108 @@ func TestReadback_ReviveUnresolvedNeverClaimsAStopThatFailed(t *testing.T) {
 	}
 	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt != nil || p.ContainmentError == "" {
 		t.Errorf("start = %s (contained %v, error %q), want failed and unresolved", p.State, p.ContainedAt, p.ContainmentError)
+	}
+}
+
+// unconfirmedFailureRow is the run's one run.policy.unconfirmed failure row, decoded.
+func unconfirmedFailureRow(t *testing.T, f *readbackFixture) map[string]any {
+	t.Helper()
+	var out map[string]any
+	for _, ev := range f.audit.eventsFor(f.run.ID, "run.policy.unconfirmed") {
+		if ev.Outcome == "failure" {
+			if out != nil {
+				t.Fatal("want one run.policy.unconfirmed failure row")
+			}
+			if err := json.Unmarshal(ev.Data, &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if out == nil {
+		t.Fatal("no run.policy.unconfirmed failure row")
+	}
+	return out
+}
+
+// The failure row's stopped follows the stop: false, with the stop's error, when it failed.
+func TestReadback_FailureRowStoppedFalseWhenTheStopFails(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.failWithUnstoppableProxy(t)
+	row := unconfirmedFailureRow(t, f)
+	if row["stopped"] != false || !strings.Contains(fmt.Sprint(row["containment_error"]), "daemon down") {
+		t.Errorf("failure row = %v, want stopped false with the stop's error", row)
+	}
+}
+
+// The failure row's stopped is false, naming the lock, when another operation held the run's lock and
+// containment was left to the sweep.
+func TestReadback_FailureRowStoppedFalseWhenTheLockIsBusy(t *testing.T) {
+	f := newReadbackFixture(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	_, _, jti := f.lastHandover(t)
+	_, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
+	if !ok {
+		t.Fatal("take the run's lock")
+	}
+	code, state := postLoaded(t, f.srv, f.run.ID, jti, hashHex([]byte("other bytes")))
+	unlock()
+	if code != http.StatusOK || state != string(types.ProxyStartFailed) {
+		t.Fatalf("mismatched report: %d %q, want 200 failed", code, state)
+	}
+	row := unconfirmedFailureRow(t, f)
+	if row["stopped"] != false || row["containment_error"] != errRunOpBusy.Error() {
+		t.Errorf("failure row = %v, want stopped false with the busy lock", row)
+	}
+}
+
+// A run whose lock another operation holds is not contained now: containProxyStart answers
+// errRunOpBusy, stops nothing, and writes nothing on the start, for the sweep to retry.
+func TestReadback_BusyLockLeavesContainmentToTheSweep(t *testing.T) {
+	f := newReadbackFixture(t)
+	gen := f.failWithUnstoppableProxy(t)
+	f.setProxyStopErr(nil)
+	before, stops := f.active(t), f.lr.proxyStopCount()
+	_, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
+	if !ok {
+		t.Fatal("take the run's lock")
+	}
+	c := f.srv.containProxyStart(context.Background(), f.run.ID, gen)
+	unlock()
+	if !errors.Is(c.Err, errRunOpBusy) || c.Contained || c.Superseded {
+		t.Fatalf("containment under a busy lock = %+v, want errRunOpBusy", c)
+	}
+	if after := f.active(t); f.lr.proxyStopCount() != stops || after.ContainedAt != nil || after.ContainmentError != before.ContainmentError {
+		t.Errorf("a busy lock stopped or recorded something: stops %d -> %d, start %+v", stops, f.lr.proxyStopCount(), after)
+	}
+}
+
+// A plain revive whose new proxy sends no hash and whose stop fails answers 502
+// revive_policy_unconfirmed_lost without saying the proxy was stopped.
+func TestReadback_RevivePolicyUnconfirmedNeverClaimsAStopThatFailed(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.hr.hash = func([]byte) string { return "" }
+	f.setProxyStopErr(errors.New("daemon down"))
+	rec := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), reasonRevivePolicyUnconfirmedLost) {
+		t.Fatalf("revive = %d %s, want 502 %s", rec.Code, rec.Body.String(), reasonRevivePolicyUnconfirmedLost)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "so it was stopped") || !strings.Contains(body, "not confirmed") {
+		t.Errorf("the answer claims a stop that failed: %s", body)
+	}
+}
+
+// A create whose answer cannot be recorded fails the run, and its start is failed by a second answer
+// whose deadline already passed, so the stop is recorded and the sweep could find it.
+func TestReadback_UnrecordedAnswerFailsTheStartForTheSweep(t *testing.T) {
+	d := newDispatchReadback(t, hashHex([]byte("bytes")), false)
+	d.st.failAnswers = 1
+	d.dispatch()
+	if got := d.st.State(); got != types.RunFailed {
+		t.Fatalf("run state = %s, want FAILED", got)
+	}
+	if p := d.st.get(d.run.ID, 1); p.State != types.ProxyStartFailed || p.ContainedAt == nil {
+		t.Errorf("start = %s (contained %v), want failed and contained", p.State, p.ContainedAt)
 	}
 }

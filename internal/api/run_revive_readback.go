@@ -89,7 +89,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	start proxyStartRec, sha, retiring string, renewed renewedTokens, fresh string) *reviveError {
 	s.revokeRetiringToken(ctx, retiring, run.ID)
 	s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), fresh)
-	ok, why := s.proxyStartAnswered(ctx, run.ID, start, sha)
+	ok, why, failed := s.proxyStartAnswered(ctx, run.ID, start, sha)
 	if ok {
 		return nil
 	}
@@ -98,16 +98,24 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 		"the run's new proxy did not confirm its policy, so it was stopped and the run is lost until revived", errors.New(why))
 	// The answer's stop wording comes from the containment result, never from the lost mark's outcome.
 	c := s.containProxyStartLocked(ctx, run.ID, start.gen)
+	if failed != nil {
+		s.auditReadbackFailure(ctx, *failed, c)
+	}
 	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) {
 		return rerr
+	}
+	// The sweep retries only a failed start that is still the run's newest.
+	retry := ""
+	if !c.Superseded && !errors.Is(c.Err, errStartNotFailed) {
+		retry = ", and a later sweep retries it"
 	}
 	switch rerr.reason {
 	case reasonRevivePolicyUnconfirmedLost:
 		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy and the run is lost until revived; "+
-			"stopping that proxy is not confirmed yet, and a later sweep retries it", errors.New(why))
+			"stopping that proxy is not confirmed yet"+retry, errors.New(why))
 	case reasonReviveRecoveryUnresolved:
 		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, "+
-			"but stopping its proxy is not confirmed yet, and a later sweep recovers it", errors.New(why))
+			"but stopping its proxy is not confirmed yet"+retry, errors.New(why))
 	}
 	return rerr
 }
