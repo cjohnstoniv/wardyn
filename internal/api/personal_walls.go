@@ -842,8 +842,20 @@ func wallsSealLayer(rec policyref.Provenance, walls types.PersonalWallsSpec) []s
 // written and the approval stays pending. It returns the run, read here when the gates before it had
 // not. A run launched with the No network preset is refused every approval, whatever the store keeps.
 // Otherwise a store that keeps neither walls nor stored presets has no host to deny: a built-in denies
-// none.
+// none, and a run such a store cannot read is left to the rules after this one (the four-eyes gate's
+// 503, the write-back's audited miss), as before the preset; the proxy refuses a No network run's every
+// request on its own.
 func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
+	if !haveRun && !s.wallsDenyHosts() {
+		if s.cfg.Store == nil {
+			return run, haveRun, true
+		}
+		got, err := s.cfg.Store.GetRun(r.Context(), ap.RunID)
+		if err != nil {
+			return run, haveRun, true
+		}
+		run, haveRun = got, true
+	}
 	if !haveRun {
 		var err error
 		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
