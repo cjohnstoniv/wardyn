@@ -112,14 +112,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if ownUnread && !runner.NetPolAtLeast(runners.Verdict, runner.NetPolNotProven) {
 		runners = runner.NetPolCheck{}
 	}
-	// The winning check gives the verdict, its time and its source together: between equal verdicts
-	// the older check wins, which may be a runner's.
+	// The winning check gives the verdict, its time and its source together. A runner's wins only when
+	// it is strictly worse: on a tie the daemon's own check stands, so the band never hides that this
+	// cluster is failing too.
 	netpol, netpolFromRunner := own, false
-	if runner.NetPolSecondWins(own, runners) {
+	if runner.NetPolWorse(runners.Verdict, own.Verdict) {
 		netpol, netpolFromRunner = runners, true
 	}
 	netpolVerdict, netpolCheckedAt := netpol.Verdict, netpol.At
-	netpolFromRunner = netpolFromRunner && netpolVerdict != ""
 	gtStatus := s.ebpfGroundtruthStatus(r.Context())
 	gtPublic := ebpfGroundtruthPublic(gtStatus)
 	body := map[string]any{

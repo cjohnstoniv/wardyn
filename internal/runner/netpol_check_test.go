@@ -83,31 +83,20 @@ func TestNetPolAtLeast(t *testing.T) {
 	}
 }
 
-// TestNetPolSecondWins: it says which check WorseNetPolCheck returns, so a caller can keep the winner's
-// source with its verdict and time; between equal verdicts the older check wins, either way round.
-func TestNetPolSecondWins(t *testing.T) {
-	t1 := time.Now().UTC().Add(-time.Hour)
-	t2 := t1.Add(10 * time.Minute)
-	for _, tc := range []struct {
-		name string
-		a, b NetPolCheck
-		want bool
-	}{
-		{"worse second wins", NetPolCheck{NetPolEnforced, t1}, NetPolCheck{NetPolRefused, t2}, true},
-		{"worse first wins", NetPolCheck{NetPolRefused, t2}, NetPolCheck{NetPolEnforced, t1}, false},
-		{"equal verdicts, second older", NetPolCheck{NetPolRefused, t2}, NetPolCheck{NetPolRefused, t1}, true},
-		{"equal verdicts, first older", NetPolCheck{NetPolRefused, t1}, NetPolCheck{NetPolRefused, t2}, false},
-		{"equal verdicts, first has no time", NetPolCheck{NetPolEnforced, time.Time{}}, NetPolCheck{NetPolEnforced, t1}, true},
-		{"equal verdicts, second has no time", NetPolCheck{NetPolEnforced, t1}, NetPolCheck{NetPolEnforced, time.Time{}}, false},
-		{"none second never wins over a verdict", NetPolCheck{NetPolEnforced, t1}, NetPolCheck{}, false},
-		{"a verdict second wins over none", NetPolCheck{}, NetPolCheck{NetPolEnforced, t1}, true},
-		{"same check: first kept", NetPolCheck{NetPolRefused, t1}, NetPolCheck{NetPolRefused, t1}, false},
-	} {
-		if got := NetPolSecondWins(tc.a, tc.b); got != tc.want {
-			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+// TestNetPolWorse: strictly worse only; equal verdicts are never worse, either way round.
+func TestNetPolWorse(t *testing.T) {
+	order := []string{NetPolEnforced, NetPolAcknowledged, NetPolNotProven, NetPolRefused, NetPolUnenforced}
+	for i, v := range order {
+		for j, than := range order {
+			if got, want := NetPolWorse(v, than), i > j; got != want {
+				t.Errorf("NetPolWorse(%q, %q) = %v, want %v", v, than, got, want)
+			}
 		}
-		if want := map[bool]NetPolCheck{true: tc.b, false: tc.a}[tc.want]; WorseNetPolCheck(tc.a, tc.b) != want {
-			t.Errorf("%s: WorseNetPolCheck disagrees with NetPolSecondWins", tc.name)
+		if !NetPolWorse(v, "") || NetPolWorse("", v) || NetPolWorse("newer-word", v) {
+			t.Errorf("%q against none or an unknown word", v)
 		}
+	}
+	if NetPolWorse("", "") {
+		t.Error("none is worse than none")
 	}
 }

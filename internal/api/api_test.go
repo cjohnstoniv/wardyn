@@ -678,33 +678,32 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 		}
 		link.online = false
 		body = decode(t, srv)
-		if body["network_policy"] != "enforced" || body["network_policy_checked_at"] != at.Add(-time.Hour).Format(time.RFC3339) {
-			t.Errorf("runner offline: network_policy = %v checked %v, want enforced at the older check %s", body["network_policy"], body["network_policy_checked_at"], at.Add(-time.Hour).Format(time.RFC3339))
+		if body["network_policy"] != "enforced" || body["network_policy_checked_at"] != at.Format(time.RFC3339) {
+			t.Errorf("runner offline: network_policy = %v checked %v, want the daemon's own enforced at %s", body["network_policy"], body["network_policy_checked_at"], at.Format(time.RFC3339))
 		}
 		if v, ok := body["network_policy_source"]; ok {
 			t.Errorf("network_policy_source = %v with the daemon's own verdict, want absent", v)
 		}
 	})
-	// Between equal verdicts the older check wins, and its source goes with it: the time shown is never
-	// one cluster's check under the other's name. Both orders.
-	t.Run("equal verdicts: the older check gives the time and the source", func(t *testing.T) {
+	// On a tie the daemon's own check stands, its verdict, time and no source, whichever check is older:
+	// a runner's verdict shows only when it is strictly worse.
+	t.Run("equal verdicts: the daemon's own check stands", func(t *testing.T) {
 		at := time.Now().UTC().Truncate(time.Second)
 		for _, tc := range []struct {
-			name                string
-			own, remote, wantAt time.Time
-			wantSource          bool
+			name        string
+			own, remote time.Time
 		}{
-			{name: "runner older", own: at, remote: at.Add(-10 * time.Minute), wantAt: at.Add(-10 * time.Minute), wantSource: true},
-			{name: "daemon older", own: at.Add(-10 * time.Minute), remote: at, wantAt: at.Add(-10 * time.Minute)},
+			{"runner older", at, at.Add(-10 * time.Minute)},
+			{"daemon older", at.Add(-10 * time.Minute), at},
 		} {
 			local := runner.NetPolCheck{Verdict: runner.NetPolRefused, At: tc.own}
 			srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRecheckRunner{k8sRunner: k8sRunner{networkPolicy: true}, check: local}})
 			connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: tc.remote})
 			body := decode(t, srv)
-			_, hasSource := body["network_policy_source"]
-			if body["network_policy"] != "refused" || body["network_policy_checked_at"] != tc.wantAt.Format(time.RFC3339) || hasSource != tc.wantSource {
-				t.Errorf("%s: network_policy = %v checked %v source %v; want refused checked %s, source from the runner %v",
-					tc.name, body["network_policy"], body["network_policy_checked_at"], body["network_policy_source"], tc.wantAt.Format(time.RFC3339), tc.wantSource)
+			source, hasSource := body["network_policy_source"]
+			if body["network_policy"] != "refused" || body["network_policy_checked_at"] != tc.own.Format(time.RFC3339) || hasSource {
+				t.Errorf("%s: network_policy = %v checked %v source %v; want refused at the daemon's own check %s, no source",
+					tc.name, body["network_policy"], body["network_policy_checked_at"], source, tc.own.Format(time.RFC3339))
 			}
 		}
 	})
