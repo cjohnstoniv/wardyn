@@ -344,7 +344,7 @@ func (d *Driver) deliverManagedFilesOrReap(ctx context.Context, ref, containerID
 	// runAsMainProcess's start spells out).
 	rmCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 	defer cancel()
-	if _, rerr := d.cli.ContainerRemove(rmCtx, containerID, client.ContainerRemoveOptions{Force: true}); rerr != nil && !isNotFound(rerr) {
+	if _, rerr := d.cli.ContainerRemove(rmCtx, containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); rerr != nil && !isNotFound(rerr) {
 		return fmt.Errorf("docker: managed-file delivery failed and the container could not be removed: %w (delivery error: %v)", rerr, mfErr)
 	}
 	return mfErr
