@@ -118,13 +118,13 @@ func TestNoNetwork_EveryTransportIsRefused(t *testing.T) {
 		}
 		wantNoNetworkRow(t, "VM ask", buf.String())
 	})
-	t.Run("desktop sign-in lane", func(t *testing.T) {
+	t.Run("desktop sign-in", func(t *testing.T) {
 		rig := newSigninLaneRig(t, func(o *Options) { o.NoNetwork = true })
 		if _, _, status := rig.connect(t, rig.signinAddr, "site.test:443", signinAuth(rig.goodCred)); status != http.StatusForbidden {
 			t.Fatalf("sign-in CONNECT = %d, want 403", status)
 		}
 		if rig.upstream.reached {
-			t.Fatal("the sign-in lane reached the site")
+			t.Fatal("the sign-in listener reached the site")
 		}
 		wantNoNetworkRow(t, "sign-in", rig.logs.String())
 	})

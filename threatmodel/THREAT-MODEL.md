@@ -919,7 +919,7 @@ is not the deployment described above.**
 
 | Step | Check | Refused as |
 |---|---|---|
-| 1 | A literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `builtin:private-ip` |
+| 1 | A run with no network refuses everything first; then a literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `policy:no-network`; `builtin:private-ip`, `policy:ip-literal` |
 | 2 | A host reached only by a brokered route: an MCP server, a local model server | `brokered:mcp:direct`, `brokered:local-model` |
 | 3 | Host, port and method (`gateConnect`), then a push to a code host under `deny_all` | `policy:denied`, `policy:port`, `policy:method`, `policy:evaluator-error`, `brokered:git:push-deny-all-forge` |
 | 4 | A private address refused before (`privateIPMemoHit`) | Refused again, with no new decision row |
@@ -932,6 +932,13 @@ is not the deployment described above.**
   - in every spelling that guard parses: the canonical one, the `inet_aton` non-canonical IPv4
     forms, and a zone-suffixed IPv6 literal (`fe80::1%eth0`).
   - The residual below states what that set does not cover.
+- **`no_network`** (proxy config, set at dispatch for a run launched with the `no-network` wall
+  preset and replayed at revive) refuses every request at `evaluate` step 0 as `policy:no-network`,
+  and again in the egress dial and the `CONNECT` dial as a backstop, and before a `via_org` forward,
+  which does not pass `evaluate`. It is never checked in the dial the control-plane client shares, so
+  the run still reports and stops. The seal empties the run's allowlist too, and every approval is refused.
+- **`refuse_ip_literals`** (policy) refuses, under `allow_all_egress`, every public IP literal in the
+  same spellings as `policy:ip-literal`; an address listed exactly in `allowed_domains` is still allowed.
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.
