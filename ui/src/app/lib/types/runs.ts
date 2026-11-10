@@ -184,6 +184,8 @@ export interface AgentRun {
   shape?: RunShape;
   // SHA-256 of the run's effective policy, written once at dispatch (Go: types.AgentRun.PolicyDigest); the run's later audit rows carry it as data.policy_digest. Absent before dispatch.
   policy_digest?: string;
+  // The run's current proxy start, as its policy readback stands (Go: types.AgentRun.PolicyReadback); on the single-run read only. Never a hash.
+  policy_readback?: RunPolicyReadback;
   correlation_id?: string; // The caller's own reference for the run, given at create (Go: types.AgentRun.CorrelationID); absent when none was.
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
@@ -987,4 +989,15 @@ export interface RunCapacity {
 export interface RunCapacityResponse extends RunCapacity {
   generated_at: string;
   basis: "configured_reservations";
+}
+
+// Where a run's current proxy start's policy readback stands (Go: types.RunPolicyReadback,
+// internal/types/policy_readback.go). enforced: the proxy reported the hash of the bytes its driver
+// handed it; unconfirmed: an older runner or proxy image that cannot report; failed: the proxy was stopped.
+export type ProxyStartState = "pending" | "enforced" | "unconfirmed" | "failed" | "abandoned" | "superseded";
+
+export interface RunPolicyReadback {
+  state: ProxyStartState;
+  generation: number;
+  confirmed_at?: string;
 }
