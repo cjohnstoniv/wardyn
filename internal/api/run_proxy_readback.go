@@ -45,9 +45,12 @@ const readbackRelease = "0.10.0-rc.18"
 var readbackReleaseRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
 
 // releaseBefore reports whether v parses as a release older than readbackRelease. Anything that does
-// not parse (empty, a development build, a digest) is not evidence, and reads as not older.
+// not parse (empty, a development build, a digest) is not evidence, and reads as not older. A build from
+// a checkout reports its release with a "+<commit>[-dirty]" suffix (internal/version), which is dropped
+// first: such a build at an older release has no hash to report, so it reads as that release.
 func releaseBefore(v string) bool {
-	a, ok := releaseRank(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	v, _, _ = strings.Cut(strings.TrimPrefix(strings.TrimSpace(v), "v"), "+")
+	a, ok := releaseRank(v)
 	if !ok {
 		return false
 	}

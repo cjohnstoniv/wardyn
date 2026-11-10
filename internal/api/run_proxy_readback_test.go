@@ -740,6 +740,9 @@ func TestReadback_ModeNeedsPositiveEvidence(t *testing.T) {
 	}{
 		{"0.10.0-rc.17", "", store.ProxyStartLegacy},
 		{"v0.9.8", "", store.ProxyStartLegacy},
+		{"0.10.0-rc.17+0b4c6bac3", "", store.ProxyStartLegacy},
+		{"0.10.0-rc.17+0b4c6bac3-dirty", "", store.ProxyStartLegacy},
+		{"0.10.0-rc.18+0b4c6bac3", "", store.ProxyStartExpected},
 		{"0.10.0-rc.18", "", store.ProxyStartExpected},
 		{"0.10.0", "", store.ProxyStartExpected},
 		{"", "", store.ProxyStartExpected},
