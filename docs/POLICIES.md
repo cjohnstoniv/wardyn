@@ -788,6 +788,18 @@ What the check does and does not settle:
 - But `approved-egress` and `denied-egress` are also two independent full-replace PUTs with no cross-list guard between them, so an operator can still hand-place the same host on both by editing each list directly.
 - If that happens, the proxy's own evaluation order — not the egress API — decides it: denied domains are checked, and win, before allowed ones are ever consulted.
 
+### A host rule hold: `effect: hold`
+
+A `host_rules` rule with `effect: hold` makes the proxy hold a matching request until a person decides it.
+
+- The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`.
+- The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
+- An approval lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline refuses them all for the run. The answer lives in the run's proxy, so a new proxy asks again.
+- A hold never outranks a deny. Each request is judged afresh: if any rule set denies it, or names the host and matches nothing, it is refused, approved or not. An approval answers only the hold. Every other set must still allow the request, and the run-wide `allowed_methods` still applies. A method `allowed_methods` refuses is refused without asking anyone.
+- It fails closed. If the control plane refuses or cannot take the request for an approval, or the proxy cannot read the answer, the request is not sent.
+- The decision takes no `decision_scope`, or `"once"`; the row records `once`. The run's owner or a security operator decides it, as for a kubectl write. `WARDYN_CAPABILITY_SECOND_HUMAN` makes it four-eyes. A unit's `egress_domain` deciders rule governs it, and an approval rule never decides one.
+- The decision rows are `policy:host-rule:approval-wait`, `-approval-denied`, `-approval-closed` and `-approval-refused`.
+
 ## `eligible_grants[]` — `GrantSpec`
 
 - How each grant kind reaches a run, and what the sandbox can read afterwards, is in [CREDENTIALS.md](CREDENTIALS.md).
