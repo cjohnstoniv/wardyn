@@ -321,6 +321,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		// Emitted only AFTER a successful round-trip: a failed dial must NOT
 		// over-report an allow.
 		resp, err := p.roundTripUpstream(outReq)
+		if p.answerHostRuleRefusal(w, p.shapeOf(r, host), err) { // the 403 failUpstream gives
+			return nil, false
+		}
 		if err != nil {
 			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary, GatewayCallID: callID}
 			if p.refuseH2Mismatch(w, p.shapeOf(r, host), err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {

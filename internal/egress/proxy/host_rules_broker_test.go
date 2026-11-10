@@ -52,8 +52,8 @@ func checkBrokerHostRules(t *testing.T, p *Proxy, log func() string, host, metho
 		if tc.pass && (!ok || !reached || refused) {
 			t.Errorf("%s: status %d reached=%v host-rule row=%v, want it forwarded", tc.name, status, reached, refused)
 		}
-		if !tc.pass && (ok || reached || !refused) {
-			t.Errorf("%s: status %d reached=%v host-rule row=%v, want it refused before the host", tc.name, status, reached, refused)
+		if !tc.pass && (status != http.StatusForbidden || reached || !refused || strings.Contains(log(), "builtin:dial-failed")) {
+			t.Errorf("%s: status %d reached=%v host-rule row=%v, want 403 with a policy:host-rule row (and no dial-failed row) before the host", tc.name, status, reached, refused)
 		}
 	}
 }

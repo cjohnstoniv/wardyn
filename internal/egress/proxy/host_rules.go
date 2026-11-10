@@ -143,8 +143,25 @@ func (p *Proxy) innerMethodRefused(w http.ResponseWriter, r *http.Request, host 
 	return true
 }
 
-// errHostRuleRefused is a forward the host rules refuse (outboundHostRuleRefused).
+// errHostRuleRefused is a forward the host rules refuse (outboundHostRuleRefused); the error returned is a
+// *hostRuleRefusal, which carries the row it wrote so the answer can be the same 403 the other lanes give.
 var errHostRuleRefused = errors.New("wardyn: refused by host rules")
+
+type hostRuleRefusal struct{ log egress.DecisionLog }
+
+func (e *hostRuleRefusal) Error() string        { return errHostRuleRefused.Error() }
+func (e *hostRuleRefusal) Is(target error) bool { return target == errHostRuleRefused }
+
+// answerHostRuleRefusal answers err when it is a host-rule refusal: the 403 deny, shaped for the route,
+// with no further row (outboundHostRuleRefused wrote it). It reports whether it answered.
+func (p *Proxy) answerHostRuleRefusal(w http.ResponseWriter, shape errShape, err error) bool {
+	var hr *hostRuleRefusal
+	if !errors.As(err, &hr) {
+		return false
+	}
+	p.writeEgressDenyLLM(w, shape, hr.log.Request.Host, hr.log.Request.Port, &hr.log)
+	return true
+}
 
 // outboundHostRuleRefused judges a request the proxy is about to send upstream, whichever route built it.
 // The brokered routes (model, git, git credential, MCP) and the API doors re-originate outside the CONNECT
@@ -164,7 +181,7 @@ func (p *Proxy) outboundHostRuleRefused(req *http.Request) error {
 	if p.sink != nil {
 		p.sink.emit(log)
 	}
-	return errHostRuleRefused
+	return &hostRuleRefusal{log: log}
 }
 
 // hostRuleTransportProxy is the egress transport's Proxy hook. The transport calls it for every request,
