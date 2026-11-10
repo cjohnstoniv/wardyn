@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -93,17 +94,23 @@ func TestListenDNSServesOnlyAllowedPeers(t *testing.T) {
 				t.Fatalf("TCP query, allowed=%v: read error %v", tc.allowed, terr)
 			}
 
-			rows := 0
+			// One row per protocol: the UDP query asked for A, the TCP query for TXT.
+			var kinds []string
 			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-				if rows = len(dnsRows(t, buf)); rows > 0 && tc.allowed {
+				kinds = kinds[:0]
+				for _, r := range dnsRows(t, buf) {
+					kinds = append(kinds, r.Type)
+				}
+				slices.Sort(kinds)
+				if tc.allowed && slices.Equal(kinds, []string{"A", "TXT"}) {
 					break
 				}
 			}
-			if tc.allowed && rows == 0 {
-				t.Error("no DNS row for an allowed peer")
+			if tc.allowed && !slices.Equal(kinds, []string{"A", "TXT"}) {
+				t.Errorf("DNS row types for an allowed peer = %v, want [A TXT] (the UDP row and the TCP row)", kinds)
 			}
-			if !tc.allowed && rows != 0 {
-				t.Errorf("%d DNS rows for a caller outside the peers, want 0", rows)
+			if !tc.allowed && len(kinds) != 0 {
+				t.Errorf("DNS rows %v for a caller outside the peers, want none", kinds)
 			}
 		})
 	}

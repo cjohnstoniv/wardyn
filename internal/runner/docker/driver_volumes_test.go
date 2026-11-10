@@ -535,8 +535,9 @@ func TestCreateSandbox_HostPathDriveAllocatesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox with an in-root host_path drive: %v", err)
 	}
-	if f.volumeCreates != 0 {
-		t.Errorf("a host_path drive made %d VolumeCreate calls, want 0", f.volumeCreates)
+	// The one volume the run makes is its own resolver volume (driver_dns.go); no drive is allocated.
+	if _, ok := f.volumes[dnsVolumeName(testSpec().RunID)]; f.volumeCreates != 1 || len(f.volumes) != 1 || !ok {
+		t.Errorf("a host_path drive run made %d VolumeCreate calls and holds %v, want exactly the run's DNS volume", f.volumeCreates, f.volumes)
 	}
 	// (the bind's source/mode are asserted by TestCreateSandbox_HostPathDriveApplied)
 	if m := findMount(mounts, runner.DriveTarget); m != nil && m.Type != mount.TypeBind {

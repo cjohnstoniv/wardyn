@@ -254,6 +254,9 @@ type fakeDocker struct {
 	// run against one drive creates nothing (idempotence is the contract, not
 	// merely the observable end state).
 	volumeCreates int
+	// createConflicts names containers whose create the daemon refuses as a name already in use, for a name
+	// taken between a driver's inspect and its create.
+	createConflicts map[string]bool
 	// apiVersion/apiVersionSet: see ClientVersion.
 	apiVersion    string
 	apiVersionSet bool
@@ -716,6 +719,9 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
 	}
+	if f.createConflicts[name] {
+		return client.ContainerCreateResult{}, fakeConflict{msg: "Conflict. The container name \"/" + name + "\" is already in use"}
+	}
 	if err := f.refuseUnsupportedRRO(opts.HostConfig); err != nil {
 		return client.ContainerCreateResult{}, err
 	}
@@ -759,6 +765,20 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	// createWarnings simulates a daemon that discarded a requested limit (e.g. a
 	// cgroup-v1-rootless host) — surfaced in the create response like real Moby.
 	return client.ContainerCreateResult{ID: id, Warnings: f.createWarnings}, nil
+}
+
+// managedCopies is the CopyToContainer calls that are not a DNS seed's: the managed-file and secret deliveries
+// into an agent, which a test of those counts without the run's resolver seed (driver_dns.go).
+func (f *fakeDocker) managedCopies() []fakeCopy {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []fakeCopy
+	for _, c := range f.copies {
+		if !strings.HasPrefix(c.id, dnsSeedPrefix) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // fakeCopy records one CopyToContainer: which container, where, the raw

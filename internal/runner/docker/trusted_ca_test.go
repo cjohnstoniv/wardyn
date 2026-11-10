@@ -142,8 +142,8 @@ func TestRunnerTrustedCA_MountBesideAComponentSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox with a component secret and the CA mount: %v", err)
 	}
-	if len(f.copies) != 1 || !slices.Contains(f.startedNames, agentContainerName(spec.RunID)) {
-		t.Fatalf("%d copies, started %v; want the secret delivered and the agent started", len(f.copies), f.startedNames)
+	if len(f.managedCopies()) != 1 || !slices.Contains(f.startedNames, agentContainerName(spec.RunID)) {
+		t.Fatalf("%d copies, started %v; want the secret delivered and the agent started", len(f.managedCopies()), f.startedNames)
 	}
 	if !slices.ContainsFunc(f.containers[sb.Ref].host.Mounts, func(m mount.Mount) bool {
 		return m.Source == "/state/trusted-ca.pem" && m.Target == runner.TrustedCAMountPath && m.ReadOnly

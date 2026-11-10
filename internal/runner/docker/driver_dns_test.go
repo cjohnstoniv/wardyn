@@ -369,17 +369,278 @@ func TestTeardown_DNSVolumeGoesBeforeTheProxy(t *testing.T) {
 	}
 }
 
-// TestTeardown_RemovesALeftDNSSeed: a seed a crash left is removed by the run's teardown, by its run-derived name.
+// dnsSeedFixture puts a container under runID's DNS seed name, with the given labels.
+func dnsSeedFixture(f *fakeDocker, runID uuid.UUID, labels map[string]string) *createdContainer {
+	c := &createdContainer{name: dnsSeedName(runID), cfg: &container.Config{Labels: labels}}
+	f.containers[dnsSeedName(runID)] = c
+	return c
+}
+
+// TestTeardown_RemovesALeftDNSSeed: a seed a crash left, labelled as the driver labels it, is removed by the run's
+// teardown, by the id its inspect returned.
 func TestTeardown_RemovesALeftDNSSeed(t *testing.T) {
-	f := newFakeDocker()
+	d, f := dnsTestDriver(Config{})
 	id := uuid.New()
-	f.containers[dnsSeedName(id)] = &createdContainer{name: dnsSeedName(id)}
-	if err := newTestDriver(f).teardown(context.Background(), agentContainerName(id)); err != nil {
+	seed := dnsSeedFixture(f, id, d.dnsLabels(id, componentDNSSeed))
+	if err := d.teardown(context.Background(), agentContainerName(id)); err != nil {
 		t.Fatal(err)
 	}
-	if c := f.containers[dnsSeedName(id)]; c != nil && !c.removed {
-		t.Errorf("teardown left the DNS seed %s", dnsSeedName(id))
+	if !seed.removed || !seed.forceRemoved {
+		t.Errorf("teardown left the DNS seed %s (removed %v)", dnsSeedName(id), seed.removed)
 	}
+}
+
+// foreignDNSSeedLabels are label sets of containers that answer to a run's DNS seed name but are not its seed.
+func foreignDNSSeedLabels(d *Driver, runID uuid.UUID) map[string]map[string]string {
+	mutated := func(mutate func(map[string]string)) map[string]string {
+		l := maps.Clone(d.dnsLabels(runID, componentDNSSeed))
+		mutate(l)
+		return l
+	}
+	return map[string]map[string]string{
+		"no labels":          nil,
+		"another component":  mutated(func(l map[string]string) { l[labelComponent] = componentAgent }),
+		"another run":        mutated(func(l map[string]string) { l[labelRun] = uuid.NewString() }),
+		"not managed":        mutated(func(l map[string]string) { delete(l, labelManaged) }),
+		"another deployment": mutated(func(l map[string]string) { l[labelDeployment] = "other-net" }),
+		"no deployment":      mutated(func(l map[string]string) { delete(l, labelDeployment) }),
+		"another runner":     mutated(func(l map[string]string) { l[runner.LabelRunnerID] = "runner-9" }),
+	}
+}
+
+// TestTeardown_KeepsAForeignDNSSeed: a container that answers to the seed name but is not the seed is left in place,
+// and the teardown still removes the run's own volume and proxy.
+func TestTeardown_KeepsAForeignDNSSeed(t *testing.T) {
+	probe, _ := dnsTestDriver(Config{})
+	for name := range foreignDNSSeedLabels(probe, uuid.New()) {
+		t.Run(name, func(t *testing.T) {
+			d, f := dnsTestDriver(Config{})
+			spec := testSpec()
+			sb, err := d.CreateSandbox(context.Background(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign := dnsSeedFixture(f, spec.RunID, foreignDNSSeedLabels(d, spec.RunID)[name])
+			if err := d.KillSandbox(context.Background(), sb.Ref); err != nil {
+				t.Fatalf("KillSandbox: %v", err)
+			}
+			if foreign.removed {
+				t.Error("the teardown removed a container that is not the run's DNS seed")
+			}
+			if _, ok := f.volumes[dnsVolumeName(spec.RunID)]; ok {
+				t.Error("the foreign seed stopped the teardown before the run's own volume went")
+			}
+			if p := f.containers[proxyContainerName(spec.RunID)]; p == nil || !p.removed {
+				t.Error("the teardown left the proxy")
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_RefusesAForeignDNSSeed: a container under the seed name that is not the seed refuses the run
+// before anything is copied, is left as it was, and the rollback removes what the run made.
+func TestCreateSandbox_RefusesAForeignDNSSeed(t *testing.T) {
+	probe, _ := dnsTestDriver(Config{})
+	run := testSpec().RunID
+	for name, labels := range foreignDNSSeedLabels(probe, run) {
+		t.Run(name, func(t *testing.T) {
+			d, f := dnsTestDriver(Config{})
+			foreign := dnsSeedFixture(f, run, labels)
+			_, err := d.CreateSandbox(context.Background(), testSpec())
+			if !errors.Is(err, errDNSSeedNotOurs) {
+				t.Fatalf("CreateSandbox = %v, want %v", err, errDNSSeedNotOurs)
+			}
+			if foreign.removed || len(f.copies) != 0 {
+				t.Errorf("foreign seed removed %v, copies %d; want it untouched and nothing written", foreign.removed, len(f.copies))
+			}
+			if _, ok := f.volumes[dnsVolumeName(run)]; ok {
+				t.Error("the run's own DNS volume survived the refusal")
+			}
+			if p := f.containers[proxyContainerName(run)]; p != nil && !p.removed {
+				t.Error("the proxy survived the refusal")
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_SeedNameTakenBetweenInspectAndCreate: the inspect finds no seed, then the daemon refuses the
+// create as a name in use. The run is refused, nothing is copied, and the rollback leaves nothing of the run.
+func TestCreateSandbox_SeedNameTakenBetweenInspectAndCreate(t *testing.T) {
+	d, f := dnsTestDriver(Config{})
+	run := testSpec().RunID
+	f.createConflicts = map[string]bool{dnsSeedName(run): true}
+	if _, err := d.CreateSandbox(context.Background(), testSpec()); err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("CreateSandbox = %v, want the daemon's name conflict", err)
+	}
+	if len(f.copies) != 0 {
+		t.Errorf("%d copies after a refused seed create", len(f.copies))
+	}
+	if _, ok := f.volumes[dnsVolumeName(run)]; ok {
+		t.Error("the DNS volume survived")
+	}
+	if p := f.containers[proxyContainerName(run)]; p != nil && !p.removed {
+		t.Error("the proxy survived")
+	}
+}
+
+// TestCreateSandbox_SeedCopyAndRemovalGoByTheCreatedID: the copy into the seed and its removal use the id the create
+// returned, so a name that comes to mean another container cannot redirect either.
+func TestCreateSandbox_SeedCopyAndRemovalGoByTheCreatedID(t *testing.T) {
+	d, f := dnsTestDriver(Config{})
+	f.createIDOverride = "sha256:0123456789abcdef"
+	spec := testSpec()
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.copies) != 1 || f.copies[0].id != f.createIDOverride || f.copies[0].dest != "/" {
+		t.Fatalf("copies = %+v, want one, addressed by the created id %s", f.copies, f.createIDOverride)
+	}
+	if seed := f.containers[dnsSeedName(spec.RunID)]; seed == nil || !seed.removed {
+		t.Errorf("seed = %+v, want it removed by the created id", seed)
+	}
+}
+
+// TestCreateSandbox_StuckResolverCleanupKeepsTheProxy: a failed create whose resolver volume or seed cannot be
+// removed keeps the proxy and the network, reports the cleanup error, and the orphan sweep finishes the removal
+// once the daemon recovers, volume first and proxy after.
+func TestCreateSandbox_StuckResolverCleanupKeepsTheProxy(t *testing.T) {
+	run := testSpec().RunID
+	cases := map[string]func(*fakeDocker){
+		"the volume cannot be removed": func(f *fakeDocker) {
+			f.failCreateContainer = "wardyn-agent-"
+			f.volumeInUse = dnsVolumeName(run)
+		},
+		"the seed cannot be removed": func(f *fakeDocker) {
+			f.failCopyToContainer = true
+			f.failRemove = map[string]int{dnsSeedName(run): 2}
+		},
+	}
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			d, f := dnsTestDriver(Config{})
+			arrange(f)
+			_, err := d.CreateSandbox(context.Background(), testSpec())
+			if err == nil || !strings.Contains(err.Error(), "kept for the orphan sweep") {
+				t.Fatalf("CreateSandbox = %v, want the failure and the cleanup error", err)
+			}
+			if _, ok := f.volumes[dnsVolumeName(run)]; !ok {
+				t.Fatal("the volume is gone, so this case never got stuck")
+			}
+			if p := f.containers[proxyContainerName(run)]; p == nil || p.removed {
+				t.Fatalf("proxy = %+v, want it kept as the anchor", p)
+			}
+			if _, ok := f.networks[internalNetName(run)]; !ok {
+				t.Fatal("the run network was removed under the kept proxy")
+			}
+
+			f.volumeInUse, f.failRemove, f.failCopyToContainer, f.failCreateContainer = "", nil, false, ""
+			old := time.Now().Add(-time.Hour).Unix()
+			f.listItems = []container.Summary{{ID: proxyContainerName(run), Created: old, Labels: d.labels(run, componentProxy, nil)}}
+			swept, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true })
+			if err != nil || swept != 1 {
+				t.Fatalf("sweep = %d, %v; want the one run torn down", swept, err)
+			}
+			if _, ok := f.volumes[dnsVolumeName(run)]; ok {
+				t.Error("the sweep's retry left the volume")
+			}
+			if c := f.containers[dnsSeedName(run)]; c != nil && !c.removed {
+				t.Error("the sweep's retry left the seed")
+			}
+			if p := f.containers[proxyContainerName(run)]; !p.removed {
+				t.Error("the sweep's retry left the proxy")
+			}
+			if _, ok := f.networks[internalNetName(run)]; ok {
+				t.Error("the sweep's retry left the network")
+			}
+		})
+	}
+}
+
+// TestProxyDNSListenerOnlyWhereTheAgentUsesIt: the proxy opens :53 only for a container run whose agent resolver is
+// mounted to point at it, on create and on a revive; a Linux VM, a macOS VM and a run on an Engine or API without
+// the mount get none, since a proxy told to listen exits when it cannot bind.
+func TestProxyDNSListenerOnlyWhereTheAgentUsesIt(t *testing.T) {
+	listens := func(f *fakeDocker, run uuid.UUID) bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return slices.Contains(f.containers[proxyContainerName(run)].cfg.Env, proxy.DNSListenEnv+"=:53")
+	}
+	t.Run("container run, create and revive", func(t *testing.T) {
+		d, f := dnsTestDriver(Config{InternalNetwork: "wardyn-internal"})
+		spec := testSpec()
+		ctx := context.Background()
+		sb, err := d.CreateSandbox(ctx, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !listens(f, spec.RunID) {
+			t.Error("create: the proxy has no DNS listener")
+		}
+		if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.ReplaceProxy(ctx, sb.Ref, renderedTestConfig(t, "fresh")); err != nil {
+			t.Fatal(err)
+		}
+		if !listens(f, spec.RunID) {
+			t.Error("revive: the replacement proxy lost its DNS listener")
+		}
+	})
+	t.Run("container run on an Engine without the mount, create and revive", func(t *testing.T) {
+		d, f := dnsTestDriver(Config{InternalNetwork: "wardyn-internal", AllowHostReachableRunNetwork: true})
+		f.info.ServerVersion = "25.0.0"
+		spec := testSpec()
+		ctx := context.Background()
+		sb, err := d.CreateSandbox(ctx, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if listens(f, spec.RunID) {
+			t.Error("create: the proxy listens on :53 for an agent whose resolver is Docker's")
+		}
+		if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.ReplaceProxy(ctx, sb.Ref, renderedTestConfig(t, "fresh")); err != nil {
+			t.Fatal(err)
+		}
+		if listens(f, spec.RunID) {
+			t.Error("revive: the replacement proxy listens on :53 for an agent whose resolver is Docker's")
+		}
+	})
+	t.Run("container run on a pinned old API", func(t *testing.T) {
+		d, f := dnsTestDriver(Config{})
+		f.apiVersion, f.apiVersionSet = "1.44", true
+		spec := testSpec()
+		if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+			t.Fatal(err)
+		}
+		if listens(f, spec.RunID) {
+			t.Error("the proxy listens on :53 for an agent whose resolver is Docker's")
+		}
+	})
+	t.Run("Linux VM", func(t *testing.T) {
+		r := newVMRig(t)
+		spec := vmSpec()
+		spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}}
+		spec.ExecOutput = &syncWriter{w: &bytes.Buffer{}}
+		if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+			t.Fatal(err)
+		}
+		if listens(r.f, spec.RunID) {
+			t.Error("a Linux VM's proxy listens on :53")
+		}
+	})
+	t.Run("macOS VM", func(t *testing.T) {
+		r := newMacRig(t)
+		spec := macSpec()
+		if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+			t.Fatal(err)
+		}
+		if listens(r.f.fakeDocker, spec.RunID) {
+			t.Error("a macOS VM's proxy listens on :53")
+		}
+	})
 }
 
 // TestCreateSandbox_DNSFailuresRollBackTheVolume: every way the create can fail after the DNS volume exists
