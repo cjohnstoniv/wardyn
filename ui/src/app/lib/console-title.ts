@@ -1,3 +1,7 @@
+/**
+ * Copyright 2026 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // The tab title has one writer. The console sets its own title here (the shell's "<page> - <console>"), and a
 // brand, while set, renames it on the way out. So leaving a brand restores the console's title exactly, and
 // a brand name that equals a page's title ("Runs -" gives "Runs - Wardyn") is never mistaken for one.
