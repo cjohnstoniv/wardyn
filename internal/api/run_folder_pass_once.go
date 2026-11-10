@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -42,12 +44,36 @@ var errFolderPassUnconfirmed = errors.New("no pass ran; the runner's last pass f
 // has not passed since it was sent (lastPassUnanswered), and the runner is not known to run one pass per
 // run at a time: an older runner, or unknown facts (caps not in, a failed lookup, the runner offline).
 // computerFolderPass checks the same on the endpoint it sends to.
-func (s *Server) lastPassOpen(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, rec types.RunLocalFolderStatus) bool {
-	if folder.RunnerID == nil || !s.lastPassUnanswered(rec) {
+func (s *Server) lastPassOpen(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, g passGuard) bool {
+	if folder.RunnerID == nil || !s.mayStillRun(g) {
 		return false
 	}
 	sub, refusal := s.folderRunner(ctx, run.CreatedBy, *folder.RunnerID)
 	return passMayRunBeside(sub, refusal)
+}
+
+// passGuard is what a pass back is checked against before it is sent (lastPassOpen): the record before its
+// generation, and whether that could not be read.
+type passGuard struct {
+	last   types.RunLocalFolderStatus
+	unread bool
+}
+
+// passGuardFor is run's passGuard. A virtual machine's sandbox cannot be kept with its agent stopped
+// (stopForKeep), so its pass is sent as before this release, unguarded: it can still run beside one that is
+// stuck, which only a runner that runs one pass per run at a time rules out.
+func passGuardFor(run types.AgentRun, prev types.RunLocalFolderStatus, unread bool) passGuard {
+	if run.MachineKind.IsVM() {
+		return passGuard{}
+	}
+	return passGuard{last: prev, unread: unread}
+}
+
+// mayStillRun is a guard whose last pass the runner may still be running (lastPassUnanswered), or whose
+// record could not be read: a read that failed never sends to a runner not known to run one pass per run at
+// a time.
+func (s *Server) mayStillRun(g passGuard) bool {
+	return g.unread || s.lastPassUnanswered(g.last)
 }
 
 // lastPassUnanswered is a last pass the runner may still be running: unsettled (lastPassUnsettled), and
@@ -76,28 +102,84 @@ func (s *Server) pastOldPassBound(rec types.RunLocalFolderStatus) bool {
 // from it. On a resume visit (prev.Resume set) the sandbox was kept already, its agent stopped and its
 // egress cut, and stays so. On the first, its agent and egress are stopped first, and it is kept with a
 // resume; one where that fails, or that cannot be quiesced, is stopped with the changes not brought back.
-func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, prev types.RunLocalFolderStatus, ref string) bool {
-	if prev.Resume == nil {
-		qctx, qcancel := teardownCtx(ctx)
-		qerr := s.quiesceKeptSandbox(qctx, run, ref)
-		qcancel()
-		if qerr != nil {
-			rctx, cancel := teardownCtx(ctx)
-			defer cancel()
-			errText := folderBackGivenUp("no pass ran; the runner may still be running its last pass back",
-				"its agent and egress could not be stopped first: "+qerr.Error(), 0)
-			return s.recordFolderBackAt(rctx, run.ID, folder, prev.Gen, false, nil, runnerwire.FolderPass{}, errText)
+func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, g passGuard, ref string) bool {
+	prev := g.last
+	if prev.Resume == nil || g.unread {
+		if err := s.stopForKeep(ctx, run, ref); err != nil {
+			return s.stopNotKept(ctx, run.ID, folder, prev.Gen, false, "no pass ran; the runner may still be running its last pass back", err)
 		}
 	}
-	return s.keepForResume(ctx, run.ID, folder, prev.Gen, prev)
+	return s.keepForResume(ctx, run.ID, folder, prev.Gen, prev, prev.GenAt)
+}
+
+// stopForKeep makes run's sandbox safe to keep for a later pass with none sent: quiesced, its agent stopped
+// and no egress, where its substrate can; else (holdUnquiesced) with its agent stopped alone.
+func (s *Server) stopForKeep(ctx context.Context, run types.AgentRun, ref string) error {
+	qctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	return s.holdUnquiesced(qctx, run, s.quiesceKeptSandbox(qctx, run, ref))
+}
+
+// holdUnquiesced answers whether a sandbox whose quiesce answered qerr may be kept: one quiesced (qerr nil)
+// may; one that cannot be quiesced (notQuiescable) may once its agent is stopped alone, as a bring-back stops
+// it (a sandbox on a runner, or on Kubernetes in server mode), with no claim on its egress. A virtual
+// machine's sandbox, or one whose quiesce failed, may not.
+func (s *Server) holdUnquiesced(ctx context.Context, run types.AgentRun, qerr error) error {
+	var cannot notQuiescable
+	switch {
+	case !errors.As(qerr, &cannot):
+		return qerr
+	case run.MachineKind.IsVM():
+		return errors.New("a virtual machine's agent cannot be stopped alone")
+	case !s.agentStoppable(ctx, run):
+		return errors.New("its agent is not one that can be stopped alone")
+	}
+	if err := s.stopAgentForPass(ctx, run.SandboxRef); err != nil {
+		return fmt.Errorf("the agent could not be stopped: %w", err)
+	}
+	return nil
+}
+
+// keepBusy keeps the sandbox of a pass back the runner refused as busy (recordFolderPassBusy), once it is
+// safe to keep (holdUnquiesced); one that is not is stopped with its changes not brought back.
+func (s *Server) keepBusy(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, qerr error) bool {
+	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+		return s.stopNotKept(ctx, run.ID, folder, gen, true, "no pass ran; the runner is still running this run's last pass back", err)
+	}
+	return s.recordFolderPassBusy(ctx, run.ID, folder, gen)
+}
+
+// keepUnconfirmed keeps the sandbox of a pass back not sent because the runner may still run the last
+// (errFolderPassUnconfirmed), once it is safe to keep (holdUnquiesced), with the last pass's send time
+// (genAt) kept, so the wait does not start again. One not safe to keep is stopped with its changes not
+// brought back.
+func (s *Server) keepUnconfirmed(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus, genAt time.Time, qerr error) bool {
+	if err := s.holdUnquiesced(ctx, run, qerr); err != nil {
+		return s.stopNotKept(ctx, run.ID, folder, gen, false, "no pass ran; the runner may still be running its last pass back", err)
+	}
+	return s.keepForResume(ctx, run.ID, folder, gen, rec, genAt)
+}
+
+// stopNotKept records, at gen, a pass back that did not run on a sandbox that cannot be kept for why, and
+// lets it be stopped with its changes not brought back.
+func (s *Server) stopNotKept(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, settled bool, head string, why error) bool {
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	errText := folderBackGivenUp(head, "the sandbox could not be kept with its agent stopped: "+why.Error(), 0)
+	return s.recordFolderBackAt(rctx, id, folder, gen, settled, nil, runnerwire.FolderPass{}, errText)
 }
 
 // keepForResume keeps run id's sandbox for a later pass, at gen, with no stall counted and nothing claimed
 // done. The sweeps keep only a sandbox whose record holds a resume (computerFolderKept), so one is written
-// where rec, the record as read, has none, and a send time where it has none. A resume that cannot be
-// written stops the sandbox with its changes not brought back; a send time that cannot is stamped later.
-func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus) bool {
-	if rec.Resume != nil && !rec.GenAt.IsZero() {
+// where rec, the record as read, has none. The send time becomes genAt, the last pass's, or, with none,
+// now where rec has none. A resume that cannot be written stops the sandbox with its changes not brought
+// back; a send time that cannot is left as it is.
+func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus, genAt time.Time) bool {
+	want := genAt
+	if want.IsZero() {
+		want = rec.GenAt
+	}
+	if rec.Resume != nil && !want.IsZero() && rec.GenAt.Equal(want) {
 		return true
 	}
 	rctx, cancel := teardownCtx(ctx)
@@ -106,7 +188,10 @@ func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.R
 		if st.Resume == nil {
 			st.Resume = &types.FolderResume{}
 		}
-		if st.GenAt.IsZero() {
+		switch {
+		case !genAt.IsZero():
+			st.GenAt = genAt
+		case st.GenAt.IsZero():
 			st.GenAt = s.cfg.Now()
 		}
 	}) || rec.Resume != nil {

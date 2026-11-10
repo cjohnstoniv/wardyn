@@ -367,9 +367,9 @@ What happens:
 - A run kept after its end is torn down on the first pass that can take its lock, and brings its changes back the same way. If that lock stays held for 5 minutes, the sandbox is stopped without bringing its changes back, at most about 7 minutes after the run was due to be torn down.
 - A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
 - Update the Wardyn runner on every laptop: most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older folder sync behaviour.
-- An older runner keeps working. If one of its passes back goes unanswered, the next is sent about an hour later; it can still run beside a pass that is stuck, which only an updated runner prevents.
-- With an older runner, a run that was already running when the server was upgraded waits about an hour before its first copy back, because the server cannot tell whether that runner was still copying.
-- The sandbox is kept meanwhile, and changes still not brought back after two passes in a row that bring nothing back are lost, with a failure record.
+- An older runner keeps working. If one of its passes back goes unanswered, the next is sent an hour or more later, on the hourly sweep. That pass can still run beside a stuck one, which only an updated runner prevents. A run started before the server was updated waits the same way for its first pass back.
+- Meanwhile a sandbox on the server's Docker is kept with its agent stopped and no network. One on a runner or on Kubernetes is kept with its agent stopped; its network is not cut. A virtual machine's sandbox cannot be kept that way: its pass is sent at once, as before, and can still run beside a stuck one.
+- Changes still not brought back after two passes in a row that bring nothing back are lost, with a failure record.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:

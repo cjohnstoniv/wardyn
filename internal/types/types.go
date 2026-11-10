@@ -800,7 +800,7 @@ type RunLocalFolderStatus struct {
 	// GenAt is when the record was moved to Gen, so when that generation's pass was sent at the
 	// earliest. Absent (a record from before it) is not taken as long ago: the first pass back that
 	// finds it absent stamps it, and the wait for an unanswered pass runs from there.
-	GenAt time.Time `json:"gen_at,omitempty"`
+	GenAt time.Time `json:"gen_at,omitzero"`
 }
 
 // FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that

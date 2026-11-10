@@ -184,7 +184,7 @@ func (s *Server) seedComputerFolder(ctx context.Context, run types.AgentRun, fol
 		return
 	}
 	gen := rec.Gen
-	out := s.computerFolderPassWithin(ctx, wait, run, folder, false, prev)
+	out := s.computerFolderPassWithin(ctx, wait, run, folder, false, passGuard{last: prev})
 	res, errText := out.FolderPass, out.errText
 	// Recorded on ctx, not the pass's own deadline: a pass that timed out still leaves its record.
 	recorded := s.writeComputerFolderStatus(ctx, run.ID, gen, func(st *types.RunLocalFolderStatus) {
@@ -232,6 +232,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return false
 	}
 	var prev types.RunLocalFolderStatus
+	unread := false
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(rctx, runID); err == nil {
 			if folderBroughtBack(rec) {
@@ -239,6 +240,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 				return false
 			}
 			prev = rec
+		} else {
+			unread = true
 		}
 	}
 	run, err := s.cfg.Store.GetRun(rctx, runID)
@@ -248,11 +251,12 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	}
 	run.SandboxRef = ref
 	// While the last pass is open (lastPassOpen), no pass is sent (keepForOpenPass).
+	guard := passGuardFor(run, prev, unread)
 	octx, ocancel := teardownCtx(ctx)
-	open := s.lastPassOpen(octx, run, *folder, prev)
+	open := s.lastPassOpen(octx, run, *folder, guard)
 	ocancel()
 	if open {
-		return s.keepForOpenPass(ctx, run, *folder, prev, ref)
+		return s.keepForOpenPass(ctx, run, *folder, guard, ref)
 	}
 	// The pass back owns the next generation of the record, and writes only at it: an owner that
 	// lost it (another moved the record on) writes nothing and leaves the sandbox to that owner.
@@ -304,14 +308,14 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if dl, ok := ctx.Deadline(); ok {
 		d = min(d, time.Until(dl)-runTeardownBudget)
 	}
-	out := s.computerFolderPassWithin(ctx, d, run, *folder, true, prev)
+	out := s.computerFolderPassWithin(ctx, d, run, *folder, true, guard)
 	switch {
 	case out.busy:
-		return s.recordFolderPassBusy(ctx, runID, *folder, gen)
+		return s.keepBusy(ctx, run, *folder, gen, qerr)
 	case out.unconfirmed:
 		// The runner the pass was to go to turned out to be one that may still run the last: kept, as
 		// lastPassOpen keeps it, with nothing counted.
-		return s.keepForResume(ctx, runID, *folder, gen, rec)
+		return s.keepUnconfirmed(ctx, run, *folder, gen, rec, prev.GenAt, qerr)
 	}
 	res, passErr, cut := out.FolderPass, out.errText, out.cut
 	next, errText := s.folderBackVerdict(ctx, run, &res, passErr, cut, qerr)
@@ -613,7 +617,7 @@ const computerFolderAccountTime = 5 * time.Second
 // computerFolderAccountTime before it, for the runner's account. The caller records the outcome:
 // the seed on ctx (seedComputerFolder), the pass back on teardownCtx, since a finalizing caller's
 // ctx can end before d does (#3466).
-func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, run types.AgentRun, folder types.RunLocalFolder, pull bool, last types.RunLocalFolderStatus) folderPassOutcome {
+func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, run types.AgentRun, folder types.RunLocalFolder, pull bool, last passGuard) folderPassOutcome {
 	end := time.Now().Add(d)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(end) {
 		end = dl
@@ -724,11 +728,11 @@ func (s *Server) writeComputerFolderStatus(ctx context.Context, id uuid.UUID, ge
 // runner is checked again here: it must still be the run creator's own, online, sharing folders.
 // A pass that ctx ends before it finishes is cut: its stream is closed, and the runner's account
 // of what it saved is awaited on account, for at most computerFolderAccountTime.
-// last is the record before this pass's generation: while the runner may still run its pass (lastPassOpen,
+// last is what the pass is checked against: while the runner may still run the last pass (lastPassOpen,
 // checked again here on the endpoint the pass is sent to), nothing is sent and nothing is settled.
-func (s *Server) computerFolderPass(ctx, account context.Context, run types.AgentRun, folder types.RunLocalFolder, pull bool, last types.RunLocalFolderStatus) (_ runnerwire.FolderPass, cut, settled bool, _ error) {
+func (s *Server) computerFolderPass(ctx, account context.Context, run types.AgentRun, folder types.RunLocalFolder, pull bool, last passGuard) (_ runnerwire.FolderPass, cut, settled bool, _ error) {
 	sub, refusal := s.folderRunner(ctx, run.CreatedBy, *folder.RunnerID)
-	if s.lastPassUnanswered(last) && passMayRunBeside(sub, refusal) {
+	if s.mayStillRun(last) && passMayRunBeside(sub, refusal) {
 		if refusal != nil {
 			return runnerwire.FolderPass{}, false, false, fmt.Errorf("%s; %w", refusal.body.Error, errFolderPassUnconfirmed)
 		}

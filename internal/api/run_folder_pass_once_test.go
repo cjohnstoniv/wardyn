@@ -415,6 +415,132 @@ func TestPassBack_ARunnerThatTurnsOlderBeforeTheSendKeepsTheSandboxForTheSweeps(
 	}
 }
 
+// onARunner makes the fixture's run one whose sandbox is on a runner, which cannot be quiesced, with an agent
+// that can be stopped alone; stopFails leaves a process the stop cannot end.
+func (f *passFixture) onARunner(t *testing.T, stopFails bool) *agentSandbox {
+	t.Helper()
+	ag := &agentSandbox{folderSandboxRunner: f.sb, t: t, pid1: taskIdlePID1, stopFails: stopFails}
+	f.s.cfg.Runner = ag
+	id := uuid.New()
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.RunnerID = &id
+	ds.mu.Unlock()
+	return ag
+}
+
+// On a sandbox that cannot be quiesced but whose agent can be stopped alone (one on a runner), an open
+// record keeps the sandbox with its agent stopped and a resume written, and sends no pass.
+func TestPassBack_AnOpenPassOnARunnersSandboxStopsItsAgentAndKeepsIt(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	ag := f.onARunner(t, false)
+	seen := passSeen(f.sb)
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	if ag.stops != 1 || !ag.agentDown {
+		t.Errorf("agent stops %d, down %v; want the agent stopped once before the keep", ag.stops, ag.agentDown)
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil || st.Gen != 0 || st.GenAt.IsZero() {
+		t.Errorf("record %+v, want a resume at gen 0, stamped", st)
+	}
+}
+
+// An open record on a runner's sandbox whose agent cannot be stopped is not kept running: no pass is sent,
+// and the record says the changes were not brought back.
+func TestPassBack_AnOpenPassOnARunnersSandboxWhoseAgentLivesStopsItNotBroughtBack(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	f.onARunner(t, true)
+	seen := passSeen(f.sb)
+	if f.back() || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox left to its stop", seen.Load())
+	}
+	st := f.cs.folderStatus()
+	for _, want := range []string{"no pass ran; the runner may still be running its last pass back", "the agent could not be stopped", "its changes not brought back yet, uncounted"} {
+		if st.Back == nil || !strings.Contains(st.Back.Error, want) || st.Resume != nil {
+			t.Errorf("record %+v, want no resume and the error naming %q", st, want)
+		}
+		if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", want); ev == nil || ev.Outcome != "failure" {
+			t.Errorf("no failure row naming %q", want)
+		}
+	}
+}
+
+// A virtual machine's sandbox cannot be kept with its agent stopped: an open record's pass is sent as before
+// this release.
+func TestPassBack_AnOpenPassOnAVirtualMachineIsSent(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.MachineKind = types.MachineLinuxVM
+	ds.mu.Unlock()
+	seen := passSeen(f.sb)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 1 || st.Settled != 1 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("pass %v, record %+v; want the pass sent and completed at gen 1", seen.Load(), st)
+	}
+}
+
+// statusReadFailsOnce is computerFolderStore whose first read of the pass record fails.
+type statusReadFailsOnce struct {
+	*computerFolderStore
+	failed atomic.Bool
+}
+
+func (s *statusReadFailsOnce) RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
+	if !s.failed.Swap(true) {
+		return types.RunLocalFolderStatus{}, errors.New("the read failed")
+	}
+	return s.computerFolderStore.RunLocalFolderStatus(ctx, id)
+}
+
+// A pass back whose record could not be read sends nothing to an older runner, and keeps the sandbox; a
+// runner that runs one pass per run at a time gets the pass, as before this release.
+func TestPassBack_AnUnreadRecordSendsNoPassToAnOlderRunner(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	f.s.cfg.Store = &statusReadFailsOnce{computerFolderStore: f.cs}
+	seen := passSeen(f.sb)
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil {
+		t.Errorf("record %+v, want a resume", st)
+	}
+
+	f = newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &onePerRunnerCaps)
+	f.s.cfg.Store = &statusReadFailsOnce{computerFolderStore: f.cs}
+	seen = passSeen(f.sb)
+	f.back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 1 || st.Settled != 1 {
+		t.Errorf("pass %v, record %+v; want the pass sent at gen 1, settled", seen.Load(), st)
+	}
+}
+
+// A pass back refused at the send keeps the last pass's send time, so the wait does not start again.
+func TestPassBack_ARefusalAtTheSendKeepsTheLastPassesSendTime(t *testing.T) {
+	f := newPassFixture(t, 2, 1, nil)
+	sent := f.cs.folderStatus().GenAt
+	f.runnerAs(t, &onePerRunnerCaps)
+	f.s.cfg.Store = &runnerTurnsAfterBump{computerFolderStore: f.cs, gen: 3, turn: func() { f.runnerAs(t, &olderRunnerCaps) }}
+	f.advance(time.Minute)
+	if !f.back() {
+		t.Fatal("the sandbox was not kept")
+	}
+	if st := f.cs.folderStatus(); st.Gen != 3 || st.Resume == nil || !st.GenAt.Equal(sent) {
+		t.Errorf("record %+v, want gen 3 kept with the last pass's send time %v", st, sent)
+	}
+}
+
 // A pass the runner refused as busy is settled at its generation and kept for a resume.
 func TestPassBack_ABusyRunnerIsTriedAgainLater(t *testing.T) {
 	s, cs, audit, run, _, _ := computerFolderFixture(t, types.ComputerFolderBoth)
