@@ -197,7 +197,8 @@ func (rp *reporter) flush() {
 		}
 		if h.q != nil {
 			if !rp.takeDNS(now) {
-				continue // still held: its count rides a later flush
+				delete(rp.held, k) // over the bound: dropped and counted once, so held stays bounded
+				continue
 			}
 			q := *h.q
 			q.Repeat = h.count - 1

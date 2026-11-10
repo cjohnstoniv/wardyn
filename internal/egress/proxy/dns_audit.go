@@ -225,7 +225,11 @@ func (l *dnsLimiter) flush() {
 	now := l.now()
 	var out []egress.DNSQuery
 	for k, h := range l.held {
-		if now.Sub(l.last[k]) < dnsInterval || !l.take(now) {
+		if now.Sub(l.last[k]) < dnsInterval {
+			continue
+		}
+		if !l.take(now) {
+			delete(l.held, k) // over the bound: dropped and counted once, so held stays bounded
 			continue
 		}
 		q := h.q
