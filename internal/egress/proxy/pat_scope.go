@@ -109,9 +109,11 @@ func patRequestRepoKey(forge, rest, verb string) (string, bool) {
 //   - every forge but bitbucket_server: patAPIMount;
 //   - gitea also: "api" anywhere before the repository name (Gitea reserves
 //     it as an owner, so there it is the API mount under a sub-path);
-//   - generic also: "_api" (Azure DevOps). Gerrit needs no rule: it binds its
-//     git servlet, which takes every [a/]<project>/<git verb> path, ahead of
-//     its REST servlets (Daemon.java GitOverHttpModule before WebModule).
+//   - generic also: "_api" (Azure DevOps). Gerrit needs no rule: with HTTP git
+//     download enabled it binds its git servlet, which takes every
+//     [a/]<project>/<git verb> path, ahead of its REST servlets (Daemon.java
+//     GitOverHttpModule before WebModule). With HTTP git off, the broker
+//     cannot clone from it at all.
 //   - bitbucket_server: exactly [<context path>/]scm/<project>/<repo>, the
 //     context path free of the server's own routes, and the repository is
 //     <project>/<repo>.
