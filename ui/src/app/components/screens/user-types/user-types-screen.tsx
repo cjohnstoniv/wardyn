@@ -175,7 +175,9 @@ export function UserTypesScreen() {
                     <TableHead>{UT.COL_DESCRIPTION}</TableHead>
                     <TableHead>{UT.COL_PRIORITY}</TableHead>
                     <TableHead>{UT.COL_UPDATED}</TableHead>
-                    <TableHead className="w-[140px]" />
+                    <TableHead className="w-[140px]">
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

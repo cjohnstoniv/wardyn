@@ -236,7 +236,9 @@ export function PoliciesScreen() {
                 <TableHead>Egress</TableHead>
                 <TableHead className="w-[160px]">Attributes</TableHead>
                 <TableHead className="w-[100px]">Updated</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

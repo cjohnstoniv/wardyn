@@ -165,7 +165,9 @@ export function AdminMintedTokens() {
                     <TableHead>{MINTED.COL_CREATED_BY}</TableHead>
                     <TableHead>{MINTED.COL_ADDED}</TableHead>
                     <TableHead>{MINTED.COL_LAST_USED}</TableHead>
-                    <TableHead />
+                    <TableHead>
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

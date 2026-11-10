@@ -149,7 +149,9 @@ export function ComponentsScreen() {
                 <TableHead>{T.COL_REACHES}</TableHead>
                 <TableHead>{T.COL_SECRETS}</TableHead>
                 <TableHead>{T.COL_AVAILABLE}</TableHead>
-                <TableHead className="w-[1%]" />
+                <TableHead className="w-[1%]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

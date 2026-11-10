@@ -128,7 +128,9 @@ export function KeyDomainsSection() {
                     <TableRow className="hover:bg-transparent">
                       <TableHead>{KEY_DOMAINS.COL_SUBJECT}</TableHead>
                       <TableHead>{KEY_DOMAINS.COL_DOMAIN}</TableHead>
-                      <TableHead />
+                      <TableHead>
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

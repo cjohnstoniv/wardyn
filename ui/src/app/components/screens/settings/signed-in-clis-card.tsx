@@ -121,7 +121,9 @@ export function SignedInClisCard() {
                   <TableHead>{SERVICES.COL_LAST_USED}</TableHead>
                   <TableHead>{T.COL_ENDS}</TableHead>
                   <TableHead>{T.COL_IDLE_END}</TableHead>
-                  <TableHead />
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody className="max-md:block">

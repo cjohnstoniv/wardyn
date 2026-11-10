@@ -110,7 +110,9 @@ export function AdminSshKeysCard() {
                 <TableHead>Name</TableHead>
                 <TableHead>Fingerprint</TableHead>
                 <TableHead>Added</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

@@ -65,6 +65,7 @@ describe("the State column", () => {
     render(<AdminMintedTokens />);
     await screen.findByText("alice@example.com");
     expect(screen.getByRole("columnheader", { name: MINTED.COL_STATE })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     expect(rowOf("alice@example.com").getByText("Needs a decision")).toBeInTheDocument();
     expect(rowOf("alice@example.com").getByText("Still works as the person. Invite them, or move it to a service identity.")).toBeInTheDocument();
     expect(rowOf("ben@example.com").getByText("Waiting for the owner")).toBeInTheDocument();

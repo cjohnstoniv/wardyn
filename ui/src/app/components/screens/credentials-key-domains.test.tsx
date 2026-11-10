@@ -61,6 +61,7 @@ describe("the domains table", () => {
     expect(await screen.findByText(KEY_DOMAINS.TITLE)).toBeInTheDocument();
     // The title is on the loading skeleton too; the lede appears only with the data.
     expect(await screen.findByText(KEY_DOMAINS.LEDE)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     const finance = screen.getAllByText("finance")[0].closest("tr")!;
     expect(within(finance).getByText("Transit key finance")).toBeInTheDocument();
     expect(within(finance).getByText(KEY_DOMAINS.PROVEN)).toBeInTheDocument();

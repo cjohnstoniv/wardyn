@@ -313,7 +313,9 @@ function ServiceRow({
                   <TableHead>{T.COL_TOKEN}</TableHead>
                   <TableHead>{T.COL_EXPIRES}</TableHead>
                   <TableHead>{T.COL_LAST_USED}</TableHead>
-                  <TableHead />
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

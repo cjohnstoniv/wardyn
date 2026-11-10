@@ -72,6 +72,7 @@ describe("the card", () => {
     for (const col of ["Computer", "Store", "Signed in", "Last used", "Ends", "Idle end"]) {
       expect(within(table).getByRole("columnheader", { name: col })).toBeVisible();
     }
+    expect(within(table).getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     const mbp = row("s1");
     expect(mbp.getByText("mbp-dev")).toBeVisible();
     expect(mbp.getByText(T.CHIP)).toBeVisible();

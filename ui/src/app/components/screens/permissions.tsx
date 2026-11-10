@@ -419,7 +419,9 @@ export function PermissionsScreen() {
                   <TableHead>{PERM.COL_VALUE}</TableHead>
                   <TableHead>{PERM.COL_EFFECT}</TableHead>
                   <TableHead>{PERM.COL_ADDED}</TableHead>
-                  <TableHead className="w-[80px]" />
+                  <TableHead className="w-[80px]">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
