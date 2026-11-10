@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -18,6 +19,21 @@ import (
 // existingSyncFlag opens a file only to read and sync it: FlushFileBuffers needs write access. It
 // neither creates nor truncates.
 const existingSyncFlag = os.O_RDWR
+
+// readOnlyRefusal is an open of name for writing that err refused (ERROR_ACCESS_DENIED) only because
+// name has the read-only attribute, read from the file, not guessed from the errno: an access
+// list or a lock refuses the same way and is a failure.
+func readOnlyRefusal(root *os.Root, name string, err error) bool {
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		return false
+	}
+	fi, lerr := root.Lstat(name)
+	if lerr != nil {
+		return false
+	}
+	a, ok := fi.Sys().(*syscall.Win32FileAttributeData)
+	return ok && a.FileAttributes&windows.FILE_ATTRIBUTE_READONLY != 0
+}
 
 // replaceFile moves from over to and has Windows write the move through to the disk, since a
 // directory cannot be synced there. Only when the directory's path cannot be resolved does it fall

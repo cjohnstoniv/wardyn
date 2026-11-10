@@ -351,8 +351,8 @@ What happens:
   `<name> (sandbox conflict <run>)<ext>`. If it can't be saved, neither side changes and the file is listed as not
   brought back. A later run copies these in like any file; a `.wardynignore` line `* (sandbox conflict *)*` leaves
   them out.
-- On filesystems that cannot sync a directory, a power loss can drop a just-written file's folder entry; Wardyn logs a
-  warning and continues.
+- On filesystems that cannot sync a directory, and for read-only files on Windows, a power loss can drop a
+  just-written change; Wardyn logs a warning and continues.
 - Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
   [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
 - Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its

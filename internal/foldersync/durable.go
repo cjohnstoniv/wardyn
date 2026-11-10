@@ -180,7 +180,7 @@ func keptAlready(root *os.Root, tmpName, dst string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	f, fi, err := openKept(root, dst)
+	f, fi, err := openKept(root, dst, existingSyncFlag)
 	if err != nil {
 		return false, nil
 	}
@@ -191,13 +191,19 @@ func keptAlready(root *os.Root, tmpName, dst string) (bool, error) {
 	return true, fsyncFile(f)
 }
 
+// errReadOnlyNotFlushed is a read-only laptop file recorded without a flush (readOnlyRefusal).
+var errReadOnlyNotFlushed = errors.New("read-only file: recorded without a flush, which needs write access")
+
 // errNotKeptFile is a laptop path that is not one regular file from its check to its open.
 var errNotKeptFile = errors.New("not a regular file, or replaced while it was opened")
 
-// openKept opens the laptop's regular file name in root, never through a link at its name: what
-// is compared, synced and recorded is this one file, not one swapped in at its name.
-func openKept(root *os.Root, name string) (*os.File, os.FileInfo, error) {
-	f, err := root.OpenFile(name, existingSyncFlag, 0)
+// openFileIn is root.OpenFile, replaced by tests to fail.
+var openFileIn = func(root *os.Root, name string, flag int) (*os.File, error) { return root.OpenFile(name, flag, 0) }
+
+// openKept opens the laptop's regular file name in root with flag, never through a link at its
+// name: what is compared, synced and recorded is this one file, not one swapped in at its name.
+func openKept(root *os.Root, name string, flag int) (*os.File, os.FileInfo, error) {
+	f, err := openFileIn(root, name, flag)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -222,9 +228,20 @@ func sumOf(f *os.File, size int64) ([]byte, bool) {
 // that file, then its directory and every one above it, and only then records the side of the file
 // it synced. A file that is not the one meant is (false, nil), with nothing recorded. A failed sync
 // is an InstallError with Installed set, whatever its errno: only a directory sync the filesystem
-// does not offer is passed over (syncDirIn).
+// does not offer is passed over (syncDirIn), and on Windows the flush of a read-only file
+// (readOnlyRefusal).
 func (sy *Syncer) recordKept(rel string, remote Side, same func(f *os.File, fi os.FileInfo) bool) (bool, error) {
-	f, fi, err := openKept(sy.Root, rel)
+	f, fi, err := openKept(sy.Root, rel, existingSyncFlag)
+	flush := true
+	if err != nil && readOnlyRefusal(sy.Root, rel, err) {
+		// Windows flushes a file only through a handle open for writing, which a read-only file
+		// refuses, and its attributes are the user's to keep. So it is opened to read, checked the
+		// same way and recorded unflushed, with the pass's durability warning. A file this pass
+		// just installed was flushed as its temp before the write-through move, so what a power
+		// loss can drop is small: an identical copy found on the laptop, or a later change to it.
+		f, fi, err = openKept(sy.Root, rel, os.O_RDONLY)
+		flush = false
+	}
 	if err != nil {
 		return false, err
 	}
@@ -232,7 +249,9 @@ func (sy *Syncer) recordKept(rel string, remote Side, same func(f *os.File, fi o
 	if !same(f, fi) {
 		return false, nil
 	}
-	if err := fsyncFile(f); err != nil {
+	if !flush {
+		sy.dirs.unsupported(rel, errReadOnlyNotFlushed)
+	} else if err := fsyncFile(f); err != nil {
 		return false, &InstallError{Step: "sync-file", Installed: true, Err: err}
 	}
 	if err := syncDirsUp(sy.Root, sy.dirs, path.Dir(rel)); err != nil {

@@ -15,6 +15,9 @@ import (
 // existingSyncFlag opens a file only to read and sync it.
 const existingSyncFlag = os.O_RDONLY
 
+// readOnlyRefusal is false: a file is synced through a read-only handle here.
+func readOnlyRefusal(*os.Root, string, error) bool { return false }
+
 func replaceFile(root *os.Root, from, to string) error { return root.Rename(from, to) }
 
 // linkFile is root.Link, replaced by tests to fail.
