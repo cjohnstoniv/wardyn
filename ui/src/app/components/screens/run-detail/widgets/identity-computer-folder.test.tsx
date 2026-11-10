@@ -46,14 +46,15 @@ describe("Folders from your computer", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(`laptop-7f2 is offline ${C.NOTHING_RAN}`);
   });
 
-  it("once a Both ways run ends, says what came back and that the sandbox copy is gone", () => {
+  it("once a Both ways run ends, says what came back and never claims the sandbox copy was deleted", () => {
     show("COMPLETED", {
       ...FOLDER, state: "synced",
       seed: { at: AT, files: 1284, bytes: 1, refused: [] }, back: { at: AT, files: 3, bytes: 10, refused: [] },
     });
     expect(screen.getByText(C.ENDED)).toBeInTheDocument();
     expect(screen.getByText(C.FILES("3"))).toBeInTheDocument();
-    expect(screen.getByText(C.DELETED)).toBeInTheDocument();
+    expect(screen.getByText("The run has ended. Its sandbox copy may no longer be available.")).toBeInTheDocument();
+    expect(screen.queryByText(/sandbox copy was deleted/)).toBeNull();
     expect(screen.getByText(C.BACK_AT(shortTime(AT), "3"))).toBeInTheDocument();
   });
 

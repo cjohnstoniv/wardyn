@@ -227,7 +227,7 @@ export const RUN_COMPUTER_FOLDER = {
   WAITING_BODY: "The run starts when this finishes. Nothing has run yet.",
   NOTHING_RAN: "Nothing ran.",
   BACK_AT: (time: string, files: string) => `Last changes synced back at ${time}. ${files} files came back to you.`,
-  DELETED: "The sandbox copy was deleted when the run ended.",
+  MAY_BE_GONE: "The run has ended. Its sandbox copy may no longer be available.",
   REFUSED: (n: string) => `${n} paths were not copied.`,
   BACK_FAILED: (text: string) => `The changes could not come back: ${text}`,
 };
