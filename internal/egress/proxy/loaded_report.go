@@ -42,7 +42,8 @@ type LoadedReport struct {
 }
 
 // ReportLoaded posts r with the run token until the control plane answers 2xx (a report it holds
-// counts) or ctx ends. Call it once the proxy serves.
+// counts), answers 404 or 405 (an older wardynd with no such route), or ctx ends. Call it once the
+// proxy serves.
 func (s *Server) ReportLoaded(ctx context.Context, r LoadedReport) { s.proxy.reportLoaded(ctx, r) }
 
 // reportLoaded is ReportLoaded: one POST per attempt over p.localClient, retried with backoff.
@@ -57,6 +58,10 @@ func (p *Proxy) reportLoaded(ctx context.Context, r LoadedReport) {
 		status, err := p.postLoadedReport(ctx, body)
 		if err == nil && status/100 == 2 {
 			slog.Info("wardyn-proxy: reported the loaded config", slog.String("config_sha256", r.ConfigSHA256), slog.Int("attempt", attempt))
+			return
+		}
+		if err == nil && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed) {
+			slog.Info("wardyn-proxy: the control plane has no loaded-config report route (an older wardynd); not reporting", slog.Int("status", status))
 			return
 		}
 		if attempt == 1 {
