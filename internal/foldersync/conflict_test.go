@@ -484,3 +484,34 @@ func TestPass_IdenticalCopiesAreRecordedNotConflicts(t *testing.T) {
 		}
 	}
 }
+
+// A recovering pass that ends before its save (refused, or stopped) leaves the next pass recovering:
+// the record is still missing and the moved-aside one is beside it, so a file both sides hold is
+// compared and never pushed over the sandbox's. Once a pass saves, a load is no longer recovering.
+func TestLoadStateRecover_StaysRecoveringUntilASave(t *testing.T) {
+	sy, box, root := runnerSyncer(t, false)
+	file := filepath.Join(t.TempDir(), "run.json")
+	putSyncFile(t, file, `{"local":`, 0o600)
+	first, err := LoadStateRecover(file, root, box)
+	if err != nil || first.Recovered == "" {
+		t.Fatalf("state = %+v, err = %v", first, err)
+	}
+	// The pass is refused: nothing is saved. The next pass loads again.
+	st, err := LoadStateRecover(file, root, box)
+	if err != nil || st.Recovered != first.Recovered {
+		t.Fatalf("after an unsaved pass: Recovered = %q, err = %v, want %q", st.Recovered, err, first.Recovered)
+	}
+	sy.State, sy.StateFile, sy.StateRoot = st, file, filepath.Dir(file)
+	putSyncFile(t, filepath.Join(root, "x.txt"), "laptop", 0o644)
+	putSyncFile(t, filepath.Join(box, "x.txt"), "sandbox", 0o644)
+	rep, err := sy.Pass(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := getSyncFile(t, filepath.Join(box, "x.txt")); got != "sandbox" || slices.Contains(rep.Pushed, "x.txt") || !slices.Contains(rep.Conflicts, "x.txt") {
+		t.Errorf("sandbox = %q, report = %+v: want x.txt compared, not pushed", got, rep)
+	}
+	if st, err := LoadStateRecover(file, root, box); err != nil || st.Recovered != "" {
+		t.Errorf("after a saved pass: Recovered = %q, err = %v", st.Recovered, err)
+	}
+}
