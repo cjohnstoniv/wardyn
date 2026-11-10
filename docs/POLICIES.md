@@ -1214,7 +1214,7 @@ How a request to a host is decided:
 
 Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.
 
-A path with an encoded slash is refused on a rule host. GitLab API paths use one in project, file and branch names, so use numeric project ids there, or put no rule on that host.
+A path with an encoded slash is refused on a rule host. GitLab API project, file and branch paths use `%2F` (`/projects/team%2Fapp`, `/repository/files/src%2Fmain.go`), so they are refused there. Use numeric project ids, or put no rule on that host.
 
 What the proxy does for a rule host:
 
