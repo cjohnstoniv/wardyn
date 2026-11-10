@@ -33,6 +33,7 @@ type CeilingOverlay struct {
 	FirstUseHoldSeconds     *int                   `json:"first_use_hold_seconds,omitempty"`
 	MaxHolds                *int                   `json:"max_holds,omitempty"`
 	AllowedMethods          *[]string              `json:"allowed_methods,omitempty"`
+	HostRules               *[]HostRuleSet         `json:"host_rules,omitempty"`
 	MinConfinementClass     *ConfinementClass      `json:"min_confinement_class,omitempty"`
 	EligibleGrants          *[]GrantSpec           `json:"eligible_grants,omitempty"`
 	AutoStopAfterSec        *int                   `json:"auto_stop_after_sec,omitempty"`

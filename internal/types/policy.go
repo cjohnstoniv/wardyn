@@ -155,6 +155,11 @@ type RunPolicySpec struct {
 	MaxHolds int `json:"max_holds,omitempty"`
 	// AllowedMethods optionally restricts HTTP methods (empty = all).
 	AllowedMethods []string `json:"allowed_methods,omitempty"`
+	// HostRules are per-host method and path rules, one set per layer (HostRuleSet): each set that names
+	// a host must allow a request on it, by first match inside that set. Composition appends each
+	// layer's sets and never merges them. The proxy inspects every rule host, refuses one it cannot
+	// inspect, and allowed_methods still applies on top. Empty imposes nothing.
+	HostRules []HostRuleSet `json:"host_rules,omitempty"`
 	// MinConfinementClass refuses to launch below this class.
 	MinConfinementClass ConfinementClass `json:"min_confinement_class"`
 	// EligibleGrants is the ceiling of credential scopes a run may request.
@@ -453,6 +458,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.AllowedDomains = append([]string(nil), s.AllowedDomains...)
 	out.DeniedDomains = append([]string(nil), s.DeniedDomains...)
 	out.AllowedMethods = append([]string(nil), s.AllowedMethods...)
+	out.HostRules = CloneHostRuleSets(s.HostRules)
 	out.EligibleGrants = append([]GrantSpec(nil), s.EligibleGrants...)
 	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
