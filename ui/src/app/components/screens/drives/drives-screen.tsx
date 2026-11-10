@@ -39,8 +39,7 @@ import {
   drives as api,
   enforcementFor,
   isManagedBackend,
-  teamGrantsKnown,
-  teamWritable,
+  teamMode,
   type UserDriveGrant,
   type UserDriveListItem,
   type UserDrivesSnapshot,
@@ -76,14 +75,6 @@ function allocatedText(d: UserDriveListItem, grants: UserDriveGrant[]): string {
   if (d.grant_count === 0) return DRIVES.ALLOCATED_NONE;
   const names = grants.filter((g) => g.drive_id === d.id).map((g) => g.subject);
   return names.length === d.grant_count ? names.join(", ") : DRIVES.ALLOCATED_COUNT(d.grant_count);
-}
-
-// A writable team drive whose allocations this page does not all list, and whose listed ones all
-// allow writing: the missing ones may or may not, so neither Writable nor Read only is true to say.
-// A listed allocation that lacks the write bit settles it as read-only.
-function modeUnproven(d: UserDriveListItem, grants: UserDriveGrant[]): boolean {
-  if (!d.writable || d.grant_count === 0 || teamGrantsKnown(d, grants)) return false;
-  return grants.filter((g) => g.drive_id === d.id).every((g) => !!g.members_can_write);
 }
 
 const EMPTY: UserDrivesSnapshot = {
@@ -292,6 +283,7 @@ export function DrivesScreen() {
                         const team = teamDrives && !!d.team;
                         // A team drive whose setting is unknown claims nothing about access, cleanup or allocation.
                         const unknownTeam = teamUnknown && !!d.team;
+                        const mode = team ? teamMode(d, snap.grants) : d.writable;
                         return (
                         <TableRow key={d.id}>
                           {/* A drive name is a human-chosen label, never mono. */}
@@ -330,13 +322,12 @@ export function DrivesScreen() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            {/* A team drive is writable only where its allocations say so too. */}
-                            {unknownTeam || (team && modeUnproven(d, snap.grants)) ? (
+                            {/* A team drive's mode resolves per allocation; it is claimed only when the page lists
+                                every allocation and they all agree (teamMode), else it is not shown. */}
+                            {unknownTeam || (team && mode === null) ? (
                               <span className="text-muted-foreground">{DRIVES_TEAM_UNKNOWN.CELL}</span>
                             ) : (
-                              <Chip tone={modeTone(team ? teamWritable(d, snap.grants) : d.writable)}>
-                                {modeText(team ? teamWritable(d, snap.grants) : d.writable)}
-                              </Chip>
+                              <Chip tone={modeTone(mode ?? undefined)}>{modeText(mode ?? undefined)}</Chip>
                             )}
                           </TableCell>
                           <TableCell className={team || unknownTeam ? "text-muted-foreground" : undefined}>

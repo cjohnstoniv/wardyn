@@ -274,6 +274,22 @@ export function teamWritable(d: UserDriveListItem, grants: UserDriveGrant[]): bo
   return teamGrantsKnown(d, grants) && own.every((g) => !!g.members_can_write);
 }
 
+// What the Mode column may say about a team drive: true (Writable), false (Read only) or null
+// (not shown). Writability resolves per allocation, as the server does it: the allocation's
+// writable_override first, then its members_can_write, and never on a drive that is itself read-only.
+// It is not an AND across groups, so one false allocation does not make the drive read-only. The
+// column claims a mode only when the page lists every allocation and every one resolves the same.
+// This is display only; the editor keeps the conservative teamWritable.
+export function teamMode(d: UserDriveListItem, grants: UserDriveGrant[]): boolean | null {
+  if (!d.writable) return false;
+  if (d.grant_count === 0) return true;
+  if (!teamGrantsKnown(d, grants)) return null;
+  const modes = grants.filter((g) => g.drive_id === d.id).map((g) => (g.writable_override ?? true) && !!g.members_can_write);
+  if (modes.every(Boolean)) return true;
+  if (modes.every((m) => !m)) return false;
+  return null;
+}
+
 // Whether the grants page lists every allocation the drive has. The page is cut
 // (at 1000 rows), and then the allocations it leaves out carry write bits the
 // console cannot see: an editor must not seed or send a write bit for them.

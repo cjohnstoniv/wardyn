@@ -141,9 +141,35 @@ describe("Drives list, team drive rows", () => {
     expect(table().getByText(DRIVES.ALLOCATED_COUNT(3))).toBeInTheDocument();
   });
 
-  it("a short page still says Read only when a listed allocation lacks the write bit", async () => {
+  // Writability resolves per allocation (writable_override, then members_can_write), not as an AND across groups.
+  const modeCell = (name: RegExp) => within(table().getByRole("row", { name }));
+
+  it("a partial page with a read-only allocation and a hidden writer says Not shown, not Read only", async () => {
     await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant()] }));
-    expect(table().getByText(DRIVES.MODE_RO)).toBeInTheDocument();
+    const row = modeCell(/platform-ref/);
+    expect(row.queryByText(DRIVES.MODE_RO)).toBeNull();
+    expect(row.queryByText(DRIVES.MODE_RW)).toBeNull();
+    expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(1);
+  });
+
+  it("a complete page with a read-only and a writing allocation says Not shown", async () => {
+    await renderScreen(
+      snapshot({ drives: [drive({ writable: true, grant_count: 2 })], grants: [grant({ id: "gr", subject: "readers" }), grant({ id: "gw", subject: "writers", members_can_write: true })] }),
+    );
+    const row = modeCell(/platform-ref/);
+    expect(row.queryByText(DRIVES.MODE_RO)).toBeNull();
+    expect(row.queryByText(DRIVES.MODE_RW)).toBeNull();
+    expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(1);
+  });
+
+  it("a complete page whose only writer is overridden to read-only says Read only", async () => {
+    await renderScreen(snapshot({ drives: [drive({ writable: true })], grants: [grant({ members_can_write: true, writable_override: false })] }));
+    expect(modeCell(/platform-ref/).getByText(DRIVES.MODE_RO)).toBeInTheDocument();
+  });
+
+  it("a complete page where no allocation lets members write says Read only", async () => {
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 2 })], grants: [grant(), grant({ id: "g2", subject: "qa" })] }));
+    expect(modeCell(/platform-ref/).getByText(DRIVES.MODE_RO)).toBeInTheDocument();
   });
 
   it("switch off: the same drive is today's row, with no chip and no team words", async () => {
