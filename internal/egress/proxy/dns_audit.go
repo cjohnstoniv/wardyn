@@ -120,13 +120,10 @@ func vmnetDNSQuery(in vmnetDNS) (egress.DNSQuery, bool) {
 	return q, true
 }
 
-// dnsName keeps a lower-case LDH name of at most 253 bytes, or gives "".
+// dnsName keeps a lower-case LDH name of at most 253 bytes (a dotted quad
+// included: a sandbox may ask for one), or gives "".
 func dnsName(s string) string {
-	s = strings.TrimSuffix(strings.ToLower(s), ".")
-	if net.ParseIP(s) != nil {
-		return "" // a name, never an address
-	}
-	return vmnetName(s)
+	return vmnetName(strings.TrimSuffix(strings.ToLower(s), "."))
 }
 
 // dnsType keeps a record type's mnemonic ("A", "AAAA") or number.

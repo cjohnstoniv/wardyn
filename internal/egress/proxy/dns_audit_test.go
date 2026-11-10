@@ -94,6 +94,8 @@ func TestVMNetDNSRows(t *testing.T) {
 			egress.DNSQuery{Type: "A", Outcome: "refused", Cause: "name", Via: "vm_relay"}},
 		{`{"name":"two.test","type":"A","outcome":"refused","cause":"full"}`,
 			egress.DNSQuery{Name: "two.test", Type: "A", Outcome: "refused", Cause: "full", Via: "vm_relay"}},
+		{`{"name":"10.1.2.3","type":"A","outcome":"answered","answer":"198.18.0.9"}`,
+			egress.DNSQuery{Name: "10.1.2.3", Type: "A", Outcome: "answered", Answer: "198.18.0.9", Via: "vm_relay"}},
 		{`{"name":"setup.test","type":"A","outcome":"prep_refused"}`,
 			egress.DNSQuery{Name: "setup.test", Type: "A", Outcome: "prep_refused", Via: "vm_relay"}},
 	}
