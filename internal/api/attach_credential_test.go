@@ -177,7 +177,6 @@ func TestUISession_BoundToItsCredential(t *testing.T) {
 	if err != nil || strings.Contains(string(raw), `"ct"`) || strings.Contains(string(raw), `"cs"`) {
 		t.Fatalf("console cookie payload %q (%v) carries credential ids", raw, err)
 	}
-	}
 	for name, sess := range map[string]uiSession{"token": byToken, "CLI": byCLI, "console": console} {
 		if de := refused(sess); de != nil {
 			t.Fatalf("%s session with its credential live: refused %+v", name, de)
