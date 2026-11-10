@@ -717,7 +717,9 @@ describe("SignIn — the token field and the page landmark", () => {
     const input = await screen.findByLabelText(/admin token/i);
     await userEvent.type(input, "goodtoken");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.UNREACHABLE_ERROR);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(SIGNIN.UNREACHABLE_ERROR);
     expect(input).not.toHaveAttribute("aria-invalid");
+    expect((input.getAttribute("aria-describedby") ?? "").split(" ")).not.toContain(alert.id);
   });
 });
