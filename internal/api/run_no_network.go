@@ -132,10 +132,48 @@ func noNetworkKind(kind string) string {
 // running it: a local MCP server started by one needs the network, wherever the program sits.
 var packageFetchers = []string{"npx", "pnpx", "bunx", "uvx", "pipx"}
 
+// launchFetches reports whether a local server's launch downloads what it runs: a package fetcher, or one
+// behind env or a shell's -c, a container run (docker or podman pulls its image), or a deno run of an npm:,
+// jsr: or URL module. A wrapper is looked through at most twice.
+func launchFetches(cmd string, args []string, depth int) bool {
+	verb := func() string { // the first argument that is not a flag
+		i := slices.IndexFunc(args, func(a string) bool { return !strings.HasPrefix(a, "-") })
+		if i < 0 {
+			return ""
+		}
+		return args[i]
+	}
+	switch base := path.Base(cmd); {
+	case slices.Contains(packageFetchers, base):
+		return true
+	case base == "docker" || base == "podman":
+		return verb() == "run"
+	case base == "deno":
+		return verb() == "run" && slices.ContainsFunc(args, func(a string) bool {
+			return strings.HasPrefix(a, "npm:") || strings.HasPrefix(a, "jsr:") || strings.HasPrefix(a, "http:") || strings.HasPrefix(a, "https:")
+		})
+	case depth >= 2:
+		return false
+	case base == "env":
+		i := slices.IndexFunc(args, func(a string) bool { return !strings.HasPrefix(a, "-") && !strings.Contains(a, "=") })
+		return i >= 0 && launchFetches(args[i], args[i+1:], depth+1)
+	case base == "sh" || base == "bash" || base == "dash" || base == "zsh":
+		i := slices.IndexFunc(args, func(a string) bool { // -c, or a flag group that holds it (-lc, -ec)
+			return strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "c")
+		})
+		if i < 0 || i+1 >= len(args) {
+			return false
+		}
+		words := strings.Fields(args[i+1])
+		return len(words) > 0 && launchFetches(words[0], words[1:], depth+1)
+	}
+	return false
+}
+
 // noNetworkComponentNeedsHost reports whether an attached component needs the network: a built-in Git
 // provider, a CLI credential, a remote MCP server (whose host only the broker reaches, so it is never on
-// the allowlist), a local MCP server a package fetcher starts, a header secret, or any host on its
-// definition. One with only config, env or file secrets, or a local server run from another program in
+// the allowlist), a local MCP server whose launch fetches what it runs (launchFetches), a header secret,
+// or any host on its definition. One with only config, env or file secrets, or a local server run from another program in
 // the image, needs none.
 func noNetworkComponentNeedsHost(c attachedComponent) bool {
 	if c.builtin != nil {
@@ -145,7 +183,7 @@ func noNetworkComponentNeedsHost(c attachedComponent) bool {
 	if len(d.Hosts) > 0 || d.CLI != nil || d.RemoteMCP() {
 		return true
 	}
-	if d.LocalMCP() && d.MCP.Launch != nil && slices.Contains(packageFetchers, path.Base(d.MCP.Launch.Command)) {
+	if d.LocalMCP() && d.MCP.Launch != nil && launchFetches(d.MCP.Launch.Command, d.MCP.Launch.Args, 0) {
 		return true
 	}
 	return slices.ContainsFunc(d.Secrets, func(sec types.ComponentSecret) bool {

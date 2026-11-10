@@ -244,6 +244,36 @@ func TestNoNetwork_ComponentsByWhatTheyNeed(t *testing.T) {
 	}
 }
 
+// TestNoNetwork_LaunchFetches: a fetcher behind env or a shell, a container run and a deno run of a remote
+// module download what they start; a program from the image, run directly or through a wrapper, does not.
+func TestNoNetwork_LaunchFetches(t *testing.T) {
+	for _, tc := range []struct {
+		cmd  string
+		args []string
+		want bool
+	}{
+		{"npx", []string{"-y", "@example/mcp-server@1.4.2"}, true},
+		{"/usr/local/bin/uvx", []string{"mcp-server-files"}, true},
+		{"/usr/bin/env", []string{"npx", "-y", "@example/mcp-server@1.4.2"}, true},
+		{"/usr/bin/env", []string{"-i", "PATH=/usr/bin", "uvx", "mcp-server-files"}, true},
+		{"/bin/sh", []string{"-c", "uvx mcp-server-files --stdio"}, true},
+		{"/bin/bash", []string{"-lc", "npx -y @example/mcp-server@1.4.2"}, true},
+		{"/usr/bin/docker", []string{"run", "-i", "--rm", "mcp/files"}, true},
+		{"/usr/bin/podman", []string{"--log-level=error", "run", "mcp/files"}, true},
+		{"/usr/local/bin/deno", []string{"run", "-A", "npm:@example/mcp-server@1.4.2"}, true},
+		{"/usr/local/bin/deno", []string{"run", "-A", "/opt/mcp/server.ts"}, false},
+		{"/usr/bin/docker", []string{"exec", "files", "mcp"}, false},
+		{"/usr/bin/env", []string{"/usr/local/bin/mcp-files"}, false},
+		{"/bin/sh", []string{"-c", "/usr/local/bin/mcp-files --stdio"}, false},
+		{"/usr/local/bin/mcp-files", nil, false},
+		{"/usr/bin/env", []string{"env", "env", "npx", "pkg@1.0.0"}, false},
+	} {
+		if got := launchFetches(tc.cmd, tc.args, 0); got != tc.want {
+			t.Errorf("launchFetches(%s %v) = %v, want %v", tc.cmd, tc.args, got, tc.want)
+		}
+	}
+}
+
 // TestNoNetwork_SealEmptiesEgress: whatever a step after resolve added, the No network preset's seal
 // layer leaves no host and no open egress, and withholds every credential by host. Sealed's own
 // layer keeps the allowlist.
