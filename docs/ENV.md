@@ -1570,7 +1570,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Each one writes `approval.second_human.bypass`, on the decision's own outcome.
 - `success` when the decision it was spent on was made, `failure` (with an `error` class of `already_decided`, `not_found` or `error`) when the bypass got past the gate and the decision then failed.
 - A deployment that wants this gate to bind must treat the admin token accordingly (SSO configured, token held out of band).
-- Scoped to `egress_domain` only (Azure DevOps capability escalations have their own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`, below).
+- Scoped to `egress_domain` approvals and host rule holds (Azure DevOps capability escalations have their own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`, below). A host rule hold is four-eyes when either switch is on.
 - A value that is not a bool exits 2 at boot in every mode (`#202`; before that it was silently read as unset).
 - A unit's [deciders](operations/deciders.md) can turn the same rule on for its kind with `second_human`; it is never weaker than this switch, and the bypass row's `switch` then reads `unit deciders (<unit id>)`.
 - See [`docs/OPERATIONS.md`](OPERATIONS.md) and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.

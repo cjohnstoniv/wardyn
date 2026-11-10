@@ -54,9 +54,6 @@ func TestHostCallRowIsItsOwnRow(t *testing.T) {
 	if got := approval.TallyKey(ap); got != approval.TallyToolCallHost {
 		t.Fatalf("TallyKey = %q", got)
 	}
-	if name, _ := secondHumanGate(ap); name != envCapabilitySecondHuman {
-		t.Fatalf("secondHumanGate = %q", name)
-	}
 	g := uuid.New()
 	ap.GrantID = &g
 	if isHostCallRow(ap) || approval.TallyKey(ap) == approval.TallyToolCallHost {
@@ -148,9 +145,36 @@ func TestHostCallOwnerDecides(t *testing.T) {
 	}
 }
 
-// WARDYN_CAPABILITY_SECOND_HUMAN governs a host rule hold: the run's creator is refused.
+// Either four-eyes switch governs a host rule hold, which is both an egress decision and one exact call.
+func TestHostCallSecondHumanGate(t *testing.T) {
+	ap := types.ApprovalRequest{Kind: types.ApprovalToolCall, RequestedScope: hostCallScopeJSON(t, "POST", "/admin")}
+	for _, tc := range []struct {
+		egress, capability string
+		name               string
+		on                 bool
+	}{
+		{"", "", envEgressSecondHuman, false},
+		{"1", "", envEgressSecondHuman, true},
+		{"", "1", envCapabilitySecondHuman, true},
+		{"1", "1", envCapabilitySecondHuman, true},
+	} {
+		t.Setenv(envEgressSecondHuman, tc.egress)
+		t.Setenv(envCapabilitySecondHuman, tc.capability)
+		if name, on := secondHumanGate(ap); name != tc.name || on != tc.on {
+			t.Errorf("egress=%q capability=%q: secondHumanGate = %q %v, want %q %v", tc.egress, tc.capability, name, on, tc.name, tc.on)
+		}
+	}
+}
+
+// Either switch refuses the run's creator a host rule hold of their own run.
 func TestHostCallSecondHumanSwitch(t *testing.T) {
-	t.Setenv(envCapabilitySecondHuman, "1")
+	for _, sw := range []string{envCapabilitySecondHuman, envEgressSecondHuman} {
+		t.Run(sw, func(t *testing.T) { hostCallSecondHumanRefusesOwner(t, sw) })
+	}
+}
+
+func hostCallSecondHumanRefusesOwner(t *testing.T, sw string) {
+	t.Setenv(sw, "1")
 	f := newScopeFixture(t)
 	id := seedHostCall(t, f, false)
 	w := mcpDecide(t, f, id, "approve", ssoSession(t, f.memberID, "owner@corp.example", oidc.RoleUser), "")

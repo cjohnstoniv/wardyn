@@ -22,7 +22,7 @@ import (
 // approval.TallyKey's host arm restates it.
 //
 // Who decides one: as for a kubectl write, the run's owner or a security operator, once;
-// WARDYN_CAPABILITY_SECOND_HUMAN makes it four-eyes, a unit's egress_domain deciders rule governs it,
+// WARDYN_EGRESS_SECOND_HUMAN or WARDYN_CAPABILITY_SECOND_HUMAN makes it four-eyes (secondHumanGate), a unit's egress_domain deciders rule governs it,
 // and an approval rule never decides one.
 func isHostCallRow(ap types.ApprovalRequest) bool {
 	return ap.Kind == types.ApprovalToolCall && (ap.GrantID == nil || *ap.GrantID == uuid.Nil) &&
