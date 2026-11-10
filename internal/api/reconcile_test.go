@@ -119,7 +119,7 @@ func TestAuditK8sNetpolChange(t *testing.T) {
 	ctx := context.Background()
 	updates := func() []types.AuditEvent {
 		var out []types.AuditEvent
-		for _, ev := range audit.events {
+		for _, ev := range audit.snapshot() {
 			if ev.Action == "k8s.netpol.update" {
 				out = append(out, ev)
 			}
