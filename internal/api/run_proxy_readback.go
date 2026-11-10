@@ -157,6 +157,14 @@ func (s *Server) proxyStartAnswered(ctx context.Context, runID uuid.UUID, rec pr
 		slog.WarnContext(ctx, "wardynd: recording a proxy start's answer failed; stopping it",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		s.auditReadback(ctx, runID, "run.policy.unconfirmed", "failure", rec.gen, map[string]any{"reason": "answer_unrecorded"})
+		// Answer again with a deadline already passed, which fails the start, so the sweep lists it until
+		// its stop is confirmed. A store still refusing leaves it pending, and nothing retries it.
+		if rec.mode == store.ProxyStartExpected {
+			if _, ferr := st.AnswerProxyStart(ctx, runID, rec.gen, sha, -time.Second); ferr != nil {
+				slog.WarnContext(ctx, "wardynd: failing a proxy start whose answer was not recorded failed",
+					slog.String("run_id", runID.String()), slog.Any("err", ferr))
+			}
+		}
 		return false, "answer_unrecorded", nil
 	}
 	if !ch.Active {
@@ -238,6 +246,10 @@ type proxyContainment struct {
 	Err error
 }
 
+// errStartNotFailed is a containment asked for a start that is not failed (one whose answer could not
+// be recorded stays pending): nothing stops it, and the sweep does not list it.
+var errStartNotFailed = errors.New("not failed")
+
 // errRunOpBusy is a containment skipped because another operation holds the run's lock.
 var errRunOpBusy = errors.New("another operation holds the run's lock; the sweep retries")
 
@@ -283,7 +295,7 @@ func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, g
 	case p.ContainedAt != nil:
 		return proxyContainment{Contained: true}
 	case p.State != types.ProxyStartFailed:
-		return proxyContainment{Err: fmt.Errorf("proxy start %d is %s, not failed", gen, p.State)}
+		return proxyContainment{Err: fmt.Errorf("proxy start %d is %s: %w", gen, p.State, errStartNotFailed)}
 	}
 	proxyContainPaused()
 	run, err := s.cfg.Store.GetRun(ctx, runID)

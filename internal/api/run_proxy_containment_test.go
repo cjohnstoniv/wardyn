@@ -280,3 +280,17 @@ func TestReadback_RevivePolicyUnconfirmedNeverClaimsAStopThatFailed(t *testing.T
 		t.Errorf("the answer claims a stop that failed: %s", body)
 	}
 }
+
+// A create whose answer cannot be recorded fails the run, and its start is failed by a second answer
+// whose deadline already passed, so the stop is recorded and the sweep could find it.
+func TestReadback_UnrecordedAnswerFailsTheStartForTheSweep(t *testing.T) {
+	d := newDispatchReadback(t, hashHex([]byte("bytes")), false)
+	d.st.failAnswers = 1
+	d.dispatch()
+	if got := d.st.State(); got != types.RunFailed {
+		t.Fatalf("run state = %s, want FAILED", got)
+	}
+	if p := d.st.get(d.run.ID, 1); p.State != types.ProxyStartFailed || p.ContainedAt == nil {
+		t.Errorf("start = %s (contained %v), want failed and contained", p.State, p.ContainedAt)
+	}
+}

@@ -104,13 +104,18 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) {
 		return rerr
 	}
+	// The sweep retries only a failed start that is still the run's newest.
+	retry := ""
+	if !c.Superseded && !errors.Is(c.Err, errStartNotFailed) {
+		retry = ", and a later sweep retries it"
+	}
 	switch rerr.reason {
 	case reasonRevivePolicyUnconfirmedLost:
 		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy and the run is lost until revived; "+
-			"stopping that proxy is not confirmed yet, and a later sweep retries it", errors.New(why))
+			"stopping that proxy is not confirmed yet"+retry, errors.New(why))
 	case reasonReviveRecoveryUnresolved:
 		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, "+
-			"but stopping its proxy is not confirmed yet, and a later sweep recovers it", errors.New(why))
+			"but stopping its proxy is not confirmed yet"+retry, errors.New(why))
 	}
 	return rerr
 }

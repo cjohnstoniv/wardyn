@@ -33,8 +33,9 @@ type memProxyStarts struct {
 	addrs  map[uuid.UUID]string
 	// lineage is the run's token lineage as agent_runs holds it: current jti, previous jti, renewed at.
 	lineage func(uuid.UUID) (string, string, time.Time)
-	// failReports is how many more ReportProxyStart calls fail, as a database blip would.
-	failReports int
+	// failReports is how many more ReportProxyStart calls fail, as a database blip would; failAnswers
+	// the same for AnswerProxyStart.
+	failReports, failAnswers int
 }
 
 func newMemProxyStarts() *memProxyStarts {
@@ -105,6 +106,10 @@ func (m *memProxyStarts) AnswerProxyStart(_ context.Context, runID uuid.UUID, ge
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	var ch store.ProxyStartChange
+	if m.failAnswers > 0 {
+		m.failAnswers--
+		return ch, errors.New("database blip")
+	}
 	a := m.activeLocked(runID)
 	if a == nil {
 		return ch, nil
