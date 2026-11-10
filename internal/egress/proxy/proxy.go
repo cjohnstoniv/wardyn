@@ -295,14 +295,8 @@ type Proxy struct {
 	openTunnels atomic.Int32
 	maxTunnels  int32
 	meterOff    bool // Config.DisableModelUsage: no model-token metering; the zero value meters
-	// noNetwork is Config.NoNetwork: literalIPGuard refuses every sandbox request, and egressDial and
-	// the CONNECT dial refuse as a backstop. directDial and p.dial never read it: the control-plane
-	// transport shares them.
-	noNetwork bool
+	noNetwork   bool // Config.NoNetwork: refuse every sandbox request (literalIPGuard, noNetworkDial)
 }
-
-// errNoNetwork is the egress dial's refusal on a run with no network.
-var errNoNetwork = errors.New("proxy: this run has no network")
 
 // maxOpenTunnels is the most opaque CONNECT tunnels a run's proxy holds at once,
 // failed and pending dials included: the desktop VM relay's maxOpaqueTunnels
@@ -484,16 +478,7 @@ func newProxy(opts Options) *Proxy {
 			return p.dialThroughUpstream(ctx, host, port)
 		}
 	}
-	// A run with no network dials nothing for the sandbox. Only the egress dial is wrapped: the
-	// control-plane transport keeps directDial.
-	if dial := egressDial; dial != nil {
-		egressDial = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if p.noNetwork {
-				return nil, errNoNetwork
-			}
-			return dial(ctx, network, addr)
-		}
-	}
+	egressDial = p.noNetworkDial(egressDial) // never directDial: the control-plane transport shares it
 	mkTransport := func(dc func(context.Context, string, string) (net.Conn, error)) *http.Transport {
 		return &http.Transport{
 			DialContext: dc,
@@ -588,12 +573,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A via_org destination is the organisation's to decide: no spool row, no
 	// hold and no decision here (design 0.9 §7.3).
 	if route, authority, ok := p.viaOrgRouteFor(r); ok {
-		// serveViaOrg forwards on the control-plane transport, past evaluate and the egress dial, so a
-		// run with no network is refused before it.
-		if p.noNetwork {
-			p.refuseNoNetwork(w, r, authority)
-			return
-		}
 		p.serveViaOrg(w, r, route, authority)
 		return
 	}
@@ -962,12 +941,11 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 		upstream net.Conn
 		err      error
 	)
-	switch {
-	case p.noNetwork:
+	if p.noNetwork {
 		err = errNoNetwork
-	case p.upstream != nil && !p.bypassUpstream(host):
+	} else if p.upstream != nil && !p.bypassUpstream(host) {
 		upstream, err = p.dialThroughUpstream(r.Context(), host, port)
-	default:
+	} else {
 		upstream, err = p.dial(r.Context(), "tcp", target)
 	}
 	if err != nil {
@@ -1011,16 +989,4 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 	}
 	first, err := tunnel(client, watch)
 	p.tunnelEnded(log, host, watch, first, err)
-}
-
-// canonicalPATGrants keys the git_pat grants by lower-cased host and drops an entry with no
-// host or no grant id. The proxy and Config.TerminatesTLS read the same set.
-func canonicalPATGrants(in map[string]PATGrant) map[string]PATGrant {
-	out := make(map[string]PATGrant, len(in))
-	for k, g := range in {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
-			out[k] = g
-		}
-	}
-	return out
 }

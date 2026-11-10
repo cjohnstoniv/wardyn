@@ -49,7 +49,7 @@
 | `allowed_domains` | `[]string` | `[]` (deny all) | L2 egress allowlist of exact hosts or `*.` wildcards, empty meaning nothing is reachable under default-deny, shape-checked and capped at 256 entries at write time; details in [`allowed_domains`](#allowed_domains). |
 | `denied_domains` | `[]string` | `[]` | Always wins over `allowed_domains`, in both egress modes. Same entry-shape validation. **Dispatch appends its own** (four GitHub HTTPS hosts plus the forge's SSH endpoint) for any run carrying a `github_token` grant with repos — see the note below the table. |
 | `allow_all_egress` | `bool` | `false` | Switches egress from allowlist-only to deny-list-only, so any non-denied **public** host is allowed; the private-IP guard, the credential-injection rule and the GitHub-host denies still hold. See [`allow_all_egress`](#allow_all_egress). |
-| `refuse_ip_literals` | `bool` | `false` | Under `allow_all_egress`, refuses every IP-address host, in any spelling, with `rule_source: policy:ip-literal`. An address listed exactly in `allowed_domains` is still allowed. It only narrows: a default or ceiling that sets it holds every run under it. See [IP literals](#brokered-github-the-denies-you-did-not-write). |
+| `refuse_ip_literals` | `bool` | `false` | Under `allow_all_egress`, refuses every IP-address host (`policy:ip-literal`). It only narrows. See [IP literals](#brokered-github-the-denies-you-did-not-write). |
 | `first_use_approval` | `string` | `always_deny` | How an unknown domain is handled. See the three modes below. A legacy boolean still decodes (`true`→`deny_with_review`, `false`→`always_deny`). |
 | `first_use_hold_seconds` | `int` | `0` (→ `30`) | Only `wait_for_review`: how long a connection is held awaiting a decision before it fails closed. `0`/absent keeps the built-in **30s**. |
 | `max_holds` | `int` | `0` (→ `16`) | Only `wait_for_review`: cap on concurrent held connections; the next held connection over the cap fails fast. `0`/absent keeps the built-in **16**. |
@@ -207,7 +207,7 @@
 - Denying `93.184.216.34` also denies `::ffff:93.184.216.34` and every other spelling of that same address — a different ADDRESS is still a different key.
 - Under the default posture that changes nothing — an unlisted host is `always_deny`.
 - But under `allow_all_egress` a literal public IP is allowed (private, loopback, link-local and metadata ranges are denied regardless of policy).
-- To refuse those too, set `refuse_ip_literals: true`. An IP address listed exactly in `allowed_domains` is still allowed; `refuse_ip_literals` refuses every other IP literal, in any spelling. That covers hex, octal, bare decimal, shortened dotted forms, bracketed and zoned IPv6, and IPv4-mapped IPv6, through `CONNECT` and plain HTTP alike. A refusal is audited as `rule_source: policy:ip-literal`.
+- To refuse those too, set `refuse_ip_literals: true`. An IP address listed exactly in `allowed_domains` is still allowed; `refuse_ip_literals` refuses every other IP literal, in any spelling.
 - There is one operator-authored exception: a private-range literal named EXACTLY in `allowed_domains`, which is what an `egress_redirects` `to` on a private endpoint adds for the runs it covers, is reachable and audited as `rule_source: site-config:egress-redirect`.
 - A wildcard never qualifies and a deny still wins.
 - A member's own entry does not create that exception under an `allow_all_egress` ceiling: run create drops it, with a `clamp_warnings` line, unless the ceiling lists the same address for every port the entry names.
@@ -607,12 +607,10 @@ What the check does and does not settle:
 ## Wall presets
 
 - A wall preset is a named set of walls, in the same knobs as [Your walls](#your-walls), that you pick for one run. It only narrows, like your walls.
-- Four are built in: `open` (narrows nothing), `read-only` (keeps the read capabilities and refuses every push), `sealed` (read-only, plus only the sites the run's setup needs and no desktop transfers) and `no-network` (sealed, and no network at all). You can keep your own, a group's template managers can keep one for the group, and an organisation administrator can keep one for everyone.
-- `network: none` is `wall_preset: no-network` (`"wall_preset": "no-network"` on `POST /runs`, `--wall-preset no-network` on the CLI):
-  - A run that would need a host is refused at create, and by Review and the policy preview, with `422` `no_network_needs_egress`. The refusal names each source: a workspace, its clone host, the site's code host, an `ssh_key`, a `git_pat`, a direct GitHub clone, a component, the harness's model or a model provider. A harness whose model is reached over the network is refused, so use a harness or image that needs no model host.
-  - The run's proxy refuses every request on every route, audited as `rule_source: policy:no-network`, and the final seal empties the allowlist and turns `allow_all_egress` off, at dispatch and at revive.
-  - Every egress approval for the run is refused `403` `wall_preset_host`.
-  - The proxy still reaches the control plane, so the run reports, records and stops as usual.
+- Four are built in: `open` (narrows nothing), `read-only` (keeps the read capabilities and refuses every push), `sealed` (read-only, plus only the sites the run's setup needs and no desktop transfers) and `no-network` (no network). You can keep your own, a group's template managers can keep one for the group, and an organisation administrator can keep one for everyone.
+- `network: none` is `wall_preset: no-network`, which is `sealed` with no network at all:
+  - A run that would need a host is refused `422` `no_network_needs_egress`, at create, Review and the preview alike, naming each source. A harness whose model is reached over the network is refused.
+  - The proxy refuses every request (`policy:no-network`) but still reaches the control plane, the seal empties the allowlist, and every approval is refused.
 - Start a run with one using `wardyn run --wall-preset <name|id>`, which also goes with `--file`. A name is looked up across the audiences open to you. A name in more than one is refused with the audiences listed: use its id.
 - Manage them with `wardyn walls presets`:
 

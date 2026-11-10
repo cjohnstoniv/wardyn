@@ -17,6 +17,8 @@ package proxy
 // says the guard still covers.
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
@@ -79,6 +81,24 @@ func (p *Proxy) refuseNoNetwork(w http.ResponseWriter, r *http.Request, authorit
 		Method: strings.ToUpper(r.Method), Time: p.now()}, egress.Deny, ruleSourceNoNetwork)
 	p.sink.emit(log)
 	p.writeEgressDeny(w, host, port, &log, false)
+}
+
+// errNoNetwork is the egress dial's refusal on a run with no network.
+var errNoNetwork = errors.New("proxy: this run has no network")
+
+// noNetworkDial wraps the sandbox's egress dial so a run with no network dials nothing, a backstop
+// behind literalIPGuard. directDial and p.dial are never wrapped: the control-plane transport shares
+// them, so the run still reaches its control plane.
+func (p *Proxy) noNetworkDial(dial func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+	if dial == nil {
+		return nil
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if p.noNetwork {
+			return nil, errNoNetwork
+		}
+		return dial(ctx, network, addr)
+	}
 }
 
 // trimLiteralHost is host lower-cased, without a trailing dot or the brackets of an IPv6 authority.

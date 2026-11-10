@@ -87,6 +87,12 @@ func (p *Proxy) viaOrgRouteForHost(host string) (ViaOrgRoute, bool) {
 // anything else is forwarded as it stands. No hold is raised and no decision is
 // written here: the organisation owns both.
 func (p *Proxy) serveViaOrg(w http.ResponseWriter, r *http.Request, route ViaOrgRoute, authority string) {
+	// The forward rides the control-plane transport, past evaluate and the egress dial, so a run with
+	// no network is refused here.
+	if p.noNetwork {
+		p.refuseNoNetwork(w, r, authority)
+		return
+	}
 	if r.Method != http.MethodConnect {
 		// The run's allowed_models judges a plain via_org request to a model host as serveMITMRequest
 		// judges a terminated one: the organisation forwards it on, and nothing after this would see it.

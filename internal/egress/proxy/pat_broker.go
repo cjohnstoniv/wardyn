@@ -24,6 +24,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
@@ -297,4 +299,16 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 	// (inject.go) is the one definition.
 	registerBasicAuthCredential(p.maskKey, username, tok)
 	return tok, username, nil
+}
+
+// canonicalPATGrants keys the git_pat grants by lower-cased host and drops an entry with no
+// host or no grant id. The proxy and Config.TerminatesTLS read the same set.
+func canonicalPATGrants(in map[string]PATGrant) map[string]PATGrant {
+	out := make(map[string]PATGrant, len(in))
+	for k, g := range in {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
+			out[k] = g
+		}
+	}
+	return out
 }
