@@ -514,7 +514,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 - Accepted but not enforced, with a logged warning naming the run: **no per-pod PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide backstop).
 - That one is not a missing feature and will not close: the Pod API has no per-container maximum-pids resource to request, so there is nothing for the chart to set — see `resourceRequirements` in [`internal/runner/k8s/naming.go`](../../../internal/runner/k8s/naming.go).
 - The kubelet setting is the only lever, and it is node-wide by design.
-- Also **no in-sandbox DNS**: a fast-failing loopback-only resolver, so only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress.
+- Also **no in-sandbox DNS**: the agent's one nameserver is its proxy pod, which refuses every query and records it, so only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress.
   - The ground-truth sensor is **opt-in, not a default**: `groundtruth.k8s.enabled` runs a DaemonSet that reads your Tetragon's export. [The page](../../../docs/operations/kubernetes-ground-truth.md) also has the recipe for joining another sensor by run.
   - **`replicas` stays 1 unless `ha.enabled` is set** (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "High availability").
 
