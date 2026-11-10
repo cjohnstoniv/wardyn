@@ -798,13 +798,15 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
 - An approval lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline refuses them all for the run. The answer lives in the run's proxy, so a new proxy asks again.
+- On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. That engine is let go after 10 minutes with nothing open, or when the runner goes offline, and the call is then asked about again.
 - A request a brokered route or an API door sends is held the same way, on the method and path its host receives. A request a lane already held and let through is not asked about again when it is sent.
 - The approval names no port or scheme. It covers that host, method and path on any port, over HTTP or HTTPS.
 - A hold never outranks a deny. Each request is judged afresh: if any rule set denies it, or names the host and matches nothing, it is refused, approved or not. An approval answers only the hold.
 - Every other set must still allow the request. A plain-HTTP request to a host the policy does not allow is refused without asking anyone.
 - On the lanes the run-wide [`allowed_methods`](#allowed_methods) covers, a method it refuses is refused without asking anyone. The git routes `/wardyn/gh/` and `/wardyn/git/` ignore `allowed_methods`, so a held request there is asked about whatever its method.
 - It fails closed. If the control plane refuses or cannot take the request for an approval, or the proxy cannot read the answer, the request is not sent.
-- At most 16 held requests wait at once, and a retry of a waiting call counts. The proxy remembers at most 1024 different calls at once: those waiting or pending, and those approved or declined. A call whose approval expired or was cancelled is forgotten, which frees its place. A request past either limit is refused at once (`policy:host-rule:approval-busy`).
+- At most 16 held requests wait at once, and a retry of a waiting call counts.
+- The proxy remembers at most 1024 different calls at once: those waiting or pending, and those approved or declined. A call whose approval expired or was cancelled frees its place once the proxy sees it closed: while a request for it waits, or when the call is sent again. A request past either limit is refused at once (`policy:host-rule:approval-busy`).
 - The decision takes no `decision_scope`, or `"run"`. The row records `run`, since the answer holds for the rest of the run. A unit's deciders rule whose `max_scope` is below `run` refuses the decision (`decision_scope_above_rule`).
 - The run's owner or a security operator decides it, as for a kubectl write. A unit's `egress_domain` deciders rule governs it, and an approval rule never decides one.
 - `WARDYN_EGRESS_SECOND_HUMAN` or `WARDYN_CAPABILITY_SECOND_HUMAN` makes it four-eyes. Either one is enough, and then someone other than the run's own people decides it.
@@ -1232,7 +1234,7 @@ How a request to a host is decided:
 - Across sets, any deny wins. Otherwise any hold asks a person ([A host rule hold](#a-host-rule-hold-effect-hold)). Otherwise the request is allowed. A set that does not name the host has no say.
 - [`allowed_methods`](#allowed_methods) still applies on top, on the lanes it covers. `/wardyn/gh/` and `/wardyn/git/` ignore it.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
-- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or a path override (`X-Original-URL`, `X-Rewrite-URL`, `X-Override-URL`), is refused.
+- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or a path, prefix or host override (`X-Original-URL`, `X-Rewrite-URL`, `X-Override-URL`, `X-Forwarded-Prefix`, `X-Script-Name`, `X-Forwarded-Host`), is refused. The git routes `/wardyn/gh/` and `/wardyn/git/` drop these headers instead and send the request on, judged by its request line.
 
 Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.
 
