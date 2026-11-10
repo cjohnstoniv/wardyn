@@ -551,6 +551,7 @@ func TestDesktopFiles_PercentEncodedNamesAreDecodedOnce(t *testing.T) {
 	for _, tc := range []struct{ raw, want string }{
 		{"report%20(1).pdf", "report (1).pdf"},
 		{"caf%C3%A9%20(2).txt", "café (2).txt"},
+		{"report%2520(1).pdf", "report%20(1).pdf"}, // a real name with a literal percent sequence: decoded once, not twice
 	} {
 		e := newReviewEnv(t, types.TransferReview)
 		if w := doSSO(t, e.srv, http.MethodPut, e.path(tc.raw), e.ses["owner"], fileSentinel); w.Code != http.StatusOK ||
