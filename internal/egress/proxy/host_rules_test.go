@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -94,7 +95,7 @@ func hrConnect(t *testing.T, proxyURL string, port string) (int, net.Conn, *bufi
 }
 
 // hrInner sends one request inside an opened tunnel, trusting caPEM; it reports the status.
-func hrInner(t *testing.T, conn net.Conn, caPEM []byte, method, path string) int {
+func hrInner(t *testing.T, conn net.Conn, caPEM []byte, method, path string, hdr ...string) int {
 	t.Helper()
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(caPEM)
@@ -102,12 +103,17 @@ func hrInner(t *testing.T, conn net.Conn, caPEM []byte, method, path string) int
 	if err := tc.Handshake(); err != nil {
 		t.Fatalf("a rule host's tunnel was not opened by the proxy (TLS to the proxy's certificate failed): %v", err)
 	}
-	return hrSend(t, tc, method, path)
+	return hrSend(t, tc, method, path, hdr...)
 }
 
-func hrSend(t *testing.T, c net.Conn, method, path string) int {
+// hrSend writes one request on c, with each of hdr as a header line, and returns the status.
+func hrSend(t *testing.T, c net.Conn, method, path string, hdr ...string) int {
 	t.Helper()
-	if _, err := io.WriteString(c, method+" "+path+" HTTP/1.1\r\nHost: "+hrHost+"\r\nContent-Length: 0\r\n\r\n"); err != nil {
+	extra := ""
+	for _, h := range hdr {
+		extra += h + "\r\n"
+	}
+	if _, err := io.WriteString(c, method+" "+path+" HTTP/1.1\r\nHost: "+hrHost+"\r\n"+extra+"Content-Length: 0\r\n\r\n"); err != nil {
 		t.Fatalf("write inner request: %v", err)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: method})
@@ -279,6 +285,59 @@ func TestHostRulesPathParameterBeforeASegmentAndAPlainPath(t *testing.T) {
 	wantServletParamRefused(t, "/admin;x=1/users")
 	if status, reached, _ := servletParamGET(t, "/users"); status != http.StatusOK || reached != 1 {
 		t.Errorf("GET /users = %d, upstream reached %d time(s), want 200 once", status, reached)
+	}
+}
+
+// TestHostRulesRefuseRouteOverrideHeaders: a host may run the method or path an override header names in
+// place of the request line's, so on a rule host such a request is refused, on the terminated lane and on a
+// brokered forward alike (one helper, routeOverrideCause), even where the rules allow the request line.
+func TestHostRulesRefuseRouteOverrideHeaders(t *testing.T) {
+	rules := []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: hrHost, Methods: []string{"DELETE"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Effect: types.HostRuleAllow},
+	}}}
+	for _, tc := range []struct {
+		method, header string
+		refused        bool
+	}{
+		{"POST", "X-HTTP-Method-Override: DELETE", true},
+		{"POST", "X-HTTP-Method: DELETE", true},
+		{"POST", "X-Method-Override: delete", true},
+		{"POST", "X-HTTP-Method-Override: post", false}, // names the request's own method
+		{"GET", "X-Original-URL: /admin", true},
+		{"GET", "X-Rewrite-URL: /admin", true},
+		{"GET", "X-Override-URL: /admin", true},
+		{"GET", "X-Unrelated: /admin", false},
+	} {
+		t.Run("tunnel "+tc.header, func(t *testing.T) {
+			cu := captureUpstream(t, true, "ok")
+			p, buf, caPEM := hrProxy(t, hrOpts{}, cu.srv)
+			p.policy.hostRules = rules
+			srv := httptest.NewServer(p)
+			status, conn, _ := hrConnect(t, srv.URL, "443")
+			if status != http.StatusOK {
+				t.Fatalf("CONNECT = %d", status)
+			}
+			got := hrInner(t, conn, caPEM, tc.method, "/public", tc.header)
+			srv.Close()
+			if tc.refused != (got == http.StatusForbidden) || tc.refused == cu.reached {
+				t.Errorf("%s /public with %s = %d reached=%v, want refused=%v", tc.method, tc.header, got, cu.reached, tc.refused)
+			}
+			if tc.refused && !strings.Contains(buf.String(), "carries") {
+				t.Errorf("no row naming the override:\n%s", buf.String())
+			}
+		})
+		t.Run("brokered "+tc.header, func(t *testing.T) {
+			p, _, _ := hrProxy(t, hrOpts{}, captureUpstream(t, true, "ok").srv)
+			p.policy.hostRules = rules
+			req := httptest.NewRequest(tc.method, "https://"+hrHost+"/public", nil)
+			k, v, _ := strings.Cut(tc.header, ": ")
+			req.Header.Set(k, v)
+			if err := p.outboundHostRuleRefused(req); tc.refused != errors.Is(err, errHostRuleRefused) {
+				t.Errorf("outbound %s /public with %s: err %v, want refused=%v", tc.method, tc.header, err, tc.refused)
+			}
+		})
 	}
 }
 

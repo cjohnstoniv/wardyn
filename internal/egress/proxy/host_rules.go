@@ -77,18 +77,50 @@ func (p *Proxy) hostRuleUninspected(ctx context.Context, host string, port int) 
 	return ""
 }
 
+// hostRuleVerdict is the one judgement both gates (hostRuleRefused, outboundHostRuleRefused) make of a
+// request to host with the escaped path rawPath: "" when the host is no rule host or its rules allow the
+// request, otherwise the refusal's cause.
+func (p *Proxy) hostRuleVerdict(r *http.Request, host, rawPath string) string {
+	if !p.policy.namesRuleHost(host) {
+		return ""
+	}
+	if cause := routeOverrideCause(r); cause != "" {
+		return cause
+	}
+	if d := types.EvalHostRules(p.policy.hostRules, host, r.Method, rawPath); d.Effect != types.HostRuleAllow {
+		return hostRuleCause(d)
+	}
+	return ""
+}
+
+// pathOverrideHeaders are headers a server or framework may route by in place of the request line's path.
+var pathOverrideHeaders = []string{"X-Original-URL", "X-Rewrite-URL", "X-Override-URL"}
+
+// routeOverrideCause says why a request carries a header that could have its host run another method or
+// path than the one the rules judged, or "": a method override naming another method (patAPIMethodMismatch,
+// the forge API door's check), or any path override. Such a request is refused, never stripped: the rule
+// says what the host may be asked, and the request asks something else.
+func routeOverrideCause(r *http.Request) string {
+	if patAPIMethodMismatch(r) {
+		return "host rules: the request carries a method override that names another method than the request line"
+	}
+	for _, k := range pathOverrideHeaders {
+		if len(r.Header.Values(k)) > 0 {
+			return "host rules: the request carries " + k + ", which a host may serve in place of the path judged"
+		}
+	}
+	return ""
+}
+
 // hostRuleRefused judges one request to host (inside a terminated tunnel or on the plain lane), writes
 // the refusal when the rules do not allow it, and reports whether it did. hold is refused until holds land.
 func (p *Proxy) hostRuleRefused(w http.ResponseWriter, r *http.Request, host string, port int) bool {
-	if !p.policy.namesRuleHost(host) {
-		return false
-	}
-	d := types.EvalHostRules(p.policy.hostRules, host, r.Method, requestEscapedPath(r))
-	if d.Effect == types.HostRuleAllow {
+	cause := p.hostRuleVerdict(r, host, requestEscapedPath(r))
+	if cause == "" {
 		return false
 	}
 	log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceHostRule)
-	log.Cause = hostRuleCause(d)
+	log.Cause = cause
 	if p.sink != nil {
 		p.sink.emit(log)
 	}
@@ -123,15 +155,12 @@ func (p *Proxy) outboundHostRuleRefused(req *http.Request) error {
 		return nil
 	}
 	host, port := splitHostPort(req.URL.Host, defaultPortForScheme(req.URL.Scheme))
-	if !p.policy.namesRuleHost(host) {
-		return nil
-	}
-	d := types.EvalHostRules(p.policy.hostRules, host, req.Method, req.URL.EscapedPath())
-	if d.Effect == types.HostRuleAllow {
+	cause := p.hostRuleVerdict(req, host, req.URL.EscapedPath())
+	if cause == "" {
 		return nil
 	}
 	log := decisionLog(p.reqOf(req, host, port), egress.Deny, ruleSourceHostRule)
-	log.Cause = hostRuleCause(d)
+	log.Cause = cause
 	if p.sink != nil {
 		p.sink.emit(log)
 	}
