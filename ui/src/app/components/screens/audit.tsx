@@ -220,8 +220,8 @@ export function AuditScreen() {
   const [searchParams, setFilters] = useUrlFilters();
   const runFilter = searchParams.get("run_id") ?? "";
   const setRunFilter = React.useCallback(
-    (id: string) => setFilters({ run_id: id }, { push: id !== "" }),
-    [setFilters],
+    (id: string) => setFilters({ run_id: id }, { push: id !== "" && id !== runFilter }),
+    [setFilters, runFilter],
   );
   const query = searchParams.get("q") ?? "";
   const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
@@ -230,7 +230,7 @@ export function AuditScreen() {
   const [tab, setTab] = React.useState<"events" | "retention">("events");
   const showRetention = securityOperator && tab === "retention";
   const kindParam = searchParams.get("kind") ?? "";
-  const kindFilter: EventKind | "all" = (KIND_ORDER as string[]).includes(kindParam) ? (kindParam as EventKind) : "all";
+  const urlKind: EventKind | "all" = (KIND_ORDER as string[]).includes(kindParam) ? (kindParam as EventKind) : "all";
   const setKindFilter = (k: EventKind | "all") => setFilters({ kind: k === "all" ? "" : k });
   const actorParam = searchParams.get("actor") ?? "";
   const actorFilter: ActorType | "all" = ACTOR_TYPES.includes(actorParam as ActorType) ? (actorParam as ActorType) : "all";
@@ -374,15 +374,13 @@ export function AuditScreen() {
   // The Event facet's own SelectItem list is `KIND_ORDER.filter((k) =>
   // presentKinds.has(k))` — when the loaded window narrows (a run_id drill-in
   // whose authoritative trail lacks the selected kind) that item unmounts
-  // while `kindFilter` still points at it, leaving the trigger blank over a
-  // filter that now matches nothing. Fall back to "all" the moment the
-  // selected kind is no longer present; an append-only poll tick only ever
-  // GROWS presentKinds, so this never fires on one.
-  React.useEffect(() => {
-    // Not before the first answer: a kind from the URL is not absent from a window that has not loaded.
-    if (status === "ready" && kindFilter !== "all" && !presentKinds.has(kindFilter)) setKindFilter("all");
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- setKindFilter only writes the URL
-  }, [presentKinds, kindFilter, status]);
+  // while the URL still names it, leaving the trigger blank over a filter that
+  // now matches nothing. So the kind in force is "all" once the loaded window
+  // lacks it. It is derived, not written back to the URL: on Back or Forward
+  // the events still belong to the previous filter for one render, and a write
+  // from that render would drop a kind the entry being returned to carries.
+  // Not before the first answer: a kind from the URL is not absent from a window that has not loaded.
+  const kindFilter: EventKind | "all" = status === "ready" && urlKind !== "all" && !presentKinds.has(urlKind) ? "all" : urlKind;
 
   // Query / kind / actor are sub-filters applied over the loaded window. The
   // run_id filter is enforced server-side (above), so it is not re-applied here.

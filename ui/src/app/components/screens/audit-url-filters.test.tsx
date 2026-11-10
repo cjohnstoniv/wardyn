@@ -8,7 +8,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
-import userEvent from "@testing-library/user-event";
 import { LaggingRouter } from "../../../test/lagging-router";
 import type { AuditEvent } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
@@ -41,6 +40,7 @@ describe("AuditScreen URL filters", () => {
       <>
         <output data-testid="search">{location.search}</output>
         <button onClick={() => navigate(-1)}>history back</button>
+        <button onClick={() => navigate(1)}>history forward</button>
       </>
     );
   }
@@ -87,11 +87,44 @@ describe("AuditScreen URL filters", () => {
     );
     await screen.findByLabelText("Search events");
     const box = screen.getByLabelText("Search events");
-    const user = userEvent.setup({ delay: null });
-    await user.type(box, "abc");
-    expect(box).toHaveValue("abc");
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
     await new Promise((r) => setTimeout(r, 80));
     expect(box).toHaveValue("abc");
+  });
+
+
+  it("Back then Forward across a drill keeps a kind that only the run's own trail has", async () => {
+    // The global window has no tool events; the run's trail does.
+    listAuditMock.mockImplementation((runId?: string) =>
+      Promise.resolve(
+        runId
+          ? [ev({ id: "e1", run_id: "run_111", action: "egress.allow" }), ev({ id: "e3", run_id: "run_111", action: "run.exec" })]
+          : [ev({ id: "e1", run_id: "run_111", action: "egress.allow" })],
+      ),
+    );
+    renderAt(["/?q=&kind=egress", "/?run_id=run_111&kind=tool"], 1);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("Tool"));
+    fireEvent.click(screen.getByRole("button", { name: "history back" }));
+    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^\?kind=egress$|^\?q=&kind=egress$/));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("Egress"));
+    fireEvent.click(screen.getByRole("button", { name: "history forward" }));
+    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent("run_id=run_111"));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("Tool"));
+    expect(screen.getByTestId("search")).toHaveTextContent("kind=tool");
+  });
+
+  it("opening the run that is already open does not push another entry", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    renderAt(["/", "/?q=egress"], 1);
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
+    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent("run_id=run_111"));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
+    fireEvent.click(screen.getByRole("button", { name: "history back" }));
+    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^\?q=egress$/));
   });
 
 });
