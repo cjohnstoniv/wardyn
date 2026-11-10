@@ -608,6 +608,7 @@ var sealLayerCensus = map[string]int{
 	"governance_restrictions.go restrictionSealLayers": 1,
 	"governance_restrictions.go restrictionSealLayer":  1,
 	"personal_walls.go personalWallsSealLayer":         1,
+	"personal_walls.go wallPresetSealLayer":            1,
 	"personal_walls.go wallsSealLayer":                 1,
 }
 
