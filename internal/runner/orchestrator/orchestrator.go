@@ -84,7 +84,6 @@ type Orchestrator struct {
 }
 
 var _ runner.Runner = (*Orchestrator)(nil)
-var _ runner.ProxyReviverHashed = (*Orchestrator)(nil)
 
 // New constructs an Orchestrator over the given substrates (at least one). With
 // a single substrate it is a thin pass-through; with several it routes by class.
@@ -793,21 +792,6 @@ func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []b
 		return runner.ErrReviveUnsupported
 	}
 	return rv.ReplaceProxy(ctx, ref, cfgJSON)
-}
-
-// ReplaceProxyHashed forwards a hashed proxy replacement to ref's substrate
-// (runner.ProxyReviverHashed). A substrate that cannot hash is refused with
-// ErrReviveUnsupported before anything changes, never answered with no hash.
-func (o *Orchestrator) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
-	s, err := o.subForRef(ctx, ref)
-	if err != nil {
-		return "", err
-	}
-	rv, ok := s.(runner.ProxyReviverHashed)
-	if !ok {
-		return "", runner.ErrReviveUnsupported
-	}
-	return rv.ReplaceProxyHashed(ctx, ref, cfgJSON)
 }
 
 // EnsureProxyImage ensures every substrate's proxy sidecar image ahead of a
