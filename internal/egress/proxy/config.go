@@ -520,6 +520,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	if err := types.ValidatePushRuleSets(c.PushRuleSets); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if err := c.validateHostRules(); err != nil {
+		return nil, err
+	}
 	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
