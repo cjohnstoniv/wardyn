@@ -82,20 +82,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		writeApprovalPending(w, log)
 		return
 	}
-	// A request the host rules hold asks a person only now, once the policy allows the host (host_call_hold.go).
-	if p.hostRuleRefused(w, r, host, port) {
-		return
-	}
-
-	// require_tls: the operator declared this host's credential may ride only TLS, and this
-	// request is cleartext — refuse the REQUEST before inspection, since a refusal ends it and
-	// scanning first would waste budget. Writes its own 403 since this is an operator-fixable mistake.
-	if p.inject.requiresTLS(host) && !strings.EqualFold(r.URL.Scheme, "https") {
-		if log != nil {
-			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceRequireTLS))
-		}
-		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceRequireTLS)
-		http.Error(w, fmt.Sprintf(injectRequireTLSBody, host), http.StatusForbidden)
+	if p.plainRefusedAfterPolicy(w, r, host, port, log) {
 		return
 	}
 
@@ -169,4 +156,25 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 
 	p.relay(w, resp)
+}
+
+// plainRefusedAfterPolicy is handlePlain's refusals once the policy allows the host, and reports whether
+// it answered.
+func (p *Proxy) plainRefusedAfterPolicy(w http.ResponseWriter, r *http.Request, host string, port int, log *egress.DecisionLog) bool {
+	// A request the host rules hold asks a person only now, once the policy allows the host (host_call_hold.go).
+	if p.hostRuleRefused(w, r, host, port) {
+		return true
+	}
+	// require_tls: the operator declared this host's credential may ride only TLS, and this
+	// request is cleartext — refuse the REQUEST before inspection, since a refusal ends it and
+	// scanning first would waste budget. Writes its own 403 since this is an operator-fixable mistake.
+	if p.inject.requiresTLS(host) && !strings.EqualFold(r.URL.Scheme, "https") {
+		if log != nil {
+			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceRequireTLS))
+		}
+		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceRequireTLS)
+		http.Error(w, fmt.Sprintf(injectRequireTLSBody, host), http.StatusForbidden)
+		return true
+	}
+	return false
 }
