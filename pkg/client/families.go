@@ -795,7 +795,9 @@ type DrivesDocument struct {
 	HostRootsConfigured bool                `json:"host_roots_configured"`
 	RunnerTarget        string              `json:"runner_target"`
 	Disabled            bool                `json:"disabled"`
-	GrantTotal          int                 `json:"grant_total"`
+	// TeamDrives is the deployment's team-drive switch; read-only, never written back.
+	TeamDrives bool `json:"team_drives"`
+	GrantTotal int  `json:"grant_total"`
 }
 
 // GetDrives returns every registered drive and EVERY allocation. GET
