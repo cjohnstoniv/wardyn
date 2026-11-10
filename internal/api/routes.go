@@ -947,8 +947,7 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	r.Post("/internal/proxy/loaded", s.handleInternalProxyLoaded)
 	r.Post("/internal/approvals", s.handleInternalRequestApproval)
 	r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
-	// wardyn-toolgate's own give-up signal (#811): closes the row it
-	// raised instead of leaving it PENDING for the sweep.
+	// wardyn-toolgate's own give-up signal (#811): closes the row it raised instead of leaving it PENDING for the sweep.
 	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
 	// The run proxy's sign-in lane asks whether a credential is the run's
