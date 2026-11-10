@@ -276,9 +276,12 @@ func k8sEgressContainmentCheck(driver, netpolProven string, capsUnreadable bool,
 	case netpolProven == "not_proven":
 		return SetupCheck{
 			ID: id, Label: label, Status: "fail",
-			Detail: "Not proven. The last 3 checks could not run, so Wardyn can't confirm that this cluster blocks egress with a " +
-				"deny-all NetworkPolicy. New sandboxes are refused until a check passes.",
-			Fix: "Check that the cluster's API answers and that Wardyn can create pods and NetworkPolicies in the runs namespace. " +
+			// Two causes reach this row: checks that could not tell, and an acknowledged result in agent-sandbox
+			// mode. The wire verdict does not say which, so neither is named in the Detail.
+			Detail: "Not proven. The canary has not proved that this cluster blocks egress with a deny-all NetworkPolicy. " +
+				"New sandboxes are refused until a check passes.",
+			Fix: "Check that the cluster's API answers, that Wardyn can create pods and NetworkPolicies in the runs namespace, " +
+				"and that pods there have a pod network and no ambient default-deny NetworkPolicy ahead of Wardyn's checks. " +
 				"Wardyn checks again every 10 minutes.",
 		}, true
 	}
