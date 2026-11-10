@@ -155,8 +155,8 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope, signIn?: string): 
       if (str(scope, "call_sha256") && str(scope, "cluster")) {
         return KUBE_CALL_CARD.LIST_TITLE(escapeUnsafeRunes(str(scope, "method") ?? ""), escapeUnsafeRunes(str(scope, "namespace") ?? ""));
       }
-      // One held host request (a host, a method and a path, no call_sha256): the list names all three.
-      if (str(scope, "host") && str(scope, "method") && str(scope, "path") && !str(scope, "call_sha256") && !str(scope, "lane")) {
+      // One held host request (a call_sha256 and a host, no cluster): the list names its method, path and host.
+      if (str(scope, "call_sha256") && str(scope, "host")) {
         return HOST_CALL_CARD.LIST_TITLE(escapeUnsafeRunes(str(scope, "method") ?? ""), escapeUnsafeRunes(str(scope, "path") ?? ""), escapeUnsafeRunes(str(scope, "host") ?? ""));
       }
       // One MCP call (call_sha256 and a server): the list names the tool and the server it was for.

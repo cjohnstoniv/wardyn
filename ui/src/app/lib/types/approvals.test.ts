@@ -255,21 +255,28 @@ describe("canDecideApproval on a held kubectl write", () => {
   });
 });
 
-// A held host request is a host, a method and a path and nothing else that names a kind of call.
+// A held host request is a call_sha256 and a host with no cluster (WIRE.md); an MCP call and a kubectl write are not.
 describe("isHostCallRequest", () => {
-  const host = { kind: "tool_call" as const, grant_id: undefined, requested_scope: { host: "api.example.com", method: "POST", path: "/v1/refunds" } };
-  it("reads a host, method and path scope", () => {
+  const key = "ab".repeat(32);
+  const host = { kind: "tool_call" as const, grant_id: undefined,
+    requested_scope: { host: "api.example.com", method: "POST", path: "/v1/refunds", call_sha256: key, hold_seconds: 90 } };
+  const mcp = { kind: "tool_call" as const, grant_id: undefined, requested_scope: { tool: "mcp__jira__x", mcp_server: "jira", mcp_host: "jira.example.com", call_sha256: key } };
+  const kube = { kind: "tool_call" as const, grant_id: undefined,
+    requested_scope: { cluster: "k8s.example.com", namespace: "team-a", method: "PATCH", path: "/apis/apps/v1/x", call_sha256: key } };
+  it("reads a host call row and no other kind of row as one", () => {
     expect(isHostCallRequest(host)).toBe(true);
-  });
-  it("never reads an MCP call, a kubectl write, an ADO capability, a granted row or another kind", () => {
-    const key = "ab".repeat(32);
-    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, call_sha256: key, mcp_server: "jira" } })).toBe(false);
-    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, call_sha256: key, cluster: "k8s" } })).toBe(false);
-    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, lane: "azure_devops" } })).toBe(false);
+    expect(isHostCallRequest(mcp)).toBe(false);
+    expect(isHostCallRequest(kube)).toBe(false);
     expect(isHostCallRequest({ ...host, grant_id: "g1" })).toBe(false);
     expect(isHostCallRequest({ ...host, kind: "egress_domain" as never })).toBe(false);
-    expect(isHostCallRequest({ ...host, requested_scope: { host: "a", method: "GET" } })).toBe(false);
+    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, call_sha256: "" } })).toBe(false);
+  });
+  it("is never an MCP call or a kubectl write", () => {
     expect(isMCPCallRequest(host)).toBe(false);
     expect(isKubeCallRequest(host)).toBe(false);
+  });
+  it("is one the run's owner may decide, the server's per-row verdict leading", () => {
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: host.requested_scope, decidable: true })).toBe(true);
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: host.requested_scope, decidable: false })).toBe(false);
   });
 });

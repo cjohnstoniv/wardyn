@@ -132,7 +132,7 @@ export interface ApprovalRequest {
 // at all, not something this predicate needs to re-check. It does NOT know the
 // egress_host capability: when an admin withholds that grant the server refuses
 // a member's egress_domain decision with capability_egress_host, and the strip
-// turns the row's buttons off on that first refusal. One MCP call or held kubectl write is the one tool_call a member may decide (pass the row).
+// turns the row's buttons off on that first refusal. One MCP call, held kubectl write or held host request is the one tool_call a member may decide (pass the row).
 export function canDecideApproval(
   operator: boolean,
   kind: ApprovalKind,
@@ -298,12 +298,13 @@ export interface KubeCallScope {
 }
 
 // Structural, like the server's isMCPCallRow: a tool_call with no grant whose scope carries a call_sha256
-// and no cluster (a scope with a cluster is a kubectl write, isKubeCallRequest).
+// and no cluster or host (a scope with a cluster is a kubectl write, isKubeCallRequest; one with a host is a held
+// host request, isHostCallRequest).
 export function isMCPCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
   a: T,
 ): a is T & { requested_scope: MCPCallScope } {
   const key = a.requested_scope?.call_sha256;
-  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster === undefined;
+  return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster === undefined && a.requested_scope?.host === undefined;
 }
 
 // Structural, like the server's isKubeCallRow: a tool_call with no grant whose scope carries a call_sha256
@@ -315,43 +316,38 @@ export function isKubeCallRequest<T extends Pick<ApprovalRequest, "kind" | "gran
   return a.kind === "tool_call" && !a.grant_id && typeof key === "string" && key !== "" && a.requested_scope?.cluster !== undefined;
 }
 
-// HostCallScope: one held request to a host rule with effect hold (B5): the host, the method and the path the rule
-// named. Approving it allows that method and path on that host for the rest of the run in that proxy. The scope
-// carries no body, no query and no call_sha256. Aligned to the host-rule-holds wire only as far as the plan states it
-// ({host, method, path}); hold_seconds is optional until WIRE.md confirms it.
+// HostCallScope mirrors internal/types.HostCallScope (lane host-rule-holds, WIRE.md): one held request to a host a
+// rule holds. Approving it lets every request with this host, method and path through for the rest of the run in
+// that proxy; the query and body are not in the scope. host is lowercase without port; method is upper case; path is
+// in normal form (no query, no dot segments). call_sha256 is HostCallKey(host, method, path); hold_seconds is how long
+// the proxy holds the open request.
 export interface HostCallScope {
   host: string;
   method: string;
   path: string;
+  call_sha256: string;
   hold_seconds?: number;
 }
 
-// Structural: a tool_call with no grant whose scope is a host, a method and a path and nothing that makes it an MCP
-// call (call_sha256, mcp_server), a kubectl write (cluster) or an Azure DevOps capability (lane).
+// Structural, like the server's isHostCallRow: a tool_call with no grant whose scope carries a call_sha256 and a
+// host and no cluster (a cluster is a kubectl write). A host call row is never an MCP call row.
 export function isHostCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
   a: T,
 ): a is T & { requested_scope: HostCallScope } {
-  const s = a.requested_scope;
+  const key = a.requested_scope?.call_sha256;
   return (
     a.kind === "tool_call" &&
     !a.grant_id &&
-    !!s &&
-    typeof s.host === "string" &&
-    s.host !== "" &&
-    typeof s.method === "string" &&
-    s.method !== "" &&
-    typeof s.path === "string" &&
-    s.path !== "" &&
-    s.call_sha256 === undefined &&
-    s.cluster === undefined &&
-    s.mcp_server === undefined &&
-    s.lane === undefined
+    typeof key === "string" &&
+    key !== "" &&
+    a.requested_scope?.host !== undefined &&
+    a.requested_scope?.cluster === undefined
   );
 }
 
-// Structural, like the server's isExactCallRow: one MCP call or one held kubectl write.
+// Structural, like the server's isExactCallRow: one MCP call, one held kubectl write or one held host request.
 export function isExactCallRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(a: T): boolean {
-  return isMCPCallRequest(a) || isKubeCallRequest(a);
+  return isMCPCallRequest(a) || isKubeCallRequest(a) || isHostCallRequest(a);
 }
 
 export function isAdoConsentRequest(

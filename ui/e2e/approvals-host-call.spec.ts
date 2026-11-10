@@ -24,7 +24,8 @@ const hostCall = (id: string, runId: string, path: string, over: Row = {}): Row 
   requested_at: new Date().toISOString(),
   decidable: true,
   held: true,
-  requested_scope: { host: HOST, method: "POST", path },
+  requested_scope: { host: HOST, method: "POST", path, call_sha256: id.padEnd(64, "a").slice(0, 64), hold_seconds: 90 },
+  held_until: new Date(Date.now() + 60_000).toISOString(),
   ...over,
 });
 

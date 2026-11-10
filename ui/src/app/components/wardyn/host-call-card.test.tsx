@@ -13,7 +13,7 @@ import { APPROVAL, APPROVAL_MCP_CALL, APPROVAL_SCOPE_LABEL } from "./copy/approv
 import { HOST_CALL_CARD as C } from "./copy/files-review";
 import { HostCallCard } from "./host-call-card";
 
-const scope: HostCallScope = { host: "api.payments.example.com", method: "POST", path: "/v1/refunds" };
+const scope: HostCallScope = { host: "api.payments.example.com", method: "POST", path: "/v1/refunds", call_sha256: "7ab4c1e09d3f".padEnd(64, "0"), hold_seconds: 90 };
 
 const row = (s: HostCallScope = scope, over: Partial<ApprovalRequest> = {}) =>
   ({
@@ -78,9 +78,8 @@ describe("the host call card (HC-1)", () => {
     const card = screen.getByTestId("host-call-card");
     expect(card).not.toHaveTextContent(C.HELD_NOTE);
     expect(card).not.toHaveTextContent(C.HELD_EXPIRED);
-    // hold_seconds alone is a duration, not a deadline.
-    renderCard(row({ ...scope, hold_seconds: 90 }, { held: true }));
-    expect(screen.getAllByTestId("host-call-card")[1]).not.toHaveTextContent("No longer waiting");
+    // hold_seconds (in the scope above) is a duration, not a deadline.
+    expect(card).not.toHaveTextContent("No longer waiting");
   });
 
   it("a long path wraps in its definition rather than clipping", () => {

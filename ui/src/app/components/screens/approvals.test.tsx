@@ -901,11 +901,12 @@ describe("deriveTitle for the download and kubectl cards", () => {
 
 describe("deriveTitle for the host call card", () => {
   it("names a held host request by method, path and host, ahead of the plain tool_call arm", () => {
-    const scope = { host: "api.payments.example.com", method: "POST", path: "/v1/refunds" };
+    const scope = { host: "api.payments.example.com", method: "POST", path: "/v1/refunds", call_sha256: "ab".repeat(32), hold_seconds: 90 };
     expect(deriveTitle("tool_call", scope)).toBe("POST /v1/refunds on api.payments.example.com");
     expect(HOST_CALL_CARD.LIST_TITLE("POST", "/v1/refunds", "api.payments.example.com")).toBe("POST /v1/refunds on api.payments.example.com");
   });
-  it("leaves a scope with a call_sha256 or a lane to its own arm", () => {
-    expect(deriveTitle("tool_call", { host: "h", method: "GET", path: "/", call_sha256: "ab".repeat(32), mcp_server: "jira", tool: "t" })).toBe("Call t on jira");
+  it("leaves an MCP call and a kubectl write to their own arms", () => {
+    expect(deriveTitle("tool_call", { tool: "t", mcp_server: "jira", mcp_host: "jira.example.com", call_sha256: "ab".repeat(32) })).toBe("Call t on jira");
+    expect(deriveTitle("tool_call", { host: "h", cluster: "k8s", namespace: "ns", method: "GET", path: "/", call_sha256: "ab".repeat(32) })).toBe("kubectl GET in ns");
   });
 });

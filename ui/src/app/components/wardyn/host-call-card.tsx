@@ -7,7 +7,7 @@
 // the request and asks a person). Built on KubeCallCard's parts and mounted beside it.
 //
 // SCOPE IS THE WHOLE RUN: approving lets this method and path through on this host for the rest of the run, so the
-// chip, the button and the blast radius say "this run", never "once". The scope has no body and no fingerprint.
+// chip, the button and the blast radius say "this run", never "once". The scope has no body (the query and body are not covered by the key), so the card shows no body and no fingerprint.
 //
 // NO SCOPE MENU: Approve and Deny call straight through.
 import * as React from "react";
