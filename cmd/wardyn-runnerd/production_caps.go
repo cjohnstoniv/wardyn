@@ -47,7 +47,7 @@ func resendMacOSCaps(ctx context.Context, peer *runnerwire.Peer, dirty *atomic.B
 }
 
 // capsReporter sends the runner's caps to its organisation: on a fresh session, after a resume that has
-// something new, and when a macOS VM or the relay changes.
+// something new, and when a macOS VM, the relay or the Kubernetes NetworkPolicy verdict changes.
 type capsReporter struct {
 	sub        substrate.Substrate
 	extra      runtimeExtras
@@ -62,6 +62,8 @@ type capsReporter struct {
 	// last is the last caps the org acked: the base of a macOS VM resend while Docker is down, when the
 	// host's part of the caps cannot be built.
 	last atomic.Pointer[runnerwire.Caps]
+	// netPol holds one mark from netPolChanged until resendNetPol takes it.
+	netPol chan struct{}
 }
 
 func (c *capsReporter) ack(ctx context.Context, peer *runnerwire.Peer, caps runnerwire.Caps) error {
@@ -127,6 +129,35 @@ func (c *capsReporter) resendRelay(ctx context.Context) {
 	if peer := c.online.Load(); peer != nil {
 		if err := c.send(ctx, peer, false, true); err != nil {
 			slog.WarnContext(ctx, "runner caps after a relay change failed", "error", err)
+		}
+	}
+}
+
+// netPolChanged is the Kubernetes driver's hook after a canary re-check changed its verdict, or the time
+// of the check behind it. It only marks the change, so the re-check loop never waits on the network;
+// marks made before resendNetPol takes one are sent as one.
+func (c *capsReporter) netPolChanged() {
+	select {
+	case c.netPol <- struct{}{}:
+	default:
+	}
+}
+
+// resendNetPol sends the caps again after each netPolChanged mark until ctx ends, so the organisation's
+// health and audit see a re-check's verdict mid-session. With no session the caps are only marked
+// unsent, and the next session sends them.
+func (c *capsReporter) resendNetPol(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.netPol:
+		}
+		c.dirty.Store(true)
+		if peer := c.online.Load(); peer != nil {
+			if err := c.send(ctx, peer, false, true); err != nil {
+				slog.WarnContext(ctx, "runner caps after a NetworkPolicy verdict change failed", "error", err)
+			}
 		}
 	}
 }

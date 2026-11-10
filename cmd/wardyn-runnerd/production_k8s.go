@@ -173,6 +173,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		report:         connectReport{log: opts.offline},
 		runsNamespaces: opts.runsNamespaces,
 		workloadStatus: workloads.statusFunc(),
+		netPolWatch:    drv.OnNetPolChange,
 	})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close(), drv.Close())

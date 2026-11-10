@@ -29,6 +29,13 @@ var netPolRank = map[string]int{NetPolEnforced: 1, NetPolAcknowledged: 2, NetPol
 // KnownNetPolVerdict reports whether v is one of the NetPolCheck verdicts.
 func KnownNetPolVerdict(v string) bool { return netPolRank[v] > 0 }
 
+// NetPolVerdictChanged reports whether a verdict moved from prev to next: both are verdicts this build
+// knows, and they differ. A first verdict (prev empty) is a baseline, not a change, and a word this build
+// does not know is never one.
+func NetPolVerdictChanged(prev, next string) bool {
+	return KnownNetPolVerdict(prev) && KnownNetPolVerdict(next) && prev != next
+}
+
 // WorseNetPolCheck returns the worse of two checks, each keeping its own time. Between equal verdicts it
 // returns the older check, so "last confirmed" never claims more than every substrate showed.
 func WorseNetPolCheck(a, b NetPolCheck) NetPolCheck {

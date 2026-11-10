@@ -35,3 +35,27 @@ func TestWorseNetPolCheck(t *testing.T) {
 		t.Error("KnownNetPolVerdict")
 	}
 }
+
+// TestNetPolVerdictChanged: only a move between two known verdicts is a change.
+func TestNetPolVerdictChanged(t *testing.T) {
+	for _, tc := range []struct {
+		prev, next string
+		want       bool
+	}{
+		{NetPolEnforced, NetPolRefused, true},
+		{NetPolRefused, NetPolEnforced, true},
+		{NetPolEnforced, NetPolAcknowledged, true},
+		{NetPolNotProven, NetPolUnenforced, true},
+		{NetPolEnforced, NetPolEnforced, false},
+		{NetPolRefused, NetPolRefused, false},
+		{"", NetPolRefused, false},
+		{NetPolEnforced, "", false},
+		{"newer-word", NetPolEnforced, false},
+		{NetPolEnforced, "newer-word", false},
+		{"", "", false},
+	} {
+		if got := NetPolVerdictChanged(tc.prev, tc.next); got != tc.want {
+			t.Errorf("NetPolVerdictChanged(%q, %q) = %v, want %v", tc.prev, tc.next, got, tc.want)
+		}
+	}
+}

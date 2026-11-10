@@ -223,6 +223,8 @@ type Driver struct {
 	// netPol is the live NetworkPolicy verdict per runs namespace, seeded by
 	// the boot canary and replaced whole by each re-check (canary_recheck.go).
 	netPol atomic.Pointer[netPolVerdict]
+	// netPolChanged is OnNetPolChange's hook, nil until one is set.
+	netPolChanged atomic.Pointer[func()]
 	// stopRecheck stops the re-check loop and waits for it; nil until it starts.
 	stopRecheck func()
 

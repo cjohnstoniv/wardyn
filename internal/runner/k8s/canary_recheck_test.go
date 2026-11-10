@@ -589,3 +589,32 @@ func TestCanaryCleanup_StalledDeleteIsBounded(t *testing.T) {
 		t.Fatal("Close did not return while a cleanup delete stalled")
 	}
 }
+
+// TestCanaryRecheck_HookFiresOnEachVerdictChange: OnNetPolChange's hook runs when the health verdict or
+// the time of its check moves, and never for a check that leaves both as they were.
+func TestCanaryRecheck_HookFiresOnEachVerdictChange(t *testing.T) {
+	c := newRecheckCluster(t)
+	d, clock := c.boot(t, Config{})
+	calls := 0
+	d.OnNetPolChange(func() { calls++ })
+	d.recheckOnce(context.Background()) // proof again, at a later time than boot's
+	if calls != 1 {
+		t.Fatalf("after a proof at a new time: %d calls, want 1", calls)
+	}
+	d.recheckOnce(context.Background()) // the same proof at the same time
+	if calls != 1 {
+		t.Fatalf("after a check that changed nothing: %d calls, want 1", calls)
+	}
+	c.phaseB.Store(128) // cannot tell: the verdict and its time stand
+	*clock = clock.Add(canaryRecheckInterval)
+	d.recheckOnce(context.Background())
+	if calls != 1 {
+		t.Fatalf("after one indeterminate check: %d calls, want 1", calls)
+	}
+	c.phaseB.Store(0) // an escape
+	*clock = clock.Add(canaryRecheckInterval)
+	d.recheckOnce(context.Background())
+	if calls != 2 || healthCheck(t, d).Verdict != runner.NetPolRefused {
+		t.Fatalf("after an escape: %d calls, verdict %q, want 2 and %q", calls, healthCheck(t, d).Verdict, runner.NetPolRefused)
+	}
+}

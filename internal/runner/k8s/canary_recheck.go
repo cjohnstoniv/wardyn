@@ -198,6 +198,14 @@ func (d *Driver) Close() error {
 	return nil
 }
 
+// OnNetPolChange sets the hook the re-check loop calls each time the live verdict health reads
+// (netPolCheck: the verdict, or the time of the check behind it) changes. wardyn-runnerd sends its caps
+// again from it, so the organisation sees a re-check's verdict mid-session. The hook runs on the loop and
+// must not block.
+func (d *Driver) OnNetPolChange(f func()) {
+	d.netPolChanged.Store(&f)
+}
+
 // recheckOnce re-runs the canary in each runs namespace and publishes each result as it lands. The loop
 // is the only writer. A check cut short by stopping is no evidence and changes nothing.
 func (d *Driver) recheckOnce(ctx context.Context) {
@@ -206,6 +214,7 @@ func (d *Driver) recheckOnce(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		before := d.netPolCheck()
 		cur := d.netPol.Load()
 		next := &netPolVerdict{byNS: make(map[string]nsVerdict, len(d.cfg.Namespaces))}
 		if cur != nil {
@@ -213,6 +222,11 @@ func (d *Driver) recheckOnce(ctx context.Context) {
 		}
 		next.byNS[ns] = d.advance(ns, next.byNS[ns], verdict, err)
 		d.netPol.Store(next)
+		if after := d.netPolCheck(); after.Verdict != before.Verdict || !after.At.Equal(before.At) {
+			if f := d.netPolChanged.Load(); f != nil {
+				(*f)()
+			}
+		}
 	}
 }
 

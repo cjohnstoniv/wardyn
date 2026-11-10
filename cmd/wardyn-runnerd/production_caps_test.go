@@ -10,13 +10,16 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
@@ -49,22 +52,72 @@ func TestRunnerRuntimeAdvertisesBoundFolders(t *testing.T) {
 	}
 }
 
+// A k8s runner sends its caps again when a canary re-check changes the NetworkPolicy verdict, so the
+// organisation's health and audit see it mid-session, not only at the next session.
+func TestRunnerRuntimeResendsCapsOnNetPolChange(t *testing.T) {
+	sub := &netPolFake{Fake: runnertest.NewFake()}
+	sub.check.Store(&runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: time.Now().UTC()})
+	var hook func()
+	org := composedRuntime(t, sub, runtimeExtras{noPosture: true, arch: "amd64", netPolWatch: func(f func()) { hook = f }})
+	if c, _ := org.Caps(); c.Support.NetworkPolicyCheck.Verdict != runner.NetPolEnforced {
+		t.Fatalf("session caps carry verdict %q, want %q", c.Support.NetworkPolicyCheck.Verdict, runner.NetPolEnforced)
+	}
+	if hook == nil {
+		t.Fatal("the runtime never set the NetworkPolicy hook")
+	}
+	sub.check.Store(&runner.NetPolCheck{Verdict: runner.NetPolRefused, At: time.Now().UTC()})
+	hook()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if c, _ := org.Caps(); c.Support.NetworkPolicyCheck.Verdict == runner.NetPolRefused {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no caps carried the re-check's refused verdict")
+		}
+	}
+}
+
+// netPolFake is the fake substrate with a NetworkPolicy verdict a test changes while the runtime reads it.
+type netPolFake struct {
+	*runnertest.Fake
+	check atomic.Pointer[runner.NetPolCheck]
+}
+
+func (f *netPolFake) Classes(ctx context.Context) (substrate.ClassSupport, error) {
+	cs, err := f.Fake.Classes(ctx)
+	if c := f.check.Load(); c != nil {
+		cs.NetworkPolicyCheck = *c
+	}
+	return cs, err
+}
+
 // composedCaps is the caps event the composed runtime with extra sends the organisation.
 func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
 	t.Helper()
+	caps, ok := composedRuntime(t, runnertest.NewFake(), extra).Caps()
+	if !ok {
+		t.Fatal("no caps")
+	}
+	return caps
+}
+
+// composedRuntime serves the composed runtime on sub with extra to an organisation until the test ends,
+// and returns the organisation's view of the runner once it is READY.
+func composedRuntime(t *testing.T, sub substrate.Substrate, extra runtimeExtras) *remote.Substrate {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	pub, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	identity := runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}
-	runtime, err := runnerRuntimeWith(ctx, identity, t.TempDir(), runnertest.NewFake(), func(id uuid.UUID) string { return "fake-" + id.String() },
+	runtime, err := runnerRuntimeWith(ctx, identity, t.TempDir(), sub, func(id uuid.UUID) string { return "fake-" + id.String() },
 		newLocalRelay(ctx), unsized, extra)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.close()
+	t.Cleanup(func() { _ = runtime.close() })
 	const orgURL = "https://org.example"
 	row := types.Runner{ID: identity.RunnerID, PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256(orgURL)}
 	link := &remote.Link{}
@@ -80,7 +133,7 @@ func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
 			}, nil
 		},
 	})
-	defer hub.Close()
+	t.Cleanup(hub.Close)
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: orgURL, RunnerID: row.ID.String(), PrivateKey: key, Hooks: runtime.hooks,
 		Dial: func(context.Context) (runnerwire.Conn, error) {
 			org, local := runnerwire.Loopback()
@@ -93,7 +146,7 @@ func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
 	}
 	done := make(chan struct{})
 	go func() { defer close(done); _ = runRunnerServices(ctx, client.Run, runtime.run) }()
-	defer func() { cancel(); <-done }()
+	t.Cleanup(func() { cancel(); <-done })
 	for !link.Online() {
 		select {
 		case <-done:
@@ -103,9 +156,5 @@ func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	caps, ok := remoteSub.Caps()
-	if !ok {
-		t.Fatal("no caps")
-	}
-	return caps
+	return remoteSub
 }
