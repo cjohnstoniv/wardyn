@@ -107,7 +107,7 @@ kubectl create secret docker-registry regcred -n wardyn \
 - Pin the version — an unpinned OCI install silently follows the newest chart:
 
 ```bash
-# The newest release not marked pre-release (the same rule as install.sh when run from a checkout).
+# The release GitHub marks Latest (a pre-release is never marked; set WARDYN_VERSION by hand for one).
 # If there is none the lookup fails and the guard below refuses to install unpinned.
 WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
