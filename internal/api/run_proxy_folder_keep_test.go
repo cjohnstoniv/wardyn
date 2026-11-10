@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -147,11 +149,12 @@ func TestReadback_UnreadableFolderRecordKeepsTheSandboxAndStaysUnresolved(t *tes
 	}
 }
 
-// orderRunner records the order of proxy and sandbox stops.
+// orderRunner records the order of proxy and sandbox stops, each sandbox stop with the run's state as it was.
 type orderRunner struct {
 	*hashedReviveRunner
 	mu    sync.Mutex
 	calls []string
+	state func() types.RunState
 }
 
 func (r *orderRunner) StopProxy(ctx context.Context, ref string) error {
@@ -163,20 +166,21 @@ func (r *orderRunner) StopProxy(ctx context.Context, ref string) error {
 
 func (r *orderRunner) StopSandbox(ctx context.Context, ref string) error {
 	r.mu.Lock()
-	r.calls = append(r.calls, "sandbox")
+	r.calls = append(r.calls, "sandbox:"+string(r.state()))
 	r.mu.Unlock()
 	return r.hashedReviveRunner.StopSandbox(ctx, ref)
 }
 
 // A running hosted run that cannot be kept, whose start failed, has its proxy stopped before its end runs, so the
-// end's computer folder decision (and its pass back) comes before any sandbox stop.
+// end's computer folder decision (and its pass back) comes before any sandbox stop: every sandbox stop finds the
+// run already ended, never one stopped right after its proxy.
 func TestReadback_UnkeepableRunningRunStopsItsProxyBeforeItsEnd(t *testing.T) {
 	f := newReadbackFixture(t)
 	_, gen := f.keptFolderFailedStart(t, "")
 	f.st.mu.Lock()
 	f.st.state, f.st.run.Interactive, f.st.run.Placement = types.RunRunning, false, types.PlacementRemote
 	f.st.mu.Unlock()
-	ordered := &orderRunner{hashedReviveRunner: f.hr}
+	ordered := &orderRunner{hashedReviveRunner: f.hr, state: f.st.State}
 	f.srv.cfg.Runner = ordered
 	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Contained {
 		t.Fatalf("containment = %+v, want contained once the end landed", c)
@@ -186,6 +190,11 @@ func TestReadback_UnkeepableRunningRunStopsItsProxyBeforeItsEnd(t *testing.T) {
 	ordered.mu.Unlock()
 	if len(calls) == 0 || calls[0] != "proxy" {
 		t.Errorf("stops = %v, want the proxy stopped first", calls)
+	}
+	for _, c := range calls[1:] {
+		if state, ok := strings.CutPrefix(c, "sandbox:"); ok && !isTerminalRunState(types.RunState(state)) {
+			t.Errorf("stops = %v: the sandbox was stopped with the run %s, before its end", calls, state)
+		}
 	}
 	if !isTerminalRunState(f.st.State()) {
 		t.Errorf("state %s, want the run ended", f.st.State())
@@ -307,5 +316,87 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 	if len(rows) != 1 || rows[0].Action != "sandbox.sweep" || rows[0].Outcome != "failure" ||
 		!strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
 		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with proxy_stop_error and no sandbox stop", rows, rr.stopped)
+	}
+}
+
+// A kept sandbox whose proxy stop fails stays unresolved, as the run.reconcile failure row naming that stop; the
+// sandbox, and the files it is kept for, are not stopped.
+func TestReadback_KeptFolderProxyStopFailureIsAuditedAndUnresolved(t *testing.T) {
+	f := newReadbackFixture(t)
+	_, gen := f.keptFolderFailedStart(t, "kept")
+	sandboxStops := f.lr.stopCount()
+	f.setProxyStopErr(errors.New("daemon down"))
+	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); c.Contained || c.Err == nil {
+		t.Fatalf("containment = %+v, want unresolved while the proxy stop fails", c)
+	}
+	if n := f.lr.stopCount() - sandboxStops; n != 0 {
+		t.Errorf("sandbox stops +%d, want none: the sandbox is kept for its folder's pass back", n)
+	}
+	var rows int
+	for _, ev := range f.audit.eventsFor(f.run.ID, "run.reconcile") {
+		if ev.Outcome == "failure" && strings.Contains(string(ev.Data), `"proxy_stop_error"`) && strings.Contains(string(ev.Data), "daemon down") {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Errorf("%d run.reconcile failure rows with proxy_stop_error, want 1", rows)
+	}
+}
+
+// A terminal sandbox whose folder record cannot be read keeps its egress cut and its revoke on every substrate:
+// it is kept only once its proxy is stopped alone, as a folder_record_error row; it is stopped where it cannot be
+// kept (on a runner, a virtual machine), where its proxy cannot be stopped alone, and where that stop failed.
+func TestSweepTerminalSandboxes_UnreadableFolderRecordFailsClosed(t *testing.T) {
+	runnerID := uuid.New()
+	for _, tc := range []struct {
+		name     string
+		noProxy  bool
+		proxyErr error
+		edit     func(*types.AgentRun)
+		left     bool
+		row      string
+		proxied  int
+	}{
+		{name: "proxy stopped", left: true, row: "folder_record_error", proxied: 1},
+		{name: "proxy stop failed", proxyErr: errors.New("the daemon did not answer the proxy stop"), row: "proxy_stop_error", proxied: 1},
+		{name: "proxy stop unsupported", proxyErr: runner.ErrEndUnsupported, proxied: 1},
+		{name: "no proxy stop", noProxy: true},
+		{name: "on a runner", edit: func(r *types.AgentRun) { r.RunnerID = &runnerID }},
+		{name: "virtual machine", edit: func(r *types.AgentRun) { r.MachineKind = types.MachineLinuxVM }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := sweepRun(types.RunFailed, "sbx-unread")
+			if tc.edit != nil {
+				tc.edit(&run)
+			}
+			srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{run}}, unreadable: run.ID})
+			rr.proxyErr = tc.proxyErr
+			if tc.noProxy {
+				srv.cfg.Runner = rr.sweepAliveRunner
+			}
+			swept, err := srv.SweepTerminalSandboxes(context.Background())
+			if err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			wantSwept, wantStopped := 1, []string{"sbx-unread"}
+			if tc.left {
+				wantSwept, wantStopped = 0, nil
+			}
+			if swept != wantSwept || len(rr.proxied) != tc.proxied || !slices.Equal(rr.stopped, wantStopped) {
+				t.Errorf("swept %d, StopProxy %v, StopSandbox %v; want %d, %d proxy stops, %v", swept, rr.proxied, rr.stopped, wantSwept, tc.proxied, wantStopped)
+			}
+			var failures []types.AuditEvent
+			for _, ev := range runRows(h.audit.snapshot(), run.ID) {
+				if ev.Outcome == "failure" {
+					failures = append(failures, ev)
+				}
+			}
+			if tc.row == "" && len(failures) != 0 || tc.row != "" && (len(failures) != 1 || failures[0].Action != "sandbox.sweep" || !strings.Contains(string(failures[0].Data), tc.row)) {
+				t.Errorf("failure rows %+v, want %q", failures, tc.row)
+			}
+			if !slices.Contains(h.broker.revoked, run.ID) {
+				t.Errorf("the run's credentials were not revoked: %v", h.broker.revoked)
+			}
+		})
 	}
 }

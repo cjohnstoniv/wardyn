@@ -404,37 +404,53 @@ func (s *Server) endUnconfirmedRun(ctx context.Context, run types.AgentRun) erro
 }
 
 // stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
-// (computerFolderKept); left reports a sandbox left in place. A sandbox kept for its pass back stays, and
-// only its proxy is stopped: nil once that stop is confirmed. A record that cannot be read leaves the
-// sandbox too, with its proxy stopped where it can be, and stays unresolved so a later pass reads it
-// again. Any other sandbox is stopped. A failed stop of either kind is action's failure row.
+// (computerFolderKeptRead); left reports a sandbox left in place. A sandbox kept for its pass back stays
+// with only its proxy stopped: nil once that stop is confirmed, and a stop that failed is action's
+// failure row. A record that cannot be read is logged, and the sandbox stays only once its proxy is
+// stopped, as a failure row with folder_record_error that stays unresolved so a later pass reads it again.
+// It fails closed: a sandbox that cannot be kept (one on a runner, a virtual machine, one whose proxy
+// cannot be stopped alone, as quiesceKeptSandbox decides) is stopped whatever its record says, and so is
+// one whose record cannot be read and whose proxy did not stop. Any other sandbox is stopped.
 func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) (left bool, err error) {
 	if run.SandboxRef == "" {
 		return false, nil
 	}
 	kept, ferr := s.computerFolderKeptRead(ctx, run.ID)
-	if !kept && ferr == nil {
-		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, action) {
-			return false, errProxyStopUnconfirmed
-		}
-		return false, nil
-	}
-	stopErr := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, action)
 	if ferr != nil {
-		return true, errors.Join(fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept: %w", ferr), stopErr)
+		slog.WarnContext(ctx, "wardynd: a terminal run's computer folder record could not be read",
+			slog.String("run_id", run.ID.String()), slog.String("action", action), slog.Any("err", ferr))
 	}
-	return true, stopErr
+	var stopErr error
+	if (kept || ferr != nil) && run.RunnerID == nil && !run.MachineKind.IsVM() {
+		stopErr = s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, action)
+		switch {
+		case stopErr == nil && ferr != nil:
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", action, run.SandboxRef, "failure",
+				mustJSON(map[string]any{"sandbox_ref": run.SandboxRef, "folder_record_error": ferr.Error()})))
+			return true, fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept with its proxy stopped: %w", ferr)
+		case stopErr == nil:
+			return true, nil
+		case ferr == nil && !errors.Is(stopErr, runner.ErrEndUnsupported):
+			return true, stopErr // kept: its files stay, and the row names the stop that failed
+		}
+	}
+	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, action) {
+		return false, errProxyStopUnconfirmed
+	}
+	return false, nil
 }
 
 // stopProxyOrAudit stops a sandbox's proxy alone, recording a stop that failed as action's failure row
 // (sandbox_ref, proxy_stop_error). A stop that lands writes nothing, so a sweep that asks again each pass
-// adds no row while the proxy stays stopped (Docker's StopProxy answers nil for a proxy already gone).
+// adds no row while the proxy stays stopped (Docker's StopProxy answers nil for a proxy already gone),
+// and neither does a substrate that cannot stop a proxy alone (runner.ErrEndUnsupported): its caller
+// stops the sandbox instead.
 func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, action string) error {
 	err := error(runner.ErrEndUnsupported)
 	if stopper, ok := s.cfg.Runner.(runner.ProxyStopper); ok {
 		err = stopper.StopProxy(ctx, ref)
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, runner.ErrEndUnsupported) {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action, ref, "failure",
 			mustJSON(map[string]any{"sandbox_ref": ref, "proxy_stop_error": err.Error()})))
 	}
