@@ -232,6 +232,9 @@ type SetupRunner struct {
 	// call failed, so runnerCheck can tell it from "no runner configured". Never
 	// on the wire.
 	capsUnreadable bool
+	// netpolCheckedAt is when the k8s NetworkPolicy canary last ran, for the
+	// egress-containment row. Never on the wire.
+	netpolCheckedAt time.Time
 }
 
 // SetupSandboxStart is how long a Kubernetes sandbox has to start, and how much longer one that no
@@ -380,7 +383,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
-	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven, rnr.capsUnreadable); ok {
+	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven, rnr.capsUnreadable, rnr.netpolCheckedAt); ok {
 		checks = append(checks, chk)
 	}
 	// idle_cpu_signal: whether idle auto-stop can see CPU work in a sandbox.
@@ -696,11 +699,12 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 		}
 	}
 	out.EphemeralDiskEnforcement = c.EphemeralDiskEnforcement
+	out.netpolCheckedAt = c.NetworkPolicyCheckedAt
 	return out, k8sNetpolVerdict(out.Driver, c)
 }
 
 // k8sNetpolVerdict grades a runner's aggregated NetworkPolicy signals into the
-// three live-daemon verdicts, or "" on any non-k8s driver. Shared by
+// four live-daemon verdicts, or "" on any non-k8s driver. Shared by
 // setupRunnerInfo (admin-only /setup/status, its return value here is a k8s
 // egress-containment checklist row) and handleHealthz (anonymous /healthz's
 // "network_policy" field) — both already hold a driver name and a
@@ -714,12 +718,17 @@ func k8sNetpolVerdict(driver string, caps runner.Capabilities) string {
 	// caps.NetworkPolicy / caps.NetworkPolicyAcknowledged are the
 	// orchestrator-aggregated ClassSupport signals; a genuinely indeterminate
 	// canary (no ack, no override) refuses to boot entirely (internal/runner/
-	// k8s's newWithClient), so a LIVE daemon can only ever report one of these
-	// three. Acknowledged checked first: WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY
+	// k8s's newWithClient), so a LIVE daemon boots on one of the last three.
+	// Acknowledged comes before enforced: WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY
 	// produces a driver that never set NetworkPolicy true (it is not proof), so
 	// the two are mutually exclusive in practice, but acknowledged-not-proven
 	// must never read as the stronger "enforced" claim if that ever changed.
+	// A failed re-check is checked first: since boot, the canary stopped proving
+	// enforcement and new sandboxes are refused. It must never read as the
+	// operator's boot-time override ("unenforced") or as "acknowledged".
 	switch {
+	case caps.NetworkPolicyRecheckFailed:
+		return "recheck_failed"
 	case caps.NetworkPolicyAcknowledged:
 		return "acknowledged"
 	case caps.NetworkPolicy:

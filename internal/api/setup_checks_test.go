@@ -346,6 +346,27 @@ func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
 	}
 }
 
+// TestK8sEgressContainmentCheck_RecheckFailedNamesItsCheckTime: the failed
+// re-check row says when the canary last ran and never claims the operator set
+// WARDYN_K8S_ALLOW_UNENFORCED_NETPOL.
+func TestK8sEgressContainmentCheck_RecheckFailedNamesItsCheckTime(t *testing.T) {
+	at := time.Now().UTC().Truncate(time.Second)
+	chk, ok := k8sEgressContainmentCheck("k8s", "recheck_failed", false, at)
+	if !ok || chk.Status != "fail" {
+		t.Fatalf("ok %v status %q, want a fail row", ok, chk.Status)
+	}
+	if !strings.Contains(chk.Detail, at.Format(time.RFC3339)) {
+		t.Errorf("Detail %q does not name the check time %s", chk.Detail, at.Format(time.RFC3339))
+	}
+	if strings.Contains(chk.Detail+chk.Fix, "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") {
+		t.Errorf("row names the override the operator did not set: %q / %q", chk.Detail, chk.Fix)
+	}
+	unenforced, _ := k8sEgressContainmentCheck("k8s", "unenforced", false, at)
+	if chk.Detail == unenforced.Detail {
+		t.Error("a failed re-check reads the same as the operator's override")
+	}
+}
+
 func TestK8sEgressContainmentCheck(t *testing.T) {
 	cases := []struct {
 		name             string
@@ -364,10 +385,13 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 		// nor fail (the operator made an informed call on a managed cluster,
 		// which is a warn, not a red the checklist blocks on).
 		{"k8s acknowledged (B1): warn, never fail or ok", "k8s", "acknowledged", true, "warn", false},
+		// A failed re-check is not the operator's override: fail, and the fix
+		// never tells them to unset an env var they did not set.
+		{"k8s re-check failed: fail, fix never names the opt-out", "k8s", "recheck_failed", true, "fail", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := k8sEgressContainmentCheck(tc.driver, tc.netpolProven, false)
+			chk, ok := k8sEgressContainmentCheck(tc.driver, tc.netpolProven, false, time.Time{})
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
@@ -403,7 +427,7 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 // real remedy (exempt Wardyn's pods, then unset the env) rather than just
 // suppressing the warning.
 func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
-	chk, ok := k8sEgressContainmentCheck("k8s", "acknowledged", false)
+	chk, ok := k8sEgressContainmentCheck("k8s", "acknowledged", false, time.Time{})
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
@@ -854,8 +878,8 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, envBuilderCheck(true))
 	assertSetupCheckBlocking(t, envBuilderCheck(false))
 
-	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", ""} {
-		chk, ok := k8sEgressContainmentCheck("k8s", netpol, false)
+	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", "recheck_failed", ""} {
+		chk, ok := k8sEgressContainmentCheck("k8s", netpol, false, time.Time{})
 		if !ok {
 			t.Fatalf("k8sEgressContainmentCheck(%q) absent", netpol)
 		}
@@ -1228,14 +1252,14 @@ func TestStaticKeyServiceCheck(t *testing.T) {
 // A k8s runner that did not report its capabilities has no canary verdict to upgrade for: the row
 // points at substrate_health, not at a wardynd upgrade.
 func TestK8sEgressContainmentCheck_UnreadableRunnerPointsAtSubstrateHealth(t *testing.T) {
-	chk, ok := k8sEgressContainmentCheck("k8s", "", true)
+	chk, ok := k8sEgressContainmentCheck("k8s", "", true, time.Time{})
 	if !ok || chk.Status != "fail" {
 		t.Fatalf("check = %+v (ok=%v), want a fail row", chk, ok)
 	}
 	if strings.Contains(chk.Fix, "Upgrade wardynd") || !strings.Contains(chk.Fix, "substrate_health") {
 		t.Errorf("Fix = %q, want it to point at substrate_health and not at an upgrade", chk.Fix)
 	}
-	old, _ := k8sEgressContainmentCheck("k8s", "", false)
+	old, _ := k8sEgressContainmentCheck("k8s", "", false, time.Time{})
 	if !strings.Contains(old.Fix, "Upgrade wardynd") {
 		t.Errorf("a runner that answered without a verdict keeps the upgrade advice, Fix = %q", old.Fix)
 	}

@@ -30,6 +30,8 @@ type recheckCluster struct {
 	phaseA atomic.Int32
 	phaseB atomic.Int32
 	pods   atomic.Int32 // canary pods created
+	// only, when set for a namespace, replaces phaseA and phaseB there.
+	only sync.Map // namespace -> [2]int32
 }
 
 func newRecheckCluster(t *testing.T) *recheckCluster {
@@ -69,9 +71,13 @@ func newRecheckCluster(t *testing.T) *recheckCluster {
 		mu.Lock()
 		phaseB := denyAll[a.GetNamespace()] > 0
 		mu.Unlock()
-		code := c.phaseA.Load()
+		codes := [2]int32{c.phaseA.Load(), c.phaseB.Load()}
+		if v, ok := c.only.Load(a.GetNamespace()); ok {
+			codes = v.([2]int32)
+		}
+		code := codes[0]
 		if phaseB {
-			code = c.phaseB.Load()
+			code = codes[1]
 		}
 		return true, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.GetNamespace()},
@@ -299,5 +305,86 @@ func TestCanaryRecheck_LoopRunsUntilStopped(t *testing.T) {
 	}
 	if err := d.netPolRefusal(testNamespace); err != nil {
 		t.Errorf("refusal %v after proving re-checks, want none", err)
+	}
+}
+
+// TestCanaryRecheck_CreateSandboxRefusedAfterFailedRecheck: CreateSandbox asks the live verdict first,
+// so after three failed checks it refuses before it creates a single object.
+func TestCanaryRecheck_CreateSandboxRefusedAfterFailedRecheck(t *testing.T) {
+	c := newRecheckCluster(t)
+	d, _ := c.boot(t, Config{})
+	c.phaseB.Store(0)
+	for i := 0; i < canaryRecheckStrikes; i++ {
+		d.recheckOnce(context.Background())
+	}
+	if _, err := d.CreateSandbox(context.Background(), testSandboxSpec()); !errors.Is(err, errNetPolNotProven) {
+		t.Fatalf("CreateSandbox: %v, want errNetPolNotProven", err)
+	}
+	ctx := context.Background()
+	if nps, _ := c.cs.NetworkingV1().NetworkPolicies(testNamespace).List(ctx, metav1.ListOptions{}); len(nps.Items) != 0 {
+		t.Errorf("%d NetworkPolicies left after a refused create, want none", len(nps.Items))
+	}
+	if secrets, _ := c.cs.CoreV1().Secrets(testNamespace).List(ctx, metav1.ListOptions{}); len(secrets.Items) != 0 {
+		t.Errorf("%d Secrets left after a refused create, want none", len(secrets.Items))
+	}
+}
+
+// TestCanaryRecheck_ClassesCarryCheckTimeAndFailure: Classes reports when the canary last ran and
+// whether a re-check failed, so health and the setup page can say so.
+func TestCanaryRecheck_ClassesCarryCheckTimeAndFailure(t *testing.T) {
+	c := newRecheckCluster(t)
+	d, clock := c.boot(t, Config{})
+	d.recheckOnce(context.Background())
+	cls, err := d.Classes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cls.NetworkPolicyCheckedAt.Equal(*clock) || cls.NetworkPolicyRecheckFailed {
+		t.Fatalf("checked %v, failed %v; want %v and false", cls.NetworkPolicyCheckedAt, cls.NetworkPolicyRecheckFailed, *clock)
+	}
+	c.phaseB.Store(0)
+	for i := 0; i < canaryRecheckStrikes; i++ {
+		*clock = clock.Add(canaryRecheckInterval)
+		d.recheckOnce(context.Background())
+	}
+	if cls, _ = d.Classes(context.Background()); !cls.NetworkPolicyRecheckFailed || !cls.NetworkPolicyCheckedAt.Equal(*clock) {
+		t.Fatalf("checked %v, failed %v; want %v and true", cls.NetworkPolicyCheckedAt, cls.NetworkPolicyRecheckFailed, *clock)
+	}
+	c.phaseB.Store(1)
+	d.recheckOnce(context.Background())
+	if cls, _ = d.Classes(context.Background()); cls.NetworkPolicyRecheckFailed || !cls.NetworkPolicy {
+		t.Errorf("after a proving check: failed %v, NetworkPolicy %v; want false and true", cls.NetworkPolicyRecheckFailed, cls.NetworkPolicy)
+	}
+}
+
+// TestCanaryRecheck_BootOverrideIsNotAFailedRecheck: an unenforced boot verdict under
+// WARDYN_K8S_ALLOW_UNENFORCED_NETPOL that re-checks keep finding is the operator's choice, not a
+// failed re-check.
+func TestCanaryRecheck_BootOverrideIsNotAFailedRecheck(t *testing.T) {
+	c := newRecheckCluster(t)
+	c.phaseB.Store(0)
+	d, _ := c.boot(t, Config{AllowUnenforcedNetPol: true})
+	for i := 0; i < canaryRecheckStrikes; i++ {
+		d.recheckOnce(context.Background())
+	}
+	cls, err := d.Classes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cls.NetworkPolicy || cls.NetworkPolicyRecheckFailed {
+		t.Errorf("NetworkPolicy %v, failed %v; want both false", cls.NetworkPolicy, cls.NetworkPolicyRecheckFailed)
+	}
+}
+
+// TestCanaryRecheck_AcknowledgedBesideUnenforcedReadsUnenforced: one namespace acknowledged and another
+// unenforced under the override reads as unenforced, never the milder acknowledged.
+func TestCanaryRecheck_AcknowledgedBesideUnenforcedReadsUnenforced(t *testing.T) {
+	c := newRecheckCluster(t)
+	c.only.Store("runs-a", [2]int32{1, 1}) // phase A blocked: an ambient default-deny, acknowledged
+	c.only.Store("runs-b", [2]int32{0, 0}) // phase B connected: not enforced, overridden
+	d, _ := c.boot(t, Config{Namespaces: []string{"runs-a", "runs-b"}, AckAmbientDefaultDeny: true, AllowUnenforcedNetPol: true})
+	enforced, acked := networkPolicyClaim(t, d)
+	if enforced || acked {
+		t.Errorf("NetworkPolicy %v, acknowledged %v; want both false, which health grades unenforced", enforced, acked)
 	}
 }

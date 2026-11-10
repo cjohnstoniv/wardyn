@@ -209,7 +209,7 @@ type Driver struct {
 
 	// netPolEnforced is the boot-time canary's verdict, fixed at construction:
 	// what New decided boot on. The live verdict, which the re-check loop
-	// replaces, is netPol below; Classes reads that one.
+	// replaces, is netPol below; Classes, creates and the image check read that one.
 	// netPolOptedOut records WHY it may be false despite success
 	// (AllowUnenforcedNetPol), diagnostics only.
 	netPolEnforced bool
@@ -416,8 +416,8 @@ func (d *Driver) Name() string { return driverName }
 
 // Classes reports the Confinement Classes this substrate can enforce. CC1 is
 // unconditional: reaching this point already proves the canary passed or the
-// operator opted out (see New); a later failed re-check reads here as
-// NetworkPolicy false. CC2/CC3 each require an explicit
+// operator opted out (see New); a later failed re-check refuses creates instead
+// (netPolRefusal) and reads here as NetworkPolicy false. CC2/CC3 each require an explicit
 // WARDYN_CONFINEMENT_MAP pin resolving to a RuntimeClass that exists and
 // whose .Handler passes the class's floor guard.
 func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
@@ -455,6 +455,9 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// rather than the canary proving enforcement. Never true at the same
 		// time as NetworkPolicy — mutually exclusive canary outcomes.
 		NetworkPolicyAcknowledged: netPol.acknowledged(),
+		// A re-check since boot stopped proving enforcement, and when the canary last ran.
+		NetworkPolicyRecheckFailed: netPol.recheckFailed(),
+		NetworkPolicyCheckedAt:     netPol.checkedAt(),
 		// Exec (exec.go's recordCmd) wraps the ephemeral-container argv with
 		// wardyn-rec via the masked brokered proxy upload — the only path
 		// this substrate supports, since mounts (and shared-volume delivery)

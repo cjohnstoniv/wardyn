@@ -71,6 +71,8 @@ type nsVerdict struct {
 	strikes int
 	// checkedAt is when the namespace's last check finished, whatever it found.
 	checkedAt time.Time
+	// byRecheck: a re-check, not boot, set state.
+	byRecheck bool
 }
 
 // netPolVerdict is the live verdict across the runs namespaces. Replaced whole, never changed in place.
@@ -108,6 +110,20 @@ func (v *netPolVerdict) acknowledged() bool {
 		}
 	}
 	return acked
+}
+
+// recheckFailed: a re-check since boot moved some namespace to not enforced or not proven. Boot's own
+// unenforced verdict under WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is not a failed re-check.
+func (v *netPolVerdict) recheckFailed() bool {
+	if v == nil {
+		return false
+	}
+	for _, n := range v.byNS {
+		if n.byRecheck && (n.state == netPolUnenforced || n.state == netPolNotProven) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkedAt is the oldest namespace's last check: every namespace was checked at least this recently.
@@ -200,10 +216,11 @@ func (d *Driver) recheckOnce(ctx context.Context) {
 // last of them becomes the verdict (indeterminate ones as "not proven").
 func (d *Driver) advance(ns string, prev nsVerdict, verdict canaryVerdict, err error) nsVerdict {
 	got := stateOf(verdict)
-	next := nsVerdict{state: prev.state, strikes: prev.strikes + 1, checkedAt: d.now()}
-	if got == prev.state || got == netPolProven {
-		next.state, next.strikes = got, 0
-	} else if next.strikes >= canaryRecheckStrikes {
+	next := nsVerdict{state: prev.state, strikes: prev.strikes + 1, checkedAt: d.now(), byRecheck: prev.byRecheck}
+	if got == prev.state || got == netPolProven || next.strikes >= canaryRecheckStrikes {
+		if got != prev.state {
+			next.byRecheck = true
+		}
 		next.state, next.strikes = got, 0
 	}
 	attrs := []any{slog.String("namespace", ns), slog.String("result", got.String()), slog.String("verdict", next.state.String()),

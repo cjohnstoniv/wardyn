@@ -123,6 +123,7 @@ func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (pl
 			Driver: ep.sub.Name(), ConfinementClasses: cs.Classes, Resolved: cs.Resolved,
 			StructuralEgress: cs.StructuralEgress, NetworkPolicy: cs.NetworkPolicy,
 			NetworkPolicyAcknowledged: cs.NetworkPolicyAcknowledged, SessionRecording: cs.SessionRecording,
+			NetworkPolicyCheckedAt: cs.NetworkPolicyCheckedAt, NetworkPolicyRecheckFailed: cs.NetworkPolicyRecheckFailed,
 			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles,
 			EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement, Freeze: cs.Freeze,
 			ExecOutputUncaptured: cs.ExecOutputUncaptured,
@@ -215,6 +216,11 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 		out.StructuralEgress = out.StructuralEgress && s.StructuralEgress
 		out.NetworkPolicy = out.NetworkPolicy && s.NetworkPolicy
 		out.NetworkPolicyAcknowledged = out.NetworkPolicyAcknowledged && s.NetworkPolicyAcknowledged
+		// A failed re-check anywhere shows; the check time is the oldest.
+		out.NetworkPolicyRecheckFailed = out.NetworkPolicyRecheckFailed || s.NetworkPolicyRecheckFailed
+		if t := s.NetworkPolicyCheckedAt; !t.IsZero() && (out.NetworkPolicyCheckedAt.IsZero() || t.Before(out.NetworkPolicyCheckedAt)) {
+			out.NetworkPolicyCheckedAt = t
+		}
 		out.SessionRecording = out.SessionRecording && s.SessionRecording
 		out.UserDrives = out.UserDrives && s.UserDrives
 		out.ManagedFiles = out.ManagedFiles && s.ManagedFiles

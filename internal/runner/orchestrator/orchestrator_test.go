@@ -674,3 +674,40 @@ func TestCapabilities_FreezeAggregatesPerClass(t *testing.T) {
 		t.Errorf("Freeze[CC1] = true, but CC1 routes to k8s, which cannot freeze (Freeze = %v)", caps.Freeze)
 	}
 }
+
+// netpolSubstrate is fakeSubstrate reporting a NetworkPolicy canary check time and whether a re-check failed.
+type netpolSubstrate struct {
+	*fakeSubstrate
+	checkedAt time.Time
+	failed    bool
+}
+
+func (n netpolSubstrate) Classes(ctx context.Context) (substrate.ClassSupport, error) {
+	cs, err := n.fakeSubstrate.Classes(ctx)
+	cs.NetworkPolicyCheckedAt, cs.NetworkPolicyRecheckFailed = n.checkedAt, n.failed
+	return cs, err
+}
+
+// TestCapabilities_NetworkPolicyCheckIsTheOldestAndAnyFailure: one substrate's failed re-check shows in
+// the aggregate, and the check time is the oldest a substrate reports (one with none is skipped).
+func TestCapabilities_NetworkPolicyCheckIsTheOldestAndAnyFailure(t *testing.T) {
+	older := time.Now().Add(-time.Hour).UTC()
+	newer := older.Add(30 * time.Minute)
+	sub := func(name string, at time.Time, failed bool) netpolSubstrate {
+		return netpolSubstrate{&fakeSubstrate{name: name, classes: []types.ConfinementClass{types.CC1}}, at, failed}
+	}
+	caps, err := New(sub("a", newer, false), sub("b", time.Time{}, false), sub("c", older, true)).Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !caps.NetworkPolicyCheckedAt.Equal(older) || !caps.NetworkPolicyRecheckFailed {
+		t.Errorf("checked %v, failed %v; want %v and true", caps.NetworkPolicyCheckedAt, caps.NetworkPolicyRecheckFailed, older)
+	}
+	caps, err = New(sub("a", newer, false)).Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !caps.NetworkPolicyCheckedAt.Equal(newer) || caps.NetworkPolicyRecheckFailed {
+		t.Errorf("checked %v, failed %v; want %v and false", caps.NetworkPolicyCheckedAt, caps.NetworkPolicyRecheckFailed, newer)
+	}
+}

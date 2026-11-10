@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -590,5 +591,21 @@ func TestProbeFailureNamesTheUnreadableExecutor(t *testing.T) {
 	kinds[types.PlacementRemote][1].facts.ProbeErr = nil
 	if err := probeFailure(kinds); err != nil {
 		t.Errorf("offline candidates only: probeFailure = %v, want none", err)
+	}
+}
+
+// TestIntersectCapabilities_NetworkPolicyCheck: a failed canary re-check on any placement shows, and the
+// check time is the oldest one reported (a placement with none is skipped).
+func TestIntersectCapabilities_NetworkPolicyCheck(t *testing.T) {
+	older := time.Now().Add(-time.Hour).UTC()
+	at := func(checked time.Time, failed bool) placementCaps {
+		return placementCaps{Capabilities: runner.Capabilities{NetworkPolicyCheckedAt: checked, NetworkPolicyRecheckFailed: failed}}
+	}
+	got := intersectCapabilities(at(older.Add(time.Minute), false), at(time.Time{}, false), at(older, true))
+	if !got.NetworkPolicyCheckedAt.Equal(older) || !got.NetworkPolicyRecheckFailed {
+		t.Errorf("checked %v, failed %v; want %v and true", got.NetworkPolicyCheckedAt, got.NetworkPolicyRecheckFailed, older)
+	}
+	if got := intersectCapabilities(at(time.Time{}, false)); !got.NetworkPolicyCheckedAt.IsZero() || got.NetworkPolicyRecheckFailed {
+		t.Errorf("checked %v, failed %v; want zero and false", got.NetworkPolicyCheckedAt, got.NetworkPolicyRecheckFailed)
 	}
 }

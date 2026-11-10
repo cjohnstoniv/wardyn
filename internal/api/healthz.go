@@ -66,12 +66,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	caps := []types.ConfinementClass(nil)
 	var substrates map[types.ConfinementClass]string
 	netpolVerdict := ""
+	var netpolCheckedAt time.Time
 	if s.cfg.Runner != nil {
 		runnerName = s.cfg.Runner.Name()
 		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
 			caps = c.ConfinementClasses
 			substrates = c.Resolved
 			netpolVerdict = k8sNetpolVerdict(runnerName, c)
+			netpolCheckedAt = c.NetworkPolicyCheckedAt
 		}
 	}
 	gtStatus := s.ebpfGroundtruthStatus(r.Context())
@@ -185,12 +187,18 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// whose answer it lost. One bit; false only on a store that keeps no keys.
 		"idempotent_run_create": s.keepsRunCreateKeys(),
 	}
-	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
-	// grade, present ONLY on a k8s substrate — omitted from the map entirely
+	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"/
+	// "recheck_failed" grade, present ONLY on a k8s substrate — omitted from the map entirely
 	// (not even a JSON null) on Docker and every other driver, so a Docker
 	// deployment's /healthz shape never sprouts a k8s-only field.
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
+	}
+	// network_policy_checked_at is when the canary behind that grade last ran
+	// (RFC 3339, UTC; the oldest namespace's check). Absent beside it when the
+	// substrate reports no check time (an older daemon or runner).
+	if netpolVerdict != "" && !netpolCheckedAt.IsZero() {
+		body["network_policy_checked_at"] = netpolCheckedAt.UTC().Format(time.RFC3339)
 	}
 	// cli_artifact_base is WARDYN_CLI_ARTIFACT_BASE, the operator's internal
 	// mirror of the release assets. Absent (not "") while unset, so a deployment
