@@ -281,46 +281,37 @@ func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userTy
 // revoke is idempotent, so a second call must not emit a second token.revoke
 // audit row for an act that didn't happen.
 //
-// Revoking a CLI sign-in's access token ends that sign-in (reason "revoked") and revokes the rest of its
-// tokens in the same transaction: a revoked access token otherwise left the session able to mint a new
-// one at its next refresh, from the identity stamped when it last signed in. A cli_admin token's revoke
+// Revoking a CLI sign-in's access token ends that sign-in (reason "revoked") and revokes all of its
+// tokens, through EndCLISession: a revoked access token otherwise left the session able to mint a new one
+// at its next refresh, from the identity stamped when it last signed in. The token is read first, and that
+// read is the authorization (a live row this principal may revoke); the end then takes the session's row
+// lock, so a refresh that replaced the token in between is still ended with its new token, not turned into
+// a not-found. Only a session that really has ended answers as already revoked. A cli_admin token's revoke
 // ends only itself, since its session goes on.
 func (s PG) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error) {
+	tok, err := scanAPIToken(s.Pool.QueryRow(ctx, `
+		SELECT `+apiTokenCols+` FROM api_tokens
+		WHERE id = $1 AND revoked_at IS NULL AND ($2 = '' OR principal = $2)`, id, principal))
+	if err != nil {
+		return types.APIToken{}, err
+	}
+	if tok.Kind == types.APITokenKindCLIAccess && tok.CLISessionID != nil {
+		_, err := s.EndCLISession(ctx, *tok.CLISessionID, "", types.CLISessionEndRevoked, now)
+		if err == nil {
+			tok.RevokedAt = &now
+			return tok, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return types.APIToken{}, err
+		}
+		// The session had already ended (and revoked its tokens): the plain revoke below answers
+		// ErrNotFound for the revoked row, as a second revoke always has.
+	}
 	const q = `
 		UPDATE api_tokens SET revoked_at = $2
 		WHERE id = $1 AND revoked_at IS NULL AND ($3 = '' OR principal = $3)
 		RETURNING ` + apiTokenCols
-	var out types.APIToken
-	err := s.inTx(ctx, func(tx Querier) error {
-		// The session row is taken before the token row, as a CLI rotation and a sign-out take them, so
-		// the three cannot deadlock. The read repeats the UPDATE's own conditions: a token this call may
-		// not revoke ends no session.
-		var sessionID *uuid.UUID
-		if err := tx.QueryRow(ctx, `
-			SELECT cli_session_id FROM api_tokens
-			WHERE id = $1 AND revoked_at IS NULL AND ($2 = '' OR principal = $2) AND kind = 'cli_access'`,
-			id, principal).Scan(&sessionID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("store: read cli session of token: %w", err)
-		}
-		if sessionID != nil {
-			if _, err := tx.Exec(ctx, `UPDATE cli_sessions SET ended_at = $2, end_reason = $3 WHERE id = $1 AND ended_at IS NULL`,
-				*sessionID, now, types.CLISessionEndRevoked); err != nil {
-				return fmt.Errorf("store: end cli session of revoked token: %w", err)
-			}
-		}
-		var err error
-		if out, err = scanAPIToken(tx.QueryRow(ctx, q, id, now, principal)); err != nil {
-			return err
-		}
-		if sessionID != nil {
-			if _, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = $2 WHERE cli_session_id = $1 AND revoked_at IS NULL`,
-				*sessionID, now); err != nil {
-				return fmt.Errorf("store: revoke cli session tokens: %w", err)
-			}
-		}
-		return nil
-	})
-	return out, err
+	return scanAPIToken(s.Pool.QueryRow(ctx, q, id, now, principal))
 }
 
 // queryAPITokens is the two token lists' shared read, via collect's rows
