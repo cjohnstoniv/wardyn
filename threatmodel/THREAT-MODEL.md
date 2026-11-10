@@ -1575,7 +1575,7 @@ These risks are **not closed by v1 Wardyn**.
    - The full container path is not proven in default CI, with per-workspace ephemeral-CA injection into arbitrary agent images and QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual channel below the TLS-intercept tier.
-   - On Kubernetes and VM runs an agent's DNS queries are answered inside the run, each a `run.dns.query` row; not yet on Docker.
+   - On Kubernetes, Docker and VM runs an agent's DNS queries are answered inside the run, each a `run.dns.query` row. On Docker the agent's nameserver is its run proxy through a mounted `/etc/resolv.conf`: tested in CI on runc and set up for gVisor, not tested on Kata or krun, and it needs Docker Engine 26 and API 1.45 (an older one writes no row).
 
 4. **Kernel 0-day on CC1 hardened-runc hosts (shared kernel).**
    - runc-as-sole-boundary is explicitly insufficient for LLM-generated code; this tier alone is published as the weakest.
