@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -113,7 +114,9 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	if s.cfg.Runner == nil {
 		return buildErr
 	}
-	s.auditK8sNetpolIfUnenforced(ctx)
+	if netpol := s.auditK8sNetpolIfUnenforced(ctx); s.cfg.Runner.Name() == "k8s" {
+		s.goBackground(func() { s.watchK8sNetpolVerdict(s.watcherBaseCtx(), watcherSweepInterval, netpol) })
+	}
 	// Start the periodic sweep FIRST, before anything that can fail: a transient
 	// store error in the boot pass must not disable adoption for the process's
 	// whole lifetime, which is exactly what returning early ahead of this line
@@ -174,20 +177,64 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 // Capabilities() call already means no live k8s daemon to warn about, so it is
 // treated the same as a non-k8s driver, not as a reason to fail boot. Nil run
 // id, like apitokens.go's token.create/token.revoke rows — this is a
-// deployment-wide posture fact, not tied to any one run.
-func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) {
+// deployment-wide posture fact, not tied to any one run. It returns the verdict
+// it read ("" when it read none), the baseline the re-check watch compares with.
+func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) string {
 	driver := s.cfg.Runner.Name()
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
-		return
+		return ""
 	}
 	verdict := k8sNetpolVerdict(driver, caps)
 	if verdict != "unenforced" && verdict != "acknowledged" {
-		return
+		return verdict
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile",
 		"k8s.netpol.fail", driver, "failure",
 		mustJSON(map[string]any{"verdict": verdict, "driver": driver})))
+	return verdict
+}
+
+// watchK8sNetpolVerdict reads the NetworkPolicy verdict every `every` until ctx
+// ends, auditing each change the canary's re-checks make (auditK8sNetpolChange).
+func (s *Server) watchK8sNetpolVerdict(ctx context.Context, every time.Duration, last string) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			last = s.auditK8sNetpolChange(ctx, last)
+		}
+	}
+}
+
+// auditK8sNetpolChange writes "k8s.netpol.update" when the verdict differs from
+// last, in either direction: a failed re-check that refuses new sandboxes, and
+// the check that proves enforcement again. The outcome is "success" only when the
+// new verdict is "enforced". A verdict first read here (last == "", boot could
+// not read one) is the baseline, not a change; an unreadable one keeps last.
+func (s *Server) auditK8sNetpolChange(ctx context.Context, last string) string {
+	driver := s.cfg.Runner.Name()
+	caps, err := s.cfg.Runner.Capabilities(ctx)
+	if err != nil {
+		return last
+	}
+	verdict := k8sNetpolVerdict(driver, caps)
+	if verdict == "" || verdict == last || last == "" {
+		return cmp.Or(verdict, last)
+	}
+	outcome := "failure"
+	if verdict == "enforced" {
+		outcome = "success"
+	}
+	data := map[string]any{"verdict": verdict, "previous": last, "driver": driver}
+	if at := caps.NetworkPolicyCheck.At; !at.IsZero() {
+		data["checked_at"] = at.UTC().Format(time.RFC3339)
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile", "k8s.netpol.update", driver, outcome, mustJSON(data)))
+	return verdict
 }
 
 // sweepOrphanedSandboxes tears down the per-run containers of runs whose row no

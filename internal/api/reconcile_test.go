@@ -107,6 +107,79 @@ func TestAuditK8sNetpolIfUnenforced(t *testing.T) {
 	})
 }
 
+// TestAuditK8sNetpolChange: a re-check that changes the verdict writes one
+// "k8s.netpol.update" row, in either direction, naming both verdicts and the
+// check time; an unchanged verdict, an unreadable one and the first one read
+// write nothing.
+func TestAuditK8sNetpolChange(t *testing.T) {
+	at := time.Now().UTC().Truncate(time.Second)
+	rn := &k8sRecheckRunner{check: runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at}}
+	audit := &recRecorder{}
+	srv := New(Config{BaseCtx: testBaseCtx(t), Runner: rn, Audit: audit})
+	ctx := context.Background()
+	updates := func() []types.AuditEvent {
+		var out []types.AuditEvent
+		for _, ev := range audit.events {
+			if ev.Action == "k8s.netpol.update" {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+
+	last := srv.auditK8sNetpolIfUnenforced(ctx)
+	if last != "enforced" {
+		t.Fatalf("boot verdict %q, want enforced", last)
+	}
+	last = srv.auditK8sNetpolChange(ctx, last)
+	if n := len(updates()); n != 0 {
+		t.Fatalf("%d rows for an unchanged verdict, want none", n)
+	}
+
+	rn.check = runner.NetPolCheck{Verdict: runner.NetPolRefused, At: at.Add(10 * time.Minute)}
+	last = srv.auditK8sNetpolChange(ctx, last)
+	last = srv.auditK8sNetpolChange(ctx, last)
+	rn.check = runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at.Add(20 * time.Minute)}
+	last = srv.auditK8sNetpolChange(ctx, last)
+	rows := updates()
+	if len(rows) != 2 || last != "enforced" {
+		t.Fatalf("%d rows, last %q; want 2 (one per change) and enforced", len(rows), last)
+	}
+	for i, want := range []struct {
+		outcome, verdict, previous string
+		at                         time.Time
+	}{
+		{"failure", "refused", "enforced", at.Add(10 * time.Minute)},
+		{"success", "enforced", "refused", at.Add(20 * time.Minute)},
+	} {
+		var data struct {
+			Verdict, Previous, Driver string
+			CheckedAt                 string `json:"checked_at"`
+		}
+		if err := json.Unmarshal(rows[i].Data, &data); err != nil {
+			t.Fatalf("row %d: decode Data: %v", i, err)
+		}
+		got := struct {
+			outcome, verdict, previous string
+			at                         time.Time
+		}{rows[i].Outcome, data.Verdict, data.Previous, time.Time{}}
+		got.at, _ = time.Parse(time.RFC3339, data.CheckedAt)
+		if got != want || data.Driver != "k8s" || rows[i].RunID != nil || rows[i].ActorType != types.ActorSystem {
+			t.Errorf("row %d: %+v driver %q run %v actor %q; want %+v, k8s, nil, system", i, got, data.Driver, rows[i].RunID, rows[i].ActorType, want)
+		}
+	}
+
+	rn.capsErr = errors.New("k8s api unreachable")
+	if got := srv.auditK8sNetpolChange(ctx, "enforced"); got != "enforced" || len(updates()) != 2 {
+		t.Errorf("unreadable verdict: kept %q with %d rows, want enforced and no new row", got, len(updates()))
+	}
+	rn.capsErr = nil
+	rn.check.Verdict = runner.NetPolNotProven
+	if got := srv.auditK8sNetpolChange(ctx, ""); got != "not_proven" || len(updates()) != 2 {
+		t.Errorf("first read: %q with %d rows, want not_proven as the baseline and no new row", got, len(updates()))
+	}
+}
+
 // TestReconcileFinalize_TeardownErrorAudited covers finding N2: when the boot
 // reconciler finalizes a stranded run and the sandbox teardown fails, it must
 // audit a run.reconcile/failure event carrying teardown_error — otherwise the
