@@ -184,7 +184,7 @@ func (c *Config) validateHostRules() error {
 	for _, s := range sets {
 		for _, r := range s.Rules {
 			if viaOrg[r.Host] {
-				return fmt.Errorf("config: policy.host_rules: %s is reached through a via_org route, which host rules do not judge", r.Host)
+				return fmt.Errorf("config: policy.host_rules: host rules can't name %s: it is reached through an organisation relay route, which this release can't check per request", r.Host)
 			}
 		}
 	}
