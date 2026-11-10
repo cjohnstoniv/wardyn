@@ -130,11 +130,10 @@ func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun
 	if serr != nil || st.State != types.RunRunning {
 		return false // already gone (or unprobeable) — the normal, settled case
 	}
-	// A sandbox kept for its computer folder's pass back (or whose record cannot be read) is left for
-	// resumeComputerFolderBacks with only its proxy stopped, and is not counted as swept.
-	if left, _ := s.stopTerminalSandbox(ctx, run, "sandbox.sweep"); left {
-		return false
+	if s.computerFolderKept(ctx, run.ID) {
+		return false // kept for its computer folder's pass back, which resumeComputerFolderBacks resumes
 	}
+	s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.sweep")
 	s.revokeRunCascade(ctx, run.ID)
 	return true
 }
