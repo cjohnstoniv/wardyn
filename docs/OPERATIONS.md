@@ -737,8 +737,9 @@ commands are the ones in "Back them up" and "Restore them", and in
   - The trade: while the store cannot take writes, covered changes are refused instead of being queued.
   - Under `WARDYN_AUDIT_SEAL`, a row whose subject key cannot be had is refused too, since such a row waits only in the
     spool.
-  - Configured sinks get the intent row as they get every row, even when the store write failed and the change was
-    refused.
+  - Configured sinks get an intent row only after the store has taken it; a store write that failed sends them nothing.
+  - A sink that fails does not undo an intent row the store took, and the change goes ahead.
+  - That is the intent row only: the handler's own row reaches the sinks as every row does, spooled or not.
 
 > [!IMPORTANT]
 > **Set the two server-side timeouts** on the database Wardyn uses.
