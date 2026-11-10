@@ -11,8 +11,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- New Run, Tools: the Wall preset control lists No network when the server offers that preset, and stacks its four options on a phone. A create refused with `no_network_needs_egress` holds Launch and links to the Tools step.
+
 ### Fixed
 
+- New Run: Review's Network line, and the Network row of Effective policy, now read "N hosts listed · other public hosts allowed unless blocked" when egress is open, instead of a bare host count.
+- New Run: Review shows "Barrier · The virtual machine" for a Linux or macOS VM, and the Barrier row says The virtual machine, instead of a container barrier chip.
+- New Run: a main drive size kept from a template, a run again or a pool change that is over the pool's cap now says "{size} is over the {cap} cap. The run gets {cap}." under the Size field, and the Files summary shows the size the run gets and no longer shows the check. Review shows that size too.
+- New Run: when the chosen pool cannot run macOS VMs, "Pools that offer macOS" lists the pools that can, as buttons. Picking one chooses that pool and macOS, with the CPU and memory minimum of the picked pool.
 - macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit, never kills it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. Retest on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.
 
 ## [0.10.0-rc.17] — 2026-11-09
