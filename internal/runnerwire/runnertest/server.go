@@ -255,6 +255,10 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		if !ok {
 			return nil, runner.ErrReviveUnsupported
 		}
+		if hashed, ok := rv.(runner.ProxyReviverHashed); ok {
+			sum, err := hashed.ReplaceProxyHashed(ctx, ref, a.CfgJSON)
+			return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+		}
 		return nil, rv.ReplaceProxy(ctx, ref, a.CfgJSON)
 	}
 	a, err := decode[runnerwire.RefArgs](args)

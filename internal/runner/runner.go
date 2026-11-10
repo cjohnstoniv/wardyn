@@ -414,10 +414,11 @@ type Sandbox struct {
 	// KeptScrub and KeptBase are a kept create's boot scrub and cloned base; nil otherwise or from older runners.
 	KeptScrub *KeptScrub `json:",omitempty"`
 	KeptBase  *KeptBase  `json:",omitempty"`
-	// ProxyConfigSHA256 is the hex SHA-256 of the exact config bytes the driver handed to this sandbox's
-	// proxy; empty from a driver or runner that predates the readback.
+	// ProxyConfigSHA256 is proxy.ConfigSHA256 of the exact bytes the driver handed this run's proxy,
+	// which that proxy reports back once it loads them; empty from a driver or runner that predates it.
 	ProxyConfigSHA256 string `json:",omitempty"`
-	// ProxyAddr is the address the agent is pinned to for its proxy; empty from an older driver or runner.
+	// ProxyAddr is the proxy address the agent is pinned to (its wardyn-proxy hosts entry); empty
+	// from a driver or runner that predates it.
 	ProxyAddr string `json:",omitempty"`
 }
 
@@ -603,8 +604,9 @@ type ProxyReviver interface {
 	EnsureProxyImage(ctx context.Context) error
 }
 
-// ProxyReviverHashed is an OPTIONAL ProxyReviver capability: ReplaceProxy that also answers the hex
-// SHA-256 of the exact config bytes the new proxy was handed.
+// ProxyReviverHashed is ReplaceProxy that also answers proxy.ConfigSHA256 of the exact bytes the
+// new proxy was handed, which that proxy reports back once it loads them. An empty hash is a runner
+// that predates it.
 type ProxyReviverHashed interface {
 	ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error)
 }

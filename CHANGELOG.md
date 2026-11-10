@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - Each proxy start now confirms the policy its proxy loaded. The driver reports the SHA-256 of the config bytes it handed the proxy, and the proxy reports the SHA-256 of the bytes it loaded. The start is enforced when the two are equal. The proxy is stopped when the driver sends no hash, when the hashes differ, or when no report arrives within 60 seconds of the driver's answer. The run read shows the result as `policy_readback`. Runners and proxy images older than 0.10.0-rc.18 run as before, unconfirmed. A revive that must confirm, on a substrate that cannot report the hash, is refused before anything changes.
+- Each proxy now reports, once it serves, the SHA-256 of the exact config bytes it loaded, its version and the deployment switches set in its environment (`WARDYN_LLM_SCAN`, `WARDYN_MODEL_USAGE`), and retries until the control plane accepts the report. The Docker and Kubernetes drivers, runners included, return the SHA-256 of the final bytes they handed the proxy on every create and revive, and each create also returns the address the agent's proxy is pinned to.
 
 ### Fixed
 

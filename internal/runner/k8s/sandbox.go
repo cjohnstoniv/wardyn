@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -276,6 +277,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
 		return fail(err)
 	}
+	proxySHA := proxy.ConfigSHA256(proxyJSON) // the Secret's bytes, staged unchanged for the proxy to load
 	d.warnOlderProxy()
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The agent's credential-bearing env rides this SAME Secret (see
@@ -502,7 +504,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
-	return podSandbox(spec, enforced, runtimeHandler), nil
+	sb := podSandbox(spec, enforced, runtimeHandler)
+	sb.ProxyConfigSHA256, sb.ProxyAddr = proxySHA, proxyIP
+	return sb, nil
 }
 
 // podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
