@@ -337,3 +337,36 @@ func agentMountsResolver(host *container.HostConfig, runID uuid.UUID) bool {
 		return m.Type == mount.TypeVolume && m.Target == "/etc/resolv.conf" && m.Source == dnsVolumeName(runID)
 	})
 }
+
+// createRollback collects the teardown steps of a CreateSandbox that fails, run in reverse. A resolver volume
+// that cannot be removed keeps the proxy and the network: the proxy is the anchor the orphan sweep finds the run
+// by, and its teardown removes the volume before the proxy, so dropping the proxy here would leave the volume
+// with nothing to find it by.
+type createRollback struct {
+	undoNet    func()
+	steps      []func()
+	resolver   func() error
+	dnsCleanup error
+}
+
+// add registers a step to run on failure, after those registered later.
+func (r *createRollback) add(step func()) { r.steps = append(r.steps, step) }
+
+// addResolver registers the resolver's cleanup, which may be nil when no resolver was set up. Its error is kept.
+func (r *createRollback) addResolver(undo func() error) { r.resolver = undo }
+
+// run undoes what the create made, most recent first, and returns err with the resolver cleanup's error joined
+// when that cleanup failed and the proxy was therefore kept.
+func (r *createRollback) run(err error) error {
+	for i := len(r.steps) - 1; i >= 0; i-- {
+		r.steps[i]()
+	}
+	if r.resolver != nil {
+		r.dnsCleanup = r.resolver()
+	}
+	if r.dnsCleanup != nil {
+		return errors.Join(err, fmt.Errorf("the run's proxy is kept for the orphan sweep to retry: %w", r.dnsCleanup))
+	}
+	r.undoNet()
+	return err
+}

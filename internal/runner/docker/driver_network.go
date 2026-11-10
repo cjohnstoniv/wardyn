@@ -86,25 +86,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
-	// rollback collects teardown steps to run on any later failure. A resolver volume that cannot be removed
-	// keeps the proxy and the network: the proxy is the anchor the orphan sweep finds the run by, and its
-	// teardown removes the volume before the proxy, so dropping the proxy here would leave the volume with
-	// nothing to find it by.
-	var dnsCleanupErr error
-	rollback := []func(){func() {
-		if dnsCleanupErr == nil {
-			undoNet()
-		}
-	}}
-	fail := func(err error) (runner.Sandbox, error) {
-		for i := len(rollback) - 1; i >= 0; i-- {
-			rollback[i]()
-		}
-		if dnsCleanupErr != nil {
-			err = errors.Join(err, fmt.Errorf("the run's proxy is kept for the orphan sweep to retry: %w", dnsCleanupErr))
-		}
-		return runner.Sandbox{}, err
-	}
+	rb := &createRollback{undoNet: undoNet}
+	fail := func(err error) (runner.Sandbox, error) { return runner.Sandbox{}, rb.run(err) }
 
 	// (3) Agent container: attached ONLY to the per-run internal network, which (Internal=true) has
 	// NO gateway, so the agent gets no default route (L0) and its sole egress path is the
@@ -172,9 +155,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// The agent's only nameserver is its proxy. Added before the exec-less stash below, so a deferred
 	// agent carries the mount too.
 	undoDNS, err := d.mountProxyResolver(ctx, spec.RunID, proxyIP, info.ServerVersion, agentHost)
-	if undoDNS != nil {
-		rollback = append(rollback, func() { dnsCleanupErr = undoDNS() })
-	}
+	rb.addResolver(undoDNS)
 	if err != nil {
 		return fail(err)
 	}
@@ -220,7 +201,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(fmt.Errorf("docker: create agent: %w", err))
 	}
-	rollback = append(rollback, func() {
+	rb.add(func() {
 		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	})
 
