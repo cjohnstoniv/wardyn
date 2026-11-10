@@ -351,8 +351,9 @@ func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, g
 // stopUnconfirmedProxy stops the proxy of a run whose start failed after its driver answered, and
 // answers nil only once that stop is confirmed. A run still being dispatched fails, its sandbox
 // stopped (the dispatch's own RUNNING write then loses); a running run is lost (outage) with its
-// proxy stopped, or torn down when it cannot be kept, as the lapsed-token sweep does. A run already
-// lost has its proxy stopped again, and any other run its sandbox: what a retry does.
+// proxy stopped, or ended when it cannot be kept, as the lapsed-token sweep does. A run already
+// lost has its proxy stopped again, an ended run whose sandbox is kept for its computer folder's
+// copy back its proxy alone, and any other run its sandbox: what a retry does.
 func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) error {
 	switch {
 	case run.State == types.RunStarting:
@@ -368,10 +369,25 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 		if handled, err := s.loseUnconfirmedRun(ctx, run); handled {
 			return err
 		}
-		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
+		// The proxy first, then the end, whose computer folder copy back decides whether the sandbox
+		// is stopped (finalizeRunEffects): a sandbox kept for it is not stopped here. A proxy stop
+		// that is not confirmed has the sandbox stopped before the end, as before.
+		ok := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
+		if !ok {
+			ok = s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
+		}
 		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(ok))
 		if !ok {
 			return errProxyStopUnconfirmed
+		}
+		return nil
+	}
+	if isTerminalRunState(run.State) && s.computerFolderKept(ctx, run.ID) {
+		// Kept for its computer folder's copy back to resume (bringComputerFolderBack): stopping the
+		// sandbox would lose the changes not yet copied back, so its proxy alone is stopped, and the
+		// sandbox and its ref stay for the resume.
+		if !s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
+			return errKeptProxyStopUnconfirmed
 		}
 		return nil
 	}
@@ -381,8 +397,42 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 	return nil
 }
 
+// stopProxyOrAudit stops only the proxy of the sandbox ref (runner.ProxyStopper), leaving the
+// sandbox, and records a failed stop under action as stopSandboxOrAudit does. It reports whether
+// the stop was confirmed; a substrate that cannot stop a proxy alone confirms nothing and records
+// nothing.
+func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, action string) bool {
+	if s.cfg.Runner == nil || ref == "" {
+		return true
+	}
+	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
+	if !ok {
+		return false
+	}
+	switch err := stopper.StopProxy(ctx, ref); {
+	case err == nil:
+		return true
+	case errors.Is(err, runner.ErrEndUnsupported):
+		return false
+	default:
+		return s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
+	}
+}
+
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
 var errProxyStopUnconfirmed = errors.New("the sandbox stop failed")
+
+// errKeptProxyStopUnconfirmed is errProxyStopUnconfirmed for a sandbox kept for its computer
+// folder's copy back, whose proxy alone is stopped.
+var errKeptProxyStopUnconfirmed error = keptProxyStopError{}
+
+type keptProxyStopError struct{}
+
+func (keptProxyStopError) Error() string {
+	return "the proxy stop failed; the sandbox is kept for its computer folder's copy back"
+}
+
+func (keptProxyStopError) Unwrap() error { return errProxyStopUnconfirmed }
 
 // errLostMarkUnwritten is a containment whose proxy stop succeeded but whose lost mark could not be
 // written: still unresolved, so a retry writes the mark.
