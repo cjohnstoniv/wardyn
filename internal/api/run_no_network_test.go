@@ -34,7 +34,7 @@ func noNetworkFold(t *testing.T, preset string) (runFold, *httptest.ResponseReco
 	w := httptest.NewRecorder()
 	f := runFold{
 		mode: foldCreate, w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), req: &req,
-		spec: types.RunPolicySpec{EligibleGrants: grants}, wsRefs: []types.Workspace{ws},
+		spec: types.RunPolicySpec{EligibleGrants: grants, WorkspaceRepos: []types.WorkspaceRepo{{Repo: ws.Sources[0].Source}}}, wsRefs: []types.Workspace{ws},
 		scmSite:           types.SiteConfig{ScmHosts: []string{"ghes.corp.example"}},
 		directGitHubAdded: []string{"github.com"},
 		comps: runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{Name: "linear",
@@ -173,6 +173,34 @@ func TestNoNetwork_FolderOnlyWorkspacePasses(t *testing.T) {
 	f.spec.WorkspaceRepos = []types.WorkspaceRepo{{Repo: "https://github.com/acme/app"}}
 	if (&Server{}).stepNoNetwork(&f, &foldRecorder{}) || !strings.Contains(w.Body.String(), "repository") {
 		t.Fatalf("a selected repository passed or was not named: %s", w.Body)
+	}
+}
+
+// TestNoNetwork_FolderOnlyNonGitHubWorkspace: an operator-owned workspace whose repository is on a
+// non-GitHub forge, attached for its folders alone, derives no clone host and launches in every door; with
+// that repository selected it is refused, naming the workspace's clone host and the repository.
+func TestNoNetwork_FolderOnlyNonGitHubWorkspace(t *testing.T) {
+	ws := types.Workspace{ID: uuid.New(), Name: "app", Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeRepo, Source: "https://gitlab.example/team/app"},
+		{Type: types.WorkspaceSourceTypeLocalDir, Source: "/home/dev/app"},
+	}}
+	for _, mode := range []foldMode{foldCreate, foldPreflight, foldPreview} {
+		f, w := noNetworkRepoFold(t, "")
+		f.mode, f.wsRefs = mode, []types.Workspace{ws}
+		if !(&Server{}).stepNoNetwork(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: a folder-only workspace on gitlab.example was refused: %s", mode, w.Body)
+		}
+		f, w = noNetworkRepoFold(t, "")
+		f.mode, f.wsRefs = mode, []types.Workspace{ws}
+		f.spec.WorkspaceRepos = []types.WorkspaceRepo{{Repo: "https://gitlab.example/team/app"}}
+		if (&Server{}).stepNoNetwork(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: the workspace's selected repository passed", mode)
+		}
+		for _, src := range []string{derivedWorkspace, "repository"} {
+			if !strings.Contains(w.Body.String(), src) {
+				t.Errorf("mode %d: the refusal does not name %q: %s", mode, src, w.Body)
+			}
+		}
 	}
 }
 

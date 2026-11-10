@@ -16,6 +16,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A fourth built-in wall preset, `no-network` ("No network"), for a run with no network at all: `"wall_preset": "no-network"` on `POST /runs`, `--wall-preset no-network` on the CLI. A launch that would need a host is refused `422` `no_network_needs_egress`, naming each source, at create, Review and the policy preview alike; a harness whose model is reached over the network is refused. The run's proxy refuses every request (`policy:no-network`) while still reaching the control plane, the seal empties the allowlist, and every approval for the run is refused.
 - A policy switch, `refuse_ip_literals`: under `allow_all_egress`, every IP-address host is refused (`policy:ip-literal`) in any spelling, through `CONNECT` and plain HTTP. An IP address listed exactly in `allowed_domains` is still allowed. An organisation default or a ceiling that sets it holds every run under it.
 
+### Changed
+
+- A run adds a workspace's clone host only for a repository it clones. A workspace attached for its folders alone (`repos: []`) no longer opens its repositories' hosts, at create, Review and the preview alike.
+
 ## [0.10.0-rc.17] — 2026-11-09
 
 ### Before you upgrade
