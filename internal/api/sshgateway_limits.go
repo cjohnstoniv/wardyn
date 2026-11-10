@@ -182,7 +182,7 @@ func sshRefuseChannels(chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, ms
 }
 
 // sshRefuseOverPrincipalCap ends a connection that authenticated over its person's share. It holds
-// no authenticated-connection slot; its handshake and source slots are released when its handler returns,
+// no established-connection slot; its handshake and source slots are released when its handler returns,
 // after the refusal row is written, so everything here is under those bounds. The refusal handling is bounded
 // by the refusal grace: the timer that closes the connection is armed first, and the
 // ssh.connection.reject row is written under a context of that length. The number of such
