@@ -80,7 +80,6 @@ var auditStrictRoutes = map[string]bool{
 	"DELETE /api/v1/wall-presets/{id}": true,
 
 	"POST /api/v1/templates":           true,
-	"POST /api/v1/templates/import":    true,
 	"PUT /api/v1/templates/{id}":       true,
 	"DELETE /api/v1/templates/{id}":    true,
 	"POST /api/v1/templates/{id}/copy": true,
@@ -90,16 +89,18 @@ var auditStrictRoutes = map[string]bool{
 }
 
 // auditStrictExcluded is the POSTs under those prefixes that change nothing: each reads, works an answer
-// out and returns it.
+// out and returns it (a template import parses a document and stores nothing). OPERATIONS.md's "Not
+// covered" line lists the same routes (TestAuditStrictExcludedIsDocumented).
 var auditStrictExcluded = map[string]bool{
 	"POST /api/v1/policies/grade":                    true,
 	"POST /api/v1/governance/check":                  true,
 	"POST /api/v1/governance/dry-run":                true,
 	"POST /api/v1/governance/approval-rules/dry-run": true,
+	"POST /api/v1/templates/import":                  true,
 }
 
-// strictIntentBodyCap bounds the body read to hash it. It is above every covered handler's own cap (the
-// template import's, 2 MiB and a little), so a body past it is one its handler would refuse too.
+// strictIntentBodyCap bounds the body read to hash it. It is above every covered handler's own cap, so a
+// body past it is one its handler would refuse too.
 const strictIntentBodyCap = 4 << 20
 
 // auditUnavailableMsg answers a covered change whose intent row could not be written.

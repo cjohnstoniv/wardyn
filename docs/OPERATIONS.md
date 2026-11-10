@@ -729,8 +729,9 @@ commands are the ones in "Back them up" and "Restore them", and in
   - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
   - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
     `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`.
-  - Not covered, because each reads and answers: `POST /policies/grade`, `/governance/check`, `/governance/dry-run` and
-    `/governance/approval-rules/dry-run`.
+  - Not covered, because each reads and answers and changes nothing: the POSTs `/policies/grade`, `/governance/check`,
+    `/governance/dry-run`, `/governance/approval-rules/dry-run` and `/templates/import` (it parses a document and
+    stores nothing).
   - The row is written for every covered request that passed sign-in, one its route then refuses included, so it says a
     change was asked for, not that it happened.
   - The trade: while the store cannot take writes, covered changes are refused instead of being queued.

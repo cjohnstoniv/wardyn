@@ -5,7 +5,9 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -119,5 +121,26 @@ func TestAuditStrictCensusSeesAMissingRow(t *testing.T) {
 	})
 	if !found {
 		t.Errorf("%s has no auditStrictIntent in the middleware chain chi.Walk reports", key)
+	}
+}
+
+// TestAuditStrictExcludedIsDocumented: OPERATIONS.md's "Not covered" line names exactly the excluded
+// routes, so an operator reads the same list the code keeps.
+func TestAuditStrictExcludedIsDocumented(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/OPERATIONS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(raw), "  - Not covered, because each reads and answers")
+	if !ok {
+		t.Fatal(`OPERATIONS.md has no "Not covered, because each reads and answers" line`)
+	}
+	item, _, _ := strings.Cut(rest, "\n  - ")
+	documented := map[string]bool{}
+	for _, m := range regexp.MustCompile("`(/[^`]+)`").FindAllStringSubmatch(item, -1) {
+		documented["POST /api/v1"+m[1]] = true
+	}
+	if !reflect.DeepEqual(documented, auditStrictExcluded) {
+		t.Errorf("OPERATIONS.md's Not covered line names %v; auditStrictExcluded is %v", documented, auditStrictExcluded)
 	}
 }
