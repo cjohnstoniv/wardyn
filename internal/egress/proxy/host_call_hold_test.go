@@ -558,3 +558,28 @@ func TestHostCallPlainHoldAfterThePolicy(t *testing.T) {
 		t.Errorf("rows=%d, want one host call asked", rows)
 	}
 }
+
+// TestHostCallReleaseRowNamesTheApproval: each request an approval lets through, the first and every later
+// one, gets an allow row naming that approval.
+func TestHostCallReleaseRowNamesTheApproval(t *testing.T) {
+	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+	cp := newHCCP(t, p)
+	cp.newState = types.ApprovalApproved
+	for range 2 {
+		if _, sent := hcSend(p, "POST", "http://"+hrHost+"/admin"); !sent {
+			t.Fatal("approved request refused")
+		}
+	}
+	cp.mu.Lock()
+	id := cp.rows[0].id
+	cp.mu.Unlock()
+	var released int
+	for _, d := range hrRows(t, buf) {
+		if d.RuleSource == ruleSourceHostRuleApprovalApproved && d.Decision == egress.Allow && d.ApprovalID != nil && *d.ApprovalID == id {
+			released++
+		}
+	}
+	if released != 2 {
+		t.Fatalf("release rows naming %s = %d, want 2:\n%s", id, released, buf)
+	}
+}

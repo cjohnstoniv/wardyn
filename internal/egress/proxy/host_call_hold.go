@@ -43,6 +43,9 @@ const (
 	ruleSourceHostRuleApprovalClosed  = "policy:host-rule:approval-closed"
 	ruleSourceHostRuleApprovalRefused = "policy:host-rule:approval-refused"
 	ruleSourceHostRuleApprovalBusy    = "policy:host-rule:approval-busy"
+	// ruleSourceHostRuleApprovalApproved is the allow row of a held request an approval let through,
+	// naming the approval; the lane's own row for the request follows it.
+	ruleSourceHostRuleApprovalApproved = "policy:host-rule:approval-approved"
 
 	hostCallHeldPrefix   = "Wardyn did not send this request: "
 	hostCallWaitingText  = hostCallHeldPrefix + "a host rule holds %s %s on %s until a person decides (approval %s). Send it again once it is approved."
@@ -106,7 +109,7 @@ func (p *Proxy) awaitHostCall(w http.ResponseWriter, r *http.Request, host strin
 	id, state, why := p.hostCalls.admitKept(key)
 	switch {
 	case state == apApproved: // kept for the run, and no waiting slot taken
-		return true
+		return p.releaseHostCall(r, host, port, id)
 	case state == apDenied:
 		return declined(id, "a declined host call, refused for the run")
 	case why != "":
@@ -155,7 +158,7 @@ func (p *Proxy) pollHostCall(ctx context.Context, w http.ResponseWriter, r *http
 			switch ar.State {
 			case types.ApprovalApproved:
 				p.hostCalls.update(key, id, apApproved)
-				return true
+				return p.releaseHostCall(r, host, port, id)
 			case types.ApprovalDenied:
 				p.hostCalls.update(key, id, apDenied)
 				return declined(id, "declined by a person")
@@ -176,6 +179,16 @@ func (p *Proxy) pollHostCall(ctx context.Context, w http.ResponseWriter, r *http
 		case <-tick.C:
 		}
 	}
+}
+
+// releaseHostCall writes the allow row of a held request approval id lets through, and reports true.
+func (p *Proxy) releaseHostCall(r *http.Request, host string, port int, id uuid.UUID) bool {
+	if p.sink != nil {
+		log := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceHostRuleApprovalApproved)
+		log.ApprovalID = &id
+		p.sink.emit(log)
+	}
+	return true
 }
 
 // raiseHostCall posts the hold's tool_call approval, or rejoins the pending one when rejoin is set.
