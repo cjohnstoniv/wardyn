@@ -280,6 +280,59 @@ func TestHostRulesRefusePathParameters(t *testing.T) {
 	}
 }
 
+// TestHostRulesRefuseRouteOverrideHeaders: a host may run the method or path an override header names in
+// place of the request line's, so on a rule host such a request is refused, on the terminated lane and on a
+// brokered forward alike (one helper, routeOverrideCause), even where the rules allow the request line.
+func TestHostRulesRefuseRouteOverrideHeaders(t *testing.T) {
+	rules := []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: hrHost, Methods: []string{"DELETE"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Effect: types.HostRuleAllow},
+	}}}
+	for _, tc := range []struct {
+		method, header string
+		refused        bool
+	}{
+		{"POST", "X-HTTP-Method-Override: DELETE", true},
+		{"POST", "X-HTTP-Method: DELETE", true},
+		{"POST", "X-Method-Override: delete", true},
+		{"POST", "X-HTTP-Method-Override: post", false}, // names the request's own method
+		{"GET", "X-Original-URL: /admin", true},
+		{"GET", "X-Rewrite-URL: /admin", true},
+		{"GET", "X-Override-URL: /admin", true},
+		{"GET", "X-Unrelated: /admin", false},
+	} {
+		t.Run("tunnel "+tc.header, func(t *testing.T) {
+			cu := captureUpstream(t, true, "ok")
+			p, buf, caPEM := hrProxy(t, hrOpts{}, cu.srv)
+			p.policy.hostRules = rules
+			srv := httptest.NewServer(p)
+			status, conn, _ := hrConnect(t, srv.URL, "443")
+			if status != http.StatusOK {
+				t.Fatalf("CONNECT = %d", status)
+			}
+			got := hrInner(t, conn, caPEM, tc.method, "/public", tc.header)
+			srv.Close()
+			if tc.refused != (got == http.StatusForbidden) || tc.refused == cu.reached {
+				t.Errorf("%s /public with %s = %d reached=%v, want refused=%v", tc.method, tc.header, got, cu.reached, tc.refused)
+			}
+			if tc.refused && !strings.Contains(buf.String(), "carries") {
+				t.Errorf("no row naming the override:\n%s", buf.String())
+			}
+		})
+		t.Run("brokered "+tc.header, func(t *testing.T) {
+			p, _, _ := hrProxy(t, hrOpts{}, captureUpstream(t, true, "ok").srv)
+			p.policy.hostRules = rules
+			req := httptest.NewRequest(tc.method, "https://"+hrHost+"/public", nil)
+			k, v, _ := strings.Cut(tc.header, ": ")
+			req.Header.Set(k, v)
+			if err := p.outboundHostRuleRefused(req); tc.refused != errors.Is(err, errHostRuleRefused) {
+				t.Errorf("outbound %s /public with %s: err %v, want refused=%v", tc.method, tc.header, err, tc.refused)
+			}
+		})
+	}
+}
+
 // TestHostRulesRefuseAnUninspectedConnect: no CA, a port the proxy does not open for the host, and a VM
 // proxy each refuse the CONNECT with policy:host-rule-needs-inspection, never an opaque tunnel.
 func TestHostRulesRefuseAnUninspectedConnect(t *testing.T) {
