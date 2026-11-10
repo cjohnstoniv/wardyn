@@ -97,3 +97,19 @@ func TestInstall_AFailedCopyOrLinkRefusesThePush(t *testing.T) {
 		})
 	}
 }
+
+// An entry that can never be read, a FIFO here, is refused by the walk and never owed: the pass is
+// not marked not preserved for it.
+func TestPass_AFIFOInTheSandboxIsRefusedNotOwed(t *testing.T) {
+	sy, box, _ := runnerSyncer(t, true)
+	if err := syscall.Mkfifo(filepath.Join(box, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := sy.Pass(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.NotPreserved != "" || rep.Unsynced != 0 || !slices.Contains(rep.Refused, Refusal{Path: "pipe", Reason: "not a regular file"}) {
+		t.Errorf("report = %+v", rep)
+	}
+}

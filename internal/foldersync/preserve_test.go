@@ -5,6 +5,7 @@ package foldersync
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pkg/sftp"
 )
 
 // failLaptopDirs makes every sync of a directory on the laptop fail with errno, and nothing else.
@@ -297,4 +300,37 @@ func TestPass_AListedConflictKeepsTheSandboxCopy(t *testing.T) {
 			t.Errorf("report = %+v, copy stat err = %v", rep, err)
 		}
 	})
+}
+
+// onCopy makes a pull's copy into the laptop write half its bytes, then fail with err.
+func onCopy(t *testing.T, err error) {
+	t.Helper()
+	old := copyToLaptop
+	t.Cleanup(func() { copyToLaptop = old })
+	copyToLaptop = func(dst *os.File, src io.Reader) (int64, error) {
+		n, _ := io.CopyN(dst, src, 4)
+		return n, err
+	}
+}
+
+// A pull whose copy into the laptop fails, on the write (a full disk) or on the read from the
+// sandbox, is not preserved on a runner pass, and `wardyn sync` still only refuses it.
+func TestPass_AFailedCopyIntoTheLaptopIsNotPreserved(t *testing.T) {
+	for name, err := range map[string]error{
+		"write": &os.PathError{Op: "write", Path: "tmp", Err: syscall.ENOSPC},
+		"read":  &sftp.StatusError{Code: 4},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sy, _, _ := newInSandbox(t)
+			onCopy(t, err)
+			notKept(t, name, sy, pass(t, sy), "copy into the laptop new.txt")
+
+			cli, box, _ := pipeSyncer(t, true)
+			putSyncFile(t, filepath.Join(box, "new.txt"), "from the sandbox", 0o644)
+			rep := pass(t, cli)
+			if rep.NotPreserved != "" || rep.Unsynced != 0 || len(rep.Refused) != 1 {
+				t.Errorf("wardyn sync: report = %+v", rep)
+			}
+		})
+	}
 }

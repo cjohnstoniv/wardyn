@@ -922,20 +922,20 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 	}
 	src, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))
 	if err != nil {
-		return "", nil, sy.pathFailed(ctx, rep, rel, "read in the sandbox", err)
+		return "", nil, sy.keptFailed(ctx, rep, rel, "read in the sandbox", err)
 	}
 	defer src.Close()
 	tmpName, tmp, err := sy.localTemp(dst)
 	if err != nil {
 		return "", nil, sy.keptFailed(ctx, rep, rel, "create a local temp file", err)
 	}
-	n, err := io.Copy(tmp, io.LimitReader(src, allowed+1))
+	n, err := copyToLaptop(tmp, io.LimitReader(src, allowed+1))
 	*pulled += n
 	rep.BytesIn += n
 	mt := r.ModTime()
 	switch {
 	case err != nil:
-		err = sy.pathFailed(ctx, rep, rel, "read in the sandbox", err)
+		err = sy.keptFailed(ctx, rep, rel, "copy into the laptop", err) // the read or the write
 	case n > allowed:
 		rep.refuse(rel, "larger than listed and over the pull limit")
 	default:

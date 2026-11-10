@@ -84,6 +84,9 @@ func (n *dirNote) unsupported(dir string, err error) {
 	})
 }
 
+// copyToLaptop is a pull's copy into its laptop temp file, replaced by tests to fail.
+var copyToLaptop = func(dst *os.File, src io.Reader) (int64, error) { return io.Copy(dst, src) }
+
 // The sync calls, replaced by tests to fail or record one.
 var (
 	fsyncFile = func(f *os.File) error { return f.Sync() }
