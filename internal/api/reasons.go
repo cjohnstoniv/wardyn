@@ -386,6 +386,7 @@ const (
 	reasonWallPresetUnknown         = "wall_preset_unknown"          // 422: a launch names a preset that does not exist or the caller may not see
 	reasonWallPresetsUnavailable    = "wall_presets_unavailable"     // 501: the store keeps no wall presets (not the Postgres store)
 	reasonNoNetworkNeedsEgress      = "no_network_needs_egress"      // 422: a launch with the No network preset that needs a host; the message names each source
+	reasonHostRulesNeedInspectedVM  = "host_rules_need_inspected_vm" // 422: a VM run whose policy has host_rules, which are not yet judged on a VM guest's flows
 
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
