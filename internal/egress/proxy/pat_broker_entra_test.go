@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -636,4 +637,44 @@ func TestADOGitBroker_CloneWithoutCodeReadIsHeldAsCodeRead(t *testing.T) {
 		t.Fatalf("control plane saw %v, want one ask for code_read", asks)
 	}
 	h.finish(t)
+}
+
+// A project and repository named API are ordinary names to Azure DevOps: the
+// broker's path check reads API mounts by where each forge mounts them, so the
+// clone goes through on the Entra lane.
+func TestADOGitBroker_ProjectNamedAPIClones(t *testing.T) {
+	h := newADOGitHarness(t, adoscope.CapCodeRead)
+	h.fake.RegisterRepo("acme", "API", "API", h.bare)
+	h.clone(t, "https://dev.azure.com/acme/API/_git/API")
+	h.finish(t)
+}
+
+// On Azure DevOps Services the Entra lane reaches git only at
+// [<project>/]_git/<repository>/<verb> under the organisation, as it does on a
+// Server: any other path ending in a verb is refused before Azure DevOps sees it.
+func TestADOGitBroker_HostedPathOutsideGitIsRefused(t *testing.T) {
+	for _, path := range []string{
+		"dev.azure.com/acme/proj/git-upload-pack",
+		"dev.azure.com/acme/proj/x/_git/app/git-upload-pack",
+		"dev.azure.com/acme/_git/app/x/git-upload-pack",
+		"dev.azure.com/acme/proj//_git/app/git-upload-pack",
+		"acme.visualstudio.com/proj/app/git-upload-pack",
+		"acme.visualstudio.com/DefaultCollection/proj/x/_git/app/git-upload-pack",
+	} {
+		t.Run(path, func(t *testing.T) {
+			h := newADOGitHarness(t, adoscope.CapCodeRead)
+			resp, err := http.Post(h.proxy+routePATBroker+path, "application/x-git-upload-pack-request", strings.NewReader("0000"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "on Azure DevOps this run reaches git only at") {
+				t.Errorf("status %d body %q, want the hosted path refusal", resp.StatusCode, body)
+			}
+			if n := len(h.fake.Requests()); n != 0 {
+				t.Errorf("the fake saw %d requests, want 0", n)
+			}
+		})
+	}
 }

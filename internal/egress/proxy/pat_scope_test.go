@@ -37,6 +37,7 @@ func TestPATRequestRepoKey(t *testing.T) {
 		{"gitea", "gitea", "/org/repo/git-upload-pack", "git-upload-pack", "org/repo", true},
 		{"bitbucket reads /scm/", "bitbucket_server", "/scm/PROJ/repo.git/info/refs", "info/refs", "PROJ/repo.git", true},
 		{"bitbucket outside /scm/", "bitbucket_server", "/PROJ/repo.git/info/refs", "info/refs", "", false},
+		{"bitbucket context path keys as /scm/", "bitbucket_server", "/bitbucket/scm/PROJ/repo.git/info/refs", "info/refs", "PROJ/repo.git", true},
 		{"no repository", "generic", "/info/refs", "info/refs", "", false},
 		{"empty segment", "generic", "/team//app/info/refs", "info/refs", "", false},
 		{"double slash prefix", "generic", "//team/app/info/refs", "info/refs", "", false},
@@ -301,5 +302,238 @@ func TestUnnarrowedPATGrantRendersNoScopeKeys(t *testing.T) {
 	}
 	if got, want := string(b), `{"grant_id":"00000000-0000-0000-0000-000000000001"}`; got != want {
 		t.Fatalf("PATGrant renders %s, want %s", got, want)
+	}
+}
+
+// routeOverrideHeaders are the method- and path-override headers neither git
+// broker lane forwards.
+var routeOverrideHeaders = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override",
+	"X-Original-URL", "X-Rewrite-URL", "X-Forwarded-Prefix", "X-Script-Name", "X-Forwarded-Host"}
+
+// patGitRepoForges is the column order of TestPATGitRepoPerForge's verdicts.
+var patGitRepoForges = []string{"generic", "gitlab", "gitea", "bitbucket_server"}
+
+// TestPATGitRepoPerForge is the value list of the broker's path predicate: for
+// each decoded upstream path, the verdict per forge in patGitRepoForges order,
+// A for admitted and R for refused. Each row whose name starts "only:" is
+// refused by the one reading it names (case fold, ";" cut, trailing dot or space
+// trim, "%"), so removing that reading turns it red.
+func TestPATGitRepoPerForge(t *testing.T) {
+	for _, tc := range []struct{ name, path, want string }{
+		// The reported exploit and its siblings: every forge refuses.
+		{"Gitea contents API commit", "api/v1/repos/o/r/contents/dir/git-upload-pack", "RRRR"},
+		{"Gitea contents API receive-pack", "api/v1/repos/o/r/contents/dir/git-receive-pack", "RRRR"},
+		{"Gitea raw API refs", "api/v1/repos/o/r/raw/main/info/refs", "RRRR"},
+		{"API mount under a sub-path", "gitea/api/v1/repos/o/r/contents/dir/git-upload-pack", "RRRR"},
+		{"GitLab API under a relative root", "gitlab/api/v4/projects/1/repository/files/x/git-upload-pack", "RRRR"},
+		{"GitHub Enterprise GraphQL mount", "ghe/api/graphql/x/git-upload-pack", "RRRR"},
+		{"Bitbucket Server REST", "rest/api/1.0/projects/P/repos/r/browse/dir/git-upload-pack", "RRRR"},
+		{"Bitbucket Server REST plugin route", "bitbucket/rest/git/latest/projects/P/repos/r/tags/git-upload-pack", "RRRR"},
+		{"Azure DevOps _apis", "org/project/_apis/git/repositories/r/git-upload-pack", "RRRR"},
+		{"GitLab route scope", "group/project/-/raw/main/info/refs", "RRRR"},
+		{"Bitbucket Cloud !api", "!api/2.0/repositories/ws/git-upload-pack", "RRRR"},
+		{"no repository", "info/refs", "RRRR"},
+		{"empty repository", "/info/refs", "RRRR"},
+		// Only the reading named refuses these.
+		{"only: case fold", "API/v1/user/git-upload-pack", "RRRR"},
+		{"only: case fold on _apis", "org/_APIS/x/git-upload-pack", "RRRR"},
+		{"only: case fold on the version", "gitlab/API/V4/user/git-upload-pack", "RRRR"},
+		{"only: Unicode fold (U+017F)", "org/_api\u017f/x/git-upload-pack", "RRRR"},
+		{"only: ASCII case mapping (U+0131)", "org/_ap\u0131s/x/git-upload-pack", "RRRR"},
+		{"only: ASCII case mapping (U+0130)", "org/_ap\u0130s/x/git-upload-pack", "RRRR"},
+		{"only: empty segment before the mount", "/api/2.0/repositories/ws/git-upload-pack", "RRRR"},
+		{"only: segment read as empty before the mount", ";x/api/2.0/repositories/ws/git-upload-pack", "RRRR"},
+		{"empty segment inside", "team//app/git-upload-pack", "RRRR"},
+		{"trailing slash before the verb", "team/app//git-upload-pack", "RRRR"},
+		{"segment of dots", "team/.../app/git-upload-pack", "RRRR"},
+		{"only: ; cut", "api;v=1/v1/user/git-upload-pack", "RRRR"},
+		{"only: ; cut on -", "team/-;x/y/git-upload-pack", "RRRR"},
+		{"only: trailing dot", "api./v1/user/git-upload-pack", "RRRR"},
+		{"only: trailing dot on -", "group/project/-./raw/main/info/refs", "RRRR"},
+		{"only: trailing space", "api /v1/user/git-upload-pack", "RRRR"},
+		{"only: percent escape", "o/r%2Fx/git-upload-pack", "RRRR"},
+		{"only: percent", "o/r%x/git-upload-pack", "ARRR"},
+		{"Azure DevOps name with a percent", "org/100% Done/_git/Half 50%/info/refs", "ARRR"},
+		// Bitbucket Server: scm/ with an API tail or a route before it.
+		{"scm under REST", "rest/api/1.0/projects/P/repos/r/browse/scm/x/y/git-upload-pack", "RRRR"},
+		{"scm under the web browse route", "projects/P/repos/r/browse/scm/x/y/info/refs", "AAAR"},
+		{"scm under a plugin servlet", "plugins/servlet/x/scm/P/r/git-upload-pack", "AAAR"},
+		{"scm with a route after the repository", "scm/P/r/raw/x/git-upload-pack", "AAAR"},
+		{"scm under an API mount", "api/scm/P/r/git-upload-pack", "RRRR"},
+		{"only: case fold in the context path", "bitbucket/REST/scm/P/r.git/info/refs", "AAAR"},
+		{"scm under a doubled slash", "bitbucket//scm/P/r.git/info/refs", "RRRR"},
+		// generic only: Azure DevOps _api.
+		{"Azure DevOps _api", "org/_api/x/git-upload-pack", "RAAR"},
+		// Real repositories: admitted wherever the forge allows the name.
+		{"GitLab subgroup api", "group/api/project.git/info/refs", "AARR"},
+		{"GitLab subgroup api, project v4", "group/api/v4/info/refs", "AARR"},
+		{"namespace contents", "contents/project.git/info/refs", "AAAR"},
+		{"namespace rest", "rest/project.git/git-upload-pack", "AAAR"},
+		{"a former guard row: contents mid-path", "o/r/contents/dir/git-upload-pack", "AAAR"},
+		{"Azure DevOps project API", "org/API/_git/repo/info/refs", "AARR"},
+		{"a repository named api", "team/api/git-upload-pack", "AAAR"},
+		{"Gerrit authenticated clone", "a/project.git/info/refs", "AAAR"},
+		// Gerrit: its git servlet takes every [a/]<project>/<git verb> path ahead of REST.
+		{"Gerrit project named projects, through a/", "a/projects/git-upload-pack", "AAAR"},
+		{"Gerrit project under a collection name, through a/", "a/plugins/replication/info/refs", "AAAR"},
+		{"Gerrit project named config, through a/", "a/config/info/refs", "AAAR"},
+		{"Gerrit project under projects/, through a/", "a/projects/p/branches/git-upload-pack", "AAAR"},
+		{"Gerrit project named projects, without a/", "projects/info/refs", "AAAR"},
+		{"GitLab subgroups api and v4 (refused: no deployment root is configured)", "group/api/v4/project.git/info/refs", "RRRR"},
+		{"GitLab subgroups api and graphql (refused: no deployment root is configured)", "group/api/graphql/project.git/info/refs", "RRRR"},
+		{"Bitbucket Server", "scm/PROJ/repo.git/git-upload-pack", "AAAA"},
+		{"Bitbucket Server project API", "scm/API/repo.git/git-upload-pack", "AARA"},
+		{"Bitbucket Server personal", "scm/~user/repo.git/info/refs", "AAAA"},
+		{"Bitbucket Server context path", "bitbucket/scm/PROJ/repo.git/info/refs", "AAAA"},
+	} {
+		path := tc.path
+		verb := path[strings.LastIndex(path, "/")+1:]
+		if strings.HasSuffix(path, "/info/refs") || path == "info/refs" {
+			verb = patInfoRefs
+		}
+		for i, forge := range patGitRepoForges {
+			t.Run(tc.name+"/"+forge, func(t *testing.T) {
+				_, ok := patGitRepo(forge, "/"+path, verb)
+				if got := map[bool]byte{true: 'A', false: 'R'}[ok]; got != tc.want[i] {
+					t.Fatalf("patGitRepo(%q, %q) = %c, want %c", forge, "/"+path, got, tc.want[i])
+				}
+			})
+		}
+	}
+}
+
+// The broker route judges the whole path, not its last segment: a forge API
+// route whose tail happens to spell a smart-HTTP verb (Gitea's contents API
+// commits a file on POST and takes a token over Basic auth) is refused on every
+// forge, with no repos set and read-only access, before anything mints. The
+// path arrives percent-encoded, as a sandbox can send it.
+func TestPATBrokerRefusesForgeAPIPathsEndingInAGitVerb(t *testing.T) {
+	const up = "?service=git-upload-pack"
+	for _, tc := range []struct{ name, method, path string }{
+		{"contents API commit", http.MethodPost, "api/v1/repos/o/r/contents/dir/git-upload-pack"},
+		{"contents API receive-pack", http.MethodPost, "api/v1/repos/o/r/contents/dir/git-receive-pack"},
+		{"raw API refs", http.MethodGet, "api/v1/repos/o/r/raw/main/info/refs" + up},
+		{"api prefix any case", http.MethodPost, "API/v1/repos/o/r/contents/dir/git-upload-pack"},
+		{"api under a sub-path", http.MethodPost, "gitea/api/v1/repos/o/r/contents/dir/git-upload-pack"},
+		{"api with a path parameter", http.MethodPost, "api;v=1/v1/repos/o/r/contents/dir/git-upload-pack"},
+		{"api with a trailing dot", http.MethodPost, "api./v1/repos/o/r/contents/dir/git-upload-pack"},
+		{"Bitbucket Server REST", http.MethodPost, "rest/api/1.0/projects/P/repos/r/browse/dir/git-upload-pack"},
+		{"Azure DevOps _apis", http.MethodPost, "org/project/_apis/git/repositories/r/git-upload-pack"},
+		{"GitLab route scope", http.MethodGet, "group/project/-/raw/main/info/refs" + up},
+		{"no repository", http.MethodGet, "info/refs" + up},
+		// Encodings: each decodes onto a refused path, or leaves a "%".
+		{"encoded slashes", http.MethodPost, "api%2Fv1%2Frepos%2Fo%2Fr%2Fcontents%2Fdir/git-upload-pack"},
+		{"encoded slashes, mixed case", http.MethodPost, "Api%2fV1%2Frepos%2fo%2Fr%2Fcontents%2fdir/git-upload-pack"},
+		{"doubly encoded slashes", http.MethodPost, "api%252Fv1%252Frepos%252Fo%252Fr%252Fcontents%252Fdir/git-upload-pack"},
+		{"doubly encoded, one segment", http.MethodPost, "team/app%252Fx/git-upload-pack"},
+		{"encoded trailing space", http.MethodPost, "api%20/v1/user/git-upload-pack"},
+		{"encoded long s", http.MethodPost, "org/_api%C5%BF/x/git-upload-pack"},
+		{"trailing slash after the verb", http.MethodPost, "api/v1/repos/o/r/contents/dir/git-upload-pack/"},
+		{"trailing slash before the verb", http.MethodPost, "api/v1/repos/o/r/contents/dir//git-upload-pack"},
+	} {
+		for _, forge := range patGitRepoForges {
+			t.Run(tc.name+"/"+forge, func(t *testing.T) {
+				p, upstream, last := patScopeProxy(t, "git.corp", PATGrant{Forge: forge, Access: types.PATAccessRead})
+				rec := httptest.NewRecorder()
+				p.ServeHTTP(rec, mustLocalReq(t, tc.method, "/wardyn/git/git.corp/"+tc.path,
+					strings.NewReader(`{"content":"eA==","branch":"main","message":"x"}`)))
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403", rec.Code)
+				}
+				if upstream.gitHits != 0 || upstream.mintCalls != 0 {
+					t.Fatalf("forge saw %d request(s) at %q and %d mint(s), want none: the PAT reached a forge API route",
+						upstream.gitHits, upstream.gitPath, upstream.mintCalls)
+				}
+				if d := last(); d.Decision != egress.Deny || d.RuleSource != ruleSourcePATDenied {
+					t.Fatalf("decision = %v %q, want a deny from %q", d.Decision, d.RuleSource, ruleSourcePATDenied)
+				}
+			})
+		}
+	}
+}
+
+// The same check must leave every forge's real clone, fetch and push paths
+// alone: each is forwarded at exactly the path the sandbox sent.
+func TestPATBrokerForwardsEachForgesGitPaths(t *testing.T) {
+	for _, tc := range []struct{ forge, repo string }{
+		{"generic", "octocat/hello-world.git"},                 // GitHub / GitHub Enterprise
+		{"generic", "octocat/hello-world"},                     // without .git
+		{"generic", "workspace/repo.git"},                      // Bitbucket Cloud
+		{"generic", "org/project/_git/repo"},                   // Azure DevOps Services
+		{"generic", "org/_git/repo"},                           // Azure DevOps, project named as the repository
+		{"generic", "DefaultCollection/project/_git/repo"},     // <org>.visualstudio.com
+		{"generic", "tfs/DefaultCollection/project/_git/repo"}, // Azure DevOps Server
+		{"generic", "team/api"},                                // a repository named api
+		{"generic", "team/rest.git"},                           // a repository named rest
+		{"generic", "org/API/_git/repo"},                       // Azure DevOps project named API
+		{"generic", "a/project.git"},                           // Gerrit, authenticated
+		{"gitlab", "group/project.git"},
+		{"gitlab", "group/api/project.git"}, // subgroup api
+		{"gitlab", "contents/project.git"},
+		{"gitlab", "rest/project.git"},
+		{"gitlab", "group/sub/project"},
+		{"gitlab", "group/project.wiki.git"},
+		{"gitea", "owner/repo.git"},
+		{"gitea", "owner/repo"},
+		{"gitea", "owner/contents"},       // a repository named contents
+		{"gitea", "gitea/owner/repo.git"}, // served under a sub-path
+		{"bitbucket_server", "scm/PROJ/repo.git"},
+		{"bitbucket_server", "scm/~user/repo.git"},
+		{"bitbucket_server", "scm/API/repo.git"},
+		{"bitbucket_server", "bitbucket/scm/PROJ/repo.git"}, // under a context path
+	} {
+		for _, rq := range []struct{ method, tail, query string }{
+			{http.MethodGet, "info/refs", "?service=git-upload-pack"},
+			{http.MethodGet, "info/refs", "?service=git-receive-pack"},
+			{http.MethodPost, "git-upload-pack", ""},
+			{http.MethodPost, "git-receive-pack", ""},
+		} {
+			t.Run(tc.forge+"/"+tc.repo+"/"+rq.tail+rq.query, func(t *testing.T) {
+				p, upstream, _ := patScopeProxy(t, "git.corp", PATGrant{Forge: tc.forge})
+				rec := httptest.NewRecorder()
+				p.ServeHTTP(rec, mustLocalReq(t, rq.method, "/wardyn/git/git.corp/"+tc.repo+"/"+rq.tail+rq.query,
+					strings.NewReader("0000")))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d body=%q, want 200", rec.Code, rec.Body.String())
+				}
+				if want := "/" + tc.repo + "/" + rq.tail; upstream.gitPath != want {
+					t.Fatalf("forwarded path = %q, want %q", upstream.gitPath, want)
+				}
+			})
+		}
+	}
+}
+
+// A method override is never forwarded: the forge would judge the request by a
+// method the verb check never saw. A pack POST carries no query, and refs
+// discovery carries only the service the check read.
+func TestPATBrokerForwardsNoMethodOverrideAndOnlyTheServiceQuery(t *testing.T) {
+	p, upstream, _ := patScopeProxy(t, "git.corp", PATGrant{})
+	req := mustLocalReq(t, http.MethodPost, "/wardyn/git/git.corp/team/app/git-upload-pack?x=1", strings.NewReader("0000"))
+	for _, h := range routeOverrideHeaders {
+		req.Header.Set(h, http.MethodPut)
+	}
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%q, want 200", rec.Code, rec.Body.String())
+	}
+	for _, h := range routeOverrideHeaders {
+		if v := upstream.gitHeaders.Values(h); len(v) != 0 {
+			t.Errorf("forge saw %s: %q, want it stripped", h, v)
+		}
+	}
+	if upstream.gitQuery != "" {
+		t.Errorf("forwarded query = %q, want none on a pack POST", upstream.gitQuery)
+	}
+
+	rec = httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/git/git.corp/team/app/info/refs?service=git-upload-pack&ref=main", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("info/refs status = %d, want 200", rec.Code)
+	}
+	if upstream.gitQuery != "service=git-upload-pack" {
+		t.Errorf("forwarded query = %q, want only service", upstream.gitQuery)
 	}
 }

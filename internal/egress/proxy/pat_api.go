@@ -287,6 +287,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	copyHeader(out.Header, r.Header)
 	removeHopByHop(out.Header)
 	p.stripGatewayHeaders(out.Header)
+	stripRouteOverrides(out.Header) // the door judged the request line's method and path
 	stripSandboxCredentials(out.Header, "")
 	if d.credential != nil {
 		out.Header.Set(name, value)
