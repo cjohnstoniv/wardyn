@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -218,7 +219,7 @@ func TestStopKeptRun_ARestartedServerStopsAtTheSameAnchor(t *testing.T) {
 }
 
 // Moving the stored end later moves the anchor, though the listing row stays stale. The end here comes from
-// the run's EndsAt.
+// the lost run's EndsAt.
 func TestStopKeptRun_AnExtensionMovesTheAnchor(t *testing.T) {
 	s, cs, audit, run, sb, leaser, hold := keptEndFixture(t)
 	defer hold()
@@ -228,7 +229,8 @@ func TestStopKeptRun_AnExtensionMovesTheAnchor(t *testing.T) {
 	setEnd := func(at time.Time) {
 		cs.dispatchTestStore.mu.Lock()
 		defer cs.dispatchTestStore.mu.Unlock()
-		cs.run.LostAt, cs.run.LostReason, cs.run.EndsAt = nil, "", &at
+		lost := at.Add(-time.Hour)
+		cs.run.LostAt, cs.run.LostReason, cs.run.EndsAt = &lost, types.LostOutage, &at
 	}
 	end := func(after time.Duration) {
 		clock.now = due.Add(after)
@@ -301,5 +303,154 @@ func TestStopKeptRun_SuccessiveHoldersDoNotStretchTheWindow(t *testing.T) {
 	end(5*time.Minute + 30*time.Second)
 	if got := oneForcedStop(t, audit); got.PastDue != 330 || sb.stopCount() != 1 {
 		t.Errorf("past_due_sec %d, sandbox stops %d; want 330 and 1", got.PastDue, sb.stopCount())
+	}
+}
+
+// forcedRows are the failure rows a forced stop wrote under action, in order.
+func forcedRows(t *testing.T, audit *recRecorder, action string) []forcedStop {
+	t.Helper()
+	var rows []forcedStop
+	for _, ev := range audit.snapshot() {
+		var data forcedStop
+		var raw map[string]any
+		if ev.Action != action || json.Unmarshal(ev.Data, &raw) != nil {
+			continue
+		}
+		if _, ok := raw["past_due_sec"]; !ok {
+			continue
+		}
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, data)
+	}
+	return rows
+}
+
+// A gone run has no end to be past: it is due when it was lost, so a lock held for good is cut 5 minutes
+// after that, with or without an end on the row.
+func TestStopKeptRun_AGoneRunIsDueWhenItWasLost(t *testing.T) {
+	for name, endsAt := range map[string]*time.Time{"no end": nil, "an end days away": ptrTime(time.Now().Add(72 * time.Hour))} {
+		t.Run(name, func(t *testing.T) {
+			s, cs, audit, run, sb, leaser, hold := keptEndFixture(t)
+			defer hold()
+			lost := time.Now()
+			clock := &keptEndClock{now: lost}
+			s.cfg.Now = clock.Now
+			cs.dispatchTestStore.mu.Lock()
+			cs.run.LostAt, cs.run.LostReason, cs.run.EndsAt = &lost, types.LostGone, endsAt
+			cs.dispatchTestStore.mu.Unlock()
+			end := func(after time.Duration) {
+				clock.now = lost.Add(after)
+				s.stopKeptRun(context.Background(), leaser, run, types.RunFailed, "run.lost", map[string]any{"reason": string(types.LostGone)})
+			}
+			end(4 * time.Minute)
+			if sb.stopCount() != 0 || len(forcedRows(t, audit, "run.lost")) != 0 {
+				t.Fatal("stopped before the limit")
+			}
+			end(6 * time.Minute)
+			rows := forcedRows(t, audit, "run.lost")
+			if len(rows) != 1 || rows[0].PastDue != 360 || !rows[0].Stopped || sb.stopCount() != 1 {
+				t.Errorf("rows %+v, sandbox stops %d; want one with past_due_sec 360, stopped, and 1 stop", rows, sb.stopCount())
+			}
+		})
+	}
+}
+
+// Only a lock found held counts: a try the locker refuses, past the anchor, stops nothing; the same visit
+// with the lock held does.
+func TestStopKeptRun_ARefusedTryIsNotAHeldLock(t *testing.T) {
+	s, cs, audit, run, sb, leaser, hold := keptEndFixture(t)
+	defer hold()
+	due := time.Now()
+	clock := &keptEndClock{now: due.Add(10 * time.Minute)}
+	s.cfg.Now = clock.Now
+	dueAt(cs, due)
+	end := func() {
+		s.stopKeptRun(context.Background(), leaser, run, types.RunStopped, "run.ended.expired", map[string]any{"ended_at": run.LostAt})
+	}
+	s.locks.override = exhaustedPool()
+	end()
+	if sb.stopCount() != 0 || len(expiredRows(audit)) != 0 {
+		t.Fatalf("a refused try forced the stop: %d stops, %d rows", sb.stopCount(), len(expiredRows(audit)))
+	}
+	s.locks.override = nil
+	end()
+	if got := oneForcedStop(t, audit); got.PastDue != 600 || sb.stopCount() != 1 {
+		t.Errorf("past_due_sec %d, sandbox stops %d; want 600 and 1", got.PastDue, sb.stopCount())
+	}
+}
+
+// A row that is no longer lost (a revive claimed it since the listing) is not forced, however stale its
+// stored end.
+func TestStopKeptRun_ARowNoLongerLostIsNotForced(t *testing.T) {
+	s, cs, audit, run, sb, leaser, hold := keptEndFixture(t)
+	defer hold()
+	past := time.Now().Add(-time.Hour)
+	cs.dispatchTestStore.mu.Lock()
+	cs.run.LostAt, cs.run.LostReason, cs.run.EndsAt = nil, "", &past
+	cs.dispatchTestStore.mu.Unlock()
+	s.stopKeptRun(context.Background(), leaser, run, types.RunStopped, "run.ended.expired", map[string]any{"ended_at": run.LostAt})
+	if sb.stopCount() != 0 || len(expiredRows(audit)) != 0 {
+		t.Errorf("a row with no lost mark was forced: %d stops, %d rows", sb.stopCount(), len(expiredRows(audit)))
+	}
+}
+
+// A stop that failed is tried again on the next held visit: two rows, the first with sandbox_stopped false.
+func TestStopKeptRun_AFailedStopIsRetried(t *testing.T) {
+	s, cs, audit, run, sb, leaser, hold := keptEndFixture(t)
+	defer hold()
+	due := time.Now()
+	clock := &keptEndClock{now: due.Add(6 * time.Minute)}
+	s.cfg.Now = clock.Now
+	dueAt(cs, due)
+	end := func() {
+		s.stopKeptRun(context.Background(), leaser, run, types.RunStopped, "run.ended.expired", map[string]any{"ended_at": run.LostAt})
+	}
+	sb.stopErr = errors.New("the runner did not answer the stop")
+	end()
+	if rows := forcedRows(t, audit, "run.ended.expired"); len(rows) != 1 || rows[0].Stopped || sb.stopCount() != 0 {
+		t.Fatalf("rows %+v, sandbox stops %d after a failed stop; want one row, not stopped, and no stop", rows, sb.stopCount())
+	}
+	sb.stopErr = nil
+	clock.now = due.Add(7 * time.Minute)
+	end()
+	rows := forcedRows(t, audit, "run.ended.expired")
+	if len(rows) != 2 || !rows[1].Stopped || rows[1].PastDue != 420 || sb.stopCount() != 1 {
+		t.Errorf("rows %+v, sandbox stops %d; want a second row, stopped, past_due_sec 420, and 1 stop", rows, sb.stopCount())
+	}
+	clock.now = due.Add(8 * time.Minute)
+	end()
+	if n := len(forcedRows(t, audit, "run.ended.expired")); n != 2 || sb.stopCount() != 1 {
+		t.Errorf("after the stop held: %d rows, %d stops; want 2 and 1", n, sb.stopCount())
+	}
+}
+
+// An end that moves after a force is a new end: it is forced again when it too is 5 minutes past due, and
+// not before.
+func TestStopKeptRun_ASecondForceFollowsAMovedEnd(t *testing.T) {
+	s, cs, audit, run, sb, leaser, hold := keptEndFixture(t)
+	defer hold()
+	due := time.Now()
+	clock := &keptEndClock{now: due}
+	s.cfg.Now = clock.Now
+	dueAt(cs, due)
+	end := func(after time.Duration) {
+		clock.now = due.Add(after)
+		s.stopKeptRun(context.Background(), leaser, run, types.RunStopped, "run.ended.expired", map[string]any{"ended_at": run.LostAt})
+	}
+	end(6 * time.Minute)
+	if sb.stopCount() != 1 {
+		t.Fatalf("%d stops after the first force, want 1", sb.stopCount())
+	}
+	dueAt(cs, due.Add(10*time.Minute))
+	end(12 * time.Minute)
+	if sb.stopCount() != 1 {
+		t.Fatalf("%d stops before the moved end was 5 minutes past due, want 1", sb.stopCount())
+	}
+	end(16 * time.Minute)
+	rows := forcedRows(t, audit, "run.ended.expired")
+	if len(rows) != 2 || rows[1].PastDue != 360 || sb.stopCount() != 2 {
+		t.Errorf("rows %+v, sandbox stops %d; want a second row with past_due_sec 360 and 2 stops", rows, sb.stopCount())
 	}
 }
