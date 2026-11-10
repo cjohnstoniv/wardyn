@@ -18,7 +18,7 @@ const (
 	NetPolEnforced     = "enforced"     // a deny-all policy blocked the canary's connect
 	NetPolAcknowledged = "acknowledged" // the operator accepted an ambient default-deny; never proof
 	NetPolNotProven    = "not_proven"   // three checks in a row could not tell; new sandboxes are refused
-	NetPolRefused      = "refused"      // checks showed it not enforced, with no override; new sandboxes are refused
+	NetPolRefused      = "refused"      // checks showed it not enforced, and no override covers the new sandboxes; they are refused
 	NetPolUnenforced   = "unenforced"   // not enforced, under WARDYN_K8S_ALLOW_UNENFORCED_NETPOL
 )
 

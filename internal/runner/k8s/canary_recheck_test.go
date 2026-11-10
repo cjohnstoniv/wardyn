@@ -211,9 +211,16 @@ func TestCanaryRecheck_OverrideNeverCoversAgentSandbox(t *testing.T) {
 	if err := d.netPolRefusal(testNamespace); err != nil {
 		t.Errorf("plain sandbox under the override: refusal %v, want none", err)
 	}
+	if got := healthCheck(t, d).Verdict; got != runner.NetPolUnenforced {
+		t.Errorf("plain sandbox under the override: health verdict %q, want %q", got, runner.NetPolUnenforced)
+	}
 	d.cfg.AgentSandbox = true // boot refuses agent-sandbox unless proven; the check alone is under test
 	if err := d.netPolRefusal(testNamespace); !errors.Is(err, errNetPolNotProven) {
 		t.Errorf("agent-sandbox under the override: refusal %v, want errNetPolNotProven", err)
+	}
+	// Health says what happens: the override covers no agent-sandbox create, so they are refused.
+	if got := healthCheck(t, d).Verdict; got != runner.NetPolRefused {
+		t.Errorf("agent-sandbox under the override: health verdict %q, want %q", got, runner.NetPolRefused)
 	}
 }
 

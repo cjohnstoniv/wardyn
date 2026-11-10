@@ -125,8 +125,8 @@ func (d *Driver) netPolCheck() runner.NetPolCheck {
 	return out
 }
 
-// wireVerdict names a namespace state for health: not enforced splits on whether the override still
-// lets plain sandboxes start.
+// wireVerdict names a namespace state for health: not enforced splits on whether new sandboxes still
+// start, which the override allows for plain sandboxes only, never in agent-sandbox mode.
 func (d *Driver) wireVerdict(s netPolState) string {
 	switch s {
 	case netPolProven:
@@ -134,10 +134,10 @@ func (d *Driver) wireVerdict(s netPolState) string {
 	case netPolAcknowledged:
 		return runner.NetPolAcknowledged
 	case netPolUnenforced:
-		if d.cfg.AllowUnenforcedNetPol {
-			return runner.NetPolUnenforced
+		if d.refuses(s) {
+			return runner.NetPolRefused
 		}
-		return runner.NetPolRefused
+		return runner.NetPolUnenforced
 	}
 	return runner.NetPolNotProven
 }
