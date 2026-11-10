@@ -40,8 +40,8 @@ const (
 	runExecSandboxGoneMsg = "The run's sandbox is gone; the run is ending."
 	// runExecBusyMsg answers a run already holding its most SSH channels and commands at once.
 	runExecBusyMsg = "This run already has %d SSH channels or commands open, the most it may; try again when one ends."
-	// runExecFailedMsg answers a runner that could not start the command; the cause goes to the log.
-	runExecFailedMsg = "The runner could not start the command."
+	// runExecFailedMsg answers a runner that could not start the command or lost it; the cause goes to the log.
+	runExecFailedMsg = "The runner could not run the command, or lost it before it ended."
 )
 
 func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +108,12 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 	defer stopKeep()
 	_ = s.cfg.Store.TouchRun(keepCtx, fresh.ID)
 	go s.attachKeepalive(keepCtx, fresh.ID)
-	res := collectExec(execCtx, sess)
+	res, err := collectExec(execCtx, sess)
+	if err != nil {
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": command, "error": err.Error()})
+		writeExecStartError(w, r, err)
+		return
+	}
 	data, outcome := map[string]any{"command": command, "exit": res.ExitCode}, "success"
 	if res.TimedOut {
 		data["error"], outcome = fmt.Sprintf("timed out after %s", timeout), "failure"
@@ -150,7 +155,7 @@ func (s *Server) refuseExecDataOut(w http.ResponseWriter, r *http.Request, run t
 	return true
 }
 
-// writeExecStartError answers an ExecStream that did not start.
+// writeExecStartError answers a command the runner did not start, or lost before it ended.
 func writeExecStartError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, runner.ErrExecStreamUnsupported):
@@ -171,8 +176,10 @@ func (s *Server) auditRunExec(ctx context.Context, run types.AgentRun, at types.
 
 // collectExec reads both of sess's streams to their end, keeping the first runExecStreamCap bytes of
 // each, and then its exit code. When ctx ends first (the timeout, or a caller who left) the session is
-// closed, which ends both streams, and the exit code is -1.
-func collectExec(ctx context.Context, sess *runner.ExecSession) client.ExecResult {
+// closed, which ends both streams, and the exit code is -1. Otherwise a stream that broke, or a Wait
+// that gave no exit code, is the error: the runner lost the command (a k8s exec whose connection failed
+// after ExecStream returned ends its streams that way), and no exit code is made up for it.
+func collectExec(ctx context.Context, sess *runner.ExecSession) (client.ExecResult, error) {
 	// Close is what ends a stream no context reaches (a docker exec's hijacked connection), as
 	// sshBridgeExecSession does on a dropped connection.
 	stop := context.AfterFunc(ctx, func() {
@@ -181,33 +188,46 @@ func collectExec(ctx context.Context, sess *runner.ExecSession) client.ExecResul
 		}
 	})
 	defer stop()
+	defer func() {
+		if sess.Close != nil {
+			_ = sess.Close()
+		}
+	}()
 	if sess.Stdin != nil {
 		_ = sess.Stdin.Close() // no input: a command reading stdin sees its end
 	}
 	stdout, stderr := &execCapture{max: runExecStreamCap}, &execCapture{max: runExecStreamCap}
 	var wg sync.WaitGroup
+	var errErr, outErr error
 	if sess.Stderr != nil {
 		// Drained beside Stdout, never after it: one demux feeds both (drainExecStderr).
-		wg.Go(func() { _, _ = io.Copy(stderr, sess.Stderr) })
+		wg.Go(func() { _, errErr = io.Copy(stderr, sess.Stderr) })
 	}
 	if sess.Stdout != nil {
-		_, _ = io.Copy(stdout, sess.Stdout)
+		_, outErr = io.Copy(stdout, sess.Stdout)
 	}
 	wg.Wait()
-	res := client.ExecResult{ExitCode: 1, Stdout: string(stdout.buf), Stderr: string(stderr.buf), Truncated: stdout.dropped || stderr.dropped}
-	waited := false
-	if ctx.Err() == nil && sess.Wait != nil {
-		if code, err := sess.Wait(); err == nil {
-			res.ExitCode, waited = clampExitCode(code), true
-		}
-	}
-	if !waited && ctx.Err() != nil {
+	res := client.ExecResult{Stdout: string(stdout.buf), Stderr: string(stderr.buf), Truncated: stdout.dropped || stderr.dropped}
+	if ctx.Err() != nil {
 		res.ExitCode, res.TimedOut = -1, errors.Is(ctx.Err(), context.DeadlineExceeded)
+		return res, nil
 	}
-	if sess.Close != nil {
-		_ = sess.Close()
+	if err := errors.Join(outErr, errErr); err != nil {
+		return client.ExecResult{}, fmt.Errorf("the command's output stream broke: %w", err)
 	}
-	return res
+	if sess.Wait == nil {
+		return client.ExecResult{}, errors.New("the runner gave no exit code")
+	}
+	code, err := sess.Wait()
+	if err != nil {
+		if ctx.Err() != nil {
+			res.ExitCode, res.TimedOut = -1, errors.Is(ctx.Err(), context.DeadlineExceeded)
+			return res, nil
+		}
+		return client.ExecResult{}, fmt.Errorf("the runner lost the command: %w", err)
+	}
+	res.ExitCode = clampExitCode(code)
+	return res, nil
 }
 
 // execCapture keeps the first max bytes written to it and notes that more came. It never refuses a

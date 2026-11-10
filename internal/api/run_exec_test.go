@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -330,4 +331,75 @@ func TestRunExecKeepsTheRunAwake(t *testing.T) {
 	if n := touches.touches(); n < 3 {
 		t.Errorf("the run was touched %d times over a 1 s command with a 50 ms keepalive, want at least 3", n)
 	}
+}
+
+// brokenExecSession writes out to stdout, then ends both streams with streamErr (nil for a clean end),
+// and its Wait answers code and waitErr: a k8s exec whose connection fails after ExecStream returned
+// ends its streams and Wait this way (internal/runner/k8s/session.go).
+func brokenExecSession(out string, streamErr error, code int, waitErr error) *runner.ExecSession {
+	outR, outW := io.Pipe()
+	errR, errW := io.Pipe()
+	go func() {
+		if out != "" {
+			_, _ = io.WriteString(outW, out)
+		}
+		_ = outW.CloseWithError(streamErr)
+		_ = errW.CloseWithError(streamErr)
+	}()
+	return &runner.ExecSession{Stdout: outR, Stderr: errR, Wait: func() (int, error) { return code, waitErr }}
+}
+
+// TestRunExecLostCommandIsAFailure: a command the runner never started or lost before it ended answers
+// the runner's failure, never a made-up exit code, and its run.command.exec row is a failure carrying
+// the error and no exit; a real nonzero exit still answers 200 with its code.
+func TestRunExecLostCommandIsAFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sess       func() *runner.ExecSession
+		wantStatus int
+		wantReason string
+	}{
+		{"wait fails after an async start failure", func() *runner.ExecSession {
+			return brokenExecSession("", nil, 0, errors.New("dial the pod: connection refused"))
+		}, http.StatusBadGateway, reasonRunExecFailed},
+		{"stream fails at the start", func() *runner.ExecSession {
+			return brokenExecSession("", errors.New("upgrade request failed"), 0, nil)
+		}, http.StatusBadGateway, reasonRunExecFailed},
+		{"partial output, then a read error", func() *runner.ExecSession {
+			return brokenExecSession("half of the out", errors.New("connection reset by peer"), 0, nil)
+		}, http.StatusBadGateway, reasonRunExecFailed},
+		{"the sandbox went away mid-stream", func() *runner.ExecSession {
+			return brokenExecSession("half", fmt.Errorf("pod deleted: %w", runner.ErrSandboxGone), 0, nil)
+		}, http.StatusConflict, reasonRunExecUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return tc.sess(), nil })
+			w := e.execWithin(t, `{"command":"make"}`, 10*time.Second)
+			if w.Code != tc.wantStatus || wireReason(t, w) != tc.wantReason {
+				t.Errorf("POST /exec = %d %s, want %d %s", w.Code, w.Body, tc.wantStatus, tc.wantReason)
+			}
+			if strings.Contains(w.Body.String(), "exit_code") || strings.Contains(w.Body.String(), "half") {
+				t.Errorf("a lost command answered an exit code or output: %s", w.Body)
+			}
+			rows := execRows(e.h.audit.snapshot(), "run.command.exec")
+			if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), `"error":`) ||
+				strings.Contains(string(rows[0].Data), `"exit"`) {
+				t.Errorf("run.command.exec rows = %v, want one failure with the error and no exit", rows)
+			}
+		})
+	}
+
+	t.Run("a real exit 1", func(t *testing.T) {
+		e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+			return brokenExecSession("FAIL", nil, 1, nil), nil
+		})
+		res := execResult(t, e.execWithin(t, `{"command":"false"}`, 10*time.Second))
+		if res.ExitCode != 1 || res.Stdout != "FAIL" || res.TimedOut {
+			t.Errorf("result = %+v, want exit_code 1 with its output", res)
+		}
+		if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "success" ||
+			!strings.Contains(string(rows[0].Data), `"exit":1`) {
+			t.Errorf("run.command.exec rows = %v, want one success row with exit 1", rows)
+		}
+	})
 }
