@@ -147,21 +147,21 @@ func (s *Server) abandonProxyStart(ctx context.Context, runID uuid.UUID, rec pro
 // that must not run: the hash is missing or differs from a report already held, the start is no longer
 // the run's active one (a late answer), or its answer could not be recorded. The caller stops the proxy.
 // A pending start gets its deadline watchdog.
-func (s *Server) proxyStartAnswered(ctx context.Context, runID uuid.UUID, rec proxyStartRec, sha string) (bool, string) {
+func (s *Server) proxyStartAnswered(ctx context.Context, runID uuid.UUID, rec proxyStartRec, sha string) (bool, string, *store.ProxyStartChange) {
 	st, ok := s.cfg.Store.(store.RunProxyStarts)
 	if !ok || !rec.active {
-		return true, ""
+		return true, "", nil
 	}
 	ch, err := st.AnswerProxyStart(ctx, runID, rec.gen, sha, proxyReportGrace)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: recording a proxy start's answer failed; stopping it",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		s.auditReadback(ctx, runID, "run.policy.unconfirmed", "failure", rec.gen, map[string]any{"reason": "answer_unrecorded"})
-		return false, "answer_unrecorded"
+		return false, "answer_unrecorded", nil
 	}
 	if !ch.Active {
 		s.auditReadback(ctx, runID, "run.policy.unconfirmed", "failure", rec.gen, map[string]any{"reason": "start_superseded"})
-		return false, "start_superseded"
+		return false, "start_superseded", nil
 	}
 	switch ch.Settled {
 	case types.ProxyStartUnconfirmed:
@@ -169,12 +169,11 @@ func (s *Server) proxyStartAnswered(ctx context.Context, runID uuid.UUID, rec pr
 	case types.ProxyStartEnforced:
 		s.auditReadback(ctx, runID, "run.policy.enforced", "success", rec.gen, map[string]any{"config_sha256": ch.Start.ExpectedSHA256})
 	case types.ProxyStartFailed:
-		s.auditReadbackFailure(ctx, ch)
-		return false, ch.Reason
+		return false, ch.Reason, &ch
 	default:
 		s.watchProxyStart(runID, rec.gen)
 	}
-	return true, ""
+	return true, "", nil
 }
 
 // proxyStartWatch schedules a start's deadline check. A variable so a test can run it at once.
@@ -204,8 +203,7 @@ func (s *Server) expireProxyStart(ctx context.Context, runID uuid.UUID, gen int)
 		return
 	}
 	if ch.Settled == types.ProxyStartFailed {
-		s.auditReadbackFailure(ctx, ch)
-		s.containProxyStart(ctx, runID, gen)
+		s.auditReadbackFailure(ctx, ch, s.containProxyStart(ctx, runID, gen))
 	}
 }
 
@@ -396,12 +394,17 @@ func (s *Server) auditReadback(ctx context.Context, runID uuid.UUID, action, out
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action, runID.String(), outcome, mustJSON(data)))
 }
 
-// auditReadbackFailure is a failed start's run.policy.unconfirmed row, with both hashes as evidence.
-func (s *Server) auditReadbackFailure(ctx context.Context, ch store.ProxyStartChange) {
-	s.auditReadback(ctx, ch.Start.RunID, "run.policy.unconfirmed", "failure", ch.Start.Generation, map[string]any{
-		"reason": ch.Reason, "stopped": true,
+// auditReadbackFailure is a failed start's run.policy.unconfirmed row, with both hashes as evidence,
+// written once its stop was tried: stopped only when c confirms it, else containment_error says why not.
+func (s *Server) auditReadbackFailure(ctx context.Context, ch store.ProxyStartChange, c proxyContainment) {
+	data := map[string]any{
+		"reason": ch.Reason, "stopped": c.Contained,
 		"expected_sha256": ch.Start.ExpectedSHA256, "reported_sha256": ch.Start.ReportedSHA256,
-	})
+	}
+	if c.Err != nil {
+		data["containment_error"] = c.Err.Error()
+	}
+	s.auditReadback(ctx, ch.Start.RunID, "run.policy.unconfirmed", "failure", ch.Start.Generation, data)
 }
 
 // proxyLoadedReport is the body of POST /internal/proxy/loaded.
@@ -452,8 +455,8 @@ func (s *Server) handleInternalProxyLoaded(w http.ResponseWriter, r *http.Reques
 		data["config_sha256"] = body.ConfigSHA256
 		s.auditReadback(ctx, claims.RunID, "run.policy.enforced", "success", ch.Start.Generation, data)
 	case types.ProxyStartFailed:
-		s.auditReadbackFailure(ctx, ch)
-		s.containProxyStart(context.WithoutCancel(ctx), claims.RunID, ch.Start.Generation)
+		ctx := context.WithoutCancel(ctx)
+		s.auditReadbackFailure(ctx, ch, s.containProxyStart(ctx, claims.RunID, ch.Start.Generation))
 	}
 	status := http.StatusOK
 	if ch.Start.State == types.ProxyStartPending {
@@ -527,16 +530,17 @@ func (s *Server) recordConfirmedSandbox(ctx context.Context, run types.AgentRun,
 		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
 		return false
 	}
-	if ok, why := s.proxyStartAnswered(ctx, run.ID, start, sb.ProxyConfigSHA256); !ok {
-		s.abortUnconfirmedSandbox(ctx, run.ID, sb.Ref, start, why)
+	if ok, why, failed := s.proxyStartAnswered(ctx, run.ID, start, sb.ProxyConfigSHA256); !ok {
+		s.abortUnconfirmedSandbox(ctx, run.ID, sb.Ref, start, why, failed)
 		return false
 	}
 	return true
 }
 
 // abortUnconfirmedSandbox stops a created sandbox whose start did not confirm (why), records that stop
-// on a failed start, and fails the run. An unconfirmed stop is left to the sweep's retry.
-func (s *Server) abortUnconfirmedSandbox(ctx context.Context, runID uuid.UUID, ref string, start proxyStartRec, why string) {
+// on a failed start (and in its run.policy.unconfirmed row), and fails the run. An unconfirmed stop
+// is left to the sweep's retry.
+func (s *Server) abortUnconfirmedSandbox(ctx context.Context, runID uuid.UUID, ref string, start proxyStartRec, why string, failed *store.ProxyStartChange) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
@@ -546,6 +550,13 @@ func (s *Server) abortUnconfirmedSandbox(ctx context.Context, runID uuid.UUID, r
 		stopErr = errProxyStopUnconfirmed.Error()
 	}
 	s.failAndRevoke(ctx, runID, types.RunStarting, unconfirmedHint(stopped))
+	if failed != nil {
+		c := proxyContainment{Contained: stopped}
+		if !stopped {
+			c.Err = errProxyStopUnconfirmed
+		}
+		s.auditReadbackFailure(ctx, *failed, c)
+	}
 	if st, ok := s.cfg.Store.(store.RunProxyStarts); ok && start.active {
 		if err := st.RecordProxyContainment(ctx, runID, start.gen, stopErr); err != nil {
 			slog.WarnContext(ctx, "wardynd: recording a failed proxy start's stop failed; the sweep retries",

@@ -89,7 +89,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	start proxyStartRec, sha, retiring string, renewed renewedTokens, fresh string) *reviveError {
 	s.revokeRetiringToken(ctx, retiring, run.ID)
 	s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), fresh)
-	ok, why := s.proxyStartAnswered(ctx, run.ID, start, sha)
+	ok, why, failed := s.proxyStartAnswered(ctx, run.ID, start, sha)
 	if ok {
 		return nil
 	}
@@ -98,6 +98,9 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 		"the run's new proxy did not confirm its policy, so it was stopped and the run is lost until revived", errors.New(why))
 	// The answer's stop wording comes from the containment result, never from the lost mark's outcome.
 	c := s.containProxyStartLocked(ctx, run.ID, start.gen)
+	if failed != nil {
+		s.auditReadbackFailure(ctx, *failed, c)
+	}
 	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) {
 		return rerr
 	}

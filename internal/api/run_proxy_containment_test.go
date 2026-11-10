@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -182,5 +184,58 @@ func TestReadback_ReviveUnresolvedNeverClaimsAStopThatFailed(t *testing.T) {
 	}
 	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt != nil || p.ContainmentError == "" {
 		t.Errorf("start = %s (contained %v, error %q), want failed and unresolved", p.State, p.ContainedAt, p.ContainmentError)
+	}
+}
+
+// unconfirmedFailureRow is the run's one run.policy.unconfirmed failure row, decoded.
+func unconfirmedFailureRow(t *testing.T, f *readbackFixture) map[string]any {
+	t.Helper()
+	var out map[string]any
+	for _, ev := range f.audit.eventsFor(f.run.ID, "run.policy.unconfirmed") {
+		if ev.Outcome == "failure" {
+			if out != nil {
+				t.Fatal("want one run.policy.unconfirmed failure row")
+			}
+			if err := json.Unmarshal(ev.Data, &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if out == nil {
+		t.Fatal("no run.policy.unconfirmed failure row")
+	}
+	return out
+}
+
+// The failure row's stopped follows the stop: false, with the stop's error, when it failed.
+func TestReadback_FailureRowStoppedFalseWhenTheStopFails(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.failWithUnstoppableProxy(t)
+	row := unconfirmedFailureRow(t, f)
+	if row["stopped"] != false || !strings.Contains(fmt.Sprint(row["containment_error"]), "daemon down") {
+		t.Errorf("failure row = %v, want stopped false with the stop's error", row)
+	}
+}
+
+// The failure row's stopped is false, naming the lock, when another operation held the run's lock and
+// containment was left to the sweep.
+func TestReadback_FailureRowStoppedFalseWhenTheLockIsBusy(t *testing.T) {
+	f := newReadbackFixture(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	_, _, jti := f.lastHandover(t)
+	_, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
+	if !ok {
+		t.Fatal("take the run's lock")
+	}
+	code, state := postLoaded(t, f.srv, f.run.ID, jti, hashHex([]byte("other bytes")))
+	unlock()
+	if code != http.StatusOK || state != string(types.ProxyStartFailed) {
+		t.Fatalf("mismatched report: %d %q, want 200 failed", code, state)
+	}
+	row := unconfirmedFailureRow(t, f)
+	if row["stopped"] != false || row["containment_error"] != errRunOpBusy.Error() {
+		t.Errorf("failure row = %v, want stopped false with the busy lock", row)
 	}
 }
