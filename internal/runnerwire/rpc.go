@@ -328,6 +328,12 @@ type ReplaceProxyArgs struct {
 	CfgJSON []byte `json:"cfg_json"`
 }
 
+// ReplaceProxyResult is replace_proxy's answer: runner.ProxyReviverHashed's hash of the bytes the
+// new proxy was handed. A runner that predates it answers nothing, which decodes as an empty hash.
+type ReplaceProxyResult struct {
+	ConfigSHA256 string `json:"config_sha256,omitempty"`
+}
+
 // SweepArgs is the crash-orphan sweep. A func cannot cross the wire, so it runs
 // in two calls: with Remove nil the runner answers the run ids older than
 // MinAge it holds a sandbox for; the org keeps those it no longer tracks and

@@ -82,7 +82,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (1) Per-run internal network and (2) the wardyn-proxy sidecar on it.
-	intNetID, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -188,7 +188,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg, managed: spec.ManagedFiles}
 		d.mu.Unlock()
 		d.keepExecOutput(name, spec.ExecOutput)
-		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced}, nil
+		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced, ProxyConfigSHA256: proxySHA, ProxyAddr: proxyIP}, nil
 	}
 
 	agentResp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
@@ -237,22 +237,25 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// driver makes on Ref, but teardown's not-found fallback (runIDFromAgentName) can only
 		// recover a run id from THIS form — a raw daemon-assigned ID would leak the proxy sidecar +
 		// per-run network whenever the agent container was already gone at teardown.
-		Ref:           agentContainerName(spec.RunID),
-		Driver:        driverName,
-		EnforcedClass: enforced,
+		Ref:               agentContainerName(spec.RunID),
+		Driver:            driverName,
+		EnforcedClass:     enforced,
+		ProxyConfigSHA256: proxySHA,
+		ProxyAddr:         proxyIP,
 	}, nil
 }
 
 // runNetworkAndProxy brings up a run's per-run internal network and its wardyn-proxy sidecar, for a
-// container and a VM alike. It returns the network's id, the proxy's IP on it, and the undo that
-// removes both; on an error it has already undone them.
-func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP string, undo func(), err error) {
+// container and a VM alike. It returns the network's id, the proxy's IP on it, the hash of the
+// config written to the proxy (startProxy), and the undo that removes both; on an error it has
+// already undone them.
+func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
 	// (1) Per-run internal network. Internal=true takes away its route off the host, and the isolated
 	// gateway mode leaves no address on the host's side (run_network_shape.go): together these uphold
 	// L0 even though the agent is *connected* to it.
 	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels))
 	if err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 	// rollback collects teardown steps to run on any later failure.
 	var rollback []func()
@@ -262,9 +265,9 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 			rollback[i]()
 		}
 	}
-	fail := func(err error) (string, string, func(), error) {
+	fail := func(err error) (string, string, string, func(), error) {
 		undo()
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 
 	// (2) wardyn-proxy sidecar: attached to the per-run internal network now; the control-plane-facing
@@ -276,7 +279,7 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg, spec.MachineKind.IsVM())
 	var proxyID string
 	if err == nil {
-		proxyID, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
+		proxyID, proxySHA, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
 			proxyEnvs, prep, netip.Addr{})
 	}
 	if err != nil {
@@ -309,7 +312,7 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 	if proxyIP == "" {
 		return fail(fmt.Errorf("docker: proxy has no IP on the per-run internal network %q", internalNetName(spec.RunID)))
 	}
-	return intNetID, proxyIP, undo, nil
+	return intNetID, proxyIP, proxySHA, undo, nil
 }
 
 // createRunNetwork creates runID's internal network with a user-specified IPv4 subnet and returns
