@@ -211,7 +211,7 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 	}
 	name := driveSeedName(runID)
 	remove := func(ctx context.Context) error {
-		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("docker: seed user drive volume %q: remove: %w", drive.ObjectName, err)
 		}
 		return nil

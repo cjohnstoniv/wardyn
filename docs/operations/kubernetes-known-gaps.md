@@ -14,11 +14,12 @@
 | --- | --- | --- | --- |
 | No BYOI or devcontainer builds | Refused | A `wardyn-byoi/`-prefixed image ref is refused before any pod is created. `WARDYN_ENVBUILD` devcontainer builds are Docker-only too, whatever `k8s.enabled` says. | Ephemeral containers can't honor the selftest-then-task double-exec BYOI needs ([`internal/runner/k8s/errors.go`](../../internal/runner/k8s/errors.go)'s `errBYOIUnsupported`, [`internal/runner/k8s/exec.go`](../../internal/runner/k8s/exec.go)). |
 | No `local_dir` or host-path workspace mounts | Refused | A policy with any `WorkspaceMounts` entry fails the run closed with a named error ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)'s `errMountsUnsupported`). Git-clone workspaces (`WorkspaceRepos`) are unaffected. | A pod has no path back to a directory on wardynd's own host, so there is nothing to stage. A model provider's credential injection and the Bedrock AWS SSO exchange happen at `wardyn-proxy`, so they work unchanged on Kubernetes. |
-| No in-sandbox DNS | By design | Every sandbox pod is `DNSPolicy: DNSNone` with the single nameserver `127.0.0.1`. Nothing listens there, so a lookup fails at once with connection refused ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). | Only the `wardyn-proxy` pod resolves hostnames, as on the Compose substrate. |
+| No in-sandbox DNS | By design | Every sandbox pod is `DNSPolicy: DNSNone` with its own proxy pod as the single nameserver. The proxy answers every query `REFUSED` and writes a `run.dns.query` row, so a lookup fails at once ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go), [`internal/egress/proxy/dns_audit.go`](../../internal/egress/proxy/dns_audit.go)). | Only the `wardyn-proxy` pod resolves hostnames, as on the Compose substrate. |
 | No per-pod PIDs limit | Not enforced | A run's `ResourceLimits.PidsLimit` is accepted but not enforced; wardynd logs a warning naming the run id each time. | Kubernetes has no per-container pids resource. Set the node-level kubelet `podPidsLimit` (or your distribution's `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb backstop. |
 | No revive or restart with current limits | Refused | `POST /runs/{id}/revive` answers 409, and `POST /admin/runs/restart` ("Restart with current limits") answers 200 with each run `ok: false`. Both carry reason `revive_unsupported` and change nothing. | The substrate implements no `runner.ProxyReviver`: the agent pod pins the proxy pod's IP, so a new proxy pod could not be reached. |
 | Ground-truth sensor | Opt-in | `groundtruth.k8s.enabled` runs a DaemonSet that ties your Tetragon's events to runs ([`cmd/wardyn-tetragon-ingest`](../../cmd/wardyn-tetragon-ingest)). Off by default. | Wardyn ships no Tetragon and does not verify its events. Gaps: gVisor and Kata runs are invisible to host eBPF, and no live-Tetragon test exists yet. See [Ground truth on Kubernetes](kubernetes-ground-truth.md). |
-| A default-deny NetworkPolicy already in `k8s.runsNamespace` | Refused | wardynd refuses to boot, unless the canary pod ran and could not connect. | See [the boot-time egress canary](#the-boot-time-egress-canary). |
+| A default-deny NetworkPolicy already in `k8s.runsNamespace` | Refused | wardynd refuses to boot, unless the canary pod ran and could not connect. | See [the egress canary](#the-egress-canary). |
+| NetworkPolicy stops being enforced after boot | Refused for new sandboxes | The canary re-runs every 10 minutes; the first check that shows egress through a deny-all policy refuses new sandboxes in that namespace. Running sandboxes keep running. | Fix the CNI; see [re-checks after boot](#re-checks-after-boot). |
 | The proxy's DNS rule covers only `kube-dns` pods in `kube-system` | Partial | The per-run proxy NetworkPolicy admits DNS to its address range (cloud-metadata address excluded) and to pods labelled `k8s-app=kube-dns` in `kube-system` ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). | GKE Cloud DNS, NodeLocal DNSCache on the host network and DNS outside `kube-system` (OpenShift) need an operator-supplied NetworkPolicy. |
 | `replicas` stays 1 unless `ha.enabled` is set | Partial | HA is supported on Kubernetes only. | See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks. With registered runners keep one replica: [what a second replica still hits](high-availability.md). |
 
@@ -100,7 +101,9 @@ User drives and `disk_mib` report the same `enforcement` values, `types.StorageE
 > [!NOTE]
 > Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.
 
-## The boot-time egress canary
+## The egress canary
+
+wardynd runs the canary at boot in every runs namespace, then again every 10 minutes.
 
 A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses boot, with no override, unless the canary pod ran and could not connect.
 
@@ -117,5 +120,19 @@ A managed, multi-tenant cluster may apply an ambient default-deny as its baselin
 - If the canary pod reached Running and its own connect exited with exactly 1 (not "never reached Running", not any other exit code), `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1` acknowledges that shape and boots anyway.
 - That is never proof of enforcement, because phase B is skipped. The setup checklist's `k8s_egress_containment` row grades it `warn` ("acknowledged, not proven"), never `ok`.
 - Only the exempt-the-podSelector fix gives real proof.
+
+### Re-checks after boot
+
+- Each re-check runs the same two phases. A definite result changes the verdict at once: a check that shows egress through a deny-all policy refuses new sandboxes from that check on, and a check that proves enforcement allows them again.
+- Only a check that cannot tell (an API error, a pod that never ran) waits: three in a row (about 30 minutes) make the verdict "not proven", so one flaky check never moves it.
+- Under `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, a phase A pod that exits 1 waits too where a definite verdict stands, since a pod-network blip looks the same. Three in a row make "enforced" read "acknowledged", and "not enforced" read "not proven". Agent-sandbox mode refuses on "acknowledged", so `/healthz` reports it as `not_proven` there.
+- Once a namespace's verdict is "not enforced" or "not proven", new sandboxes there are refused. Running sandboxes keep running; stop them yourself if they must not outlive the guarantee.
+- `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` still lets plain sandboxes start where the canary proved NetworkPolicy not enforced, as at boot. It never covers "not proven", and agent-sandbox creates (`WARDYN_K8S_AGENT_SANDBOX`) need proven enforcement whatever it says.
+- After a CNI change, the next check sees it within 10 minutes. Restart wardynd, or the runner, to check at once.
+- `/healthz` reports `network_policy` and `network_policy_checked_at`, the time of the check that produced that verdict; checks that could not tell, fewer than three, never move it. After a failed re-check the verdict is `refused` (not enforced, new sandboxes refused) or `not_proven`. With several runs namespaces it is the worst one's, with its own time. The `k8s_egress_containment` setup row shows the same.
+- A Kubernetes runner reports its verdict when its session starts, and again after each re-check that changes the verdict or its time. On a runner, the refusal at create is what stops a new sandbox.
+- wardynd's `/healthz` shows the worst of its own verdict and every connected runner's, with `network_policy_source` set to `runner` when it is a runner's. The setup row shows wardynd's own.
+- Health reflects connected runners only. A runner's verdict reappears when it reconnects.
+- A change on a runner writes a `k8s.netpol.update` row naming the runner. Its first verdict, when not `enforced`, writes `k8s.netpol.fail`.
 
 The canary's verdict is on the admin setup page's Environment step (`GET /setup/status`, the `k8s_egress_containment` check). The same step holds the Fence/Wall/Vault tier matrix for every driver.

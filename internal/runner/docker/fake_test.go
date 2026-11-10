@@ -76,6 +76,7 @@ const fakeJoinedNetIP = "172.30.0.9"
 type fakeExec struct {
 	cmd     []string
 	user    string
+	env     []string
 	running bool
 }
 
@@ -93,6 +94,8 @@ type createdContainer struct {
 	// forceRemoved records whether the removal asked for Force, which a
 	// container that may be running needs.
 	forceRemoved bool
+	// removedVolumes records whether the removal asked for the container's anonymous volumes to go.
+	removedVolumes bool
 }
 
 // fakeDocker is an in-memory dockerAPI for unit tests. It is concurrency-safe
@@ -548,6 +551,15 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 		if !f.legacyProxyImages[imageID] {
 			resp.Config = &dockerspec.DockerOCIImageConfig{}
 			resp.Config.Labels = map[string]string{proxyReadyLabel: "1"}
+		}
+		if vols := f.imageVolumes[imageID]; len(vols) > 0 {
+			if resp.Config == nil {
+				resp.Config = &dockerspec.DockerOCIImageConfig{}
+			}
+			resp.Config.Volumes = map[string]struct{}{}
+			for _, v := range vols {
+				resp.Config.Volumes[v] = struct{}{}
+			}
 		}
 		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
@@ -1122,6 +1134,7 @@ func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client
 	}
 	c.removed = true
 	c.forceRemoved = opts.Force
+	c.removedVolumes = opts.RemoveVolumes
 	return client.ContainerRemoveResult{}, nil
 }
 
@@ -1172,7 +1185,7 @@ func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.Exec
 	if f.execCreateErr != nil {
 		return client.ExecCreateResult{}, f.execCreateErr
 	}
-	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, running: c.state != nil && c.state.Running})
+	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, env: opts.Env, running: c.state != nil && c.state.Running})
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd

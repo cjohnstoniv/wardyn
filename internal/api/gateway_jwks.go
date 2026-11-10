@@ -14,7 +14,9 @@ import (
 // console's directory does not hold.
 const wellKnownPrefix = "/.well-known"
 
-// gatewayJWKSRoute is the key set's path. Experimental until 0.11.
+// gatewayJWKSRoute is the key set's path. Its address is stable through 0.11, as the
+// compatibility list in docs/operations/ai-gateway.md promises; the path keeps its
+// "experimental" name so a gateway already pointed at it keeps working.
 const gatewayJWKSRoute = wellKnownPrefix + "/wardyn-experimental/gateway-jwks.json"
 
 // handleGatewayJWKS serves the public keys an AI gateway verifies a run identity

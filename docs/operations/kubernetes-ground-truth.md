@@ -170,12 +170,12 @@ An empty `run` means the label lookup could not establish a run. It does not pro
 
 ## DNS queries
 
-The sensor sees where a packet went, not the name it asked for. Wardyn records each DNS query a run asks as a `run.dns.query` audit row with the name, the type and what the sandbox was told. No query is looked up outside the run.
+The sensor sees where a packet went, not the name it asked for. Wardyn records the DNS queries a run asks as `run.dns.query` audit rows with the name, the type and what the sandbox was told, bounded as the last bullet says. On Kubernetes, Docker and VM runs, no query is looked up outside the run.
 
 - **Kubernetes:** the agent pod's one nameserver is its proxy pod. The proxy answers every query `REFUSED` and writes the row, with `via` `proxy`. The agent's NetworkPolicy allows port 53, TCP and UDP, to its proxy pod only. The proxy binds 53 through the pod sysctl `net.ipv4.ip_unprivileged_port_start`, with no added capability.
 - **VM runs:** the relay keeps answering from its own name table, because that answer is how a guest reaches an allowed host by name. Each row says `answered` (with the address the guest got), `refused` (with `cause` `name` or `full`), and `via` `vm_relay`. A base-image preparation has no run proxy, so its `prep_refused` queries are only in the relay's log.
-- **Docker:** the agent's one nameserver is its run proxy, through a read-only `/etc/resolv.conf` the driver mounts from a per-run Docker volume. The proxy answers every query `REFUSED` and writes the row, with `via` `proxy`. Tested in CI on runc (every PR) and set up for gVisor (nightly); Kata and krun use the same mount but are not tested in CI. It needs Docker Engine 26 or later and Docker API 1.45 or later. On an older engine run with `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK`, or a client pinned to an older API with `DOCKER_API_VERSION`, lookups fail at Docker's resolver as before and write no row.
-- Rows are bounded: the first of each name, type and outcome in a second is written, and the rest are counted on the next one (`repeat`). At most 64 rows a second are written per run.
+- **Docker:** the agent's one nameserver is its run proxy, through a read-only `/etc/resolv.conf` the driver mounts from a per-run Docker volume. The proxy answers every query `REFUSED` and writes the row, with `via` `proxy`. Covered by CI tests on runc (every pull request) and gVisor (nightly); Kata and krun use the same mount but are untested. It needs Docker Engine 26 or later and Docker API 1.45 or later. On an older engine run with `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK`, or a client pinned to an older API with `DOCKER_API_VERSION`, lookups fail at Docker's resolver as before and write no row.
+- Rows are bounded: the first of each name, type and outcome in a second is written, and the rest are counted on the next one (`repeat`). At most 64 rows a second are written per proxy; rows over that are dropped and counted in the proxy's warning.
 
 ## Limits
 

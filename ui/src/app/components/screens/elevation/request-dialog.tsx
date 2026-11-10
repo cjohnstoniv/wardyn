@@ -28,7 +28,7 @@ export function KindChoice({ kind, onKind }: { kind: RequestKind; onKind: (k: Re
         {KINDS.map((k) => (
           <label key={k.value} className="cursor-pointer">
             <input type="radio" className="peer sr-only" name={name} checked={kind === k.value} onChange={() => onKind(k.value)} />
-            <span className="block px-3 py-1.5 text-muted-foreground peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring">
+            <span className="block px-3 py-1.5 text-muted-foreground peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-ring">
               {k.label}
             </span>
           </label>

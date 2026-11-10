@@ -206,6 +206,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_IMAGE_PULL_SECRET` | string | (unset) | optional pre-existing Secret name threaded onto `imagePullSecrets` for every pod the `k8s` substrate creates (agent, proxy, and the boot-time egress canary) (`-tags k8s`) |
 | `WARDYN_K8S_READ_NODES` | bool | off | list the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`); boot measures the cluster from them. Needs `list` on `nodes`. [Details](#wardyn_k8s_read_nodes) |
 | `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
+| `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE` | string | empty | experimental: a `SandboxTemplate` in each runs namespace whose `sandbox-template.wardyn.dev/` annotations the agent pod takes; needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.template`. [Details](#wardyn_k8s_agent_sandbox_template) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -218,6 +219,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_APPROVAL_NOTIFY` 🔒 | string (JSON) | (unset) | approval notification config (flag `-approval-notify`): channels that are told when an approval is waiting. Unset or empty means off. Any bad value refuses boot, naming the channel `id` and the rule. [Details](#wardyn_approval_notify) |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`); a sibling `<path>.quarantine` appears if the store permanently refuses a spooled line |
 | `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, a person in `actor` or `target` is a subject, shown while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
+| `WARDYN_AUDIT_STRICT` | bool | `false` | strict audit (flag `-audit-strict`): a covered policy, governance, approval or grant change is refused `503 audit_unavailable` if its audit intent row cannot be written first. The handler's own detailed row can still spool. [Details](OPERATIONS.md#the-audit-log-cant-quietly-rot) |
 | `WARDYN_AUDIT_SOURCE` | string | (unset) | optional static string stamped as an extra top-level `"source"` field on every event a configured sink serializes, never written to Postgres (flag `-audit-source`). [Details](#wardyn_audit_source) |
 | `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`). **Unset is not a safe default** (store mode is the exception): it mints a throwaway identity each boot, so boot 2 cannot decrypt what the first boot encrypted and fails closed (`loadOrCreateSecret`, [`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)). [Details](#wardyn_age_key) |
 | `WARDYN_PLATFORM_KEY_FILE` 🔒 | path | (unset) | local mode only (flag `-platform-key-file`): a file holding a SECOND age identity from which alone wardynd derives the key that wraps its own signing, session, UI-session and SSH host keys. Refused without `WARDYN_AGE_KEY`. [Details](#wardyn_platform_key_file) |
@@ -352,7 +354,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_PROXY_COMMAND` | string | (unset) | an ssh `ProxyCommand` published on `/healthz` as `ssh.proxy_command` (flag `-ssh-proxy-command`), for an estate whose only way in is a TLS-terminating listener on 443. [Details](#wardyn_ssh_proxy_command) |
 | `WARDYN_SSH_MAX_CONNECTIONS` | int | `64` | authenticated SSH gateway connections, per replica (flag `-ssh-max-connections`). See [SSH.md](SSH.md#bounds) |
 | `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` | int | `16` | SSH gateway handshakes in progress per source address, per replica (flag `-ssh-max-handshakes-per-source`) |
-| `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `4` | most concurrent SSH channels one run may hold, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
+| `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `4` | most concurrent SSH channels one run may hold, a `POST /runs/{id}/exec` command counting as one, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
@@ -821,6 +823,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Experimental, off by default (`-tags k8s`). The agent pod is made by a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller from a `Sandbox`; the proxy pod, Secret and NetworkPolicies stay Wardyn's.
 - Boot refuses when the cluster does not serve `agents.x-k8s.io/v1beta1`, when wardynd lacks a needed verb, under `wardyn-runnerd`, or beside `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`.
 - Tested with agent-sandbox v1.0.9 only. Setup, what it widens and what is not supported: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md). Chart: `k8s.agentSandbox.*`.
+
+### `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`
+
+- Experimental, empty by default (`-tags k8s`). The name of an agent-sandbox `SandboxTemplate` in each runs namespace. The agent pod takes only its annotations under `sandbox-template.wardyn.dev/`. Placement and runtime come only from `WARDYN_K8S_SANDBOX_PLACEMENT` and the confinement class, where the boot canary checks NetworkPolicy enforcement.
+- A template that sets any pod field (placement included) or other field, or changes an annotation Wardyn set, refuses the run before its `Sandbox` is created. Boot refuses a template that is missing, unreadable or refused, a name that is not a valid object name, and the variable without `WARDYN_K8S_AGENT_SANDBOX`.
+- Needs `get` on that one name of `sandboxtemplates.extensions.agents.x-k8s.io`. [A platform template](operations/kubernetes-agent-sandbox.md#a-platform-template).
 
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 
@@ -2231,7 +2239,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Each audit row becomes one OTLP/HTTP JSON log record, POSTed in batches to `<endpoint>/v1/logs` (the path is added unless `endpoint` already ends in it). Stdlib only, no SDK.
 - Best-effort, like the webhook sink: a full queue or a batch that fails every retry is shed and counted in `wardyn_audit_sink_drops_total{sink="otlp"}`. It is not lossless; use the acknowledged webhook for that.
-- Spans are not exported yet.
+- Spans are off unless `traces` is `true`; see [monitoring](operations/monitoring.md#opentelemetry-logs).
 
 | Field | Default | Notes |
 |---|---|---|
@@ -2239,6 +2247,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `bearer_token` | (unset) | sent as `Authorization: Bearer`; requires an `https://` endpoint, boot fails otherwise |
 | `headers` | (unset) | extra request headers, for example a tenant id; sent as written, so a secret in one travels in cleartext over `http://`. `Authorization`, `Content-Type`, `Content-Length` and `Host` are refused |
 | `batch_size` | `100` | records per POST |
+| `traces` | `false` | also POST one span per run-scoped row to `<endpoint>/v1/traces`, and add the span's `traceId` and `spanId` to the row's log record |
 | `flush_interval`, `buffer_size`, `max_retries`, `retry_base_delay`, `timeout` | as `webhook` | same meaning and limits, including the `15s` timeout cap |
 
 | Record part | Value |

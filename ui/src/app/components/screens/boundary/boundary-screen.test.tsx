@@ -142,6 +142,7 @@ describe("BoundaryScreen", () => {
     expect(screen.getByTestId("boundary-mode-chip")).toHaveTextContent(BOUNDARY.CHIP_HARD);
     expect(hardRadio()).toBeEnabled();
     expect(within(hardPanel).getByText(new RegExp(BOUNDARY.BLOCKED_EMPTY))).toBeInTheDocument();
+    expect(screen.getByLabelText("Barrier floor")).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText(BOUNDARY.FLOOR_LABEL), "CC2");
     expect(within(hardPanel).getByText(BOUNDARY.FLOOR_TAIL("Wall"))).toBeInTheDocument();
     expect(within(hardPanel).queryByText(new RegExp(BOUNDARY.BLOCKED_EMPTY))).toBeNull();

@@ -318,7 +318,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 		}
 		return runner.Sandbox{}, err
 	}
-	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec, false)
+	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, false)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -421,7 +421,8 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	d.vms.Store(name, v)
 	d.keepExecOutput(name, spec.ExecOutput)
 	// A hardware VM boundary: the CC3 family, as Kata and krun microVMs are.
-	return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns}, nil
+	return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
+		ProxyConfigSHA256: proxySHA, ProxyAddr: proxyIP}, nil
 }
 
 func (c VMConfig) user() string { return strconv.Itoa(c.UID) + ":" + strconv.Itoa(c.GID) }
@@ -551,7 +552,7 @@ func (d *Driver) exportImage(ctx context.Context, spec runner.SandboxSpec, path 
 		return fmt.Errorf("docker: create the VM image export: %w", err)
 	}
 	defer func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	}()
 	rc, err := d.cli.ContainerExport(ctx, created.ID, client.ContainerExportOptions{})
 	if err != nil {

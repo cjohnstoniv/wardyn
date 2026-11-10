@@ -64,6 +64,7 @@ Wardyn is up.
     - (kind's default kindnet is the classic case — the conformance CI lane pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the refusal to a loud warning).
   - A DIFFERENT knob, `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, never downgrades this enforcement refusal — it only acknowledges the SEPARATE trap below (an ambient default-deny already present in `k8s.runsNamespace`),
     - and only when the canary pod actually ran and could not connect.
+- **Pod sysctls allowed in `k8s.runsNamespace`** (with `k8s.enabled`): each run's proxy pod sets `net.ipv4.ip_unprivileged_port_start=53`, a namespaced safe sysctl, to bind its DNS listener without a capability. A cluster whose admission forbids pod sysctls fails every run at proxy start.
 - **Postgres 13+** (external or managed).
 - A wardynd image:
   - the chart's default pulls the CI-published one for a released version (see the callout at the top), or **build and push your own** (see below) for a fork, a private registry, or an unreleased change.
@@ -514,7 +515,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 - Accepted but not enforced, with a logged warning naming the run: **no per-pod PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide backstop).
 - That one is not a missing feature and will not close: the Pod API has no per-container maximum-pids resource to request, so there is nothing for the chart to set — see `resourceRequirements` in [`internal/runner/k8s/naming.go`](../../../internal/runner/k8s/naming.go).
 - The kubelet setting is the only lever, and it is node-wide by design.
-- Also **no in-sandbox DNS**: a fast-failing loopback-only resolver, so only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress.
+- Also **no in-sandbox DNS**: the agent's one nameserver is its proxy pod, which refuses every query and records it, so only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress.
   - The ground-truth sensor is **opt-in, not a default**: `groundtruth.k8s.enabled` runs a DaemonSet that reads your Tetragon's export. [The page](../../../docs/operations/kubernetes-ground-truth.md) also has the recipe for joining another sensor by run.
   - **`replicas` stays 1 unless `ha.enabled` is set** (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "High availability").
 

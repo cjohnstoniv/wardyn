@@ -456,6 +456,7 @@ function Row({
                   onChanged={onStatusRefresh}
                   summary={<HostSummary host={host} />}
                   hint={GIT_S.STORE_NOTE}
+                  provider={host}
                   saveVariant="secondary"
                 />
               </LaneBody>
@@ -470,6 +471,7 @@ function Row({
                     stored={present.includes("github-app-id")}
                     disabled={!operator}
                     onChanged={onStatusRefresh}
+                    provider={host}
                     saveVariant="secondary"
                   />
                   <SecretLane
@@ -479,6 +481,7 @@ function Row({
                     stored={present.includes("github-app-key")}
                     disabled={!operator}
                     onChanged={onStatusRefresh}
+                    provider={host}
                     saveVariant="secondary"
                   />
                 </div>
@@ -494,6 +497,7 @@ function Row({
                   disabled={!operator}
                   onChanged={onStatusRefresh}
                   summary={<HostSummary host={host} />}
+                  provider={host}
                   saveVariant="secondary"
                 />
               </LaneBody>

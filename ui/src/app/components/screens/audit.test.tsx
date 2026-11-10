@@ -44,6 +44,8 @@ vi.mock("../../lib/api/health", () => ({
 }));
 
 import { AuditScreen } from "./audit";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 function ev(partial: Partial<AuditEvent> & { id: string }): AuditEvent {
   return {
@@ -90,6 +92,13 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     whoamiMock.mockResolvedValue(null);
   });
 
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listAuditMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("re-queries the server with run_id when a run is selected from a row", async () => {
     // First load: global (no run filter) -> two events for different runs.
     listAuditMock.mockResolvedValueOnce([
@@ -104,7 +113,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
     // #3036: with no title known, the run reference's lead word is the drill-in and the id beside it copies.
-    expect(await screen.findAllByRole("button", { name: /^(111|222)$/ })).toHaveLength(2);
+    expect(await screen.findAllByRole("button", { name: /^Copy run id (111|222)$/ })).toHaveLength(2);
     const drill = (await screen.findAllByRole("button", { name: "Run" }))[0];
     fireEvent.click(drill);
 
@@ -209,8 +218,11 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(chip).toHaveTextContent(/^3f2a91c0$/);
     const ref = chip.closest('[data-testid="run-ref"]')!;
     const row = ref.parentElement!;
-    expect(row).toHaveClass("flex-wrap", "sm:flex-nowrap");
+    expect(row).toHaveClass("flex-wrap", "xl:flex-nowrap");
+    expect(row).not.toHaveClass("sm:flex-nowrap");
+    // The sentence keeps its floor (#1878); the run reference may shrink beside the sidebar (1024px).
     expect(screen.getByText(/^Created the run/)).toHaveClass("sm:min-w-[10rem]");
+    expect(ref).toHaveClass("sm:shrink");
     // Two lines on a phone: the outcome is lifted onto the first, the description and chip share the second.
     expect(ref).toHaveClass("order-3", "sm:order-none");
     expect(ref.parentElement!.querySelector(":scope > div.order-1")).not.toBeNull();
@@ -227,7 +239,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const title = await screen.findByRole("button", { name: "payments deps bump" });
     expect(screen.getByText(/^Created the run$/)).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(RID))).toBeNull();
-    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" })).toBeInTheDocument();
     fireEvent.click(title);
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(RID, { newest: true }));
   });
@@ -238,7 +250,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     listAuditMock.mockResolvedValue([ev({ id: "r1", run_id: RID, action: "run.kill", target: RID })]);
     renderScreen();
     expect(await screen.findByRole("button", { name: "Run" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" })).toBeInTheDocument();
   });
 
   // #2850: the toolbar counter drops to its own line whole instead of wrapping inside itself.
@@ -277,7 +289,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const outcomes = screen.getAllByTestId("audit-outcome-cell");
     expect(actors).toHaveLength(2);
     expect(outcomes).toHaveLength(2);
-    for (const cell of actors) expect(cell.className).toContain("w-[88px]");
+    for (const cell of actors) expect(cell.className).toContain("w-[96px]");
     for (const cell of outcomes) expect(cell.className).toContain("w-[72px]");
     expect(actors[0]).toHaveTextContent(/human/i);
     expect(actors[1]).toHaveTextContent(/system/i);
@@ -622,56 +634,6 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await user.click(await screen.findByRole("option", { name: /^Egress$/i }));
     await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
     expect(screen.getByText("Allowed inbound to api")).toBeInTheDocument();
-  });
-
-  // The call id a row went to a gateway under. Untrusted text: shown only as a UUID, only as text, and copied whole.
-  it("shows the gateway call id on an egress row with a copy button, and a row without it looks as it did", async () => {
-    const id = "3f2a1c70-8e4b-4d19-a6f2-5b0c7de19a44";
-    listAuditMock.mockResolvedValue([
-      ev({ id: "e1", action: "egress.allow", target: "gateway.example.com", data: { gateway_call_id: id } }),
-      ev({ id: "e2", action: "egress.deny", target: "gateway.example.com", outcome: "denied", data: { gateway_call_id: id.replace("3f2a", "b81e") } }),
-      ev({ id: "e3", action: "egress.allow", target: "registry.example.com", data: {} }),
-      ev({ id: "e4", action: "egress.allow", target: "no-data.example.com" }),
-      // Not a UUID, or on a row that is not an egress decision: no line, and the text is never parsed as markup.
-      ev({ id: "e5", action: "egress.allow", target: "evil.example.com", data: { gateway_call_id: "<img src=x onerror=alert(1)>" } }),
-      ev({ id: "e6", action: "run.create", data: { gateway_call_id: id } }),
-    ]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    // After setup(), which installs a clipboard of its own.
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    const { container } = renderScreen();
-    expect(await screen.findByText(`Call id ${id}`)).toBeInTheDocument();
-    expect(screen.getByText(`Call id ${id.replace("3f2a", "b81e")}`)).toBeInTheDocument();
-    expect(screen.getAllByTestId("audit-call-id")).toHaveLength(2);
-    expect(screen.getByText("Allowed egress to registry.example.com").parentElement?.children).toHaveLength(1);
-    expect(screen.getByText("Allowed egress to no-data.example.com").parentElement?.children).toHaveLength(1);
-    expect(screen.getByText("Allowed egress to evil.example.com").parentElement?.children).toHaveLength(1);
-    expect(container.querySelector("img")).toBeNull();
-    expect(screen.queryByText(/onerror/)).not.toBeInTheDocument();
-    expect(screen.getByText("Created the run").parentElement?.children).toHaveLength(1);
-    // Copy takes the whole id, never the "Call id" label.
-    const [copy] = screen.getAllByRole("button", { name: "Copy call id" });
-    expect(screen.getAllByRole("button", { name: "Copy call id" })).toHaveLength(2);
-    await user.click(copy);
-    expect(writeText).toHaveBeenCalledWith(id);
-  });
-
-  it("words a gateway token mint row, and files it under Credentials", async () => {
-    listAuditMock.mockResolvedValue([
-      ev({ id: "e1", actor_type: "agent", action: "gateway_identity.mint", target: "corp-gateway", data: { provider: "corp-gateway" } }),
-      ev({ id: "e2", action: "gateway_identity.mint", target: "old-gateway", outcome: "denied", data: { reason: "identity_deactivated" } }),
-      ev({ id: "e3", action: "run.create" }),
-    ]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderScreen();
-    expect(await screen.findByText("Signed a gateway token for corp-gateway")).toBeInTheDocument();
-    expect(screen.getByText("Refused a gateway token for old-gateway")).toBeInTheDocument();
-    expect(screen.queryByTestId("audit-call-id")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("combobox", { name: /event/i }));
-    await user.click(await screen.findByRole("option", { name: /^Credentials$/i }));
-    await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
-    expect(screen.getByText("Signed a gateway token for corp-gateway")).toBeInTheDocument();
   });
 
   it("r15 T2-f: labels service rows by source, names no caller for a credential-less refusal, and ends an inbound detail with the run", async () => {

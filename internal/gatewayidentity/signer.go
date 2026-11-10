@@ -7,8 +7,8 @@
 // never touches internal-API auth, and a token it signs cannot authenticate
 // inward. Only wardynd holds it.
 //
-// The token format and the JWKS are experimental until 0.11, and either may
-// change before then.
+// The token format is "1": within it claims are only added, never removed,
+// renamed or re-typed. See "Compatibility" in docs/operations/ai-gateway.md.
 package gatewayidentity
 
 import (
@@ -31,8 +31,9 @@ import (
 
 const (
 	// tokenFormat is the wardyn_format claim: a gateway rule can tell which
-	// shape it is reading while the format is experimental.
-	tokenFormat = "experimental-1"
+	// shape it is reading. A change to this value is a new format, announced a
+	// minor release ahead.
+	tokenFormat = "1"
 	// tokenLifetime is the longest a token lives, and how long one lives when the
 	// provider sets none. A gateway cannot learn that a run was killed, so this is
 	// also the longest a killed run's token can still be spent. Key retirement

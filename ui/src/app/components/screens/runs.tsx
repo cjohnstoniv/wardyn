@@ -26,7 +26,7 @@ import { RunsFirstRun } from "./runs-first-run";
 import { RunsMemberEmpty } from "./runs-member-empty";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
-import { EmptyState, ErrorState } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { useRole } from "../wardyn/operator-context";
@@ -156,9 +156,13 @@ export function RunsScreen() {
       );
   }, [view, adminView, filters.scope, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q]);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
-    fetchRuns().catch(() => setStatus("error"));
+    fetchRuns().catch((e) => {
+      setLoadMessage(failureSentence(e));
+      setStatus("error");
+    });
   }, [fetchRuns]);
 
   // Reload whenever the filters (i.e. the URL) or the view change, and on
@@ -277,7 +281,7 @@ export function RunsScreen() {
 
       {status === "error" ? (
         <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         </div>
       ) : firstLoad ? (
         <RunsLoadingSkeleton />

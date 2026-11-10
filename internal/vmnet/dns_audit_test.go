@@ -172,6 +172,31 @@ func TestReporterBoundsDNSRecords(t *testing.T) {
 	}
 }
 
+// A guest asking new names, each twice, for 120 seconds keeps at most one
+// interval's worth of names held or remembered.
+func TestReporterDNSHeldStaysBounded(t *testing.T) {
+	c := &clock{t: time.Unix(1e9, 0)}
+	rp := newReporter(c.now, slog.New(slog.DiscardHandler), func(refusal) {})
+	rp.sendDNS = func(dnsRecord) {}
+	n := 0
+	for sec := 0; sec < 120; sec++ {
+		c.t = c.t.Add(reportInterval) // a new window: new names spend its budget before the flush runs
+		for i := 0; i < 2*maxDNSReports; i++ {
+			q := dnsRecord{Name: fmt.Sprintf("n%d.test", n), Type: "A", Outcome: dnsAnswered}
+			n++
+			rp.dns(q)
+			rp.dns(q)
+		}
+		rp.flush()
+		rp.mu.Lock()
+		held, last := len(rp.held), len(rp.last)
+		rp.mu.Unlock()
+		if held > maxDNSReports || last > 2*maxDNSReports {
+			t.Fatalf("second %d: %d held, %d remembered", sec, held, last)
+		}
+	}
+}
+
 func recv(t *testing.T, ch chan dnsRecord) dnsRecord {
 	t.Helper()
 	select {

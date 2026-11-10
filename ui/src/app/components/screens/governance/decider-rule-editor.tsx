@@ -280,7 +280,7 @@ export function DeciderRuleEditor({
             {SCOPES.map((s) => (
               <label key={s.label} className="cursor-pointer">
                 <input type="radio" className="peer sr-only" name={id("scope")} checked={rule.max_scope === s.value} onChange={() => patch({ max_scope: s.value })} />
-                <span className="block px-3 py-1.5 text-muted-foreground peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring">{s.label}</span>
+                <span className="block px-3 py-1.5 text-muted-foreground peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-ring">{s.label}</span>
               </label>
             ))}
           </span>

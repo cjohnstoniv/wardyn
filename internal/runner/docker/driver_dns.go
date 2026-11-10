@@ -164,9 +164,10 @@ func (d *Driver) removeDNSSeed(ctx context.Context, runID uuid.UUID) error {
 	return d.removeSeedByID(ctx, res.Container.ID)
 }
 
-// removeSeedByID force-removes the seed container with this id, the one this driver created or inspected.
+// removeSeedByID force-removes the seed container with this id, the one this driver created or inspected, and
+// any anonymous volume the image declared for it. The run's named DNS volume stays.
 func (d *Driver) removeSeedByID(ctx context.Context, id string) error {
-	if _, err := d.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove the DNS seed: %w", err)
 	}
 	return nil

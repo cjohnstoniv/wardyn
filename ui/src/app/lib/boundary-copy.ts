@@ -41,7 +41,7 @@ export const BOUNDARY = {
   BLOCKED_HINT: "No run can reach these, whatever a team allows.",
   /** not on the boards: DESIGN-TREE §8 "UI lanes" names it for an empty boundary. */
   BLOCKED_EMPTY: "No hard limits yet. Add the first.",
-  FLOOR_LABEL: "Confinement floor",
+  FLOOR_LABEL: "Barrier floor",
   FLOOR_TAIL: (barrier: string) => `and up. No team can allow a run below ${barrier}.`,
   HARD_FOOT: "Anything not listed is left to the teams below. Your organisation's boundary may still block more.",
   ALWAYS_BLOCKED: "Always blocked by Wardyn, whatever this list says: cloud metadata and link-local addresses.",
@@ -142,7 +142,7 @@ export const BOUNDARY_DRY_RUN = {
   KNOB: {
     allowed_domains: "Allowed hosts",
     denied_domains: "Blocked hosts and ranges",
-    min_confinement_class: "Confinement floor",
+    min_confinement_class: "Barrier floor",
     eligible_grants: "Credentials",
     desktop: BOUNDARY_DESKTOP.TITLE,
     "limits.max_end_ahead_sec": "Longest run",

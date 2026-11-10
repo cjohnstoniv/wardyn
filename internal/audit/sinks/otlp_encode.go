@@ -31,6 +31,10 @@ type otlpLogRecord struct {
 	SeverityText         string     `json:"severityText"`
 	Body                 otlpValue  `json:"body"`
 	Attributes           []otlpAttr `json:"attributes"`
+	// TraceID and SpanID tie the record to its span (OTLPConfig.Traces); both are
+	// omitted otherwise, and for a row with no run.
+	TraceID string `json:"traceId,omitempty"`
+	SpanID  string `json:"spanId,omitempty"`
 }
 
 type otlpScopeLogs struct {
@@ -88,7 +92,8 @@ func correlationID(data json.RawMessage) string {
 // logRecord turns one audit row into a LogRecord. It exports the row's
 // identity fields and outcome and nothing from the per-action data except the
 // correlation id: the webhook sink's full payload is the ceiling, not the aim.
-func logRecord(ev types.AuditEvent) otlpLogRecord {
+// withTraceIDs adds the trace and span ids the row's span carries.
+func logRecord(ev types.AuditEvent, withTraceIDs bool) otlpLogRecord {
 	sev, sevText := severityForOutcome(ev.Outcome)
 	ts := strconv.FormatInt(ev.Time.UnixNano(), 10)
 	attrs := make([]otlpAttr, 0, 5)
@@ -103,7 +108,7 @@ func logRecord(ev types.AuditEvent) otlpLogRecord {
 	if id := correlationID(ev.Data); id != "" {
 		attrs = append(attrs, otlpAttr{"wardyn.correlation_id", otlpValue{id}})
 	}
-	return otlpLogRecord{
+	rec := otlpLogRecord{
 		TimeUnixNano:         ts,
 		ObservedTimeUnixNano: ts,
 		SeverityNumber:       sev,
@@ -111,21 +116,34 @@ func logRecord(ev types.AuditEvent) otlpLogRecord {
 		Body:                 otlpValue{ev.Action},
 		Attributes:           attrs,
 	}
+	if withTraceIDs {
+		if ids, ok := idsFor(ev); ok {
+			rec.TraceID, rec.SpanID = ids.trace, ids.span
+		}
+	}
+	return rec
+}
+
+// resourceAttrs is the resource both requests carry: service.name=wardynd, plus
+// service.instance.id when WARDYN_AUDIT_SOURCE is set, as the other sinks stamp it.
+func resourceAttrs() []otlpAttr {
+	attrs := []otlpAttr{{"service.name", otlpValue{"wardynd"}}}
+	if Source != "" {
+		attrs = append(attrs, otlpAttr{"service.instance.id", otlpValue{Source}})
+	}
+	return attrs
 }
 
 // encodeOTLPLogs serialises batch as one ExportLogsServiceRequest: a single
 // resource (service.name=wardynd, plus service.instance.id when
 // WARDYN_AUDIT_SOURCE is set, as the other sinks stamp it) and one scope.
-func encodeOTLPLogs(batch []types.AuditEvent) ([]byte, error) {
+func encodeOTLPLogs(batch []types.AuditEvent, withTraceIDs bool) ([]byte, error) {
 	records := make([]otlpLogRecord, len(batch))
 	for i := range batch {
-		records[i] = logRecord(batch[i])
+		records[i] = logRecord(batch[i], withTraceIDs)
 	}
 	var rl otlpResourceLogs
-	rl.Resource.Attributes = []otlpAttr{{"service.name", otlpValue{"wardynd"}}}
-	if Source != "" {
-		rl.Resource.Attributes = append(rl.Resource.Attributes, otlpAttr{"service.instance.id", otlpValue{Source}})
-	}
+	rl.Resource.Attributes = resourceAttrs()
 	var scope otlpScopeLogs
 	scope.Scope.Name = "wardynd"
 	scope.LogRecords = records

@@ -72,11 +72,8 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization), true)
 		return
 	}
-	// adoGitKeys drops empty segments but the forward sends rest as written, so an inner "//" is refused here.
-	if !adoHostedHost(host) && (strings.Contains(strings.Trim(rest, "/"), "//") || !adoServerGitPath(keys, grant.Organization)) {
-		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
-			"Wardyn refused this git request: on Azure DevOps Server this run reaches git only at %s/<project>/_git/<repository>.",
-			strings.Trim(grant.Organization, "/")), true)
+	if msg := adoGitPathRefusal(host, rest, keys, grant.Organization); msg != "" {
+		p.refuseADOGit(w, r, host, nil, nil, msg, true)
 		return
 	}
 
@@ -304,7 +301,46 @@ func adoServerGitPath(keys []string, collection string) bool {
 	if !adoServerCollection(keys, coll) {
 		return false
 	}
-	tail := keys[len(strings.Split(strings.Trim(coll, "/"), "/")):]
+	return adoGitTail(keys[len(strings.Split(strings.Trim(coll, "/"), "/")):])
+}
+
+// adoGitPathRefusal answers "" for a git path this lane forwards, otherwise the
+// refusal: on a Server adoServerGitPath, on Azure DevOps Services
+// adoHostedGitPath. adoGitKeys drops empty segments but the forward sends rest
+// as written, so an inner "//" is refused here.
+func adoGitPathRefusal(host, rest string, keys []string, org string) string {
+	inner := strings.Contains(strings.Trim(rest, "/"), "//")
+	if !adoHostedHost(host) {
+		if inner || !adoServerGitPath(keys, org) {
+			return fmt.Sprintf("Wardyn refused this git request: on Azure DevOps Server this run reaches git only at %s/<project>/_git/<repository>.",
+				strings.Trim(org, "/"))
+		}
+		return ""
+	}
+	if inner || !adoHostedGitPath(host, keys) {
+		return "Wardyn refused this git request: on Azure DevOps this run reaches git only at <project>/_git/<repository> under the organisation."
+	}
+	return ""
+}
+
+// adoHostedGitPath is adoServerGitPath for Azure DevOps Services: on dev.azure.com
+// the collection is the organisation (the first segment, which adoOrgMatches
+// pins); on <org>.visualstudio.com it is the host, with an optional
+// DefaultCollection segment.
+func adoHostedGitPath(host string, keys []string) bool {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".visualstudio.com") {
+		if len(keys) > 0 && keys[0] == "defaultcollection" {
+			keys = keys[1:]
+		}
+		return adoGitTail(keys)
+	}
+	return len(keys) > 0 && adoGitTail(keys[1:])
+}
+
+// adoGitTail reports whether tail, the keys under the collection, is
+// [<project>/]_git/<repository>/ followed by exactly info/refs, git-upload-pack
+// or git-receive-pack.
+func adoGitTail(tail []string) bool {
 	i := slices.Index(tail, "_git")
 	if (i != 0 && i != 1) || i+2 > len(tail) {
 		return false

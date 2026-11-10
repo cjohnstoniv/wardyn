@@ -20,6 +20,7 @@ import { ModelAccessProvider } from "./model-access-context";
 import type { AdoCardRun } from "./ado-capability-card";
 import { SECURITY_ONLY_REASON } from "./copy";
 import { ADO } from "../../lib/ado-entra-copy";
+import { APPROVALS } from "../../lib/approvals-copy";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -31,7 +32,8 @@ vi.mock("../../lib/api/approvals", () => ({
     deny: (...a: unknown[]) => denyMock(...a),
   },
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+const toastSuccess = vi.fn();
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: (...a: unknown[]) => toastSuccess(...a), info: vi.fn() } }));
 
 import { LiveApprovals } from "./live-approvals";
 
@@ -126,6 +128,15 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
     const card = await screen.findByTestId("ado-capability-card");
     await userEvent.click(within(card).getByRole("button", { name: "Approve" }));
     expect(approveMock).toHaveBeenCalledWith("esc-1", expect.any(String), { scope: "run" });
+  });
+
+  it("Approve confirms with the same toast the Approvals screen gives", async () => {
+    toastSuccess.mockReset();
+    listApprovalsMock.mockResolvedValue([escalationRow()]);
+    mount({ principal: "dana@acme.example" });
+    const card = await screen.findByTestId("ado-capability-card");
+    await userEvent.click(within(card).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(APPROVALS.TOAST_APPROVED));
   });
 
   // F2 test gap (round 2) — the strip's own SECURITY_ONLY_REASON hint must

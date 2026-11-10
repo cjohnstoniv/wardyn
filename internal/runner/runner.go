@@ -35,8 +35,7 @@ type Capabilities struct {
 	NetworkPolicy             bool                              `json:"network_policy"`                        // L1 (nftables / NetworkPolicy default-deny)
 	NetworkPolicyAcknowledged bool                              `json:"network_policy_acknowledged,omitempty"` // operator accepted a canary failure as expected rather than proven
 	SessionRecording          bool                              `json:"session_recording"`                     // wardyn-rec sidecar support
-	// UserDrives and ManagedFiles are fail-closed: false means the control
-	// plane refuses rather than admit a request the driver would reject.
+	// UserDrives and ManagedFiles are fail-closed: false means the control plane refuses rather than admit a request the driver would reject.
 	UserDrives   bool `json:"user_drives,omitempty"`
 	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
@@ -49,7 +48,8 @@ type Capabilities struct {
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
-	ExecOutputUncaptured bool `json:"-"`
+	ExecOutputUncaptured bool        `json:"-"`
+	NetworkPolicyCheck   NetPolCheck `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -414,6 +414,12 @@ type Sandbox struct {
 	// KeptScrub and KeptBase are a kept create's boot scrub and cloned base; nil otherwise or from older runners.
 	KeptScrub *KeptScrub `json:",omitempty"`
 	KeptBase  *KeptBase  `json:",omitempty"`
+	// ProxyConfigSHA256 is proxy.ConfigSHA256 of the exact bytes the driver handed this run's proxy,
+	// which that proxy reports back once it loads them; empty from a driver or runner that predates it.
+	ProxyConfigSHA256 string `json:",omitempty"`
+	// ProxyAddr is the proxy address the agent is pinned to (its wardyn-proxy hosts entry); empty
+	// from a driver or runner that predates it.
+	ProxyAddr string `json:",omitempty"`
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
@@ -578,33 +584,6 @@ type RunnerSandboxProver interface {
 // sandbox this runner created. Any other error means the substrate could not
 // answer, so the caller retries rather than refusing for good.
 var ErrNotRunnerSandbox = errors.New("runner: not a sandbox this runner created")
-
-// ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
-// sidecar, running or stopped, with a new one while the agent keeps running.
-// The control plane reads the run's stored config (#1176), rewrites its token
-// and denies, and hands it to ReplaceProxy.
-//
-// CanReplaceProxy answers ErrReviveUnsupported when ref's substrate cannot
-// replace a proxy in place. ReplaceProxy removes the old proxy, then starts
-// the new one at the address the agent's hosts entry pins. An error wrapping
-// ErrProxyReplaceFailed means the old proxy is, or may be, gone; any other
-// error left it untouched.
-type ProxyReviver interface {
-	CanReplaceProxy(ctx context.Context, ref string) error
-	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
-	// EnsureProxyImage pulls the proxy sidecar image if not already present.
-	// Called BEFORE the revive claim so a slow pull doesn't widen the window
-	// a watcher sweep must leave the run alone in.
-	EnsureProxyImage(ctx context.Context) error
-}
-
-// ErrReviveUnsupported is ProxyReviver's answer from a router whose substrate
-// for ref cannot replace a proxy in place.
-var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a sandbox's proxy")
-
-// ErrProxyReplaceFailed marks a ReplaceProxy that removed, or may have
-// removed, the old proxy and did not start the new one.
-var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
 
 // Selftester is an OPTIONAL Runner capability: run a BYOI image's contract
 // check (agent-run --selftest) in a runner's sandbox as an execution of its

@@ -149,7 +149,9 @@ export function AssignmentsBlock({
                   <TableHead>{GOV.COL_PROFILE}</TableHead>
                   <TableHead>{GOV.COL_PRIORITY}</TableHead>
                   <TableHead>{PERM.COL_ADDED}</TableHead>
-                  <TableHead className="w-[90px]" />
+                  <TableHead className="w-[90px]">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

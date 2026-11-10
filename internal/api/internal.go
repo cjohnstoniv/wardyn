@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -42,6 +43,15 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	normalizeN1Decision(&dl)
 
 	runID := claims.RunID
+	// Relayed is not serialised: a via_org engine's post marks a relayed row with DecisionRelayedHeader.
+	// Only the engine's in-process call for a VM run is trusted with it; anyone else's copy is dropped.
+	relayedMark := r.Header.Get(proxy.DecisionRelayedHeader) == "1"
+	r.Header.Del(proxy.DecisionRelayedHeader)
+	if relayedMark && viaOrgCall(r.Context()) {
+		if run, ok := liveRunFromContext(r.Context()); ok && run.MachineKind.IsVM() {
+			dl.Request.Relayed = true
+		}
+	}
 
 	// A model call's token counts (rule source llm:usage) are a count and not an egress decision: they are
 	// stored as usage and write no egress row, so a metered call is one decision row plus one usage row.

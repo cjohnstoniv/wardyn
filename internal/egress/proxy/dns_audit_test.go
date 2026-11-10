@@ -8,10 +8,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -69,8 +71,9 @@ func TestVMNetDNSRowsFromARealRelay(t *testing.T) {
 			break
 		}
 	}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("DNS rows %+v, want %+v", got, want)
+	// The relay sends each record on its own goroutine, so rows arrive in either order.
+	if len(got) != len(want) || !slices.Contains(got, want[0]) || !slices.Contains(got, want[1]) {
+		t.Fatalf("DNS rows %+v, want %+v in any order", got, want)
 	}
 }
 
@@ -93,6 +96,8 @@ func TestVMNetDNSRows(t *testing.T) {
 			egress.DNSQuery{Type: "A", Outcome: "refused", Cause: "name", Via: "vm_relay"}},
 		{`{"name":"two.test","type":"A","outcome":"refused","cause":"full"}`,
 			egress.DNSQuery{Name: "two.test", Type: "A", Outcome: "refused", Cause: "full", Via: "vm_relay"}},
+		{`{"name":"10.1.2.3","type":"A","outcome":"answered","answer":"198.18.0.9"}`,
+			egress.DNSQuery{Name: "10.1.2.3", Type: "A", Outcome: "answered", Answer: "198.18.0.9", Via: "vm_relay"}},
 		{`{"name":"setup.test","type":"A","outcome":"prep_refused"}`,
 			egress.DNSQuery{Name: "setup.test", Type: "A", Outcome: "prep_refused", Via: "vm_relay"}},
 	}
@@ -292,6 +297,27 @@ func TestDNSListenerRowsAreBounded(t *testing.T) {
 	l.flush()
 	if len(l.last) != 0 || len(l.held) != 0 {
 		t.Fatalf("kept %d names, %d held after their interval", len(l.last), len(l.held))
+	}
+}
+
+// TestDNSListenerHeldStaysBounded: a sandbox asking new names, each twice, for
+// 120 seconds keeps at most one interval's worth of names held or remembered.
+func TestDNSListenerHeldStaysBounded(t *testing.T) {
+	now := time.Unix(1e9, 0)
+	l := newDNSLimiter(func() time.Time { return now }, func(egress.DNSQuery) {})
+	n := 0
+	for sec := 0; sec < 120; sec++ {
+		now = now.Add(dnsInterval) // a new window: new names spend its budget before the flush runs
+		for i := 0; i < 2*maxDNSRows; i++ {
+			q := egress.DNSQuery{Name: fmt.Sprintf("n%d.test", n), Type: "A", Outcome: "refused", Via: "proxy"}
+			n++
+			l.note(q)
+			l.note(q)
+		}
+		l.flush()
+		if len(l.held) > maxDNSRows || len(l.last) > 2*maxDNSRows {
+			t.Fatalf("second %d: %d held, %d remembered", sec, len(l.held), len(l.last))
+		}
 	}
 }
 

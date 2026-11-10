@@ -371,6 +371,9 @@ A run gets what every layer allows. The run's policy record names the layer that
   - and the desktop envelope ships it on.
 - So this boundary is live on every managed laptop and every `curl … | sh` box, bound to loopback by
   the compose host-port publish (`127.0.0.1:2222`) rather than left unexposed.
+- With the listener off, a run's owner still has an unmasked, unrecorded command door: REST exec
+  (`POST /runs/{id}/exec`) is an API route, not part of this boundary, under SSH exec's per-run controls
+  ([§4.1](#41-output-masking-and-the-paths-it-does-not-cover)).
 - Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes
   via self-service `/api/v1/me/ssh-keys`,
   - so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds
@@ -555,7 +558,7 @@ is not the deployment described above.**
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
 | Prompt-injected agent reads resident secrets | Credentials stay out of the sandbox wherever Wardyn can broker them, with a named, bounded exception list — **[§5.1a](#51a-llm-egress-content-inspection--the-honest-claims-contract) is the complete set**. | B1, B2, B4 |
-| | Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with named unmasked paths (screen recordings, the `-out-dir` fallback, SSH exec/SFTP/direct-tcpip) and a registry shared through Postgres that fails closed — [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) | |
+| | Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with named unmasked paths (screen recordings, the `-out-dir` fallback, SSH exec/SFTP/direct-tcpip, REST exec) and a registry shared through Postgres that fails closed — [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) | |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the run's network has no route off the host, so ignoring the compatibility-only `HTTP_PROXY`/`HTTPS_PROXY` reaches no route. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Closed twice over, independently: **L0 [shipped]** (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions). | L0, L2 (L1 adds depth) |
 | | L1 🟢 **[shipped on Kubernetes]**, 🟡 **[Docker planned]**, adds depth; the metadata block does not wait on it | |
@@ -908,6 +911,9 @@ is not the deployment described above.**
   - Residuals:
     - **Runs that predate 0.8.6 have no manifest**, so after any restart they are refused at those doors rather than masked, until they end.
     - **SSH exec, SFTP and direct-tcpip were never masked** (`sshgateway_channels.go`), and masking is verbatim only.
+    - **REST exec (`POST /runs/{id}/exec`, `run_exec.go`) is never masked or recorded either**, and it is on with the SSH gateway off.
+      - So a deployment with no SSH listener still gives a run's owner, or their API token, an unmasked command door.
+      - Its per-run controls are SSH exec's: `deny_interactive`, a `data_out` rule other than `allowed`, and background-only runs refuse it.
     - **Masking depends on Postgres.** With it unreachable, uploads and new attaches are refused and live output shows the placeholder: availability is traded for never persisting a credential.
     - **A compromised wardynd process still sees every value it masks**, and a refresh in flight on an old lock holder can still race a new holder across a Postgres failover (the person signs in again).
 
@@ -1575,7 +1581,7 @@ These risks are **not closed by v1 Wardyn**.
    - The full container path is not proven in default CI, with per-workspace ephemeral-CA injection into arbitrary agent images and QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual channel below the TLS-intercept tier.
-   - On Kubernetes, Docker and VM runs an agent's DNS queries are answered inside the run, each a `run.dns.query` row. On Docker the agent's nameserver is its run proxy through a mounted `/etc/resolv.conf`: tested in CI on runc and set up for gVisor, not tested on Kata or krun, and it needs Docker Engine 26 and API 1.45 (an older one writes no row).
+   - On Kubernetes, Docker and VM runs an agent's DNS queries are answered inside the run and recorded as `run.dns.query` rows (repeats folded, at most 64 rows a second per proxy; rows over that are dropped and counted in the proxy's warning). On Docker the agent's nameserver is its run proxy through a mounted `/etc/resolv.conf`: covered by CI tests on runc (every pull request) and gVisor (nightly), untested on Kata and krun, and it needs Docker Engine 26 and API 1.45 (an older one writes no row).
 
 4. **Kernel 0-day on CC1 hardened-runc hosts (shared kernel).**
    - runc-as-sole-boundary is explicitly insufficient for LLM-generated code; this tier alone is published as the weakest.

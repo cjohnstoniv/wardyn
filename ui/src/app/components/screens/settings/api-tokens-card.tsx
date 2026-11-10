@@ -31,7 +31,7 @@ import { MINTED } from "../../wardyn/copy/credentials";
 import { inWords, OWN_TOKENS as O, SERVICES as T } from "../../wardyn/copy/service-tokens";
 import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { TokenDialog } from "./token-dialog";
 
 type Load = "loading" | "ready" | "error" | "hidden";
@@ -40,6 +40,7 @@ const isLive = (t: ApiToken) => !t.revoked_at && !(t.expires_at && Date.parse(t.
 
 export function ApiTokensCard() {
   const [state, setState] = React.useState<Load>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [rows, setRows] = React.useState<ApiToken[]>([]);
   const [minting, setMinting] = React.useState(false);
   const [revoking, setRevoking] = React.useState<ApiToken | null>(null);
@@ -57,7 +58,10 @@ export function ApiTokensCard() {
         setRows(r);
         setState("ready");
       })
-      .catch((e: unknown) => setState(e instanceof HttpError && (e.reason === "needs_sso" || e.reason === "api_token_no_human") ? "hidden" : "error"));
+      .catch((e: unknown) => {
+        setLoadMessage(failureSentence(e));
+        setState(e instanceof HttpError && (e.reason === "needs_sso" || e.reason === "api_token_no_human") ? "hidden" : "error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -99,6 +103,7 @@ export function ApiTokensCard() {
         <div role="group" aria-label={O.LOAD_ERROR_LABEL}>
           <ErrorState
             as="h4"
+            message={loadMessage}
             onRetry={() => {
               setState("loading");
               load();
@@ -121,7 +126,9 @@ export function ApiTokensCard() {
                   <TableHead>{T.COL_TOKEN}</TableHead>
                   <TableHead>{T.COL_EXPIRES}</TableHead>
                   <TableHead>{T.COL_LAST_USED}</TableHead>
-                  <TableHead />
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

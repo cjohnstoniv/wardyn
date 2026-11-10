@@ -23,7 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { buttonVariants, Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { Chip } from "../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { DISPOSITION, MINTED } from "../wardyn/copy/credentials";
 import { inWords } from "../wardyn/copy/service-tokens";
 import { Checkbox } from "../ui/checkbox";
@@ -66,6 +66,7 @@ function StateCell({ t }: { t: AdminMintedToken }) {
 export function AdminMintedTokens() {
   const [tokens, setTokens] = React.useState<AdminMintedToken[] | null>(null);
   const [failed, setFailed] = React.useState(false);
+  const [failMessage, setFailMessage] = React.useState<string | undefined>();
   const [includeRevoked, setIncludeRevoked] = React.useState(false);
   const [target, setTarget] = React.useState<AdminMintedToken | null>(null);
   const [revoking, setRevoking] = React.useState(false);
@@ -81,7 +82,7 @@ export function AdminMintedTokens() {
     credentialsApi
       .listAdminMintedTokens(includeRevoked)
       .then((rows) => { if (mine === newest.current) setTokens(rows); })
-      .catch(() => { if (mine === newest.current) setFailed(true); });
+      .catch((e) => { if (mine === newest.current) { setFailMessage(failureSentence(e)); setFailed(true); } });
   }, [includeRevoked]);
   React.useEffect(load, [load]);
 
@@ -134,7 +135,7 @@ export function AdminMintedTokens() {
         </div>
 
         {failed ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={failMessage} onRetry={load} />
         ) : !tokens ? (
           <TableSkeleton rows={2} cols={5} />
         ) : shown.length === 0 ? (
@@ -165,7 +166,9 @@ export function AdminMintedTokens() {
                     <TableHead>{MINTED.COL_CREATED_BY}</TableHead>
                     <TableHead>{MINTED.COL_ADDED}</TableHead>
                     <TableHead>{MINTED.COL_LAST_USED}</TableHead>
-                    <TableHead />
+                    <TableHead>
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

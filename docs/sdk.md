@@ -294,6 +294,38 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
 
 From a shell, `wardyn run output <run-id>` prints the same bytes (below).
 
+## Running a command in a run
+
+An automation can create, execute, inspect and destroy a run without a terminal.
+`CreateRun` starts it, `ExecRun` runs commands in it, `RunFiles` and `RunOutput` read what it did, and `KillRun` ends it:
+
+```go
+res, err := c.ExecRun(ctx, created.ID, client.ExecRequest{Command: "go test ./...", TimeoutSec: 120})
+fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
+```
+
+`POST /api/v1/runs/{id}/exec` takes `{"command": "...", "timeout_sec": 60}` and answers `200 {"exit_code", "stdout", "stderr", "truncated", "timed_out"}` once the command ends.
+
+- It is the SSH gateway's exec, over HTTP: the command runs through `/bin/sh -c` from the sandbox user's home directory, with no TTY and no added environment.
+- It is on whether or not the SSH gateway is (`WARDYN_SSH_LISTEN`), and the per-run controls below apply either way: `deny_interactive`, the `data_out` rule and background-only runs.
+- As with SSH exec, the output is neither masked nor recorded.
+- Only the person who may enter the run may call it, as for the terminal; a profile's `deny_interactive` closes it too.
+- A run whose `data_out` rule is `review` or `blocked`, or whose rule cannot be read, answers `409 data_out_blocked`.
+  The command never reaches the sandbox, and a `run.data_out.deny` row with `path` `exec` is written, as for an SSH command.
+- A run that cannot take a command now (not running, ended, a background task, or paused and not resumed) answers `409 run_exec_unavailable`.
+- The command may be up to 128 KiB, the most Linux execs as one argument; a longer one answers `400 run_exec_invalid`.
+- `timeout_sec` defaults to 60 and may be 1 to 300.
+  When it passes, the command's stream is closed, and the reply says `timed_out` with `exit_code` `-1`.
+  The command itself may keep running in the sandbox until it ends or the run ends; a retry can run a second copy.
+- Each stream keeps its first 1 MiB; `truncated` says one had more.
+  The rest is read and dropped, so a command writing more never blocks.
+- The command is never recorded.
+  Its `run.command.exec` audit row names the command (its first 4 KiB) and the exit code, never output.
+  A caller who leaves before the command ends gets a `failure` row saying so.
+- A command holds one of the run's SSH channels while it runs (`WARDYN_SSH_MAX_SESSIONS_PER_RUN`, shared with SSH); with all in use the answer is `429 run_exec_busy`.
+  While it runs, the run does not count as idle.
+- The call waits for the command, so an `http.Client` with a `Timeout` needs a longer one.
+
 ## Finding a waiting sign-in
 
 `GET /api/v1/runs/{id}/sign-in` finds an AWS sign-in waiting for its
@@ -984,7 +1016,7 @@ start.
 | `desktop_review_required` / `desktop_review_not_held` / `desktop_review_pending` / `desktop_review_not_approved` / `desktop_review_spent` / `file_changed_since_review` / `desktop_review_unavailable` | A reviewed download (`desktop.download` `review`): `403` a download with no `?approval=<id>`; `409` an ask (`POST /runs/{id}/desktop/files/{name}/review`) on a run whose downloads are allowed; `409` a review of that file is already waiting; `403` the approval is not an approved review of this file on this run; `409` the approval already released its file; `409` the file's bytes are not the ones reviewed, and nothing was sent; `503` the approvals could not be read, raised or spent, and nothing was asked for or sent. |
 | `desktop_rules_unreadable` | `503`: the run's desktop rules could not be read, so the desktop's socket and its Files panel (`/runs/{id}/desktop/files`) refuse rather than fall back to the defaults. Try again. |
 | `computer_folder_none` / `computer_folder_copy_in_only` / `computer_folder_not_synced` / `computer_folder_not_running` / `computer_folder_paused` / `computer_folder_agent_unstoppable` | `409` on `POST /runs/{id}/computer-folder/bring-back` (the run's own person only; anyone else gets `404`): no folder from your computer, Copy in only, first sync never landed, the run is not `RUNNING`, it is paused, or its sandbox cannot stop the agent first. |
-| `data_out_blocked` / `data_out_unreadable` / `data_out_review_unavailable` | The run's `data_out` rule keeps content in: `403` on run output (not a security admin), on a recording replay by anyone but a super admin (`This run's data_out rule keeps its content in: only a super admin can replay its recording.`), on a web app other than the desktop, and on `POST /runs/{id}/computer-folder/bring-back`; `503` the rule could not be read; `409` the Files panel of a run whose machine cannot move files through Wardyn, under `review`. |
+| `data_out_blocked` / `data_out_unreadable` / `data_out_review_unavailable` | The run's `data_out` rule keeps content in: `403` on run output (not a security admin), on a recording replay by anyone but a super admin (`This run's data_out rule keeps its content in: only a super admin can replay its recording.`), on a web app other than the desktop, and on `POST /runs/{id}/computer-folder/bring-back`; `409` on `POST /runs/{id}/exec`, where an unreadable rule counts as `blocked`; `503` the rule could not be read; `409` the Files panel of a run whose machine cannot move files through Wardyn, under `review`. |
 | `computer_folder_data_out` | `422` on `POST /runs` with `local_folder.direction` `both`: the run's `data_out` rule keeps content in, so a computer folder can only go in. |
 | `harness_inner_walls_looser` / `harness_inner_walls_unmet` / `harness_sandbox_unavailable` | `422` from `POST /runs` and Review: the policy's `harness_inner_walls` is looser than the run's harness walls, or its harness and lane cannot meet it. `harness_sandbox_unavailable`: Codex's sandbox cannot start at the run's class. |
 | `run_max_wait_invalid` | `POST /runs`: `max_wait_sec` is below 1. A wait above 604800 (7 days) is cut to it with a warning, not refused. |
@@ -1158,6 +1190,8 @@ sending `error` alone — completing the sweep this issue tracks:
 | `credential_host_collision` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview`, for any run (422, `credentialHostRefusal` in `runs_dispatch_components.go`): two of the run's credentials are bound to one host, and a host carries only one — two `api_key` grants, or an `api_key` grant on a host that a token-bearing redirect, the Azure DevOps lane or a `git_pat` API grant also credentials. The body names no host. Also the `reason` on a failed run's `run.create` row when the collision only appears at dispatch; that row carries the `grant_ids` involved and never the host. `component_host_collision` is the same rule for a component's own header. |
 | `run_title_store_unavailable` | `PATCH /runs/{id}/title` (`run_title.go`): this store cannot rename a run. |
 | `run_inspect_no_runner` / `run_inspect_terminal` / `run_inspect_no_sandbox` / `run_inspect_paused` / `run_inspect_agent_stopped` / `run_inspect_exec_stream_unsupported` / `run_resources_read_failed` / `run_files_no_exec_session` | `GET /runs/{id}/resources` and `GET /runs/{id}/files` (`run_resources.go`, `run_files.go`): the two widgets read the identical run-state facts and share a reason per cause rather than each inventing its own synonym. `run_inspect_paused` also answers the Files panel's list (`desktop_files.go`). |
+| `run_exec_invalid` / `run_exec_unavailable` / `run_exec_busy` / `run_exec_failed` | `POST /runs/{id}/exec` (`run_exec.go`): the command is empty or over 128 KiB, or `timeout_sec` is outside 1 to 300 (`400`); the run cannot take a command now, and the message says why (`409`); the run's SSH channels are all in use (`429`); the runner could not start the command, or lost it before it ended (`502`, with no exit code). A runner with no exec stream answers `501 run_inspect_exec_stream_unsupported`. |
+| `audit_unavailable` | Strict audit (`WARDYN_AUDIT_STRICT`, `audit_strict.go`), `503`: a covered change was refused because its audit intent row could not be written first. Nothing was changed; try again. |
 | `run_output_tail_invalid` / `run_output_interactive` / `run_output_not_captured` / `run_output_off` / `run_output_not_kept` / `run_output_expired` / `run_output_erased` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive with no pane snapshot (`409`): with recording off the sentence says nothing was kept, with it on it points at the recording; the runner exposes no direct stdout and no authorized recording-derived output is available (`409`); this deployment keeps none, or refuses stored rows (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no output is kept for the run — it finished before output was persisted, its runner captures none and no recording arrived, or it is still being captured and a later read serves it (`409`); a sign-in run is interactive and answers `run_output_interactive`; the in-memory tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL`, or the run ended longer ago than `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and its row was deleted (`410`); the run's output was erased (`404`). |
 | `run_sign_in_not_aws` / `run_sign_in_unreadable` | `GET /runs/{id}/sign-in` (`run_sign_in.go`): the run is not an AWS sign-in run (`409`); the sign-in pane, or the capture's audit row, could not be read in time — a read a moment later may answer (`503`). |
 | `run_resume_not_running` / `run_resume_failed` | `POST /runs/{id}/resume` (`run_pause.go`): the run is not in a resumable state, or thawing it for exec failed. |

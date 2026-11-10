@@ -158,6 +158,31 @@ func TestPG_AttachTicket_AuthorityRoundTrip(t *testing.T) {
 
 // GetDelegatedTokenByID is the by-grant-id twin of GetDelegatedTokenByRaw: live
 // while unexpired and its portal registered, ErrNotFound otherwise.
+func TestPG_AttachTicket_CredentialRoundTrip(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	tokenID, sessionID := uuid.New(), uuid.New()
+	for name, want := range map[string]store.AttachTicket{
+		"a personal token": {TokenID: tokenID},
+		"a CLI session":    {CLISessionID: sessionID},
+		"neither":          {},
+	} {
+		tok := uuid.NewString()
+		want.RunID, want.ActorType, want.Principal, want.AuthorizedAt = uuid.New(), types.ActorHuman, "alice", now
+		if err := st.MintAttachTicket(ctx, tok, want, now, now.Add(30*time.Second)); err != nil {
+			t.Fatalf("%s: mint: %v", name, err)
+		}
+		got, ok, err := st.ConsumeAttachTicket(ctx, tok, now)
+		if err != nil || !ok {
+			t.Fatalf("%s: consume: ok=%v err=%v", name, ok, err)
+		}
+		if got.TokenID != want.TokenID || got.CLISessionID != want.CLISessionID {
+			t.Fatalf("%s: credential = %v/%v, want %v/%v", name, got.TokenID, got.CLISessionID, want.TokenID, want.CLISessionID)
+		}
+	}
+}
+
 func TestPG_GetDelegatedTokenByID(t *testing.T) {
 	st := store.NewPG(runsPGPool(t))
 	ctx := context.Background()

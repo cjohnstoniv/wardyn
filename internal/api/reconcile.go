@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -113,7 +114,9 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	if s.cfg.Runner == nil {
 		return buildErr
 	}
-	s.auditK8sNetpolIfUnenforced(ctx)
+	if netpol := s.auditK8sNetpolIfUnenforced(ctx); s.cfg.Runner.Name() == "k8s" {
+		s.goBackground(func() { s.watchK8sNetpolVerdict(s.watcherBaseCtx(), watcherSweepInterval, netpol) })
+	}
 	// Start the periodic sweep FIRST, before anything that can fail: a transient
 	// store error in the boot pass must not disable adoption for the process's
 	// whole lifetime, which is exactly what returning early ahead of this line
@@ -174,20 +177,71 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 // Capabilities() call already means no live k8s daemon to warn about, so it is
 // treated the same as a non-k8s driver, not as a reason to fail boot. Nil run
 // id, like apitokens.go's token.create/token.revoke rows — this is a
-// deployment-wide posture fact, not tied to any one run.
-func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) {
+// deployment-wide posture fact, not tied to any one run. It returns the verdict
+// it read ("" when it read none), the baseline the re-check watch compares with.
+func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) string {
 	driver := s.cfg.Runner.Name()
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
-		return
+		return ""
 	}
 	verdict := k8sNetpolVerdict(driver, caps)
 	if verdict != "unenforced" && verdict != "acknowledged" {
-		return
+		return verdict
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile",
 		"k8s.netpol.fail", driver, "failure",
 		mustJSON(map[string]any{"verdict": verdict, "driver": driver})))
+	return verdict
+}
+
+// watchK8sNetpolVerdict reads the NetworkPolicy verdict every `every` until ctx
+// ends, auditing each change the canary's re-checks make (auditK8sNetpolChange).
+func (s *Server) watchK8sNetpolVerdict(ctx context.Context, every time.Duration, last string) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			last = s.auditK8sNetpolChange(ctx, last)
+		}
+	}
+}
+
+// auditK8sNetpolChange writes "k8s.netpol.update" when the verdict differs from
+// last, in either direction: a failed re-check that refuses new sandboxes, and
+// the check that proves enforcement again. The outcome is "success" only when the
+// new verdict is "enforced". A verdict first read here (last == "", boot could
+// not read one) is the baseline, not a change; an unreadable one keeps last.
+func (s *Server) auditK8sNetpolChange(ctx context.Context, last string) string {
+	driver := s.cfg.Runner.Name()
+	caps, err := s.cfg.Runner.Capabilities(ctx)
+	if err != nil {
+		return last
+	}
+	verdict := k8sNetpolVerdict(driver, caps)
+	if verdict == "" || verdict == last || last == "" {
+		return cmp.Or(verdict, last)
+	}
+	s.auditNetpolUpdate(ctx, "wardyn/reconcile", driver, verdict, last, caps.NetworkPolicyCheck.At, map[string]any{"driver": driver})
+	return verdict
+}
+
+// auditNetpolUpdate writes one "k8s.netpol.update" row: verdict replaced previous, from the check at at
+// (zero when the substrate reports no time). The outcome is "success" only when the new verdict is
+// "enforced". data holds the source's own fields (driver; runner_id for a runner's report).
+func (s *Server) auditNetpolUpdate(ctx context.Context, actorID, target, verdict, previous string, at time.Time, data map[string]any) {
+	outcome := "failure"
+	if verdict == runner.NetPolEnforced {
+		outcome = "success"
+	}
+	data["verdict"], data["previous"] = verdict, previous
+	if !at.IsZero() {
+		data["checked_at"] = at.UTC().Format(time.RFC3339)
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, actorID, "k8s.netpol.update", target, outcome, mustJSON(data)))
 }
 
 // sweepOrphanedSandboxes tears down the per-run containers of runs whose row no
@@ -292,7 +346,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // audits it with teardown_error) for the NEXT boot to retry. A runner run's
 // teardown follows the runner's last answer: an end it refused is retried as a
 // kill, an end or a kill it applied clears the ref, and a kill it refused is not
-// queued again. A direct stop an online runner refuses is followed by one kill.
+// queued again. With no answer yet it is a kill.
 //
 // It also re-runs revokeRunCascade: a run that
 // reaches this pass may have had its ORIGINAL finalize/kill/idle-stop
@@ -324,18 +378,10 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 			// a kill, which stops its agent.
 			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
 		case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
-			// The same record refuses a direct stop from an online runner, which leaves no answer to
-			// follow next boot, so a refused stop is followed by one kill. One audit row covers both.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(func(ctx context.Context, ref string) error {
-				err := s.cfg.Runner.StopSandbox(ctx, ref)
-				if err == nil || errors.Is(err, runner.ErrPendingOnRunner) {
-					return err // stopped, or an end queued for an offline runner, whose answer the next boot follows
-				}
-				if kerr := s.cfg.Runner.KillSandbox(ctx, ref); kerr != nil {
-					return errors.Join(err, kerr)
-				}
-				return nil
-			}))
+			// A kill, never a stop: a stop is queued for an offline runner (at boot, every runner) as an
+			// end, which a runner that cannot keep an ended sandbox refuses and a containment-only record
+			// refuses too. Every runner takes a kill, and a terminal run's sandbox has nothing to keep.
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
 		default:
 			torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.StopSandbox))
 		}
@@ -363,7 +409,8 @@ func boundedTeardown(teardown func(context.Context, string) error) func(context.
 
 // lastRunnerTeardown is the runner's latest answer to a queued end or kill of
 // run's sandbox, or answered false off Postgres, for a run on no runner, or
-// when it cannot be read (the sweep then queues the end it always has).
+// when it cannot be read (the sweep then tears the sandbox down as for no answer:
+// a kill for a run on a runner, a stop otherwise).
 func (s *Server) lastRunnerTeardown(ctx context.Context, run types.AgentRun) (types.RunnerActionKind, string, bool) {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok || run.RunnerID == nil || s.cfg.Runner == nil {
@@ -895,16 +942,20 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				tick.Reset(baseInterval)
 			}
 			if isTerminalRunState(st.State) {
-				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-					switch s.probeRunnerSandbox(ctx, run, ref, st) {
-					case runnerProbeEnded:
-						return
-					case runnerProbeAbsent:
-						continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
-					}
-					if s.keepRebootedRun(ctx, run, st) {
-						return
-					}
+				run, gerr := s.cfg.Store.GetRun(ctx, runID)
+				if gerr != nil {
+					// One failed read must not skip the keep-after-reboot path and finalize: the next tick reads again.
+					slog.WarnContext(ctx, "reconcile watch: read run before finalizing", slog.String("run_id", runID.String()), slog.Any("err", gerr))
+					continue
+				}
+				switch s.probeRunnerSandbox(ctx, run, ref, st) {
+				case runnerProbeEnded:
+					return
+				case runnerProbeAbsent:
+					continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
+				}
+				if s.keepRebootedRun(ctx, run, st) {
+					return
 				}
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {

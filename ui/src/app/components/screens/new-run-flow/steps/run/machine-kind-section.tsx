@@ -17,6 +17,7 @@ import { KeptMachineSection } from "./kept-machine-section";
 import { MacOSBasePicker } from "./macos-base-picker";
 import { hasBaseChoice } from "./macos-bases";
 import { refusalText, useMacOSOffer, type MacOSOffer } from "./macos-offer";
+import { POOL_ID } from "./pool-section";
 import { macWindowOn } from "./window-choice";
 import { WindowOption } from "./window-option";
 
@@ -32,8 +33,12 @@ const withCode = (text: string) => text.split("`").map((part, i) => (i % 2 ? <co
  * Macs cannot take one. A macOS pool with several bases adds the base picker (board J6). A macOS VM adds the window on
  * the Mac while the site switch is on (board WIN-2); with it off there is no Window group at all.
  */
-export function MachineKindSection({ kind, agents = [], macosBase, windowChoice, kept, onChoose, onChooseBase }: {
+export function MachineKindSection({ kind, agents = [], macosBase, windowChoice, kept, macPools = [], onPickMacPool, onChoose, onChooseBase }: {
   kind: MachineKind;
+  /** The other pools that offer macOS now, in the pool list's order: shown under the refusal, each a button. */
+  macPools?: readonly { id: string; name: string }[];
+  /** Chooses that pool and macOS together. */
+  onPickMacPool?: (poolId: string) => void;
   agents?: readonly string[];
   /** The draft's macOS base; absent is Standard. */
   macosBase?: string;
@@ -57,6 +62,9 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
   onChooseBase: (base: string | undefined) => void;
 }) {
   const labelId = React.useId();
+  const osRef = React.useRef<HTMLDivElement>(null);
+  // A pool button goes away once its pick lifts the refusal; focus follows to the macOS control it chose, or to the pool select.
+  const refocus = React.useRef(false);
   const { status } = useShellSetupStatus();
   const offer = useMacOSOffer();
   const macOSOn = macOSVMsEnabled(status);
@@ -68,6 +76,12 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
   // The draft's first agent whose admin disallows sign-ins in a desktop (the setup status's own harness row):
   // a macOS desktop cannot block them, so the panel says the run will be refused one.
   const signInsOffFor = status?.harnesses?.find((h) => h.desktop_sign_ins_off && agents.includes(h.id))?.display;
+  React.useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    const mac = macOS && !refused ? osRef.current?.querySelector<HTMLButtonElement>("button[aria-pressed='true']") : null;
+    (mac ?? document.getElementById(POOL_ID))?.focus();
+  });
   return (
     <div className="mb-[18px] flex flex-col gap-[18px]">
       <div role="group" aria-labelledby={labelId} className="flex flex-col gap-2">
@@ -82,7 +96,7 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
       </div>
       {vm && (
         <>
-          <div role="group" aria-label={NR_MACHINE.OS_LABEL} className="flex flex-col gap-2">
+          <div ref={osRef} role="group" aria-label={NR_MACHINE.OS_LABEL} className="flex flex-col gap-2">
             <span className="text-xs font-semibold" aria-hidden="true">{NR_MACHINE.OS_LABEL}</span>
             <Segmented
               size="compact"
@@ -94,6 +108,17 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
               ]}
             />
             {refused && <p className={note}>{withCode(refused)}</p>}
+            {refused && macPools.length > 0 && onPickMacPool && (
+              <div data-testid="nr-macos-pools" className="flex flex-wrap items-center gap-2">
+                <span className={note}>{NR_MACHINE.MACOS_POOLS_OFFER}</span>
+                {macPools.map((p) => (
+                  <Button key={p.id} type="button" variant="outline" size="sm" className="h-auto min-w-0 whitespace-normal py-1 text-left" aria-label={NR_MACHINE.MACOS_POOL_PICK(p.name)}
+                    onClick={() => { refocus.current = true; onPickMacPool(p.id); }}>
+                    {p.name}
+                  </Button>
+                ))}
+              </div>
+            )}
             <MacOSLines loaded={status != null && !status.unreachable} on={macOSOn} chosen={macOS} offer={offer} windowOn={windowOn} />
           </div>
           {macOS && offer?.ok && !kept?.machine?.resume && hasBaseChoice(offer, macosBase) && <MacOSBasePicker offer={offer} value={macosBase} onChoose={onChooseBase} />}
