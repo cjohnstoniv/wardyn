@@ -946,8 +946,7 @@ is not the deployment described above.**
   (`policy:host-rule-needs-inspection`), and each request's normal-form path is checked inside
   (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). Each brokered or API-door
   forward is judged again where it is sent (`roundTripUpstream`, the egress transport's per-request hook).
-  Residual: the organisation sends a `via_org` request, so a rule on a `via_org` host is refused at load
-  (`validateHostRules`).
+  A `via_org` request is judged per request by the organisation's engine (`ServeInjected`, `ServeBroker`).
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.

@@ -1216,14 +1216,14 @@ How a request to a host is decided:
 
 Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.
 
-A path with an encoded slash is refused on a rule host. GitLab API project, file and branch paths use `%2F` (`/projects/team%2Fapp`, `/repository/files/src%2Fmain.go`), so they are refused there. Use numeric project ids, or put no rule on that host.
+A path with an encoded slash is refused on a rule host. GitLab API project, file and branch paths use `%2F` (`/projects/team%2Fapp`, `/repository/files/src%2Fmain.go`), so they are refused there. A numeric project id removes only the project name's `%2F`: a file or branch name holding a slash is still refused on a rule host.
 
 What the proxy does for a rule host:
 
 - It intercepts TLS to a rule host on port 443, so it can read each request. A run with host rules gets a per-run interception certificate for this.
 - A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` on another port, without that certificate, and on the desktop sign-in lane.
 - Plain HTTP to a rule host is checked per request.
-- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A rule host reached through an organisation relay route (`via_org`) is refused when the policy loads.
+- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A request through an organisation relay route (`via_org`) is checked the same way, at the organisation, per request.
 - A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
 
 ## `recording`
