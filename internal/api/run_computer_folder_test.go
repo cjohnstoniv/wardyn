@@ -303,6 +303,14 @@ func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runne
 	if r.ended {
 		return nil, errors.New("container is not running")
 	}
+	if len(spec.Argv) == 3 && spec.Argv[0] == "sh" && spec.Argv[2] == agentStopScript {
+		// The stop a sandbox the server cannot quiesce gets before its pass (stopAgentForPass).
+		r.agentKilled.Store(true)
+		return &runner.ExecSession{
+			Stdin: nopWriteCloser{io.Discard}, Stdout: strings.NewReader(agentStoppedMark + "\n"), Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { return 0, nil }, Close: func() error { return nil },
+		}, nil
+	}
 	if len(spec.Argv) == 3 && spec.Argv[0] == "sh" && spec.Argv[2] == agentVerifyScript {
 		// The quiesce path's /proc check after the kill: clean unless a test leaves a process behind.
 		out, code := agentStoppedMark+"\n", 0
@@ -481,7 +489,7 @@ func TestBringComputerFolderBack_RunsBeforeTheSandboxStopsAndOnlyForBothWays(t *
 		b, _ := os.ReadFile(filepath.Join(app, "README.md"))
 		backBeforeStop = string(b) == "edited by the agent"
 	}
-	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.stop", nil, false, true); err != nil {
+	if err := finalizeHeld(t, s, context.Background(), run.ID, "sbx", "run.stop", nil, false, true); err != nil {
 		t.Logf("finalize: %v", err)
 	}
 	if !backBeforeStop {
@@ -504,7 +512,7 @@ func TestBringComputerFolderBack_RunsBeforeTheSandboxStopsAndOnlyForBothWays(t *
 	_, _ = f.Write([]byte("edited by the agent"))
 	_ = f.Close()
 	_ = c.Chtimes("/home/agent/work/README.md", time.Now(), time.Now().Add(time.Hour))
-	s.bringComputerFolderBack(context.Background(), run.ID, "sbx")
+	bringBackHeld(t, s, run.ID, "sbx")
 	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "hello" || cs.status.Back != nil {
 		t.Errorf("a copy-in-only folder came back: %q, %+v", b, cs.status.Back)
 	}
@@ -634,7 +642,7 @@ func boundedFinalize(t *testing.T, s *Server, run types.AgentRun, stop time.Dura
 	ctx, cancel := context.WithTimeout(context.Background(), runTeardownBudget+computerFolderAccountTime+stop)
 	defer cancel()
 	start := time.Now()
-	err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false)
+	err := finalizeHeld(t, s, ctx, run.ID, "sbx", "run.complete", nil, false, false)
 	return time.Since(start), err
 }
 
@@ -692,7 +700,7 @@ func TestFinalizeRunEffects_APassThatCompletesAfterACutOneStopsTheSandbox(t *tes
 	_, err := boundedFinalize(t, s, run, time.Second)
 	assertFolderBackKept(t, err, cs, sb, types.FolderResume{Unsynced: 1})
 	sb.block = ""
-	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+	if err := finalizeHeld(t, s, context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
 		t.Errorf("finalize: %v", err)
 	}
 	if n := sb.stopCount(); n != 1 {
@@ -757,7 +765,7 @@ func TestFinalizeRunEffects_TheFirstPassBackRunsWithTheAgentStoppedAndNoEgress(t
 		running.Store(agent.State == types.RunRunning)
 		egress.Store(fmt.Sprint(sb.agentEgress()))
 	}
-	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.stop", nil, false, true); err != nil {
+	if err := finalizeHeld(t, s, context.Background(), run.ID, "sbx", "run.stop", nil, false, true); err != nil {
 		t.Errorf("finalize: %v", err)
 	}
 	if running.Load() || egress.Load() != errNoEgress.Error() {
@@ -805,7 +813,7 @@ func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testi
 			tc.setup(cs.localFolderStore, sb)
 			var passed atomic.Bool
 			sb.onPass = func() { passed.Store(true) }
-			if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+			if err := finalizeHeld(t, s, context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
 				t.Errorf("finalize: %v", err)
 			}
 			if passed.Load() {
@@ -858,7 +866,7 @@ func TestFinalizeRunEffects_TeardownRunsAfterTheCallersCtxIsCancelled(t *testing
 			} else {
 				time.AfterFunc(tc.after, cancel)
 			}
-			if err := s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false); !errors.Is(err, context.Canceled) {
+			if err := finalizeHeld(t, s, ctx, run.ID, "sbx", "run.complete", nil, false, false); !errors.Is(err, context.Canceled) {
 				t.Errorf("finalize = %v, want the caller's cancel", err)
 			}
 			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)

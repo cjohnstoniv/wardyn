@@ -325,7 +325,8 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordKeepsTheSandbox(t *testing
 	}
 }
 
-// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row, never silent.
+// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row, never silent, and is stopped:
+// containment wins over the pass back.
 func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T) {
 	kept := sweepRun(types.RunFailed, "sbx-kept")
 	srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept}}, kept: kept.ID})
@@ -335,23 +336,23 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 	}
 	rows := runRows(h.audit.snapshot(), kept.ID)
 	if len(rows) != 1 || rows[0].Action != "sandbox.sweep" || rows[0].Outcome != "failure" ||
-		!strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
-		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with proxy_stop_error and no sandbox stop", rows, rr.stopped)
+		!strings.Contains(string(rows[0].Data), "proxy_stop_error") || !slices.Equal(rr.stopped, []string{"sbx-kept"}) {
+		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with proxy_stop_error and the sandbox stopped", rows, rr.stopped)
 	}
 }
 
-// A kept sandbox whose proxy stop fails stays unresolved, as the run.reconcile failure row naming that stop; the
-// sandbox, and the files it is kept for, are not stopped.
-func TestReadback_KeptFolderProxyStopFailureIsAuditedAndUnresolved(t *testing.T) {
+// A kept sandbox whose proxy stop fails is the run.reconcile failure row naming that stop, and is contained by
+// stopping the sandbox: containment wins over the pass back.
+func TestReadback_KeptFolderProxyStopFailureIsAuditedAndStopsTheSandbox(t *testing.T) {
 	f := newReadbackFixture(t)
 	_, gen := f.keptFolderFailedStart(t, "kept")
 	sandboxStops := f.lr.stopCount()
 	f.setProxyStopErr(errors.New("daemon down"))
-	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); c.Contained || c.Err == nil {
-		t.Fatalf("containment = %+v, want unresolved while the proxy stop fails", c)
+	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Contained || c.Err != nil {
+		t.Fatalf("containment = %+v, want contained by the sandbox stop", c)
 	}
-	if n := f.lr.stopCount() - sandboxStops; n != 0 {
-		t.Errorf("sandbox stops +%d, want none: the sandbox is kept for its folder's pass back", n)
+	if n := f.lr.stopCount() - sandboxStops; n != 1 {
+		t.Errorf("sandbox stops +%d, want 1: a pending sandbox whose proxy stop failed is stopped", n)
 	}
 	var rows int
 	for _, ev := range f.audit.eventsFor(f.run.ID, "run.reconcile") {

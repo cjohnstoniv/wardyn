@@ -375,7 +375,7 @@ func TestBringComputerFolderBack_AProcessTheKillCouldNotEndStopsThePass(t *testi
 					t.Fatalf("bring-back = %d %s", res.code, res.body)
 				}
 			} else {
-				if !s.bringComputerFolderBack(context.Background(), run.ID, "sbx") && cs.status.Back == nil {
+				if !bringBackHeld(t, s, run.ID, "sbx") && cs.status.Back == nil {
 					t.Fatal("a pass back that could not quiesce recorded nothing")
 				}
 			}
@@ -563,7 +563,7 @@ func TestBringComputerFolderBack_ALaterEndKeepsItsRecord(t *testing.T) {
 		t.Fatalf("bring-back = %d %s", res.code, res.body)
 	}
 	want := *cs.status.Back // a second pass would find nothing new and record 0 files
-	s.bringComputerFolderBack(context.Background(), run.ID, "sbx")
+	bringBackHeld(t, s, run.ID, "sbx")
 	if got := cs.status.Back; got == nil || got.Error != "" || got.Files != want.Files {
 		t.Errorf("a later end replaced the pass's record: %+v", got)
 	}
