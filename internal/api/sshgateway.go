@@ -297,55 +297,6 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 	}
 }
 
-// sshPerPrincipalCap is one person's share of the established connections: the configured value,
-// else the global ceiling when no SSO is configured (every key is then registered under the one
-// admin-token or local principal, so the whole install is one person), else
-// DefaultSSHMaxConnectionsPerPrincipal.
-func (s *Server) sshPerPrincipalCap() int {
-	if n := s.cfg.SSHMaxConnectionsPerPrincipal; n > 0 {
-		return n
-	}
-	if s.cfg.OIDC == nil {
-		return cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)
-	}
-	return DefaultSSHMaxConnectionsPerPrincipal
-}
-
-// sshRefuseOverPrincipalCap ends a connection that authenticated over its person's share. It holds
-// no established slot, and its caller still holds the connection's handshake and source slots, so
-// everything here is under those bounds. The whole path is bounded by the refusal grace: the timer
-// that closes the connection is armed first, and the ssh.connection.reject row is written under a
-// context of that length. If the refusal pool admits the connection (one per person, sshRefusalPool
-// in all) it is kept so the first channel it opens is rejected with a message (an interactive ssh
-// opens one at once). Otherwise it is closed at once, before its row is written: the message is
-// best-effort, the row and the metric are not.
-func (s *Server) sshRefuseOverPrincipalCap(ctx context.Context, sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, lim *sshConnLimits, principal string) {
-	grace := sshRefusalGraceFor()
-	t := time.AfterFunc(grace, func() { _ = sconn.Close() })
-	defer t.Stop()
-	admitted := lim.enterRefusal(principal)
-	if admitted {
-		defer lim.leaveRefusal(principal) // on timeout, on the first channel's rejection, and on client close
-	} else {
-		_ = sconn.Close()
-	}
-	auditCtx, cancel := context.WithTimeout(ctx, grace)
-	defer cancel()
-	ext := sconn.Permissions.Extensions
-	if runID, err := uuid.Parse(ext["run_id"]); err == nil {
-		s.recordAudit(auditCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.connection.reject",
-			ext["key_fingerprint"], "failure", mustJSON(map[string]any{"reason": sshCapReasonPrincipal, "max": lim.perPrincipal})))
-	}
-	if !admitted {
-		return
-	}
-	go ssh.DiscardRequests(reqs)
-	if newCh, ok := <-chans; ok {
-		_ = newCh.Reject(ssh.ResourceShortage, fmt.Sprintf("too many SSH connections for this person (max %d); close one and try again", lim.perPrincipal))
-	}
-	_ = sconn.Close()
-}
-
 // sshServerConfig builds the gateway's auth posture: registered public keys
 // only (no PasswordCallback / KeyboardInteractiveCallback is set, so neither
 // auth method is ever offered to a client).
