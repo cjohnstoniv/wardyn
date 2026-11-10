@@ -625,11 +625,14 @@ func TestDevices_EnrolIsRateLimitedPerPeer(t *testing.T) {
 	}
 }
 
-// TestPrincipalLimiter_EvictsOneEntryNotAll pins per-entry eviction: a full map
-// drops its stalest entry, and a peer that just exhausted its bucket stays
-// exhausted when a new peer arrives. The clear-when-full ceiling this replaced
-// refilled every bucket at once — fail-open on a route anyone can reach.
-func TestPrincipalLimiter_EvictsOneEntryNotAll(t *testing.T) {
+// TestPrincipalLimiter_FullTableKeepsSpentBuckets pins the full-table rule: a
+// peer that just exhausted its bucket stays exhausted when a new peer arrives,
+// and a full table of spent buckets is never evicted to make room (that handed
+// a caller who rotates more keys than the table holds a full burst per visit).
+// Newcomers share one overflow bucket instead. The clear-when-full ceiling this
+// replaced refilled every bucket at once, which failed open on a route anyone
+// can reach.
+func TestPrincipalLimiter_FullTableKeepsSpentBuckets(t *testing.T) {
 	l := principalLimiter{rate: 1, burst: 1, max: 3}
 	t0 := time.Unix(1_700_000_000, 0)
 	for i, key := range []string{"stale", "b", "hot"} {
@@ -643,14 +646,33 @@ func TestPrincipalLimiter_EvictsOneEntryNotAll(t *testing.T) {
 	if !l.allow("newcomer", t0.Add(4*time.Millisecond)) {
 		t.Fatal("newcomer refused")
 	}
-	if len(l.buckets) > 3 {
-		t.Fatalf("map grew to %d entries, cap is 3", len(l.buckets))
+	if len(l.buckets) != 3 {
+		t.Fatalf("map has %d entries, want the 3 spent ones kept", len(l.buckets))
 	}
-	if _, kept := l.buckets["stale"]; kept {
-		t.Fatal("the stalest entry survived; eviction took a fresher one")
+	if _, kept := l.buckets["stale"]; !kept {
+		t.Fatal("a spent entry was evicted to admit a newcomer")
 	}
 	if l.allow("hot", t0.Add(5*time.Millisecond)) {
-		t.Fatal("hot was refilled by a newcomer's arrival — eviction failed open")
+		t.Fatal("hot was refilled by a newcomer's arrival: eviction failed open")
+	}
+}
+
+// TestPrincipalLimiter_RotatingKeysDoNotRestartBurst: a caller cycling more keys
+// than the table holds gets no fresh burst on the second round.
+func TestPrincipalLimiter_RotatingKeysDoNotRestartBurst(t *testing.T) {
+	l := principalLimiter{rate: 0.001, burst: 1, max: 4}
+	t0 := time.Unix(1_700_000_000, 0)
+	keys := []string{"k1", "k2", "k3", "k4", "k5"}
+	allowed := [2]int{}
+	for round := range 2 {
+		for i, k := range keys {
+			if l.allow(k, t0.Add(time.Duration(round*len(keys)+i)*time.Millisecond)) {
+				allowed[round]++
+			}
+		}
+	}
+	if allowed[0] != 5 || allowed[1] != 0 {
+		t.Fatalf("allowed per round = %v, want [5 0]: the second round over spent keys must be refused", allowed)
 	}
 }
 

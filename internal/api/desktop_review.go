@@ -73,9 +73,9 @@ func (s *Server) handleRequestDesktopReview(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name, nameOK := desktopFileNameParam(r)
 	switch {
-	case !validDesktopFileName(name):
+	case !nameOK || !validDesktopFileName(name):
 		writeErrorReason(w, http.StatusBadRequest, reasonDesktopTransferBadRequest, "a file name is a plain name: no folder, no leading dot")
 		return
 	case rules.Download == types.TransferAllowed:

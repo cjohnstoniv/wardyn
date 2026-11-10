@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"sync"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -80,7 +80,12 @@ func setSSHKeepaliveEvery(d time.Duration) (prev time.Duration) {
 // wants a reply, and any reply (OpenSSH answers an unknown request with failure) proves the peer is
 // there; an error, or no answer within one interval, ends the connection, which ends every channel and
 // frees the attach slots they hold. It returns when ctx ends.
-func sshProbeConn(ctx context.Context, conn ssh.Conn) {
+//
+// recheck, when set, runs first on every tick and returns why the connection may no longer stand ("" if
+// it may): an idle connection opens no channel, so without it a deleted key or a revoked session would
+// keep the connection, and its slots, until the client left. A failed lookup is not a reason: a store
+// blip must not drop every idle connection at once.
+func sshProbeConn(ctx context.Context, conn ssh.Conn, recheck func() string) {
 	every := sshKeepaliveEvery()
 	tick := time.NewTicker(every)
 	defer tick.Stop()
@@ -89,6 +94,13 @@ func sshProbeConn(ctx context.Context, conn ssh.Conn) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+		}
+		if recheck != nil {
+			if reason := recheck(); reason != "" && !strings.HasSuffix(reason, "lookup failed") {
+				slog.Info("ssh gateway: closing an idle connection whose key is no longer authorized", slog.String("reason", reason))
+				_ = conn.Close()
+				return
+			}
 		}
 		answered := make(chan error, 1)
 		sshGo(func() {
@@ -130,6 +142,10 @@ const (
 	// connections still handshaking never use up this one; a connection
 	// authenticated over it is closed.
 	DefaultSSHMaxConnections = 64
+	// DefaultSSHMaxConnectionsPerPrincipal is Config.SSHMaxConnectionsPerPrincipal's default: how many of
+	// those authenticated connections one person may hold, so one person cannot take every slot. Counted
+	// by the principal the key is registered to; a connection authenticated over it is closed.
+	DefaultSSHMaxConnectionsPerPrincipal = 8
 	// defaultSSHSessionsPerRun is Config.SSHMaxSessionsPerRun's fallback
 	// (WARDYN_SSH_MAX_SESSIONS_PER_RUN). It bounds concurrent SSH channels —
 	// "session" (shell/exec/sftp) AND "direct-tcpip" (-L forwards) both draw
@@ -250,7 +266,8 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 	}()
 
 	lim := &sshConnLimits{handshakes: make(chan struct{}, maxSSHHandshakes), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
-		perSource: cmp.Or(s.cfg.SSHMaxHandshakesPerSource, DefaultSSHMaxHandshakesPerSource), sources: map[string]int{}, metrics: &s.metrics}
+		perSource: cmp.Or(s.cfg.SSHMaxHandshakesPerSource, DefaultSSHMaxHandshakesPerSource), sources: map[string]int{},
+		perPrincipal: cmp.Or(s.cfg.SSHMaxConnectionsPerPrincipal, DefaultSSHMaxConnectionsPerPrincipal), principals: map[string]int{}, metrics: &s.metrics}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -278,64 +295,6 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 		}
 	}
 }
-
-// The bounds a refusal names, in its warning and its metric label.
-const (
-	sshBoundHandshake   = "handshake"
-	sshBoundSource      = "source"
-	sshBoundEstablished = "established"
-)
-
-// sshConnLimits is the gateway's connection bounds (maxSSHHandshakes, the
-// per-source share of it, Config.SSHMaxConnections) and the throttled warning
-// a refusal at any of them writes.
-type sshConnLimits struct {
-	handshakes, established chan struct{}
-	perSource               int
-	sourcesMu               sync.Mutex
-	sources                 map[string]int // handshakes in progress per source, under sourcesMu
-	metrics                 *metrics
-	lastWarn                atomic.Int64 // unix nanos of the last warning
-	quiet                   atomic.Int64 // refusals since it
-}
-
-// enterSource takes one of src's handshake slots; false when it holds them all.
-func (l *sshConnLimits) enterSource(src string) bool {
-	l.sourcesMu.Lock()
-	defer l.sourcesMu.Unlock()
-	if l.sources[src] >= l.perSource {
-		return false
-	}
-	l.sources[src]++
-	return true
-}
-
-func (l *sshConnLimits) leaveSource(src string) {
-	l.sourcesMu.Lock()
-	defer l.sourcesMu.Unlock()
-	if l.sources[src]--; l.sources[src] <= 0 {
-		delete(l.sources, src)
-	}
-}
-
-// refused records one connection closed at a cap: the
-// wardyn_ssh_connections_refused_total count, and a warning at most every
-// sshCapWarnEvery carrying how many were refused since the last one.
-func (l *sshConnLimits) refused(bound string, limit int) {
-	l.metrics.sshRefusedInc(bound)
-	n := l.quiet.Add(1)
-	now, last := time.Now().UnixNano(), l.lastWarn.Load()
-	if now-last < int64(sshCapWarnEvery) || !l.lastWarn.CompareAndSwap(last, now) {
-		return
-	}
-	l.quiet.Add(-n)
-	slog.Warn("ssh gateway: connection refused at a cap", slog.String("bound", bound),
-		slog.Int("limit", limit), slog.Int64("refused", n))
-}
-
-// sshCapWarnEvery spaces the cap-refusal warnings, so a flood writes a line a
-// minute rather than a line a connection.
-const sshCapWarnEvery = time.Minute
 
 // sshServerConfig builds the gateway's auth posture: registered public keys
 // only (no PasswordCallback / KeyboardInteractiveCallback is set, so neither
@@ -643,6 +602,14 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 			_ = sconn.Close()
 			return
 		}
+		// One person's share of those slots: counted after the global one, released before it.
+		principal := sconn.Permissions.Extensions["principal"]
+		if !lim.enterPrincipal(principal) {
+			lim.refused(sshBoundPrincipal, lim.perPrincipal)
+			_ = sconn.Close()
+			return
+		}
+		defer lim.leavePrincipal(principal)
 	}
 	if err != nil {
 		// sshAuth already audited a specific reason when PublicKeyCallback was
@@ -671,7 +638,9 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	dataOut := s.sshDataOut(connCtx, runID)
-	sshGo(func() { sshProbeConn(connCtx, sconn) })
+	sshGo(func() {
+		sshProbeConn(connCtx, sconn, func() string { return s.sshCurrentKey(connCtx, sconn.Permissions) })
+	})
 
 	for newCh := range chans {
 		if newCh.ChannelType() == "session" || newCh.ChannelType() == "direct-tcpip" {
@@ -738,6 +707,9 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 	defer cancel()
 	fp := permissions.Extensions["key_fingerprint"]
 	key, err := s.cfg.Store.GetSSHKeyByFingerprint(ctx, fp)
+	if errors.Is(err, store.ErrNotFound) {
+		return "SSH key registration changed" // deleted; the keepalive recheck closes the connection on this
+	}
 	if err != nil {
 		return "SSH key lookup failed"
 	}

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net"
 	"testing"
@@ -114,7 +115,8 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
 	priv, pub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
-	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+	// One person holds all 64 here, so lift the per-person share (its own test is below).
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnectionsPerPrincipal = DefaultSSHMaxConnections })
 
 	served := func(c *ssh.Client) bool {
 		_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
@@ -167,6 +169,113 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("a session closed at the ceiling never freed its slot")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// One person holds at most their share of the authenticated slots: a third connection from the
+// same principal (a second key counts too) is closed and counted under "principal", while another
+// person is still served.
+func TestSSHGateway_ConnectionsPerPrincipalBounded(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	bobRun := uuid.New()
+	st.putRun(types.AgentRun{ID: bobRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-2"})
+	alicePriv, alicePub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(alicePub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(alicePub))})
+	bobPriv, bobPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(bobPub), Principal: "bob@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(bobPub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnectionsPerPrincipal = 2 })
+
+	served := func(c *ssh.Client) bool {
+		_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+		return err == nil
+	}
+	for i := range 2 {
+		c, err := sshDial(t, h, runID.String(), alicePriv)
+		if err != nil {
+			t.Fatalf("alice connection %d: %v", i+1, err)
+		}
+		defer c.Close()
+		if !served(c) {
+			t.Fatalf("alice connection %d was not served", i+1)
+		}
+	}
+	if over, err := sshDial(t, h, runID.String(), alicePriv); err == nil {
+		ok := served(over)
+		_ = over.Close()
+		if ok {
+			t.Fatal("alice's third connection was served, want it closed at her share")
+		}
+	}
+	h.srv.metrics.mu.Lock()
+	got, global := h.srv.metrics.sshRefused[sshBoundPrincipal], h.srv.metrics.sshRefused[sshBoundEstablished]
+	h.srv.metrics.mu.Unlock()
+	if got != 1 || global != 0 {
+		t.Fatalf("refusals counted: principal %d, established %d, want 1 and 0", got, global)
+	}
+	bob, err := sshDial(t, h, bobRun.String(), bobPriv)
+	if err != nil {
+		t.Fatalf("bob: %v", err)
+	}
+	defer bob.Close()
+	if !served(bob) {
+		t.Fatal("bob was refused while alice sat at her share")
+	}
+}
+
+// A connection that opens no channel was never re-checked, so deleting its key left it, and its
+// slots, in place. The keepalive now re-checks the key: the idle connections close within a
+// keepalive and the person's slots drain, so a new key of theirs is served again.
+func TestSSHGateway_DeletedKeyClosesIdleConnectionsAndFreesSlots(t *testing.T) {
+	prev := setSSHKeepaliveEvery(100 * time.Millisecond)
+	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	oldPriv, oldPub := mustSSHKeypair(t)
+	oldFP := ssh.FingerprintSHA256(oldPub)
+	st.putKey(types.SSHPublicKey{Fingerprint: oldFP, Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(oldPub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnectionsPerPrincipal = 2 })
+
+	var idle []*ssh.Client
+	for i := range 2 {
+		c, err := sshDial(t, h, runID.String(), oldPriv)
+		if err != nil {
+			t.Fatalf("connection %d: %v", i+1, err)
+		}
+		defer c.Close()
+		idle = append(idle, c)
+	}
+	if err := st.DeleteSSHKey(context.Background(), oldFP, "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range idle {
+		closed := make(chan struct{})
+		go func() { _ = c.Wait(); close(closed) }()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("idle connection %d outlived its deleted key", i+1)
+		}
+	}
+
+	newPriv, newPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(newPub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(newPub))})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := sshDial(t, h, runID.String(), newPriv)
+		if err == nil {
+			_, _, serr := c.SendRequest("keepalive@openssh.com", true, nil)
+			_ = c.Close()
+			if serr == nil {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the closed connections never gave their slots back")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

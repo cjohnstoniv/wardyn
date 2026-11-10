@@ -7,18 +7,51 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // maxApprovedEgress bounds the operator-owned approved-egress list — matches
 // the scanner's SuggestedEgress cap, its only intended feeder.
 const maxApprovedEgress = 64
+
+// workspaceIfMatch reads an If-Match naming the workspace version the caller's
+// list was read at: the workspace's own `updated_at` string, quoted or not. A
+// decision ("always" approve or deny) moves updated_at, so a full-list save made
+// from an older read can be refused instead of dropping that decision. Absent or
+// "*" is no condition (a caller that sends none works as before). A value that
+// is not a timestamp can never match, so it answers stale (ok false).
+func workspaceIfMatch(r *http.Request) (seen time.Time, present, ok bool) {
+	h := strings.TrimSpace(r.Header.Get("If-Match"))
+	if h == "" || h == "*" {
+		return time.Time{}, false, true
+	}
+	seen, err := time.Parse(time.RFC3339Nano, strings.Trim(strings.TrimPrefix(h, "W/"), `"`))
+	return seen, true, err == nil
+}
+
+// withWorkspaceIfMatch applies workspaceIfMatch to a list replace: it answers 412 for an unusable
+// value, and otherwise returns the context the store write runs under.
+func withWorkspaceIfMatch(w http.ResponseWriter, r *http.Request) (func(context.Context) context.Context, bool) {
+	seen, present, ok := workspaceIfMatch(r)
+	if !ok {
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonWorkspaceUpdateConflict, workspaceUpdateConflictMsg)
+		return nil, false
+	}
+	return func(ctx context.Context) context.Context {
+		if present {
+			return store.WithWorkspaceSeenAt(ctx, seen)
+		}
+		return ctx
+	}, true
+}
 
 // handleSetApprovedEgress replaces the workspace's operator-owned approved
 // egress list (PUT semantics: the body is the FULL list; un-approve by
@@ -43,6 +76,10 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	// The set itself is deadApprovedEgressHosts (workspaces_canon.go), shared
 	// with the observed-egress panel that produces what gets promoted here.
 	deadHosts := s.deadApprovedEgressHosts()
+	guard, ok := withWorkspaceIfMatch(w, r)
+	if !ok {
+		return
+	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
 		func(req body) ([]string, string, string) {
 			if len(req.Domains) > maxApprovedEgress {
@@ -77,7 +114,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
 		func(ctx context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceApprovedEgress(ctx, id, doms)
+			return s.cfg.Store.SetWorkspaceApprovedEgress(guard(ctx), id, doms)
 		},
 		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
 }
@@ -109,6 +146,10 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 	type body struct {
 		Domains []string `json:"domains"`
 	}
+	guard, ok := withWorkspaceIfMatch(w, r)
+	if !ok {
+		return
+	}
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.deny",
 		func(req body) ([]string, string, string) {
 			if len(req.Domains) > maxApprovedEgress {
@@ -127,7 +168,7 @@ func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
 		// Wrapped, not passed as a method value: the store call must not be
 		// resolved until validation has passed.
 		func(ctx context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceDeniedEgress(ctx, id, doms)
+			return s.cfg.Store.SetWorkspaceDeniedEgress(guard(ctx), id, doms)
 		},
 		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
 }

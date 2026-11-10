@@ -1837,7 +1837,7 @@ func TestSSHProbeConnContainsAPanickingRequest(t *testing.T) {
 	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
 	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
 	c := panicConn{closed: make(chan struct{})}
-	go sshProbeConn(context.Background(), c)
+	go sshProbeConn(context.Background(), c, nil)
 	select {
 	case <-c.closed:
 	case <-time.After(5 * time.Second):

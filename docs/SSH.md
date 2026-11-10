@@ -697,8 +697,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - It closes the connection when no answer comes within the next 30, so a dead peer is dropped within 30 to 60 seconds and frees its run's attach slot.
   - A failure reply counts as an answer; OpenSSH, PuTTY, paramiko and `wardyn sync` all give one.
   - A client suspended or asleep for more than 30 seconds can lose its session, where TCP alone would have kept it for minutes.
-  - The close writes no audit row and no log line.
-- **Connections.** At most 64 connections handshake at once (each within 15 seconds), at most 16 of them from one source address, and, counted apart, 64 authenticated ones stay open.
+  - The gateway also re-checks each connection's key on that cadence, so a deleted key or a revoked session closes its idle connections within 30 seconds, not only when a channel next opens.
+  - A close writes no audit row. The dead-peer close logs nothing; the key close logs one line.
+- **Connections.** At most 64 connections handshake at once (each within 15 seconds), at most 16 of them from one source address, and, counted apart, 64 authenticated ones stay open, at most 8 of them for one person.
   - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` and `WARDYN_SSH_MAX_CONNECTIONS` set them. Behind a NAT, raise the per-source one.
   - Over a handshake bound a connection is closed before any byte; over the authenticated one, once it authenticates.
   - Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and logs a `connection refused at a cap` warning, at most once a minute.

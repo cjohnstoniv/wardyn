@@ -543,3 +543,31 @@ func TestDesktopFiles_PausedRunThawsOnlyForATransfer(t *testing.T) {
 		}
 	})
 }
+
+// A name with one of ( ) ! * ' next to a space or a non-ASCII letter reaches the handler with Go's
+// RawPath set, and chi then hands the segment back still percent-encoded. The upload, the download
+// and the review request must all see the decoded name, and a decoded slash stays refused.
+func TestDesktopFiles_PercentEncodedNamesAreDecodedOnce(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"report%20(1).pdf", "report (1).pdf"},
+		{"caf%C3%A9%20(2).txt", "café (2).txt"},
+	} {
+		e := newReviewEnv(t, types.TransferReview)
+		if w := doSSO(t, e.srv, http.MethodPut, e.path(tc.raw), e.ses["owner"], fileSentinel); w.Code != http.StatusOK ||
+			!strings.Contains(w.Body.String(), `"name":"`+tc.want+`"`) || string(e.folder.files[tc.want]) != fileSentinel {
+			t.Fatalf("upload %s: %d %s (folder has %v)", tc.raw, w.Code, w.Body.String(), e.folder.files)
+		}
+		if w := doSSO(t, e.srv, http.MethodPost, e.path(tc.raw)+"/review", e.ses["owner"], ""); w.Code != http.StatusAccepted {
+			t.Fatalf("review %s: %d %s", tc.raw, w.Code, w.Body.String())
+		}
+		d := newDesktopFilesEnv(t, &types.DesktopControls{Download: types.TransferAllowed})
+		d.folder.files[tc.want] = []byte(fileSentinel)
+		if w := doSSO(t, d.srv, http.MethodGet, d.path(tc.raw), d.ses["owner"], ""); w.Code != http.StatusOK || w.Body.String() != fileSentinel {
+			t.Fatalf("download %s: %d %q", tc.raw, w.Code, w.Body.String())
+		}
+	}
+	e := newDesktopFilesEnv(t, nil)
+	if w := doSSO(t, e.srv, http.MethodPut, e.path("a%2Fb(1)"), e.ses["owner"], "x"); w.Code != http.StatusBadRequest || len(e.folder.files) != 1 {
+		t.Fatalf("an encoded slash: %d %s (folder has %v)", w.Code, w.Body.String(), e.folder.files)
+	}
+}

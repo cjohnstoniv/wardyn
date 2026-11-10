@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -144,6 +146,19 @@ func (s *Server) beatInRunWindow(run types.AgentRun, at time.Time) bool {
 	return !at.Before(run.CreatedAt.Add(-time.Second)) && !at.After(end.Add(time.Second))
 }
 
+// kernelNodeEventWindow is how many of a run's newest kernel events kernelWindowOnNode reads to find its node.
+const kernelNodeEventWindow = 64
+
+// kernelEventsForNode is the run's newest kernel events. A store that pages reads only those rows;
+// the unpaged fallback reads the run's whole capture window, as before.
+func (s *Server) kernelEventsForNode(ctx context.Context, runID uuid.UUID) ([]types.AuditEvent, error) {
+	if pager, ok := s.cfg.Store.(store.Pager); ok {
+		return pager.QueryAuditEventsFilteredPage(ctx, &runID,
+			store.AuditFilter{ActionPrefix: groundtruth.KernelActionPrefix}, store.Page{Limit: kernelNodeEventWindow, Newest: true})
+	}
+	return s.cfg.Store.QueryAuditEvents(ctx, runID, maxCaptureAuditEvents)
+}
+
 // kernelWindowOnNode is kernelWindow with a sensor on each of several nodes:
 // the newest beat anywhere says nothing about the node the run was on, so the
 // window reads the beat of the node the run's own kernel events name
@@ -151,7 +166,7 @@ func (s *Server) beatInRunWindow(run types.AgentRun, at time.Time) bool {
 // a node with no sensor row, gets the empty window, which fails silent rather
 // than false.
 func (s *Server) kernelWindowOnNode(ctx context.Context, run types.AgentRun, rows []store.GroundtruthSensor) recordmode.KernelWindow {
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, maxCaptureAuditEvents)
+	events, err := s.kernelEventsForNode(ctx, run.ID)
 	if err != nil {
 		return recordmode.KernelWindow{}
 	}
