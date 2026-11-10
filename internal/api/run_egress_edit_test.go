@@ -414,12 +414,17 @@ func TestEgressEdit_RetiresTheViaOrgEngineBeforeTheAnswer(t *testing.T) {
 // stop is slow to land would.
 type blockingStopRunner struct {
 	*hashedReviveRunner
-	block atomic.Bool
-	gate  chan struct{}
+	block   atomic.Bool
+	gate    chan struct{}
+	entered chan struct{} // one signal per stop that reached the gate
 }
 
 func (r *blockingStopRunner) StopProxy(ctx context.Context, ref string) error {
 	if r.block.Load() {
+		select {
+		case r.entered <- struct{}{}:
+		default:
+		}
 		<-r.gate
 	}
 	return r.hashedReviveRunner.StopProxy(ctx, ref)
@@ -438,7 +443,7 @@ func (f *readbackFixture) mismatchAfterAnswer(t *testing.T) {
 // not answer, and once it lands the edit answers 503 egress_edit_unconfirmed (stopped).
 func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
 	f := newEgressEditFixture(t)
-	br := &blockingStopRunner{hashedReviveRunner: f.hr, gate: make(chan struct{})}
+	br := &blockingStopRunner{hashedReviveRunner: f.hr, gate: make(chan struct{}), entered: make(chan struct{}, 4)}
 	f.srv.cfg.Runner = br
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.editEgress(t, `{"deny_hosts":["evil.example"]}`) }()
@@ -454,10 +459,12 @@ func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
 	f.answeredStart(t, 0)
 	br.block.Store(true)
 	f.mismatchAfterAnswer(t)
-	select { // the edit has read its start failed while the stop that contains it is held
-	case <-saw:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the edit never read its failed start")
+	for name, ch := range map[string]chan struct{}{"entered the held stop": br.entered, "read its failed start": saw} {
+		select { // the containment's stop is held, and the edit has read its start failed meanwhile
+		case <-ch:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the test never %s", name)
+		}
 	}
 	select {
 	case w := <-done:
