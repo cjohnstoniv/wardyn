@@ -245,7 +245,7 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	defer cancel()
 	// A revive that failed after its start was recorded is answered by that start: a failed one once
 	// its containment is recorded, an abandoned one (the replace failed) once its stop is confirmed.
-	wait := s.awaitEgressEditReadback(ctx, run.ID, res.generation)
+	wait := s.awaitEgressEditReadback(ctx, run.ID, res.generation, rerr == nil || res.stored)
 	switch {
 	case wait != nil:
 		return egressEditResult{}, wait
@@ -300,7 +300,7 @@ func (s *Server) egressEditSupported(ctx context.Context, run types.AgentRun) *r
 // which retries while the lock is busy (errRunOpBusy: not yet a stop either way). A start another
 // revive superseded is that start's to settle and stops nothing here. A start still unresolved when
 // the wait runs out is the reconcile sweep's to fail and contain.
-func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, gen int) *reviveError {
+func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, gen int, persisted bool) *reviveError {
 	st, _ := s.cfg.Store.(store.RunProxyStarts) // egressEditSupported refused a store without starts
 	why := "readback_wait_timeout"
 	for ctx.Err() == nil {
@@ -308,9 +308,9 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 		switch {
 		case err != nil: // read again until the wait runs out
 		case !found || p.Generation < gen: // gen was abandoned (its replace failed), and no newer start began
-			return s.stopEditStart(ctx, runID, gen, "start_abandoned")
+			return s.stopEditStart(ctx, runID, gen, persisted, "start_abandoned")
 		case p.Generation > gen || p.State == types.ProxyStartSuperseded:
-			return egressEditSuperseded()
+			return egressEditSuperseded(persisted)
 		case p.State == types.ProxyStartEnforced:
 			return nil
 		case p.State == types.ProxyStartFailed && p.ContainedAt != nil:
@@ -320,11 +320,11 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 		case p.State == types.ProxyStartFailed:
 			why = "start_failed"
 			egressEditSawUncontained()
-			if rerr, done := s.containEditStart(ctx, runID, gen); done {
+			if rerr, done := s.containEditStart(ctx, runID, gen, persisted); done {
 				return rerr
 			}
 		case p.State == types.ProxyStartUnconfirmed: // a legacy start, if the runner changed since egressEditSupported
-			return s.stopEditStart(ctx, runID, gen, "start_unconfirmed")
+			return s.stopEditStart(ctx, runID, gen, persisted, "start_unconfirmed")
 		default:
 			s.expireProxyStart(ctx, runID, gen) // a no-op before the deadline
 		}
@@ -347,14 +347,14 @@ func stopCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 
 // containEditStart contains the failed start gen and answers by the result. done is false while the
 // run's lock is busy, which is no stop either way: the caller polls again within its deadline.
-func (s *Server) containEditStart(ctx context.Context, runID uuid.UUID, gen int) (rerr *reviveError, done bool) {
+func (s *Server) containEditStart(ctx context.Context, runID uuid.UUID, gen int, persisted bool) (rerr *reviveError, done bool) {
 	ctx, cancel := stopCtx(ctx)
 	defer cancel()
 	switch c := s.containProxyStart(ctx, runID, gen); {
 	case c.Contained:
 		return egressEditUnconfirmed("start_failed"), true
 	case c.Superseded:
-		return egressEditSuperseded(), true
+		return egressEditSuperseded(persisted), true
 	case errors.Is(c.Err, errRunOpBusy):
 		return nil, false
 	default:
@@ -366,7 +366,7 @@ func (s *Server) containEditStart(ctx context.Context, runID uuid.UUID, gen int)
 // unconfirmed, or one abandoned when its replace failed), under the run's lock, which a revive holds
 // from its claim to its settle, and only while no start newer than gen began. It claims the stop
 // only once stopUnconfirmedProxy confirms it.
-func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, why string) *reviveError {
+func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, persisted bool, why string) *reviveError {
 	ctx, cancel := stopCtx(ctx)
 	defer cancel()
 	lctx, unlock, err := s.lockRunOp(ctx, runID)
@@ -379,7 +379,7 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, wh
 	case err != nil:
 		return egressEditUnresolved(why, err)
 	case found && p.Generation > gen:
-		return egressEditSuperseded()
+		return egressEditSuperseded(persisted)
 	}
 	run, err := s.cfg.Store.GetRun(lctx, runID)
 	if err != nil {
@@ -399,16 +399,16 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, wh
 // closed: a later revive would start from the pre-edit config and reopen the removed or denied hosts,
 // so the new proxy's start is failed and contained, and the edit never answers 200.
 func (s *Server) storeAndSettleRevived(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string,
-	start proxyStartRec, proxyHash, retiring string, renewed renewedTokens, freshJTI string, storedJSON []byte, edits []liveEgressEdit) *reviveError {
+	start proxyStartRec, proxyHash, retiring string, renewed renewedTokens, freshJTI string, storedJSON []byte, edits []liveEgressEdit) (stored bool, rerr *reviveError) {
 	if len(edits) == 0 {
 		if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil {
-			return rerr
+			return false, rerr
 		}
 		if err := s.storeRunProxyConfig(ctx, run.ID, storedJSON); err != nil {
 			slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
-		return nil
+		return false, nil
 	}
 	storeErr := s.storeRunProxyConfig(ctx, run.ID, storedJSON)
 	if storeErr != nil {
@@ -421,12 +421,12 @@ func (s *Server) storeAndSettleRevived(ctx context.Context, run types.AgentRun, 
 	} else {
 		s.retireViaOrgEngine(run.ID) // no engine built from the pre-edit config serves again
 	}
-	rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI)
+	rerr = s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI)
 	if rerr == nil && storeErr != nil { // a start with no hash always fails; never let an unstored edit stand
-		return s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
+		return false, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
 			"the edited proxy config could not be stored, so the run's new proxy is being stopped", storeErr)
 	}
-	return rerr
+	return storeErr == nil, rerr
 }
 
 // egressEditUnconfirmed is the 503 of an edit whose new proxy did not confirm it, once that proxy's
@@ -437,10 +437,15 @@ func egressEditUnconfirmed(why string) *reviveError {
 }
 
 // egressEditSuperseded is the 503 of an edit whose start another revive replaced before it confirmed.
-// That revive started from the stored, edited config, and its own readback settles it.
-func egressEditSuperseded() *reviveError {
-	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditSuperseded,
-		msg: "another revive replaced the edit's proxy before it confirmed; the run's proxy now starts from the edited config, and its own readback confirms it"}
+// persisted says this request stored the edited config: that revive then started from it, and its
+// own readback settles it. Otherwise (the edit's replace or config write failed) the edit was never
+// applied, and that revive started from the config stored before it.
+func egressEditSuperseded(persisted bool) *reviveError {
+	msg := "another revive replaced the run's proxy before the edit took effect, so the edit was not applied; send it again"
+	if persisted {
+		msg = "another revive replaced the edit's proxy before it confirmed; the run's proxy now starts from the edited config, and its own readback confirms it"
+	}
+	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditSuperseded, msg: msg}
 }
 
 // egressEditUnresolved is the 503 of an edit whose new proxy did not confirm it and whose stop is not

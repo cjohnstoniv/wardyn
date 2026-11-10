@@ -153,7 +153,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 5. Any other end, a config that could not be stored included, stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
 6. While that stop is not confirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
-8. When another revive replaced the edit's start, that revive started from the edited config and its own readback settles it. Nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`.
+8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config if the edit stored it; if the edit's replace or config write failed first, the edit was not applied and must be sent again.
 
 Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced.
 

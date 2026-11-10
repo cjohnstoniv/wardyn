@@ -276,11 +276,15 @@ func TestApplyEgressEdits_NarrowsOnly(t *testing.T) {
 // failPutStore fails the run's proxy-config write while fail is set, as a database blip would.
 type failPutStore struct {
 	*readbackStore
-	fail atomic.Bool
+	fail   atomic.Bool
+	onFail func() // runs at each failed write, before it answers
 }
 
 func (s *failPutStore) PutRunProxyConfig(ctx context.Context, id uuid.UUID, sealed []byte) error {
 	if s.fail.Load() {
+		if s.onFail != nil {
+			s.onFail()
+		}
 		return errors.New("injected config write failure")
 	}
 	return s.readbackStore.PutRunProxyConfig(ctx, id, sealed)
@@ -511,7 +515,7 @@ func TestEgressEdit_SupersededStartStopsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	stops := f.lr.proxyStopCount()
-	rerr := f.srv.awaitEgressEditReadback(context.Background(), f.run.ID, gen)
+	rerr := f.srv.awaitEgressEditReadback(context.Background(), f.run.ID, gen, true)
 	if rerr == nil || rerr.reason != reasonEgressEditSuperseded || strings.Contains(rerr.msg, "was stopped") {
 		t.Fatalf("superseded start: %+v, want egress_edit_superseded that does not claim a stop", rerr)
 	}
@@ -631,7 +635,7 @@ func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 			}
 		}
 	}
-	if got := f.srv.withRunFate(context.Background(), f.run.ID, egressEditSuperseded()).msg; strings.Contains(got, "ended") {
+	if got := f.srv.withRunFate(context.Background(), f.run.ID, egressEditSuperseded(true)).msg; strings.Contains(got, "ended") {
 		t.Errorf("a superseded edit stopped nothing, so it names no fate: %q", got)
 	}
 }
@@ -678,6 +682,50 @@ func TestRevive_FailedReplaceWithAFailedStopIsNotStopped(t *testing.T) {
 				strings.Contains(body, "was stopped") || strings.Contains(body, "has no egress") {
 				t.Errorf("mark fails=%v edit=%v: %d %s, want %s saying the stop is not confirmed", markFails, edit, w.Code, body, want)
 			}
+		}
+	}
+}
+
+// supersedeOnAbandonStore has another revive begin a newer start the moment the edit's start is
+// abandoned, as a revive that raced a failed replace would.
+type supersedeOnAbandonStore struct {
+	*readbackStore
+}
+
+func (s *supersedeOnAbandonStore) AbandonProxyStart(ctx context.Context, runID uuid.UUID, gen int) error {
+	if err := s.readbackStore.AbandonProxyStart(ctx, runID, gen); err != nil {
+		return err
+	}
+	_, err := s.BeginProxyStart(ctx, runID, gen+1, "newer-jti", store.ProxyStartExpected)
+	return err
+}
+
+// An edit superseded after its replace or its config write failed was never applied: the revive that
+// replaced it started from the config stored before the edit, so the answer says to send it again and
+// never that the run now starts from the edited config.
+func TestEgressEdit_SupersededAfterAFailureSaysTheEditWasNotApplied(t *testing.T) {
+	for _, failure := range []string{"replace", "config write"} {
+		f := newEgressEditFixture(t)
+		switch failure {
+		case "replace":
+			f.srv.cfg.Store = &supersedeOnAbandonStore{readbackStore: f.rb}
+			f.rr.replaceErr = runner.ErrProxyReplaceFailed
+		default:
+			fs := &failPutStore{readbackStore: f.rb}
+			fs.fail.Store(true)
+			fs.onFail = func() {
+				p, _, _ := f.rb.ActiveProxyStart(context.Background(), f.run.ID)
+				if _, err := f.rb.BeginProxyStart(context.Background(), f.run.ID, p.Generation+1, "newer-jti", store.ProxyStartExpected); err != nil {
+					t.Error(err)
+				}
+			}
+			f.srv.cfg.Store = fs
+		}
+		w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+		body := w.Body.String()
+		if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditSuperseded ||
+			!strings.Contains(body, "not applied") || strings.Contains(body, "edited config") {
+			t.Errorf("superseded after a failed %s: %d %s, want %s saying the edit was not applied", failure, w.Code, body, reasonEgressEditSuperseded)
 		}
 	}
 }
