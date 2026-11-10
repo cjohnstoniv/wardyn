@@ -139,6 +139,7 @@ export function TopBar({
           size="icon"
           onClick={toggle}
           aria-label="Toggle theme"
+          aria-pressed={theme === "dark"}
         >
           {theme === "dark" ? (
             <Sun className="size-4" />
@@ -164,6 +165,7 @@ export function TopBar({
                 back to instead of the bare unthemed browser outline. */}
             <Button
               variant="ghost"
+              aria-label={`Account menu: ${display}`}
               className="h-auto gap-2 rounded-md px-1.5 py-1"
             >
               <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">

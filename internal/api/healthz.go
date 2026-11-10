@@ -35,6 +35,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -45,6 +46,30 @@ import (
 // degraded; with no heartbeat ever, it is unavailable. This makes the overclaim
 // structurally impossible: the stream is "healthy" only while events arrive.
 const ebpfHeartbeatTTL = 2 * time.Minute
+
+// runnersNetPolCheck is the worst NetworkPolicy verdict, with its own time, across the connected
+// Kubernetes runners, as runnerNetPolCheck takes each; zero when none has one. A runner sends its caps
+// again after each re-check that changes the verdict or its time, so this is as live as the runner's
+// own. An offline runner is left out: it takes no new sandbox, and its verdict comes back with its caps
+// when it reconnects.
+func (s *Server) runnersNetPolCheck(ctx context.Context) runner.NetPolCheck {
+	s.runnerStreams.subsMu.Lock()
+	eps := slices.Collect(maps.Values(s.runnerStreams.subs))
+	s.runnerStreams.subsMu.Unlock()
+	now := s.cfg.Now()
+	var out runner.NetPolCheck
+	for _, ep := range eps {
+		if _, err := ep.sub.Classes(ctx); err != nil { // offline, or no caps yet
+			continue
+		}
+		if c, ok := ep.sub.Caps(); ok {
+			if check, ok := runnerNetPolCheck(c, now); ok {
+				out = runner.WorseNetPolCheck(out, check)
+			}
+		}
+	}
+	return out
+}
 
 // healthzSSOProvider is "microsoft" when OIDC is configured and its issuer is Entra
 // ID (the one check the person-keying path already uses), "" otherwise.
@@ -65,15 +90,36 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	runnerName := ""
 	caps := []types.ConfinementClass(nil)
 	var substrates map[types.ConfinementClass]string
-	netpolVerdict := ""
+	var own runner.NetPolCheck
+	ownUnread := false // a Kubernetes daemon whose own verdict could not be read
 	if s.cfg.Runner != nil {
 		runnerName = s.cfg.Runner.Name()
 		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
 			caps = c.ConfinementClasses
 			substrates = c.Resolved
-			netpolVerdict = k8sNetpolVerdict(runnerName, c)
+			own.Verdict = k8sNetpolVerdict(runnerName, c)
+			if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
+				own.At = c.NetworkPolicyCheck.At
+			}
+		} else {
+			ownUnread = runnerName == "k8s"
 		}
 	}
+	// The worst of this daemon's verdict and its connected Kubernetes runners', with that one's time.
+	// When the daemon could not read its own, a runner's verdict shows only if it is at least as bad
+	// as not_proven: a better one must not hide that the daemon's own cluster cannot be confirmed.
+	runners := s.runnersNetPolCheck(r.Context())
+	if ownUnread && !runner.NetPolAtLeast(runners.Verdict, runner.NetPolNotProven) {
+		runners = runner.NetPolCheck{}
+	}
+	// The winning check gives the verdict, its time and its source together. A runner's wins only when
+	// it is strictly worse: on a tie the daemon's own check stands, so the band never hides that this
+	// cluster is failing too.
+	netpol, netpolFromRunner := own, false
+	if runner.NetPolWorse(runners.Verdict, own.Verdict) {
+		netpol, netpolFromRunner = runners, true
+	}
+	netpolVerdict, netpolCheckedAt := netpol.Verdict, netpol.At
 	gtStatus := s.ebpfGroundtruthStatus(r.Context())
 	gtPublic := ebpfGroundtruthPublic(gtStatus)
 	body := map[string]any{
@@ -185,12 +231,25 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// whose answer it lost. One bit; false only on a store that keeps no keys.
 		"idempotent_run_create": s.keepsRunCreateKeys(),
 	}
-	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
-	// grade, present ONLY on a k8s substrate — omitted from the map entirely
+	// network_policy is k8sNetpolVerdict's "enforced"/"acknowledged"/"unenforced"/
+	// "refused"/"not_proven" grade, present ONLY on a k8s substrate — omitted from the map entirely
 	// (not even a JSON null) on Docker and every other driver, so a Docker
-	// deployment's /healthz shape never sprouts a k8s-only field.
+	// deployment's /healthz shape never sprouts a k8s-only field. A connected
+	// Kubernetes runner's verdict counts too: the worst of all wins.
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
+	}
+	// network_policy_checked_at is when the canary check that produced that grade
+	// ran (RFC 3339, UTC), never a later attempt that did not change it. Absent
+	// when the substrate reports no check (an older daemon or runner).
+	if netpolVerdict != "" && !netpolCheckedAt.IsZero() {
+		body["network_policy_checked_at"] = netpolCheckedAt.UTC().Format(time.RFC3339)
+	}
+	// network_policy_source is "runner" when network_policy is a connected Kubernetes runner's verdict
+	// rather than this daemon's own cluster's, so the console names the right place. Absent otherwise.
+	// No runner id: this body is anonymous.
+	if netpolFromRunner {
+		body["network_policy_source"] = "runner"
 	}
 	// cli_artifact_base is WARDYN_CLI_ARTIFACT_BASE, the operator's internal
 	// mirror of the release assets. Absent (not "") while unset, so a deployment

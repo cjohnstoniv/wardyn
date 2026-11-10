@@ -703,7 +703,9 @@ describe("GitTab", () => {
       const row = screen.getByTestId("provider-row-github");
       await userEvent.click(within(row).getByRole("button", { name: "Disconnect" }));
       const dialog = await screen.findByRole("alertdialog");
-      expect(within(dialog).getByText(/git-pat-github-com/)).toBeInTheDocument();
+      // The user pressed Disconnect, so the dialog says Disconnect and names the provider, not the stored secret.
+      expect(within(dialog).getByRole("heading", { name: "Disconnect Access token for github.com?" })).toBeInTheDocument();
+      expect(within(dialog).queryByText(/git-pat-github-com/)).not.toBeInTheDocument();
       expect(deleteSecretMock).not.toHaveBeenCalled();
       await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -715,7 +717,7 @@ describe("GitTab", () => {
       render(stored());
       const row = screen.getByTestId("provider-row-github");
       await userEvent.click(within(row).getByRole("button", { name: "Disconnect" }));
-      await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete credential" }));
+      await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disconnect" }));
       await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("git-pat-github-com"));
       expect(deleteSecretMock).toHaveBeenCalledTimes(1);
     });

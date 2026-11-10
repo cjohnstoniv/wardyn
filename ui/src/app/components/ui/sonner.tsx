@@ -32,8 +32,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
       // slot; the top centre is the page title, text, so no toast covers a control. mobileOffset keeps the same gap
       // on a phone, where sonner spans the width.
       position="top-center"
-      offset={{ top: 64 }}
-      mobileOffset={{ top: 64 }}
+      // The shell publishes where the row under its banners starts (--shell-main-top), so a toast sits below the
+      // banner stack instead of covering a banner's own Retry or Renew; 56px is the bare top bar (no shell, no banner).
+      offset={{ top: "calc(var(--shell-main-top, 56px) + 8px)" }}
+      mobileOffset={{ top: "calc(var(--shell-main-top, 56px) + 8px)" }}
       {...props}
     />
   );

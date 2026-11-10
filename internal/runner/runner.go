@@ -35,8 +35,7 @@ type Capabilities struct {
 	NetworkPolicy             bool                              `json:"network_policy"`                        // L1 (nftables / NetworkPolicy default-deny)
 	NetworkPolicyAcknowledged bool                              `json:"network_policy_acknowledged,omitempty"` // operator accepted a canary failure as expected rather than proven
 	SessionRecording          bool                              `json:"session_recording"`                     // wardyn-rec sidecar support
-	// UserDrives and ManagedFiles are fail-closed: false means the control
-	// plane refuses rather than admit a request the driver would reject.
+	// UserDrives and ManagedFiles are fail-closed: false means the control plane refuses rather than admit a request the driver would reject.
 	UserDrives   bool `json:"user_drives,omitempty"`
 	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
@@ -49,7 +48,8 @@ type Capabilities struct {
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
-	ExecOutputUncaptured bool `json:"-"`
+	ExecOutputUncaptured bool        `json:"-"`
+	NetworkPolicyCheck   NetPolCheck `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -414,10 +414,11 @@ type Sandbox struct {
 	// KeptScrub and KeptBase are a kept create's boot scrub and cloned base; nil otherwise or from older runners.
 	KeptScrub *KeptScrub `json:",omitempty"`
 	KeptBase  *KeptBase  `json:",omitempty"`
-	// ProxyConfigSHA256 is the hex SHA-256 of the exact config bytes the driver handed to this sandbox's
-	// proxy; empty from a driver or runner that predates the readback.
+	// ProxyConfigSHA256 is proxy.ConfigSHA256 of the exact bytes the driver handed this run's proxy,
+	// which that proxy reports back once it loads them; empty from a driver or runner that predates it.
 	ProxyConfigSHA256 string `json:",omitempty"`
-	// ProxyAddr is the address the agent is pinned to for its proxy; empty from an older driver or runner.
+	// ProxyAddr is the proxy address the agent is pinned to (its wardyn-proxy hosts entry); empty
+	// from a driver or runner that predates it.
 	ProxyAddr string `json:",omitempty"`
 }
 

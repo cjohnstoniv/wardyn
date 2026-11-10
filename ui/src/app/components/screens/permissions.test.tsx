@@ -56,6 +56,7 @@ import { CHANGE_NOTE } from "../wardyn/copy/change-note";
 import { aheadByHours } from "../../lib/test-clock";
 import { setField } from "../../../test/set-field";
 import { expectActionBar } from "../../../test/action-bar";
+import { STATES } from "../wardyn/states";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -340,6 +341,13 @@ describe("PermissionsScreen — a snapshot that never arrived", () => {
     }
     // ...and it must not claim the zero-config posture either.
     expect(screen.queryByText(PERM.DEFAULT_POSTURE)).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getPermissionsMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findAllByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("retrying after a failure renders the kinds from the snapshot that arrives", async () => {

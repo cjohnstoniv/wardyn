@@ -338,6 +338,7 @@ export function RecordingScreen() {
                   <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     placeholder="Search tasks, repos, run IDs…"
+                    aria-label="Search recordings"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     className="pl-9"
@@ -346,7 +347,7 @@ export function RecordingScreen() {
               </div>
               {agentOptions.length > 1 && (
                 <Select value={agentFacet} onValueChange={setAgentFacet}>
-                  <SelectTrigger className="w-[170px]">
+                  <SelectTrigger className="w-[170px]" aria-label="Filter by agent">
                     <SelectValue placeholder="Agent · All" />
                   </SelectTrigger>
                   <SelectContent>
@@ -361,7 +362,7 @@ export function RecordingScreen() {
               )}
               {stateOptions.length > 1 && (
                 <Select value={stateFacet} onValueChange={setStateFacet}>
-                  <SelectTrigger className="w-[170px]">
+                  <SelectTrigger className="w-[170px]" aria-label="Filter by outcome">
                     <SelectValue placeholder="Outcome · All" />
                   </SelectTrigger>
                   <SelectContent>

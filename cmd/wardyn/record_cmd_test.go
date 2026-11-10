@@ -124,6 +124,117 @@ func TestRecordCommands(t *testing.T) {
 	})
 }
 
+// TestRecordSaveAsTemplate: a member cannot write a policy, so --template saves the
+// synthesized profile as a person-scope template, and the 403 without it names the flag.
+func TestRecordSaveAsTemplate(t *testing.T) {
+	runID, tplID := uuid.New(), uuid.New()
+	var tplBody map[string]any
+	var policyPosts int
+	policyReason := "admin_surface"
+	profile := profileBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/runs/" + runID.String() + "/profile/synthesize":
+			fmt.Fprint(w, profile)
+		case "POST /api/v1/policies":
+			policyPosts++
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, `{"error":"requires the admin role","reason":%q}`, policyReason)
+		case "POST /api/v1/templates":
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &tplBody)
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"id":%q,"name":"learned","scope":"person"}`, tplID)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	run := func(args ...string) (string, error) {
+		return execCmdCapture(t, append(args, "--url", srv.URL, "--token", "tok")...)
+	}
+
+	out, err := run("record", "save", runID.String(), "--name", "learned", "--template")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `saved sandbox profile as your template "learned" (id ` + tplID.String() + `)`; !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+	if policyPosts != 0 {
+		t.Errorf("--template wrote %d policies, want none", policyPosts)
+	}
+	if tplBody["scope"] != "person" || tplBody["name"] != "learned" || tplBody["group_id"] != nil {
+		t.Errorf("template request = %v, want person scope, the name, no group", tplBody)
+	}
+	doc, _ := tplBody["document"].(map[string]any)
+	intent, _ := doc["intent"].(map[string]any)
+	pol, _ := intent["inline_policy"].(map[string]any)
+	if d, _ := pol["allowed_domains"].([]any); len(d) != 2 {
+		t.Errorf("inline_policy %v, want the synthesized allowed domains", pol)
+	}
+	if pol["min_confinement_class"] != "CC2" || pol["allow_all_egress"] != false {
+		t.Errorf("inline_policy %v, want the confinement floor and allow_all_egress false", pol)
+	}
+	// A recording with no grants decides "no grant": the key is written empty, or the source policy's grants survive.
+	if g, has := pol["eligible_grants"].([]any); !has || len(g) != 0 {
+		t.Errorf("inline_policy eligible_grants = %v (present %v), want an explicit empty list", pol["eligible_grants"], has)
+	}
+	for _, zero := range []string{"workspace_mounts", "resources", "llm_inspection", "denied_domains", "allowed_methods"} {
+		if _, has := pol[zero]; has {
+			t.Errorf("inline_policy carries the key %q a recording never decides: it must inherit", zero)
+		}
+	}
+	if doc["kind"] != "RunTemplate" || doc["coverage"] != "partial" {
+		t.Errorf("document = %v, want a partial RunTemplate", doc)
+	}
+
+	// A recorded grant is kept as it is, and the keys a recording never decides stay out even when the proposal fills them.
+	profile = `{"proposed":{"inline_policy":{"allowed_domains":[],"min_confinement_class":"CC2","auto_stop_after_sec":3600,` +
+		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.example.com","header":"x-api-key"},"ttl_seconds":600},{"kind":"api_key","scope":null}],` +
+		`"allowed_methods":["GET"],"denied_domains":["bad.example.com"],"resources":{"cpu_millis":2000},"workspace_mounts":[{"host_path":"/srv"}]}}}`
+	if _, err := run("record", "save", runID.String(), "--name", "learned", "--template"); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ = tplBody["document"].(map[string]any)
+	intent, _ = doc["intent"].(map[string]any)
+	pol, _ = intent["inline_policy"].(map[string]any)
+	grants, _ := pol["eligible_grants"].([]any)
+	if len(grants) != 1 {
+		t.Fatalf("eligible_grants = %v, want the one recorded grant and none with a null scope", pol["eligible_grants"])
+	}
+	if g, _ := grants[0].(map[string]any); g["kind"] != "api_key" || g["ttl_seconds"] != float64(600) {
+		t.Errorf("grant = %v, want it unchanged", grants[0])
+	}
+	if d, has := pol["allowed_domains"].([]any); !has || len(d) != 0 || pol["auto_stop_after_sec"] != float64(3600) {
+		t.Errorf("inline_policy = %v, want allowed_domains [] and auto_stop_after_sec 3600 kept", pol)
+	}
+	for _, key := range []string{"denied_domains", "resources", "workspace_mounts"} {
+		if _, has := pol[key]; has {
+			t.Errorf("inline_policy carries %q, which a recording never decides", key)
+		}
+	}
+	// The proposal is post-clamp: methods the clamp filled in from the ceiling are kept, never dropped.
+	if m, _ := pol["allowed_methods"].([]any); len(m) != 1 || m[0] != "GET" {
+		t.Errorf("allowed_methods = %v, want the proposal's [GET] kept", pol["allowed_methods"])
+	}
+
+	_, err = run("record", "save", runID.String(), "--name", "learned")
+	if err == nil || !strings.Contains(err.Error(), "Members can save it as their own template with --template.") {
+		t.Errorf("an admin-only 403 without --template: err = %v, want the hint naming the flag", err)
+	}
+	// A 403 from another gate is not about membership: no hint. One with no reason gets the conditional wording.
+	policyReason = "governance_hold"
+	if _, err = run("record", "save", runID.String(), "--name", "learned"); err == nil || strings.Contains(err.Error(), "--template") {
+		t.Errorf("a 403 for another reason: err = %v, want no --template hint", err)
+	}
+	policyReason = ""
+	if _, err = run("record", "save", runID.String(), "--name", "learned"); err == nil || !strings.Contains(err.Error(), "If you are a member, you can save it as your own template with --template.") {
+		t.Errorf("a 403 with no reason: err = %v, want the conditional hint", err)
+	}
+}
+
 func TestOrDashShowsEmptyAndNullAsADash(t *testing.T) {
 	for in, want := range map[string]string{"": "-", "null": "-", "low": "low"} {
 		if got := orDash(in); got != want {

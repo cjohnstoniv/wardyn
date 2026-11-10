@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunProxyStarts pins migration 0274 through the readback surface: a report is held until the
+// TestPG_RunProxyStarts pins migration 0275 through the readback surface: a report is held until the
 // driver's hash is in, equal hashes enforce, a late answer for a superseded generation and a token
 // outside the active start's lineage change nothing, a renewed lineage (current and previous jti) is
 // accepted, and a passed deadline fails the start. The proxy address round-trips through the run read.

@@ -4,8 +4,8 @@
  */
 
 // A runner's trust class on Admin -> Runners (0.9.3, owner mock item 3, Q5). The strings are written out,
-// not read from the copy module, so a drift in them fails this suite. The organization spelling is the
-// console's ("Organization"), per the owner's ruling.
+// not read from the copy module, so a drift in them fails this suite. The organisation spelling is the
+// console's ("Organisation"), per the owner's ruling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -92,7 +92,7 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
     await user.click(trigger());
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Personal", "Managed device"]);
     await user.click(screen.getByRole("option", { name: "Managed device" }));
-    expect(within(section).getByText("A person's computer your organization manages. This is your assertion; Wardyn can't check it.")).toBeInTheDocument();
+    expect(within(section).getByText("A person's computer your organisation manages. This is your assertion; Wardyn can't check it.")).toBeInTheDocument();
     expect(within(section).getByText("Required. Kept on the change and in the audit trail.")).toBeInTheDocument();
     expect(save).toBeEnabled();
   });
@@ -205,19 +205,19 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
 });
 
 describe("Admin -> Runners trust class: read-only", () => {
-  it("an organization's runner is always Organization cluster: no select, no Reason, no Change; the owner reads Organization", async () => {
+  it("an organisation's runner is always Organisation cluster: no select, no Reason, no Change; the owner reads Organisation", async () => {
     open(ORG);
     const drawer = await screen.findByRole("dialog");
     const section = drawer.querySelector("[data-trust]") as HTMLElement;
     expect(within(section).queryByRole("combobox")).toBeNull();
     expect(within(section).queryByLabelText(/^Reason/)).toBeNull();
     expect(within(section).queryByRole("button", { name: "Change trust class" })).toBeNull();
-    expect(within(section).getByText("Organization cluster")).toBeInTheDocument();
-    expect(within(section).getByText("A cluster your organization runs. An organization's runner is always this class.")).toBeInTheDocument();
+    expect(within(section).getByText("Organisation cluster")).toBeInTheDocument();
+    expect(within(section).getByText("A cluster your organisation runs. An organisation's runner is always this class.")).toBeInTheDocument();
     expect(within(section).getByText(/^Set by sam@example\.com /)).toBeInTheDocument();
     // The chip beside the state, and the owner in the header.
-    expect(within(drawer).getAllByText("Organization cluster")).toHaveLength(2);
-    expect(within(drawer).getByText(/^Organization$/)).toBeInTheDocument();
+    expect(within(drawer).getAllByText("Organisation cluster")).toHaveLength(2);
+    expect(within(drawer).getByText(/^Organisation$/)).toBeInTheDocument();
   });
 
   it("someone who is not a security admin sees a person's runner's class read-only", async () => {
@@ -226,7 +226,7 @@ describe("Admin -> Runners trust class: read-only", () => {
     expect(within(section).queryByRole("combobox")).toBeNull();
     expect(within(section).queryByRole("button", { name: "Change trust class" })).toBeNull();
     expect(within(section).getByText("Managed device")).toBeInTheDocument();
-    expect(within(section).getByText("A person's computer your organization manages. This is your assertion; Wardyn can't check it.")).toBeInTheDocument();
+    expect(within(section).getByText("A person's computer your organisation manages. This is your assertion; Wardyn can't check it.")).toBeInTheDocument();
   });
 
   it("an unclaimed runner has no class to change yet", async () => {
@@ -247,11 +247,11 @@ describe("Admin -> Runners trust class: read-only", () => {
 describe("Admin -> Runners list: the trust class chip", () => {
   const chips = (r: RunnerView) => {
     render(<RunnerCard f={{ kind: "self_hosted", id: r.id, name: r.name, runner: r }} onOpen={vi.fn()} onOpenPool={vi.fn()} />);
-    return screen.queryAllByText(/^(Personal|Managed device|Organization cluster)$/).map((e) => e.textContent);
+    return screen.queryAllByText(/^(Personal|Managed device|Organisation cluster)$/).map((e) => e.textContent);
   };
-  it("an organization's runner always shows its class", () => {
-    expect(chips(ORG)).toEqual(["Organization cluster"]);
-    expect(screen.getByText("Organization", { selector: "dd" })).toBeInTheDocument();
+  it("an organisation's runner always shows its class", () => {
+    expect(chips(ORG)).toEqual(["Organisation cluster"]);
+    expect(screen.getByText("Organisation", { selector: "dd" })).toBeInTheDocument();
   });
   it("a person's runner shows a chip only when it is a Managed device", () => {
     expect(chips(runner({ trust_class: "managed_device" }))).toEqual(["Managed device"]);

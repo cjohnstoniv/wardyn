@@ -22,7 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { Mono, makeMono } from "../../wardyn/code-block";
 import { SectionLabel } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 
 const withMono = makeMono(["WARDYN_SCIM_TOKEN"]);
 
@@ -165,6 +165,7 @@ function Lists({ s }: { s: SCIMStatus }) {
 export function ScimCard() {
   const [status, setStatus] = React.useState<SCIMStatus | null>(null);
   const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
 
   const load = React.useCallback(() => {
     setState("loading");
@@ -174,7 +175,10 @@ export function ScimCard() {
         setStatus(s);
         setState("ready");
       })
-      .catch(() => setState("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setState("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -196,7 +200,7 @@ export function ScimCard() {
       <p className="text-body leading-snug text-muted-foreground">{SCIM.LEAD}</p>
       <div className="mt-3">
         {state === "loading" && <TableSkeleton rows={2} cols={3} />}
-        {state === "error" && <ErrorState as="h4" onRetry={load} />}
+        {state === "error" && <ErrorState as="h4" message={loadMessage} onRetry={load} />}
         {state === "ready" && status && !status.configured && (
           <>
             <p className="text-body text-foreground">{SCIM.OFF_BODY}</p>

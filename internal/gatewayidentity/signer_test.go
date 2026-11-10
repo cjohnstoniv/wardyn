@@ -133,7 +133,7 @@ func TestSignExactClaimKeys(t *testing.T) {
 			if !slices.Equal(keys, wantKeys) {
 				t.Errorf("claim keys = %v, want %v", keys, wantKeys)
 			}
-			if m["aud"] != "gw-audience" || m["sub"] != "person@example.com" || m["wardyn_format"] != "experimental-1" {
+			if m["aud"] != "gw-audience" || m["sub"] != "person@example.com" || m["wardyn_format"] != "1" {
 				t.Errorf("claims = %v", m)
 			}
 			if got := m["act"].(map[string]any)["sub"]; got != "spiffe://wardyn.local/agent-run/"+c.Run {

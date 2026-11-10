@@ -54,7 +54,7 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove, confi
       <ul className="space-y-2">
         {rows.map((r) => (
           <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-            <Mono className="flex-1 text-foreground">{r.host}</Mono>
+            <Mono className="min-w-0 flex-1 break-all text-foreground">{r.host}</Mono>
             <span className="text-meta text-muted-foreground">{r.provenance}</span>
             {/* A disabled control says why in visible text beside it, never in a title alone (CONSOLE-RULES). */}
             {r.removable && r.removeBlockedReason && (

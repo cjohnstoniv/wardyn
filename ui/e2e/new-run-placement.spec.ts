@@ -117,7 +117,7 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
     // Review says it plainly, and still lets the run launch: waiting is not a refusal.
     await expect(page.getByText(RUN_WAIT.AT_CAPACITY("CI jobs", 40))).toBeVisible();
     await expect(page.getByText(NR_REVIEW.WHERE_VALUE("CI jobs"), { exact: true })).toBeVisible();
-    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Organization pool", 40, 40))).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Organisation pool", 40, 40))).toBeVisible();
 
     await nameAndLaunch(page, "waiting run");
     await expect(page.getByText(NR_LAUNCH.BADGE_WAITING, { exact: true })).toBeVisible();

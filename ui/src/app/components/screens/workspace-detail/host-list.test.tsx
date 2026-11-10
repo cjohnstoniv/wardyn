@@ -54,3 +54,12 @@ describe("HostList — a blocked removal says why", () => {
     }
   });
 });
+
+// A long hostname has no break opportunity, so it pushed the remove button past the card's edge.
+describe("HostList — a long host stays inside its card", () => {
+  it("lets the host shrink and break instead of widening the row", () => {
+    const host = "a-very-long-internal-hostname-with-no-break-points-at-all.corp.example.internal";
+    render(<HostList rows={[row(host)]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} confirm={confirm} />);
+    expect(screen.getByText(host)).toHaveClass("min-w-0", "break-all");
+  });
+});

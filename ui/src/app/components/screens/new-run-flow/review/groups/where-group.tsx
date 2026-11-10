@@ -36,7 +36,7 @@ import { SELECT_CLASS } from "../save-as-dialog";
 import type { GroupProps } from "./group-props";
 
 // The pool line names the pool's kind (canon: new-run-canon.md WHERE_DETAIL, pool words).
-const POOL_KIND_LABEL = { organization: "Organization pool", user: "User pool" } as const;
+const POOL_KIND_LABEL = { organization: "Organisation pool", user: "User pool" } as const;
 const BARRIER_NAME: Record<ConfinementClass, string> = { CC1: NR_SHARED.BARRIER_FENCE, CC2: NR_SHARED.BARRIER_WALL, CC3: NR_SHARED.BARRIER_VAULT };
 
 /**
@@ -165,7 +165,9 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
       id="where"
       label={NR_REVIEW.GROUP_WHERE}
       value={pool ? NR_REVIEW.WHERE_VALUE(pool.name) : noPool ? <span className="font-normal text-muted-foreground">{NR_REVIEW.WHERE_NONE}</span> : undefined}
-      mark={cc && <BarrierChip cc={cc} />}
+      mark={isVMKind(draft.intent.machine_kind)
+        ? <span data-testid="where-vm-barrier" className="text-sm font-medium">{NR_SHARED.JOIN(NR_MACHINE.BARRIER_LABEL, NR_MACHINE.BARRIER_VM)}</span>
+        : cc && <BarrierChip cc={cc} />}
       detail={detail}
       provenance={provenance}
       docRows={docRows}

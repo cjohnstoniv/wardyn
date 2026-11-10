@@ -26,6 +26,7 @@ const LIST: WallPresetList = {
     { id: "open", scope: "builtin", name: "Open", spec: {}, version: 1 },
     { id: "read-only", scope: "builtin", name: "Read-only", version: 1, spec: { github_capabilities: GH, azure_devops_capabilities: ADO, push_rules: { deny_all: true } } },
     SEALED,
+    { id: "no-network", scope: "builtin", name: "No network", version: 1, spec: { ...SEALED.spec } },
     { id: "org-1", scope: "org", name: "Docs triage", description: "Keeps read capabilities and only setup sites.", spec: { allowed_domains: [] }, version: 4 },
     { id: "grp-1", scope: "group", group_id: "g1", name: "Release freeze", spec: { push_rules: { deny_all: true } }, version: 2 },
     { id: "me-1", scope: "person", name: "No pastebins", spec: { denied_domains: ["paste.ee"] }, version: 1 },
@@ -42,12 +43,26 @@ describe("WallPresetPicker", () => {
     return onChange;
   };
 
-  it("offers Open, Read-only and Sealed with Open chosen by default, and says what the choice does", () => {
+  it("offers Open, Read-only, Sealed and No network with Open chosen by default, and says what the choice does", () => {
     show(undefined);
     const group = within(screen.getByRole("group", { name: W.CONTROL }));
-    expect(group.getAllByRole("button").map((b) => b.textContent)).toEqual(["Open", "Read-only", "Sealed"]);
+    expect(group.getAllByRole("button").map((b) => b.textContent)).toEqual(["Open", "Read-only", "Sealed", "No network"]);
     expect(group.getByRole("button", { name: "Open" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(W.CONTROL_HELP)).toBeInTheDocument();
+  });
+
+  it("stacks the options on a phone so No network is not cut off, and sends its id on a pick", async () => {
+    const onChange = show(undefined);
+    const group = screen.getByRole("group", { name: W.CONTROL });
+    expect(group.firstElementChild).toHaveClass("max-[399px]:flex-col");
+    await user.click(screen.getByRole("button", { name: "No network" }));
+    expect(onChange).toHaveBeenCalledWith("no-network");
+  });
+
+  it("shows No network as the chosen built-in, not as a custom pill", () => {
+    show("no-network");
+    expect(screen.getByRole("button", { name: "No network" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("wall-preset-pill")).toBeNull();
   });
 
   it("sends the built-in's id on a pick, including Open as a deliberate choice", async () => {

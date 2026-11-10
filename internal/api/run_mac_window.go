@@ -187,10 +187,7 @@ type macWindowAuthority struct {
 // macWindowAuthorityFrom is the authority of the request ctx carries, admitted at.
 func macWindowAuthorityFrom(ctx context.Context, actor types.ActorType, principal string, at time.Time) macWindowAuthority {
 	_, via := audit.DelegationFrom(ctx)
-	tokenID, sessionID := apiTokenIDFromContext(ctx), cliSessionIDFromContext(ctx)
-	if sessionID != uuid.Nil {
-		tokenID = uuid.Nil
-	}
+	tokenID, sessionID := credentialBinding(ctx)
 	return macWindowAuthority{ActorType: actor, Principal: principal, Email: oidcEmailFromContext(ctx),
 		Issue: admittedIssue(ctx, principal, at), Token: admittedByToken(ctx), Via: via,
 		TokenID: tokenID, CLISessionID: sessionID}

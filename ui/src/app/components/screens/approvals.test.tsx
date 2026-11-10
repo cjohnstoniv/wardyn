@@ -38,6 +38,8 @@ let mockExpiredPushRow = false;
 // fetchAll() failure (Promise.all over the 5 states) without having to race
 // individual calls within one Promise.all.
 let mockFailAllLists = false;
+// What those rejections carry; null is a plain network-style failure.
+let mockListError: Error | null = null;
 // F5-F11: freezes every listApprovals call until resolved, so a test can
 // inspect the DOM DURING an in-flight refresh (decide()'s silent fetchAll()
 // vs. the old load()'s loading-skeleton flash).
@@ -51,7 +53,7 @@ vi.mock("../../lib/api/approvals", () => {
     approvals: {
       listApprovals: async (state: string) => {
         if (mockListDeferred) await mockListDeferred;
-        if (mockFailAllLists) return Promise.reject(new Error("503"));
+        if (mockFailAllLists) return Promise.reject(mockListError ?? new Error("503"));
         if (state === "PENDING" && !mockPendingEmpty) {
           return Promise.resolve([
             {
@@ -168,6 +170,7 @@ import { FILE_DOWNLOAD_CARD, KUBE_CALL_CARD } from "../wardyn/copy/files-review"
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import { HttpError } from "../../lib/api/core";
+import { STATES } from "../wardyn/states";
 import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/copy";
 
 // Every describe below assumes a LIVE run unless it says otherwise (B4 gates
@@ -177,6 +180,7 @@ beforeEach(() => {
   mockCancelledRow = false;
   mockExpiredPushRow = false;
   mockFailAllLists = false;
+  mockListError = null;
   mockListDeferred = null;
 });
 
@@ -735,6 +739,21 @@ describe("ApprovalsScreen — the run has ended", () => {
   // The archived side. "Cancelled · by system · 3h ago" could mean anyone
   // withdrew it; the row has to say that NOTHING was decided — which is a
   // different fact from a denial, and the only one true here.
+  it.each([
+    ["Pending", "/approvals"],
+    ["Decided", "/approvals?tab=decided"],
+  ])("a failed %s read the server worded shows its sentence, not the default line", async (_tab, url) => {
+    mockFailAllLists = true;
+    mockListError = new HttpError(500, "Your sentence from the server.", "load_failed");
+    render(
+      <MemoryRouter initialEntries={[url]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("a CANCELLED row in the Decided tab says nothing was approved and nothing denied", async () => {
     mockCancelledRow = true;
     render(

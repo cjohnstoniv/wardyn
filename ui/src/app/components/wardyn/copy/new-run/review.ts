@@ -140,6 +140,9 @@ export const NR_REVIEW = {
   POLICY_NETWORK: "Network",
   POLICY_HOSTS: (n: string | number) => `${n} hosts allowed`,
   POLICY_HOST_ONE: "1 host allowed",
+  /** Open egress: the listed hosts are not all the run can reach. */
+  POLICY_HOSTS_OPEN: (n: string | number) => `${n} hosts listed · other public hosts allowed unless blocked`,
+  POLICY_HOST_OPEN_ONE: "1 host listed · other public hosts allowed unless blocked",
   POLICY_CREDENTIALS: "Credentials",
   POLICY_NO_CREDENTIALS: "No credentials requested",
   POLICY_HIDDEN: "Selected model provider · Hidden",

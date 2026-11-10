@@ -156,7 +156,7 @@ func (d *Driver) startPrepProxy(ctx context.Context, id uuid.UUID, labels map[st
 	}
 	// Nothing here reads the prep proxy's stdout, so the attach is stdin only and the start is watched
 	// for an early exit, as startProxyOn does for a proxy image without the ready marker.
-	att, err := d.startWithConfig(ctx, id, resp.ID, cfgJSON, false)
+	att, _, err := d.startWithConfig(ctx, id, resp.ID, cfgJSON, false) // a prep proxy reports to no start
 	if err != nil {
 		return resp.ID, err
 	}

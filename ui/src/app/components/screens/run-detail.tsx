@@ -114,7 +114,7 @@ function RunDetailPage({ id }: { id: string }) {
   const principal = usePrincipal();
 
   const {
-    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, loadMessage, tab, setTab,
     recording, recState, recRefusal, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
@@ -286,6 +286,7 @@ function RunDetailPage({ id }: { id: string }) {
       ) : status === "error" ? (
         <div className="m-6 rounded-xl border border-border bg-card">
           <ErrorState
+            message={loadMessage}
             action={
               <Button variant="outline" size="sm" onClick={() => load(true)}>
                 <RotateCw className="size-3.5" /> Retry

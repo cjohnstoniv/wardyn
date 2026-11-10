@@ -46,6 +46,11 @@ import { SecretsScreen, AddSecretDialog } from "./secrets";
 import { LANE_META } from "../../lib/scm-provider";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
+import { WRITE_ONLY } from "../wardyn/copy/door";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
+import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -68,6 +73,43 @@ describe("SecretsScreen — delete error handling", () => {
     const confirm = await screen.findByRole("button", { name: /delete secret/i });
     await user.click(confirm);
   }
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listSecretsMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    render(<SecretsScreen />);
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("reads the search text from the URL, so Back from a row lands on the same filtered list", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key", "openai-api-key"]);
+    render(
+      <MemoryRouter initialEntries={["/?q=openai"]}>
+        <SecretsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("openai-api-key")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search secrets by name…")).toHaveValue("openai");
+    expect(screen.queryByText("anthropic-api-key")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key", "openai-api-key"]);
+    render(
+      <LaggingRouter>
+        <SecretsScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("openai-api-key");
+    const box = screen.getByPlaceholderText("Search secrets by name…");
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
+  });
 
   it("names each row's actions menu after the secret", async () => {
     render(<SecretsScreen />);
@@ -504,6 +546,28 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
     expect(listSecretsMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /add secret/i })).toBeEnabled();
     expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+  });
+
+  // The cyan tint over the row's hover wash (muted at 50%) measures 4.49:1, under the 4.5:1 text target; over --card it is 5.36:1.
+  it("member: the Write-only chip sits on the card colour while its row is hovered, so its text keeps contrast", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    const chip = screen.getByTitle(WRITE_ONLY.TOOLTIP);
+    expect(chip.className).toContain("[tr:hover_&]:bg-card");
+  });
+
+  it("names the search box, not only by its placeholder", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    expect(screen.getByRole("textbox", { name: "Search secrets" })).toBeInTheDocument();
   });
 
   it("member: Rotate and Delete act on their own row only; the admin's name has no actions", async () => {

@@ -141,6 +141,14 @@ func (s *stallingSub) ReplaceProxy(ctx context.Context, ref string, cfg []byte) 
 	return s.Fake.ReplaceProxy(ctx, ref, cfg)
 }
 
+// ReplaceProxyHashed hangs like ReplaceProxy: the embedded Fake's would skip the hook on the hashed path.
+func (s *stallingSub) ReplaceProxyHashed(ctx context.Context, ref string, cfg []byte) (string, error) {
+	if err := s.hang(ctx, "replace_proxy"); err != nil {
+		return "", err
+	}
+	return s.Fake.ReplaceProxyHashed(ctx, ref, cfg)
+}
+
 func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)

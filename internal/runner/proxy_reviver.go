@@ -27,8 +27,9 @@ type ProxyReviver interface {
 	EnsureProxyImage(ctx context.Context) error
 }
 
-// ProxyReviverHashed is an OPTIONAL ProxyReviver capability: ReplaceProxy that also answers the hex
-// SHA-256 of the exact config bytes the new proxy was handed.
+// ProxyReviverHashed is ReplaceProxy that also answers proxy.ConfigSHA256 of the exact bytes the
+// new proxy was handed, which that proxy reports back once it loads them. An empty hash is a runner
+// that predates it.
 type ProxyReviverHashed interface {
 	ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error)
 }

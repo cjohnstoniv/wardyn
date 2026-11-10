@@ -64,7 +64,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
   - **Callable from outside the run** lets the callers under **Who can call it** (people, groups, service identities; **Add a caller**) reach that port through the gateway with no terminal open. It needs inbound access turned on for you.
 - **Machine kind** is **Container** (the default) or **Virtual machine**. A virtual machine has no Fence, Wall or Vault; its barrier reads **The virtual machine**.
   - **Operating system** is **Linux** or **macOS**. macOS is listed when macOS virtual machines are on.
-  - A macOS VM needs a pool of Macs that offer it. The step names the Mac and the reason when one cannot take the run.
+  - A macOS VM needs a pool of Macs that offer it. The step names the Mac and the reason when one cannot take the run, and lists the pools that offer macOS as buttons: picking one chooses that pool and macOS.
   - See [macOS virtual machines](operations/macos-vms.md) and [Linux VM sandboxes](operations/linux-vm-sandboxes.md).
 - **Window** (macOS, while `macos_vm.allow_attended_window` is on): **Open in a window on my Mac** opens a window as the run starts. Be at the Mac with its screen unlocked ([Quickstart](operations/macos-vm-use.md#quickstart-an-interactive-developer-sandbox)).
 - **Between runs** (an interactive macOS VM on your own Mac, while kept machines are on):
@@ -127,7 +127,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | **Add tools and access** | The catalogue of things you can add |
 | **Network** and **Credentials** | The total the run can reach |
 | **Setup still needed** | Open items, each with a button: **Sign in**, **Choose**, **Add** or **Connect Azure DevOps** |
-| **Wall preset** | **Open**, **Read-only** or **Sealed**, and the saved presets under **More presets**. A preset narrows this run only, on top of your walls ([Wall presets](POLICIES.md#wall-presets)) |
+| **Wall preset** | **Open**, **Read-only**, **Sealed** or **No network** (where the server offers it), and the saved presets under **More presets**. A preset narrows this run only, on top of your walls ([Wall presets](POLICIES.md#wall-presets)) |
 
 - A run that carries an Azure DevOps credential, on a connection that creates a token for each run, says so under **Credentials**: "Azure DevOps: a token for this run with …. It's revoked when the run ends."
 - If you have not connected, that card also reads "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection." beside **Connect Azure DevOps**.

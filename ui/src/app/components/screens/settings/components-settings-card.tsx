@@ -28,7 +28,7 @@ import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
 import { Switch } from "../../wardyn/form-primitives";
-import { ErrorState } from "../../wardyn/states";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 
 type Cap = NonNullable<ComponentSettings["autonomy_cap"]>;
@@ -84,6 +84,7 @@ export function ComponentsSettingsCard() {
   const [saved, setSaved] = React.useState(draftOf());
   const [draft, setDraft] = React.useState(draftOf());
   const [state, setState] = React.useState<"loading" | "ready" | "failed">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
@@ -102,7 +103,8 @@ export function ComponentsSettingsCard() {
         setState("ready");
         return next;
       })
-      .catch(() => {
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
         setState("failed");
         return null;
       });
@@ -159,7 +161,7 @@ export function ComponentsSettingsCard() {
       <p className="text-body leading-snug text-muted-foreground">{T.SETTINGS_LEAD}</p>
 
       {state === "loading" && <Loader2 role="status" aria-label="Loading" className="mt-4 size-4 animate-spin text-muted-foreground" />}
-      {state === "failed" && <ErrorState size="compact" title={T.SETTINGS_LOAD_FAILED_TITLE} onRetry={() => void load()} />}
+      {state === "failed" && <ErrorState size="compact" title={T.SETTINGS_LOAD_FAILED_TITLE} message={loadMessage} onRetry={() => void load()} />}
 
       {state === "ready" && (
         <div className="mt-3 divide-y divide-border">

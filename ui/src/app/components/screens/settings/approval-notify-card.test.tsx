@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { STATES } from "../../wardyn/states";
+import { HttpError } from "../../../lib/api/core";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import type { ApprovalNotifyStatus } from "../../../lib/api/approval-notify";
@@ -76,6 +78,21 @@ describe("ApprovalNotifyCard", () => {
     expect(screen.getByText(COPY.ENV_NAME)).toBeInTheDocument();
     expect(screen.getByText(COPY.OFF_BODY[1].trim(), { exact: false })).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getStatusMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "approval_notify_failed"));
+    render(<ApprovalNotifyCard />);
+    await expandCard(COPY.TITLE);
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    getStatusMock.mockRejectedValue(new Error("Failed to fetch"));
+    render(<ApprovalNotifyCard />);
+    await expandCard(COPY.TITLE);
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("shows no summary and an error state when the read fails", async () => {

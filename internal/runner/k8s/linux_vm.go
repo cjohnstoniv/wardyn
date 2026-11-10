@@ -54,3 +54,14 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	}
 	return nil
 }
+
+// podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
+// a VM run, the machine its RuntimeClass boots, the hash of the Secret's config (staged unchanged for the proxy to load) and the proxy's pinned address.
+func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler, proxySHA, proxyAddr string) runner.Sandbox {
+	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced, ProxyConfigSHA256: proxySHA, ProxyAddr: proxyAddr}
+	if spec.MachineKind == types.MachineLinuxVM {
+		m := vmMachine(runtimeHandler)
+		sb.Machine = &m
+	}
+	return sb
+}

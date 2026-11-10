@@ -40,7 +40,7 @@ import { cn } from "../../ui/utils";
 import { WALL_PRESETS } from "../../wardyn/copy/wall-presets";
 import { audienceOf } from "../../../lib/wall-preset-words";
 import { WallPresetRunLine } from "./wall-preset-run-lines";
-import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
+import { CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
 
@@ -293,7 +293,7 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
 // credential id, an app id) and stays in monospace.
 const READABLE_FIELDS = new Set([
   "min_confinement_class", "first_use_approval", "first_use_hold_seconds", "git_push_any_branch",
-  "allow_all_egress", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib", "desktop",
+  "allow_all_egress", "refuse_ip_literals", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib", "desktop",
 ]);
 
 // Single-value fields arrive as one-entry sets of the raw value; each reads in the
@@ -313,6 +313,8 @@ function entryText(field: string, text: string, holdSeconds?: number): string {
       return text === "true" ? SUMMARY.anyBranch : SUMMARY.ownBranch;
     case "allow_all_egress":
       return text === "true" ? CAPABILITY.allowAllEgress : text;
+    case "refuse_ip_literals":
+      return text === "true" ? IP_LITERALS.on : IP_LITERALS.off;
     case "auto_stop_after_sec":
       return lifecycleSummary({ auto_stop_after_sec: n } as RunPolicySpec);
     case "resources.cpu_millis":

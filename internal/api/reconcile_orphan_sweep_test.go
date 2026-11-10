@@ -218,38 +218,45 @@ func TestReconcileOnBoot_OrphanSweepFailureAudited(t *testing.T) {
 	}
 }
 
-// refusedStopRunner answers each ref's direct stop and kill with the error given, and records kills.
-type refusedStopRunner struct {
+// orphanTeardownRunner answers each ref's direct stop and kill with the error given, and records both.
+type orphanTeardownRunner struct {
 	*fakeRunner
-	mu     sync.Mutex
-	stops  map[string]error
-	kills  map[string]error
-	killed []string
+	mu      sync.Mutex
+	stops   map[string]error
+	kills   map[string]error
+	stopped []string
+	killed  []string
 }
 
-func (r *refusedStopRunner) StopSandbox(_ context.Context, ref string) error { return r.stops[ref] }
+func (r *orphanTeardownRunner) StopSandbox(_ context.Context, ref string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopped = append(r.stopped, ref)
+	return r.stops[ref]
+}
 
-func (r *refusedStopRunner) KillSandbox(_ context.Context, ref string) error {
+func (r *orphanTeardownRunner) KillSandbox(_ context.Context, ref string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.killed = append(r.killed, ref)
 	return r.kills[ref]
 }
 
-// TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused: an online runner's record kept only
-// for containment refuses the sweep's direct stop and leaves no answer to follow at the next boot, so
-// the sweep follows the refusal with one kill, which such a record takes. A stop queued for an offline
-// runner and a sandbox on no runner get no kill, and each failed chain is audited once.
-func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T) {
+// TestReconcileOrphanSweep_KillsARunnerSandboxNeverStopsIt: a terminal run's sandbox on a runner is
+// killed, never stopped. A stop queued for an offline runner (at boot, every runner) is an end, which a
+// runner that cannot keep an ended sandbox refuses, and so does a record kept only for containment;
+// every runner takes a kill. A sandbox on no runner is still stopped, and each failed teardown is
+// audited once.
+func TestReconcileOrphanSweep_KillsARunnerSandboxNeverStopsIt(t *testing.T) {
 	h := newHarness(t)
 	runnerID := uuid.New()
-	refused := placement.RunnerRefPrefix(runnerID.String()) + "refused"
+	killed := placement.RunnerRefPrefix(runnerID.String()) + "killed"
 	pending := placement.RunnerRefPrefix(runnerID.String()) + "pending"
 	stuck := placement.RunnerRefPrefix(runnerID.String()) + "stuck"
 	local := "local"
 	now := time.Now().UTC()
 	var runs []types.AgentRun
-	for _, ref := range []string{refused, pending, stuck, local} {
+	for _, ref := range []string{killed, pending, stuck, local} {
 		run := types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
 			Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunFailed, RunnerTarget: "docker", SandboxRef: ref}
 		if ref != local {
@@ -258,10 +265,9 @@ func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T
 		runs = append(runs, run)
 	}
 	st := &orphanSweepStore{runs: runs}
-	refusal := errors.New("containment-only identity refuses this operation")
-	rn := &refusedStopRunner{fakeRunner: &fakeRunner{},
-		stops: map[string]error{refused: refusal, pending: runner.ErrPendingOnRunner, stuck: refusal, local: refusal},
-		kills: map[string]error{stuck: context.DeadlineExceeded}}
+	rn := &orphanTeardownRunner{fakeRunner: &fakeRunner{},
+		stops: map[string]error{local: errors.New("docker: stop: refused")},
+		kills: map[string]error{pending: runner.ErrPendingOnRunner, stuck: context.DeadlineExceeded}}
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
 	srv := testServer(t, cfg)
@@ -269,8 +275,11 @@ func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T
 	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(rn.killed, ","); got != refused+","+stuck {
-		t.Fatalf("kills %q, want one each for the refused stops on the runner", got)
+	if got := strings.Join(rn.killed, ","); got != killed+","+pending+","+stuck {
+		t.Fatalf("kills %q, want one for each sandbox on the runner", got)
+	}
+	if got := strings.Join(rn.stopped, ","); got != local {
+		t.Fatalf("stops %q, want only the sandbox on no runner", got)
 	}
 	for i, want := range []string{"", pending, stuck, local} {
 		if got := st.runs[i].SandboxRef; got != want {

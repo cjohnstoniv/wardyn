@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Tools step's Wall preset control (boards WP-2): Open, Read-only and Sealed as a segmented choice, then More
+// The Tools step's Wall preset control (boards WP-2, NR-5): Open, Read-only, Sealed and No network as a segmented choice, then More
 // presets for the organisation's, the groups' and the person's own. The choice narrows this run only, on top of the
 // person's own walls. A preset that is no longer available stays chosen, as an error: nothing falls back to Open, and
 // Launch stays held until the person picks another or picks Open.
@@ -15,7 +15,7 @@ import { Button } from "../../../../ui/button";
 import { WALL_PRESETS as W } from "../../../../wardyn/copy/wall-presets";
 import { Segmented } from "../../../../wardyn/segmented";
 
-const BUILT_IN_IDS = ["open", "read-only", "sealed"];
+const BUILT_IN_IDS = ["open", "read-only", "sealed", "no-network"];
 
 /** The preset the draft names, from the list; undefined for none chosen (Open) or one the list lacks. */
 export const chosenPreset = (list: WallPresetList | undefined, id: string | undefined): WallPreset | undefined =>
@@ -59,7 +59,7 @@ export function WallPresetPicker({
       <h3 id="wall-preset-label" className="font-medium">{W.CONTROL}</h3>
       <div className="flex flex-wrap items-center gap-2">
         <div ref={builtinGroup} role="group" aria-labelledby="wall-preset-label">
-          <Segmented<string> value={unavailable || custom ? "" : (value ?? "open")} options={builtins.map((p) => ({ value: p.id, label: p.name }))} onChange={(v) => (setMore(false), onChange(v))} />
+          <Segmented<string> value={unavailable || custom ? "" : (value ?? "open")} options={builtins.map((p) => ({ value: p.id, label: p.name }))} onChange={(v) => (setMore(false), onChange(v))} stackOnPhone />
         </div>
         {sections.length > 0 && (
           <Button ref={moreButton} type="button" variant="outline" aria-expanded={more} onClick={() => setMore((m) => !m)}>

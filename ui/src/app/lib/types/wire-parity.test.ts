@@ -632,6 +632,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/user_drive.go", "UserDriveGrant", "members_can_write", "api/drives.ts", "UserDriveGrant"],
     ["internal/types/user_drive.go", "UserDriveListItem", "single_host", "api/drives.ts", "UserDriveListItem"],
     ["internal/types/workspace_provider.go", "UserDriveProvider", "team_drives", "types/site.ts", "UserDriveProvider"],
+    ["internal/api/user_drives.go", "userDrivesResponse", "team_drives", "api/drives.ts", "UserDrivesSnapshot"],
     ["pkg/client/families.go", "DriveRequest", "team", "api/drives.ts", "UserDriveInput"],
     ["pkg/client/families.go", "DriveGrantRequest", "members_can_write", "api/drives.ts", "UserDriveGrantInput"],
     ["pkg/client/me_drives.go", "MeDrive", "team", "api/me-drives.ts", "MeDrive"],
