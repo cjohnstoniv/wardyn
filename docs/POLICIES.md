@@ -1217,10 +1217,10 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 Rules for what a run may send to one host: which methods, on which paths. `host_rules` is a list of rule sets. You write one set; each layer that adds rules (a ceiling, a profile, a restriction) keeps its own set beside yours, and the sets are not merged.
 
 ```json
-"host_rules": [{"rules": [
+{ "host_rules": [{"rules": [
   {"host": "api.example.com", "methods": ["DELETE"], "effect": "deny"},
   {"host": "api.example.com", "methods": ["GET"], "paths": ["/repos"], "effect": "allow"}
-]}]
+]}] }
 ```
 
 | Field | Type | Default | What it does |
