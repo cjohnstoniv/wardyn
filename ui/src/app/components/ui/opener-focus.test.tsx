@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./dialog"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./dropdown-menu";
 import { holdExitAnimation } from "../../../test/exit-animation";
+import { stopFocusWatches } from "./opener-focus";
 
 afterEach(cleanup);
 
@@ -309,6 +310,18 @@ describe("the opener focus watch leaves no timer behind", () => {
     unmount();
     await vi.advanceTimersByTimeAsync(500);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("is ended by stopFocusWatches, so a test's teardown leaves no watch to fire on a page that is gone", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    render(<ListHarness initial={["a", "b", "c"]} />);
+    await user.click(screen.getByRole("button", { name: "Delete b" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm" }));
+    stopFocusWatches();
+    await vi.advanceTimersByTimeAsync(500);
+    // The watch would have moved focus to the next row (the first test); stopped, it never runs.
+    expect(screen.getByRole("button", { name: "Delete c" })).not.toHaveFocus();
   });
 });
 

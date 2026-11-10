@@ -8,8 +8,12 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { stopFocusWatches } from "../app/components/ui/opener-focus";
 
 afterEach(() => {
+  // A focus watch's settle timer must not fire after its page is gone: once the file's DOM is torn down it
+  // reads `document` and throws an uncaught error that fails the whole run.
+  stopFocusWatches();
   cleanup();
 });
 
