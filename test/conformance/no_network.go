@@ -20,7 +20,8 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY wget -q -T 5 -O /d
 `
 
 // testNoNetwork: a sandbox whose proxy config has no_network reaches nothing. A request through the
-// proxy is refused 403, and a direct connect with no proxy fails.
+// proxy fails, refused 403 where the substrate runs the real proxy (Options.RealProxy), and a direct
+// connect with no proxy fails.
 func testNoNetwork(t *testing.T, r runner.Runner, opts Options) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout())
@@ -39,8 +40,11 @@ func testNoNetwork(t *testing.T, r runner.Runner, opts Options) {
 	if got["wget"] == "missing" {
 		t.Skipf("sandbox image %q has no wget; the no-network case needs one: an image contract, not a substrate verdict", opts.image())
 	}
-	if got["proxied_rc"] == "0" || got["proxied_refused"] != "1" {
-		t.Errorf("through the proxy: rc %q refused %q, want a non-zero exit and the proxy's 403", got["proxied_rc"], got["proxied_refused"])
+	if got["proxied_rc"] == "" || got["proxied_rc"] == "0" {
+		t.Errorf("through the proxy: rc %q, want it to fail", got["proxied_rc"])
+	}
+	if opts.RealProxy && got["proxied_refused"] != "1" {
+		t.Errorf("through the real proxy: refused %q, want the proxy's 403", got["proxied_refused"])
 	}
 	if got["direct_rc"] == "" || got["direct_rc"] == "0" {
 		t.Errorf("a direct connect: rc %q, want it to fail", got["direct_rc"])

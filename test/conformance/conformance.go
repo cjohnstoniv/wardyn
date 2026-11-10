@@ -101,6 +101,10 @@ type Options struct {
 	// Exec returned (running, exit code, pid). Diagnostic only: the Wait
 	// exit-code case logs it when the code is wrong, and asserts nothing on it.
 	ExecState func(ctx context.Context, execID string) string
+	// RealProxy says the sandbox's proxy sidecar is the real wardyn-proxy, so a case may assert its
+	// answers. False is a stand-in that only exists on the network (the docker suites run busybox): the
+	// NoNetwork case then asserts only that a connect through it fails.
+	RealProxy bool
 }
 
 func (o Options) timeout() time.Duration {
