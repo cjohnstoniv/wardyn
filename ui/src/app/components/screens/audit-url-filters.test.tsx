@@ -6,7 +6,7 @@
 // The Audit search text and Event/Actor facets live in the URL (q, kind, actor), and opening a run pushes a
 // history entry so Back removes it. Its own file: audit.test.tsx is at the file-size limit.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { LaggingRouter } from "../../../test/lagging-router";
 import type { AuditEvent } from "../../lib/types";
@@ -125,6 +125,30 @@ describe("AuditScreen URL filters", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
     fireEvent.click(screen.getByRole("button", { name: "history back" }));
     await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^\?q=egress$/));
+  });
+
+
+  it("a kind the loaded window lacks is dropped once, and a later poll that brings it does not narrow the list", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    renderAt(["/?kind=tool"]);
+    await screen.findByText(/egress/i);
+    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^$/));
+    expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("All");
+    // Fake timers only for the poll tick itself, as audit.test.tsx does.
+    vi.useFakeTimers();
+    try {
+      listAuditMock.mockResolvedValue([
+        ev({ id: "e1", run_id: "run_111", action: "egress.allow" }),
+        ev({ id: "e2", run_id: "run_111", action: "run.exec" }),
+      ]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+      expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("All");
+      expect(screen.getByTestId("search")).toHaveTextContent(/^$/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
 });

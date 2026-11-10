@@ -231,6 +231,11 @@ export function AuditScreen() {
   const showRetention = securityOperator && tab === "retention";
   const kindParam = searchParams.get("kind") ?? "";
   const urlKind: EventKind | "all" = (KIND_ORDER as string[]).includes(kindParam) ? (kindParam as EventKind) : "all";
+  // What load reads, so a change of kind (or of the router's setter, which follows the URL) does not reload.
+  const dropKindRef = React.useRef({ urlKind, setFilters });
+  React.useEffect(() => {
+    dropKindRef.current = { urlKind, setFilters };
+  }, [urlKind, setFilters]);
   const setKindFilter = (k: EventKind | "all") => setFilters({ kind: k === "all" ? "" : k });
   const actorParam = searchParams.get("actor") ?? "";
   const actorFilter: ActorType | "all" = ACTOR_TYPES.includes(actorParam as ActorType) ? (actorParam as ActorType) : "all";
@@ -282,8 +287,11 @@ export function AuditScreen() {
     void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
     // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
     // investigating: ask for its newest page.
+    // Resolves with the list it set, or null when a newer read superseded it.
     return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then((list) => {
-      if (eventsRequestId.current === requestId) setEvents(list);
+      if (eventsRequestId.current !== requestId) return null;
+      setEvents(list);
+      return list;
     });
   }, [runFilter]);
 
@@ -298,9 +306,13 @@ export function AuditScreen() {
   const load = React.useCallback(() => {
     setStatus("loading");
     fetchEvents()
-      .then(() => {
+      .then((list) => {
         setPollStale(false);
         setStatus("ready");
+        // A kind the URL names that this load's own window lacks is dropped here, once. A later poll tick that
+        // brings that kind must not narrow a list the screen showed as unfiltered.
+        const { urlKind: kind, setFilters: drop } = dropKindRef.current;
+        if (list && kind !== "all" && !list.some((e) => eventKind(e) === kind)) drop({ kind: "" });
       })
       .catch((e) => {
         setLoadMessage(failureSentence(e));
