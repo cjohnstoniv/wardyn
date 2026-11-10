@@ -49,6 +49,10 @@ const (
 // passKept is how long a finished pass's outcome waits for sync_folder_wait.
 var passKept = 10 * time.Minute
 
+// backPassLimit bounds a pass back when the organisation names no deadline (an older one), so a
+// stuck stream cannot hold its run's pass forever. A seed pass then has no limit but the runner's.
+var backPassLimit = 5 * time.Minute
+
 // listBudget bounds the counting one listing does; folders not reached by then
 // are listed with More set.
 var listBudget = 3 * time.Second
@@ -59,9 +63,18 @@ type Server struct {
 	roots    []string
 	stateDir string
 
+	// Clock turns the organisation's deadline for a pass into time left here: srvclock.Clock does it
+	// from the authenticated hello. Nil, or no reading yet, reads every deadline as absent.
+	Clock interface {
+		Remaining(at time.Time) (time.Duration, error)
+	}
+
 	mu      sync.Mutex
 	running int
 	passes  map[uint32]*pass
+	// byRun holds the runs with a pass running: one at a time each, from before its state is read
+	// until after it is saved.
+	byRun map[uuid.UUID]bool
 }
 
 type pass struct {
@@ -75,7 +88,7 @@ func New(ctx context.Context, roots []string, stateDir string) (*Server, error) 
 	if len(roots) == 0 {
 		return nil, errors.New("folders: no root folder")
 	}
-	s := &Server{ctx: ctx, stateDir: filepath.Join(stateDir, "folders"), passes: map[uint32]*pass{}}
+	s := &Server{ctx: ctx, stateDir: filepath.Join(stateDir, "folders"), passes: map[uint32]*pass{}, byRun: map[uuid.UUID]bool{}}
 	for _, r := range roots {
 		if !filepath.IsAbs(r) {
 			return nil, fmt.Errorf("folders: root %q is not an absolute path", r)
@@ -241,6 +254,19 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	if args.RunID == uuid.Nil {
 		return nil, runnerwire.Refuse("a pass names its run")
 	}
+	s.mu.Lock()
+	if s.byRun[args.RunID] {
+		s.mu.Unlock()
+		return nil, &runnerwire.Error{Code: runnerwire.CodeFolderPassBusy, Message: "a pass for this run is still running; try again"}
+	}
+	s.byRun[args.RunID] = true
+	s.mu.Unlock()
+	started := false
+	defer func() {
+		if !started {
+			s.endRun(args.RunID)
+		}
+	}()
 	dir, err := s.folder(args.Path)
 	if err != nil {
 		return nil, err
@@ -253,7 +279,7 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	if err := foldersync.StateOutside(dir, stateFile); err != nil {
 		return nil, runnerwire.Refuse("%s", err.Error())
 	}
-	st, err := foldersync.LoadState(stateFile, dir, remote)
+	st, err := foldersync.LoadRunnerState(stateFile, dir, remote)
 	if err != nil {
 		return nil, err
 	}
@@ -280,10 +306,12 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	s.mu.Lock()
 	s.passes[stream.ID()] = p
 	s.mu.Unlock()
+	started = true
 	go func() {
 		p.res = s.run(stream, dir, remote, st, stateFile, args)
 		_ = stream.Close()
 		release()
+		s.endRun(args.RunID)
 		close(p.done)
 		// An outcome nobody waits for is dropped after a while.
 		time.AfterFunc(passKept, func() {
@@ -297,13 +325,33 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	return runnerwire.StreamResult{Stream: stream.ID()}, nil
 }
 
+func (s *Server) endRun(id uuid.UUID) {
+	s.mu.Lock()
+	delete(s.byRun, id)
+	s.mu.Unlock()
+}
+
+// passContext bounds one pass: by the organisation's deadline, read through Clock, when it names
+// one; otherwise a pass back by backPassLimit and a seed pass by nothing but s.ctx.
+func (s *Server) passContext(args runnerwire.SyncFolderArgs) (context.Context, context.CancelFunc) {
+	if args.DeadlineUnixMs > 0 && s.Clock != nil {
+		if left, err := s.Clock.Remaining(time.UnixMilli(args.DeadlineUnixMs)); err == nil {
+			return context.WithTimeout(s.ctx, left)
+		}
+	}
+	if args.Pull {
+		return context.WithTimeout(s.ctx, backPassLimit)
+	}
+	return context.WithCancel(s.ctx)
+}
+
 // run is one pass over stream, which the organisation joins to the sandbox's
 // sftp-server started in remote.
 func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, stateFile string, args runnerwire.SyncFolderArgs) runnerwire.FolderPass {
 	failed := func(err error) runnerwire.FolderPass {
-		return runnerwire.FolderPass{Refused: []runnerwire.FolderRefusal{}, Error: foldersync.Shown(err.Error())}
+		return runnerwire.FolderPass{Refused: []runnerwire.FolderRefusal{}, Recovered: st.Recovered, Error: foldersync.Shown(err.Error())}
 	}
-	ctx, cancel := context.WithCancel(s.ctx)
+	ctx, cancel := s.passContext(args)
 	defer cancel()
 	// Closing the stream unblocks an sftp call stuck on a sandbox that stalls.
 	defer context.AfterFunc(ctx, func() { _ = stream.Close() })()
@@ -326,7 +374,7 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 	defer root.Close()
 	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, Opts: foldersync.Options{
 		Remote: remote, Pull: args.Pull, MaxPullBytes: foldersync.DefaultMaxPullBytes, OrgDeny: args.Deny,
-		Credential: credentialPath,
+		Credential: credentialPath, Runner: true, RunTag: args.RunID.String()[:8],
 	}}
 	// A pass cut short (its stream closed) still reports what it finished and saved in its state.
 	rep, err := sy.Pass(ctx)
@@ -334,9 +382,14 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 		return failed(err)
 	}
 	out := runnerwire.FolderPass{Pushed: len(rep.Pushed), Pulled: len(rep.Pulled), Conflicts: len(rep.Conflicts),
-		Ignored: rep.Ignored, BytesOut: rep.BytesOut, BytesIn: rep.BytesIn, Unsynced: rep.Unsynced, Refused: []runnerwire.FolderRefusal{}}
+		Ignored: rep.Ignored, BytesOut: rep.BytesOut, BytesIn: rep.BytesIn, Unsynced: rep.Unsynced, Refused: []runnerwire.FolderRefusal{},
+		Recovered: st.Recovered}
 	if err != nil {
 		out.Error = foldersync.Shown(err.Error())
+	}
+	unsynced := slices.Sorted(slices.Values(rep.UnsyncedPaths))
+	for _, p := range unsynced[:min(len(unsynced), runnerwire.MaxFolderUnsyncedPaths)] {
+		out.UnsyncedPaths = append(out.UnsyncedPaths, foldersync.Shown(p))
 	}
 	for _, r := range rep.Refused[:min(len(rep.Refused), runnerwire.MaxFolderRefusals)] {
 		out.Refused = append(out.Refused, runnerwire.FolderRefusal{Path: foldersync.Shown(r.Path), Reason: r.Reason})
