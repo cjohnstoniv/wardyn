@@ -134,4 +134,25 @@ grep -qE 'ghcr\.io/[^"]*/agent-claude-code' "$INSTALL" \
 grep -q 'agent-base' "$INSTALL" \
   || fail "$INSTALL never names agent-base, the image published in agent-claude-code's place"
 
+# ── 8. With no WARDYN_VERSION it picks the HIGHEST stable version, not the first row ──
+# The API lists newest-created first; a patch on an older line published after a newer line comes first.
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+sed -n '/^pick_release() {/,/^}/p' "$INSTALL" > "$tmp/pick.sh"
+[ -s "$tmp/pick.sh" ] || fail "$INSTALL has no pick_release function"
+cat > "$tmp/releases.json" <<'JSON'
+[
+  { "tag_name": "v0.9.10", "draft": false, "prerelease": false },
+  { "tag_name": "v0.10.0-rc.17", "draft": false, "prerelease": true },
+  { "tag_name": "v0.10.0", "draft": false, "prerelease": false },
+  { "tag_name": "v0.9.8", "draft": false, "prerelease": false },
+  { "tag_name": "v1.0.0", "draft": true, "prerelease": false }
+]
+JSON
+got="$(sh -c '. "$1"; pick_release < "$2"' _ "$tmp/pick.sh" "$tmp/releases.json")"
+[ "$got" = "v0.10.0 3 stable" ] || fail "with v0.9.10 listed before v0.10.0 (and an rc and a draft), install.sh picked '$got', want 'v0.10.0 3 stable'"
+got="$(printf '[{"tag_name":"v0.10.0-rc.9","prerelease":true},{"tag_name":"v0.10.0-rc.17","prerelease":true}]' | sh -c '. "$1"; pick_release' _ "$tmp/pick.sh")"
+[ "$got" = "v0.10.0-rc.17 2 prerelease" ] || fail "a repo with only pre-releases picked '$got', want 'v0.10.0-rc.17 2 prerelease'"
+got="$(printf '{"message":"API rate limit exceeded"}' | sh -c '. "$1"; pick_release' _ "$tmp/pick.sh")"
+[ -z "$got" ] || fail "an API error body resolved to '$got'"
+
 echo "test-install-sh: PASS (install.sh + ${#READMES[@]} documented install blocks)"

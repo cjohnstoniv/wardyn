@@ -108,6 +108,11 @@ jobs:
   publish-image:
     needs: gate
     if: needs.gate.outputs.green == 'true'
+    # One publisher at a time and none cancelled mid-push, so the main-tip check in
+    # "Compute image tags" is made after any earlier publish has finished.
+    concurrency:
+      group: publish-image
+      cancel-in-progress: false
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
@@ -145,9 +150,22 @@ jobs:
           EXTRA_TAG: ${{ inputs.extra_tag }}
           SHA: ${{ needs.gate.outputs.sha }}
         run: |
+          set -euo pipefail
+          # A release tag is published by release.yml, signed and attested; this lane never writes a v* tag.
+          case "${EXTRA_TAG:-}" in
+            v*) echo "::error::extra_tag must not start with v (got ${EXTRA_TAG}); release tags come from release.yml"; exit 1 ;;
+          esac
           tags=("ghcr.io/cjohnstoniv/wardynd:sha-${SHA::7}")
           if [ "$REF_TYPE" = "branch" ] && [ "$REF_NAME" = "main" ]; then
-            tags+=("ghcr.io/cjohnstoniv/wardynd:latest")
+            # :latest only ever moves forward: a run for a commit that is no longer main's tip (its CI finished
+            # after a newer commit's) must not point :latest back at it. The newer commit's own run publishes.
+            tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+            [ -n "$tip" ] || { echo "::error::could not read main's tip"; exit 1; }
+            if [ "$tip" = "$SHA" ]; then
+              tags+=("ghcr.io/cjohnstoniv/wardynd:latest")
+            else
+              echo "::notice::$SHA is not main's tip ($tip); not moving :latest"
+            fi
           fi
           if [ "$REF_TYPE" = "tag" ]; then
             tags+=("ghcr.io/cjohnstoniv/wardynd:${REF_NAME#v}")
