@@ -111,6 +111,7 @@ func (c *capsReporter) send(ctx context.Context, peer *runnerwire.Peer, reprobe,
 	caps.ProxySettings, caps.AllowedRoots, caps.LocalModelPorts = c.extra.proxySettings(), c.extra.driveRoots, c.extra.localModelPorts
 	caps.LinuxVM, caps.MacOSVM, caps.LocalAttach = c.extra.linuxVM, c.extra.macOSVM.current(), c.hasLocal
 	caps.BoundFolders = c.extra.boundFolders
+	caps.ProxyFence = true
 	caps.RunsNamespaces = c.extra.runsNamespaces
 	if !c.extra.report.fill(ctx, &caps, reprobe) && !always {
 		return nil

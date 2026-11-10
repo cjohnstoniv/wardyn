@@ -24,6 +24,8 @@ func TestErrorCodeToSentinelMap(t *testing.T) {
 		"never_started":       runner.ErrExecNeverStarted,
 		"image_arch":          runner.ErrImageArch,
 		"relay_ip_fenced":     runner.ErrRelayIPFenced,
+		"folder_pass_busy":    runner.ErrFolderPassBusy,
+		"proxy_fenced":        runner.ErrProxyFenced,
 		"observe_unsupported": runner.ErrObserveUnsupported,
 	}
 	if len(codeSentinels) != len(want) {

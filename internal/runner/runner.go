@@ -358,6 +358,12 @@ var ErrImageArch = errors.New("runner: the image's architecture cannot run on th
 // relay_ip_fenced code, so the org ends the run with that reason rather than a daemon fault.
 var ErrRelayIPFenced = errors.New("runner: relay_ip_fenced")
 
+// ErrFolderPassBusy refuses a folder pass for a run whose last pass is still running. Retryable.
+var ErrFolderPassBusy = errors.New("runner: a pass for this run is still running; try again")
+
+// ErrProxyFenced refuses a proxy replace for a run whose proxy is fenced (the run was contained).
+var ErrProxyFenced = errors.New("runner: the run's proxy is fenced")
+
 // ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
 // exec-scoped environment, and whether it runs under a PTY.
 type ExecSpec struct {

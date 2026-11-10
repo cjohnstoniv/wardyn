@@ -41,7 +41,7 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 	// sendCaps reports the folders caps; always sends them even when no summary waits (a fresh session's are required).
 	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, always bool) error {
 		machine, _ := os.Hostname()
-		caps := runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true}
+		caps := runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true, FolderPassOnce: true}
 		if !report.fill(ctx, &caps, false) && !always {
 			return nil
 		}
