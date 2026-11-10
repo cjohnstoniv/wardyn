@@ -240,7 +240,7 @@ func postLoaded(t *testing.T, srv *Server, runID uuid.UUID, jti, sha string) (in
 	return w.Code, out.State
 }
 
-func sha256Hex(b []byte) string {
+func hashHex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -291,7 +291,7 @@ func (r *hashedReviveRunner) ReplaceProxyHashed(ctx context.Context, ref string,
 	if r.hash != nil {
 		return r.hash(cfg), nil
 	}
-	return sha256Hex(cfg), nil
+	return hashHex(cfg), nil
 }
 
 type readbackFixture struct {
@@ -338,7 +338,7 @@ func (f *readbackFixture) lastHandover(t *testing.T) ([]byte, string, string) {
 	if err != nil {
 		t.Fatalf("the new proxy's token does not verify: %v", err)
 	}
-	return raw, sha256Hex(raw), claims.JTI
+	return raw, hashHex(raw), claims.JTI
 }
 
 func (f *readbackFixture) active(t *testing.T) store.ProxyStart {
@@ -365,7 +365,7 @@ func TestReadback_ReportBeforeReviveReturnsIsHeldThenEnforced(t *testing.T) {
 			t.Errorf("verify the new token: %v", err)
 			return
 		}
-		if code, state := postLoaded(t, f.srv, f.run.ID, claims.JTI, sha256Hex(cfg)); code != http.StatusAccepted || state != "pending" {
+		if code, state := postLoaded(t, f.srv, f.run.ID, claims.JTI, hashHex(cfg)); code != http.StatusAccepted || state != "pending" {
 			t.Errorf("early report: %d %q, want 202 pending", code, state)
 		}
 	}
@@ -396,7 +396,7 @@ func TestReadback_ReportBeforeReviveReturnsDifferentHashStops(t *testing.T) {
 		}
 		_ = json.Unmarshal(cfg, &c)
 		claims, _ := f.srv.cfg.Identity.Verify(context.Background(), c.RunToken, internalAudience)
-		postLoaded(t, f.srv, f.run.ID, claims.JTI, sha256Hex([]byte("other bytes")))
+		postLoaded(t, f.srv, f.run.ID, claims.JTI, hashHex([]byte("other bytes")))
 	}
 	if code := f.revive(t); code != http.StatusBadGateway {
 		t.Fatalf("revive: code %d, want 502", code)
@@ -548,7 +548,7 @@ func TestReadback_OldCurrentTokenAfterLineageRetirementIsStale(t *testing.T) {
 	f.rb.jtis, f.rb.renewedAt = []string{"old-current", ""}, at
 	f.rb.generationStore.mu.Unlock()
 	f.rr.onReplace = func(cfg []byte) {
-		if code, state := postLoaded(t, f.srv, f.run.ID, "old-current", sha256Hex(cfg)); code != http.StatusOK || state != "stale" {
+		if code, state := postLoaded(t, f.srv, f.run.ID, "old-current", hashHex(cfg)); code != http.StatusOK || state != "stale" {
 			t.Errorf("old-current report: %d %q, want 200 stale", code, state)
 		}
 	}
@@ -676,7 +676,7 @@ func TestReadback_ModeNeedsPositiveEvidence(t *testing.T) {
 	for image, want := range map[string]string{
 		"ghcr.io/example/wardyn-proxy:0.10.0-rc.17":             store.ProxyStartLegacy,
 		"ghcr.io/example/wardyn-proxy:0.10.0-rc.18":             store.ProxyStartExpected,
-		"ghcr.io/example/wardyn-proxy@sha256:" + sha256Hex(nil): store.ProxyStartExpected,
+		"ghcr.io/example/wardyn-proxy@sha256:" + hashHex(nil): store.ProxyStartExpected,
 		"ghcr.io/example/wardyn-proxy:latest":                   store.ProxyStartExpected,
 		"":                                                      store.ProxyStartExpected,
 	} {
@@ -775,7 +775,7 @@ func TestReadback_DispatchWithoutHashStopsAtOnce(t *testing.T) {
 // deadline); the create then answers the matching hash, the start is enforced and the run runs. The
 // address it answered is stored; the run's JSON never carries it.
 func TestReadback_DispatchReportWhileCreateBlockedThenMatch(t *testing.T) {
-	sha := sha256Hex([]byte("final bytes"))
+	sha := hashHex([]byte("final bytes"))
 	d := newDispatchReadback(t, sha, true)
 	d.rn.addr = "172.30.0.2"
 	done := make(chan struct{})
@@ -806,11 +806,11 @@ func TestReadback_DispatchReportWhileCreateBlockedThenMatch(t *testing.T) {
 
 // The report held during the create is of different bytes: the create's answer stops the sandbox.
 func TestReadback_DispatchReportWhileCreateBlockedThenMismatch(t *testing.T) {
-	d := newDispatchReadback(t, sha256Hex([]byte("final bytes")), true)
+	d := newDispatchReadback(t, hashHex([]byte("final bytes")), true)
 	done := make(chan struct{})
 	go func() { d.dispatch(); close(done) }()
 	<-d.rn.started
-	postLoaded(t, d.srv, d.run.ID, d.jti, sha256Hex([]byte("other bytes")))
+	postLoaded(t, d.srv, d.run.ID, d.jti, hashHex([]byte("other bytes")))
 	close(d.rn.release)
 	<-done
 	if got := d.st.State(); got != types.RunFailed {
@@ -835,7 +835,7 @@ func TestReadback_LateCreateReturnIsFenced(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			sha := sha256Hex([]byte("final bytes"))
+			sha := hashHex([]byte("final bytes"))
 			d := newDispatchReadback(t, sha, true)
 			done := make(chan struct{})
 			go func() { d.dispatch(); close(done) }()
@@ -858,7 +858,7 @@ func TestReadback_LateCreateReturnIsFenced(t *testing.T) {
 
 // A create answer without an address leaves the run's stored address empty.
 func TestReadback_DispatchWithoutAddrStoresNone(t *testing.T) {
-	d := newDispatchReadback(t, sha256Hex([]byte("final bytes")), false)
+	d := newDispatchReadback(t, hashHex([]byte("final bytes")), false)
 	d.dispatch()
 	if got, ok := d.st.addrs[d.run.ID]; ok || got != "" {
 		t.Errorf("stored proxy address = %q, want none", got)
