@@ -397,12 +397,8 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 			return err
 		}
 	}
-	if sy.Opts.RunnerPass && sy.State.Recovered != "" && !known && hasL && hasR {
-		if sy.sameBytes(rel, l.side.Size, path.Join(sy.Opts.Remote, rel), r.Size()) {
-			sy.State.Files[rel] = FileSeen{Local: l.side, Remote: rSide}
-			return nil
-		}
-		return sy.conflict(ctx, rel, l, r, rep, pulled)
+	if sy.recovering(known, hasL, hasR) {
+		return sy.recoveredFile(ctx, rel, l, r, rSide, rep, pulled)
 	}
 	switch {
 	case hasL && hasR && lChanged && rChanged && (known || sy.Opts.Pull):
@@ -423,6 +419,22 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 		return sy.pull(ctx, rel, r, nil, rep, pulled)
 	}
 	return nil
+}
+
+// recovering reports whether rel, on both sides with no record, is in a runner pass after an
+// unreadable record was moved aside: such a file is compared, never taken as changed on one side.
+func (sy *Syncer) recovering(known, hasL, hasR bool) bool {
+	return sy.Opts.RunnerPass && sy.State.Recovered != "" && !known && hasL && hasR
+}
+
+// recoveredFile records a recovering file whose two copies hold the same bytes, and keeps the
+// sandbox's as a conflict copy when they differ.
+func (sy *Syncer) recoveredFile(ctx context.Context, rel string, l syncFile, r os.FileInfo, rSide Side, rep *Report, pulled *int64) error {
+	if sy.sameBytes(rel, l.side.Size, path.Join(sy.Opts.Remote, rel), r.Size()) {
+		sy.State.Files[rel] = FileSeen{Local: l.side, Remote: rSide}
+		return nil
+	}
+	return sy.conflict(ctx, rel, l, r, rep, pulled)
 }
 
 // deleted handles a file this sync sent that one side has since deleted. A
