@@ -541,17 +541,21 @@ func TestCanaryRecheck_AcknowledgedBesideUnenforcedReadsUnenforced(t *testing.T)
 	}
 }
 
-// stallingCleanupAPI is an API server for the canary that creates objects and reports every canary pod
-// exited 0, but takes each DELETE and never answers it until the client gives up.
-func stallingCleanupAPI(t *testing.T) (kubernetes.Interface, *atomic.Int32) {
+// stallingAPI is an API server for the canary that creates objects and reports every canary pod
+// exited 0, but takes each request of method stall and never answers it until the client gives up. It
+// counts the stalled requests.
+func stallingAPI(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int32) {
 	t.Helper()
-	var deletes atomic.Int32
+	var stalled atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodDelete:
-			deletes.Add(1)
+		case r.Method == stall:
+			stalled.Add(1)
 			<-r.Context().Done()
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
 		case r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.Copy(w, r.Body) // the created object is what was sent
@@ -575,7 +579,7 @@ func stallingCleanupAPI(t *testing.T) (kubernetes.Interface, *atomic.Int32) {
 	if err != nil {
 		t.Fatalf("clientset: %v", err)
 	}
-	return cs, &deletes
+	return cs, &stalled
 }
 
 // TestCanaryCleanup_StalledDeleteIsBounded: an API server that takes the canary's cleanup deletes and
@@ -588,7 +592,7 @@ func TestCanaryCleanup_StalledDeleteIsBounded(t *testing.T) {
 
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{})
-	cs, deletes := stallingCleanupAPI(t)
+	cs, deletes := stallingAPI(t, http.MethodDelete)
 	d.clientset = cs
 
 	checked := make(chan struct{})
@@ -623,5 +627,36 @@ func TestCanaryCleanup_StalledDeleteIsBounded(t *testing.T) {
 	case <-closed:
 	case <-time.After(30 * time.Second):
 		t.Fatal("Close did not return while a cleanup delete stalled")
+	}
+}
+
+// TestCanaryCreate_StalledCreateIsBounded: an API server that takes the canary's create and never
+// answers holds a check only canaryCreateTimeout, and the check counts as one that cannot tell: the
+// proven verdict stands with one strike, so three such checks in a row still make it not proven.
+func TestCanaryCreate_StalledCreateIsBounded(t *testing.T) {
+	old := canaryCreateTimeout
+	canaryCreateTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { canaryCreateTimeout = old })
+
+	c := newRecheckCluster(t)
+	d, _ := c.boot(t, Config{})
+	cs, posts := stallingAPI(t, http.MethodPost)
+	d.clientset = cs
+
+	checked := make(chan struct{})
+	go func() {
+		d.recheckOnce(context.Background())
+		close(checked)
+	}()
+	select {
+	case <-checked:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a check whose create never answers did not return")
+	}
+	if posts.Load() == 0 {
+		t.Fatal("no create reached the server")
+	}
+	if got := d.netPol.Load().byNS[testNamespace]; got.state != netPolProven || got.strikes != 1 {
+		t.Errorf("after a stalled create: state %v with %d strike(s), want %v with 1", got.state, got.strikes, netPolProven)
 	}
 }
