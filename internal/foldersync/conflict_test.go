@@ -91,6 +91,9 @@ func TestInstall_Order(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"file sync, copy absent=true, sandbox=sandbox edit!", "dir sync, copy present=true, sandbox=sandbox edit!"}
+	if !dirSyncs {
+		want = want[:1]
+	}
 	if !slices.Equal(events, want) || sandbox() != "laptop edit" {
 		t.Errorf("events = %q, sandbox after = %q", events, sandbox())
 	}
@@ -116,6 +119,9 @@ func TestInstall_ConflictSyncFailuresRefuseThePush(t *testing.T) {
 		"directory sync": {nil, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
+			if name == "directory sync" {
+				unixDirSync(t)
+			}
 			sy, box, root := runnerSyncer(t, true)
 			bothChanged(t, sy, box, root)
 			before := sy.State.Files["x.txt"]
@@ -280,6 +286,7 @@ func TestSyncer_WithoutRunnerPassKeepsCLIRules(t *testing.T) {
 // one above it are synced, the root last, and only after all of them may the push truncate the
 // sandbox's file. A failed directory sync blocks the push.
 func TestInstall_ConflictCopyInANewDirectorySyncsEverythingBeforeThePush(t *testing.T) {
+	unixDirSync(t)
 	for _, failDir := range []bool{false, true} {
 		sy, box, root := runnerSyncer(t, true)
 		sy.ig = newSyncIgnore(nil)
@@ -393,6 +400,7 @@ func TestInstall_AnIdenticalExistingCopyIsSyncedBeforeThePush(t *testing.T) {
 // refused. The retry finds the directories and the copy already in place and still syncs the root
 // before the push may truncate the sandbox's file; a failure that repeats refuses the push again.
 func TestInstall_ARetryAfterAFailedRootSyncSyncsTheRootBeforeThePush(t *testing.T) {
+	unixDirSync(t)
 	for _, again := range []bool{false, true} {
 		sy, box, root := runnerSyncer(t, true)
 		sy.ig = newSyncIgnore(nil)
@@ -448,5 +456,70 @@ func TestInstall_ARetryAfterAFailedRootSyncSyncsTheRootBeforeThePush(t *testing.
 		} else if sandbox() != "laptop edit" || !slices.Equal(rep.Pushed, []string{rel}) {
 			t.Errorf("attempt 2: sandbox = %q, pushed = %v", sandbox(), rep.Pushed)
 		}
+	}
+}
+
+// Copies that both changed, or that have no record, but hold the same bytes are in step: no
+// conflict copy is made (a lost save must not make copies that use up the pull budget), nothing is
+// pushed, and the record is brought up to date.
+func TestPass_IdenticalCopiesAreRecordedNotConflicts(t *testing.T) {
+	for _, recorded := range []bool{true, false} {
+		sy, box, root := runnerSyncer(t, true)
+		if recorded {
+			bothChanged(t, sy, box, root)
+		}
+		at := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+		for i, p := range []string{filepath.Join(root, "x.txt"), filepath.Join(box, "x.txt")} {
+			putSyncFile(t, p, "the same edit", 0o644)
+			if err := os.Chtimes(p, at.Add(time.Duration(i)*time.Hour), at.Add(time.Duration(i)*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rep, err := sy.Pass(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(root, copyName(1))); err == nil || len(rep.Conflicts) != 0 || len(rep.Pushed) != 0 || len(rep.Pulled) != 0 {
+			t.Errorf("recorded=%v: a conflict copy or a transfer for identical copies: copy stat err = %v, report = %+v", recorded, err, rep)
+		}
+		lfi, _ := os.Stat(filepath.Join(root, "x.txt"))
+		seen, ok := sy.State.Files["x.txt"]
+		if !ok || seen.Local.Size != lfi.Size() || seen.Local.MTime != lfi.ModTime().UnixNano() {
+			t.Errorf("recorded=%v: record = %+v, %v", recorded, seen, ok)
+		}
+		if again, err := sy.Pass(context.Background()); err != nil || len(again.Conflicts) != 0 || len(again.Pushed) != 0 {
+			t.Errorf("recorded=%v: the next pass = %+v, %v", recorded, again, err)
+		}
+	}
+}
+
+// A recovering pass that ends before its save (refused, or stopped) leaves the next pass recovering:
+// the record is still missing and the moved-aside one is beside it, so a file both sides hold is
+// compared and never pushed over the sandbox's. Once a pass saves, a load is no longer recovering.
+func TestLoadStateRecover_StaysRecoveringUntilASave(t *testing.T) {
+	sy, box, root := runnerSyncer(t, false)
+	file := filepath.Join(t.TempDir(), "run.json")
+	putSyncFile(t, file, `{"local":`, 0o600)
+	first, err := LoadStateRecover(file, root, box)
+	if err != nil || first.Recovered == "" {
+		t.Fatalf("state = %+v, err = %v", first, err)
+	}
+	// The pass is refused: nothing is saved. The next pass loads again.
+	st, err := LoadStateRecover(file, root, box)
+	if err != nil || st.Recovered != first.Recovered {
+		t.Fatalf("after an unsaved pass: Recovered = %q, err = %v, want %q", st.Recovered, err, first.Recovered)
+	}
+	sy.State, sy.StateFile, sy.StateRoot = st, file, filepath.Dir(file)
+	putSyncFile(t, filepath.Join(root, "x.txt"), "laptop", 0o644)
+	putSyncFile(t, filepath.Join(box, "x.txt"), "sandbox", 0o644)
+	rep, err := sy.Pass(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := getSyncFile(t, filepath.Join(box, "x.txt")); got != "sandbox" || slices.Contains(rep.Pushed, "x.txt") || !slices.Contains(rep.Conflicts, "x.txt") {
+		t.Errorf("sandbox = %q, report = %+v: want x.txt compared, not pushed", got, rep)
+	}
+	if st, err := LoadStateRecover(file, root, box); err != nil || st.Recovered != "" {
+		t.Errorf("after a saved pass: Recovered = %q, err = %v", st.Recovered, err)
 	}
 }

@@ -263,6 +263,7 @@ func portOr22(port string) string {
 }
 
 func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
+	warned := false // a durability warning is printed once, however many passes hit it
 	for first := true; ; first = false {
 		rep, err := sy.Pass(ctx)
 		if err != nil {
@@ -273,6 +274,10 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer,
 			return fmt.Errorf("sync: %w", err)
 		}
 		sess.report(syncPassReport{Complete: true, DeletedOnLaptop: len(rep.DeletedLocal)})
+		if rep.DurabilityWarning != "" && !warned {
+			warned = true
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", rep.DurabilityWarning)
+		}
 		if f.asJSON {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(rep); err != nil {
 				return err

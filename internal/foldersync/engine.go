@@ -57,6 +57,9 @@ type Report struct {
 	Unsynced int `json:"unsynced,omitempty"`
 	// UnsyncedPaths names them, in order, with each conflict a runner pass could not keep.
 	UnsyncedPaths []string `json:"unsynced_paths,omitempty"`
+	// NotPreserved, on a runner pass only, is the first reason a change the pass owed the laptop was
+	// not proven kept there: an install, a directory sync or the state save failed.
+	NotPreserved string `json:"not_preserved,omitempty"`
 	// DurabilityWarning is set when this folder's filesystem does not offer a directory sync: what
 	// the pass wrote stands, but a folder entry may not survive a power loss. It refuses nothing.
 	DurabilityWarning string `json:"durability_warning,omitempty"`
@@ -344,7 +347,11 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 		}
 	}
 	if err := sy.saveState(); err != nil {
-		return nil, fmt.Errorf("save sync state: %w", err)
+		if !sy.Opts.RunnerPass {
+			return nil, fmt.Errorf("save sync state: %w", err)
+		}
+		rep.notPreserved("save sync state: " + err.Error())
+		return rep, fmt.Errorf("save sync state: %w", err)
 	}
 	return rep, nil
 }
@@ -355,7 +362,11 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 // --pull it also counts the sandbox's changes among left.
 func (sy *Syncer) cut(rep *Report, left []string, v *passView, err error) (*Report, error) {
 	if serr := sy.saveState(); serr != nil {
-		return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
+		if !sy.Opts.RunnerPass {
+			return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
+		}
+		rep.notPreserved("save sync state: " + serr.Error())
+		err = errors.Join(err, fmt.Errorf("save sync state: %w", serr))
 	}
 	if sy.Opts.Pull {
 		for _, rel := range left {
@@ -397,11 +408,7 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 			return err
 		}
 	}
-	if sy.Opts.RunnerPass && sy.State.Recovered != "" && !known && hasL && hasR {
-		if sy.sameBytes(rel, l.side.Size, path.Join(sy.Opts.Remote, rel), r.Size()) {
-			sy.State.Files[rel] = FileSeen{Local: l.side, Remote: rSide}
-			return nil
-		}
+	if sy.recovering(known, hasL, hasR) {
 		return sy.conflict(ctx, rel, l, r, rep, pulled)
 	}
 	switch {
@@ -423,6 +430,13 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 		return sy.pull(ctx, rel, r, nil, rep, pulled)
 	}
 	return nil
+}
+
+// recovering reports whether rel, on both sides with no record, is in a runner pass after an
+// unreadable record was moved aside: such a file is compared (conflict), never taken as changed on
+// one side.
+func (sy *Syncer) recovering(known, hasL, hasR bool) bool {
+	return sy.Opts.RunnerPass && sy.State.Recovered != "" && !known && hasL && hasR
 }
 
 // deleted handles a file this sync sent that one side has since deleted. A
@@ -855,18 +869,18 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 	defer tmp.Close()
 	// Synced before the re-check, so a save made while the bytes reach the disk is still seen.
 	if err := syncTemp(tmp); err != nil {
-		return sy.pathFailed(ctx, rep, rel, "replace the local file", err)
+		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
 	if !sy.unchangedLocally(rel, walked) {
 		rep.Conflicts = append(rep.Conflicts, rel)
 		return nil
 	}
 	if _, err := installSynced(sy.Root, sy.dirs, tmp, tmpName, InstallReplace, rel); err != nil {
-		return sy.pathFailed(ctx, rep, rel, "replace the local file", err)
+		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
 	fi, err := sy.Root.Lstat(rel)
 	if err != nil {
-		return sy.pathFailed(ctx, rep, rel, "stat the local file", err)
+		return sy.keptFailed(ctx, rep, rel, "stat the local file", err)
 	}
 	sy.State.Files[rel] = FileSeen{Local: localSide(fi), Remote: remoteSide(r)}
 	rep.Pulled = append(rep.Pulled, rel)
@@ -897,7 +911,7 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 		return "", nil, nil
 	}
 	if err := sy.Root.MkdirAll(path.Dir(dst), 0o755); err != nil { // the install syncs every directory above dst
-		return "", nil, sy.pathFailed(ctx, rep, rel, "create the local directory", err)
+		return "", nil, sy.keptFailed(ctx, rep, rel, "create the local directory", err)
 	}
 	src, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))
 	if err != nil {
@@ -906,7 +920,7 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 	defer src.Close()
 	tmpName, tmp, err := sy.localTemp(dst)
 	if err != nil {
-		return "", nil, sy.pathFailed(ctx, rep, rel, "create a local temp file", err)
+		return "", nil, sy.keptFailed(ctx, rep, rel, "create a local temp file", err)
 	}
 	n, err := io.Copy(tmp, io.LimitReader(src, allowed+1))
 	*pulled += n
@@ -919,7 +933,7 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 		rep.refuse(rel, "larger than listed and over the pull limit")
 	default:
 		if err = tmp.Chmod(mode); err != nil {
-			err = sy.pathFailed(ctx, rep, rel, "set the local mode", err)
+			err = sy.keptFailed(ctx, rep, rel, "set the local mode", err)
 			break
 		}
 		_ = sy.Root.Chtimes(tmpName, mt, mt)

@@ -199,3 +199,33 @@ func TestSyncFolder_AnUnreadableRecordIsMovedAsideAndNamed(t *testing.T) {
 		t.Errorf("the moved-aside record: %v", err)
 	}
 }
+
+// A pass whose state save fails is carried as not preserved, with the save's error kept.
+func TestSyncFolder_ASaveFailureIsNotPreservedAndKeepsItsError(t *testing.T) {
+	h := home(t)
+	app := filepath.Join(h, "code", "app")
+	stateDir := t.TempDir()
+	s, err := New(context.Background(), []string{h}, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := wire(t, s)
+	run := uuid.New()
+	p, err := sub.SyncFolder(context.Background(), runnerwire.SyncFolderArgs{RunID: run, Path: app, RemoteDir: "/home/agent/work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The record was read when the pass started; a directory now in its place refuses the save.
+	put(t, filepath.Join(stateDir, "folders", run.String()+".json", "x"), "x")
+	srv := newSandbox(t).serve(p.Stream, "/home/agent/work")
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	res, err := p.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Error == "" || !strings.HasPrefix(res.NotPreserved, "save sync state:") || res.Pushed != 2 {
+		t.Errorf("pass = %+v, want the save's error, not preserved, and the files it sent", res)
+	}
+}

@@ -223,7 +223,9 @@ func LoadState(file, local, remote string) (*State, error) {
 
 // LoadStateRecover is LoadState for a folder runner's pass: an unreadable record
 // is moved aside to <file>.unreadable-<UTC time> and the state is empty, with
-// Recovered set, so the pass compares every file instead of trusting none.
+// Recovered set, so the pass compares every file instead of trusting none. Until
+// a pass saves a record again, a missing file with a moved-aside one beside it
+// loads the same way: a pass refused or stopped before its save stays recovering.
 func LoadStateRecover(file, local, remote string) (*State, error) {
 	return loadState(file, local, remote, true)
 }
@@ -233,6 +235,9 @@ func loadState(file, local, remote string, recover bool) (*State, error) {
 	st := &State{Local: local, Remote: remote, Files: map[string]FileSeen{}}
 	b, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
+		if recover {
+			st.Recovered = lastAside(file)
+		}
 		return st, nil
 	}
 	if err != nil {
@@ -254,6 +259,21 @@ func loadState(file, local, remote string, recover bool) (*State, error) {
 		return &prev, nil
 	}
 	return st, nil
+}
+
+// lastAside is the newest record of file moved aside as unreadable, by base name, or "".
+func lastAside(file string) string {
+	entries, err := os.ReadDir(filepath.Dir(file))
+	if err != nil {
+		return ""
+	}
+	last := ""
+	for _, e := range entries {
+		if n := e.Name(); strings.HasPrefix(n, filepath.Base(file)+".unreadable-") && e.Type().IsRegular() && n > last {
+			last = n
+		}
+	}
+	return last
 }
 
 // removeStateTemps removes the temp files a save of file left behind when it
