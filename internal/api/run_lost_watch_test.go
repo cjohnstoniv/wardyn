@@ -140,8 +140,9 @@ func TestLostRun_AFailedReadDoesNotFinalizeARebootedRun(t *testing.T) {
 	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostReboot {
 		t.Fatalf("lost = %v %q, want the run marked lost (reboot)", lostAt, reason)
 	}
-	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 || f.rn.endCount() != 0 {
-		t.Errorf("state %s, StopSandbox %d, EndSandbox %d; want RUNNING, 0, 0: the run is kept, not torn down",
+	// Kept as TestLostRun_ARebootKeepsTheRun keeps it: the agent ended (EndSandbox), not torn down (StopSandbox).
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 || f.rn.endCount() != 1 {
+		t.Errorf("state %s, StopSandbox %d, EndSandbox %d; want RUNNING, 0, 1: the run is kept, not torn down",
 			f.st.State(), f.rn.stopCount(), f.rn.endCount())
 	}
 }
