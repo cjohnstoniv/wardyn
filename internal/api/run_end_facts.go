@@ -112,7 +112,7 @@ func (f folderPassFacts) capable() bool {
 }
 
 // folderStatusDone is a record whose pass back is over: a back recorded and no resume kept. A pass is
-// never run for it again (store: folderStatusDoneSQL).
+// never run for it again (as store.GiveUpRunLocalFolder reads it).
 func folderStatusDone(st types.RunLocalFolderStatus) bool {
 	return st.Back != nil && st.Resume == nil
 }
@@ -148,8 +148,8 @@ func (s *Server) runPending(ctx context.Context, run types.AgentRun) bool {
 
 // holdsRunLock is the pass gate: ctx carries run id's lock, and the lock is still held. No pass back runs
 // without it.
-func holdsRunLock(ctx context.Context, id uuid.UUID) bool {
-	return slices.Contains(db.HeldLocks(ctx), db.NewLockKey(db.RunOpLockClass, id.String())) && db.LockHeld(ctx) == nil
+func (s *Server) holdsRunLock(ctx context.Context, id uuid.UUID) bool {
+	return slices.Contains(db.HeldLocks(ctx), db.NewLockKey(db.RunOpLockClass, id.String())) && s.lockHeld(ctx) == nil
 }
 
 // sandboxQuiescable is a sandbox the server can keep with its egress cut and its agent stopped: on the

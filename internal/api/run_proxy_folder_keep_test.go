@@ -49,7 +49,7 @@ func (s *folderStatusStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.U
 	return st, err == nil, err
 }
 
-func (s *folderStatusStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord) (int, bool, error) {
+func (s *folderStatusStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord, types.AuditEvent, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error) {
 	return 1, true, nil
 }
 
@@ -251,7 +251,7 @@ func (s *keptSweepStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID
 	return st, err == nil, err
 }
 
-func (s *keptSweepStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord) (int, bool, error) {
+func (s *keptSweepStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord, types.AuditEvent, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error) {
 	return 1, true, nil
 }
 

@@ -360,7 +360,7 @@ func (s *keptFolderStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUI
 	return st, err == nil, err
 }
 
-func (s *keptFolderStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord) (int, bool, error) {
+func (s *keptFolderStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord, types.AuditEvent, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error) {
 	return 1, true, nil
 }
 

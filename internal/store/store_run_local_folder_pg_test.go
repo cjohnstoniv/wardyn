@@ -7,10 +7,12 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -155,36 +157,60 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	}
 }
 
-// A give-up lands at any generation, once: it records back, drops resume and moves the generation on, so
-// the owner that was resuming the pass cannot settle it afterwards; a second give-up does not land, and a
-// NULL or gen-less record is given up like any other.
+// giveUpRun is a run in state with a sandbox and a computer folder, its record status ("" for NULL), and its
+// end ended ago on the database's clock.
+func giveUpRun(t *testing.T, pool *pgxpool.Pool, state types.RunState, status string, ended time.Duration) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	runner := uuid.New()
+	r := newRun(state)
+	r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
+	if _, err := store.NewPG(pool).CreateRun(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+	var raw any
+	if status != "" {
+		raw = status
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = 'sbx', local_folder_status = $2::jsonb,
+		ended_at = now() - make_interval(secs => $3), updated_at = now() - make_interval(secs => $3) WHERE id = $1`,
+		r.ID, raw, ended.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+	return r.ID
+}
+
+// giveUpRows counts run id's given-up audit rows.
+func giveUpRows(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_events WHERE run_id=$1 AND action='run.folder.transfer'`, id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+var giveUpEvent = types.AuditEvent{ActorType: types.ActorSystem, Actor: "wardynd", Action: "run.folder.transfer", Target: "sbx", Outcome: "failure",
+	Data: json.RawMessage(`{"given_up":true}`)}
+
+// A give-up lands at any generation, once, with one audit row: it records back with its time, drops resume
+// and moves the generation on, so the owner that was resuming the pass cannot settle it afterwards (here a
+// D1 give-up while a later resume passes); a second give-up writes nothing, and a NULL or gen-less record is
+// given up like any other.
 func TestPG_FolderGiveUp_EndsAResumeOnceAndFencesItsOwner(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	runner := uuid.New()
-	newFolderRun := func(status string) uuid.UUID {
-		r := newRun(types.RunStopped)
-		r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
-		if _, err := pg.CreateRun(ctx, r); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = $2::jsonb WHERE id = $1`, r.ID, status); err != nil {
-			t.Fatal(err)
-		}
-		return r.ID
-	}
 	givenUp := types.FolderPassRecord{Error: "given up", Refused: []types.FolderRefusal{}}
-	due := store.FolderGiveUpWhen{GiveUpAt: time.Now().Add(-time.Minute)}
+	d1 := store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true, Unsupported: true}
 
-	// A later resume's owner bumped to gen 3 and is passing when the give-up lands.
-	id := newFolderRun(`{"gen":2,"settled":2,"resume":{"stalled":0,"unsynced":3}}`)
+	id := giveUpRun(t, pool, types.RunStopped, `{"gen":2,"settled":2,"resume":{"stalled":0,"unsynced":3}}`, 2*time.Hour)
 	owned, ok, err := pg.BumpRunLocalFolderGen(ctx, id, store.FolderStatusGuard{Gen: 2})
 	if !ok || err != nil || owned.Gen != 3 {
 		t.Fatalf("bump = %+v %v %v", owned, ok, err)
 	}
-	gen, ok, err := pg.GiveUpRunLocalFolder(ctx, id, due, givenUp)
+	gen, ok, err := pg.GiveUpRunLocalFolder(ctx, id, d1, givenUp, giveUpEvent, prepareSpoolTest)
 	if !ok || err != nil || gen != 4 {
 		t.Fatalf("give-up = %d %v %v, want gen 4", gen, ok, err)
 	}
@@ -193,69 +219,124 @@ func TestPG_FolderGiveUp_EndsAResumeOnceAndFencesItsOwner(t *testing.T) {
 		t.Fatalf("the old owner's settle landed after the give-up: %v %v", ok, err)
 	}
 	got, err := pg.RunLocalFolderStatus(ctx, id)
-	if err != nil || got.Gen != 4 || got.Resume != nil || got.Back == nil || got.Back.Error != "given up" || got.Settled != 2 {
-		t.Fatalf("read back %+v %v, want gen 4, the given-up back, no resume, settled kept", got, err)
+	if err != nil || got.Gen != 4 || got.Resume != nil || got.Back == nil || got.Back.Error != "given up" || got.Back.GivenUpAt == nil || got.Settled != 2 {
+		t.Fatalf("read back %+v %v, want gen 4, the given-up back with its time, no resume, settled kept", got, err)
 	}
-	if _, ok, err := pg.GiveUpRunLocalFolder(ctx, id, due, givenUp); ok || err != nil {
+	if _, ok, err := pg.GiveUpRunLocalFolder(ctx, id, d1, givenUp, giveUpEvent, prepareSpoolTest); ok || err != nil {
 		t.Errorf("a second give-up landed: %v %v", ok, err)
 	}
+	if n := giveUpRows(t, pool, id); n != 1 {
+		t.Errorf("%d given-up rows after two give-ups, want 1", n)
+	}
 
+	past := store.FolderGiveUpWhen{Cap: time.Hour}
 	for name, status := range map[string]string{"null": "", "gen-less": `{"seed":{"at":"2026-11-01T00:00:00Z","files":1,"bytes":1,"refused":[]}}`} {
-		id := newFolderRun(`{}`)
-		q := `UPDATE agent_runs SET local_folder_status = NULL WHERE id = $1`
-		args := []any{id}
-		if status != "" {
-			q, args = `UPDATE agent_runs SET local_folder_status = $2::jsonb WHERE id = $1`, []any{id, status}
-		}
-		if _, err := pool.Exec(ctx, q, args...); err != nil {
-			t.Fatal(err)
-		}
-		if gen, ok, err := pg.GiveUpRunLocalFolder(ctx, id, due, givenUp); !ok || err != nil || gen != 1 {
+		id := giveUpRun(t, pool, types.RunStopped, status, 2*time.Hour)
+		if gen, ok, err := pg.GiveUpRunLocalFolder(ctx, id, past, givenUp, giveUpEvent, prepareSpoolTest); !ok || err != nil || gen != 1 {
 			t.Errorf("%s: give-up = %d %v %v, want gen 1", name, gen, ok, err)
 		}
 		if got, err := pg.RunLocalFolderStatus(ctx, id); err != nil || got.Back == nil || got.Gen != 1 || (status != "" && got.Seed == nil) {
 			t.Errorf("%s: read back %+v %v, want the given-up back at gen 1 with the rest kept", name, got, err)
 		}
+		if n := giveUpRows(t, pool, id); n != 1 {
+			t.Errorf("%s: %d given-up rows, want 1", name, n)
+		}
+	}
+	if _, _, err := pg.GiveUpRunLocalFolder(ctx, id, past, givenUp, giveUpEvent, nil); err == nil {
+		t.Error("a give-up with no audit row was let run")
 	}
 }
 
-// A give-up never lands on a live run, nor before its time unless the caller observed D1.
+// A give-up never lands on a live run, one with no sandbox, nor before its time: the cap since its end, or
+// for D1 the hold since its containment was due with the substrate's refusal or a containment error old
+// enough. One that does not land writes no row and leaves the record as it was.
 func TestPG_FolderGiveUp_NeverOnALiveRunOrBeforeItsTime(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	runner := uuid.New()
-	newFolderRun := func(state types.RunState) uuid.UUID {
-		r := newRun(state)
-		r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
-		if _, err := pg.CreateRun(ctx, r); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = '{"gen":1,"resume":{"stalled":0,"unsynced":2}}'::jsonb WHERE id = $1`, r.ID); err != nil {
-			t.Fatal(err)
-		}
-		return r.ID
-	}
 	back := types.FolderPassRecord{Error: "given up", Refused: []types.FolderRefusal{}}
-	past, future := time.Now().Add(-time.Minute), time.Now().Add(time.Hour)
+	const resume = `{"gen":1,"resume":{"stalled":0,"unsynced":2}}`
 	for name, tc := range map[string]struct {
-		state types.RunState
-		when  store.FolderGiveUpWhen
-		want  bool
+		state      types.RunState
+		ended      time.Duration
+		noSandbox  bool
+		containErr time.Duration // ago; 0 = none
+		created    time.Duration // ago; 0 = now
+		when       store.FolderGiveUpWhen
+		want       bool
 	}{
-		"running, past its time":       {types.RunRunning, store.FolderGiveUpWhen{GiveUpAt: past}, false},
-		"running, D1":                  {types.RunRunning, store.FolderGiveUpWhen{GiveUpAt: future, D1: true}, false},
-		"terminal, before its time":    {types.RunStopped, store.FolderGiveUpWhen{GiveUpAt: future}, false},
-		"terminal, D1 before its time": {types.RunStopped, store.FolderGiveUpWhen{GiveUpAt: future, D1: true}, true},
-		"terminal, past its time":      {types.RunStopped, store.FolderGiveUpWhen{GiveUpAt: past}, true},
+		"running, past the cap":        {state: types.RunRunning, ended: 2 * time.Hour, when: store.FolderGiveUpWhen{Cap: time.Hour}},
+		"running, D1":                  {state: types.RunRunning, ended: 2 * time.Hour, when: store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true, Unsupported: true}},
+		"no sandbox, past the cap":     {state: types.RunStopped, ended: 2 * time.Hour, noSandbox: true, when: store.FolderGiveUpWhen{Cap: time.Hour}},
+		"terminal, before the cap":     {state: types.RunStopped, ended: time.Minute, when: store.FolderGiveUpWhen{Cap: time.Hour}},
+		"terminal, D1 before the hold": {state: types.RunStopped, ended: time.Minute, when: store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true, Hold: time.Hour, Unsupported: true}},
+		"terminal, D1 young error":     {state: types.RunStopped, ended: 2 * time.Hour, containErr: time.Minute, when: store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true, ContainErrAge: time.Hour}},
+		"terminal, D1 no refusal":      {state: types.RunStopped, ended: 2 * time.Hour, when: store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true}},
+		"terminal, D1 old error":       {state: types.RunStopped, ended: 2 * time.Hour, containErr: 2 * time.Hour, when: store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true, ContainErrAge: time.Hour}, want: true},
+		"terminal, D1 refused stop":    {state: types.RunStopped, ended: 2 * time.Hour, when: store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true, Hold: time.Hour, Unsupported: true}, want: true},
+		"terminal, D1 due by max age":  {state: types.RunStopped, ended: time.Minute, created: 3 * time.Hour, when: store.FolderGiveUpWhen{Cap: 24 * time.Hour, D1: true, Hold: time.Hour, Unsupported: true, MaxAge: time.Hour}, want: true},
+		"terminal, past the cap":       {state: types.RunStopped, ended: 2 * time.Hour, when: store.FolderGiveUpWhen{Cap: time.Hour}, want: true},
 	} {
-		id := newFolderRun(tc.state)
-		if _, ok, err := pg.GiveUpRunLocalFolder(ctx, id, tc.when, back); ok != tc.want || err != nil {
+		id := giveUpRun(t, pool, tc.state, resume, tc.ended)
+		if tc.noSandbox {
+			if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = '' WHERE id = $1`, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.created > 0 {
+			if _, err := pool.Exec(ctx, `UPDATE agent_runs SET created_at = now() - make_interval(secs => $2) WHERE id = $1`, id, tc.created.Seconds()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.containErr > 0 {
+			if _, err := pool.Exec(ctx, `UPDATE agent_runs SET containment_error = 'proxy down', containment_error_at = now() - make_interval(secs => $2) WHERE id = $1`, id, tc.containErr.Seconds()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, ok, err := pg.GiveUpRunLocalFolder(ctx, id, tc.when, back, giveUpEvent, prepareSpoolTest); ok != tc.want || err != nil {
 			t.Errorf("%s: applied %v %v, want %v", name, ok, err, tc.want)
+		}
+		if n := giveUpRows(t, pool, id); (n == 1) != tc.want || n > 1 {
+			t.Errorf("%s: %d given-up rows, want %v", name, n, tc.want)
 		}
 		if got, _ := pg.RunLocalFolderStatus(ctx, id); !tc.want && (got.Resume == nil || got.Back != nil || got.Gen != 1) {
 			t.Errorf("%s: a give-up that did not apply changed the record: %+v", name, got)
+		}
+	}
+}
+
+// ContainmentDue and the give-up's SQL agree on when a run's containment was due.
+func TestPG_ContainmentDue_GoAndSQLAgree(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	end := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	grace := time.Hour
+	for name, tc := range map[string]struct {
+		set    string
+		maxAge time.Duration
+		want   time.Time
+	}{
+		"an ordinary end":        {set: `lost_at = NULL`, want: end},
+		"lost with reason ended": {set: `lost_at = $2::timestamptz - interval '3 hours', lost_reason = 'ended'`, want: end.Add(-2 * time.Hour)},
+		"lost with a lease end":  {set: `lost_at = $2::timestamptz - interval '1 hour', lost_reason = 'outage', ends_at = $2::timestamptz - interval '5 hours'`, want: end.Add(-4 * time.Hour)},
+		"max age":                {set: `created_at = $2::timestamptz - interval '10 hours', admitted_at = NULL`, maxAge: 2 * time.Hour, want: end.Add(-8 * time.Hour)},
+		"max age 0":              {set: `created_at = $2::timestamptz - interval '10 hours', admitted_at = NULL`, want: end},
+	} {
+		id := giveUpRun(t, pool, types.RunStopped, "", 0)
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ended_at = $2, updated_at = $2, `+tc.set+` WHERE id = $1`, id, end); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		run, err := pg.GetRun(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var inSQL time.Time
+		if err := pool.QueryRow(ctx, `SELECT `+store.ContainmentDueSQL()+` FROM agent_runs WHERE id = $3`, grace.Seconds(), store.MaxAgeSecs(tc.maxAge), id).Scan(&inSQL); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if inGo := store.ContainmentDue(run, grace, tc.maxAge); !inGo.Equal(tc.want) || !inSQL.Equal(tc.want) {
+			t.Errorf("%s: Go %s, SQL %s, want %s", name, inGo, inSQL, tc.want)
 		}
 	}
 }

@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -236,7 +235,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		kept, _ := s.containPending(rctx, f.run, "run.folder.transfer")
 		return kept
 	}
-	if !holdsRunLock(ctx, runID) {
+	if !s.holdsRunLock(ctx, runID) {
 		return keep()
 	}
 	if f = s.readFolderPassFacts(rctx, f.run); f.err != nil || !f.mayPass() {
@@ -254,7 +253,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	case folderStatusDone(gen.status) || (gen.status.Resume == nil && !f.eligible()):
 		return false
 	}
-	if db.LockHeld(ctx) != nil {
+	if s.lockHeld(ctx) != nil {
 		return keep()
 	}
 	qctx, qcancel := teardownCtx(ctx)
@@ -306,7 +305,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return keep()
 	}
 	s.auditComputerFolderPass(rctx, runID, *f.folder, true, res.FolderPass, errText)
-	return next != nil || db.LockHeld(ctx) != nil
+	return next != nil || s.lockHeld(ctx) != nil
 }
 
 // BringComputerFolderBack is bringComputerFolderBack for cmd/wardynd's idle and max-age stop, under the

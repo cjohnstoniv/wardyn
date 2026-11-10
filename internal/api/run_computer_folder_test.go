@@ -204,7 +204,7 @@ func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.
 	return s.status, true, nil
 }
 
-func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.UUID, _ store.FolderGiveUpWhen, back types.FolderPassRecord) (int, bool, error) {
+func (s *computerFolderStore) GiveUpRunLocalFolder(ctx context.Context, _ uuid.UUID, _ store.FolderGiveUpWhen, back types.FolderPassRecord, _ types.AuditEvent, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
