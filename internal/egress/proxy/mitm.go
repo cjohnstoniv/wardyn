@@ -482,18 +482,8 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 	// chooses each one, so the method restriction must be re-applied per request. The APPROVAL half
 	// stays per-CONNECT (docs/POLICIES.md "'One connection' is the honest word") since re-approving
 	// per inner request would multiply approvals; the method check costs nothing to re-apply.
-	if !p.evaluator.MethodAllowed(r.Method) {
-		log := decisionLog(p.reqOf(r, host, port), egress.Deny, "policy:method")
-		if p.sink != nil {
-			p.sink.emit(log)
-		}
-		// memoed=false: built right here (policy:method on an inner request), never from the
-		// private-IP memo.
-		p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
-		return
-	}
-	// Host rules judge each request inside, as allowed_methods does (host_rules.go).
-	if p.hostRuleRefused(w, r, host, port) {
+	// Host rules judge each request inside the same way (host_rules.go).
+	if p.innerMethodRefused(w, r, host, port) || p.hostRuleRefused(w, r, host, port) {
 		return
 	}
 

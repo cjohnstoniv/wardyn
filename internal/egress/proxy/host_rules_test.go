@@ -272,6 +272,8 @@ func TestConfigRefusesHostRulesABrokerServes(t *testing.T) {
 		"git broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}}, "git broker"},
 		"pat broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}}, "git credential broker"},
 		"mcp broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}}, "MCP broker"},
+		"via_org":     {Config{Policy: types.RunPolicySpec{HostRules: rule("corp.example.com")}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}}, "via_org route"},
+		"local model": {Config{Policy: types.RunPolicySpec{HostRules: rule("models.internal")}, LocalModels: map[string]types.LocalModelSettings{"models.internal:11434": {}}}, "brokered model route"},
 		"vm":          {Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true}, "VM run"},
 		"hold":        {Config{Policy: types.RunPolicySpec{HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: hrHost, Effect: types.HostRuleHold}}}}}}, "later release"},
 	} {

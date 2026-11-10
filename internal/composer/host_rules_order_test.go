@@ -127,3 +127,12 @@ func TestHostRulesLeqOrderIndependent(t *testing.T) {
 		})
 	}
 }
+
+// An overlay's malformed set is refused at write and at resolve alike, never appended.
+func TestHostRulesOverlayRefusesAMalformedSet(t *testing.T) {
+	hold := ruleSet(types.HostRuleHold, "GET", "/")
+	_, _, err := ApplyOverlay(Authority{}, Overlay{Ceiling: types.CeilingOverlay{HostRules: &hold}})
+	if oe, ok := err.(*OverlayError); !ok || oe.Reason != ReasonOverlayInvalid || oe.Field != "host_rules" {
+		t.Fatalf("ApplyOverlay with effect hold: err = %v, want %s on host_rules", err, ReasonOverlayInvalid)
+	}
+}
