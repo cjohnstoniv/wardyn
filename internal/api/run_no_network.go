@@ -149,9 +149,7 @@ func launchFetches(cmd string, args []string, depth int) bool {
 	case base == "docker" || base == "podman":
 		return verb() == "run"
 	case base == "deno":
-		return verb() == "run" && slices.ContainsFunc(args, func(a string) bool {
-			return strings.HasPrefix(a, "npm:") || strings.HasPrefix(a, "jsr:") || strings.HasPrefix(a, "http:") || strings.HasPrefix(a, "https:")
-		})
+		return denoRunsRemoteEntry(args)
 	case depth >= 2:
 		return false
 	case base == "env":
@@ -170,11 +168,47 @@ func launchFetches(cmd string, args []string, depth int) bool {
 	return false
 }
 
+// denoRunValueFlags are the deno run options whose value is the next argument; every other option is a
+// switch, or takes its value after "=".
+var denoRunValueFlags = []string{"-c", "--config", "--import-map", "--cert", "--location", "--seed", "--ext",
+	"-L", "--log-level", "--preload", "--conditions"}
+
+// firstPositional is the index of args' first argument that is neither an option nor the value of one of
+// valueFlags, or -1.
+func firstPositional(args, valueFlags []string) int {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case slices.Contains(valueFlags, a):
+			i++
+		case !strings.HasPrefix(a, "-"):
+			return i
+		}
+	}
+	return -1
+}
+
+// denoRunsRemoteEntry reports whether args are a deno run whose entry module is an npm:, jsr: or URL module.
+// Only the entry module counts: the arguments after it are the program's own (Deno.args), not modules.
+func denoRunsRemoteEntry(args []string) bool {
+	i := firstPositional(args, nil)
+	if i < 0 || args[i] != "run" {
+		return false
+	}
+	rest := args[i+1:]
+	j := firstPositional(rest, denoRunValueFlags)
+	if j < 0 {
+		return false
+	}
+	entry := rest[j]
+	return strings.HasPrefix(entry, "npm:") || strings.HasPrefix(entry, "jsr:") ||
+		strings.HasPrefix(entry, "http:") || strings.HasPrefix(entry, "https:")
+}
+
 // noNetworkComponentNeedsHost reports whether an attached component needs the network: a built-in Git
 // provider, a CLI credential, a remote MCP server (whose host only the broker reaches, so it is never on
 // the allowlist), a local MCP server whose launch fetches what it runs (launchFetches), a header secret,
-// or any host on its definition. One with only config, env or file secrets, or a local server run from another program in
-// the image, needs none.
+// or any host on its definition. One with only config, env or file secrets, or a local server run from
+// another program in the image, needs none.
 func noNetworkComponentNeedsHost(c attachedComponent) bool {
 	if c.builtin != nil {
 		return true
