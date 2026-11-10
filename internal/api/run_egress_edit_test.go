@@ -486,10 +486,13 @@ func TestEgressEdit_SupersededStartStopsNothing(t *testing.T) {
 		t.Fatalf("revive: %d, want 200", code)
 	}
 	gen := f.active(t).Generation
+	if _, err := f.rb.BeginProxyStart(context.Background(), f.run.ID, gen+1, "newer-jti", store.ProxyStartExpected); err != nil {
+		t.Fatal(err)
+	}
 	stops := f.lr.proxyStopCount()
-	rerr := f.srv.awaitEgressEditReadback(context.Background(), f.run.ID, gen+1) // any start other than the active one
-	if rerr == nil || rerr.reason != reasonEgressEditUnconfirmed || strings.Contains(rerr.msg, "was stopped") {
-		t.Fatalf("superseded start: %+v, want egress_edit_unconfirmed that does not claim a stop", rerr)
+	rerr := f.srv.awaitEgressEditReadback(context.Background(), f.run.ID, gen)
+	if rerr == nil || rerr.reason != reasonEgressEditSuperseded || strings.Contains(rerr.msg, "was stopped") {
+		t.Fatalf("superseded start: %+v, want egress_edit_superseded that does not claim a stop", rerr)
 	}
 	if f.lr.proxyStopCount() != stops {
 		t.Error("a superseded edit start must not stop the run's newer proxy")

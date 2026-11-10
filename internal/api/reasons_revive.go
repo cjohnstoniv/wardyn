@@ -71,7 +71,8 @@ const (
 	reasonEgressEditHostNotListed = "egress_edit_host_not_listed" // a remove_hosts entry is not an entry on the run's allowlist
 	reasonEgressEditUnsupported   = "egress_edit_unsupported"     // the store keeps no readback, or the substrate cannot hash what it hands a proxy
 	reasonEgressEditLegacyProxy   = "egress_edit_legacy_proxy"    // the run's runner or proxy image predates the readback
-	reasonEgressEditUnconfirmed   = "egress_edit_unconfirmed"     // the new proxy did not confirm the edit; it was stopped, or another revive replaced it
+	reasonEgressEditUnconfirmed   = "egress_edit_unconfirmed"     // the new proxy did not confirm the edit; its stop is confirmed
+	reasonEgressEditSuperseded    = "egress_edit_superseded"      // another revive replaced the edit's proxy start before it confirmed
 	// reasonEgressEditContainmentUnresolved: the new proxy did not confirm the edit, and its stop is not confirmed yet.
 	reasonEgressEditContainmentUnresolved = "egress_edit_containment_unresolved"
 )

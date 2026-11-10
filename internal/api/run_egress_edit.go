@@ -415,7 +415,7 @@ func egressEditUnconfirmed(why string) *reviveError {
 // egressEditSuperseded is the 503 of an edit whose start another revive replaced before it confirmed.
 // That revive started from the stored, edited config, and its own readback settles it.
 func egressEditSuperseded() *reviveError {
-	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditUnconfirmed,
+	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditSuperseded,
 		msg: "another revive replaced the edit's proxy before it confirmed; the run's proxy now starts from the edited config, and its own readback confirms it"}
 }
 

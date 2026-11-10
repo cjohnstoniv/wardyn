@@ -122,7 +122,8 @@ type EditRunEgressResponse struct {
 // A removed host is denied too, for the rest of the run. A 409 egress_edit_in_progress means another
 // edit of the run has not answered yet; a 503 egress_edit_unconfirmed means the new proxy did not
 // confirm, so it was stopped and the run has no egress until revived; a 503
-// egress_edit_containment_unresolved means that stop is not confirmed yet and is being retried.
+// egress_edit_containment_unresolved means that stop is not confirmed yet and is being retried; a 503
+// egress_edit_superseded means another revive replaced the edit's start, from the edited config.
 func (c *Client) EditRunEgress(ctx context.Context, runID uuid.UUID, req EditRunEgressRequest) (EditRunEgressResponse, error) {
 	var out EditRunEgressResponse
 	err := c.do(ctx, http.MethodPatch, "/api/v1/runs/"+runID.String()+"/egress", req, &out)
