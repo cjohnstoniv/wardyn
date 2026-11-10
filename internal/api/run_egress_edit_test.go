@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -451,9 +452,13 @@ func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
 	f.srv.cfg.Runner = br
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.editEgress(t, `{"deny_hosts":["evil.example"]}`) }()
-	saw := make(chan struct{}, 1)
+	// The report's handler takes the run's lock and holds the stop; the edit's first read of its failed
+	// start waits for that, so the edit never wins the lock and holds the stop itself.
+	saw, held := make(chan struct{}, 1), make(chan struct{})
+	var once sync.Once
 	hook := egressEditSawUncontained
 	egressEditSawUncontained = func() {
+		once.Do(func() { <-br.entered; close(held) })
 		select {
 		case saw <- struct{}{}:
 		default:
@@ -463,15 +468,13 @@ func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
 	f.answeredStart(t, 0)
 	br.block.Store(true)
 	f.mismatchAfterAnswer(t)
-	for name, ch := range map[string]chan struct{}{"entered the held stop": br.entered, "read its failed start": saw} {
-		select { // the containment's stop is held, and the edit has read its start failed meanwhile
-		case <-ch:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("the test never %s", name)
-		}
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the failed start's stop was never held")
 	}
-	// The barrier: each further read of the failed start is the edit going round its wait again, so it
-	// did not answer on the reads before it. Only then is the stop released.
+	// The barrier: each read of the failed start is the edit going round its wait again (its own
+	// containment finds the lock busy), so it did not answer on the reads before it.
 	for range 3 {
 		select {
 		case <-saw:
