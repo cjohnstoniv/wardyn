@@ -6,6 +6,7 @@
 // The effective policy card's rows: what the sandbox can actually do, and
 // which of it the person changed from where the draft started.
 
+import { NR_MACHINE } from "../../../wardyn/copy/new-run/machine";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
@@ -13,6 +14,7 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
 import { pushesLines } from "../../../wardyn/policy-document/policy-facts";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
+import { isVMKind } from "../../../../lib/types/machine-kind";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import { sameValue } from "../draft/draft-reducer";
 import { innerWallsText } from "./format";
@@ -67,6 +69,12 @@ export function changedRows(intent: RunIntent, base: RunIntent): Set<PolicyRowId
 
 const FILE_KEYS = ROW_KEYS.files;
 
+/** The Network value: the plain count, or under open egress the count of the listed hosts with the rest said (A3.1). */
+export function networkValue(hosts: number, open: boolean): string {
+  if (open) return hosts === 1 ? NR_REVIEW.POLICY_HOST_OPEN_ONE : NR_REVIEW.POLICY_HOSTS_OPEN(hosts);
+  return hosts === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts);
+}
+
 export function policyRows(
   draft: NewRunDraft,
   pre: ReviewPreflight | null,
@@ -82,7 +90,10 @@ export function policyRows(
   const rows: PolicyRow[] = [];
 
   const barrier = pre?.enforced_confinement_class ?? intent.confinement_class;
-  if (barrier) {
+  // A virtual machine has no container barrier to name: the row says what the Run step says, with the pool and no "Default".
+  if (isVMKind(intent.machine_kind)) {
+    rows.push({ id: "barrier", label: NR_REVIEW.POLICY_BARRIER, value: NR_MACHINE.BARRIER_VM, detail: pre?.runner_pool && NR_REVIEW.WHERE_VALUE(pre.runner_pool.name) });
+  } else if (barrier) {
     const fromList = pre?.barrier_options?.find((o) => o.default);
     // A class the server raised past the person's pick is no longer the pick: it says nothing about who chose it.
     const raised = !!intent.confinement_class && !!pre?.enforced_confinement_class && pre.enforced_confinement_class !== intent.confinement_class;
@@ -95,7 +106,7 @@ export function policyRows(
 
   const hosts = access ? reachedHosts(access, wallsLeftOut) : preview?.spec.allowed_domains?.length;
   if (hosts !== undefined) {
-    rows.push({ id: "network", label: NR_REVIEW.POLICY_NETWORK, value: hosts === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts), detail: joined(NR_REVIEW.PROV_SOURCE_POLICY, preview?.source.name) });
+    rows.push({ id: "network", label: NR_REVIEW.POLICY_NETWORK, value: networkValue(hosts, (access ? access.unlisted.allow_all : preview?.spec.allow_all_egress) === true), detail: joined(NR_REVIEW.PROV_SOURCE_POLICY, preview?.source.name) });
   }
 
   const kinds = (access?.credentials ?? []).map((c) => access?.rows.find((r) => r.id === c.row)?.name).filter((n): n is string => !!n);

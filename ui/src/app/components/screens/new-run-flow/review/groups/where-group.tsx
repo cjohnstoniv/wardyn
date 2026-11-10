@@ -165,7 +165,9 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
       id="where"
       label={NR_REVIEW.GROUP_WHERE}
       value={pool ? NR_REVIEW.WHERE_VALUE(pool.name) : noPool ? <span className="font-normal text-muted-foreground">{NR_REVIEW.WHERE_NONE}</span> : undefined}
-      mark={cc && <BarrierChip cc={cc} />}
+      mark={isVMKind(draft.intent.machine_kind)
+        ? <span data-testid="where-vm-barrier" className="text-sm font-medium">{NR_SHARED.JOIN(NR_MACHINE.BARRIER_LABEL, NR_MACHINE.BARRIER_VM)}</span>
+        : cc && <BarrierChip cc={cc} />}
       detail={detail}
       provenance={provenance}
       docRows={docRows}
