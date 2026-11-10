@@ -29,6 +29,10 @@ import (
 const (
 	routeVMNetDNS = "/wardyn/v1/vmnet/dns"
 
+	// DNSListenEnv is the proxy's environment variable naming its DNS listen
+	// address (":53"); unset, the proxy has no DNS listener.
+	DNSListenEnv = "WARDYN_PROXY_DNS_LISTEN"
+
 	dnsViaVMRelay = "vm_relay"
 	dnsViaProxy   = "proxy"
 
@@ -258,10 +262,11 @@ func refuseDNS(msg []byte) ([]byte, egress.DNSQuery, bool) {
 	return out, q, true
 }
 
-// ServeDNS runs the run's refusal-only DNS listener on addr, UDP and TCP, until
-// ctx ends. It answers every query REFUSED and writes its row; it never
-// resolves a name and never forwards a query.
-func (s *Server) ServeDNS(ctx context.Context, addr string) error {
+// ListenDNS opens the run's refusal-only DNS listener on addr, UDP and TCP,
+// and serves it until ctx ends. It answers every query REFUSED and writes its
+// row; it never resolves a name and never forwards a query. The error is the
+// bind's.
+func (s *Server) ListenDNS(ctx context.Context, addr string) error {
 	pc, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return err
@@ -271,7 +276,8 @@ func (s *Server) ServeDNS(ctx context.Context, addr string) error {
 		_ = pc.Close()
 		return err
 	}
-	return serveDNS(ctx, pc, ln, newDNSLimiter(s.proxy.now, s.proxy.recordDNS))
+	go func() { _ = serveDNS(ctx, pc, ln, newDNSLimiter(s.proxy.now, s.proxy.recordDNS)) }()
+	return nil
 }
 
 func serveDNS(ctx context.Context, pc net.PacketConn, ln net.Listener, lim *dnsLimiter) error {

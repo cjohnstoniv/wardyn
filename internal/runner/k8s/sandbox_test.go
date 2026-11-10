@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -362,8 +364,16 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 		t.Fatalf("agent netpol Egress = %d rules, want 1", len(agentNP.Spec.Egress))
 	}
 	eg := agentNP.Spec.Egress[0]
-	if len(eg.Ports) != 1 || eg.Ports[0].Port == nil || eg.Ports[0].Port.IntVal != runner.ProxyListenPort {
-		t.Errorf("agent netpol egress port = %+v, want %d", eg.Ports, runner.ProxyListenPort)
+	// The proxy, and its DNS listener on 53 over TCP and UDP: all on the one proxy-peer rule.
+	wantPorts := []string{fmt.Sprintf("TCP/%d", runner.ProxyListenPort), "TCP/53", "UDP/53"}
+	var gotPorts []string
+	for _, p := range eg.Ports {
+		if p.Protocol != nil && p.Port != nil && p.EndPort == nil {
+			gotPorts = append(gotPorts, fmt.Sprintf("%s/%d", *p.Protocol, p.Port.IntVal))
+		}
+	}
+	if !slices.Equal(gotPorts, wantPorts) || len(eg.Ports) != len(wantPorts) {
+		t.Errorf("agent netpol egress ports = %+v, want exactly %v", eg.Ports, wantPorts)
 	}
 	if len(eg.To) != 1 || eg.To[0].PodSelector == nil || eg.To[0].PodSelector.MatchLabels[labelComponent] != componentProxy {
 		t.Errorf("agent netpol egress peer = %+v, want a podSelector matching the proxy component", eg.To)
@@ -417,8 +427,10 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 	if agentPod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("agent pod RestartPolicy = %q, want Never", agentPod.Spec.RestartPolicy)
 	}
-	if agentPod.Spec.DNSPolicy != corev1.DNSNone || agentPod.Spec.DNSConfig == nil || len(agentPod.Spec.DNSConfig.Nameservers) == 0 {
-		t.Errorf("agent pod DNSPolicy/DNSConfig = %q / %+v, want None with a loopback nameserver", agentPod.Spec.DNSPolicy, agentPod.Spec.DNSConfig)
+	// The agent's one nameserver is its proxy pod, the address its wardyn-proxy alias names.
+	if agentPod.Spec.DNSPolicy != corev1.DNSNone || agentPod.Spec.DNSConfig == nil || len(agentPod.Spec.HostAliases) != 1 ||
+		!slices.Equal(agentPod.Spec.DNSConfig.Nameservers, []string{agentPod.Spec.HostAliases[0].IP}) {
+		t.Errorf("agent pod DNSPolicy/DNSConfig = %q / %+v, want None with the proxy pod as its one nameserver", agentPod.Spec.DNSPolicy, agentPod.Spec.DNSConfig)
 	}
 	ac := agentPod.Spec.Containers[0]
 	// CPU and memory ONLY: ephemeral-storage is deliberately asymmetric (a small
@@ -438,6 +450,16 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 	pc := proxyPod.Spec.Containers[0]
 	if pc.SecurityContext == nil || pc.SecurityContext.RunAsUser != nil {
 		t.Errorf("proxy container RunAsUser = %v, want nil (H2: image default, distroless nonroot)", pc.SecurityContext.RunAsUser)
+	}
+	// The DNS listener binds 53 through the namespaced safe sysctl, never a capability.
+	if sc := proxyPod.Spec.SecurityContext; sc == nil || !slices.Equal(sc.Sysctls, []corev1.Sysctl{{Name: "net.ipv4.ip_unprivileged_port_start", Value: "53"}}) {
+		t.Errorf("proxy pod sysctls = %+v, want only net.ipv4.ip_unprivileged_port_start=53", proxyPod.Spec.SecurityContext)
+	}
+	if pc.SecurityContext.Capabilities == nil || len(pc.SecurityContext.Capabilities.Add) != 0 {
+		t.Errorf("proxy container capabilities = %+v, want none added", pc.SecurityContext.Capabilities)
+	}
+	if !slices.Contains(pc.Env, corev1.EnvVar{Name: proxy.DNSListenEnv, Value: ":53"}) {
+		t.Errorf("proxy container env = %+v, want %s=:53", pc.Env, proxy.DNSListenEnv)
 	}
 }
 
