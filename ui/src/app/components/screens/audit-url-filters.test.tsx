@@ -7,12 +7,19 @@
 // history entry so Back removes it. Its own file: audit.test.tsx is at the file-size limit.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { LaggingRouter } from "../../../test/lagging-router";
 import type { AuditEvent } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
 
 const listAuditMock = vi.fn();
+const polled = vi.hoisted(() => ({ tick: undefined as undefined | (() => unknown) }));
+vi.mock("../../lib/use-poll", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/use-poll")>()),
+  usePoll: (fn: () => unknown, intervalMs: number) => {
+    if (intervalMs === 5000) polled.tick = fn;
+  },
+}));
 vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   gatewayCallId: (await importOriginal<typeof import("../../lib/api/audit")>()).gatewayCallId,
@@ -128,27 +135,75 @@ describe("AuditScreen URL filters", () => {
   });
 
 
-  it("a kind the loaded window lacks is dropped once, and a later poll that brings it does not narrow the list", async () => {
+  it("a kind the loaded window lacks is dropped from the URL after the load", async () => {
     listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
     renderAt(["/?kind=tool"]);
     await screen.findByText(/egress/i);
     await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^$/));
     expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("All");
-    // Fake timers only for the poll tick itself, as audit.test.tsx does.
-    vi.useFakeTimers();
-    try {
-      listAuditMock.mockResolvedValue([
-        ev({ id: "e1", run_id: "run_111", action: "egress.allow" }),
-        ev({ id: "e2", run_id: "run_111", action: "run.exec" }),
-      ]);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6000);
-      });
-      expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("All");
-      expect(screen.getByTestId("search")).toHaveTextContent(/^$/);
-    } finally {
-      vi.useRealTimers();
+  });
+
+  // The poll is driven by hand: use-poll is mocked to hand over the screen's own tick.
+  const eventsOf = (...actions: string[]) => actions.map((action, i) => ev({ id: `e${i}`, run_id: "run_111", action, target: `${action.replace(".", "-")}.example.com` }));
+  const poll = async (events: AuditEvent[]) => {
+    listAuditMock.mockResolvedValue(events);
+    const before = listAuditMock.mock.calls.length;
+    await act(async () => {
+      await polled.tick?.();
+    });
+    expect(listAuditMock.mock.calls.length).toBeGreaterThan(before);
+  };
+
+  it("a poll that brings the dropped kind later does not narrow the list", async () => {
+    listAuditMock.mockResolvedValue(eventsOf("egress.allow"));
+    renderAt(["/?kind=tool"]);
+    await screen.findByText(/egress/i);
+    await poll(eventsOf("egress.allow", "run.exec"));
+    expect(await screen.findByText(/run-exec\.example\.com/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("All");
+    expect(screen.getByTestId("search")).toHaveTextContent(/^$/);
+  });
+
+  it("a kind that ages out of the window on a poll is dropped, and does not return when it comes back", async () => {
+    listAuditMock.mockResolvedValue(eventsOf("egress.allow", "run.exec"));
+    renderAt(["/?kind=egress"]);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("Egress"));
+    await poll(eventsOf("run.exec"));
+    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^$/));
+    await poll(eventsOf("egress.allow", "run.exec"));
+    expect(screen.getByRole("combobox", { name: "Event" })).toHaveTextContent("All");
+    expect(screen.getByTestId("search")).toHaveTextContent(/^$/);
+    expect(screen.getByText(/run-exec\.example\.com/)).toBeInTheDocument();
+  });
+
+  it("a read that answers after the screen has gone does not write the URL", async () => {
+    let answer: (list: AuditEvent[]) => void = () => {};
+    listAuditMock.mockReturnValue(new Promise<AuditEvent[]>((resolve) => (answer = resolve)));
+    function Nav() {
+      const location = useLocation();
+      const navigate = useNavigate();
+      return (
+        <>
+          <output data-testid="where">{location.pathname + location.search}</output>
+          <button onClick={() => navigate("/other")}>go elsewhere</button>
+        </>
+      );
     }
+    render(
+      <MemoryRouter initialEntries={["/audit?kind=tool"]}>
+        <Routes>
+          <Route path="/audit" element={<AuditScreen />} />
+          <Route path="/other" element={<p>Elsewhere</p>} />
+        </Routes>
+        <Nav />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "go elsewhere" }));
+    expect(await screen.findByText("Elsewhere")).toBeInTheDocument();
+    await act(async () => {
+      answer(eventsOf("egress.allow"));
+    });
+    expect(screen.getByTestId("where")).toHaveTextContent(/^\/other$/);
   });
 
 });

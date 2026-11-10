@@ -294,6 +294,20 @@ export function AuditScreen() {
       return list;
     });
   }, [runFilter]);
+  // A read that answers after the screen is gone is superseded: it must not write the URL from a screen that has left.
+  React.useEffect(
+    () => () => {
+      eventsRequestId.current++;
+    },
+    [],
+  );
+  // The kind in the URL, dropped when the list a read just answered with lacks it. Called from a load and from a
+  // poll tick, on the list that read set (null: superseded or unmounted, so nothing is judged). A kind that
+  // leaves the window must not stay in the URL to narrow the list again when a later tick brings it back.
+  const dropAbsentKind = (list: AuditEvent[] | null) => {
+    const { urlKind: kind, setFilters: drop } = dropKindRef.current;
+    if (list && kind !== "all" && !list.some((e) => eventKind(e) === kind)) drop({ kind: "" });
+  };
 
   // Whether the LAST read actually answered. `status` cannot carry this: the
   // live tail deliberately keeps the last good view on a failed tick and so
@@ -309,10 +323,7 @@ export function AuditScreen() {
       .then((list) => {
         setPollStale(false);
         setStatus("ready");
-        // A kind the URL names that this load's own window lacks is dropped here, once. A later poll tick that
-        // brings that kind must not narrow a list the screen showed as unfiltered.
-        const { urlKind: kind, setFilters: drop } = dropKindRef.current;
-        if (list && kind !== "all" && !list.some((e) => eventKind(e) === kind)) drop({ kind: "" });
+        dropAbsentKind(list);
       })
       .catch((e) => {
         setLoadMessage(failureSentence(e));
@@ -328,7 +339,10 @@ export function AuditScreen() {
   // interval would otherwise be overtaken by the next tick and dropped by the request-id guard above, every time.
   const tick = React.useCallback(() => {
     return fetchEvents()
-      .then(() => setPollStale(false))
+      .then((list) => {
+        setPollStale(false);
+        dropAbsentKind(list);
+      })
       .catch(() => {
         /* transient poll failure — keep the last good view and retry next
            tick, but stop asserting the trail is live while it is not. */
