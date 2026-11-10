@@ -108,7 +108,7 @@ sha=1111111111111111111111111111111111111111
 newer=2222222222222222222222222222222222222222
 runtags() { # TIP EXTRA_TAG [REF_TYPE] -> sets out, rc
   out="$WORK/out"; : >"$out"; rc=0
-  PATH="$WORK/stub:$PATH" TIP="$1" EXTRA_TAG="$2" REF_TYPE="${3:-branch}" REF_NAME=main SHA="$sha" GITHUB_OUTPUT="$out" bash "$WORK/tags.sh" >"$WORK/stdout" 2>&1 || rc=$?
+  PATH="$WORK/stub:$PATH" TIP="$1" EXTRA_TAG="$2" REF_TYPE="${3:-branch}" REF_NAME="${REFN:-main}" SHA="$sha" GITHUB_OUTPUT="$out" bash "$WORK/tags.sh" >"$WORK/stdout" 2>&1 || rc=$?
 }
 runtags "$sha" ""
 [ "$rc" -eq 0 ] && grep -q 'wardynd:latest$' "$out" || fail "main's tip did not get :latest (rc $rc): $(cat "$WORK/stdout")"
@@ -118,10 +118,29 @@ runtags "$newer" ""
 grep -q "wardynd:sha-1111111$" "$out" || fail "the sha tag was dropped for a stale commit"
 runtags "" ""
 [ "$rc" -ne 0 ] || fail "an unreadable main tip still published"
-runtags "$sha" v0.10.0
-[ "$rc" -ne 0 ] || fail "extra_tag=v0.10.0 was accepted"
-runtags "$sha" 0.4.4
-[ "$rc" -eq 0 ] && grep -q 'wardynd:0.4.4$' "$out" || fail "the 0.4.4 backfill tag was refused (rc $rc)"
+# extra_tag is an allow-list (0.0.x to 0.4.x). Every other spelling is refused, whatever the ref.
+for bad in 0.10.0 0.10.0-rc.18 0.5.0 v0.4.4 latest sha-1111111 main "x y"; do
+  runtags "$sha" "$bad"
+  [ "$rc" -ne 0 ] || fail "extra_tag='$bad' was accepted"
+done
+# `latest` on a stale (non-tip) ref is refused as an extra_tag, not just skipped as the computed tag.
+runtags "$newer" latest
+[ "$rc" -ne 0 ] || fail "extra_tag=latest on a ref that is not main's tip was accepted"
+runtags "$newer" 0.10.0
+[ "$rc" -ne 0 ] || fail "extra_tag=0.10.0 on a stale ref was accepted"
+for ok in 0.4.4 0.0.1 0.3.12; do
+  runtags "$sha" "$ok"
+  [ "$rc" -eq 0 ] && grep -q "wardynd:$ok\$" "$out" || fail "the $ok backfill tag was refused (rc $rc): $(cat "$WORK/stdout")"
+done
+# A tag ref: only a 0.0.x to 0.4.x one publishes; release.yml owns the rest (v0.10.0, v0.10.0-rc.18 would write 0.10.0 / 0.10.0-rc.18).
+for badref in v0.10.0 v0.10.0-rc.18 v0.5.1 v1.0.0 nightly; do
+  REFN="$badref" runtags "$sha" "" tag
+  [ "$rc" -ne 0 ] || fail "tag ref $badref was published by publish-image.yml"
+  ! grep -q . "$out" || fail "tag ref $badref wrote tags before refusing: $(cat "$out")"
+done
+REFN=v0.4.4 runtags "$sha" "" tag
+[ "$rc" -eq 0 ] && grep -q 'wardynd:0.4.4$' "$out" || fail "tag ref v0.4.4 was refused (rc $rc)"
+! grep -q 'wardynd:latest$' "$out" || fail "a tag ref was given :latest"
 
 # release.yml: no job that can write to the repository or mint the signing identity executes a binary built from
 # the tree, and no step whose env holds the Apple secrets executes one either.

@@ -26,9 +26,10 @@ name: Publish wardynd image
 # NOT be re-run at its own ref (neither workflow file exists there), so
 # dispatching THIS workflow on main with extra_tag=0.4.4 publishes main's
 # HEAD under that old tag (acceptable: 0.4.4 is main's lineage). Manually
-# dispatching this workflow AGAINST a v0.4.5+ tag ref still works too
-# (github.ref_type reads "tag" exactly as a push would) — it is simply no
-# longer the AUTOMATIC path for one. ci.yml has no push run on release/**
+# dispatching this workflow AGAINST a tag ref (github.ref_type reads "tag"
+# exactly as a push would) works only for a 0.0.x to 0.4.x tag: the "Compute
+# image tags" step refuses any other tag ref, because release.yml owns the
+# release image tags. ci.yml has no push run on release/**
 # (#1461), so a dispatch on a tag that exists only on release/X.Y finds no push
 # run and skips; that fails closed.
 #
@@ -151,10 +152,16 @@ jobs:
           SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
-          # A release tag is published by release.yml, signed and attested; this lane never writes a v* tag.
-          case "${EXTRA_TAG:-}" in
-            v*) echo "::error::extra_tag must not start with v (got ${EXTRA_TAG}); release tags come from release.yml"; exit 1 ;;
-          esac
+          # Release image tags (bare X.Y.Z and X.Y.Z-rc.N) are published by release.yml, signed and attested.
+          # This lane writes only the pre-workflow backfill range 0.0.x to 0.4.x, whether the name comes from
+          # extra_tag or from a tag ref; anything else (0.10.0, 0.10.0-rc.18, latest, sha-*, v*) is refused.
+          backfill='^0\.[0-4]\.[0-9]+$'
+          if [ -n "${EXTRA_TAG:-}" ] && ! [[ "$EXTRA_TAG" =~ $backfill ]]; then
+            echo "::error::extra_tag must be a 0.0.x to 0.4.x backfill tag (got ${EXTRA_TAG}); release tags come from release.yml"; exit 1
+          fi
+          if [ "$REF_TYPE" = "tag" ] && ! [[ "${REF_NAME#v}" =~ $backfill ]]; then
+            echo "::error::refusing to publish tag ref ${REF_NAME}: release.yml owns release image tags; only 0.0.x to 0.4.x backfills run here"; exit 1
+          fi
           tags=("ghcr.io/cjohnstoniv/wardynd:sha-${SHA::7}")
           if [ "$REF_TYPE" = "branch" ] && [ "$REF_NAME" = "main" ]; then
             # :latest only ever moves forward: a run for a commit that is no longer main's tip (its CI finished
