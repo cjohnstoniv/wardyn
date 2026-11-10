@@ -207,6 +207,18 @@ type apiDoor struct {
 	approvalID *uuid.UUID
 }
 
+// sendAPIDoor sends a door's request: on the door's own transport (the kube row's CA) after the outbound
+// host-rule gate, which roundTripUpstream otherwise runs.
+func (p *Proxy) sendAPIDoor(d apiDoor, out *http.Request) (*http.Response, error) {
+	if d.rt == nil {
+		return p.roundTripUpstream(out)
+	}
+	if err := p.outboundHostRuleRefused(out); err != nil {
+		return nil, err
+	}
+	return d.rt.RoundTrip(out)
+}
+
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
 // serveGitHubAPI), for a request the door already admitted.
 func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host string, port int, d apiDoor) {
@@ -313,15 +325,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 		}
 	}
 
-	var resp *http.Response
-	if d.rt != nil {
-		// The door's own transport (the kube row's CA) is not roundTripUpstream, so the gate runs here.
-		if err = p.outboundHostRuleRefused(out); err == nil {
-			resp, err = d.rt.RoundTrip(out)
-		}
-	} else {
-		resp, err = p.roundTripUpstream(out)
-	}
+	resp, err := p.sendAPIDoor(d, out)
 	if err != nil {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, port), GatewayCallID: callID}, host, far+" api upstream error")
 		return
