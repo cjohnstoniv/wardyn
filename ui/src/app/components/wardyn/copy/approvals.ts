@@ -4,7 +4,7 @@
  */
 
 import type { ApprovalKind as WireApprovalKind, ApprovalRequest, ApprovalScope } from "../../../lib/types";
-import { isAdoCapabilityRequest } from "../../../lib/types";
+import { isAdoCapabilityRequest, isHostCallRequest } from "../../../lib/types";
 import { shortTime } from "../../../lib/format";
 
 // Said once, where a viewer would actually feel the consequence (the run's
@@ -218,6 +218,9 @@ export function approvalScopeBadge(
     if (item.state !== "APPROVED" || !item.decision_scope) return undefined;
     return item.decision_scope === "once" ? "Allowed once" : "Allowed for this run";
   }
+  // A held host request (B5): approving covers the method and path for the rest of the run, whatever scope the row
+  // recorded; a denial needs no badge.
+  if (isHostCallRequest(item)) return item.state === "APPROVED" ? "Allowed for this run" : undefined;
   if (item.kind !== "egress_domain") return undefined;
   if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;
   const scope = item.decision_scope;

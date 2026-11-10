@@ -11,6 +11,7 @@ import {
   isAdoCapabilityRequest,
   isAdoConsentRequest,
   isKubeCallRequest,
+  isHostCallRequest,
   isMCPCallRequest,
   isTerminalRunState,
   type RunDetail,
@@ -32,6 +33,7 @@ import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-ca
 import { McpCallCard } from "../wardyn/mcp-call-card";
 import { FileDownloadCard } from "../wardyn/file-download-card";
 import { KubeCallCard } from "../wardyn/kube-call-card";
+import { HostCallCard } from "../wardyn/host-call-card";
 import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { OIDC_HOLD_LANE, REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
 import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
@@ -362,6 +364,30 @@ export function ApprovalCard({
     );
   }
 
+  if (isHostCallRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <HostCallCard
+          item={item}
+          canDecide={waiting ? !runEnded : kindDecidable && !runEnded}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy("approve");
+            await onPushDecide(item.id, true);
+            setPushBusy(null);
+          }}
+          onDeny={async () => {
+            setPushBusy("deny");
+            await onPushDecide(item.id, false);
+            setPushBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (isPushContentRequest(item) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
@@ -585,7 +611,10 @@ export function DecidedRow({
       <ApprovalKindChip kind={item.kind} scope={scope} />
       {/* The title takes the first row at phone width and a 12rem floor from sm up, so the chips and the meta wrap
           before it is cut down to a few characters; what was decided is also in the tooltip. */}
-      <span className="min-w-0 grow basis-full truncate text-sm text-foreground sm:min-w-[12rem] sm:basis-0" title={title}>
+      <span
+        className={`min-w-0 grow basis-full text-sm text-foreground sm:min-w-[12rem] sm:basis-0 ${isHostCallRequest(item) ? "break-all" : "truncate"}`}
+        title={title}
+      >
         {title}
       </span>
       {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}

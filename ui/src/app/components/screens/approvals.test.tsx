@@ -164,7 +164,7 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 
 import { ApprovalsScreen, deriveTitle } from "./approvals";
-import { FILE_DOWNLOAD_CARD, KUBE_CALL_CARD } from "../wardyn/copy/files-review";
+import { FILE_DOWNLOAD_CARD, HOST_CALL_CARD, KUBE_CALL_CARD } from "../wardyn/copy/files-review";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import { HttpError } from "../../lib/api/core";
@@ -896,5 +896,16 @@ describe("deriveTitle for the download and kubectl cards", () => {
     expect(deriveTitle("tool_call", scope)).toBe(KUBE_CALL_CARD.LIST_TITLE("PATCH", "team-a"));
     expect(KUBE_CALL_CARD.LIST_TITLE("PATCH", "team-a")).toBe("kubectl PATCH in team-a");
     expect(deriveTitle("tool_call", { tool: "mcp__jira__delete_issue", mcp_server: "jira", call_sha256: "ab".repeat(32) })).toBe("Call mcp__jira__delete_issue on jira");
+  });
+});
+
+describe("deriveTitle for the host call card", () => {
+  it("names a held host request by method, path and host, ahead of the plain tool_call arm", () => {
+    const scope = { host: "api.payments.example.com", method: "POST", path: "/v1/refunds" };
+    expect(deriveTitle("tool_call", scope)).toBe("POST /v1/refunds on api.payments.example.com");
+    expect(HOST_CALL_CARD.LIST_TITLE("POST", "/v1/refunds", "api.payments.example.com")).toBe("POST /v1/refunds on api.payments.example.com");
+  });
+  it("leaves a scope with a call_sha256 or a lane to its own arm", () => {
+    expect(deriveTitle("tool_call", { host: "h", method: "GET", path: "/", call_sha256: "ab".repeat(32), mcp_server: "jira", tool: "t" })).toBe("Call t on jira");
   });
 });

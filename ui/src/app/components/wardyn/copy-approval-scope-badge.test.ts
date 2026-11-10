@@ -61,3 +61,22 @@ describe("approvalScopeBadge — the Azure DevOps escalation badge", () => {
     ).toBe("this run");
   });
 });
+
+describe("approvalScopeBadge for a held host request", () => {
+  const host = (over: Record<string, unknown> = {}) => ({
+    kind: "tool_call" as const,
+    state: "APPROVED" as const,
+    decision_scope: undefined,
+    decision_expires_at: undefined,
+    grant_id: undefined,
+    requested_scope: { host: "api.payments.example.com", method: "POST", path: "/v1/refunds" },
+    ...over,
+  });
+  it("reads 'Allowed for this run' once approved, with or without a recorded scope", () => {
+    expect(approvalScopeBadge(host())).toBe("Allowed for this run");
+    expect(approvalScopeBadge(host({ decision_scope: "run" }))).toBe("Allowed for this run");
+  });
+  it("carries no badge for a denied, cancelled or pending row", () => {
+    for (const state of ["DENIED", "CANCELLED", "PENDING"] as const) expect(approvalScopeBadge(host({ state }))).toBeUndefined();
+  });
+});

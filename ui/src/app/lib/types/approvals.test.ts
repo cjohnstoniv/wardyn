@@ -8,6 +8,7 @@ import {
   canDecideApproval,
   decisionArgs,
   isHeld,
+  isHostCallRequest,
   isKubeCallRequest,
   isMCPCallRequest,
   type ApprovalKind,
@@ -251,5 +252,24 @@ describe("canDecideApproval on a held kubectl write", () => {
   it("does not offer decide to someone else", () => {
     expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: kubeScope, decidable: false })).toBe(false);
     expect(canDecideApproval(false, "tool_call", { grant_id: "g1", requested_scope: kubeScope })).toBe(false);
+  });
+});
+
+// A held host request is a host, a method and a path and nothing else that names a kind of call.
+describe("isHostCallRequest", () => {
+  const host = { kind: "tool_call" as const, grant_id: undefined, requested_scope: { host: "api.example.com", method: "POST", path: "/v1/refunds" } };
+  it("reads a host, method and path scope", () => {
+    expect(isHostCallRequest(host)).toBe(true);
+  });
+  it("never reads an MCP call, a kubectl write, an ADO capability, a granted row or another kind", () => {
+    const key = "ab".repeat(32);
+    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, call_sha256: key, mcp_server: "jira" } })).toBe(false);
+    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, call_sha256: key, cluster: "k8s" } })).toBe(false);
+    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, lane: "azure_devops" } })).toBe(false);
+    expect(isHostCallRequest({ ...host, grant_id: "g1" })).toBe(false);
+    expect(isHostCallRequest({ ...host, kind: "egress_domain" as never })).toBe(false);
+    expect(isHostCallRequest({ ...host, requested_scope: { host: "a", method: "GET" } })).toBe(false);
+    expect(isMCPCallRequest(host)).toBe(false);
+    expect(isKubeCallRequest(host)).toBe(false);
   });
 });
