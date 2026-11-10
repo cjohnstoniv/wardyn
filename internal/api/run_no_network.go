@@ -60,9 +60,11 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	if len(f.directGitHubAdded) > 0 {
 		add("github_direct")
 	}
+	hint := ""
 	for i, c := range f.comps.attached {
 		if noNetworkComponentNeedsHost(c) {
 			add(noNetworkComponent(c.snapshot.Name, i))
+			hint = " A local server launched through npx, uvx or docker run counts; launching its installed program directly does not."
 		}
 	}
 	if f.adoGrade.org != "" {
@@ -86,7 +88,7 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	slices.Sort(out)
 	return !runError(http.StatusUnprocessableEntity, reasonNoNetworkNeedsEgress,
 		"This run uses the No network wall preset, and these need a network host: "+strings.Join(out, ", ")+
-			". Remove them, or launch without No network.").write(s, f.w, f.r)
+			". Remove them, or launch without No network."+hint).write(s, f.w, f.r)
 }
 
 // noNetworkClonesRepo reports whether the run names a repository to clone: the legacy repo field or a
@@ -132,6 +134,38 @@ func noNetworkKind(kind string) string {
 // running it: a local MCP server started by one needs the network, wherever the program sits.
 var packageFetchers = []string{"npx", "pnpx", "bunx", "uvx", "pipx"}
 
+// fetcherOfflineFlags are, by fetcher, the options that keep it from downloading, so it runs only a package
+// already on the machine. fetcherValueFlags are its options whose value is the next argument.
+var (
+	fetcherOfflineFlags = map[string][]string{"npx": {"--no-install", "--no", "--yes=false", "--offline"}, "uvx": {"--offline"}}
+	fetcherValueFlags   = map[string][]string{
+		"npx": {"-p", "--package", "-c", "--call"},
+		"uvx": {"--from", "--with", "--with-editable", "--with-requirements", "-p", "--python", "--index",
+			"--default-index", "--index-url", "--extra-index-url", "-c", "--constraints", "--overrides",
+			"--cache-dir", "--directory", "--project", "--config-file"},
+	}
+)
+
+// fetcherStaysOffline reports whether a package fetcher's options, those before the package it runs, include
+// one of its fetcherOfflineFlags. An option after the package is the package's own.
+func fetcherStaysOffline(base string, args []string) bool {
+	offline, ok := fetcherOfflineFlags[base]
+	if !ok {
+		return false
+	}
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case slices.Contains(fetcherValueFlags[base], a):
+			i++
+		case !strings.HasPrefix(a, "-"):
+			return false
+		case slices.Contains(offline, a):
+			return true
+		}
+	}
+	return false
+}
+
 // launchFetches reports whether a local server's launch downloads what it runs: a package fetcher, or one
 // behind env or a shell's -c, a container run (docker or podman pulls its image), or a deno run of an npm:,
 // jsr: or URL module, or a package manager's fetching subcommand (npm exec, pnpm dlx). A wrapper is looked
@@ -139,7 +173,7 @@ var packageFetchers = []string{"npx", "pnpx", "bunx", "uvx", "pipx"}
 func launchFetches(cmd string, args []string, depth int) bool {
 	switch base := path.Base(cmd); {
 	case slices.Contains(packageFetchers, base):
-		return true
+		return !fetcherStaysOffline(base, args)
 	case base == "docker" || base == "podman":
 		return containerRun(args)
 	case base == "deno":

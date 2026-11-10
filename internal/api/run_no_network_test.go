@@ -238,8 +238,9 @@ func TestNoNetwork_ComponentsByWhatTheyNeed(t *testing.T) {
 		"uvx by path": byPath("/usr/local/bin/uvx"), "pipx by path": byPath("/usr/bin/pipx"),
 		"bunx by path": byPath("/usr/local/bin/bunx"), "pnpx by path": byPath("/usr/local/bin/pnpx"),
 		"npx by path": byPath("/usr/local/bin/npx")} {
-		if ok, body := attach(d); ok || !strings.Contains(body, "component c0") {
-			t.Errorf("%s: passed %v, %s; want a refusal naming component c0", name, ok, body)
+		if ok, body := attach(d); ok || !strings.Contains(body, "component c0") ||
+			!strings.Contains(body, "launching its installed program directly does not") {
+			t.Errorf("%s: passed %v, %s; want a refusal naming component c0 and the direct launch", name, ok, body)
 		}
 	}
 }
@@ -254,6 +255,16 @@ func TestNoNetwork_LaunchFetches(t *testing.T) {
 	}{
 		{"npx", []string{"-y", "@example/mcp-server@1.4.2"}, true},
 		{"/usr/local/bin/uvx", []string{"mcp-server-files"}, true},
+		{"npx", []string{"--no-install", "mcp-server-files"}, false},
+		{"npx", []string{"--no", "mcp-server-files"}, false},
+		{"/usr/bin/npx", []string{"--yes=false", "mcp-server-files"}, false},
+		{"npx", []string{"--offline", "-p", "@example/mcp-server@1.4.2", "mcp-server"}, false},
+		{"/usr/local/bin/uvx", []string{"--offline", "mcp-server-files"}, false},
+		{"/usr/local/bin/uvx", []string{"--from", "mcp-files==1.0", "--offline", "mcp-files"}, false},
+		{"npx", []string{"-y", "@example/mcp-server@1.4.2", "--offline"}, true},
+		{"npx", []string{"-p", "--offline", "mcp-server"}, true},
+		{"/usr/local/bin/uvx", []string{"mcp-server-files", "--offline"}, true},
+		{"/usr/bin/env", []string{"npx", "--no-install", "mcp-server-files"}, false},
 		{"/usr/bin/env", []string{"npx", "-y", "@example/mcp-server@1.4.2"}, true},
 		{"/usr/bin/env", []string{"-i", "PATH=/usr/bin", "uvx", "mcp-server-files"}, true},
 		{"/bin/sh", []string{"-c", "uvx mcp-server-files --stdio"}, true},
