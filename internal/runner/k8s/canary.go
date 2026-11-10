@@ -147,15 +147,17 @@ func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyA
 				// Egress left nil: an empty rule set means deny-all outgoing traffic.
 			},
 		}
+		// Registered before the create: a create that times out may still have been stored, and a delete of an
+		// object that was never made answers NotFound, which deleteCanaryObject ignores.
+		defer deleteCanaryObject(func(ctx context.Context) error {
+			return d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, netpolName, metav1.DeleteOptions{})
+		})
 		if err := createCanaryObject(ctx, func(ctx context.Context) error {
 			_, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, netpol, metav1.CreateOptions{})
 			return err
 		}); err != nil {
 			return canaryPhaseResult{err: fmt.Errorf("%s: create deny-all netpol: %w", phaseName, err)}
 		}
-		defer deleteCanaryObject(func(ctx context.Context) error {
-			return d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, netpolName, metav1.DeleteOptions{})
-		})
 	}
 
 	pod := &corev1.Pod{
@@ -180,15 +182,15 @@ func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyA
 	// Same placement as the run pods: the canary must prove enforcement on the nodes runs use.
 	d.placement.apply(pod, runID, componentCanary, nil)
 	pod.Labels = d.stampRunner(pod.Labels)
+	defer deleteCanaryObject(func(ctx context.Context) error { // before the create, as for the policy
+		return d.clientset.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+	})
 	if err := createCanaryObject(ctx, func(ctx context.Context) error {
 		_, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
 		return err
 	}); err != nil {
 		return canaryPhaseResult{err: fmt.Errorf("%s: create canary pod: %w", phaseName, err)}
 	}
-	defer deleteCanaryObject(func(ctx context.Context) error {
-		return d.clientset.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
-	})
 
 	reached, code, err := d.waitCanaryTerminal(ctx, ns, podName)
 	if err != nil {

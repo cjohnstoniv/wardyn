@@ -546,7 +546,16 @@ func TestCanaryRecheck_AcknowledgedBesideUnenforcedReadsUnenforced(t *testing.T)
 // counts the stalled requests.
 func stallingAPI(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int32) {
 	t.Helper()
+	cs, stalled, _ := stallingAPIRecordingDeletes(t, stall)
+	return cs, stalled
+}
+
+// stallingAPIRecordingDeletes is stallingAPI that also returns the object names the server was asked to delete.
+func stallingAPIRecordingDeletes(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int32, func() []string) {
+	t.Helper()
 	var stalled atomic.Int32
+	var mu sync.Mutex
+	var deleted []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -557,6 +566,9 @@ func stallingAPI(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int3
 			_, _ = io.Copy(io.Discard, r.Body)
 			<-r.Context().Done()
 		case r.Method == http.MethodDelete:
+			mu.Lock()
+			deleted = append(deleted, path.Base(r.URL.Path))
+			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
 		case r.Method == http.MethodPost:
@@ -582,7 +594,11 @@ func stallingAPI(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int3
 	if err != nil {
 		t.Fatalf("clientset: %v", err)
 	}
-	return cs, &stalled
+	return cs, &stalled, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), deleted...)
+	}
 }
 
 // TestCanaryCleanup_StalledDeleteIsBounded: an API server that takes the canary's cleanup deletes and
@@ -672,7 +688,7 @@ func TestCanaryCreate_StalledCreateIsBounded(t *testing.T) {
 
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{})
-	cs, posts := stallingAPI(t, http.MethodPost)
+	cs, posts, deleted := stallingAPIRecordingDeletes(t, http.MethodPost)
 	d.clientset = cs
 
 	checked := make(chan struct{})
@@ -687,6 +703,10 @@ func TestCanaryCreate_StalledCreateIsBounded(t *testing.T) {
 	}
 	if posts.Load() == 0 {
 		t.Fatal("no create reached the server")
+	}
+	// A create that timed out may still have been stored, so its object is deleted anyway.
+	if got := deleted(); len(got) == 0 || !strings.HasPrefix(got[0], "wardyn-egress-canary-") {
+		t.Errorf("deletes reaching the server after a stalled create: %v, want one for the canary's pod", got)
 	}
 	if got := d.netPol.Load().byNS[testNamespace]; got.state != netPolProven || got.strikes != 1 {
 		t.Errorf("after a stalled create: state %v with %d strike(s), want %v with 1", got.state, got.strikes, netPolProven)
