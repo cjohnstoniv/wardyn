@@ -350,8 +350,14 @@ func (s *keptFolderStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) 
 	return types.RunLocalFolderStatus{}, nil
 }
 
-func (s *keptFolderStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
+func (s *keptFolderStore) SetRunLocalFolderStatusIf(context.Context, uuid.UUID, store.FolderStatusGuard, types.RunLocalFolderStatus) (bool, error) {
 	return true, nil
+}
+
+func (s *keptFolderStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, _ store.FolderStatusGuard) (types.RunLocalFolderStatus, bool, error) {
+	st, err := s.RunLocalFolderStatus(ctx, id)
+	st.Gen++
+	return st, err == nil, err
 }
 
 // orphanVerdictRunner records the orphan sweep's verdict on each run it is asked about.

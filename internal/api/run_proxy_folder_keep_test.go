@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -37,9 +38,15 @@ func (s *folderStatusStore) RunLocalFolderStatus(context.Context, uuid.UUID) (ty
 	return types.RunLocalFolderStatus{}, nil
 }
 
-func (s *folderStatusStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
+func (s *folderStatusStore) SetRunLocalFolderStatusIf(context.Context, uuid.UUID, store.FolderStatusGuard, types.RunLocalFolderStatus) (bool, error) {
 	s.sets.Add(1)
 	return true, nil
+}
+
+func (s *folderStatusStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, _ store.FolderStatusGuard) (types.RunLocalFolderStatus, bool, error) {
+	st, err := s.RunLocalFolderStatus(ctx, id)
+	st.Gen++
+	return st, err == nil, err
 }
 
 // keptFolderFailedStart revives the fixture's run and has its new proxy report other bytes while another operation
@@ -230,8 +237,14 @@ func (s *keptSweepStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) (
 	return types.RunLocalFolderStatus{}, nil
 }
 
-func (s *keptSweepStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
+func (s *keptSweepStore) SetRunLocalFolderStatusIf(context.Context, uuid.UUID, store.FolderStatusGuard, types.RunLocalFolderStatus) (bool, error) {
 	return true, nil
+}
+
+func (s *keptSweepStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, _ store.FolderStatusGuard) (types.RunLocalFolderStatus, bool, error) {
+	st, err := s.RunLocalFolderStatus(ctx, id)
+	st.Gen++
+	return st, err == nil, err
 }
 
 // newKeptSweep is a terminal-sandbox sweep over runs, every sandbox probed live, with the folder records fake answers.

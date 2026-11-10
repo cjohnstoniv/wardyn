@@ -577,16 +577,31 @@ func folderPassRecord(now time.Time, res runnerwire.FolderPass, errText string, 
 	return rec
 }
 
-// recordComputerFolderPass applies set to run id's pass record, and reports whether it was written.
+// recordComputerFolderPass applies set to run id's pass record at the generation it reads, and reports
+// whether it was written: a write another landed first is not.
 func (s *Server) recordComputerFolderPass(ctx context.Context, id uuid.UUID, set func(*types.RunLocalFolderStatus)) bool {
+	return s.writeComputerFolderStatus(ctx, id, -1, set)
+}
+
+// writeComputerFolderStatus is the one write of a run's pass record: set applied to the record as read,
+// written only while the stored one is still at gen (gen < 0: at the generation read). An owner passes the
+// generation it moved the record to (bumpComputerFolderGen), so a write after another owner moved it on
+// does not land.
+func (s *Server) writeComputerFolderStatus(ctx context.Context, id uuid.UUID, gen int, set func(*types.RunLocalFolderStatus)) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
 		return false
 	}
 	cur, err := st.RunLocalFolderStatus(ctx, id)
 	if err == nil {
-		set(&cur)
-		ok, err = st.SetRunLocalFolderStatus(ctx, id, cur)
+		if gen < 0 {
+			gen = cur.Gen
+		}
+		ok = false
+		if cur.Gen == gen {
+			set(&cur)
+			ok, err = st.SetRunLocalFolderStatusIf(ctx, id, store.FolderStatusGuard{Gen: gen}, cur)
+		}
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: record a computer folder's pass", slog.String("run_id", id.String()), slog.Any("err", err))
