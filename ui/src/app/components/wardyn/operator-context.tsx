@@ -207,7 +207,7 @@ export interface UserTypeMeta {
 }
 
 // See MeIdentity.confinementPosture for the fail-quiet rationale.
-export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "unknown" | "";
+export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "refused" | "not_proven" | "unknown" | "";
 
 // The single fail-open/fail-closed default every field's own doc comment
 // (above) explains — this is what every unwrapped consumer (every existing

@@ -3,17 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { ConfinementPostureBanner } from "./confinement-posture";
 import { ConfinementChip } from "./primitives";
+import { health as api } from "../../lib/api/health";
 import { OperatorProvider } from "./operator-context";
 import {
   POSTURE_ACKNOWLEDGED_BANNER,
   POSTURE_CHIP_SUFFIX_ACKNOWLEDGED,
   POSTURE_CHIP_SUFFIX_UNENFORCED,
+  POSTURE_NOT_PROVEN_BANNER,
+  POSTURE_REFUSED_BANNER,
   POSTURE_UNENFORCED_BANNER,
   POSTURE_UNKNOWN_BANNER,
 } from "./confinement-posture-copy";
@@ -145,5 +148,32 @@ describe("ConfinementChip posture treatment", () => {
     const acknowledged = renderChip("acknowledged");
     const acknowledgedTitle = acknowledged.container.querySelector("[title]")?.getAttribute("title") ?? "";
     expect(acknowledgedTitle.endsWith(POSTURE_CHIP_SUFFIX_ACKNOWLEDGED)).toBe(true);
+  });
+});
+
+// A failed re-check of the canary is a danger strip, never the mild warning:
+// "refused" names the check that produced it (from /healthz), "not_proven"
+// says the checks could not run. Both use the setup row's sentences.
+describe("ConfinementPostureBanner — failed re-check", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the refused strip as danger, with the check time from /healthz", async () => {
+    vi.spyOn(api, "health").mockResolvedValue({ network_policy: "refused", network_policy_checked_at: "2026-11-09T12:34:56Z" });
+    const { container } = renderBanner("refused");
+    expect(screen.getByText(POSTURE_REFUSED_BANNER.TITLE)).toBeInTheDocument();
+    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY("2026-11-09 12:34 UTC"))).toBeInTheDocument();
+    expect(screen.getByText(POSTURE_REFUSED_BANNER.ACTION)).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveClass("bg-danger-subtle");
+  });
+
+  it("renders the not-proven strip as danger", () => {
+    const health = vi.spyOn(api, "health");
+    const { container } = renderBanner("not_proven");
+    expect(screen.getByText(POSTURE_NOT_PROVEN_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(POSTURE_NOT_PROVEN_BANNER.BODY)).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveClass("bg-danger-subtle");
+    expect(health).not.toHaveBeenCalled();
   });
 });

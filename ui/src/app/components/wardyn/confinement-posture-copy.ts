@@ -37,6 +37,22 @@ export const POSTURE_UNKNOWN_BANNER = {
   ACTION: "Where to look",
 };
 
+// After a failed re-check of the canary (K-1, PS-302 and PS-306, the same
+// sentences the setup row shows), under the existing danger and unknown titles.
+// {time} is the check that produced the verdict, "2006-01-02 15:04 UTC".
+export const POSTURE_REFUSED_BANNER = {
+  TITLE: POSTURE_UNENFORCED_BANNER.TITLE,
+  BODY: (time: string) =>
+    `Not enforcing. The check at ${time} showed that this cluster no longer blocks egress with a deny-all NetworkPolicy, so new sandboxes are refused. Runs already going keep going.`,
+  ACTION: POSTURE_UNENFORCED_BANNER.ACTION,
+};
+
+export const POSTURE_NOT_PROVEN_BANNER = {
+  TITLE: POSTURE_UNKNOWN_BANNER.TITLE,
+  BODY: "Not proven. The last 3 checks could not run, so Wardyn can't confirm that this cluster blocks egress with a deny-all NetworkPolicy. New sandboxes are refused until a check passes.",
+  ACTION: POSTURE_UNENFORCED_BANNER.ACTION,
+};
+
 // Appended to ConfinementChip's `title` only — never to its visible label or
 // accessible name, which stay Fence/Wall/Vault (D4, primitives.tsx#ConfinementChip).
 export const POSTURE_CHIP_SUFFIX_UNENFORCED = " · network confinement is not enforced on this cluster";

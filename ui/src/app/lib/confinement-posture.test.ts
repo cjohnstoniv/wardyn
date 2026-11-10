@@ -27,6 +27,11 @@ describe("resolveConfinementPosture", () => {
     expect(resolveConfinementPosture("k8s", "unenforced")).toBe("unenforced");
   });
 
+  it("k8s, a failed re-check: refused and not proven pass through to their danger strips", () => {
+    expect(resolveConfinementPosture("k8s", "refused")).toBe("refused");
+    expect(resolveConfinementPosture("k8s", "not_proven")).toBe("not_proven");
+  });
+
   it("k8s, absent network_policy: warns — ruling 2, could not confirm is never silent", () => {
     expect(resolveConfinementPosture("k8s", "")).toBe("unknown");
   });
