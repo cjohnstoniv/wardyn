@@ -284,15 +284,11 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	return resp, true
 }
 
-// gitPathOverrides are the headers a server or framework may read a request
-// path or path prefix from instead of the request line.
-var gitPathOverrides = append(slices.Clone(pathOverrideHeaders), "X-Forwarded-Prefix", "X-Script-Name", "X-Forwarded-Host")
-
 // stripRouteOverrides drops the method- and path-override headers from a
 // brokered git request: the checks judged the request line's method and path,
 // and a forge that honoured an override would run another route.
 func stripRouteOverrides(h http.Header) {
-	for _, k := range slices.Concat(patAPIMethodOverrides, gitPathOverrides) {
+	for _, k := range slices.Concat(patAPIMethodOverrides, pathOverrideHeaders) {
 		h.Del(k)
 	}
 }

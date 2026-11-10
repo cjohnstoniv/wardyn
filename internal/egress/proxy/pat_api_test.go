@@ -668,7 +668,7 @@ func TestPATAPIDoorForwardsToAnIPv6LiteralHost(t *testing.T) {
 func TestPATAPIForwardsNoRouteOverride(t *testing.T) {
 	h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
 	hdr := map[string]string{"X-HTTP-Method-Override": "GET"}
-	for _, k := range gitPathOverrides {
+	for _, k := range pathOverrideHeaders {
 		hdr[k] = "/api/v4/projects/team%2Fother/variables"
 	}
 	if rec := h.serve(t, apiReq{method: "GET", target: glBase + "/issues", hdr: hdr}); rec.Code != http.StatusOK {

@@ -446,3 +446,55 @@ func TestConfigHostRulesLoadOnEveryRouteButAVM(t *testing.T) {
 		}
 	}
 }
+
+// TestHostRulesRefusePrefixOverrideHeaders: a path prefix or host header (X-Forwarded-Prefix, X-Script-Name,
+// X-Forwarded-Host) can make a host serve another route than the request line's. On a rule host such a
+// request is refused with a policy:host-rule row, on the plain lane and on the brokered model route alike,
+// though the rules allow the request line: X-Script-Name /public turns /public/admin/x into /admin/x.
+func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
+	ruled := func(host, allow, deny string) []types.HostRuleSet {
+		return []types.HostRuleSet{{Rules: []types.HostRule{
+			{Host: host, Paths: []string{deny}, Effect: types.HostRuleDeny},
+			{Host: host, Paths: []string{allow}, Effect: types.HostRuleAllow},
+		}}}
+	}
+	refusedRow := func(log string) bool {
+		return strings.Contains(log, `"rule_source":"`+ruleSourceHostRule+`"`) && strings.Contains(log, "carries")
+	}
+	for _, h := range []string{"X-Script-Name", "X-Forwarded-Prefix", "X-Forwarded-Host"} {
+		t.Run("plain "+h, func(t *testing.T) {
+			cu := captureUpstream(t, false, "ok")
+			buf := &bytes.Buffer{}
+			p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
+				Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+				Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: ruled(hrHost, "/public", "/admin")})})
+			srv := httptest.NewServer(p)
+			defer srv.Close()
+			conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = io.WriteString(conn, "GET http://"+hrHost+"/public/admin/x HTTP/1.1\r\nHost: "+hrHost+"\r\n"+h+": /public\r\n\r\n")
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || cu.reached || !refusedRow(buf.String()) {
+				t.Errorf("GET /public/admin/x with %s = %d reached=%v, want a policy:host-rule refusal:\n%s", h, resp.StatusCode, cu.reached, buf.String())
+			}
+		})
+		t.Run("model route "+h, func(t *testing.T) {
+			up := newRawUpstream(t, `{}`)
+			p, buf := llmChecksProxy(t, types.RunPolicySpec{HostRules: ruled(openaiHost, "/v1", "/models")}, "", up)
+			req := mustLocalReq(t, http.MethodGet, llmOpenAIPrefix+"v1/models", nil)
+			req.Header.Set(h, "/v1")
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden || up.reached || !refusedRow(buf.String()) {
+				t.Errorf("GET /v1/models with %s = %d reached=%v, want a policy:host-rule refusal:\n%s", h, rec.Code, up.reached, buf.String())
+			}
+		})
+	}
+}
