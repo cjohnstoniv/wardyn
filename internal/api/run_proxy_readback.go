@@ -240,11 +240,38 @@ type proxyContainment struct {
 	Err error
 }
 
-// containProxyStart stops the proxy of the run's failed start gen and records the result on the start
-// (store.ProxyStart.ContainedAt, or ContainmentError while unresolved). It is fenced on gen: once a
-// newer start is the run's active one it stops nothing. A start already contained answers Contained
-// with no second stop. It may run again, and on any replica.
+// errRunOpBusy is a containment skipped because another operation holds the run's lock.
+var errRunOpBusy = errors.New("another operation holds the run's lock; the sweep retries")
+
+// containProxyStart is containProxyStartLocked under the run's operation lock (locks.go), for a
+// caller that does not hold it: the report handler, the deadline watchdog, the reconcile sweep and
+// the egress edit. It never waits: a lock another operation holds (a revive among them) leaves the
+// start unresolved (errRunOpBusy) for the sweep's next pass. Its runner calls are bounded as the
+// rebooted-run sweep's are, so it cannot hold the lock past a wedged daemon.
 func (s *Server) containProxyStart(ctx context.Context, runID uuid.UUID, gen int) proxyContainment {
+	lctx, unlock, ok := s.tryLockRunOp(ctx, runID)
+	if !ok {
+		return proxyContainment{Err: errRunOpBusy}
+	}
+	defer unlock()
+	if _, busy := s.reviving.Load(runID); busy {
+		return proxyContainment{Err: errRunOpBusy}
+	}
+	lctx, cancel := context.WithTimeout(lctx, keepRebootedRunTimeout)
+	defer cancel()
+	return s.containProxyStartLocked(lctx, runID, gen)
+}
+
+// proxyContainPaused runs between containment's generation read and its stop. A test hook.
+var proxyContainPaused = func() {}
+
+// containProxyStartLocked stops the proxy of the run's failed start gen and records the result on the
+// start (store.ProxyStart.ContainedAt, or ContainmentError while unresolved). The caller holds the
+// run's operation lock, and ctx is the lock's: the generation read, the run read, the stop and the
+// record all happen under it, so a revive cannot start a newer proxy between the read and the stop.
+// It is fenced on gen: once a newer start is the run's active one it stops nothing. A start already
+// contained answers Contained with no second stop. It may run again, and on any replica.
+func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, gen int) proxyContainment {
 	st, ok := s.cfg.Store.(store.RunProxyStarts)
 	if !ok {
 		return proxyContainment{Err: errors.New("the store keeps no proxy starts")}
@@ -260,6 +287,7 @@ func (s *Server) containProxyStart(ctx context.Context, runID uuid.UUID, gen int
 	case p.State != types.ProxyStartFailed:
 		return proxyContainment{Err: fmt.Errorf("proxy start %d is %s, not failed", gen, p.State)}
 	}
+	proxyContainPaused()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return proxyContainment{Err: err}
@@ -289,7 +317,7 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 	switch {
 	case run.State == types.RunStarting:
 		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.create")
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, unconfirmedPolicyHint)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, unconfirmedHint(ok))
 		if !ok {
 			return errProxyStopUnconfirmed
 		}
@@ -300,7 +328,12 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 		if handled, err := s.loseUnconfirmedRun(ctx, run); handled {
 			return err
 		}
-		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedPolicyHint)
+		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(ok))
+		if !ok {
+			return errProxyStopUnconfirmed
+		}
+		return nil
 	}
 	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
 		return errProxyStopUnconfirmed
@@ -310,6 +343,10 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
 var errProxyStopUnconfirmed = errors.New("the sandbox stop failed")
+
+// errLostMarkUnwritten is a containment whose proxy stop succeeded but whose lost mark could not be
+// written: still unresolved, so a retry writes the mark.
+var errLostMarkUnwritten = errors.New("the run's proxy was stopped, but its lost mark could not be written")
 
 // loseUnconfirmedRun marks a running run lost (outage) and stops its proxy, answering the stop's
 // error. handled is false for a run that cannot be kept, which the caller tears down. A lost mark
@@ -333,14 +370,26 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (ha
 		if err := s.stopLostSandbox(ctx, run, now); err != nil {
 			return true, err
 		}
-		return true, errors.New("the run's lost mark could not be written")
+		return true, errLostMarkUnwritten
 	default:
 		return true, errors.New("the run's lost mark did not land")
 	}
 }
 
-// unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy.
-const unconfirmedPolicyHint = "The run's proxy did not confirm the policy it loaded, so it was stopped"
+// unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy and was
+// stopped; unconfirmedStopPendingHint the same while that stop is not confirmed.
+const (
+	unconfirmedPolicyHint      = "The run's proxy did not confirm the policy it loaded, so it was stopped"
+	unconfirmedStopPendingHint = "The run's proxy did not confirm the policy it loaded; stopping it is not confirmed yet and is retried"
+)
+
+// unconfirmedHint is the failure hint for a stop that was (stopped) or was not confirmed.
+func unconfirmedHint(stopped bool) string {
+	if stopped {
+		return unconfirmedPolicyHint
+	}
+	return unconfirmedStopPendingHint
+}
 
 func (s *Server) auditReadback(ctx context.Context, runID uuid.UUID, action, outcome string, gen int, data map[string]any) {
 	data["generation"] = gen
@@ -492,11 +541,11 @@ func (s *Server) abortUnconfirmedSandbox(ctx context.Context, runID uuid.UUID, r
 	defer cancel()
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
 		runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "reason": "policy_unconfirmed", "readback": why})))
-	stopErr := ""
-	if !s.stopSandboxOrAudit(ctx, runID, ref, "run.create") {
+	stopErr, stopped := "", s.stopSandboxOrAudit(ctx, runID, ref, "run.create")
+	if !stopped {
 		stopErr = errProxyStopUnconfirmed.Error()
 	}
-	s.failAndRevoke(ctx, runID, types.RunStarting, unconfirmedPolicyHint)
+	s.failAndRevoke(ctx, runID, types.RunStarting, unconfirmedHint(stopped))
 	if st, ok := s.cfg.Store.(store.RunProxyStarts); ok && start.active {
 		if err := st.RecordProxyContainment(ctx, runID, start.gen, stopErr); err != nil {
 			slog.WarnContext(ctx, "wardynd: recording a failed proxy start's stop failed; the sweep retries",

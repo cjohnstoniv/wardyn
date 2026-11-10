@@ -127,7 +127,7 @@ The proxy is stopped (`run.policy.unconfirmed`, outcome `failure`) when:
 
 A create that is still running has no readback deadline. A dispatch whose start fails fails the run. A revive's failed start puts the run back to lost.
 
-A failed start records whether its proxy stop was confirmed. Until it is, the start is unresolved, and the reconcile sweep retries the stop. The retry is for that start only: once a newer start exists, it stops nothing.
+A failed start records whether its proxy stop was confirmed. Until it is, the start is unresolved, and the reconcile sweep retries the stop. The retry is for that start only: once a newer start exists, it stops nothing. The stop runs under the run's operation lock, so a revive cannot start a newer proxy between the check and the stop. While another operation holds that lock, the start waits for the next sweep.
 
 A report counts only for the run's newest start. Its token must be that start's own token, or one renewed from it since the start: the run's current or previous token. Any other report is ignored and audited as `run.policy.report_stale`.
 
