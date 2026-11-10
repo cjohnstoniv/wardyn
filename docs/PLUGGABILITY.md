@@ -156,7 +156,8 @@
   - It has no per-domain egress decisions, and no credential, approval or audit controls.
 - Wardyn's `k8s` substrate creates its own pods by default. An experimental switch (`k8s.agentSandbox.enabled`, off by default) makes the agent pod through a bare `Sandbox` instead.
   - Wardyn keeps its own NetworkPolicies, proxy pod and managed files, and holds the pod behind a scheduling gate until it has read it back.
-  - Server mode only, no warm pools, templates, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - Server mode only, no claims, warm pools, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - Experimental: `k8s.agentSandbox.template` names a platform-owned `SandboxTemplate`. Wardyn takes only its scheduling fields and annotations under one prefix, and refuses any other field. The extensions controller stays uninstalled.
   - It trusts the controller with every run's pod. See [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md).
 - A cluster can run both now, each in its own namespace.
 

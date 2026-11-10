@@ -31,7 +31,7 @@
 ## Install the controller
 
 - Wardyn's chart never installs the controller or its CRD. You do, and only the core install.
-- Do not install the extensions manifest. Its ClusterRole adds NetworkPolicy write rights cluster-wide, and templates, claims and warm pools are unsupported here.
+- Do not install the extensions manifest. Its ClusterRole adds NetworkPolicy write rights cluster-wide, and claims and warm pools are unsupported here. A [platform template](#a-platform-template) needs only one CRD from it, not its controller.
 
 1. Download `sandbox.yaml` from the agent-sandbox `v1.0.9` release.
 2. Check its sha256 against the one that release publishes.
@@ -48,6 +48,7 @@
 | `k8s.agentSandbox.enabled` | `false` by default | The switch (`WARDYN_K8S_AGENT_SANDBOX`). Needs `k8s.enabled=true` and an enforced NetworkPolicy. |
 | `k8s.agentSandbox.controller.namespace` | `agent-sandbox-system` | The namespace the controller runs in. |
 | `k8s.agentSandbox.controller.serviceAccount` | `agent-sandbox-controller` | The ServiceAccount it runs as. Change both values if you installed it elsewhere. |
+| `k8s.agentSandbox.template` | empty by default | Experimental. A `SandboxTemplate` in the runs namespace that the agent pod takes its scheduling from (`WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`). See [A platform template](#a-platform-template). Needs `enabled=true`. |
 
 - The chart refuses `k8s.allowUnenforcedNetPol`, `k8s.ackAmbientDefaultDeny`, and a controller identity equal to wardynd's own ServiceAccount.
 - Needs Kubernetes 1.30 or later. Scheduling readiness and ValidatingAdmissionPolicy are both stable since v1.30 ([pod scheduling readiness](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-scheduling-readiness/), [ValidatingAdmissionPolicy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/), read 2026-11-03).
@@ -55,6 +56,56 @@
 - Off renders what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
 - On adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes` to wardynd's Role in the runs namespace, and two admission policies. Nothing goes in a ClusterRole.
 - At boot wardynd also asks the API server whether it holds each of those verbs, and refuses to boot if one is missing.
+
+## A platform template
+
+- A platform team can own where agent pods are scheduled, through an agent-sandbox `SandboxTemplate` that Wardyn reads. Experimental, off by default.
+- Wardyn still builds the whole agent pod: its containers, env, Secret references, security context, resources, volumes, DNS, `hostAliases`, deadline, gate, labels and ServiceAccount settings.
+
+### Install the template's CRD only
+
+1. Download `extensions.yaml` from the agent-sandbox `v1.0.9` release. Its sha256 is `02e8ff6942ea74f61418ee71e42aee8803232ddae3c000f2197ce14969fcbf6a` (read 2026-11-10 from the release).
+2. Apply only its `CustomResourceDefinition` named `sandboxtemplates.extensions.agents.x-k8s.io`. Leave out its Deployment, ClusterRole, ClusterRoleBinding and the claim and warm-pool CRDs.
+3. Create the template in the runs namespace, and set `k8s.agentSandbox.template` to its name.
+
+- The CRD requires `spec.podTemplate.spec.containers`. Set it to `[]`: a container in the template is refused.
+- The chart adds `get` on that one `sandboxtemplates` name to wardynd's Role. Nothing else.
+- Boot reads the template in every runs namespace, and refuses to boot if it is missing, unreadable or refused. Each run reads it again before its `Sandbox` is created, so a later edit is checked too.
+
+### What Wardyn takes from it
+
+| Template field | How it is used |
+| --- | --- |
+| `nodeSelector` | Keys added. A key the placement already sets must have the same value. |
+| `tolerations` | Added. |
+| `affinity` | Used when the placement sets none, or the same one. |
+| `topologySpreadConstraints` | Used. |
+| `priorityClassName` | Used when the placement sets none, or the same one. |
+| `schedulerName` | Used. |
+| `runtimeClassName` | Used when the run's confinement class sets none, or the same one. A different one is refused. |
+| `metadata.annotations` under `sandbox-template.wardyn.dev/` | Added. A key Wardyn already set must have the same value. |
+
+- Anything else the template sets refuses the run before any `Sandbox` is created. That includes `nodeName`, containers, init and ephemeral containers, volumes, security contexts, `serviceAccountName`, token automount, host namespaces, `hostUsers`, `shareProcessNamespace`, DNS fields, `hostAliases`, `restartPolicy`, lifetime fields, `schedulingGates` and `resources`.
+- Pod labels are refused: a label can match a NetworkPolicy that allows the pod more egress.
+- The template's own fields (`networkPolicy`, `service`, `volumeClaimTemplates`, and the four policy fields away from their defaults) are refused too. They are read only by the extensions controller, which is not installed.
+- An empty value (`""`, `[]`, `{}`) sets nothing and is accepted. `false` and `0` are settings, and are refused.
+- Resources stay set by Wardyn's policy, never by the template.
+- The boot canary runs with the chart placement, not the template. Keep the template's nodes inside the placement's nodes, so the NetworkPolicy check covers the nodes runs use.
+- A custom `schedulerName` is trusted to respect the scheduling gate. The default scheduler does.
+- Tested with fake clients only. CI installs no `SandboxTemplate` CRD.
+
+### Claims and warm pools
+
+- Not supported. A pod from a warm pool cannot meet the gate claim today:
+  - The extensions controller creates a warm pod from the template before any run exists. Wardyn's per-run parts are not in it: its env and Secret references, managed files, the `hostAliases` entry for the run's proxy, and the run labels its NetworkPolicies select.
+  - Most of a pod's spec cannot change once it is created, so a claim cannot add those parts later.
+  - A warm pod is already scheduled and running when it is claimed. The read-back checks a held pod, so it could not say that nothing ran before the check.
+  - The v1.0.9 `SandboxClaim` spec offers `additionalPodMetadata`, plain-value `env`, `lifecycle`, `volumeClaimTemplates` and `warmPoolRef`: no scheduling gate, no Secret reference, no `hostAliases`.
+  - Its controller's ClusterRole adds NetworkPolicy write rights in every namespace.
+- What would change it, any one of:
+  - an upstream claim that keeps a warm pod behind a gate the claimant removes, and carries the per-run pod fields;
+  - Wardyn delivering its per-run parts after start (Secrets, files, the proxy address), so a warm pod could run under a deny-all policy and an agreed image until claimed; the gate claim would then change to "ran only under deny-all before the run";
+  - an extensions controller whose NetworkPolicy rights are limited to the runs namespace.
 
 ## What turning it on widens
 
@@ -116,6 +167,7 @@
 | At boot, a placement label key (podLabels) in the controller's group (`agents.x-k8s.io/`) | k8s: WARDYN_K8S_SANDBOX_PLACEMENT: podLabels key "`<key>`" is refused: kubernetes.io/ and k8s.io/ keys can loosen confinement (only cluster-autoscaler.kubernetes.io/safe-to-evict is allowed) |
 | `linux_vm` | k8s: a "linux_vm" sandbox runs only on a registered runner that offers it |
 | Under `wardyn-runnerd`, at boot | k8s: the agent-sandbox backend does not run under wardyn-runnerd; unset WARDYN_K8S_AGENT_SANDBOX |
+| The template sets a refused field | k8s: agent sandbox: SandboxTemplate `<namespace>`/`<name>`: spec.podTemplate.spec.`<field>` is refused: Wardyn builds the agent pod itself and takes only nodeSelector, tolerations, affinity, topologySpreadConstraints, priorityClassName, schedulerName, runtimeClassName from a template |
 
 ## Switching it off with live runs
 
@@ -134,7 +186,8 @@
 | Not supported | What happens |
 | --- | --- |
 | Runner mode (`wardyn-runnerd`) | Refused at boot. |
-| Templates, claims, warm pools | No code path. Install the core controller only. |
+| Claims, warm pools | No code path. See [Claims and warm pools](#claims-and-warm-pools). |
+| Template fields outside the list | Refused before the `Sandbox` is created. See [A platform template](#a-platform-template). |
 | Pause and resume | Never offered. Wardyn never suspends a Sandbox. |
 | `linux_vm` | Refused as before. |
 | Revive, restart with current limits | 409 `revive_unsupported`, as on the plain path. |

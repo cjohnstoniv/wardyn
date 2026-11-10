@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Experimental: with the agent-sandbox backend on, `k8s.agentSandbox.template` (`WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`) names a platform-owned `SandboxTemplate` in the runs namespace. The agent pod takes only its node selector, tolerations, affinity, topology spread, priority class, scheduler, RuntimeClass (only one matching the run's confinement class) and annotations under `sandbox-template.wardyn.dev/`. Any other field, pod labels and resources included, refuses the run before the `Sandbox` is created, and boot refuses a template it cannot read or accept. Install only the template's CRD from agent-sandbox v1.0.9, not the extensions controller. Claims and warm pools stay unsupported; the agent-sandbox page says why.
+
 ### Fixed
 
 - macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit, never kills it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. Retest on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.
