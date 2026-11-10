@@ -563,6 +563,7 @@ func newProxy(opts Options) *Proxy {
 // route. This makes the run token unreachable by anything the sandbox can
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = trackNetworkBody(r)
 	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
 	if !p.lapse.serving() {
 		refuseClosed(w)

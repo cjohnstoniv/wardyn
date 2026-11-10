@@ -289,6 +289,7 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 // allowlist, branch namespace and push-content rules, its approval hold and its
 // mint, exactly as a sandbox's own proxy serves it.
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
+	r = trackNetworkBody(r)
 	if e.refuseClosed(w) {
 		return
 	}
@@ -298,7 +299,7 @@ func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	// The control plane's listener sets no read timeout, so the request body
 	// gets the same bound a terminated tunnel's does.
-	rearmBodyDeadline(w)
+	rearmBodyDeadline(w, r)
 	e.srv.proxy.handleGitBroker(w, r)
 }
 

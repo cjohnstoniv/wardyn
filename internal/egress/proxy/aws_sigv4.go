@@ -482,7 +482,7 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 			"Wardyn could not get this run's AWS role credentials from the run owner's AWS sign-in; the owner may need to sign in to AWS again"))
 		return
 	}
-	rearmBodyDeadline(w) // the credential fetch may have taken a while
+	rearmBodyDeadline(w, r) // the credential fetch may have taken a while
 	far := "aws"
 	if route != nil {
 		far = "model gateway"
