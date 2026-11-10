@@ -608,20 +608,30 @@ func TestEgressEdit_ReplaceFailureAnswersFromTheConfirmedStop(t *testing.T) {
 	}
 }
 
-// A stopped edit says the run is lost until revived only where the run can be kept; a headless run
-// off the person's own machine is ended instead.
+// A stopped edit names the run's fate as persisted: lost until revived only once the lost mark is
+// written, ended once the run is terminal, and otherwise being lost or ended.
 func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 	f := newEgressEditFixture(t)
-	kept := types.AgentRun{State: types.RunRunning, Interactive: true, SandboxRef: "sbx"}
-	ended := types.AgentRun{State: types.RunRunning, SandboxRef: "sbx"}
-	for run, want := range map[*types.AgentRun]string{&kept: "lost until revived", &ended: "is ended"} {
+	at := time.Now()
+	for _, c := range []struct {
+		state  types.RunState
+		lostAt *time.Time
+		want   string
+	}{
+		{types.RunRunning, &at, "lost until revived"},
+		{types.RunFailed, nil, "the run is ended"},
+		{types.RunRunning, nil, "being lost or ended"},
+	} {
+		f.st.mu.Lock()
+		f.st.state, f.st.run.LostAt = c.state, c.lostAt
+		f.st.mu.Unlock()
 		for _, rerr := range []*reviveError{egressEditUnconfirmed("start_failed"), egressEditUnresolved("start_failed", nil)} {
-			if got := f.srv.withRunFate(*run, rerr).msg; !strings.Contains(got, want) {
-				t.Errorf("interactive=%v %s: %q, want it to say %q", run.Interactive, rerr.reason, got, want)
+			if got := f.srv.withRunFate(context.Background(), f.run.ID, rerr).msg; !strings.Contains(got, c.want) {
+				t.Errorf("state %s lost %v, %s: %q, want it to say %q", c.state, c.lostAt != nil, rerr.reason, got, c.want)
 			}
 		}
 	}
-	if got := f.srv.withRunFate(ended, egressEditSuperseded()).msg; strings.Contains(got, "ended") {
+	if got := f.srv.withRunFate(context.Background(), f.run.ID, egressEditSuperseded()).msg; strings.Contains(got, "ended") {
 		t.Errorf("a superseded edit stopped nothing, so it names no fate: %q", got)
 	}
 }
