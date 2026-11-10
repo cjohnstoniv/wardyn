@@ -92,18 +92,23 @@ export function SecretsScreen() {
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<string | null>(null);
   // #381 F3: the real WARDYN_GIT_PAT_BROKER switch, read from the ONE door
-  // that projects it (GET /workspace-providers, operator-only). Defaults to
-  // the 0.7.10 default (on) for a non-operator viewer or before the fetch
-  // resolves — the same default git-tab.tsx's own patBrokerEnabled prop
-  // takes when it has no switch value in scope yet.
-  const [patBrokerEnabled, setPatBrokerEnabled] = React.useState(true);
-  React.useEffect(() => {
+  // that projects it (GET /workspace-providers, operator-only). null = not
+  // known: still loading, the lookup failed, or the viewer is not an operator.
+  // Unknown stays unknown: the header says nothing about where a Git token is
+  // held until the switch is read, because either answer can be the true one.
+  const [patBroker, setPatBroker] = React.useState<boolean | null>(null);
+  const [brokerFailed, setBrokerFailed] = React.useState(false);
+  const loadBroker = React.useCallback(() => {
     if (!operator) return;
+    setBrokerFailed(false);
     providersApi
       .getWorkspaceProviders()
-      .then((snap) => setPatBrokerEnabled(snap.providers.git_pat_broker_enabled ?? true))
-      .catch(() => {});
+      .then((snap) => setPatBroker(snap.providers.git_pat_broker_enabled ?? true))
+      .catch(() => setBrokerFailed(true));
   }, [operator]);
+  React.useEffect(loadBroker, [loadBroker]);
+  // The Add secret dialog only adds a sentence when the switch is known off.
+  const patBrokerEnabled = patBroker !== false;
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -131,9 +136,13 @@ export function SecretsScreen() {
         // resident posture really is an exception to gitPatLine's claim); on
         // (the default), gitPatLine's own text just elaborates on the same
         // claim, so the word is dropped rather than reading as a contradiction.
-        description={`Write-only: values go in and never come out. ${CAPABILITY.storedSecretLine} ${
-          patBrokerEnabled ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`
-        }`}
+        description={
+          patBroker === null
+            ? "Write-only: values go in and never come out."
+            : `Write-only: values go in and never come out. ${CAPABILITY.storedSecretLine} ${
+                patBroker ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`
+              }`
+        }
         actions={
           <>
             <Button onClick={() => setAddOpen(true)}>
@@ -142,6 +151,15 @@ export function SecretsScreen() {
           </>
         }
       />
+
+      {brokerFailed && patBroker === null && (
+        <p role="status" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          Couldn&apos;t check how stored Git tokens are handled, so this page says nothing about it.
+          <Button variant="outline" size="sm" onClick={loadBroker}>
+            Try again
+          </Button>
+        </p>
+      )}
 
       {caps?.enforcement.secret && (
         <p className="mb-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">{DENIED.SECRETS_NARROWED}</p>

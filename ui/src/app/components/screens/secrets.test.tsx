@@ -383,6 +383,27 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
   });
 
+  it("a failed lookup says nothing about Git tokens, offers Try again, and claims only once it succeeds", async () => {
+    getWorkspaceProvidersMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    render(<SecretsScreen />);
+    expect(await screen.findByText(/Couldn't check how stored Git tokens are handled/)).toBeInTheDocument();
+    expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/stays in Wardyn, unless a run delivers it/)).not.toBeInTheDocument();
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText(/Exception: A git access token is handed to git inside the sandbox/)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't check how stored Git tokens/)).not.toBeInTheDocument();
+  });
+
+  it("makes no Git token claim while the switch is still loading", async () => {
+    getWorkspaceProvidersMock.mockReturnValue(new Promise(() => {}));
+    render(<SecretsScreen />);
+    await screen.findByRole("heading", { name: "Secrets" });
+    expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/handed to git inside the sandbox/)).not.toBeInTheDocument();
+  });
+
   it("says the pre-0.7 exception sentence when the switch resolves off", async () => {
     getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
     render(<SecretsScreen />);
@@ -594,10 +615,11 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
   it("the page header says the exception and no longer promises a short-lived credential", async () => {
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
     listSecretsMineMock.mockResolvedValue([]);
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
     render(<SecretsScreen />);
     await screen.findByText("anthropic-api-key");
     expect(
-      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+      await screen.findByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/short-lived, scoped credential/i)).not.toBeInTheDocument();
   });

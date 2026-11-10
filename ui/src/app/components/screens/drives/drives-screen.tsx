@@ -46,7 +46,7 @@ import {
 } from "../../../lib/api/drives";
 import { providers as providersApi } from "../../../lib/api/providers";
 import { getErrorMessage } from "../../../lib/format";
-import { ACCESS_STATE, DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
+import { ACCESS_STATE, DRIVES, DRIVES_TEAM_UNKNOWN, PEOPLE } from "../../../lib/user-drives-copy";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -101,14 +101,21 @@ export function DrivesScreen() {
   const [deleteError, setDeleteError] = React.useState<{ title?: string; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
   // storage.user_drive.team_drives, read from the same site config the Storage
-  // tab edits. Off (or unreadable) is today's screen.
-  const [teamDrives, setTeamDrives] = React.useState(false);
-  React.useEffect(() => {
+  // tab edits. null = not known (loading or the read failed): a failed read is
+  // not "off", so a drive the server marks as team claims nothing until it is
+  // read. Off (read) is today's screen.
+  const [teamSetting, setTeamSetting] = React.useState<boolean | null>(null);
+  const [teamFailed, setTeamFailed] = React.useState(false);
+  const loadTeamSetting = React.useCallback(() => {
+    setTeamFailed(false);
     providersApi
       .getWorkspaceProviders()
-      .then((s) => setTeamDrives(!!s.providers.storage?.user_drive?.team_drives))
-      .catch(() => setTeamDrives(false));
+      .then((s) => setTeamSetting(!!s.providers.storage?.user_drive?.team_drives))
+      .catch(() => setTeamFailed(true));
   }, []);
+  React.useEffect(loadTeamSetting, [loadTeamSetting]);
+  const teamDrives = teamSetting === true;
+  const teamUnknown = teamSetting === null;
 
   // ponytail: no setStatus("loading") here. `load` is also the post-write
   // refresh, and flipping back to loading would unmount the add form under
@@ -260,6 +267,14 @@ export function DrivesScreen() {
                 />
               ) : (
                 <>
+                  {teamFailed && teamUnknown && snap.drives.some((d) => d.team) && (
+                    <p role="status" className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3 text-meta text-muted-foreground">
+                      {DRIVES_TEAM_UNKNOWN.NOTE}
+                      <Button variant="outline" size="sm" onClick={loadTeamSetting}>
+                        {DRIVES_TEAM_UNKNOWN.RETRY}
+                      </Button>
+                    </p>
+                  )}
                   <Table>
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
@@ -276,6 +291,8 @@ export function DrivesScreen() {
                     <TableBody>
                       {snap.drives.map((d) => {
                         const team = teamDrives && !!d.team;
+                        // A team drive whose setting is unknown claims nothing about access, cleanup or allocation.
+                        const unknownTeam = teamUnknown && !!d.team;
                         return (
                         <TableRow key={d.id}>
                           {/* A drive name is a human-chosen label, never mono. */}
@@ -312,15 +329,25 @@ export function DrivesScreen() {
                           </TableCell>
                           <TableCell>
                             {/* A team drive is writable only where its allocations say so too. */}
-                            <Chip tone={modeTone(team ? teamWritable(d, snap.grants) : d.writable)}>
-                              {modeText(team ? teamWritable(d, snap.grants) : d.writable)}
-                            </Chip>
+                            {unknownTeam ? (
+                              <span className="text-muted-foreground">{DRIVES_TEAM_UNKNOWN.CELL}</span>
+                            ) : (
+                              <Chip tone={modeTone(team ? teamWritable(d, snap.grants) : d.writable)}>
+                                {modeText(team ? teamWritable(d, snap.grants) : d.writable)}
+                              </Chip>
+                            )}
                           </TableCell>
-                          <TableCell className={team ? "text-muted-foreground" : undefined}>
-                            {team ? DRIVES.TEAM_RECLAIM_CELL : d.reclaim === "delete" ? DRIVES.RECLAIM_DELETE : DRIVES.RECLAIM_RETAIN}
+                          <TableCell className={team || unknownTeam ? "text-muted-foreground" : undefined}>
+                            {unknownTeam
+                              ? DRIVES_TEAM_UNKNOWN.CELL
+                              : team
+                                ? DRIVES.TEAM_RECLAIM_CELL
+                                : d.reclaim === "delete" ? DRIVES.RECLAIM_DELETE : DRIVES.RECLAIM_RETAIN}
                           </TableCell>
-                          <TableCell>
-                            {team
+                          <TableCell className={unknownTeam ? "text-muted-foreground" : undefined}>
+                            {unknownTeam
+                              ? DRIVES_TEAM_UNKNOWN.CELL
+                              : team
                               ? allocatedText(d, snap.grants)
                               : d.grant_count === 0
                                 ? DRIVES.ALLOCATED_NONE
@@ -332,7 +359,7 @@ export function DrivesScreen() {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  disabled={editorOpen}
+                                  disabled={editorOpen || unknownTeam}
                                   onClick={() => openEditor(d)}
                                   aria-label={`${DRIVES.EDIT} ${d.name}`}
                                 >

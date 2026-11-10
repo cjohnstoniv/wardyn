@@ -741,11 +741,11 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             </div>
           </>
         )
-      ) : status === "loading" ? (
+      ) : shown === "PENDING" && status === "loading" ? (
         <div className="rounded-xl border border-border bg-card">
           <TableSkeleton rows={4} cols={3} />
         </div>
-      ) : status === "error" ? (
+      ) : shown === "PENDING" && status === "error" ? (
         <div className="rounded-xl border border-border bg-card">
           <ErrorState onRetry={load} />
         </div>
