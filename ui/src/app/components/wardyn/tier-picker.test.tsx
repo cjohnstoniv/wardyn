@@ -100,6 +100,31 @@ describe("TierPicker — a real choice (two or more visible tiers)", () => {
     expect(screen.getByText(/pick one/i)).toBeInTheDocument();
   });
 
+  it("is one Tab stop and moves with the arrow keys", async () => {
+    const onSelect = vi.fn();
+    render(<TierPicker tiers={["CC1", "CC2", "CC3"]} selected="CC2" onSelect={onSelect} />);
+    const group = screen.getByRole("radiogroup", { name: /barrier tier/i });
+    expect(within(group).getByRole("radio", { name: "Wall" })).toHaveAttribute("tabindex", "0");
+    expect(within(group).getByRole("radio", { name: "Fence" })).toHaveAttribute("tabindex", "-1");
+    expect(within(group).getByRole("radio", { name: "Vault" })).toHaveAttribute("tabindex", "-1");
+
+    within(group).getByRole("radio", { name: "Wall" }).focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(onSelect).toHaveBeenLastCalledWith("CC3");
+    await userEvent.keyboard("{ArrowUp}");
+    expect(onSelect).toHaveBeenLastCalledWith("CC1");
+  });
+
+  it("Enter on a row's About button opens its popover and does not pick the tier", async () => {
+    const onSelect = vi.fn();
+    render(<TierPicker tiers={["CC1", "CC2", "CC3"]} selected="CC2" onSelect={onSelect} />);
+    const about = screen.getAllByRole("button", { name: /^about /i })[2];
+    about.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: "Vault" })).toBeInTheDocument();
+  });
+
   it("dropdown shape (forced, <360px) renders a single trigger, not a radiogroup", () => {
     render(<TierPicker tiers={["CC1", "CC2"]} selected="CC1" onSelect={vi.fn()} shape="dropdown" />);
     expect(screen.queryByRole("radiogroup")).toBeNull();
