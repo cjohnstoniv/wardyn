@@ -133,6 +133,8 @@ type fakeEnvbuilderDocker struct {
 	lastListAll     bool
 	// removedIDs records every container ID passed to ContainerRemove, in order.
 	removedIDs []string
+	// removeOpts records the options of every ContainerRemove, in the same order as removedIDs.
+	removeOpts []client.ContainerRemoveOptions
 
 	// lastImageListHadDeadline records whether the LAST ImageList call's ctx
 	// carried a deadline (see ImageList below).
@@ -423,11 +425,12 @@ func (f *fakeEnvbuilderDocker) ContainerWait(_ context.Context, _ string, _ clie
 	return client.ContainerWaitResult{Result: resultC, Error: errC}
 }
 
-func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, containerID string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, containerID string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removed = true
 	f.removedIDs = append(f.removedIDs, containerID)
+	f.removeOpts = append(f.removeOpts, opts)
 	return client.ContainerRemoveResult{}, nil
 }
 

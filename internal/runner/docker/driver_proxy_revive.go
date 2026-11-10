@@ -782,6 +782,10 @@ func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
+	// A container kept from before the create checked image volumes against the disk limit.
+	if err := d.checkKeptVolumesUnderCap(ctx, ref); err != nil {
+		return err
+	}
 	if _, err := d.cli.ContainerStart(ctx, ref, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: start agent: %w", err)
 	}

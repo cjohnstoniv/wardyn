@@ -39,7 +39,7 @@ export function RunsSegmentBar({
           aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
           className={cn(
-            "flex items-center gap-1.5 whitespace-nowrap border-l border-border px-3 py-1.5 text-sm transition-colors first:border-l-0",
+            "flex items-center gap-1.5 whitespace-nowrap border-l border-border px-3 py-1.5 text-sm transition-colors first:border-l-0 focus-visible:outline-offset-[-2px]",
             value === o.value ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:text-foreground",
           )}
         >

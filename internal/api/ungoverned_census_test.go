@@ -105,6 +105,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"run_end_create.go:resolveCreateEnd":                       {1, "E: an ungoverned run's end is capped by the boundary when it names a maximum"},
 	"run_entry.go:admitRunEntry":                               {2, "authz-only: the interactive entry rule an attach ticket and a takeover share"},
 	"run_entry.go:getRunForEntry":                              {1, "authz-only: run reach"},
+	"run_exec.go:handleRunExec":                                {1, "authz-only: the deny_interactive door's exemption, as SSH authentication's; it admits no run policy"},
 	"run_kept_machine.go:keptMachineGovernanceRefusal":         {1, "R: the kept-machine decision at create and Review; the run it admits meets the boundary at resolve and dispatch"},
 	"run_schedule_door.go:scheduleDoorRefusal":                 {1, "R: the scheduled-runs decision at create and Review; the run it admits meets the boundary at resolve and dispatch"},
 	"run_limit_sources.go:limitSources":                        {1, "authz-only: a display of where limits came from"},

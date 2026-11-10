@@ -134,6 +134,14 @@ describe("Review blockers", () => {
     expect(buildBlockers({ ...NOTHING, refusal: { text: sentence, reason: "wall_preset_unknown" } })[0].text).toContain("The chosen wall preset is no longer available");
   });
 
+  it("links the no_network_needs_egress create refusal to the Tools step, by its reason or by the wall_preset field it names", () => {
+    const sentence = "This run needs a host that No network refuses: the model provider. Choose another wall preset, or remove what needs it.";
+    for (const refusal of [{ text: sentence, reason: "no_network_needs_egress" }, { text: sentence, reason: "something_new", field: "wall_preset" }]) {
+      const [b] = buildBlockers({ ...NOTHING, refusal });
+      expect(b).toMatchObject({ id: "refusal", kind: "refusal", text: sentence, to: { screen: "step", step: "tools" } });
+    }
+  });
+
   it("does not block for a wall preset that is available", () => {
     expect(buildBlockers({ ...NOTHING, wallPreset: { name: "Sealed", unavailable: false } })).toEqual([]);
   });

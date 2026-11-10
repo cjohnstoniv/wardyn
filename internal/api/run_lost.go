@@ -147,32 +147,40 @@ const (
 // now, except for an ended run put back to ended, whose files grace stays
 // counted from when it first ended.
 func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) loseOutcome {
+	o, _ := s.loseRunStopped(ctx, loser, leaser, run, reason, terminal, tokenLife, at)
+	return o
+}
+
+// loseRunStopped is loseRun, also answering, for loseApplied, the proxy stop's error: nil is a stop
+// confirmed, anything else containment still unresolved.
+func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) (loseOutcome, error) {
 	now := s.cfg.Now()
 	if !s.lostRunKeepable(run, now) {
-		return loseNotKeepable
+		return loseNotKeepable, nil
 	}
 	applied, err := loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run lost failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return loseWriteFailed
+		return loseWriteFailed, nil
 	}
 	if !applied {
-		return loseNotApplied
+		return loseNotApplied, nil
 	}
 	run.LostAt, run.LostReason = &at, reason
 	s.cancelRunApprovals(ctx, run.ID)
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
 	data, outcome := map[string]any{"reason": string(reason)}, "success"
-	if err := s.stopLostSandbox(ctx, run, now); errors.Is(err, runner.ErrPendingOnRunner) {
+	stopErr := s.stopLostSandbox(ctx, run, now)
+	if err := stopErr; errors.Is(err, runner.ErrPendingOnRunner) {
 		data["containment"] = "pending_runner"
 	} else if err != nil {
 		data["lost_error"] = err.Error()
 		if errors.Is(err, runner.ErrEndUnsupported) {
 			data["kept"] = false
 			s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
-			return loseApplied
+			return loseApplied, stopErr
 		}
 		// Any other failure leaves containment unconfirmed, and a teardown
 		// on the same failing daemon would only lose the files (#1060): the
@@ -186,7 +194,7 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.lost",
 		run.ID.String(), outcome, mustJSON(data)))
-	return loseApplied
+	return loseApplied, stopErr
 }
 
 // lostRunKeepable preserves local headless agents as well as interactive

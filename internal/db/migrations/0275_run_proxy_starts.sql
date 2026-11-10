@@ -5,7 +5,9 @@
 -- recorded before its proxy starts, under the generation and the fresh run token's jti it runs on.
 -- expected_sha256 is the driver's hash of the bytes it handed the proxy, reported_sha256 the proxy's
 -- own hash of what it loaded; the start is enforced only when both are in and equal. deadline is set
--- when the driver answers: the report must be in by then.
+-- when the driver answers: the report must be in by then. A failed start's proxy stop is recorded on
+-- it: contained_at once the stop is confirmed, containment_error while it is not (the reconcile sweep
+-- retries it).
 CREATE TABLE IF NOT EXISTS run_proxy_starts (
     run_id          UUID        NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
     generation      INTEGER     NOT NULL,
@@ -18,10 +20,14 @@ CREATE TABLE IF NOT EXISTS run_proxy_starts (
     state           TEXT        NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'enforced', 'unconfirmed', 'failed', 'abandoned', 'superseded')),
     confirmed_at    TIMESTAMPTZ,
+    contained_at    TIMESTAMPTZ,
+    containment_error TEXT,
     PRIMARY KEY (run_id, generation)
 );
 CREATE INDEX IF NOT EXISTS run_proxy_starts_overdue_idx
     ON run_proxy_starts (deadline) WHERE state = 'pending' AND deadline IS NOT NULL;
+CREATE INDEX IF NOT EXISTS run_proxy_starts_uncontained_idx
+    ON run_proxy_starts (run_id) WHERE state = 'failed' AND contained_at IS NULL;
 
 -- The address the run's agent is pinned to for its proxy, from the driver's create answer. NULL for
 -- a run started before it, or by an older driver or runner.

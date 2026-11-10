@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -590,5 +591,22 @@ func TestProbeFailureNamesTheUnreadableExecutor(t *testing.T) {
 	kinds[types.PlacementRemote][1].facts.ProbeErr = nil
 	if err := probeFailure(kinds); err != nil {
 		t.Errorf("offline candidates only: probeFailure = %v, want none", err)
+	}
+}
+
+// TestIntersectCapabilities_NetworkPolicyCheck: the worst placement's canary verdict shows, with its
+// own time; a placement reporting none never wins.
+func TestIntersectCapabilities_NetworkPolicyCheck(t *testing.T) {
+	older := time.Now().Add(-time.Hour).UTC()
+	at := func(c runner.NetPolCheck) placementCaps {
+		return placementCaps{Capabilities: runner.Capabilities{NetworkPolicyCheck: c}}
+	}
+	notProven := runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: older.Add(time.Minute)}
+	got := intersectCapabilities(at(runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: older}), at(runner.NetPolCheck{}), at(notProven))
+	if got.NetworkPolicyCheck != notProven {
+		t.Errorf("check %+v, want %+v", got.NetworkPolicyCheck, notProven)
+	}
+	if got := intersectCapabilities(at(runner.NetPolCheck{})); got.NetworkPolicyCheck != (runner.NetPolCheck{}) {
+		t.Errorf("check %+v, want none", got.NetworkPolicyCheck)
 	}
 }

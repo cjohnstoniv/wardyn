@@ -99,9 +99,22 @@ func onVMNetLane(ctx context.Context) bool {
 	return on
 }
 
-// relayLane is egress.Request.Relayed for a request: a VM guest's flow that came in on the relay's listener.
+type relayLaneKey struct{}
+
+// WithRelayLane puts a via_org engine's request on the relay lane: wardynd calls it for a forwarded
+// request the run's runner marked (ViaOrgRelayedHeader). A runner's own proxy never reads it.
+func WithRelayLane(ctx context.Context) context.Context {
+	return context.WithValue(ctx, relayLaneKey{}, true)
+}
+
+// relayLane is egress.Request.Relayed for a request: a VM guest's flow that came in on the relay's listener,
+// or, on a via_org engine, a request wardynd put on the relay lane (WithRelayLane).
 // Every decision row built from a request takes it from here.
 func (p *Proxy) relayLane(ctx context.Context) bool {
+	if p.engine {
+		on, _ := ctx.Value(relayLaneKey{}).(bool)
+		return on
+	}
 	return p.vm && onVMNetLane(ctx)
 }
 

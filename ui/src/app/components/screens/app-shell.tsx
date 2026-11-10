@@ -603,6 +603,8 @@ export function AppShell({
       userDriveUnavailable={meta.userDriveUnavailable}
       userType={meta.userType}
       confinementPosture={confinementPosture}
+      confinementCheckedAt={meta.networkPolicyCheckedAt}
+      confinementSource={meta.networkPolicySource}
       demoVideoBaseUrl={meta.demoVideoBaseUrl}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
@@ -647,6 +649,8 @@ export function AppShell({
                 tier={tier}
               />
             )}
+            {/* The banners alone scroll when they pile up; the top bar above stays put. */}
+            <div className="scroll-thin max-h-[30dvh] overflow-y-auto overscroll-contain">
             {/* The no-credential preview's band, and its way out. FIRST of the
           banners and not hidden in focus mode: it explains the refusals the
           others might be mistaken for. The plain User view has no band. */}
@@ -723,6 +727,7 @@ export function AppShell({
             )}
             {/* While a renewal waits, its strip (the reauth layer's) stands here instead. */}
             <SessionRenewSlot />
+            </div>
             </div>
             {/* LAST in the stack, and not hidden in focus mode: a dead control
           plane, an unknown identity and a dying session are each the better

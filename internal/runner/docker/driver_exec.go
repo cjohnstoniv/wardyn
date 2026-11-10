@@ -47,6 +47,12 @@ func recordingChmodDirs(cfg Config) []string {
 	return dirs
 }
 
+// rootExecPATH is the PATH of every root exec the driver runs in the agent container. The image's
+// own PATH can lead with a directory the agent writes (the full image's /opt/rust/bin and
+// /home/agent/go/bin), so these execs name their binaries by absolute path and take this PATH, which
+// holds only root-owned system directories.
+const rootExecPATH = "PATH=/usr/sbin:/usr/bin:/sbin:/bin"
+
 // prepareRecordingDirs creates+chmods the cast dir and (for a named-volume
 // RecordingMount) the recording-mount target to 0777 via a one-shot root
 // exec, so a non-root agent process can both write its in-progress cast and
@@ -58,7 +64,8 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 	args := append([]string{"-p"}, dirs...)
 	created, err := d.cli.ExecCreate(ctx, ref, client.ExecCreateOptions{
 		User: "0:0", // root, regardless of the image's default USER
-		Cmd:  append([]string{"mkdir"}, args...),
+		Env:  []string{rootExecPATH},
+		Cmd:  append([]string{"/bin/mkdir"}, args...),
 	})
 	if err != nil {
 		return
@@ -70,7 +77,8 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 
 	chmodCreated, err := d.cli.ExecCreate(ctx, ref, client.ExecCreateOptions{
 		User: "0:0",
-		Cmd:  append([]string{"chmod", "0777"}, dirs...),
+		Env:  []string{rootExecPATH},
+		Cmd:  append([]string{"/bin/chmod", "0777"}, dirs...),
 	})
 	if err != nil {
 		return
@@ -309,7 +317,7 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 			d.mu.Unlock()
 			rmCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 			defer cancel()
-			if _, rerr := d.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true}); rerr != nil && !isNotFound(rerr) {
+			if _, rerr := d.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); rerr != nil && !isNotFound(rerr) {
 				return fmt.Errorf("docker: main-process agent failed the cap check and could not be removed: %w (cap error: %v)", rerr, capErr)
 			}
 			return capErr
@@ -335,7 +343,7 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 		// cancelled it, and the removal must still happen (fail closed).
 		rmCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancel()
-		if _, rerr := d.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true}); rerr != nil && !isNotFound(rerr) {
+		if _, rerr := d.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); rerr != nil && !isNotFound(rerr) {
 			return fmt.Errorf("docker: sandbox %s torn down during agent create, and removing the created agent failed: %w", ref, rerr)
 		}
 		return fmt.Errorf("docker: sandbox %s torn down during agent create", ref)

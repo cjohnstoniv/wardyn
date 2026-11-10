@@ -718,6 +718,30 @@ commands are the ones in "Back them up" and "Restore them", and in
   - A slow-but-progressing insert is never aborted by it — and it is deliberately shorter than the drain's 15s pass,
     so the request path yields before the background drain does.
 
+- **Strict audit (`WARDYN_AUDIT_STRICT=on`, flag `-audit-strict`, default off).**
+  - With strict mode on, a covered change is refused if its audit intent row cannot be written first.
+  - Before the change's handler runs, an `audit.intent.record` row is written straight to the store, with no spool
+    fallback.
+  - The row names the method, the resolved path, the route, the path's ids, the caller (`actor`), the request id and the
+    body's SHA-256, never the body.
+  - The path, each id and the request id come from the caller, so each is cut to 512 bytes, as an audit target is.
+  - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
+  - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
+  - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
+    `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`.
+  - Not covered, because each reads and answers and changes nothing: the POSTs `/policies/grade`, `/governance/check`,
+    `/governance/dry-run`, `/governance/approval-rules/dry-run` and `/templates/import` (it parses a document and
+    stores nothing).
+  - The row is written for every covered request that passed sign-in, one its route then refuses included, so it says a
+    change was asked for, not that it happened.
+  - The trade: while the store cannot take writes, covered changes are refused instead of being queued.
+  - Under `WARDYN_AUDIT_SEAL`, a row whose subject key cannot be had is refused too, since such a row waits only in the
+    spool.
+  - Configured sinks get an intent row only after the store has taken it; a store write that failed sends them nothing.
+  - A sink that fails does not undo an intent row the store took, and the change goes ahead.
+  - That is the intent row only: the handler's own row reaches the sinks as every row does, even when the store
+    write failed and the row spooled.
+
 > [!IMPORTANT]
 > **Set the two server-side timeouts** on the database Wardyn uses.
 
@@ -4069,7 +4093,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0271` (`0271_approval_file_review`) replaces `approvals_kind_check` (`0001`'s table) to admit `file_download` and adds a partial unique index that keeps one pending review of a file per run; no row or grant change.
 - `0272` (`0272_context_pins`) adds `components.owning_unit_id` (a foreign key to `governance_units`, restrict on delete; organisation rows only) and `workspaces.owning_unit_strict` (default false; true needs a pin). No grant change.
 - `0273` (`0273_governance_elevation`) adds `governance_memberships.expires_at` (with a partial index on it) and widens `agent_runs_lifetime_cap_source_check` (`0001`'s table) to admit `elevation`; no row or grant change.
-- `0274` (`0274_run_proxy_starts`) creates `run_proxy_starts`, one row per proxy start and its policy readback (the start's generation, run token id, mode, the two config hashes, state and deadline), and adds the nullable `proxy_addr` to `agent_runs` (`0001`'s table): the address the run's agent reaches its proxy on; no row or grant change.
+- `0274` (`0274_attach_ticket_credential`) adds two nullable columns to `attach_tickets` (`0026`'s table) and deletes dead CLI access-token rows; no grant change. Tickets and relay cookies issued before the upgrade carry no credential and keep the old behaviour until they expire.
+- `0275` (`0275_run_proxy_starts`) creates `run_proxy_starts`, one row per proxy start and its policy readback (the start's generation, run token id, mode, the two config hashes, state, deadline and whether a failed start's proxy stop was confirmed), and adds the nullable `proxy_addr` to `agent_runs` (`0001`'s table): the address the run's agent reaches its proxy on; no row or grant change.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

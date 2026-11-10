@@ -200,7 +200,8 @@ func (m *memProxyStarts) OverdueProxyStarts(context.Context) ([]store.ProxyStart
 	var out []store.ProxyStart
 	for _, gens := range m.starts {
 		for _, p := range gens {
-			if p.State == types.ProxyStartPending && p.Deadline != nil && !now.Before(*p.Deadline) {
+			uncontained := p.State == types.ProxyStartFailed && p.ContainedAt == nil && m.activeLocked(p.RunID) == p
+			if uncontained || p.State == types.ProxyStartPending && p.Deadline != nil && !now.Before(*p.Deadline) {
 				out = append(out, *p)
 			}
 		}
@@ -805,8 +806,8 @@ func TestReadback_DispatchWithoutHashStopsAtOnce(t *testing.T) {
 	if d.rn.stopCount() != 1 {
 		t.Errorf("sandbox stops = %d, want 1", d.rn.stopCount())
 	}
-	if p := d.st.get(d.run.ID, 1); p.State != types.ProxyStartFailed || p.Mode != store.ProxyStartExpected {
-		t.Errorf("start = %s/%s, want failed/expected", p.State, p.Mode)
+	if p := d.st.get(d.run.ID, 1); p.State != types.ProxyStartFailed || p.Mode != store.ProxyStartExpected || p.ContainedAt == nil {
+		t.Errorf("start = %s/%s (contained %v), want failed/expected, contained", p.State, p.Mode, p.ContainedAt)
 	}
 	ev := findAudit(d.audit.snapshot(), d.run.ID, "run.create", "failure")
 	if ev == nil || !strings.Contains(string(ev.Data), "policy_unconfirmed") || !strings.Contains(string(ev.Data), store.ProxyStartHashMissing) {

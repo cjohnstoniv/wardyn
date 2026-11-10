@@ -126,11 +126,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// Split literal: the envdoc guard scans raw file bytes for the quote-delimited var name alone.
 		env = append(env, "WARDYN_RECORDING"+"=1")
 	}
+	agentLabels := withRecordLabel(d.labels(spec.RunID, componentAgent, spec.Labels), record)
+	if spec.Resources.DiskMiB > 0 && spec.Resources.DiskMiBSoft {
+		agentLabels[labelDiskSoft] = "true" // read by a revive: see checkKeptVolumesUnderCap
+	}
 	agentCfg := &container.Config{
 		Image:    spec.Image,
 		Hostname: "agent",
 		Env:      env,
-		Labels:   withRecordLabel(d.labels(spec.RunID, componentAgent, spec.Labels), record),
+		Labels:   agentLabels,
 		Tty:      true, // keep a TTY so Exec can attach a PTY for recording.
 		Cmd:      idleCmd,
 	}
@@ -153,6 +157,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	agentHost.Mounts = append(agentHost.Mounts, agentMounts...)
 	if d.cfg.TrustedCAFile != "" {
 		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{Type: mount.TypeBind, Source: d.cfg.TrustedCAFile, Target: runner.TrustedCAMountPath, ReadOnly: true})
+	}
+	// Before the exec / exec-less split, so both paths answer an image VOLUME the disk limit cannot reach.
+	if err := d.checkImageVolumesUnderCap(ctx, spec.Image, spec.Resources, agentHost, info); err != nil {
+		return fail(err)
 	}
 
 	agentNetCfg := &network.NetworkingConfig{
@@ -193,7 +201,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("docker: create agent: %w", err))
 	}
 	rollback = append(rollback, func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	})
 
 	// Fail closed if the daemon DISCARDED a resource limit we requested (a cgroup controller
@@ -605,7 +613,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 			d.teardownVM(ctx, agentRef, id)
 		}
 	}()
-	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
 
@@ -645,7 +653,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	}
 	// A drive seed left by a crash between its create and its removal still
 	// holds that drive's volume.
-	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
 	return nil
@@ -689,7 +697,7 @@ func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI,
 			d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
 			continue
 		}
-		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 			errs = append(errs, fmt.Errorf("docker: remove leftover drive seed %s: %w", c.ID, err))
 			continue
 		}

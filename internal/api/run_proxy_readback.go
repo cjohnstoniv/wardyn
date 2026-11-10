@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -203,11 +205,12 @@ func (s *Server) expireProxyStart(ctx context.Context, runID uuid.UUID, gen int)
 	}
 	if ch.Settled == types.ProxyStartFailed {
 		s.auditReadbackFailure(ctx, ch)
-		s.stopUnconfirmedProxy(ctx, runID)
+		s.containProxyStart(ctx, runID, gen)
 	}
 }
 
-// sweepOverdueProxyStarts is the reconcile tick's deadline pass.
+// sweepOverdueProxyStarts is the reconcile tick's deadline pass, and its retry of failed starts whose
+// proxy stop is not yet confirmed.
 func (s *Server) sweepOverdueProxyStarts(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.RunProxyStarts)
 	if !ok {
@@ -218,38 +221,126 @@ func (s *Server) sweepOverdueProxyStarts(ctx context.Context) error {
 		return err
 	}
 	for _, p := range starts {
+		if p.State == types.ProxyStartFailed {
+			s.containProxyStart(ctx, p.RunID, p.Generation)
+			continue
+		}
 		s.expireProxyStart(ctx, p.RunID, p.Generation)
 	}
 	return nil
 }
 
-// stopUnconfirmedProxy stops the proxy of a run whose start failed after its driver answered. A run
-// still being dispatched fails, its sandbox stopped (the dispatch's own RUNNING write then loses); a
-// running run is lost (outage) with its proxy stopped, or torn down when it cannot be kept, as the
-// lapsed-token sweep does.
-func (s *Server) stopUnconfirmedProxy(ctx context.Context, runID uuid.UUID) {
+// proxyContainment is what containProxyStart found for one failed start.
+type proxyContainment struct {
+	// Contained: the start's proxy is confirmed stopped, and that is recorded on the start.
+	Contained bool
+	// Superseded: gen is no longer the run's active start, so nothing was stopped.
+	Superseded bool
+	// Err is why containment is not confirmed (unresolved); the reconcile sweep retries it.
+	Err error
+}
+
+// containProxyStart stops the proxy of the run's failed start gen and records the result on the start
+// (store.ProxyStart.ContainedAt, or ContainmentError while unresolved). It is fenced on gen: once a
+// newer start is the run's active one it stops nothing. A start already contained answers Contained
+// with no second stop. It may run again, and on any replica.
+func (s *Server) containProxyStart(ctx context.Context, runID uuid.UUID, gen int) proxyContainment {
+	st, ok := s.cfg.Store.(store.RunProxyStarts)
+	if !ok {
+		return proxyContainment{Err: errors.New("the store keeps no proxy starts")}
+	}
+	p, found, err := st.ActiveProxyStart(ctx, runID)
+	switch {
+	case err != nil:
+		return proxyContainment{Err: err}
+	case !found || p.Generation != gen:
+		return proxyContainment{Superseded: true}
+	case p.ContainedAt != nil:
+		return proxyContainment{Contained: true}
+	case p.State != types.ProxyStartFailed:
+		return proxyContainment{Err: fmt.Errorf("proxy start %d is %s, not failed", gen, p.State)}
+	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: reading a run whose proxy did not confirm its policy failed",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
-		return
+		return proxyContainment{Err: err}
 	}
-	switch run.State {
-	case types.RunStarting:
-		s.stopSandboxOrAudit(ctx, runID, run.SandboxRef, "run.create")
-		s.failAndRevoke(ctx, runID, types.RunStarting, unconfirmedPolicyHint)
-	case types.RunRunning:
-		loser, ok := s.cfg.Store.(store.RunLoser)
-		leaser, lok := s.cfg.Store.(store.RunLeaser)
-		if ok && lok && s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, 0, s.cfg.Now()) != loseNotKeepable {
-			return
+	stopErr := s.stopUnconfirmedProxy(ctx, run)
+	msg := ""
+	if stopErr != nil {
+		msg = stopErr.Error()
+	}
+	if err := st.RecordProxyContainment(ctx, runID, gen, msg); err != nil && stopErr == nil {
+		stopErr = err
+	}
+	if stopErr != nil {
+		slog.WarnContext(ctx, "wardynd: a failed proxy start is not confirmed stopped; the sweep retries",
+			slog.String("run_id", runID.String()), slog.Int("generation", gen), slog.Any("err", stopErr))
+		return proxyContainment{Err: stopErr}
+	}
+	return proxyContainment{Contained: true}
+}
+
+// stopUnconfirmedProxy stops the proxy of a run whose start failed after its driver answered, and
+// answers nil only once that stop is confirmed. A run still being dispatched fails, its sandbox
+// stopped (the dispatch's own RUNNING write then loses); a running run is lost (outage) with its
+// proxy stopped, or torn down when it cannot be kept, as the lapsed-token sweep does. A run already
+// lost has its proxy stopped again, and any other run its sandbox: what a retry does.
+func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) error {
+	switch {
+	case run.State == types.RunStarting:
+		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.create")
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, unconfirmedPolicyHint)
+		if !ok {
+			return errProxyStopUnconfirmed
 		}
-		s.reconcileFinalize(ctx, runID, types.RunFailed, run.SandboxRef, unconfirmedPolicyHint)
+		return nil
+	case runIsKept(run):
+		return s.stopLostSandbox(ctx, run, s.cfg.Now())
+	case run.State == types.RunRunning:
+		if handled, err := s.loseUnconfirmedRun(ctx, run); handled {
+			return err
+		}
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedPolicyHint)
+	}
+	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
+		return errProxyStopUnconfirmed
+	}
+	return nil
+}
+
+// errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
+var errProxyStopUnconfirmed = errors.New("the sandbox stop failed")
+
+// loseUnconfirmedRun marks a running run lost (outage) and stops its proxy, answering the stop's
+// error. handled is false for a run that cannot be kept, which the caller tears down. A lost mark
+// that could not be written still has the proxy stopped, as reloseRun does, and stays unresolved so a
+// retry writes it.
+func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (handled bool, err error) {
+	loser, ok := s.cfg.Store.(store.RunLoser)
+	leaser, lok := s.cfg.Store.(store.RunLeaser)
+	if !ok || !lok {
+		return false, nil
+	}
+	now := s.cfg.Now()
+	switch o, stopErr := s.loseRunStopped(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, 0, now); o {
+	case loseNotKeepable:
+		return false, nil
+	case loseApplied:
+		return true, stopErr
+	case loseWriteFailed:
+		s.revokeRunBroker(ctx, run.ID)
+		run.LostAt, run.LostReason = &now, types.LostOutage
+		if err := s.stopLostSandbox(ctx, run, now); err != nil {
+			return true, err
+		}
+		return true, errors.New("the run's lost mark could not be written")
+	default:
+		return true, errors.New("the run's lost mark did not land")
 	}
 }
 
 // unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy.
-const unconfirmedPolicyHint = "the run's proxy did not confirm the policy it loaded, so it was stopped"
+const unconfirmedPolicyHint = "The run's proxy did not confirm the policy it loaded, so it was stopped"
 
 func (s *Server) auditReadback(ctx context.Context, runID uuid.UUID, action, outcome string, gen int, data map[string]any) {
 	data["generation"] = gen
@@ -313,7 +404,7 @@ func (s *Server) handleInternalProxyLoaded(w http.ResponseWriter, r *http.Reques
 		s.auditReadback(ctx, claims.RunID, "run.policy.enforced", "success", ch.Start.Generation, data)
 	case types.ProxyStartFailed:
 		s.auditReadbackFailure(ctx, ch)
-		s.stopUnconfirmedProxy(context.WithoutCancel(ctx), claims.RunID)
+		s.containProxyStart(context.WithoutCancel(ctx), claims.RunID, ch.Start.Generation)
 	}
 	status := http.StatusOK
 	if ch.Start.State == types.ProxyStartPending {
@@ -388,18 +479,28 @@ func (s *Server) recordConfirmedSandbox(ctx context.Context, run types.AgentRun,
 		return false
 	}
 	if ok, why := s.proxyStartAnswered(ctx, run.ID, start, sb.ProxyConfigSHA256); !ok {
-		s.abortUnconfirmedSandbox(ctx, run.ID, sb.Ref, why)
+		s.abortUnconfirmedSandbox(ctx, run.ID, sb.Ref, start, why)
 		return false
 	}
 	return true
 }
 
-// abortUnconfirmedSandbox stops a created sandbox whose start did not confirm (why) and fails the run.
-func (s *Server) abortUnconfirmedSandbox(ctx context.Context, runID uuid.UUID, ref, why string) {
+// abortUnconfirmedSandbox stops a created sandbox whose start did not confirm (why), records that stop
+// on a failed start, and fails the run. An unconfirmed stop is left to the sweep's retry.
+func (s *Server) abortUnconfirmedSandbox(ctx context.Context, runID uuid.UUID, ref string, start proxyStartRec, why string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
 		runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "reason": "policy_unconfirmed", "readback": why})))
-	s.stopSandboxOrAudit(ctx, runID, ref, "run.create")
+	stopErr := ""
+	if !s.stopSandboxOrAudit(ctx, runID, ref, "run.create") {
+		stopErr = errProxyStopUnconfirmed.Error()
+	}
 	s.failAndRevoke(ctx, runID, types.RunStarting, unconfirmedPolicyHint)
+	if st, ok := s.cfg.Store.(store.RunProxyStarts); ok && start.active {
+		if err := st.RecordProxyContainment(ctx, runID, start.gen, stopErr); err != nil {
+			slog.WarnContext(ctx, "wardynd: recording a failed proxy start's stop failed; the sweep retries",
+				slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
+	}
 }

@@ -336,6 +336,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MAIN_BODY` | deviation (DS-3 W3) | The sandbox's own disk: system, tools and /home/agent. Every run has one. |
 | `SIZE_LABEL` | mock | Size |
 | `UP_TO(size)` | mock | Up to {size} in this pool |
+| `OVER_CAP(size, cap)` | deviation (lead 2026-11-10) | {size} is over the {cap} cap. The run gets {cap}. |
 | `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
 | `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
 | `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
@@ -919,6 +920,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_NETWORK` | mock | Network |
 | `POLICY_HOSTS(n)` | mock | {n} hosts allowed |
 | `POLICY_HOST_ONE` | deviation (lead 2026-10-13, the singular of POLICY_HOSTS) | 1 host allowed |
+| `POLICY_HOSTS_OPEN(n)` | deviation (lead 2026-11-10) | {n} hosts listed · other public hosts allowed unless blocked |
+| `POLICY_HOST_OPEN_ONE` | deviation (lead 2026-11-10, the singular of POLICY_HOSTS_OPEN) | 1 host listed · other public hosts allowed unless blocked |
 | `POLICY_CREDENTIALS` | mock | Credentials |
 | `POLICY_NO_CREDENTIALS` | mock | No credentials requested |
 | `POLICY_HIDDEN` | mock | Selected model provider · Hidden |

@@ -113,6 +113,8 @@ describe("ProfileReview", () => {
     // Overall risk + a graded risk row render (clone of compose-review).
     expect(await screen.findByText("Overall risk")).toBeInTheDocument();
     expect(screen.getByText("allow_all_egress")).toBeInTheDocument();
+    // The setting is the barrier floor everywhere else in the console, not "Confinement".
+    expect(screen.getByText("Barrier floor")).toBeInTheDocument();
 
     // Observations: egress domains with methods + decision tallies.
     const obs = screen.getByLabelText("Observations");

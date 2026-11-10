@@ -234,6 +234,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// The final seal, as dispatch's (run_policy_seal.go), then the ceiling's re-assertion over the
 	// layers it read, so a credential the boundary withholds goes as one the profile denies does.
 	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
+	sealPerEntryRules(cfg, layers)     // the restriction's push and tool rules, in the form the config carries
 	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
 	re, rerr := reassertProxyCeiling(run, cfg, c, layers, edits...)
 	if rerr != nil {

@@ -292,7 +292,9 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 	}
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	s.stopUnconfirmedProxy(stopCtx, runID)
+	if run, err := s.cfg.Store.GetRun(stopCtx, runID); err == nil {
+		_ = s.stopUnconfirmedProxy(stopCtx, run) // the readback lane's stop now answers whether it landed
+	}
 	return why
 }
 

@@ -27,10 +27,16 @@ import { AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import type { ConfinementPosture } from "./operator-context";
-import { useConfinementPosture, useOperator } from "./operator-context";
+import { useConfinementCheckedAt, useConfinementPosture, useConfinementSource, useOperator } from "./operator-context";
 import type { ConsoleView } from "./console-view";
 import {
   POSTURE_ACKNOWLEDGED_BANNER,
+  POSTURE_NOT_PROVEN_BANNER,
+  POSTURE_REFUSED_BANNER,
+  POSTURE_RUNNER_ACKNOWLEDGED_BANNER,
+  POSTURE_RUNNER_NOT_PROVEN_BANNER,
+  POSTURE_RUNNER_REFUSED_BANNER,
+  POSTURE_RUNNER_UNENFORCED_BANNER,
   POSTURE_UNENFORCED_BANNER,
   POSTURE_UNKNOWN_BANNER,
 } from "./confinement-posture-copy";
@@ -56,7 +62,46 @@ const BANNER_BY_POSTURE: Partial<
     body: POSTURE_UNKNOWN_BANNER.BODY,
     action: POSTURE_UNKNOWN_BANNER.ACTION,
   },
+  // The refused body names its check time, filled in below.
+  refused: { tone: "danger", title: POSTURE_REFUSED_BANNER.TITLE, body: "", action: POSTURE_REFUSED_BANNER.ACTION },
+  not_proven: {
+    tone: "danger",
+    title: POSTURE_NOT_PROVEN_BANNER.TITLE,
+    body: POSTURE_NOT_PROVEN_BANNER.BODY,
+    action: POSTURE_NOT_PROVEN_BANNER.ACTION,
+  },
 };
+
+// The bands for a connected Kubernetes runner's verdict (network_policy_source
+// "runner"): the same tones, worded for that runner rather than this cluster,
+// and no action, since the setup page it opens shows this cluster's verdict.
+const RUNNER_BANNER_BY_POSTURE: typeof BANNER_BY_POSTURE = {
+  acknowledged: {
+    tone: "warning",
+    title: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.TITLE,
+    body: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.BODY,
+    action: "",
+  },
+  unenforced: {
+    tone: "danger",
+    title: POSTURE_RUNNER_UNENFORCED_BANNER.TITLE,
+    body: POSTURE_RUNNER_UNENFORCED_BANNER.BODY,
+    action: "",
+  },
+  refused: { tone: "danger", title: POSTURE_RUNNER_REFUSED_BANNER.TITLE, body: "", action: "" },
+  not_proven: {
+    tone: "danger",
+    title: POSTURE_RUNNER_NOT_PROVEN_BANNER.TITLE,
+    body: POSTURE_RUNNER_NOT_PROVEN_BANNER.BODY,
+    action: "",
+  },
+};
+
+// checkTime renders /healthz's network_policy_checked_at (RFC 3339, UTC) as the
+// setup row does, "2006-01-02 15:04 UTC"; "" when absent or not that shape.
+function checkTime(iso: string | undefined): string {
+  return iso && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso) ? `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC` : "";
+}
 
 // Mounted by app-shell.tsx LAST in the banner stack, after ModelAccessBanner
 // (ruling 3 on the mock approval): a dead control plane, an unknown identity
@@ -81,8 +126,14 @@ export function ConfinementPostureBanner({ view = "user" }: { view?: ConsoleView
   const posture = useConfinementPosture();
   const operator = useOperator();
   const navigate = useNavigate();
-  const spec = BANNER_BY_POSTURE[posture];
-  if (!spec || view !== "admin") return null;
+  // The shell reads the verdict and its check time from the same /healthz answer.
+  const refusedAt = checkTime(useConfinementCheckedAt());
+  const fromRunner = useConfinementSource() === "runner";
+  const found = (fromRunner ? RUNNER_BANNER_BY_POSTURE[posture] : undefined) ?? BANNER_BY_POSTURE[posture];
+  if (!found || view !== "admin") return null;
+  // Without a check time (an older daemon), the refused band shows its title alone.
+  const refusedBody = fromRunner ? POSTURE_RUNNER_REFUSED_BANNER.BODY : POSTURE_REFUSED_BANNER.BODY;
+  const spec = posture === "refused" ? { ...found, body: refusedAt ? refusedBody(refusedAt) : "" } : found;
   return (
     <div
       className={
@@ -95,14 +146,14 @@ export function ConfinementPostureBanner({ view = "user" }: { view?: ConsoleView
       <AlertTriangle className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground">{spec.title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{spec.body}</p>
+        {spec.body && <p className="mt-0.5 text-xs text-muted-foreground">{spec.body}</p>}
       </div>
       {/* #510-F7 — the action opens the Admin view's setup funnel at its
           environment step, which only a super admin may open: a security
           admin in the Admin view would get a button whose only destination
           refuses them. Informational-only there; the operator keeps the
           action. */}
-      {operator && (
+      {operator && spec.action !== "" && (
         <button
           type="button"
           onClick={() => navigate("/admin/setup?step=environment")}

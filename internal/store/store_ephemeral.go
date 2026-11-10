@@ -57,6 +57,11 @@ type AttachTicket struct {
 	// app the minting person matched (migration 0239); both are empty on any other ticket.
 	Caller string
 	App    string
+	// TokenID is the personal API token the ticket was minted under, and CLISessionID the CLI session whose
+	// access token did (migration 0274); uuid.Nil on a console session's or the admin token's ticket. An open
+	// terminal asks after the credential on every authority check and closes when it is gone.
+	TokenID      uuid.UUID
+	CLISessionID uuid.UUID
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -68,8 +73,14 @@ type AttachTicket struct {
 // holds only unredeemed tickets inside a 30s TTL, i.e. a handful of rows. Add a
 // sweeper (or an expires_at index) only if mint volume ever makes that false.
 func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, now, expiresAt time.Time) error {
-	var viaDelegate, viaGrant *uuid.UUID
+	var viaDelegate, viaGrant, tokenID, cliSessionID *uuid.UUID
 	var viaActor []byte
+	if t.TokenID != uuid.Nil {
+		tokenID = &t.TokenID
+	}
+	if t.CLISessionID != uuid.Nil {
+		cliSessionID = &t.CLISessionID
+	}
 	if t.Via != nil {
 		viaDelegate, viaGrant = &t.Via.Delegate, &t.Via.Grant
 		var err error
@@ -79,10 +90,10 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 	}
 	_, err := s.Pool.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
-		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor)
-		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
-		t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor,
+		t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor, tokenID, cliSessionID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
@@ -101,16 +112,16 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time) (AttachTicket, bool, error) {
 	var t AttachTicket
 	var actorType string
-	var viaDelegate, viaGrant *uuid.UUID
+	var viaDelegate, viaGrant, tokenID, cliSessionID *uuid.UUID
 	var viaActor []byte
 	var authorizedAt *time.Time
 	var email *string
 	err := s.Pool.QueryRow(ctx, `
 		DELETE FROM attach_tickets
 		WHERE token_sha256 = $1 AND expires_at > $2
-		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor`,
+		RETURNING run_id, actor_type, principal, role, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id`,
 		hashToken(token), now,
-	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email, &t.RevSeq, &t.Caller, &t.App, &viaActor)
+	).Scan(&t.RunID, &actorType, &t.Principal, &t.Role, &viaDelegate, &viaGrant, &authorizedAt, &email, &t.RevSeq, &t.Caller, &t.App, &viaActor, &tokenID, &cliSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AttachTicket{}, false, nil
 	}
@@ -118,6 +129,12 @@ func (s PG) ConsumeAttachTicket(ctx context.Context, token string, now time.Time
 		return AttachTicket{}, false, fmt.Errorf("store: consume attach ticket: %w", err)
 	}
 	t.ActorType = types.ActorType(actorType)
+	if tokenID != nil {
+		t.TokenID = *tokenID
+	}
+	if cliSessionID != nil {
+		t.CLISessionID = *cliSessionID
+	}
 	if authorizedAt != nil {
 		t.AuthorizedAt = *authorizedAt
 	}

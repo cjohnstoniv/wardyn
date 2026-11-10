@@ -328,8 +328,16 @@ func (s PG) RotateCLISession(ctx context.Context, id uuid.UUID, generation int64
 		}
 		// The new access token replaces the old: a session holds one live cli_access token, so a
 		// rotation is count-neutral under the per-person token cap and a rotated-past token stops at
-		// once. A cli_admin step-up keeps its own hour.
-		if _, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp()
+		// once. A cli_admin step-up keeps its own hour. The replaced token is deleted, not left as a
+		// revoked row, when an earlier refresh minted it (generation > 1): no audit row names it, and
+		// one dead row per refresh per hour would otherwise pile up in every token list. The token the
+		// session was created with (generation 1) is kept revoked, because its creation is audited.
+		if generation > 1 {
+			if _, err := tx.Exec(ctx, `DELETE FROM api_tokens
+				WHERE cli_session_id = $1 AND kind = 'cli_access' AND revoked_at IS NULL`, id); err != nil {
+				return fmt.Errorf("store: delete rotated cli token: %w", err)
+			}
+		} else if _, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp()
 			WHERE cli_session_id = $1 AND kind = 'cli_access' AND revoked_at IS NULL`, id); err != nil {
 			return fmt.Errorf("store: revoke rotated cli token: %w", err)
 		}

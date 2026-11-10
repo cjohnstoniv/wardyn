@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -124,6 +125,23 @@ describe("MyComponentsCard", () => {
     const { container } = mount();
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+
+  it("a list the server worded shows its sentence, not the default line", async () => {
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "Your sentence from the server.", reason: "load_failed" }), { status: 500, headers: { "content-type": "application/json" } }));
+    mount();
+    await user.click(screen.getByRole("button", { name: /Your components/ }));
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    fetchMock.mockImplementationOnce(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    mount();
+    await user.click(screen.getByRole("button", { name: /Your components/ }));
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("says so, and retries, when the list cannot be read", async () => {

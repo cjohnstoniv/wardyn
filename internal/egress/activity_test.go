@@ -23,6 +23,8 @@ func TestCountsAsActivity_Matrix(t *testing.T) {
 		{"brokered sso-token allow", DecisionLog{Decision: Allow, RuleSource: "brokered:sso-token"}, true},
 		{"approvals poll allow", DecisionLog{Decision: Allow, RuleSource: "brokered:approvals"}, false},
 		{"approvals poll deny", DecisionLog{Decision: Deny, RuleSource: "brokered:approvals"}, false},
+		{"upstream-proxy start-up allow", DecisionLog{Decision: Allow, RuleSource: "builtin:upstream-proxy"}, false},
+		{"upstream-proxy start-up allow, relayed", DecisionLog{Request: Request{Relayed: true}, Decision: Allow, RuleSource: "builtin:upstream-proxy"}, false},
 		{"policy deny", DecisionLog{Decision: Deny, RuleSource: "policy:denied"}, false},
 		{"builtin deny", DecisionLog{Decision: Deny, RuleSource: "builtin:private-ip"}, false},
 		{"dial failed deny", DecisionLog{Decision: Deny, RuleSource: "builtin:dial-failed"}, false},

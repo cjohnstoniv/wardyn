@@ -211,6 +211,22 @@ describe("RecordingScreen", () => {
     expect(screen.getByText("task number 3")).toBeInTheDocument();
   });
 
+  it("names the search box and each filter by what it filters, not by its current value", async () => {
+    const runs = Array.from({ length: 5 }, (_, i) =>
+      recorded(`run_${i}`, {
+        task: `task number ${i}`,
+        agent: i % 2 ? "codex" : "claude-code",
+        state: i % 2 ? "FAILED" : "COMPLETED",
+      }),
+    );
+    listRunsMock.mockResolvedValue(page(runs));
+    renderScreen();
+    await screen.findByText("task number 0");
+    expect(screen.getByRole("textbox", { name: "Search recordings" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Filter by agent" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Filter by outcome" })).toBeInTheDocument();
+  });
+
   it("filters down to a 'no recordings match' empty state, and Clear filters restores the library", async () => {
     const runs = Array.from({ length: 5 }, (_, i) => recorded(`run_${i}`, { task: `task number ${i}` }));
     listRunsMock.mockResolvedValue(page(runs));

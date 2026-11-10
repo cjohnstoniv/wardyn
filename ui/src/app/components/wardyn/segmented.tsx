@@ -90,7 +90,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
-            "flex items-center gap-1.5 whitespace-nowrap border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
+            "flex items-center gap-1.5 whitespace-nowrap border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 focus-visible:outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50",
             stackOnPhone && "max-[399px]:border-l-0 max-[399px]:border-t max-[399px]:first:border-t-0",
             value === o.value
               ? o.value === "deny"

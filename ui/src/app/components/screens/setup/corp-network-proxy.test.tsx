@@ -286,6 +286,20 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.getByRole("button", { name: /add secret…/i })).toBeInTheDocument();
   });
 
+  it("the stored-secret disclosure reports expanded or collapsed and points at its panel", async () => {
+    renderStep();
+    const open = screen.getByRole("button", { name: /use a stored secret instead/i });
+    expect(open).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(open);
+    const toggle = screen.getByRole("button", { name: /use a stored secret instead/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const panel = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
+    expect(panel).toContainElement(screen.getByLabelText(/secret name/i));
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText(/secret name/i)).not.toBeInTheDocument();
+  });
+
   // upstream_proxy_secret_ref has no lifecycle integrity — a
   // secret it names can be deleted or rotated away from the Secrets screen,
   // which has no idea this reference exists, so this step must not keep

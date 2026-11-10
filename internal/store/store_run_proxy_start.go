@@ -42,6 +42,10 @@ type ProxyStart struct {
 	ReportedSHA256 string
 	State          types.ProxyStartState
 	ConfirmedAt    *time.Time
+	// ContainedAt is when a failed start's proxy stop was confirmed; ContainmentError is why it is not
+	// yet (unresolved), empty before the first attempt.
+	ContainedAt      *time.Time
+	ContainmentError string
 }
 
 // ProxyStartChange is what one write did. Active says the write reached the run's active start (the
@@ -73,8 +77,12 @@ type RunProxyStarts interface {
 	AbandonProxyStart(ctx context.Context, runID uuid.UUID, gen int) error
 	// ExpireProxyStart fails gen when it is the active pending start and its deadline has passed.
 	ExpireProxyStart(ctx context.Context, runID uuid.UUID, gen int) (ProxyStartChange, error)
-	// OverdueProxyStarts lists the pending starts whose deadline has passed.
+	// OverdueProxyStarts lists the pending starts whose deadline has passed, and the failed starts
+	// still each run's active one whose proxy stop is not yet confirmed.
 	OverdueProxyStarts(ctx context.Context) ([]ProxyStart, error)
+	// RecordProxyContainment records the proxy stop of failed start gen: confirmed when stopErr is
+	// empty, unresolved (stopErr) otherwise. A start already contained keeps that.
+	RecordProxyContainment(ctx context.Context, runID uuid.UUID, gen int, stopErr string) error
 	// ActiveProxyStart reads the run's active start; found is false for a run with none.
 	ActiveProxyStart(ctx context.Context, runID uuid.UUID) (start ProxyStart, found bool, err error)
 	// SetRunProxyAddr records the address the run's agent is pinned to for its proxy.
@@ -101,13 +109,13 @@ func SettleProxyStart(p ProxyStart, now time.Time) (types.ProxyStartState, strin
 }
 
 const proxyStartCols = `run_id, generation, jti, mode, started_at, deadline, COALESCE(expected_sha256, ''),
-	COALESCE(reported_sha256, ''), state, confirmed_at`
+	COALESCE(reported_sha256, ''), state, confirmed_at, contained_at, COALESCE(containment_error, '')`
 
 func scanProxyStart(row pgx.Row, extra ...any) (ProxyStart, error) {
 	var p ProxyStart
 	var state string
 	err := row.Scan(append([]any{&p.RunID, &p.Generation, &p.JTI, &p.Mode, &p.StartedAt, &p.Deadline,
-		&p.ExpectedSHA256, &p.ReportedSHA256, &state, &p.ConfirmedAt}, extra...)...)
+		&p.ExpectedSHA256, &p.ReportedSHA256, &state, &p.ConfirmedAt, &p.ContainedAt, &p.ContainmentError}, extra...)...)
 	p.State = types.ProxyStartState(state)
 	return p, err
 }
@@ -119,7 +127,7 @@ func (s PG) BeginProxyStart(ctx context.Context, runID uuid.UUID, gen int, jti, 
 		VALUES ($1, $2, $3, $4, now(), 'pending')
 		ON CONFLICT (run_id, generation) DO UPDATE SET jti = EXCLUDED.jti, mode = EXCLUDED.mode,
 			started_at = now(), deadline = NULL, expected_sha256 = NULL, reported_sha256 = NULL,
-			state = 'pending', confirmed_at = NULL
+			state = 'pending', confirmed_at = NULL, contained_at = NULL, containment_error = NULL
 		RETURNING `+proxyStartCols, runID, gen, jti, mode))
 	if err != nil {
 		return ProxyStart{}, fmt.Errorf("store: begin proxy start: %w", err)
@@ -261,7 +269,9 @@ func (s PG) ExpireProxyStart(ctx context.Context, runID uuid.UUID, gen int) (Pro
 // OverdueProxyStarts — see RunProxyStarts.
 func (s PG) OverdueProxyStarts(ctx context.Context) ([]ProxyStart, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT `+proxyStartCols+` FROM run_proxy_starts
-		WHERE state = 'pending' AND deadline IS NOT NULL AND deadline <= now()`)
+		WHERE (state = 'pending' AND deadline IS NOT NULL AND deadline <= now())
+			OR (state = 'failed' AND contained_at IS NULL AND generation = (SELECT max(o.generation)
+				FROM run_proxy_starts o WHERE o.run_id = run_proxy_starts.run_id AND o.state <> 'abandoned'))`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list overdue proxy starts: %w", err)
 	}
@@ -288,6 +298,17 @@ func (s PG) ActiveProxyStart(ctx context.Context, runID uuid.UUID) (ProxyStart, 
 		return ProxyStart{}, false, fmt.Errorf("store: read active proxy start: %w", err)
 	}
 	return p, true, nil
+}
+
+// RecordProxyContainment — see RunProxyStarts.
+func (s PG) RecordProxyContainment(ctx context.Context, runID uuid.UUID, gen int, stopErr string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE run_proxy_starts
+		SET contained_at = CASE WHEN $3 = '' THEN now() END, containment_error = NULLIF($3, '')
+		WHERE run_id = $1 AND generation = $2 AND state = 'failed' AND contained_at IS NULL`, runID, gen, stopErr)
+	if err != nil {
+		return fmt.Errorf("store: record proxy containment: %w", err)
+	}
+	return nil
 }
 
 // SetRunProxyAddr — see RunProxyStarts.

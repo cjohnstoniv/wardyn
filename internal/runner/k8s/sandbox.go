@@ -175,6 +175,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	if err := d.netPolRefusal(ns); err != nil { // the canary's live verdict; running sandboxes are untouched
+		return runner.Sandbox{}, err
+	}
 
 	// (1) Preflight: fail closed BEFORE creating anything.
 	runtimeClassName, runtimeHandler, enforced, err := d.createPreflight(ctx, spec)
@@ -504,17 +507,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
 	return podSandbox(spec, enforced, runtimeHandler, proxy.ConfigSHA256(proxyJSON), proxyIP), nil
-}
-
-// podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
-// a VM run, the machine its RuntimeClass boots, the hash of the Secret's config (staged unchanged for the proxy to load) and the proxy's pinned address.
-func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler, proxySHA, proxyAddr string) runner.Sandbox {
-	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced, ProxyConfigSHA256: proxySHA, ProxyAddr: proxyAddr}
-	if spec.MachineKind == types.MachineLinuxVM {
-		m := vmMachine(runtimeHandler)
-		sb.Machine = &m
-	}
-	return sb
 }
 
 // ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API

@@ -83,7 +83,8 @@ func reviveKeptCurrent(ctx context.Context, err error) *reviveError {
 
 // settleRevivedProxy retires the replaced proxy's tokens and records the driver's answer for the new
 // proxy's start. A start that cannot run (no hash, a report of different bytes, a start no longer the
-// run's newest) puts the run back to lost with that proxy stopped.
+// run's newest) puts the run back to lost with that proxy stopped, and the answer says when that stop
+// is not confirmed.
 func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string,
 	start proxyStartRec, sha, retiring string, renewed renewedTokens, fresh string) *reviveError {
 	s.revokeRetiringToken(ctx, retiring, run.ID)
@@ -93,6 +94,11 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 		return nil
 	}
 	data["error"] = "policy readback: " + why
-	return s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
+	rerr := s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
 		"the run's new proxy did not confirm its policy, so it was stopped and the run is lost until revived", errors.New(why))
+	if c := s.containProxyStart(ctx, run.ID, start.gen); !c.Contained && !c.Superseded && rerr.reason == reasonRevivePolicyUnconfirmedLost {
+		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy and the run is lost until revived; "+
+			"stopping that proxy is not confirmed yet, and a later sweep retries it", errors.New(why))
+	}
+	return rerr
 }

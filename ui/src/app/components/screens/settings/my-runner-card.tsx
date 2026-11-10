@@ -24,7 +24,7 @@ import { AddComputerBlock } from "../../wardyn/add-computer-block";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { Mono } from "../../wardyn/code-block";
 import { usePrincipal } from "../../wardyn/operator-context";
-import { ErrorState } from "../../wardyn/states";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { Button } from "../../ui/button";
 import { ConfirmDialog } from "../runners/confirm-dialog";
 import { LimitsDialog } from "../runners/limits-dialog";
@@ -232,6 +232,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
   const sectionRef = React.useRef<HTMLElement | null>(null);
   const [open, setOpen] = React.useState(false);
   const [status, setStatus] = React.useState<Status>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [rows, setRows] = React.useState<RunnerView[]>([]);
   const [claiming, setClaiming] = React.useState<RunnerView | null>(null);
   const [revoking, setRevoking] = React.useState<{ runner: RunnerView; notMine: boolean } | null>(null);
@@ -257,7 +258,10 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         if (e instanceof HttpError && e.status === 403 && NO_CARD_REASONS.includes(e.reason)) {
           setStatus("hidden");
           hiddenRef.current?.(e.reason);
-        } else if (!silent) setStatus("error");
+        } else if (!silent) {
+          setLoadMessage(failureSentence(e));
+          setStatus("error");
+        }
       });
   }, []);
   // A read that was in flight when the card went away must not set state.
@@ -325,7 +329,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
           <p className="text-body text-muted-foreground">{MY_RUNNER.LEDE}</p>
           {status === "error" ? (
             <div role="status">
-              <ErrorState size="compact" title={MY_RUNNER.FETCH_FAILED} onRetry={() => read(false)} />
+              <ErrorState size="compact" title={MY_RUNNER.FETCH_FAILED} message={loadMessage} onRetry={() => read(false)} />
             </div>
           ) : (
             <>

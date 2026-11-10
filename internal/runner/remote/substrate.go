@@ -490,16 +490,37 @@ func (s *Substrate) macOSVMDisks(ctx context.Context, reports []runner.MacOSVMDi
 	}
 }
 
+// StopSandbox queued for an offline runner is an end, which keeps the stopped sandbox, or a kill on a
+// runner that said it cannot keep one: such a runner refuses an end, and on it a stop deletes anyway.
 func (s *Substrate) StopSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodStop, types.RunnerActionEnd, ref)
+	kind := types.RunnerActionEnd
+	if s.endsUnkept() {
+		kind = types.RunnerActionKill
+	}
+	return s.teardown(ctx, runnerwire.MethodStop, kind, ref)
 }
 
 func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 	return s.teardown(ctx, runnerwire.MethodKill, types.RunnerActionKill, ref)
 }
 
+// EndSandbox answers runner.ErrEndUnsupported for a runner that said it cannot keep an ended sandbox,
+// online or not, so no end is queued that the runner can only refuse.
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
+	if s.endsUnkept() {
+		if err := s.own(ref); err != nil {
+			return err
+		}
+		return runner.ErrEndUnsupported
+	}
 	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+}
+
+// endsUnkept is whether the runner's last caps, kept across a link drop, said its substrate cannot keep
+// an ended sandbox. Before any caps it is false, as for a runner older than 0.9.4.
+func (s *Substrate) endsUnkept() bool {
+	c, ok := s.Caps()
+	return ok && c.EndsUnkept
 }
 
 // vmKind is the machine kind ref was created with here, "" when this substrate did not create it.

@@ -954,6 +954,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// rows required so chi.Walk's discovery of BOTH registrations stays pinned.
 	"POST /api/v1/runs/{id}/attach/ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/kill":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// One command in a running run (run_exec.go): the entry rule, as SSH exec has it.
+	"POST /api/v1/runs/{id}/exec": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 
 	// An inbound app's ticket (inbound_ticket.go): classMember, NOT classOwner — a person the app's callers
 	// list names reaches it without owning the run, and no role does. The handler is the gate: anyone it
@@ -1892,9 +1894,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// 0.10 added POST /runs/{id}/desktop/watch-ticket (tierEntry); 51 since
 		// 0.10 added POST /runs/{id}/desktop/window (tierEntry); 52 since 0.10
 		// added GET /runs/{id}/model-usage; 53 since 0.10 added POST
-		// /runs/{id}/desktop/files/{name}/review (tierEntry).
-		if probed != 53 {
-			t.Errorf("probed %d classOwner routes, want 53 — a route that left classOwner takes its tier "+
+		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
+		// POST /runs/{id}/exec (tierEntry).
+		if probed != 54 {
+			t.Errorf("probed %d classOwner routes, want 54 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

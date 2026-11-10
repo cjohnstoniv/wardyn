@@ -451,7 +451,7 @@ describe("IdentityWidget", () => {
     const id = "3f9c1e2a-7b44-4d0e-9c1a-5e8b2d6f4a10";
     render(<IdentityWidget run={{ ...run, id, title: "payments deps bump" }} onGoPolicy={() => {}} />);
     expect(screen.getByText("payments deps bump")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "3f9c1e2a" })).toHaveAttribute("title", `${id}\nClick to copy`);
+    expect(screen.getByRole("button", { name: "Copy run id 3f9c1e2a" })).toHaveAttribute("title", `${id}\nClick to copy`);
     expect(screen.queryByText(id)).not.toBeInTheDocument();
   });
 

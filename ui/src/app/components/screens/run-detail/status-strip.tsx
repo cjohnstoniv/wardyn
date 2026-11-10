@@ -57,14 +57,14 @@ export function useEvidenceFacts(runId: string, live: boolean, skipGuestCPU = fa
   return facts;
 }
 
-function Tile({ label, value, tone }: { label: string; value?: React.ReactNode; tone?: "warning" | "muted" }) {
+function Tile({ label, value, tone, title }: { label: string; value?: React.ReactNode; tone?: "warning" | "muted"; title?: string }) {
   return (
     <div data-testid="status-tile" className="flex min-w-0 items-baseline justify-between gap-2 rounded-lg border border-border bg-card px-3 py-1.5">
       <span className="shrink-0 text-meta text-muted-foreground">{label}</span>
       {value === undefined ? (
         <span className="h-4 w-14 animate-pulse rounded bg-muted" />
       ) : (
-        <span className={cn("truncate text-xs font-medium", tone === "warning" ? "text-warning" : tone === "muted" ? "text-muted-foreground" : "text-foreground")}>
+        <span title={title ?? (typeof value === "string" ? value : undefined)} className={cn("truncate text-xs font-medium", tone === "warning" ? "text-warning" : tone === "muted" ? "text-muted-foreground" : "text-foreground")}>
           {value}
         </span>
       )}
@@ -112,8 +112,8 @@ export function RunStatusStrip({ ctx }: { ctx: WidgetContext }) {
   const sandboxValue = facts && (failed?.sandbox ? RUN_COCKPIT.loadError : (facts.sandbox ?? RUN_COCKPIT.tileNotAvailable));
   const mutedWords: readonly string[] = [RUN_COCKPIT.tileNoneYet, RUN_COCKPIT.tileNotInspectable, RUN_COCKPIT.tileNotAvailable, RUN_COCKPIT.loadError];
   return (
-    <div role="group" aria-label={RUN_COCKPIT.tilesLabel} className="grid shrink-0 grid-cols-2 gap-3 px-2.5 pt-2.5 lg:grid-cols-4">
-      <Tile label={RUN_COCKPIT.tileEgress} value={egressValue} tone={egressParts.length === 0 ? "muted" : undefined} />
+    <div role="group" aria-label={RUN_COCKPIT.tilesLabel} className="grid shrink-0 grid-cols-2 gap-3 px-2.5 pt-2.5 xl:grid-cols-4">
+      <Tile label={RUN_COCKPIT.tileEgress} value={egressValue} title={egressParts.map((p) => p.text).join(" · ")} tone={egressParts.length === 0 ? "muted" : undefined} />
       <Tile label={RUN_COCKPIT.tileFiles} value={filesValue} tone={filesValue !== undefined && mutedWords.includes(filesValue) ? "muted" : undefined} />
       <Tile label={RUN_COCKPIT.tileSandbox} value={sandboxValue} tone={sandboxValue !== undefined && mutedWords.includes(sandboxValue) ? "muted" : undefined} />
       <Tile label={RUN_COCKPIT.tileCredentials} value={RUN_COCKPIT.tileCredentialsValue(ctx.grants.length, minted)} />
