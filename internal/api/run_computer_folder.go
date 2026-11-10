@@ -214,8 +214,9 @@ const computerFolderStalls = 2
 // It reports whether the sandbox stays up for a resume, with its agent stopped and no egress
 // (quiesceKeptSandbox): a pass that was cut short after it saved files keeps it, and so does the
 // first of computerFolderStalls such passes in a row that saved nothing, the last of which gives
-// the rest up. A pass that completes, fails or does not start does not, nor does a sandbox that
-// cannot be quiesced. The runner's state file holds what each pass saved, so the next pass, from
+// the rest up, and so does a pass that left changes behind or could not prove them kept
+// (folderBackVerdict). A pass that completes with nothing owed, fails on its first visit or does not
+// start does not, nor does a sandbox that cannot be quiesced. The runner's state file holds what each pass saved, so the next pass, from
 // resumeComputerFolderBacks, starts after it (#3466).
 func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, ref string) bool {
 	st, ok := s.cfg.Store.(store.RunLocalFolders)
@@ -348,19 +349,38 @@ func (s *Server) BringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 // folderBackVerdict is the resume a pass back leaves (nil: stop the sandbox now) and the error to
 // record for it, read against the resume before it (folderBackResume). Only a sandbox quiesced
 // before the pass (qerr nil) is kept; one that was not is stopped, and the record says why.
+//
+// A pass owes the laptop changes when it was cut, when the runner could not prove a change kept there
+// (res.NotPreserved), or when it left any behind (res.Unsynced), whatever error it ended with: it is
+// kept for a resume, a stall when it moved nothing, and never recorded as done. A pass that owes nothing
+// completes, or, failed, settles on a first visit; on a resume visit a failed one is a stall. Refusals
+// alone (res.Refused) owe nothing.
 func (s *Server) folderBackVerdict(ctx context.Context, run types.AgentRun, res *runnerwire.FolderPass, passErr string, cut bool, qerr error) (*types.FolderResume, string) {
-	if !cut {
-		return nil, passErr
+	owed := cut || res.NotPreserved != "" || res.Unsynced > 0
+	if !owed && passErr == "" {
+		return nil, ""
 	}
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
+	if !ok && !owed {
+		return nil, passErr
+	}
 	if !ok {
 		return nil, folderBackGivenUp(passErr, "this server's store cannot keep its record", res.Unsynced)
 	}
 	cur, err := st.RunLocalFolderStatus(rctx, run.ID)
 	if err != nil {
 		return nil, folderBackGivenUp(passErr, "its record could not be read", res.Unsynced)
+	}
+	if !owed && cur.Resume == nil {
+		return nil, passErr
+	}
+	switch {
+	case res.NotPreserved != "":
+		passErr = folderNotPreservedText(res.Unsynced, res.NotPreserved, passErr)
+	case !cut && passErr == "":
+		passErr = fmt.Sprintf("the pass back left %d changed files not brought back: a file changed on both sides could not be kept as a conflict copy", res.Unsynced)
 	}
 	next, errText := folderBackResume(cur.Resume, res, passErr)
 	if next == nil {
@@ -372,7 +392,8 @@ func (s *Server) folderBackVerdict(ctx context.Context, run types.AgentRun, res 
 	return next, errText
 }
 
-// folderBackResume is the resume a cut pass back leaves, given the one before it (nil: give up),
+// folderBackResume is the resume a pass back that owes changes leaves, or a failed resume, given the
+// one before it (nil: give up),
 // and the error to record for it. A pass saved progress when it brought a file back, or sent one,
 // and saved it in the runner's state: bytes of a file it did not finish are lost with the cut.
 // res.Unsynced is set to the count the record names.
@@ -389,9 +410,23 @@ func folderBackResume(prev *types.FolderResume, res *runnerwire.FolderPass, errT
 	}
 	res.Unsynced = next.Unsynced
 	if next.Stalled < computerFolderStalls {
-		return next, errText + "; the sandbox is kept with its agent stopped and no egress, and a later sweep resumes the sync"
+		return next, errText + "; the sandbox is kept with its agent stopped and no egress, and a later sweep, about hourly, tries the sync again"
 	}
 	return nil, folderBackGivenUp(errText, fmt.Sprintf("%d passes in a row brought nothing back", next.Stalled), next.Unsynced)
+}
+
+// folderNotPreservedText records a pass back whose runner could not prove kept on the laptop the
+// changes it owed (res.NotPreserved): never a success, never a policy refusal.
+func folderNotPreservedText(unsynced int, why, passErr string) string {
+	s := "the pass back could not confirm its changes kept on the laptop, so they count as not copied back"
+	if unsynced > 0 {
+		s = fmt.Sprintf("the pass back could not confirm %d changed files kept on the laptop, so they count as not copied back", unsynced)
+	}
+	s += ": " + why
+	if passErr != "" && !strings.Contains(passErr, why) {
+		s += "; " + passErr
+	}
+	return s
 }
 
 // folderBackGivenUp is the record of a cut pass back whose sandbox is stopped for why, with the

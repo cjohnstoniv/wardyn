@@ -47,11 +47,29 @@ func folderRunnerEndpointCaps(t *testing.T, id uuid.UUID, caps runnerwire.Caps, 
 	return ep
 }
 
+// folderRunnerOpts is how folderRunnerEndpointWith's runner runs: the caps it advertises, the directory it
+// keeps its state in (a new one when empty), and answer, when set, rewriting each call's answer.
+type folderRunnerOpts struct {
+	caps     runnerwire.Caps
+	stateDir string
+	answer   func(method string, res json.RawMessage) json.RawMessage
+}
+
 // folderRunnerEndpointPeer is folderRunnerEndpointCaps and the server's side of its connection, which a
 // test closes to take the runner offline.
 func folderRunnerEndpointPeer(t *testing.T, id uuid.UUID, caps runnerwire.Caps, roots ...string) (runnerEndpoint, *runnerwire.Peer) {
 	t.Helper()
-	fs, err := folderrunner.New(context.Background(), roots, t.TempDir())
+	return folderRunnerEndpointWith(t, id, folderRunnerOpts{caps: caps}, roots...)
+}
+
+// folderRunnerEndpointWith is folderRunnerEndpointPeer run as o says.
+func folderRunnerEndpointWith(t *testing.T, id uuid.UUID, o folderRunnerOpts, roots ...string) (runnerEndpoint, *runnerwire.Peer) {
+	t.Helper()
+	if o.stateDir == "" {
+		o.stateDir = t.TempDir()
+	}
+	caps := o.caps
+	fs, err := folderrunner.New(context.Background(), roots, o.stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +81,15 @@ func folderRunnerEndpointPeer(t *testing.T, id uuid.UUID, caps runnerwire.Caps, 
 	orgPeer := link.Attach(ctx, org)
 	var peer *runnerwire.Peer
 	peer = runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: func(ctx context.Context, cid uint32, method string, args json.RawMessage) (any, error) {
-		return fs.Call(ctx, peer, cid, method, args)
+		res, err := fs.Call(ctx, peer, cid, method, args)
+		if o.answer == nil || err != nil {
+			return res, err
+		}
+		raw, merr := json.Marshal(res)
+		if merr != nil {
+			return res, err
+		}
+		return o.answer(method, raw), nil
 	}})
 	go func() { _ = peer.Run(ctx) }()
 	t.Cleanup(func() { orgPeer.Close(); peer.Close() })
@@ -242,8 +268,10 @@ type folderSandboxRunner struct {
 	proxyEnds bool
 	// verifyLeft makes the quiesce path's /proc check report a process the kill could not end.
 	verifyLeft bool
-	// onPass runs as a pass's sftp-server starts in the sandbox's folder.
+	// onPass runs as a pass's sftp-server starts in the sandbox's folder; onRead, as a pass reads a file,
+	// by its base name, before the read.
 	onPass func()
+	onRead func(name string)
 }
 
 // StopProxy removes the sandbox's proxy, its agent's only way out.
@@ -290,9 +318,13 @@ type blockingGet struct {
 	sftp.FileReader
 	block   string
 	release <-chan struct{}
+	onRead  func(name string)
 }
 
 func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	if b.onRead != nil {
+		b.onRead(path.Base(r.Filepath))
+	}
 	if path.Base(r.Filepath) == b.block {
 		<-b.release
 	}
@@ -345,7 +377,7 @@ func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runne
 	toServer, stdin := io.Pipe()
 	stdout, fromServer := io.Pipe()
 	files, release := r.files, make(chan struct{})
-	files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release}
+	files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release, onRead: r.onRead}
 	srv := sftp.NewRequestServer(struct {
 		io.Reader
 		io.WriteCloser
@@ -617,7 +649,7 @@ func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *
 		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept", n)
 	}
 	st := cs.folderStatus()
-	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep resumes the sync") {
+	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep, about hourly, tries the sync again") {
 		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
 	}
 	// Kept past the run's end, the sandbox runs only the pass back: no agent, no egress.
