@@ -154,6 +154,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.TrustedCAFile != "" {
 		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{Type: mount.TypeBind, Source: d.cfg.TrustedCAFile, Target: runner.TrustedCAMountPath, ReadOnly: true})
 	}
+	// Before the exec / exec-less split, so both paths answer an image VOLUME the disk limit cannot reach.
+	if err := d.checkImageVolumesUnderCap(ctx, spec.Image, spec.Resources, agentHost, info); err != nil {
+		return fail(err)
+	}
 
 	agentNetCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{

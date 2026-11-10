@@ -546,6 +546,15 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 			resp.Config = &dockerspec.DockerOCIImageConfig{}
 			resp.Config.Labels = map[string]string{proxyReadyLabel: "1"}
 		}
+		if vols := f.imageVolumes[imageID]; len(vols) > 0 {
+			if resp.Config == nil {
+				resp.Config = &dockerspec.DockerOCIImageConfig{}
+			}
+			resp.Config.Volumes = map[string]struct{}{}
+			for _, v := range vols {
+				resp.Config.Volumes[v] = struct{}{}
+			}
+		}
 		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}

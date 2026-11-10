@@ -18,6 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Docker runs set up the recording folders with `mkdir` and `chmod` run as root by name, so an image that puts a folder the agent can write at the front of its PATH (the full image does) let the agent run its own file as root; they now run by absolute path with a fixed system PATH.
 - Removing a Docker run's agent container left behind the anonymous volumes of an image that declares a `VOLUME`, with whatever the agent wrote in them; they are now removed with the container, and the same goes for the short-lived drive-seed, architecture-check, VM image-export and environment-build file-read containers. A kept (ended, revivable) container and your drives keep theirs.
 - A read-only workspace folder was not forced recursively read-only, so a disk mounted inside that folder could be writable in the sandbox; it now is on runtimes that support it, and the runner logs a warning where one does not.
+- A Docker run with a disk limit could write past it into a folder its image declares as a `VOLUME`, because a volume is not part of the limited container layer; the run is now refused when a limit set by policy meets such a folder (with a message naming it), and a default or requested limit starts with a warning.
 
 ## [0.10.0-rc.17] — 2026-11-09
 
