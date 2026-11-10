@@ -8,7 +8,7 @@
 // barriers dialog. Mirrors the try-it states of the approved packet
 // (mock-08/tier-picker-1200-packet.html §2/§3).
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { allowedFromFloor, pickerShape, TierPicker, visibleTiers } from "./tier-picker";
 
@@ -123,6 +123,19 @@ describe("TierPicker — a real choice (two or more visible tiers)", () => {
     await userEvent.keyboard("{Enter}");
     expect(onSelect).not.toHaveBeenCalled();
     expect(await screen.findByRole("heading", { name: "Vault" })).toBeInTheDocument();
+  });
+
+  it("Arrow, Home and End inside the About popover do not change the barrier", async () => {
+    const onSelect = vi.fn();
+    render(<TierPicker tiers={["CC1", "CC2", "CC3"]} selected="CC2" onSelect={onSelect} />);
+    screen.getAllByRole("button", { name: /^about /i })[2].focus();
+    await userEvent.keyboard("{Enter}");
+    const heading = await screen.findByRole("heading", { name: "Vault" });
+    // The popover is portaled, but its key events still bubble through the group in the React tree.
+    for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"]) {
+      fireEvent.keyDown(heading, { key });
+    }
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("dropdown shape (forced, <360px) renders a single trigger, not a radiogroup", () => {
