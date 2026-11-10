@@ -47,7 +47,7 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 	if cfg.RunID != run.ID {
 		return reasserted{}, reviveRefused(http.StatusConflict, reasonReviveConfigRunMismatch, "the run's proxy config names another run")
 	}
-	if rerr := applyEgressEdits(&c, &cfg.Policy, edits); rerr != nil { // a live egress edit's hosts, withheld as the ceiling's are
+	if rerr := applyEgressEdits(&c, cfg, edits); rerr != nil { // a live egress edit's hosts, withheld as the ceiling's are
 		return reasserted{}, rerr
 	}
 	var re reasserted

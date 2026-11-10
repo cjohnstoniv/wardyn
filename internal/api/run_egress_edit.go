@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -144,7 +145,11 @@ func egressEditHosts(field string, hosts []string) ([]string, string) {
 // removed entry must be on the run's sealed allowlist and leaves it, and every removed and denied host
 // joins the owner ceiling's denies, so the re-assertion denies it and drops its credential lanes.
 // Nothing after the re-assertion adds an allowlist entry (the seal census), so no removed host returns.
-func applyEgressEdits(c *ownerCeiling, policy *types.RunPolicySpec, edits []liveEgressEdit) *reviveError {
+// A via_org route on an edited host is dropped too: the sidecar forwards a via_org destination to the
+// organisation before its own host check, so only an absent route refuses it there, and the
+// organisation's engine, rebuilt from this config, then has no route for the grant either.
+func applyEgressEdits(c *ownerCeiling, cfg *proxy.Config, edits []liveEgressEdit) *reviveError {
+	policy := &cfg.Policy
 	for _, e := range edits {
 		for _, h := range e.remove {
 			if !slices.ContainsFunc(policy.AllowedDomains, func(d string) bool { return strings.EqualFold(strings.TrimSpace(d), h) }) {
@@ -156,8 +161,34 @@ func applyEgressEdits(c *ownerCeiling, policy *types.RunPolicySpec, edits []live
 			return slices.Contains(e.remove, strings.ToLower(strings.TrimSpace(d)))
 		})
 		c.deny = slices.Concat(c.deny, e.remove, e.deny)
+		cfg.ViaOrgRoutes = slices.DeleteFunc(cfg.ViaOrgRoutes, func(rt proxy.ViaOrgRoute) bool {
+			return editedHost(rt.Host, slices.Concat(e.remove, e.deny))
+		})
 	}
 	return nil
+}
+
+// editedHost reports whether host falls under any edited entry, whatever the entry's port: a via_org
+// route is the host's on every port, so a port-scoped deny drops the whole route.
+func editedHost(host string, entries []string) bool {
+	host = domainmatch.CanonHost(host)
+	return slices.ContainsFunc(entries, func(d string) bool {
+		exact, wild, _ := domainmatch.Classify(d)
+		return (exact != "" && exact == host) || (wild != "" && domainmatch.MatchWild(host, []string{wild}))
+	})
+}
+
+// retireViaOrgEngine retires this replica's cached via_org engine for the run, cancelling its open
+// streams, once the edited config is stored: the next via_org request rebuilds the engine from that
+// config. Another replica's engine is reached only through the run's proxy, and the new proxy no
+// longer routes an edited host to the organisation.
+func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
+	s.viaOrg.mu.Lock()
+	run := s.viaOrg.runs[runID]
+	s.viaOrg.mu.Unlock()
+	if run != nil {
+		s.releaseViaOrgRun(run, false, false)
+	}
 }
 
 // editRunEgress refuses an edit the run cannot take before anything changes, holds the edit's mark,
@@ -274,6 +305,9 @@ func (s *Server) storeRevivedConfig(ctx context.Context, run types.AgentRun, sto
 	actorType types.ActorType, actor string, edits []liveEgressEdit) *reviveError {
 	err := s.storeRunProxyConfig(ctx, run.ID, storedJSON)
 	switch {
+	case err == nil && len(edits) > 0:
+		s.retireViaOrgEngine(run.ID) // before the edit answers: no engine built from the pre-edit config serves again
+		return nil
 	case err == nil:
 		return nil
 	case len(edits) == 0:

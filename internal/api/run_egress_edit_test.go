@@ -250,13 +250,22 @@ func TestEgressEdit_RefusedBeforeAnyChange(t *testing.T) {
 func TestApplyEgressEdits_NarrowsOnly(t *testing.T) {
 	policy := types.RunPolicySpec{AllowedDomains: []string{"a.example", "B.example", "*.c.example"}}
 	c := ownerCeiling{deny: []string{"profile.example"}}
-	if rerr := applyEgressEdits(&c, &policy, []liveEgressEdit{{remove: []string{"b.example"}, deny: []string{"d.example"}}}); rerr != nil {
+	g1, g2, g3, g4 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	cfg := &proxy.Config{Policy: policy, ViaOrgRoutes: []proxy.ViaOrgRoute{
+		{GrantID: g1, Host: "a.example"}, {GrantID: g2, Host: "B.example"}, {GrantID: g3, Host: "x.d.example"}, {GrantID: g4, Host: "port.example"},
+	}}
+	edits := []liveEgressEdit{{remove: []string{"b.example"}, deny: []string{"*.d.example", "port.example:8443"}}}
+	if rerr := applyEgressEdits(&c, cfg, edits); rerr != nil {
 		t.Fatal(rerr)
+	}
+	policy = cfg.Policy
+	if !slices.Equal(cfg.ViaOrgRoutes, []proxy.ViaOrgRoute{{GrantID: g1, Host: "a.example"}}) {
+		t.Errorf("via_org routes = %v: every route on an edited host (exact, wildcard or port-scoped) must go", cfg.ViaOrgRoutes)
 	}
 	if !slices.Equal(policy.AllowedDomains, []string{"a.example", "*.c.example"}) {
 		t.Errorf("allowed_domains = %v", policy.AllowedDomains)
 	}
-	if !slices.Equal(c.deny, []string{"profile.example", "b.example", "d.example"}) {
+	if !slices.Equal(c.deny, []string{"profile.example", "b.example", "*.d.example", "port.example:8443"}) {
 		t.Errorf("ceiling denies = %v", c.deny)
 	}
 }
@@ -336,5 +345,61 @@ func TestEgressEdit_ConfirmedEditSurvivesAnOrdinaryRevive(t *testing.T) {
 		if !slices.Contains(p.DeniedDomains, h) {
 			t.Errorf("denied_domains = %v: want %s still denied after a later revive", p.DeniedDomains, h)
 		}
+	}
+}
+
+// An edit retires this replica's cached via_org engine before it answers, and the stored config it
+// leaves has no via_org route on the edited host: the next via_org request rebuilds from that config,
+// whose engine has no route for the grant (admitViaOrg refuses it), and the new proxy, whose config has
+// no route either, never forwards one: the host goes to its own host check, which denies it.
+func TestEgressEdit_RetiresTheViaOrgEngineBeforeTheAnswer(t *testing.T) {
+	f := newEgressEditFixture(t)
+	grant := uuid.New()
+	var stored map[string]any
+	if err := json.Unmarshal(f.rs.cfg, &stored); err != nil {
+		t.Fatal(err)
+	}
+	stored["via_org_routes"] = []proxy.ViaOrgRoute{{GrantID: grant, Host: "api.anthropic.com"}}
+	raw, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rs.cfg = raw
+	// The warm cache: an engine built from the pre-edit config, as a first via_org request leaves it.
+	eng, err := proxy.NewViaOrgEngine(context.Background(),
+		&proxy.Config{RunID: f.run.ID, ControlPlaneURL: "http://127.0.0.1:9", RunToken: "run-token", DecisionBufferSize: 16},
+		proxy.ViaOrgEngineOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vr := &viaOrgRun{id: f.run.ID, runner: uuid.New(), done: make(chan struct{}), streams: map[*viaOrgStream]struct{}{},
+		bytes: new(atomic.Int64), engine: &viaOrgGen{engine: eng}, routes: []proxy.ViaOrgRoute{{GrantID: grant, Host: "api.anthropic.com"}}}
+	f.srv.viaOrg.mu.Lock()
+	f.srv.viaOrg.runs = map[uuid.UUID]*viaOrgRun{f.run.ID: vr}
+	f.srv.viaOrg.mu.Unlock()
+	f.confirmEachReplace(t)
+	if w := f.editEgress(t, `{"remove_hosts":["api.anthropic.com"]}`); w.Code != http.StatusOK {
+		t.Fatalf("edit: %d %s, want 200", w.Code, w.Body.String())
+	}
+	vr.mu.Lock()
+	retired := vr.engine == nil
+	vr.mu.Unlock()
+	if !retired {
+		t.Fatal("the cached via_org engine built from the pre-edit config is still served after the edit's 200")
+	}
+	raw, _, _ = f.lastHandover(t)
+	handed, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(handed.ViaOrgRoutes) != 0 {
+		t.Errorf("the new proxy still routes %v to the organisation", handed.ViaOrgRoutes)
+	}
+	stored2, err := proxy.LoadConfigBytes(f.rs.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored2.ViaOrgRoutes) != 0 {
+		t.Errorf("the stored config the next engine is built from still routes %v to the organisation", stored2.ViaOrgRoutes)
 	}
 }
