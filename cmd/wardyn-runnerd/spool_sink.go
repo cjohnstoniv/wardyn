@@ -343,7 +343,7 @@ func (s *spoolSink) handle(c *tls.Conn) {
 		old.conn.Close() // superseded: its gen is fenced in the manifest already
 	}
 	_ = c.SetDeadline(time.Time{})
-	if ss.send(proxy.SinkFrame{T: proxy.FrameAccept, Seq: acc.Seq, Usage: true}) != nil || ss.send(grantFrame(acc.Grant, ss.epoch)) != nil {
+	if ss.send(proxy.SinkFrame{T: proxy.FrameAccept, Seq: acc.Seq, Usage: true, DNS: true}) != nil || ss.send(grantFrame(acc.Grant, ss.epoch)) != nil {
 		s.ended(ss)
 		return
 	}

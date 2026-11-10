@@ -61,6 +61,19 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A DNS query the run's sandbox asked (internal/egress/proxy/dns_audit.go) is its own row, not an
+	// egress decision, and not agent activity: a run that only asks names idles out.
+	if dl.DNS != nil {
+		fields := map[string]any{}
+		dl.DNS.AuditFields(fields)
+		data, _ := json.Marshal(fields)
+		ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, egress.DNSQueryAction, dl.DNS.Name, dl.DNS.AuditOutcome(), data)
+		ev.SourceIP = r.RemoteAddr
+		s.recordAudit(r.Context(), ev)
+		writeJSON(w, http.StatusAccepted, nil)
+		return
+	}
+
 	// An egress decision means the agent actually did something, so it resets the
 	// idle clock the reaper reads (agent_runs.updated_at) — the seam
 	// internal/lifecycle documents. Best-effort like the attach keepalive; a nil

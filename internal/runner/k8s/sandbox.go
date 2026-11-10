@@ -230,7 +230,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 			Ingress:     []networkingv1.NetworkPolicyIngressRule{}, // empty => deny all ingress
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				Ports: []networkingv1.NetworkPolicyPort{{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(runner.ProxyListenPort))}},
+				Ports: agentToProxyPorts(),
 				To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: proxyLabels}}},
 			}},
 		},
@@ -316,7 +316,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
 			// for the init container; without it, "permission denied".
-			SecurityContext: &corev1.PodSecurityContext{FSGroup: &proxyNonrootGID},
+			SecurityContext: &corev1.PodSecurityContext{FSGroup: &proxyNonrootGID, Sysctls: proxyDNSSysctls()},
 			// SECURITY: default true injects a <SVC>_SERVICE_HOST/PORT pair for
 			// every namespace Service into every container — a free
 			// service-topology enumeration nothing here needs.
@@ -347,6 +347,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				Env: []corev1.EnvVar{
 					{Name: "WARDYN_RUN_ID", Value: spec.RunID.String()},
 					{Name: "WARDYN_CONTROL_PLANE_URL", Value: spec.ProxyConfig.ControlPlaneURL},
+					{Name: proxy.DNSListenEnv, Value: ":53"},
 				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir, ReadOnly: true},
@@ -436,11 +437,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
 			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
 			// Default ClusterFirst would point the agent at kube-dns, which its
-			// NetworkPolicy denies; DNSNone with a loopback nameserver fails a
-			// proxy-unaware lookup immediately instead of hanging the full
-			// resolver timeout.
+			// NetworkPolicy denies. Its one nameserver is its proxy pod, whose
+			// listener answers every query REFUSED and records it: a
+			// proxy-unaware lookup fails at once and leaves a run.dns.query row.
 			DNSPolicy: corev1.DNSNone,
-			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{"127.0.0.1"}},
+			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{proxyIP}},
 			Containers: []corev1.Container{{
 				Name:    mainContainerName,
 				Image:   spec.Image,

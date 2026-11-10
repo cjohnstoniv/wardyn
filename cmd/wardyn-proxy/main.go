@@ -147,6 +147,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The agent's resolver on k8s and Docker runs, when the runner set it: a listener that refuses every query
+	// and writes its row (internal/egress/proxy/dns_audit.go). A runner that asked for it gets a failed start
+	// rather than an agent whose lookups go unanswered and unrecorded.
+	if addr := os.Getenv(proxy.DNSListenEnv); addr != "" {
+		if err := srv.ListenDNS(ctx, addr); err != nil {
+			slog.Error("wardyn-proxy: dns listener", slog.String("addr", addr), slog.Any("err", err))
+			os.Exit(1)
+		}
+	}
+
 	// The runner holds the agent back until the marker appears: it prints only once :3128 is bound, which for
 	// a self-lapsing proxy is after its first renew. The log line is printed with it, so it is true when read.
 	srv.OnListening(func() {

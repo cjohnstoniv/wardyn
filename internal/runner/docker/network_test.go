@@ -481,34 +481,51 @@ func TestL0_NoDNSExfil(t *testing.T) {
 		t.Fatalf("the agent must resolve and reach wardyn-proxy:3128 (its only egress path), got:\n%s", proxy)
 	}
 
-	// (2) An EXTERNAL name must not resolve. busybox nslookup exits non-zero when
-	// the resolver refuses or cannot answer; a resolved record means the query
-	// reached the host's resolvers and, with it, whatever the label carried.
+	// (2) The agent's only nameserver is its run proxy (the driver mounts a resolv.conf naming it), so a
+	// lookup goes to the proxy's port 53, not to Docker's embedded resolver. The proxy here is busybox httpd,
+	// which does not answer on 53, so the lookup fails by timing out; TestL0_DNSQueryIsRecorded runs the same
+	// path against the real proxy image and reads the row. Non-vacuous: the file must name the proxy's address,
+	// the one the agent's hosts file pins, so a sandbox that silently kept Docker's resolver cannot pass.
 	const exfilName = "wardyn-l0-dns-exfil-probe.example.com"
+	resolv := execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "cat /etc/resolv.conf"})
+	proxyIP := strings.TrimSpace(execInSandbox(ctx, t, d, sb.Ref, []string{"sh", "-c", "awk '$2==\"wardyn-proxy\"{print $1}' /etc/hosts"}))
+	if proxyIP == "" || strings.TrimSpace(resolv) != "nameserver "+proxyIP {
+		t.Fatalf("the agent's /etc/resolv.conf is %q, want exactly %q (its run proxy and no other nameserver)", resolv, "nameserver "+proxyIP)
+	}
 	ext := execInSandbox(ctx, t, d, sb.Ref, []string{
 		"sh", "-c", "nslookup -type=a " + exfilName + " 2>&1; echo RC=$?",
 	})
-	// Non-vacuous: the embedded resolver has to have ANSWERED for its refusal to
-	// mean anything. It names itself in the reply (Server: 127.0.0.11), so a
-	// sandbox where the query silently vanished — or where busybox nslookup
-	// simply never exits 0 — cannot pass the check below by accident. What the
-	// resolver answers with is SERVFAIL, not NXDOMAIN: it tried to forward
-	// upstream and had nowhere to send it, which is the L0 topology doing the
-	// work rather than a DNS policy.
-	if !strings.Contains(ext, "127.0.0.11") {
-		t.Fatalf("the external-name probe never reached the embedded resolver, so its failure "+
-			"proves nothing:\n%s", ext)
+	if !strings.Contains(ext, "RC=") || strings.Contains(ext, "127.0.0.11") {
+		t.Fatalf("the external-name probe printed no exit code, or still went to Docker's embedded resolver:\n%s", ext)
 	}
-	// Both probes' raw output, so `go test -v` is an evidence record of WHAT the
-	// sandbox saw (the resolver naming itself, the SERVFAIL, the proxy's reply)
-	// and not merely of the exit code. This finding is settled by observation.
-	t.Logf("proxy probe (the agent's only egress path):\n%s", proxy)
-	t.Logf("external-name probe (%s):\n%s", exfilName, ext)
-
 	if strings.Contains(ext, "RC=0") {
+		t.Errorf("L0 DNS exfil: an external name resolved from inside a sealed CC1 sandbox through its run proxy:\n%s", ext)
+	}
+
+	// (3) The escape this test was written for stays shut: the agent asking Docker's embedded resolver at
+	// 127.0.0.11 directly. It forwards what it cannot answer to the HOST's resolvers, which a gatewayless
+	// Internal=true network leaves it nowhere to send. busybox nslookup exits non-zero when the resolver
+	// refuses or cannot answer; a resolved record means the query reached the host's resolvers and, with it,
+	// whatever the label carried. Non-vacuous: the resolver has to have ANSWERED for its refusal to mean
+	// anything. It names itself in the reply (Server: 127.0.0.11), and what it answers with is SERVFAIL, not
+	// NXDOMAIN: it tried to forward upstream and had nowhere to send it, which is the L0 topology doing the
+	// work rather than a DNS policy.
+	direct := execInSandbox(ctx, t, d, sb.Ref, []string{
+		"sh", "-c", "nslookup -type=a " + exfilName + " 127.0.0.11 2>&1; echo RC=$?",
+	})
+	if !strings.Contains(direct, "127.0.0.11") {
+		t.Fatalf("the probe of Docker's embedded resolver never reached it, so its failure proves nothing:\n%s", direct)
+	}
+	// Raw output of each probe, so `go test -v` is an evidence record of WHAT the sandbox saw and not merely
+	// of the exit code. This finding is settled by observation.
+	t.Logf("proxy probe (the agent's only egress path):\n%s", proxy)
+	t.Logf("resolv.conf:\n%s", resolv)
+	t.Logf("external-name probe through the run proxy (%s):\n%s", exfilName, ext)
+	t.Logf("external-name probe at the embedded resolver (%s):\n%s", exfilName, direct)
+	if strings.Contains(direct, "RC=0") {
 		t.Errorf("L0 DNS exfil: an external name resolved from inside a sealed CC1 sandbox — "+
 			"Docker's embedded resolver forwarded the query to the host's resolvers, so the query "+
-			"label is a channel off the box:\n%s", ext)
+			"label is a channel off the box:\n%s", direct)
 	}
 }
 

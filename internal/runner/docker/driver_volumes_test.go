@@ -133,6 +133,7 @@ func TestDriveVolume_CreatedWithLabelsAndNoOptions(t *testing.T) {
 	// member a writable door onto storage this test then calls read-only.
 	assertMountSet(t, mounts, []mountSummary{
 		{Target: runner.DriveTarget, Source: "wardyn-drive-alice", ReadOnly: true},
+		resolverSummary(testSpec().RunID), // the run's own resolver file, not a drive (driver_dns.go)
 	})
 
 	m := findMount(mounts, runner.DriveTarget)
@@ -534,8 +535,9 @@ func TestCreateSandbox_HostPathDriveAllocatesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox with an in-root host_path drive: %v", err)
 	}
-	if f.volumeCreates != 0 {
-		t.Errorf("a host_path drive made %d VolumeCreate calls, want 0", f.volumeCreates)
+	// The one volume the run makes is its own resolver volume (driver_dns.go); no drive is allocated.
+	if _, ok := f.volumes[dnsVolumeName(testSpec().RunID)]; f.volumeCreates != 1 || len(f.volumes) != 1 || !ok {
+		t.Errorf("a host_path drive run made %d VolumeCreate calls and holds %v, want exactly the run's DNS volume", f.volumeCreates, f.volumes)
 	}
 	// (the bind's source/mode are asserted by TestCreateSandbox_HostPathDriveApplied)
 	if m := findMount(mounts, runner.DriveTarget); m != nil && m.Type != mount.TypeBind {
@@ -601,22 +603,23 @@ func TestCreateSandbox_DriveVolumeCreateFailureAbortsSandbox(t *testing.T) {
 }
 
 // TestCreateSandbox_NoDriveTouchesNothing: the overwhelmingly common run (no
-// drive) must be byte-identical to before this feature — no volume calls, no
-// mount at the reserved target.
+// drive) must be byte-identical to before this feature — no drive volume, no
+// mount at the reserved target. The one volume it makes is the run's own
+// resolver volume (driver_dns.go).
 func TestCreateSandbox_NoDriveTouchesNothing(t *testing.T) {
 	f, mounts, err := createWithDrive(t, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateSandbox without a drive: %v", err)
 	}
-	if f.volumeCreates != 0 {
-		t.Errorf("a run with no drive made %d VolumeCreate calls, want 0", f.volumeCreates)
+	if _, ok := f.volumes[dnsVolumeName(testSpec().RunID)]; f.volumeCreates != 1 || len(f.volumes) != 1 || !ok {
+		t.Errorf("a run with no drive made %d VolumeCreate calls and holds %v, want exactly the run's DNS volume", f.volumeCreates, f.volumes)
 	}
 	// No mounts at all, not merely none at the reserved target. "Byte-identical
 	// to before this feature" is a claim about the whole slice, and the
 	// reserved-target lookup below cannot make it: a bind of the host root at
 	// /work/host, appended to every sandbox, is invisible to findMount and this
 	// is the one test in the package that would have been about it.
-	assertMountSet(t, mounts, nil)
+	assertMountSet(t, mounts, []mountSummary{resolverSummary(testSpec().RunID)})
 	if m := findMount(mounts, runner.DriveTarget); m != nil {
 		t.Errorf("a run with no drive got a mount at %s: %+v", runner.DriveTarget, *m)
 	}

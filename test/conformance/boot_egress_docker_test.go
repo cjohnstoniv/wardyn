@@ -434,6 +434,9 @@ func bootEgressDecisions(logs string) (hosts, pending, denied []string) {
 		if err := json.Unmarshal([]byte(line), &dl); err != nil || dl.Request.Host == "" {
 			continue
 		}
+		if dl.DNS != nil {
+			continue // a lookup the agent's resolver (the proxy) refused, recorded as a Deny with the queried name as Host: not a connection
+		}
 		seen[dl.Request.Host] = true
 		switch dl.Decision {
 		case egress.Pending:

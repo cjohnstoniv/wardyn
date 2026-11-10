@@ -24,8 +24,10 @@ import (
 // llm.scan.* event rather than riding this one; and Usage (a model call's token
 // counts) is stored as its own usage row by ingestModelUsage and writes no egress
 // row at all (run_model_usage.go; pinned by
-// TestInternalDecision_MeteredCallIsOneDecisionRowAndOneUsageRow).
-var decisionLogFieldsNotIngested = map[string]bool{"request": true, "decision": true, "scan": true, "usage": true}
+// TestInternalDecision_MeteredCallIsOneDecisionRowAndOneUsageRow); DNS (one sandbox
+// DNS query) is its own run.dns.query row and writes no egress row
+// (TestPostDecision_DNSQueryIsItsOwnRow).
+var decisionLogFieldsNotIngested = map[string]bool{"request": true, "decision": true, "scan": true, "usage": true, "dns": true}
 
 // TestHandlePostDecisionCarriesEveryDecisionLogField pins handlePostDecision's
 // CLOSED map[string]any literal (internal.go) to egress.DecisionLog's actual

@@ -65,6 +65,11 @@ type Options struct {
 	// "scratch" is used (drivers that cannot pull scratch should substitute
 	// their own minimal image).
 	SandboxImage string
+	// DNSProbe, when non-nil, is called with the ref of a sandbox at the strongest class. It must read that
+	// sandbox's resolver and look an external name up from inside it, and assert that the agent's only
+	// nameserver is its run proxy and that the lookup does not succeed. Injected for DefaultRouteProbe's
+	// reason: only the substrate knows how to run a command in its own sandbox. Nil skips the DNSAudit case.
+	DNSProbe func(t *testing.T, ref string)
 	// Timeout is applied to each individual operation. Defaults to 30s.
 	Timeout time.Duration
 	// ExitArgv, when non-nil, builds the argv for a short-lived in-sandbox
@@ -129,6 +134,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("CreateStatusStop", func(t *testing.T) { testCreateStatusStop(t, r, opts) })
 	t.Run("KillMissingRef", func(t *testing.T) { testKillMissingRef(t, r, opts) })
 	t.Run("L0StructuralEgress", func(t *testing.T) { testL0StructuralEgress(t, r, opts) })
+	t.Run("DNSAudit", func(t *testing.T) { testDNSAudit(t, r, opts) })
 	t.Run("WaitExitCode", func(t *testing.T) { testWaitExitCode(t, r, opts) })
 	t.Run("InteractiveAttach", func(t *testing.T) { testInteractiveAttach(t, r, opts) })
 	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })

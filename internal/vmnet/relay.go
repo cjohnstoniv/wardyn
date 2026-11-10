@@ -187,6 +187,13 @@ func New(cfg Config) (*Relay, error) {
 			log.Warn("refusal report failed", "reason", r.Reason, "err", err.Error())
 		}
 	})
+	if !rl.prep {
+		rl.rep.sendDNS = func(q dnsRecord) {
+			if err := rl.proxy.sendDNS(q); err != nil {
+				log.Warn("dns report failed", "err", err.Error())
+			}
+		}
+	}
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
@@ -351,8 +358,9 @@ func (rl *Relay) serveDNS(c *gonet.UDPConn) {
 			return
 		}
 		if rl.prep {
-			if resp, err := refuseAll(buf[:n]); err == nil {
+			if resp, res, err := refuseAll(buf[:n]); err == nil {
 				_, _ = c.WriteTo(resp, from)
+				rl.rep.dns(res.query())
 			}
 			continue
 		}
@@ -360,13 +368,12 @@ func (rl *Relay) serveDNS(c *gonet.UDPConn) {
 		if err != nil {
 			continue
 		}
-		switch {
-		case res.refused != "":
-			rl.rep.refuseLocal("dns_refused", "cause", res.refused, "type", res.qtype)
-		case res.evicted != "":
+		if res.evicted != "" {
 			rl.log.Info("evict", "name", res.evicted, "for", res.name)
 		}
 		_, _ = c.WriteTo(resp, from)
+		// Reported after the reply, so the audit never delays the guest's lookup.
+		rl.rep.dns(res.query())
 	}
 }
 

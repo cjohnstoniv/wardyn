@@ -82,18 +82,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (1) Per-run internal network and (2) the wardyn-proxy sidecar on it.
-	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, d.resolvConfMountSupported(info.ServerVersion))
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
-	// rollback collects teardown steps to run on any later failure.
-	rollback := []func(){undoNet}
-	fail := func(err error) (runner.Sandbox, error) {
-		for i := len(rollback) - 1; i >= 0; i-- {
-			rollback[i]()
-		}
-		return runner.Sandbox{}, err
-	}
+	rb := &createRollback{undoNet: undoNet}
+	fail := func(err error) (runner.Sandbox, error) { return runner.Sandbox{}, rb.run(err) }
 
 	// (3) Agent container: attached ONLY to the per-run internal network, which (Internal=true) has
 	// NO gateway, so the agent gets no default route (L0) and its sole egress path is the
@@ -158,6 +152,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.TrustedCAFile != "" {
 		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{Type: mount.TypeBind, Source: d.cfg.TrustedCAFile, Target: runner.TrustedCAMountPath, ReadOnly: true})
 	}
+	// The agent's only nameserver is its proxy. Added before the exec-less stash below, so a deferred
+	// agent carries the mount too.
+	undoDNS, err := d.mountProxyResolver(ctx, spec.RunID, proxyIP, info.ServerVersion, agentHost)
+	rb.addResolver(undoDNS)
+	if err != nil {
+		return fail(err)
+	}
 	// Before the exec / exec-less split, so both paths answer an image VOLUME the disk limit cannot reach.
 	if err := d.checkImageVolumesUnderCap(ctx, spec.Image, spec.Resources, agentHost, info); err != nil {
 		return fail(err)
@@ -200,7 +201,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(fmt.Errorf("docker: create agent: %w", err))
 	}
-	rollback = append(rollback, func() {
+	rb.add(func() {
 		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	})
 
@@ -248,8 +249,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // runNetworkAndProxy brings up a run's per-run internal network and its wardyn-proxy sidecar, for a
 // container and a VM alike. It returns the network's id, the proxy's IP on it, the hash of the
 // config written to the proxy (startProxy), and the undo that removes both; on an error it has
-// already undone them.
-func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
+// already undone them. dnsListen has the proxy answer DNS on :53 (proxy.DNSListenEnv): only for a container
+// run whose agent resolver is mounted to point at it, since a proxy told to open the listener exits when it
+// cannot bind.
+func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec, dnsListen bool) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
 	// (1) Per-run internal network. Internal=true takes away its route off the host, and the isolated
 	// gateway mode leaves no address on the host's side (run_network_shape.go): together these uphold
 	// L0 even though the agent is *connected* to it.
@@ -275,6 +278,9 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 	proxyEnvs, proxyCfg, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
 	if err != nil {
 		return fail(err)
+	}
+	if dnsListen {
+		proxyEnvs = withDNSListen(proxyEnvs)
 	}
 	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg, spec.MachineKind.IsVM())
 	var proxyID string
@@ -639,6 +645,11 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	}
 
 	d.drainSink(ctx, id)
+	// The run's resolver volume, which the agent mounted and is gone by now. Before the proxy, so that a crash
+	// or a failure here leaves the proxy for the orphan sweep to key a retry on.
+	if err := d.removeDNSVolume(ctx, id); err != nil {
+		return err
+	}
 	if err := d.removeProxy(ctx, id); err != nil {
 		return err
 	}
@@ -676,32 +687,44 @@ func (d *Driver) removedElsewhere(ctx context.Context, name string, err error) b
 	}
 }
 
-// sweepDriveSeeds removes drive seed containers (seedDriveVolume) older than
-// minAge. A seed lives for one create and remove, never started, so one that
-// old outlived a crash between the two; it holds its drive's volume, so a
-// reclaim would answer "in use" until it is gone. Keyed on the component label
-// the seed carries, never on a run's state: no live run owns a seed that long.
+// sweepDriveSeeds removes drive seed containers (seedDriveVolume) and DNS seed
+// containers (seedResolvConf) older than minAge. A seed lives for one create and
+// remove, never started, so one that old outlived a crash between the two; it
+// holds its volume, so a reclaim would answer "in use" until it is gone. Keyed
+// on the component label the seed carries, never on a run's state: no live run
+// owns a seed that long. Only this runner's and this deployment's are removed.
+// The DNS volume itself is removed by the run's teardown, never swept by age.
 func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI, minAge time.Duration) (int, error) {
-	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
-		All:     true,
-		Filters: client.Filters{}.Add("label", labelComponent+"="+componentDriveSeed),
-	})
-	if err != nil {
-		return 0, fmt.Errorf("docker: list drive seeds for orphan sweep: %w", err)
-	}
 	cutoff := time.Now().Add(-minAge)
 	var swept int
 	var errs []error
-	for _, c := range res.Items {
-		if c.Labels[labelComponent] != componentDriveSeed || c.Labels[labelManaged] != "true" || c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID ||
-			d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
+	for _, component := range []string{componentDriveSeed, componentDNSSeed} {
+		res, err := lister.ContainerList(ctx, client.ContainerListOptions{
+			All:     true,
+			Filters: client.Filters{}.Add("label", labelComponent+"="+component),
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("docker: list %s containers for orphan sweep: %w", component, err))
 			continue
 		}
-		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
-			errs = append(errs, fmt.Errorf("docker: remove leftover drive seed %s: %w", c.ID, err))
-			continue
+		for _, c := range res.Items {
+			if c.Labels[labelComponent] != component || c.Labels[labelManaged] != "true" || c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID ||
+				d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
+				continue
+			}
+			// A DNS seed is removed only on the same label test as its teardown: a deployment label that is
+			// present and ours, and a valid run id. The drive seed keeps its older rule above.
+			if component == componentDNSSeed {
+				if runID, perr := uuid.Parse(c.Labels[labelRun]); perr != nil || !d.dnsSeedLabelsOwned(c.Labels, runID) {
+					continue
+				}
+			}
+			if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
+				errs = append(errs, fmt.Errorf("docker: remove leftover %s %s: %w", component, c.ID, err))
+				continue
+			}
+			swept++
 		}
-		swept++
 	}
 	return swept, errors.Join(errs...)
 }

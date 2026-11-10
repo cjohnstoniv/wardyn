@@ -741,8 +741,13 @@ func (d *Driver) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []b
 	if err := d.removeProxy(ctx, id); err != nil {
 		return "", fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
+	// The listener only where this agent's resolver is mounted to point at the proxy, as at create.
+	env := proxyEnvFromJSON(id, cp.ControlPlaneURL)
+	if agentMountsResolver(agent.Container.HostConfig, id) {
+		env = withDNSListen(env)
+	}
 	_, sum, err := d.startProxy(ctx, id, d.labels(id, componentProxy, agentLabels),
-		proxyEnvFromJSON(id, cp.ControlPlaneURL), prep, ip)
+		env, prep, ip)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
