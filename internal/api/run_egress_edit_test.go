@@ -669,8 +669,8 @@ func (s *failEndStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from,
 	return s.readbackStore.UpdateRunStateIf(ctx, id, from, to)
 }
 
-// A headless run's edit whose replace fails has its sandbox stopped; with the end not written, the
-// answer never says the run is ended.
+// A headless run's edit whose replace fails has its proxy stopped; with the end never written, the
+// edit's retries run out and the answer says so, never that the run is or will be ended.
 func TestEgressEdit_AnUnwrittenEndClaimsNoFate(t *testing.T) {
 	f := newEgressEditFixture(t)
 	f.st.run.Interactive, f.run.Interactive = false, false
@@ -678,8 +678,8 @@ func TestEgressEdit_AnUnwrittenEndClaimsNoFate(t *testing.T) {
 	f.rr.replaceErr = runner.ErrProxyReplaceFailed
 	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
 	body := w.Body.String()
-	if r := errorReason(w); (r != reasonEgressEditUnconfirmed && r != reasonEgressEditContainmentUnresolved) || strings.Contains(body, "is ended") || strings.Contains(body, "lost until revived") {
-		t.Errorf("%d %s: want a stopped or stopping edit that names no recorded fate", w.Code, body)
+	if errorReason(w) != reasonEgressEditUnconfirmed || !strings.Contains(body, "end could not be recorded") || strings.Contains(body, "ended") || strings.Contains(body, "lost until revived") {
+		t.Errorf("%d %s: want %s saying the end could not be recorded and naming no fate", w.Code, body, reasonEgressEditUnconfirmed)
 	}
 }
 

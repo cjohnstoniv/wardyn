@@ -387,11 +387,31 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, pe
 	if err != nil {
 		return egressEditUnresolved(why, err)
 	}
-	if err := s.stopUnconfirmedProxy(lctx, run); err != nil {
+	// An end whose write failed (errRunEndUnwritten) is this edit's to retry: an abandoned start is in
+	// no sweep. Both stops are idempotent.
+	err = s.stopUnconfirmedProxy(lctx, run)
+	for try := 1; try < egressEditEndTries && errors.Is(err, errRunEndUnwritten); try++ {
+		select {
+		case <-lctx.Done():
+		case <-time.After(egressEditPoll):
+		}
+		if run, err = s.cfg.Store.GetRun(lctx, runID); err == nil {
+			err = s.stopUnconfirmedProxy(lctx, run)
+		}
+	}
+	switch {
+	case errors.Is(err, errRunEndUnwritten):
+		out := egressEditUnconfirmed(why)
+		out.msg += "; its end could not be recorded"
+		return out
+	case err != nil:
 		return egressEditUnresolved(why, err)
 	}
 	return egressEditUnconfirmed(why)
 }
+
+// egressEditEndTries bounds an edit's attempts at an end whose write failed.
+const egressEditEndTries = 3
 
 // storeAndSettleRevived stores a revive's config as the run's, the one every later revive starts from,
 // and settles the new proxy's start (settleRevivedProxy). An ordinary revive stores after the settle,

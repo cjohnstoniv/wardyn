@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -216,5 +217,19 @@ func TestReadbackContainment_AnUnwrittenEndStaysUnresolvedUntilARetryEndsTheRun(
 	}
 	if st := cs.folderStatus(); st.Resume == nil {
 		t.Errorf("resume = %+v, want the cut pass's", st.Resume)
+	}
+}
+
+// A substrate that cannot stop a proxy alone keeps no sandbox for a copy back, so an ended run's
+// failed start has its sandbox stopped even when its folder record reads as kept.
+func TestReadbackContainment_ASubstrateThatCannotStopAProxyAloneStopsTheSandbox(t *testing.T) {
+	f, gen, _ := endedWithFailedStart(t, types.RunLocalFolderStatus{}, errors.New("the database is unreachable"))
+	f.setProxyStopErr(runner.ErrEndUnsupported)
+	sandboxStops := f.lr.stopCount()
+	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Contained || c.Err != nil {
+		t.Fatalf("containment = %+v, want contained", c)
+	}
+	if n := f.lr.stopCount(); n != sandboxStops+1 {
+		t.Errorf("StopSandbox = %d, want %d", n, sandboxStops+1)
 	}
 }

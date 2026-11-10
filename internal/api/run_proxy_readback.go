@@ -370,26 +370,32 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 			return err
 		}
 		// The proxy first, then the end, whose computer folder copy back decides whether the sandbox
-		// is stopped (finalizeRunEffects): a sandbox kept for it is not stopped here. A proxy stop
-		// that is not confirmed has the sandbox stopped before the end, as before.
-		ok := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
-		if !ok {
-			ok = s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
-		}
+		// is stopped (finalizeRunEffects): a sandbox kept for it is not stopped here, so the end must
+		// land (runEndRecorded). A proxy stop that is not confirmed, or a run on a runner (whose
+		// sandbox is never kept for a copy back, quiesceKeptSandbox), has the sandbox stopped before
+		// the end, as before.
+		left := run.RunnerID == nil && s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") == nil
+		ok := left || s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
 		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(ok))
-		if !ok {
+		switch {
+		case !ok:
 			return errProxyStopUnconfirmed
+		case left:
+			return s.runEndRecorded(ctx, run.ID)
 		}
-		return s.runEndRecorded(ctx, run.ID)
+		return nil
 	}
 	if isTerminalRunState(run.State) && s.computerFolderKept(ctx, run.ID) {
 		// Kept for its computer folder's copy back to resume (bringComputerFolderBack): stopping the
 		// sandbox would lose the changes not yet copied back, so its proxy alone is stopped, and the
-		// sandbox and its ref stay for the resume.
-		if !s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
+		// sandbox and its ref stay for the resume. A substrate that cannot stop a proxy alone keeps
+		// no such sandbox (quiesceKeptSandbox), so its sandbox is stopped as any other.
+		switch err := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile"); {
+		case err == nil:
+			return nil
+		case !errors.Is(err, errProxyAloneUnsupported):
 			return errKeptProxyStopUnconfirmed
 		}
-		return nil
 	}
 	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
 		return errProxyStopUnconfirmed
@@ -398,26 +404,30 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 }
 
 // stopProxyOrAudit stops only the proxy of the sandbox ref (runner.ProxyStopper), leaving the
-// sandbox, and records a failed stop under action as stopSandboxOrAudit does. It reports whether
-// the stop was confirmed; a substrate that cannot stop a proxy alone confirms nothing and records
-// nothing.
-func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, action string) bool {
+// sandbox, and records a failed stop under action as stopSandboxOrAudit does. It answers nil once
+// the stop is confirmed, errProxyAloneUnsupported (recording nothing) for a substrate that cannot
+// stop a proxy alone, and errProxyStopUnconfirmed for a stop that failed.
+func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, action string) error {
 	if s.cfg.Runner == nil || ref == "" {
-		return true
+		return nil
 	}
 	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
 	if !ok {
-		return false
+		return errProxyAloneUnsupported
 	}
 	switch err := stopper.StopProxy(ctx, ref); {
 	case err == nil:
-		return true
+		return nil
 	case errors.Is(err, runner.ErrEndUnsupported):
-		return false
-	default:
-		return s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err })
+		return errProxyAloneUnsupported
+	case s.teardownOrAudit(ctx, runID, ref, action, func(context.Context, string) error { return err }):
+		return nil
 	}
+	return errProxyStopUnconfirmed
 }
+
+// errProxyAloneUnsupported is a substrate that cannot stop a proxy without its sandbox.
+var errProxyAloneUnsupported = errors.New("this substrate cannot stop a proxy alone")
 
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
 var errProxyStopUnconfirmed = errors.New("the sandbox stop failed")

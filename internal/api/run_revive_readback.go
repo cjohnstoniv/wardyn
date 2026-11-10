@@ -138,7 +138,7 @@ func (s *Server) storedRunFate(ctx context.Context, id uuid.UUID) string {
 	switch {
 	case err != nil:
 		return ""
-	case run.State.IsTerminal():
+	case run.State.IsTerminal(), run.LostReason == types.LostEnded:
 		return "; the run is ended"
 	case run.LostAt != nil:
 		return "; the run is lost until revived"
