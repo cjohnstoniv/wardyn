@@ -219,6 +219,17 @@ describe("ConfinementPostureBanner — failed re-check", () => {
     expect(container.firstElementChild).toHaveClass("bg-danger-subtle");
   });
 
+  // not_proven has two causes the wire does not tell apart: three checks in a row that could not tell,
+  // and agent-sandbox mode refusing an acknowledged result. The body names neither.
+  it("words not proven without a cause, as either one reaches it", () => {
+    expect(POSTURE_NOT_PROVEN_BANNER.BODY).toBe(
+      "Not proven. The canary has not proved that this cluster blocks egress with a deny-all NetworkPolicy. New sandboxes in affected namespaces are refused until a check passes.",
+    );
+    for (const body of [POSTURE_NOT_PROVEN_BANNER.BODY, POSTURE_RUNNER_NOT_PROVEN_BANNER.BODY]) {
+      expect(body).not.toMatch(/3 checks|could not run/);
+    }
+  });
+
   it("renders the not-proven strip as danger", () => {
     const health = vi.spyOn(api, "health");
     const { container } = renderBanner("not_proven");
@@ -272,6 +283,26 @@ describe("ConfinementPostureBanner and ConfinementChip — a runner's verdict", 
     const acknowledged = renderRunner("acknowledged");
     expect(screen.getByText(POSTURE_RUNNER_ACKNOWLEDGED_BANNER.BODY)).toBeInTheDocument();
     expect(chipTitle(acknowledged.container).endsWith(POSTURE_CHIP_SUFFIX_ACKNOWLEDGED)).toBe(true);
+  });
+
+  it("offers no action: the setup page shows this cluster's verdict, not the runner's", () => {
+    for (const posture of ["refused", "not_proven", "unenforced", "acknowledged"] as const) {
+      const { unmount } = renderRunner(posture, new Date().toISOString());
+      expect(screen.queryByRole("button")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("words the bodies as approved, never claiming more than the verdict says", () => {
+    expect(POSTURE_RUNNER_NOT_PROVEN_BANNER.BODY).toBe(
+      "Not proven. The canary has not proved that a connected Kubernetes runner's cluster blocks egress with a deny-all NetworkPolicy. New sandboxes in affected namespaces are refused until a check passes.",
+    );
+    expect(POSTURE_RUNNER_UNENFORCED_BANNER.BODY).toBe(
+      "That runner's canary proved its cluster's CNI does not enforce NetworkPolicy, and it was started with that risk accepted. New sandboxes in affected namespaces can start without proven network confinement.",
+    );
+    expect(POSTURE_RUNNER_REFUSED_BANNER.BODY("T")).toBe(
+      "Not enforcing. The check at T showed that a connected Kubernetes runner's cluster no longer blocks egress with a deny-all NetworkPolicy, so new sandboxes in affected namespaces are refused. Runs already going keep going.",
+    );
   });
 
   it("without a source the band keeps this cluster's wording", () => {

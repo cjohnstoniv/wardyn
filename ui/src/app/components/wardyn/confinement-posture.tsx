@@ -73,26 +73,27 @@ const BANNER_BY_POSTURE: Partial<
 };
 
 // The bands for a connected Kubernetes runner's verdict (network_policy_source
-// "runner"): the same tones, worded for that runner rather than this cluster.
+// "runner"): the same tones, worded for that runner rather than this cluster,
+// and no action, since the setup page it opens shows this cluster's verdict.
 const RUNNER_BANNER_BY_POSTURE: typeof BANNER_BY_POSTURE = {
   acknowledged: {
     tone: "warning",
     title: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.TITLE,
     body: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.BODY,
-    action: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.ACTION,
+    action: "",
   },
   unenforced: {
     tone: "danger",
     title: POSTURE_RUNNER_UNENFORCED_BANNER.TITLE,
     body: POSTURE_RUNNER_UNENFORCED_BANNER.BODY,
-    action: POSTURE_RUNNER_UNENFORCED_BANNER.ACTION,
+    action: "",
   },
-  refused: { tone: "danger", title: POSTURE_RUNNER_REFUSED_BANNER.TITLE, body: "", action: POSTURE_RUNNER_REFUSED_BANNER.ACTION },
+  refused: { tone: "danger", title: POSTURE_RUNNER_REFUSED_BANNER.TITLE, body: "", action: "" },
   not_proven: {
     tone: "danger",
     title: POSTURE_RUNNER_NOT_PROVEN_BANNER.TITLE,
     body: POSTURE_RUNNER_NOT_PROVEN_BANNER.BODY,
-    action: POSTURE_RUNNER_NOT_PROVEN_BANNER.ACTION,
+    action: "",
   },
 };
 
@@ -152,7 +153,7 @@ export function ConfinementPostureBanner({ view = "user" }: { view?: ConsoleView
           admin in the Admin view would get a button whose only destination
           refuses them. Informational-only there; the operator keeps the
           action. */}
-      {operator && (
+      {operator && spec.action !== "" && (
         <button
           type="button"
           onClick={() => navigate("/admin/setup?step=environment")}
