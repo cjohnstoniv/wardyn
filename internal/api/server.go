@@ -79,6 +79,11 @@ type Config struct {
 	// failed durable write is masked, logged loudly, and spooled to the local
 	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
+	// AuditStrict is WARDYN_AUDIT_STRICT: when set, a covered change (audit_strict.go) writes its
+	// audit.intent.record row through it before the handler runs, and is refused 503 when that write
+	// fails. It masks and stores like Audit but never spools, so a failure is the caller's to see.
+	// Nil turns strict mode off.
+	AuditStrict audit.Recorder
 	// RunnerAuditPrepare applies the serving audit mask/seal policy before the
 	// spool receipt and audit row commit in one database transaction.
 	RunnerAuditPrepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)

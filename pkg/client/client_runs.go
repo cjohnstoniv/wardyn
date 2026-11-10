@@ -105,6 +105,35 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 	return out, err
 }
 
+// ExecRequest is the body of POST /api/v1/runs/{id}/exec: one command, run
+// through /bin/sh -c from the sandbox user's home directory, as an SSH exec
+// runs it. TimeoutSec 0 is the server's default of 60 seconds; the most is 300.
+type ExecRequest struct {
+	Command    string `json:"command"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
+}
+
+// ExecResult is POST /api/v1/runs/{id}/exec's reply. Each stream keeps its
+// first 1 MiB, and Truncated says a stream had more. TimedOut says the timeout
+// ended the command; ExitCode is then -1.
+type ExecResult struct {
+	ExitCode  int    `json:"exit_code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Truncated bool   `json:"truncated"`
+	TimedOut  bool   `json:"timed_out"`
+}
+
+// ExecRun runs one command in a running run and waits for it to end, so an
+// HTTPClient with a Timeout needs one longer than the command's. The run's
+// owner may call it. A run whose data_out rule is review or blocked answers
+// 409 data_out_blocked, as SSH commands are refused there.
+func (c *Client) ExecRun(ctx context.Context, id uuid.UUID, req ExecRequest) (ExecResult, error) {
+	var out ExecResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/exec", req, &out)
+	return out, err
+}
+
 // ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
 // Mode): the synthesized least-privilege sandbox profile plus the observations
 // it was built from. Only the fields callers render/save are modeled — the full

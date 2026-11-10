@@ -718,6 +718,26 @@ commands are the ones in "Back them up" and "Restore them", and in
   - A slow-but-progressing insert is never aborted by it — and it is deliberately shorter than the drain's 15s pass,
     so the request path yields before the background drain does.
 
+- **Strict audit (`WARDYN_AUDIT_STRICT=on`, flag `-audit-strict`, default off).**
+  - With strict mode on, a covered change is refused if its audit intent row cannot be written first.
+  - Before the change's handler runs, an `audit.intent.record` row is written straight to the store, with no spool
+    fallback.
+  - The row names the method, the resolved path, the route, the path's ids, the caller (`actor`), the request id and the
+    body's SHA-256, never the body.
+  - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
+  - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
+  - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions/grants`,
+    `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`.
+  - Not covered, because each reads and answers: `POST /policies/grade`, `/governance/check`, `/governance/dry-run` and
+    `/governance/approval-rules/dry-run`.
+  - The row is written for every covered request that passed sign-in, one its route then refuses included, so it says a
+    change was asked for, not that it happened.
+  - The trade: while the store cannot take writes, covered changes are refused instead of being queued.
+  - Under `WARDYN_AUDIT_SEAL`, a row whose subject key cannot be had is refused too, since such a row waits only in the
+    spool.
+  - Configured sinks get the intent row as they get every row, even when the store write failed and the change was
+    refused.
+
 > [!IMPORTANT]
 > **Set the two server-side timeouts** on the database Wardyn uses.
 

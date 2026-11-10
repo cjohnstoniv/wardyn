@@ -418,6 +418,7 @@ func run() error {
 		GitHubRulesets: gh,
 		GitHubBranches: gh,
 		Audit:          maskedRec,
+		AuditStrict:    strictAuditRecorder(*f.auditStrict, pool, fan, maskReg, sealSrc, maskScopes),
 		RunnerAuditPrepare: func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 			return prepareRunnerAudit(ctx, ev, maskingRecorder{reg: maskReg, scope: maskScopes}, sealSrc)
 		},

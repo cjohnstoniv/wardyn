@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `POST /api/v1/runs/{id}/exec` (SDK `ExecRun`) runs one command in a running run over HTTP, as an SSH exec runs it, and answers its exit code, its output (the first 1 MiB of each stream) and whether it timed out (`timeout_sec`, 60 by default, at most 300). A run whose `data_out` rule is `review` or `blocked`, or cannot be read, refuses it `409 data_out_blocked` before the runner is called, and the refusal is audited. Each command writes a `run.command.exec` audit row with the command and the exit code, never the output. An automation can now create, execute, inspect and destroy a run without SSH.
+- Strict audit (`WARDYN_AUDIT_STRICT`, flag `-audit-strict`, off by default). With strict mode on, a covered change is refused if its audit intent row cannot be written first. Covered changes are the POST, PUT, PATCH and DELETE routes under `/policies`, `/governance`, `/approvals`, `/permissions/grants`, `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`, less the read-only checks. A refused change answers `503 audit_unavailable`. The handler's own detailed row can still spool.
+
 ## [0.10.0-rc.17] — 2026-11-09
 
 ### Before you upgrade
