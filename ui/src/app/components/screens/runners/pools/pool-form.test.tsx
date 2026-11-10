@@ -189,7 +189,7 @@ describe("edit", () => {
     await waitFor(() => expect(updateMineMock).toHaveBeenCalledWith("p-lap", { revision: 9, name: "Laptop 2", limits }));
   });
 
-  it("an organization pool saves through the organization route and goes back to the pools", async () => {
+  it("an organisation pool saves through the organisation route and goes back to the pools", async () => {
     getMock.mockResolvedValue(pool());
     membersMock.mockResolvedValue([member(remoteRunner())]);
     updateMock.mockResolvedValue({});
@@ -198,7 +198,7 @@ describe("edit", () => {
     expect(screen.getByText("Its runners allow 4 runs at once in total. A run launched past this waits for a free slot.")).toBeInTheDocument();
     expect(screen.getAllByText("Its runners allow up to 4 CPUs per run.")).toHaveLength(1);
     expect(screen.getByTestId("f-bg-qualifier")).toHaveTextContent(/^Optional\. Leave empty to follow its runners, and it can only narrow them\.$/);
-    expect(screen.getByText("Organization pools take remote-hosted runners and the organization's own runners.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Organisation pools take remote-hosted runners and the organisation's own runners.", { exact: false })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updateMock).toHaveBeenCalledWith("p-ci", expect.objectContaining({ revision: 9, name: "CI jobs" })));
     expect(await screen.findByText("runners page")).toBeInTheDocument();

@@ -277,11 +277,11 @@ describe("Admin -> Runners list", () => {
     expect(within(desk).getByText("This runner is offline. Its capacity isn't counted as available until it reconnects.")).toBeInTheDocument();
     expect(within(desk).getByText("Not reported")).toBeInTheDocument();
     expect(within(desk).getByText("None — runs nothing")).toBeInTheDocument();
-    // A remote-hosted runner is the organization's; its user pools name their owner.
+    // A remote-hosted runner is the organisation's; its user pools name their owner.
     const shared = cardOf("shared-docker");
     expect(within(shared).getByText("Remote-hosted")).toBeInTheDocument();
     expect(within(shared).getByText("Not applicable")).toBeInTheDocument();
-    expect(within(shared).getByText("Organization")).toBeInTheDocument();
+    expect(within(shared).getByText("Organisation")).toBeInTheDocument();
     expect(shared).toHaveTextContent("General, Lab VM · cara");
     expect(within(shared).getByRole("row", { name: /^Memory/ })).toHaveTextContent("16 GB of 96 GB");
     expect(rowNames()).toEqual(["mbp-ben", "laptop-7", "desk-2", "shared-docker"]);
@@ -791,7 +791,7 @@ describe("Admin -> Runners tabs", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent("Set up in");
   });
 
-  it("an organization pool's organization runner opens its runner, found in the admin list beside people's", async () => {
+  it("an organisation pool's organisation runner opens its runner, found in the admin list beside people's", async () => {
     const cluster = runner({ id: "r-cluster", name: "cluster-a", owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com", pools: [] });
     listMock.mockResolvedValue([LAPTOP, cluster]);
     const user = userEvent.setup();

@@ -5,6 +5,7 @@
 
 // 0.9 Your account -> My runner and My pools (packet M-RN-2, mock M-POOLS v6). The strings are written out,
 // not read from the copy modules, so a drift in them fails this suite.
+import { STATES } from "../../wardyn/states";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -201,7 +202,7 @@ describe("My runner card", () => {
     await expand(user);
     expect(
       screen.getByText(
-        "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
+        "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organisation's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("You haven't registered a runner.")).toBeInTheDocument();
@@ -237,6 +238,23 @@ describe("My runner card", () => {
     const block = screen.getByRole("heading", { name: "Add this computer" }).closest("section") as HTMLElement;
     expect(within(block).queryByText("wardyn runner setup")).toBeNull();
     expect(within(block).queryByRole("heading", { level: 5 })).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMineMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", undefined, "runners_failed"));
+    const user = userEvent.setup();
+    renderCard();
+    await expand(user);
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    listMineMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+    const user = userEvent.setup();
+    renderCard();
+    await expand(user);
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("a read failure says so with a Retry and no summary", async () => {

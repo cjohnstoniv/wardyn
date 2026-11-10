@@ -58,25 +58,25 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-describe("organization pool members", () => {
-  it("shows an organization runner as an organization runner, beside a remote-hosted one", () => {
+describe("organisation pool members", () => {
+  it("shows an organisation runner as an organisation runner, beside a remote-hosted one", () => {
     const cluster = selfRunner({ id: "r-cluster", name: "cluster-a", owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });
     renderDrawer(pool(), { members: [member(EU), member(cluster)] });
     const cards = document.querySelectorAll("[data-member]");
     expect(cards).toHaveLength(2);
     const org = within(cards[1] as HTMLElement);
     expect(org.getByText("cluster-a")).toBeInTheDocument();
-    expect(org.getByText("Organization")).toBeInTheDocument();
+    expect(org.getByText("Organisation")).toBeInTheDocument();
     expect(org.queryByText("Self-hosted")).not.toBeInTheDocument();
     expect(org.getByText("node-1.corp.example.com")).toBeInTheDocument();
     expect(within(cards[0] as HTMLElement).getByText("Remote-hosted")).toBeInTheDocument();
-    expect(screen.getByText("Remote-hosted and organization runners")).toBeInTheDocument();
+    expect(screen.getByText("Remote-hosted and organisation runners")).toBeInTheDocument();
   });
 });
 
-describe("organization pool member namespace line", () => {
+describe("organisation pool member namespace line", () => {
   const cluster = (id: string) => selfRunner({ id, name: id, owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });
-  it("names the namespace an organization runner serves, or its default, and none on a remote-hosted member", () => {
+  it("names the namespace an organisation runner serves, or its default, and none on a remote-hosted member", () => {
     renderDrawer(pool(), { members: [{ ...member(cluster("k8s-east")), runs_namespace: "team-payments" }, member(cluster("k8s-west")), member(EU)] });
     const cards = document.querySelectorAll("[data-member]");
     expect((cards[0] as HTMLElement).querySelector("[data-member-namespace]")?.textContent).toBe("Runs in namespace team-payments");
@@ -92,31 +92,31 @@ describe("organization pool member namespace line", () => {
   });
 });
 
-describe("organization pool members read by a pool member", () => {
-  it("shows an organization runner the server sent without the people behind it, and prints no undefined", () => {
+describe("organisation pool members read by a pool member", () => {
+  it("shows an organisation runner the server sent without the people behind it, and prints no undefined", () => {
     const sent = selfRunner({ id: "r-cluster", name: "cluster-a", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });
     // What a pool member reads: the owner, minter, trust writer and revoker keys are not sent at all.
     for (const k of ["owner", "minted_by", "minted_by_email", "trust_set_by", "trust_set_at", "revoked_by", "revoked_by_email", "revoke_reason"] as const) delete sent[k];
     renderDrawer(pool(), { members: [member(sent)] });
     const card = document.querySelector("[data-member]") as HTMLElement;
     expect(within(card).getByText("cluster-a")).toBeInTheDocument();
-    expect(within(card).getByText("Organization")).toBeInTheDocument();
+    expect(within(card).getByText("Organisation")).toBeInTheDocument();
     expect(card.textContent).not.toMatch(/undefined|null/);
   });
 });
 
-describe("organization default pool", () => {
+describe("organisation default pool", () => {
   it("shows its chips, what it allows, its resources and the default with Clear default", async () => {
     const p = pool({ id: "p-gen", name: "General", limits: { barriers: ["CC1", "CC2", "CC3"] } });
     const { onSetDefault } = renderDrawer(p, { isDefault: true, waiting: 2 });
     const sheet = await screen.findByRole("dialog");
     expect(within(sheet).getByRole("heading", { name: "General" })).toBeInTheDocument();
-    for (const chip of ["Organization pool", "Active", "✓ Default"]) expect(within(sheet).getByText(chip)).toBeInTheDocument();
+    for (const chip of ["Organisation pool", "Active", "✓ Default"]) expect(within(sheet).getByText(chip)).toBeInTheDocument();
     expect(within(sheet).getByText("Interactive and background")).toBeInTheDocument();
     expect(within(sheet).getByText("Fence, Wall, Vault")).toBeInTheDocument();
     expect(within(sheet).getAllByText("Biggest run it can take").length).toBeGreaterThan(0);
     expect(within(sheet).getByText("This pool adds no limits of its own: it follows its runners' limits.")).toBeInTheDocument();
-    expect(within(sheet).getByText("This is the organization default.")).toBeInTheDocument();
+    expect(within(sheet).getByText("This is the organisation default.")).toBeInTheDocument();
     expect(within(sheet).getByText("Machine: not applicable (remote-hosted)")).toBeInTheDocument();
     expect(within(sheet).getByText("Runs at once: 4 · Running now: 1 of 4")).toBeInTheDocument();
     expect(within(sheet).getByText("Revision 9 ·", { exact: false })).toBeInTheDocument();
@@ -142,7 +142,7 @@ describe("organization default pool", () => {
     expect(within(cell("CPU")).getByText("Up to 4 CPUs, from its runners")).toBeInTheDocument();
     expect(within(sheet).getByText("Pool limits: memory per run narrowed by this pool; cpu, disk per run set by this pool; 40 runs maximum in this pool. Otherwise from its runners.")).toBeInTheDocument();
     expect(within(sheet).queryByText("This pool adds no limits of its own: it follows its runners' limits.")).toBeNull();
-    expect(within(sheet).getByText("A run gets the strictest of your organization's policy, this pool's limits and its runner's per-run limits.")).toBeInTheDocument();
+    expect(within(sheet).getByText("A run gets the strictest of your organisation's policy, this pool's limits and its runner's per-run limits.")).toBeInTheDocument();
   });
 
   it("with no runners still shows what the pool sets, and a dash for what it leaves to them", async () => {
@@ -177,7 +177,7 @@ describe("user pool", () => {
     expect(within(sheet).getByText("Only dana@example.com can use it. Only they can change it or choose its runners.")).toBeInTheDocument();
     expect(within(sheet).getByText("Read-only. Only dana@example.com can edit or delete this pool.")).toBeInTheDocument();
     for (const b of ["Edit", "Switch off", "Delete"]) expect(within(sheet).queryByRole("button", { name: b })).toBeNull();
-    expect(within(sheet).queryByText("Organization default")).toBeNull();
+    expect(within(sheet).queryByText("Organisation default")).toBeNull();
     expect(usePolicyMock).not.toHaveBeenCalled();
     expect(within(sheet).getByText("dana-mbp-14.corp.example.com")).toBeInTheDocument();
     await userEvent.click(within(sheet).getByRole("button", { name: "laptop-7" }));
@@ -277,7 +277,7 @@ describe("who may use it", () => {
 
   it("says everyone may use a pool with no policy, and nobody when its people have left", async () => {
     const { unmount } = renderDrawer(pool());
-    expect(await screen.findByText("Everyone who may launch runs on organization pools can use this pool.")).toBeInTheDocument();
+    expect(await screen.findByText("Everyone who may launch runs on organisation pools can use this pool.")).toBeInTheDocument();
     unmount();
     usePolicyMock.mockResolvedValue({ ...POLICY, subjects: [] });
     renderDrawer(pool());
