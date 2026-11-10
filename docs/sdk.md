@@ -192,6 +192,8 @@ The CLI is `wardyn run policy <run-id> [--json]`.
 
 `GET /api/v1/runs/{id}` also returns `policy_readback`, the run's newest proxy start as its policy readback stands: `state` (`pending`, `enforced`, `unconfirmed`, `failed`, `abandoned` or `superseded`), `generation` and `confirmed_at`. There is no key for a run with no recorded start. See [run lifetime](operations/run-lifetime.md#policy-readback).
 
+`PATCH /api/v1/runs/{id}/egress` (`client.EditRunEgress`) narrows a live run's egress: `{"remove_hosts": [...], "deny_hosts": [...]}`, never a host added. It answers `200 {"policy_generation": N}` only after the new proxy's readback for that start is `enforced`, and otherwise leaves the run with no proxy and answers `503 egress_edit_unconfirmed` ([run lifetime](operations/run-lifetime.md#live-egress-edit)).
+
 `GET /api/v1/runs/{id}` also returns `policy_digest`: the SHA-256 of the run's effective policy as `run.policy.resolve` records it, or no key before the policy is recorded. It identifies the policy and enforces nothing. Audit rows of the run carry the same value; see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
 #### Reusing the spec
@@ -996,6 +998,11 @@ start.
 | `revive_readback_unsupported` | `POST /runs/{id}/revive` (409), and in each refused run's `reason` in `POST /admin/runs/restart`'s `results`: the new proxy must confirm its policy, and the run's substrate cannot answer the hash of the config it hands that proxy. Nothing changed. |
 | `revive_policy_unconfirmed_lost` | `POST /runs/{id}/revive` (502): the new proxy started but did not confirm its policy (no hash from the driver, or a report of different bytes), so it was stopped and the run is lost until revived. |
 | `proxy_report_invalid` | `POST /internal/proxy/loaded` (400): the report's `config_sha256` is not a lowercase hex SHA-256. |
+| `egress_edit_invalid` | `PATCH /runs/{id}/egress` (400): the body names no host, more than 256 in one list, or an entry the proxy cannot match. A field that would add a host is not part of the body, so it is the generic `invalid_request_body`. |
+| `egress_edit_run_not_live` / `egress_edit_in_progress` | `PATCH /runs/{id}/egress` (409), nothing changed: the run is not running, has no sandbox or is lost (revive it first); or another edit of this run has not answered yet. |
+| `egress_edit_host_not_listed` | `PATCH /runs/{id}/egress` (422), nothing changed: a `remove_hosts` entry is not an entry on the run's allowlist. To block it, deny it instead. |
+| `egress_edit_unsupported` / `egress_edit_legacy_proxy` | `PATCH /runs/{id}/egress` (409), nothing changed: this deployment's store or the run's substrate cannot confirm what a new proxy loaded; or the run's runner or proxy image is older than 0.10.0-rc.18. Start a new run with the narrower policy. |
+| `egress_edit_unconfirmed` | `PATCH /runs/{id}/egress` (503): the new proxy did not confirm the edited policy (no matching report by its deadline, a missing or different hash, or a start another revive replaced), so it was stopped and the run is lost until revived. |
 | `workspace_repo_not_admitted` | The repository is not on this deployment's admitted list (`workspace_admission.go`), at create/update and at launch. |
 | `repo_url_credentials` | `400`: an http(s) repository URL carries a user name, password or token before its host, or an `ssh://` URL a password, wherever a repository is entered or a stored one is launched or scanned. Give the plain URL and the token as a `git_pat` grant. `git@host:path`, `ssh://user@` and the Azure DevOps Clone-button form `https://<org>@dev.azure.com/<org>/...` are accepted. Stored runs, workspaces, sources, policies, presets, templates, governance profiles and launch intents are served without it. |
 | `workspace_envcode_no_local_dir` / `workspace_envcode_no_profile` | `POST /workspaces/{id}/env-as-code/write` only: no `local_dir` source. That route and `GET /workspaces/{id}/env-as-code`: no scanned profile. |

@@ -133,6 +133,25 @@ A start is `legacy` only when a runner's registered version, or the proxy image 
 
 `GET /runs/{id}` shows the newest start as `policy_readback`: its `state`, `generation` and `confirmed_at`, without either hash. The address the agent reaches its proxy on is stored with the run for the audit and is not on the run's JSON.
 
+### Live egress edit
+
+`PATCH /runs/{id}/egress` narrows a live run's egress at once, by the run's owner or a super admin, with the owner's authority as for revive. The body is `{"remove_hosts": [...], "deny_hosts": [...]}`.
+
+| Field | What it does |
+| --- | --- |
+| `remove_hosts` | Each entry must be on the run's allowlist. It leaves the allowlist and is denied for the rest of the run, so a later approval cannot reopen it |
+| `deny_hosts` | Each host is denied for the rest of the run |
+
+The edit never adds a host: any other field is a `400`. Adding a host to a running run stays an approval.
+
+1. The edit is refused, nothing changed, when the run is not live (`409 egress_edit_run_not_live`), another edit of it has not answered (`409 egress_edit_in_progress`), or a remove names a host not on the allowlist (`422 egress_edit_host_not_listed`).
+2. It is also refused when the new proxy could not confirm what it loaded: a deployment or substrate without the readback (`409 egress_edit_unsupported`), or a runner or proxy image older than 0.10.0-rc.18 (`409 egress_edit_legacy_proxy`).
+3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
+4. The answer waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
+5. Any other end leaves the run with no proxy, lost until revived, and answers `503 egress_edit_unconfirmed`. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
+
+Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced.
+
 ## Rename
 
 `PATCH /runs/{id}/title` lets the run's OWNER change its title. It's a display field, not part of the lease above, so it needs no captured limit and is allowed in ANY run state, including a terminal or kept one.
