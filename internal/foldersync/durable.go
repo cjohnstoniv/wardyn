@@ -34,7 +34,8 @@ var ErrNotDurable = errors.New("installed but not durable")
 // errNamesTaken is an InstallNew whose every destination holds another file.
 var errNamesTaken = fmt.Errorf("every name is taken: %w", fs.ErrExist)
 
-// InstallError is a failed install. Before the install (Step sync-file, close, rename or link) every
+// InstallError is a failed install. Before the install (Step sync-file, close, rename, link, or
+// sync-existing: an identical file already at a new name could not be synced) every
 // destination is as it was and the temp file is removed. After it (Step sync-dir, Installed set,
 // errors.Is(err, ErrNotDurable)) the new content is visible at the destination, but not proven
 // durable, and under InstallReplace the old content is gone.
@@ -111,32 +112,56 @@ func place(root *os.Root, tmpName string, mode InstallMode, dsts []string) (dst,
 		if !errors.Is(err, fs.ErrExist) {
 			return "", "link", err
 		}
-		if sameContent(root, tmpName, dst) {
+		same, err := keptAlready(root, tmpName, dst)
+		if err != nil {
+			return "", "sync-existing", err
+		}
+		if same {
 			return dst, "", nil
 		}
 	}
 	return "", "link", errNamesTaken
 }
 
-// sameContent reports whether the regular file dst holds tmpName's bytes.
-func sameContent(root *os.Root, tmpName, dst string) bool {
-	sum := func(name string) ([]byte, int64, bool) {
-		fi, err := root.Lstat(name)
-		if err != nil || !fi.Mode().IsRegular() {
-			return nil, 0, false
-		}
-		f, err := root.Open(name)
-		if err != nil {
-			return nil, 0, false
-		}
-		defer f.Close()
-		h := sha256.New()
-		n, err := io.Copy(h, io.LimitReader(f, fi.Size()))
-		return h.Sum(nil), n, err == nil && n == fi.Size()
+// keptAlready reports whether the regular file dst holds tmpName's bytes, and when it does, syncs
+// that same file: bytes only visible, from a write not yet on the disk, are not yet kept. dst is
+// never written.
+func keptAlready(root *os.Root, tmpName, dst string) (bool, error) {
+	want, ok := fileSum(root, tmpName)
+	if !ok {
+		return false, nil
 	}
-	a, an, aok := sum(tmpName)
-	b, bn, bok := sum(dst)
-	return aok && bok && an == bn && bytes.Equal(a, b)
+	f, err := root.OpenFile(dst, existingSyncFlag, 0)
+	if err != nil {
+		return false, nil
+	}
+	defer f.Close()
+	fi, ferr := f.Stat()
+	li, lerr := root.Lstat(dst)
+	if ferr != nil || lerr != nil || !fi.Mode().IsRegular() || !os.SameFile(fi, li) {
+		return false, nil
+	}
+	h := sha256.New()
+	if n, err := io.Copy(h, io.NewSectionReader(f, 0, fi.Size())); err != nil || n != fi.Size() || !bytes.Equal(h.Sum(nil), want) {
+		return false, nil
+	}
+	return true, fsyncFile(f)
+}
+
+// fileSum is the sha256 of the regular file name.
+func fileSum(root *os.Root, name string) ([]byte, bool) {
+	fi, err := root.Lstat(name)
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil, false
+	}
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, fi.Size()))
+	return h.Sum(nil), err == nil && n == fi.Size()
 }
 
 // createTemp creates an exclusive 0600 file prefix<random>suffix in dir, open for reading and writing.

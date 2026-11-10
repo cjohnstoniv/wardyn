@@ -7,6 +7,9 @@ package foldersync
 
 import "os"
 
+// existingSyncFlag opens a file only to read and sync it.
+const existingSyncFlag = os.O_RDONLY
+
 func replaceFile(root *os.Root, from, to string) error { return root.Rename(from, to) }
 
 // placeNew links to at from; it fails with fs.ErrExist when to exists.

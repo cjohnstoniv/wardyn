@@ -15,6 +15,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// existingSyncFlag opens a file only to read and sync it: FlushFileBuffers needs write access. It
+// neither creates nor truncates.
+const existingSyncFlag = os.O_RDWR
+
 // replaceFile moves from over to and has Windows write the move through to the disk, since a
 // directory cannot be synced there. Only when the directory's path cannot be resolved does it fall
 // back to a rename through root.

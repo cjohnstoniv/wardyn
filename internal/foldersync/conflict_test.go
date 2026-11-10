@@ -339,3 +339,51 @@ func TestInstall_ConflictCopyInANewDirectorySyncsEverythingBeforeThePush(t *test
 		}
 	}
 }
+
+// An identical copy already at a conflict name counts as kept only once that same file is synced:
+// bytes an earlier write left visible but not on the disk are not yet kept. The sync comes before
+// the push may truncate the sandbox's file, and a failed sync blocks the push without touching the
+// existing copy.
+//
+// Every caller of an install treats any InstallError, Installed or not, as not done: the pull
+// (engine.go pull: pathFailed, no record, and a pull never pushes), the conflict copy (conflict.go
+// keepConflict: not kept, so conflict pushes nothing and counts the file unsynced) and the state
+// save (rules.go Save: the error fails the pass, so nothing settles).
+func TestInstall_AnIdenticalExistingCopyIsSyncedBeforeThePush(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		sy, box, root := runnerSyncer(t, true)
+		bothChanged(t, sy, box, root)
+		putSyncFile(t, filepath.Join(root, copyName(1)), "sandbox edit!", 0o644)
+		sandbox := func() string { return getSyncFile(t, filepath.Join(box, "x.txt")) }
+		var events []string
+		onSync(t, func(f *os.File) error {
+			if strings.Contains(f.Name(), "sandbox conflict") {
+				events = append(events, "existing copy synced, sandbox="+sandbox())
+				if fail {
+					return errFault
+				}
+			}
+			return nil
+		}, nil)
+		rep, err := sy.Pass(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"existing copy synced, sandbox=sandbox edit!"}; !slices.Equal(events, want) {
+			t.Errorf("fail=%v: events = %q", fail, events)
+		}
+		if got := getSyncFile(t, filepath.Join(root, copyName(1))); got != "sandbox edit!" {
+			t.Errorf("fail=%v: the existing copy = %q", fail, got)
+		}
+		if _, err := os.Stat(filepath.Join(root, copyName(2))); err == nil {
+			t.Errorf("fail=%v: a second copy was made", fail)
+		}
+		if fail {
+			if sandbox() != "sandbox edit!" || slices.Contains(rep.Pushed, "x.txt") || !slices.Equal(rep.UnsyncedPaths, []string{"x.txt"}) {
+				t.Errorf("a failed sync of the existing copy did not block the push: sandbox = %q, report = %+v", sandbox(), rep)
+			}
+		} else if sandbox() != "laptop edit" || rep.Unsynced != 0 {
+			t.Errorf("sandbox = %q, report = %+v", sandbox(), rep)
+		}
+	}
+}
