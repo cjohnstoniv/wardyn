@@ -75,17 +75,19 @@ func (p *Proxy) hostRuleUninspected(ctx context.Context, host string, port int) 
 
 // hostRuleRefused judges one request to host (inside a terminated tunnel or on the plain lane), writes
 // the refusal when the rules do not allow it, and reports whether it did. A request the rules hold waits
-// for a person's answer to its host, method and path (host_call_hold.go).
-func (p *Proxy) hostRuleRefused(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+// for a person's answer to its host, method and path (host_call_hold.go); the request it returns carries
+// an approved hold's admission to the outbound gate, so the lane forwards that one.
+func (p *Proxy) hostRuleRefused(w http.ResponseWriter, r *http.Request, host string, port int) (*http.Request, bool) {
 	if !p.policy.namesRuleHost(host) {
-		return false
+		return r, false
 	}
 	d := types.EvalHostRules(p.policy.hostRules, host, r.Method, requestEscapedPath(r))
 	switch d.Effect {
 	case types.HostRuleAllow:
-		return false
+		return r, false
 	case types.HostRuleHold:
-		return !p.holdHostCall(w, r, host, port)
+		r, ok := p.holdHostCall(w, r, host, port)
+		return r, !ok
 	}
 	log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceHostRule)
 	log.Cause = hostRuleCause(d)
@@ -93,7 +95,7 @@ func (p *Proxy) hostRuleRefused(w http.ResponseWriter, r *http.Request, host str
 		p.sink.emit(log)
 	}
 	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
-	return true
+	return r, true
 }
 
 // innerMethodRefused is allowed_methods on a request inside a terminated tunnel (serveAdmittedMITMRequest):
@@ -117,32 +119,37 @@ var errHostRuleRefused = errors.New("wardyn: refused by host rules")
 // outboundHostRuleRefused judges a request the proxy is about to send upstream, whichever route built it.
 // The brokered routes (model, git, git credential, MCP) and the API doors re-originate outside the CONNECT
 // and plain lanes, so this is where their requests are judged, on the method and path the host receives.
-// A refusal writes the policy:host-rule row and returns errHostRuleRefused.
-func (p *Proxy) outboundHostRuleRefused(req *http.Request) error {
+// A refusal writes the policy:host-rule row and returns errHostRuleRefused. A forward the rules hold is
+// held as the lanes hold one (outboundHostCall); the request returned carries an approval's admission.
+func (p *Proxy) outboundHostRuleRefused(req *http.Request) (*http.Request, error) {
 	if req.URL == nil {
-		return nil
+		return req, nil
 	}
 	host, port := splitHostPort(req.URL.Host, defaultPortForScheme(req.URL.Scheme))
 	if !p.policy.namesRuleHost(host) {
-		return nil
+		return req, nil
 	}
 	d := types.EvalHostRules(p.policy.hostRules, host, req.Method, req.URL.EscapedPath())
-	if d.Effect == types.HostRuleAllow {
-		return nil
+	switch d.Effect {
+	case types.HostRuleAllow:
+		return req, nil
+	case types.HostRuleHold:
+		return p.outboundHostCall(req, host, port)
 	}
 	log := decisionLog(p.reqOf(req, host, port), egress.Deny, ruleSourceHostRule)
 	log.Cause = hostRuleCause(d)
 	if p.sink != nil {
 		p.sink.emit(log)
 	}
-	return errHostRuleRefused
+	return req, errHostRuleRefused
 }
 
 // hostRuleTransportProxy is the egress transport's Proxy hook. The transport calls it for every request,
 // a reused connection's included, so a route that sends on the transport itself (the kube door's clone of
 // it) is judged as roundTripUpstream's callers are. It names no proxy.
 func (p *Proxy) hostRuleTransportProxy(req *http.Request) (*url.URL, error) {
-	return nil, p.outboundHostRuleRefused(req)
+	_, err := p.outboundHostRuleRefused(req)
+	return nil, err
 }
 
 // requestEscapedPath is the path as the request carried it, escapes kept, so an encoded "/" is seen and

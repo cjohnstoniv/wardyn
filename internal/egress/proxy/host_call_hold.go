@@ -64,65 +64,135 @@ var hostCallSecond = time.Second
 
 // hostRuleRefusedNotHeld is hostRuleRefused for the plain lane's first look, before the policy decides
 // the host: a request the rules hold is passed on, to be held in handlePlain only once evaluate allows
-// it, so a host the policy refuses never asks anyone.
+// the host (a held request to a host the policy refuses never asks a person).
 func (p *Proxy) hostRuleRefusedNotHeld(w http.ResponseWriter, r *http.Request, host string, port int) bool {
 	if p.policy.namesRuleHost(host) && types.EvalHostRules(p.policy.hostRules, host, r.Method, requestEscapedPath(r)).Effect == types.HostRuleHold {
 		return false
 	}
-	return p.hostRuleRefused(w, r, host, port)
+	_, refused := p.hostRuleRefused(w, r, host, port)
+	return refused
 }
 
-// holdHostCall is hostRuleRefused's arm for a request the rules hold: true when a person approved its
-// host, method and path (now or earlier in the run), so the request goes on to the rest of the lane.
-// When it reports false it has answered.
-func (p *Proxy) holdHostCall(w http.ResponseWriter, r *http.Request, host string, port int) bool {
-	method := strings.ToUpper(r.Method)
-	if !p.evaluator.MethodAllowed(r.Method) {
-		p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRule, uuid.Nil,
-			"host rules: a held request whose method allowed_methods refuses", fmt.Sprintf(hostCallMethodText, method))
-		return false
-	}
-	path, err := types.NormalizeRequestPath(requestEscapedPath(r))
+// hostCallAdmittedKey is the request context key under which a lane or the outbound gate records the
+// held request it judged and a person approved (its HostCallKey), so the outbound gate does not judge the
+// same request again. Only the proxy sets a context value; nothing the sandbox sends becomes one.
+type hostCallAdmittedKey struct{}
+
+// withHostCallAdmitted is r carrying the admitted key of scope.
+func withHostCallAdmitted(r *http.Request, scope types.HostCallScope) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), hostCallAdmittedKey{}, scope.CallSHA256))
+}
+
+// hostCallAdmitted reports whether ctx carries the admitted key of scope.
+func hostCallAdmitted(ctx context.Context, scope types.HostCallScope) bool {
+	k, _ := ctx.Value(hostCallAdmittedKey{}).(string)
+	return k != "" && k == scope.CallSHA256
+}
+
+// hostHoldAnswer is a held request's refusal: the row it writes and the text the sandbox reads.
+type hostHoldAnswer struct {
+	decision egress.Decision
+	source   string
+	id       uuid.UUID
+	cause    string
+	detail   string
+}
+
+// hostCallScopeOf is the held request's scope: the host, the method, and the path as the host receives it.
+func hostCallScopeOf(host, method, escapedPath string) (types.HostCallScope, *hostHoldAnswer) {
+	path, err := types.NormalizeRequestPath(escapedPath)
 	if err != nil { // EvalHostRules denies a path it cannot read; this is the belt
-		p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRule, uuid.Nil, "host rules: the request path cannot be judged: "+err.Error(),
-			hostCallHeldPrefix+"its path cannot be judged.")
-		return false
+		return types.HostCallScope{}, &hostHoldAnswer{egress.Deny, ruleSourceHostRule, uuid.Nil,
+			"host rules: the request path cannot be judged: " + err.Error(), hostCallHeldPrefix + "its path cannot be judged."}
 	}
-	scope := types.HostCallScope{Host: host, Method: method, Path: path, HoldSeconds: hostCallWindow}
+	scope := types.HostCallScope{Host: host, Method: strings.ToUpper(method), Path: path, HoldSeconds: hostCallWindow}
 	scope.CallSHA256 = scope.ComputeKey()
-	return p.awaitHostCall(w, r, host, port, scope)
+	return scope, nil
+}
+
+// holdHostCall is hostRuleRefused's arm for a request the rules hold. When a person approved its host,
+// method and path (now or earlier in the run) it returns the request carrying that admission, and true,
+// so the request goes on to the rest of the lane. When it reports false it has answered.
+func (p *Proxy) holdHostCall(w http.ResponseWriter, r *http.Request, host string, port int) (*http.Request, bool) {
+	if !p.evaluator.MethodAllowed(r.Method) {
+		p.answerHostHold(w, r, host, port, hostHoldAnswer{egress.Deny, ruleSourceHostRule, uuid.Nil,
+			"host rules: a held request whose method allowed_methods refuses", fmt.Sprintf(hostCallMethodText, strings.ToUpper(r.Method))})
+		return r, false
+	}
+	scope, bad := hostCallScopeOf(host, r.Method, requestEscapedPath(r))
+	if bad != nil {
+		p.answerHostHold(w, r, host, port, *bad)
+		return r, false
+	}
+	ok, refusal := p.awaitHostCall(r, host, port, scope)
+	if !ok {
+		if refusal != nil { // nil: the client went away, and there is nobody to answer
+			p.answerHostHold(w, r, host, port, *refusal)
+		}
+		return r, false
+	}
+	return withHostCallAdmitted(r, scope), true
+}
+
+// hostHoldRefused is the outbound gate's refusal of a held request: it carries the row already written and
+// the answer, and is errHostRuleRefused to every caller that only knows that.
+type hostHoldRefused struct {
+	answer hostHoldAnswer
+	log    egress.DecisionLog
+}
+
+func (e *hostHoldRefused) Error() string        { return errHostRuleRefused.Error() + ": " + e.answer.cause }
+func (e *hostHoldRefused) Is(target error) bool { return target == errHostRuleRefused }
+
+// outboundHostCall is the outbound gate's arm for a forward the rules hold, on the host, method and path
+// the host receives. A forward a lane already admitted for that same host call goes on unasked; any other
+// is held here as the lanes hold one. On approval it returns the forward carrying the admission, so the
+// transport's hook passes it without a second row.
+func (p *Proxy) outboundHostCall(req *http.Request, host string, port int) (*http.Request, error) {
+	scope, bad := hostCallScopeOf(host, req.Method, req.URL.EscapedPath())
+	if bad != nil {
+		return req, &hostHoldRefused{*bad, p.emitHostHold(req, host, port, *bad)}
+	}
+	if hostCallAdmitted(req.Context(), scope) {
+		return req, nil
+	}
+	ok, refusal := p.awaitHostCall(req, host, port, scope)
+	switch {
+	case ok:
+		return withHostCallAdmitted(req, scope), nil
+	case refusal == nil: // the client went away
+		return req, errHostRuleRefused
+	}
+	return req, &hostHoldRefused{*refusal, p.emitHostHold(req, host, port, *refusal)}
 }
 
 // awaitHostCall passes an approved call, refuses a declined one, or asks (or rejoins the request pending
-// for it) and waits on the open request up to the window.
-func (p *Proxy) awaitHostCall(w http.ResponseWriter, r *http.Request, host string, port int, scope types.HostCallScope) bool {
+// for it) and waits on the open request up to the window. ok false with no refusal is a client gone.
+func (p *Proxy) awaitHostCall(r *http.Request, host string, port int, scope types.HostCallScope) (bool, *hostHoldAnswer) {
 	key := scope.CallSHA256
-	declined := func(id uuid.UUID, cause string) bool {
-		p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRuleApprovalDenied, id, cause,
-			fmt.Sprintf(hostCallDeclinedText, scope.Method, scope.Path, scope.Host))
-		return false
+	declined := func(id uuid.UUID, cause string) *hostHoldAnswer {
+		return &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalDenied, id, cause,
+			fmt.Sprintf(hostCallDeclinedText, scope.Method, scope.Path, scope.Host)}
 	}
-	refused := func(cause, text string) bool {
-		p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRuleApprovalRefused, uuid.Nil, cause, text)
-		return false
+	refused := func(cause, text string) *hostHoldAnswer {
+		return &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalRefused, uuid.Nil, cause, text}
 	}
 	id, state, why := p.hostCalls.admitKept(key)
 	switch {
 	case state == apApproved: // kept for the run, and no waiting slot taken
-		return p.releaseHostCall(r, host, port, id)
+		return p.releaseHostCall(r, host, port, id), nil
 	case state == apDenied:
-		return declined(id, "a declined host call, refused for the run")
+		return false, declined(id, "a declined host call, refused for the run")
 	case why != "":
 		text, cause := hostCallBusyText, "too many host calls are waiting for a person"
 		if why == mcpCallKeysText {
 			text, cause = hostCallKeysText, "too many distinct host calls were asked about"
 		}
-		p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRuleApprovalBusy, uuid.Nil, cause, text)
-		return false
+		return false, &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalBusy, uuid.Nil, cause, text}
 	}
 	defer p.hostCalls.leave(key)
 	if p.approval == nil {
-		return refused("this proxy has no way to ask", hostCallNoAskText)
+		return false, refused("this proxy has no way to ask", hostCallNoAskText)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), hostCallWindow*hostCallSecond)
 	defer cancel()
@@ -134,20 +204,20 @@ func (p *Proxy) awaitHostCall(w http.ResponseWriter, r *http.Request, host strin
 		var refusal *raiseRefusedError
 		switch {
 		case errors.As(err, &refusal):
-			return refused(fmt.Sprintf("the request for an approval was refused (%d)", refusal.status), fmt.Sprintf(hostCallRefusedText, refusal.status))
+			return false, refused(fmt.Sprintf("the request for an approval was refused (%d)", refusal.status), fmt.Sprintf(hostCallRefusedText, refusal.status))
 		case err != nil:
-			return refused("the request for an approval could not be raised", hostCallNoAskText)
+			return false, refused("the request for an approval could not be raised", hostCallNoAskText)
 		}
 		if id = p.hostCalls.install(key, got); id == uuid.Nil {
-			return refused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
+			return false, refused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
 		}
 	}
-	return p.pollHostCall(ctx, w, r, host, port, scope, id, declined)
+	return p.pollHostCall(ctx, r, host, port, scope, id, declined)
 }
 
 // pollHostCall waits on approval id for the scope's key: true once a person approved it.
-func (p *Proxy) pollHostCall(ctx context.Context, w http.ResponseWriter, r *http.Request, host string, port int, scope types.HostCallScope,
-	id uuid.UUID, declined func(uuid.UUID, string) bool) bool {
+func (p *Proxy) pollHostCall(ctx context.Context, r *http.Request, host string, port int, scope types.HostCallScope,
+	id uuid.UUID, declined func(uuid.UUID, string) *hostHoldAnswer) (bool, *hostHoldAnswer) {
 	key := scope.CallSHA256
 	tick := time.NewTicker(holdPollInterval)
 	defer tick.Stop()
@@ -158,24 +228,22 @@ func (p *Proxy) pollHostCall(ctx context.Context, w http.ResponseWriter, r *http
 			switch ar.State {
 			case types.ApprovalApproved:
 				p.hostCalls.update(key, id, apApproved)
-				return p.releaseHostCall(r, host, port, id)
+				return p.releaseHostCall(r, host, port, id), nil
 			case types.ApprovalDenied:
 				p.hostCalls.update(key, id, apDenied)
-				return declined(id, "declined by a person")
+				return false, declined(id, "declined by a person")
 			case types.ApprovalExpired, types.ApprovalCancelled:
 				p.hostCalls.update(key, id, apNone)
-				p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRuleApprovalClosed, id, "closed without a decision", hostCallClosedText)
-				return false
+				return false, &hostHoldAnswer{egress.Deny, ruleSourceHostRuleApprovalClosed, id, "closed without a decision", hostCallClosedText}
 			}
 		}
 		select {
 		case <-ctx.Done():
 			if r.Context().Err() != nil {
-				return false // the client went away; the request stays pending for a retry
+				return false, nil // the client went away; the request stays pending for a retry
 			}
-			p.answerHostHold(w, r, host, port, egress.Pending, ruleSourceHostRuleApprovalWait, id, "waiting for a person",
-				fmt.Sprintf(hostCallWaitingText, scope.Method, scope.Path, scope.Host, id))
-			return false
+			return false, &hostHoldAnswer{egress.Pending, ruleSourceHostRuleApprovalWait, id, "waiting for a person",
+				fmt.Sprintf(hostCallWaitingText, scope.Method, scope.Path, scope.Host, id)}
 		case <-tick.C:
 		}
 	}
@@ -208,23 +276,33 @@ func (p *Proxy) raiseHostCall(ctx context.Context, scope types.HostCallScope, re
 	return p.approval.raiseBytes(ctx, body)
 }
 
-// answerHostHold writes one held-request row and answers: a pending 403 the sandbox reads as "retry after
-// approval" for a wait, and the egress deny for every other outcome. The text rides the detail header.
-func (p *Proxy) answerHostHold(w http.ResponseWriter, r *http.Request, host string, port int, d egress.Decision, source string,
-	id uuid.UUID, cause, detail string) {
-	log := decisionLog(p.reqOf(r, host, port), d, source)
-	if id != uuid.Nil {
-		log.ApprovalID = &id
+// emitHostHold writes a held request's refusal row and returns it.
+func (p *Proxy) emitHostHold(r *http.Request, host string, port int, a hostHoldAnswer) egress.DecisionLog {
+	log := decisionLog(p.reqOf(r, host, port), a.decision, a.source)
+	if a.id != uuid.Nil {
+		log.ApprovalID = &a.id
 	}
-	log.Cause = cause
+	log.Cause = a.cause
 	if p.sink != nil {
 		p.sink.emit(log)
 	}
-	w.Header().Set(egressHeaderDetail, detail)
-	if d == egress.Pending {
-		setEgressRefusalHeadersWithReason(w, egressRefusalPending, host, source)
-		writeApprovalPending(w, &log)
+	return log
+}
+
+// answerHostHold writes one held-request row and answers (writeHostHold).
+func (p *Proxy) answerHostHold(w http.ResponseWriter, r *http.Request, host string, port int, a hostHoldAnswer) {
+	log := p.emitHostHold(r, host, port, a)
+	p.writeHostHold(w, host, port, a, &log)
+}
+
+// writeHostHold answers a held request: a pending 403 the sandbox reads as "retry after approval" for a
+// wait, and the egress deny for every other outcome. The text rides the detail header.
+func (p *Proxy) writeHostHold(w http.ResponseWriter, host string, port int, a hostHoldAnswer, log *egress.DecisionLog) {
+	w.Header().Set(egressHeaderDetail, a.detail)
+	if a.decision == egress.Pending {
+		setEgressRefusalHeadersWithReason(w, egressRefusalPending, host, a.source)
+		writeApprovalPending(w, log)
 		return
 	}
-	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
+	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, log)
 }

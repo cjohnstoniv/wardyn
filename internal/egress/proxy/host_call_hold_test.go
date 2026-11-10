@@ -154,7 +154,8 @@ func hcProxy(t *testing.T, spec types.RunPolicySpec) (*Proxy, *bytes.Buffer) {
 func hcSend(p *Proxy, method, target string) (rec *httptest.ResponseRecorder, sent bool) {
 	rec = httptest.NewRecorder()
 	r := httptest.NewRequest(method, target, strings.NewReader(`{"a":1}`))
-	return rec, !p.hostRuleRefused(rec, r, hrHost, 80)
+	_, refused := p.hostRuleRefused(rec, r, hrHost, 80)
+	return rec, !refused
 }
 
 // TestHostCallHoldWaitsThenAllowsForTheRun: a held request waits and is answered pending, never sent; once
@@ -163,7 +164,7 @@ func hcSend(p *Proxy, method, target string) (rec *httptest.ResponseRecorder, se
 func TestHostCallHoldWaitsThenAllowsForTheRun(t *testing.T) {
 	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
 	cp := newHCCP(t, p)
-	rec, sent := hcSend(p, "POST", "http://"+hrHost+"/x/../admin")
+	rec, sent := hcSend(p, "POST", "http://"+hrHost+"/admin")
 	if sent || rec.Code != http.StatusForbidden || rec.Header().Get(egressHeaderStatus) != egressRefusalPending ||
 		!strings.Contains(rec.Body.String(), `"wardyn":"approval-pending"`) {
 		t.Fatalf("held request: sent=%v %d %v %s", sent, rec.Code, rec.Header(), rec.Body)
@@ -184,7 +185,7 @@ func TestHostCallHoldWaitsThenAllowsForTheRun(t *testing.T) {
 	}
 
 	cp.decideAll(types.ApprovalApproved)
-	for _, target := range []string{"/admin", "/admin?x=1", "//admin"} {
+	for _, target := range []string{"/admin", "/admin?x=1", "/%61dmin"} {
 		if rec, sent := hcSend(p, "POST", "http://"+hrHost+target); !sent {
 			t.Fatalf("approved POST %s refused: %d %s", target, rec.Code, rec.Body)
 		}
@@ -376,7 +377,8 @@ func hcGo(p *Proxy, path string) (done chan hcResult, cancel context.CancelFunc)
 	go func() {
 		rec := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "http://"+hrHost+path, nil).WithContext(ctx)
-		done <- hcResult{rec, !p.hostRuleRefused(rec, r, hrHost, 80)}
+		_, refused := p.hostRuleRefused(rec, r, hrHost, 80)
+		done <- hcResult{rec, !refused}
 	}()
 	return done, cancel
 }
@@ -581,5 +583,159 @@ func TestHostCallReleaseRowNamesTheApproval(t *testing.T) {
 	}
 	if released != 2 {
 		t.Fatalf("release rows naming %s = %d, want 2:\n%s", id, released, buf)
+	}
+}
+
+// hcReleases counts the allow rows an approval wrote for held requests.
+func hcReleases(log string) int {
+	return strings.Count(log, `"rule_source":"`+ruleSourceHostRuleApprovalApproved+`"`)
+}
+
+// TestHostCallApprovedHoldIsForwarded: a held request a person approves on the plain lane or inside a
+// terminated tunnel reaches the host. The forward is not judged a second time: one ask, one release row.
+func TestHostCallApprovedHoldIsForwarded(t *testing.T) {
+	cu := captureUpstream(t, false, "ok")
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
+		Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: []types.HostRuleSet{hcHoldSet()}})})
+	cp := newHCCP(t, p)
+	cp.newState = types.ApprovalApproved
+	if got := hcPlain(t, p, "POST", "/admin"); got != http.StatusOK || !cu.reached {
+		t.Errorf("plain: an approved held request = %d reached=%v, want 200 at the host", got, cu.reached)
+	}
+	if rows, _, _ := cp.counts(); rows != 1 || hcReleases(buf.String()) != 1 {
+		t.Errorf("plain: %d asks and %d release rows, want one of each", rows, hcReleases(buf.String()))
+	}
+
+	tu := captureUpstream(t, true, "ok")
+	mp, mbuf, caPEM := hrProxy(t, hrOpts{}, tu.srv)
+	mp.policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: []types.HostRuleSet{hcHoldSet()}})
+	mcp := newHCCP(t, mp)
+	mcp.newState = types.ApprovalApproved
+	srv := httptest.NewServer(mp)
+	defer srv.Close()
+	status, conn, _ := hrConnect(t, srv.URL, "443")
+	if status != http.StatusOK {
+		t.Fatalf("CONNECT = %d", status)
+	}
+	if got := hrInner(t, conn, caPEM, "POST", "/admin"); got != http.StatusOK || !tu.reached {
+		t.Errorf("tunnel: an approved held request = %d reached=%v, want 200 at the host", got, tu.reached)
+	}
+	if rows, _, _ := mcp.counts(); rows != 1 || hcReleases(mbuf.String()) != 1 {
+		t.Errorf("tunnel: %d asks and %d release rows, want one of each", rows, hcReleases(mbuf.String()))
+	}
+}
+
+// TestHostCallRetryForwardedUnderTheRunApproval: once approved, a retry of the same request is forwarded
+// to the host with no new ask, on the plain lane and on a brokered route.
+func TestHostCallRetryForwardedUnderTheRunApproval(t *testing.T) {
+	cu := captureUpstream(t, false, "ok")
+	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
+		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: []types.HostRuleSet{hcHoldSet()}})})
+	cp := newHCCP(t, p)
+	cp.newState = types.ApprovalApproved
+	for i := range 2 {
+		cu.reached = false
+		if got := hcPlain(t, p, "POST", "/admin"); got != http.StatusOK || !cu.reached {
+			t.Errorf("plain send %d = %d reached=%v, want 200 at the host", i, got, cu.reached)
+		}
+	}
+	if rows, _, _ := cp.counts(); rows != 1 {
+		t.Errorf("plain: %d asks, want one", rows)
+	}
+
+	up := newRawUpstream(t, `{}`)
+	bp, _ := llmChecksProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcModelsHold()}}, "", up)
+	bcp := newHCCP(t, bp)
+	bcp.newState = types.ApprovalApproved
+	for i := range 2 {
+		if rec, reached := hcModels(t, bp, up); rec.Code != http.StatusOK || !reached {
+			t.Errorf("brokered send %d = %d reached=%v, want 200 at the host", i, rec.Code, reached)
+		}
+	}
+	if rows, _, _ := bcp.counts(); rows != 1 {
+		t.Errorf("brokered: %d asks, want one", rows)
+	}
+}
+
+// hcModelsHold holds GET /v1/models on the model host and allows everything else there.
+func hcModelsHold() types.HostRuleSet {
+	return types.HostRuleSet{Rules: []types.HostRule{
+		{Host: openaiHost, Methods: []string{"GET"}, Paths: []string{"/v1/models"}, Effect: types.HostRuleHold},
+		{Host: openaiHost, Effect: types.HostRuleAllow},
+	}}
+}
+
+// hcModels sends the model route's GET /v1/models and reports the status and whether the host saw it.
+func hcModels(t *testing.T, p *Proxy, up *rawUpstream) (*httptest.ResponseRecorder, bool) {
+	t.Helper()
+	up.reached = false
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, llmOpenAIPrefix+"v1/models", nil))
+	return rec, up.reached
+}
+
+// TestHostCallBrokeredRouteHeldAtTheForward: a brokered route (the git broker) meets the hold first at the
+// outbound gate, which asks a person: the sandbox reads a pending answer while nobody has decided, and once
+// a person approves, the retry reaches the host under the same one approval.
+func TestHostCallBrokeredRouteHeldAtTheForward(t *testing.T) {
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, buf := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+	p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: githubHost, Methods: []string{"GET"}, Paths: []string{"/octocat/hello-world.git"}, Effect: types.HostRuleHold},
+		{Host: githubHost, Effect: types.HostRuleAllow},
+	}}}
+	cp := newHCCP(t, p)
+	send := func() (*httptest.ResponseRecorder, bool) {
+		hits := gitHitsOf(up)
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, "/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack", nil))
+		return rec, gitHitsOf(up) > hits
+	}
+	rec, reached := send()
+	if reached || rec.Code != http.StatusForbidden || rec.Header().Get(egressHeaderStatus) != egressRefusalPending ||
+		!strings.Contains(rec.Header().Get(egressHeaderDetail), "GET /octocat/hello-world.git/info/refs on "+githubHost) {
+		t.Fatalf("undecided: %d reached=%v %v, want a pending answer before the host", rec.Code, reached, rec.Header())
+	}
+	cp.decideAll(types.ApprovalApproved)
+	if rec, reached = send(); rec.Code != http.StatusOK || !reached {
+		t.Fatalf("approved: %d reached=%v, want 200 at the host", rec.Code, reached)
+	}
+	if rows, _, _ := cp.counts(); rows != 1 || hcReleases(buf.String()) != 1 {
+		t.Errorf("%d asks and %d release rows, want one of each", rows, hcReleases(buf.String()))
+	}
+}
+
+// TestHostCallHoldAtTheForwardKeepsADeny: a forward an approved hold would let through is refused, unasked,
+// once another set denies it. A deny in any set wins at the outbound gate as at the lanes.
+func TestHostCallHoldAtTheForwardKeepsADeny(t *testing.T) {
+	deny := types.HostRuleSet{Rules: []types.HostRule{
+		{Host: openaiHost, Methods: []string{"GET"}, Paths: []string{"/v1/models"}, Effect: types.HostRuleDeny},
+		{Host: openaiHost, Effect: types.HostRuleAllow},
+	}}
+	for _, tc := range []struct {
+		name string
+		sets []types.HostRuleSet
+		pass bool
+	}{
+		{"the hold alone", []types.HostRuleSet{hcModelsHold()}, true},
+		{"the hold and a denying set", []types.HostRuleSet{hcModelsHold(), deny}, false},
+		{"a denying set and the hold", []types.HostRuleSet{deny, hcModelsHold()}, false},
+	} {
+		up := newRawUpstream(t, `{}`)
+		p, buf := llmChecksProxy(t, types.RunPolicySpec{HostRules: tc.sets}, "", up)
+		cp := newHCCP(t, p)
+		cp.newState = types.ApprovalApproved
+		rec, reached := hcModels(t, p, up)
+		rows, _, _ := cp.counts()
+		if tc.pass && (rec.Code != http.StatusOK || !reached || rows != 1) {
+			t.Errorf("%s: %d reached=%v asks=%d, want 200 at the host after one ask", tc.name, rec.Code, reached, rows)
+		}
+		if !tc.pass && (rec.Code < 300 || reached || rows != 0 ||
+			!strings.Contains(buf.String(), `"rule_source":"`+ruleSourceHostRule+`"`)) {
+			t.Errorf("%s: %d reached=%v asks=%d, want a policy:host-rule refusal before the host, unasked", tc.name, rec.Code, reached, rows)
+		}
 	}
 }

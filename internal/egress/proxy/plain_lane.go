@@ -82,7 +82,8 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		writeApprovalPending(w, log)
 		return
 	}
-	if p.plainRefusedAfterPolicy(w, r, host, port, log) {
+	r, refused := p.plainRefusedAfterPolicy(w, r, host, port, log) // r carries an approved hold to the forward
+	if refused {
 		return
 	}
 
@@ -159,11 +160,12 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 }
 
 // plainRefusedAfterPolicy is handlePlain's refusals once the policy allows the host, and reports whether
-// it answered.
-func (p *Proxy) plainRefusedAfterPolicy(w http.ResponseWriter, r *http.Request, host string, port int, log *egress.DecisionLog) bool {
+// it answered. The request it returns is the one to forward (hostRuleRefused).
+func (p *Proxy) plainRefusedAfterPolicy(w http.ResponseWriter, r *http.Request, host string, port int, log *egress.DecisionLog) (*http.Request, bool) {
 	// A request the host rules hold asks a person only now, once the policy allows the host (host_call_hold.go).
-	if p.hostRuleRefused(w, r, host, port) {
-		return true
+	r, refused := p.hostRuleRefused(w, r, host, port)
+	if refused {
+		return r, true
 	}
 	// require_tls: the operator declared this host's credential may ride only TLS, and this
 	// request is cleartext — refuse the REQUEST before inspection, since a refusal ends it and
@@ -174,7 +176,7 @@ func (p *Proxy) plainRefusedAfterPolicy(w http.ResponseWriter, r *http.Request, 
 		}
 		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceRequireTLS)
 		http.Error(w, fmt.Sprintf(injectRequireTLSBody, host), http.StatusForbidden)
-		return true
+		return r, true
 	}
-	return false
+	return r, false
 }

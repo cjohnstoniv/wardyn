@@ -483,7 +483,11 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 	// stays per-CONNECT (docs/POLICIES.md "'One connection' is the honest word") since re-approving
 	// per inner request would multiply approvals; the method check costs nothing to re-apply.
 	// Host rules judge each request inside the same way (host_rules.go).
-	if p.innerMethodRefused(w, r, host, port) || p.hostRuleRefused(w, r, host, port) {
+	if p.innerMethodRefused(w, r, host, port) {
+		return
+	}
+	r, refused := p.hostRuleRefused(w, r, host, port) // r carries an approved hold to the forward
+	if refused {
 		return
 	}
 
