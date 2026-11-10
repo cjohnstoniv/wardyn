@@ -445,25 +445,15 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 // to resume. A record that cannot be read counts as kept: a sweep never tears down what it cannot
 // check, and the next sweep reads it again.
 func (s *Server) computerFolderKept(ctx context.Context, id uuid.UUID) bool {
-	kept, err := s.computerFolderKeptRead(ctx, id)
-	return err != nil || kept
-}
-
-// computerFolderKeptRead is computerFolderKept with the record's read error apart, for a caller that must
-// not count a record it could not read as settled (a failed proxy start's containment).
-func (s *Server) computerFolderKeptRead(ctx context.Context, id uuid.UUID) (bool, error) {
 	st, ok := s.cfg.Store.(store.RunLocalFolderStatuses)
 	if !ok {
-		return false, nil
+		return false
 	}
 	rec, err := st.RunLocalFolderStatus(ctx, id)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return false, nil
-	case err != nil:
-		return false, err
+	if errors.Is(err, store.ErrNotFound) {
+		return false
 	}
-	return rec.Resume != nil, nil
+	return err != nil || rec.Resume != nil
 }
 
 // resumeComputerFolderBacks resumes, on the orphan sweep's cadence and before it, each terminal
