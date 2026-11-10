@@ -198,6 +198,7 @@ func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
 func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	res, rerr := s.editRunEgressOnce(r, run, edit)
+	rerr = s.withRunFate(run, rerr)
 	data := map[string]any{"subject": run.CreatedBy, "removed_hosts": nonNilStrings(edit.remove), "denied_hosts": nonNilStrings(edit.deny)}
 	outcome := "success"
 	if rerr != nil {
@@ -249,6 +250,22 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 		return egressEditResult{}, egressEditUnresolved("readback failed", nil)
 	}
 	return egressEditResult{PolicyGeneration: res.generation}, nil
+}
+
+// withRunFate ends an edit's stopped or stopping answer with what happens to the run: a run that can
+// be kept is lost until revived, and one that cannot (a headless run off the person's own machine) is
+// ended (lostRunKeepable, the predicate the stop itself follows).
+func (s *Server) withRunFate(run types.AgentRun, rerr *reviveError) *reviveError {
+	if rerr == nil || (rerr.reason != reasonEgressEditUnconfirmed && rerr.reason != reasonEgressEditContainmentUnresolved) {
+		return rerr
+	}
+	out := *rerr
+	if s.lostRunKeepable(run, s.cfg.Now()) {
+		out.msg += "; the run is lost until revived"
+	} else {
+		out.msg += "; the run is ended, since a headless run off your own machine cannot be kept"
+	}
+	return &out
 }
 
 // egressEditSupported refuses, before anything changes, an edit whose new proxy could not confirm
@@ -409,7 +426,7 @@ func (s *Server) storeAndSettleRevived(ctx context.Context, run types.AgentRun, 
 // stop is confirmed.
 func egressEditUnconfirmed(why string) *reviveError {
 	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditUnconfirmed, lost: true,
-		msg: "the run's new proxy did not confirm the edited policy (" + why + "), so it was stopped and the run has no egress until revived"}
+		msg: "the run's new proxy did not confirm the edited policy (" + why + "), so it was stopped and the run has no egress"}
 }
 
 // egressEditSuperseded is the 503 of an edit whose start another revive replaced before it confirmed.

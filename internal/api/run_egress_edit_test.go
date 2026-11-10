@@ -586,3 +586,21 @@ func TestEgressEdit_ReplaceFailureAnswersFromTheConfirmedStop(t *testing.T) {
 		}
 	}
 }
+
+// A stopped edit says the run is lost until revived only where the run can be kept; a headless run
+// off the person's own machine is ended instead.
+func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
+	f := newEgressEditFixture(t)
+	kept := types.AgentRun{State: types.RunRunning, Interactive: true, SandboxRef: "sbx"}
+	ended := types.AgentRun{State: types.RunRunning, SandboxRef: "sbx"}
+	for run, want := range map[*types.AgentRun]string{&kept: "lost until revived", &ended: "is ended"} {
+		for _, rerr := range []*reviveError{egressEditUnconfirmed("start_failed"), egressEditUnresolved("start_failed", nil)} {
+			if got := f.srv.withRunFate(*run, rerr).msg; !strings.Contains(got, want) {
+				t.Errorf("interactive=%v %s: %q, want it to say %q", run.Interactive, rerr.reason, got, want)
+			}
+		}
+	}
+	if got := f.srv.withRunFate(ended, egressEditSuperseded()).msg; strings.Contains(got, "ended") {
+		t.Errorf("a superseded edit stopped nothing, so it names no fate: %q", got)
+	}
+}
