@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- Kubernetes: the NetworkPolicy egress canary now re-runs every 10 minutes in each runs namespace, not only at boot. The first check that shows egress through a deny-all policy refuses new sandboxes in that namespace, and three checks in a row that cannot tell refuse them as not proven; running ones keep running. `/healthz` adds `network_policy_checked_at`, the time of the check that produced the verdict, and reports `network_policy` as `refused` or `not_proven` after a failed re-check. The setup page's egress-containment row shows the verdict and that time. The prewrapped image check follows the same live verdict. Each change of the verdict, either way, writes a `k8s.netpol.update` audit row.
+- Kubernetes: the NetworkPolicy egress canary now re-runs every 10 minutes in each runs namespace, not only at boot. The first check that shows egress through a deny-all policy refuses new sandboxes in that namespace, and three checks in a row that cannot tell refuse them as not proven; running ones keep running. `/healthz` adds `network_policy_checked_at`, the time of the check that produced the verdict, and reports `network_policy` as `refused` or `not_proven` after a failed re-check. The setup page's egress-containment row shows the verdict and that time. The prewrapped image check follows the same live verdict. Each change of the verdict, either way, writes a `k8s.netpol.update` audit row. A Kubernetes runner reports its verdict again after each re-check that changes it, so wardynd's `/healthz` shows the worst of its own and its connected runners', and a change on a runner writes the same row naming the runner.
 
 ### Fixed
 

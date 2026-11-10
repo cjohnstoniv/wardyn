@@ -130,6 +130,7 @@ A managed, multi-tenant cluster may apply an ambient default-deny as its baselin
 - `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` still lets plain sandboxes start where the canary proved NetworkPolicy not enforced, as at boot. It never covers "not proven", and agent-sandbox creates (`WARDYN_K8S_AGENT_SANDBOX`) need proven enforcement whatever it says.
 - After a CNI change, the next check sees it within 10 minutes. Restart wardynd, or the runner, to check at once.
 - `/healthz` reports `network_policy` and `network_policy_checked_at`, the time of the check that produced that verdict; checks that could not tell, fewer than three, never move it. After a failed re-check the verdict is `refused` (not enforced, new sandboxes refused) or `not_proven`. With several runs namespaces it is the worst one's, with its own time. The `k8s_egress_containment` setup row shows the same.
-- A runner reports its verdict when its session starts, not after each re-check. On a runner, the refusal at create is what stops a new sandbox.
+- A Kubernetes runner reports its verdict when its session starts, and again after each re-check that changes the verdict or its time. On a runner, the refusal at create is what stops a new sandbox.
+- wardynd's `/healthz` shows the worst of its own verdict and every connected runner's; the setup row shows wardynd's own. A change on a runner writes a `k8s.netpol.update` row naming the runner.
 
 The canary's verdict is on the admin setup page's Environment step (`GET /setup/status`, the `k8s_egress_containment` check). The same step holds the Fence/Wall/Vault tier matrix for every driver.
