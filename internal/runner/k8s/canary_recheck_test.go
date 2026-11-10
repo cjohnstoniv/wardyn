@@ -552,6 +552,9 @@ func stallingAPI(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int3
 		switch {
 		case r.Method == stall:
 			stalled.Add(1)
+			// Read the body first: net/http sees the client hang up, and ends r.Context(), only once
+			// the body is read. Unread, this handler never returns and srv.Close in Cleanup waits forever.
+			_, _ = io.Copy(io.Discard, r.Body)
 			<-r.Context().Done()
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
