@@ -284,6 +284,24 @@ func TestRunExecRefusals(t *testing.T) {
 	}
 }
 
+// TestRunExecBackgroundRunIsRefused: POST /exec is the SSH access door (backgroundDoors), so a background
+// task refuses a command as SSH does, with the door's sentence, and the runner is never called.
+func TestRunExecBackgroundRunIsRefused(t *testing.T) {
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return fakeExecSession("", "", 0), nil })
+	e.ast.mu.Lock()
+	run := e.ast.runs[e.id]
+	run.Experience = types.ExperienceBackground
+	e.ast.runs[e.id] = run
+	e.ast.mu.Unlock()
+	w := e.exec(t, `{"command":"id"}`)
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonRunExecUnavailable || !strings.Contains(w.Body.String(), runBackgroundOnlyMsg("SSH access")) {
+		t.Errorf("a background run = %d %s, want 409 %s with %q", w.Code, w.Body, reasonRunExecUnavailable, runBackgroundOnlyMsg("SSH access"))
+	}
+	if n := e.execs.Load(); n != 0 {
+		t.Errorf("ExecStream was called %d times for a background run", n)
+	}
+}
+
 // TestRunExecForeignRunIsMissing: a member who does not own the run gets the missing run's 404 and the
 // runner is never called.
 func TestRunExecForeignRunIsMissing(t *testing.T) {

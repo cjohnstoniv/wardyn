@@ -52,6 +52,9 @@ var isOperatorCensus = map[string]int{
 	// keyed on the role the ticket it leads to is stamped with (refuseAttachEntry's ticket
 	// lane); the governed-admin answer is adminDoorExempt's, as there.
 	"approvals_takeover.go:loadTakeover": 1,
+	// POST /runs/{id}/exec: the skip of deny_interactive, as SSH authentication's (sshAuth); the
+	// governed-admin answer is adminDoorExempt's, as there.
+	"run_exec.go:handleRunExec": 1,
 	// Base images (design final §3): the security tier writes prewrapped rows only, and a delete
 	// authorizes the stored kind (and force) before naming any workspace.
 	"base_images.go:mayWriteBaseImageKind": 1,

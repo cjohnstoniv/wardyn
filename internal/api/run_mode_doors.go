@@ -65,7 +65,7 @@ type backgroundDoor struct {
 	// Symbols are the functions the owner edits. A door with no surface yet has none.
 	Symbols []string
 	// Routes are the /runs/{id} routes that open this door, as "METHOD /path".
-	// SSH and the UI gateway are not under /runs/{id}; their Symbols are the guard.
+	// SSH's channels and the UI gateway are not under /runs/{id}; their Symbols are the guard.
 	Routes []string
 	// Enforced is true once every symbol asks backgroundOnlyRefusal.
 	Enforced bool
@@ -83,8 +83,10 @@ var backgroundDoors = []backgroundDoor{
 	{Door: "interactive exec", Owner: "C-mode-doors", Symbols: []string{"establishExec"}, Enforced: true},
 	// sshFreshRun, not the channel handlers: those take a run id and hold no run,
 	// while sshFreshRun is the one fresh read every channel bridge (shell, exec,
-	// sftp, wardyn-sync, direct-tcpip) makes before it execs.
-	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"}, Enforced: true},
+	// sftp, wardyn-sync, direct-tcpip) makes before it execs. POST /runs/{id}/exec is
+	// the exec channel over HTTP (run_exec.go) and makes the same read before it execs.
+	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"},
+		Routes: []string{"POST /runs/{id}/exec"}, Enforced: true},
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	// An app's ticket (handleAppTicket) is minted only for an inbound app, the door's
