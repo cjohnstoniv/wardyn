@@ -125,7 +125,7 @@ A managed, multi-tenant cluster may apply an ambient default-deny as its baselin
 
 - Each re-check runs the same two phases. A definite result changes the verdict at once: a check that shows egress through a deny-all policy refuses new sandboxes from that check on, and a check that proves enforcement allows them again.
 - Only a check that cannot tell (an API error, a pod that never ran) waits: three in a row (about 30 minutes) make the verdict "not proven", so one flaky check never moves it.
-- Under `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, a phase A pod that exits 1 waits too where a definite verdict stands, since a pod-network blip looks the same. Three in a row make "enforced" read "acknowledged", and "not enforced" read "not proven".
+- Under `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, a phase A pod that exits 1 waits too where a definite verdict stands, since a pod-network blip looks the same. Three in a row make "enforced" read "acknowledged", and "not enforced" read "not proven". Agent-sandbox mode refuses on "acknowledged", so `/healthz` reports it as `not_proven` there.
 - Once a namespace's verdict is "not enforced" or "not proven", new sandboxes there are refused. Running sandboxes keep running; stop them yourself if they must not outlive the guarantee.
 - `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` still lets plain sandboxes start where the canary proved NetworkPolicy not enforced, as at boot. It never covers "not proven", and agent-sandbox creates (`WARDYN_K8S_AGENT_SANDBOX`) need proven enforcement whatever it says.
 - After a CNI change, the next check sees it within 10 minutes. Restart wardynd, or the runner, to check at once.

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -243,38 +244,64 @@ func TestCanaryRecheck_AcknowledgedRefusesAgentSandboxOnly(t *testing.T) {
 	if err := d.netPolRefusal(testNamespace); !errors.Is(err, errNetPolNotProven) {
 		t.Errorf("agent-sandbox: refusal %v, want errNetPolNotProven", err)
 	}
+	if got := healthCheck(t, d).Verdict; got != runner.NetPolNotProven {
+		t.Errorf("agent-sandbox: health verdict %q, want %q", got, runner.NetPolNotProven)
+	}
 }
 
-// TestCanaryRecheck_AcknowledgedNeverLiftsAnEscape: with the ambient default-deny acknowledged, checks
-// whose phase A pod exits 1 after one that showed an escape keep new sandboxes refused. Fewer than three
-// keep the refused verdict and its time; three read not proven. Only proof of enforcement lifts it.
+// TestCanaryRecheck_AcknowledgedNeverLiftsAnEscape: with the ambient default-deny acknowledged, no
+// result after one that showed an escape lets new sandboxes start again, in plain and agent-sandbox
+// mode alike, except a check that proves enforcement. Acknowledged results (phase A exits 1, as a
+// pod-network blip also does) keep the refused verdict and its time for two checks, read not proven at
+// the third, and stay not proven at the fourth and fifth. After three checks that cannot tell, an
+// acknowledged result still refuses.
 func TestCanaryRecheck_AcknowledgedNeverLiftsAnEscape(t *testing.T) {
-	c := newRecheckCluster(t)
-	d, clock := c.boot(t, Config{AckAmbientDefaultDeny: true})
-	c.phaseB.Store(0) // the CNI stops enforcing
-	*clock = clock.Add(canaryRecheckInterval)
-	d.recheckOnce(context.Background())
-	escaped := *clock
-	c.phaseA.Store(1) // then phase A exits 1: a pod-network blip looks the same as an ambient default-deny
-	for i := 1; i <= canaryRecheckStrikes; i++ {
-		*clock = clock.Add(canaryRecheckInterval)
-		d.recheckOnce(context.Background())
-		if err := d.netPolRefusal(testNamespace); !errors.Is(err, errNetPolNotProven) {
-			t.Fatalf("after %d acknowledged check(s): refusal %v, want errNetPolNotProven", i, err)
+	const ack, blocked, connected, neither = 1, 1, 0, 128 // pod exit codes: phase A, then phase B
+	for _, agentSandbox := range []bool{false, true} {
+		c := newRecheckCluster(t)
+		d, clock := c.boot(t, Config{AckAmbientDefaultDeny: true})
+		d.cfg.AgentSandbox = agentSandbox // the check alone is under test, as in OverrideNeverCoversAgentSandbox
+		check := func(phaseA, phaseB int32) {
+			c.phaseA.Store(phaseA)
+			c.phaseB.Store(phaseB)
+			*clock = clock.Add(canaryRecheckInterval)
+			d.recheckOnce(context.Background())
 		}
-		want := runner.NetPolCheck{Verdict: runner.NetPolRefused, At: escaped}
-		if i == canaryRecheckStrikes {
-			want = runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: *clock}
+		refused := func(step string, want runner.NetPolCheck) {
+			t.Helper()
+			if err := d.netPolRefusal(testNamespace); !errors.Is(err, errNetPolNotProven) {
+				t.Fatalf("agent-sandbox %v, %s: refusal %v, want errNetPolNotProven", agentSandbox, step, err)
+			}
+			if got := healthCheck(t, d); got != want {
+				t.Fatalf("agent-sandbox %v, %s: health %+v, want %+v", agentSandbox, step, got, want)
+			}
 		}
-		if got := healthCheck(t, d); got != want {
-			t.Fatalf("after %d acknowledged check(s): health %+v, want %+v", i, got, want)
+
+		check(0, connected) // the CNI stops enforcing
+		escaped := *clock
+		for i := 1; i <= canaryRecheckStrikes+2; i++ {
+			check(ack, blocked)
+			want := runner.NetPolCheck{Verdict: runner.NetPolRefused, At: escaped}
+			if i >= canaryRecheckStrikes {
+				want = runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: *clock}
+			}
+			refused(fmt.Sprintf("escape, then %d acknowledged check(s)", i), want)
 		}
-	}
-	c.phaseA.Store(0)
-	c.phaseB.Store(1)
-	d.recheckOnce(context.Background())
-	if err := d.netPolRefusal(testNamespace); err != nil {
-		t.Errorf("after a proving check: refusal %v, want none", err)
+
+		check(0, connected) // a second escape, then checks that cannot tell
+		for i := 0; i < canaryRecheckStrikes; i++ {
+			check(0, neither)
+		}
+		check(ack, blocked)
+		refused("escape, three checks that cannot tell, then an acknowledged one", runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: *clock})
+
+		check(0, blocked) // proof of enforcement, the only result that lifts it
+		if err := d.netPolRefusal(testNamespace); err != nil {
+			t.Errorf("agent-sandbox %v, after a proving check: refusal %v, want none", agentSandbox, err)
+		}
+		if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: *clock}); got != want {
+			t.Errorf("agent-sandbox %v, after a proving check: health %+v, want %+v", agentSandbox, got, want)
+		}
 	}
 }
 
@@ -304,8 +331,17 @@ func TestCanaryRecheck_AcknowledgedBlipKeepsProof(t *testing.T) {
 		}
 		*clock = clock.Add(canaryRecheckInterval)
 		d.recheckOnce(context.Background())
-		if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolAcknowledged, At: *clock}); got != want {
+		// Health names what happens: agent-sandbox mode refuses on an acknowledged verdict, so it reads
+		// not proven there, the same refusal the setup row and the console then show.
+		want := runner.NetPolCheck{Verdict: runner.NetPolAcknowledged, At: *clock}
+		if agentSandbox {
+			want.Verdict = runner.NetPolNotProven
+		}
+		if got := healthCheck(t, d); got != want {
 			t.Errorf("agent-sandbox %v, after %d acknowledged checks: health %+v, want %+v", agentSandbox, canaryRecheckStrikes, got, want)
+		}
+		if err := d.netPolRefusal(testNamespace); (err != nil) != agentSandbox {
+			t.Errorf("agent-sandbox %v, after %d acknowledged checks: refusal %v, want one only in agent-sandbox mode", agentSandbox, canaryRecheckStrikes, err)
 		}
 	}
 }
@@ -505,17 +541,21 @@ func TestCanaryRecheck_AcknowledgedBesideUnenforcedReadsUnenforced(t *testing.T)
 	}
 }
 
-// stallingCleanupAPI is an API server for the canary that creates objects and reports every canary pod
-// exited 0, but takes each DELETE and never answers it until the client gives up.
-func stallingCleanupAPI(t *testing.T) (kubernetes.Interface, *atomic.Int32) {
+// stallingAPI is an API server for the canary that creates objects and reports every canary pod
+// exited 0, but takes each request of method stall and never answers it until the client gives up. It
+// counts the stalled requests.
+func stallingAPI(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int32) {
 	t.Helper()
-	var deletes atomic.Int32
+	var stalled atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodDelete:
-			deletes.Add(1)
+		case r.Method == stall:
+			stalled.Add(1)
 			<-r.Context().Done()
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
 		case r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.Copy(w, r.Body) // the created object is what was sent
@@ -539,7 +579,7 @@ func stallingCleanupAPI(t *testing.T) (kubernetes.Interface, *atomic.Int32) {
 	if err != nil {
 		t.Fatalf("clientset: %v", err)
 	}
-	return cs, &deletes
+	return cs, &stalled
 }
 
 // TestCanaryCleanup_StalledDeleteIsBounded: an API server that takes the canary's cleanup deletes and
@@ -552,7 +592,7 @@ func TestCanaryCleanup_StalledDeleteIsBounded(t *testing.T) {
 
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{})
-	cs, deletes := stallingCleanupAPI(t)
+	cs, deletes := stallingAPI(t, http.MethodDelete)
 	d.clientset = cs
 
 	checked := make(chan struct{})
@@ -616,5 +656,36 @@ func TestCanaryRecheck_HookFiresOnEachVerdictChange(t *testing.T) {
 	d.recheckOnce(context.Background())
 	if calls != 2 || healthCheck(t, d).Verdict != runner.NetPolRefused {
 		t.Fatalf("after an escape: %d calls, verdict %q, want 2 and %q", calls, healthCheck(t, d).Verdict, runner.NetPolRefused)
+	}
+}
+
+// TestCanaryCreate_StalledCreateIsBounded: an API server that takes the canary's create and never
+// answers holds a check only canaryCreateTimeout, and the check counts as one that cannot tell: the
+// proven verdict stands with one strike, so three such checks in a row still make it not proven.
+func TestCanaryCreate_StalledCreateIsBounded(t *testing.T) {
+	old := canaryCreateTimeout
+	canaryCreateTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { canaryCreateTimeout = old })
+
+	c := newRecheckCluster(t)
+	d, _ := c.boot(t, Config{})
+	cs, posts := stallingAPI(t, http.MethodPost)
+	d.clientset = cs
+
+	checked := make(chan struct{})
+	go func() {
+		d.recheckOnce(context.Background())
+		close(checked)
+	}()
+	select {
+	case <-checked:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a check whose create never answers did not return")
+	}
+	if posts.Load() == 0 {
+		t.Fatal("no create reached the server")
+	}
+	if got := d.netPol.Load().byNS[testNamespace]; got.state != netPolProven || got.strikes != 1 {
+		t.Errorf("after a stalled create: state %v with %d strike(s), want %v with 1", got.state, got.strikes, netPolProven)
 	}
 }

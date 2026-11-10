@@ -133,3 +133,32 @@ it("follows the confinement posture through the health poll, verdict and check t
     expect(result.current[0].networkPolicyCheckedAt).toBe(at);
   }
 });
+
+// A failed health read (health() answers {}) is no posture: the first one leaves the poll to learn the
+// runner, verdict and time together, and a later one, a retry's included, keeps the last.
+it("learns the posture after a failed first read and keeps it through a retry's outage", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const refused = { status: "ok", runner: "k8s", network_policy: "refused", network_policy_checked_at: checkedAt(10) } as Health;
+  vi.mocked(health.health).mockResolvedValue({} as Health);
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].resolved).toBe(true));
+  expect(result.current[0].runner).toBe("");
+
+  vi.mocked(health.health).mockResolvedValue(refused);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+  });
+  expect(result.current[0]).toMatchObject({ runner: "k8s", networkPolicy: "refused", networkPolicyCheckedAt: checkedAt(10) });
+
+  vi.mocked(health.health).mockResolvedValue({} as Health);
+  const revision = result.current[0].identityRevision;
+  act(() => result.current[1]()); // the identity retry re-reads /healthz too
+  await waitFor(() => expect(result.current[0].identityRevision).toBe(revision + 1));
+  expect(result.current[0]).toMatchObject({ runner: "k8s", networkPolicy: "refused", networkPolicyCheckedAt: checkedAt(10) });
+
+  vi.mocked(health.health).mockResolvedValue({ ...refused, network_policy: "enforced", network_policy_checked_at: checkedAt(20) });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+  });
+  expect(result.current[0]).toMatchObject({ runner: "k8s", networkPolicy: "enforced", networkPolicyCheckedAt: checkedAt(20) });
+});
