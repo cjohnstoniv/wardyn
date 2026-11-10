@@ -136,34 +136,75 @@ var packageFetchers = []string{"npx", "pnpx", "bunx", "uvx", "pipx"}
 // behind env or a shell's -c, a container run (docker or podman pulls its image), or a deno run of an npm:,
 // jsr: or URL module. A wrapper is looked through at most twice.
 func launchFetches(cmd string, args []string, depth int) bool {
-	verb := func() string { // the first argument that is not a flag
-		i := slices.IndexFunc(args, func(a string) bool { return !strings.HasPrefix(a, "-") })
-		if i < 0 {
-			return ""
-		}
-		return args[i]
-	}
 	switch base := path.Base(cmd); {
 	case slices.Contains(packageFetchers, base):
 		return true
 	case base == "docker" || base == "podman":
-		return verb() == "run"
+		return containerRun(args)
 	case base == "deno":
 		return denoRunsRemoteEntry(args)
 	case depth >= 2:
 		return false
 	case base == "env":
-		i := slices.IndexFunc(args, func(a string) bool { return !strings.HasPrefix(a, "-") && !strings.Contains(a, "=") })
+		i := firstPositional(args, envValueFlags)
+		for i >= 0 && shellAssignment(args[i]) {
+			next := firstPositional(args[i+1:], nil)
+			if next < 0 {
+				return false
+			}
+			i += 1 + next
+		}
 		return i >= 0 && launchFetches(args[i], args[i+1:], depth+1)
 	case base == "sh" || base == "bash" || base == "dash" || base == "zsh":
 		i := slices.IndexFunc(args, func(a string) bool { // -c, or a flag group that holds it (-lc, -ec)
 			return strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "c")
 		})
-		if i < 0 || i+1 >= len(args) {
-			return false
+		return i >= 0 && i+1 < len(args) && shellScriptFetches(strings.Fields(args[i+1]), depth)
+	}
+	return false
+}
+
+// envValueFlags are env's options whose value is the next argument.
+var envValueFlags = []string{"-u", "--unset", "-C", "--chdir"}
+
+// containerValueFlags are docker's and podman's global options whose value is the next argument.
+var containerValueFlags = []string{"-c", "--context", "-H", "--host", "--config", "-l", "--log-level",
+	"--tlscacert", "--tlscert", "--tlskey", "--connection", "--url", "--identity", "--root", "--runroot"}
+
+// containerRun reports whether args are a docker or podman run (or container run), which pulls its image.
+func containerRun(args []string) bool {
+	i := firstPositional(args, containerValueFlags)
+	if i >= 0 && args[i] == "container" {
+		j := firstPositional(args[i+1:], nil)
+		return j >= 0 && args[i+1+j] == "run"
+	}
+	return i >= 0 && args[i] == "run"
+}
+
+// shellAssignment reports whether w is a NAME=value word.
+func shellAssignment(w string) bool {
+	i := strings.IndexByte(w, '=')
+	return i > 0 && !strings.ContainsAny(w[:i], "-/.$")
+}
+
+// shellScriptFetches reports whether any simple command in a shell -c script's words fetches what it runs:
+// each command after &&, ||, | or ;, past a leading exec and NAME=value words.
+func shellScriptFetches(words []string, depth int) bool {
+	start := true
+	for i, w := range words {
+		if w == "&&" || w == "||" || w == "|" || w == ";" {
+			start = true
+			continue
 		}
-		words := strings.Fields(args[i+1])
-		return len(words) > 0 && launchFetches(words[0], words[1:], depth+1)
+		ends := strings.HasSuffix(w, ";")
+		w = strings.TrimSuffix(w, ";")
+		if start && w != "exec" && !shellAssignment(w) {
+			start = false
+			if launchFetches(w, words[i+1:], depth+1) {
+				return true
+			}
+		}
+		start = start || ends
 	}
 	return false
 }
