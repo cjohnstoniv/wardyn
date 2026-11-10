@@ -46,6 +46,7 @@ import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { CAPABILITY, OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { OWN_SECRETS } from "../wardyn/copy/components";
 import { WRITE_ONLY } from "../wardyn/copy/door";
+import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
 import { useOperator } from "../wardyn/operator-context";
 
 // Secret names are constrained server-side to a safe identifier set; mirror that
@@ -150,9 +151,9 @@ export function SecretsScreen() {
 
       {brokerFailed && patBroker === null && (
         <p role="status" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-          Couldn&apos;t check how stored Git tokens are handled, so this page says nothing about it.
+          {SECRETS_BROKER_UNCHECKED.NOTE}
           <Button variant="outline" size="sm" onClick={loadBroker}>
-            Try again
+            {SECRETS_BROKER_UNCHECKED.RETRY}
           </Button>
         </p>
       )}
