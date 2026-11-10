@@ -395,6 +395,10 @@ func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, 
 			continue
 		}
 		revoked, err := s.cfg.Store.RevokeAPIToken(ctx, t.ID, "", now)
+		if errors.Is(err, store.ErrNotFound) {
+			// Already revoked since the list was read: the end of a CLI sign-in revokes its other tokens too.
+			continue
+		}
 		if err != nil {
 			return n, err
 		}
