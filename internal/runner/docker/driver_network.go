@@ -126,11 +126,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// Split literal: the envdoc guard scans raw file bytes for the quote-delimited var name alone.
 		env = append(env, "WARDYN_RECORDING"+"=1")
 	}
+	agentLabels := withRecordLabel(d.labels(spec.RunID, componentAgent, spec.Labels), record)
+	if spec.Resources.DiskMiB > 0 && spec.Resources.DiskMiBSoft {
+		agentLabels[labelDiskSoft] = "true" // read by a revive: see checkKeptVolumesUnderCap
+	}
 	agentCfg := &container.Config{
 		Image:    spec.Image,
 		Hostname: "agent",
 		Env:      env,
-		Labels:   withRecordLabel(d.labels(spec.RunID, componentAgent, spec.Labels), record),
+		Labels:   agentLabels,
 		Tty:      true, // keep a TTY so Exec can attach a PTY for recording.
 		Cmd:      idleCmd,
 	}

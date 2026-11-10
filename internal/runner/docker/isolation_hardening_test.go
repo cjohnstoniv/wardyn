@@ -8,14 +8,17 @@ package docker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"path"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -269,5 +272,156 @@ func TestCreateSandbox_ExecLessRefusesAnImageVolumeUnderAHardLimit(t *testing.T)
 	}
 	if c := f.containers[agentContainerName(spec.RunID)]; c != nil {
 		t.Errorf("an agent exists after the refusal: %+v", c)
+	}
+}
+
+// A kept container made before the create checked image volumes against the disk limit has a volume
+// the limit does not count; reviving it starts the same unbounded path, so the revive answers it as
+// the create does: a hard limit refuses before the container starts, a soft one warns and starts, and
+// a container with no such volume starts.
+func TestStartSandbox_KeptVolumeAgainstTheDiskLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		soft    bool
+		volume  string // added to the kept container, as an image VOLUME from before the check
+		refused bool
+		warned  bool
+	}{
+		{"hard limit, uncovered volume", false, "/work/data", true, false},
+		{"soft limit, uncovered volume", true, "/work/data", false, true},
+		{"hard limit, no volume", false, "", false, false},
+		{"hard limit, volume under a Wardyn tmpfs", false, "/tmp", false, false},
+	} {
+		_, f := quotaDriver(system.Info{})
+		f.imageVolumes = nil
+		d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal"})
+		ctx := context.Background()
+		spec := testSpec()
+		spec.Resources.DiskMiB, spec.Resources.DiskMiBSoft = 1024, tc.soft
+		sb, err := d.CreateSandbox(ctx, spec)
+		if err != nil {
+			t.Fatalf("%s: CreateSandbox: %v", tc.name, err)
+		}
+		if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("%s: EndSandbox: %v", tc.name, err)
+		}
+		if err := d.ReplaceProxy(ctx, sb.Ref, renderedTestConfig(t, "fresh")); err != nil {
+			t.Fatalf("%s: ReplaceProxy: %v", tc.name, err)
+		}
+		agent := f.containers[sb.Ref]
+		if tc.volume != "" {
+			agent.cfg.Volumes = map[string]struct{}{tc.volume: {}}
+		}
+		startsBefore := len(f.startedNames)
+
+		var logs bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		err = d.StartSandbox(ctx, sb.Ref)
+		slog.SetDefault(old)
+
+		if tc.refused {
+			if err == nil || !strings.Contains(err.Error(), "/work/data") || !strings.Contains(err.Error(), "start a new run") {
+				t.Errorf("%s: StartSandbox = %v, want a refusal naming /work/data and a new run", tc.name, err)
+			}
+			if agent.state.Running || slices.Contains(f.startedNames[startsBefore:], sb.Ref) {
+				t.Errorf("%s: the agent was started (running %v, starts %v)", tc.name, agent.state.Running, f.startedNames[startsBefore:])
+			}
+			continue
+		}
+		if err != nil || !agent.state.Running {
+			t.Errorf("%s: StartSandbox = %v, agent running %v; want it started", tc.name, err, agent.state.Running)
+		}
+		if warned := strings.Contains(logs.String(), "not counted in the disk limit"); warned != tc.warned {
+			t.Errorf("%s: warned = %v, want %v (log %q)", tc.name, warned, tc.warned, logs.String())
+		}
+	}
+}
+
+// imageInspectFails is fakeDocker whose reads of one image fail once armed.
+type imageInspectFails struct {
+	*fakeDocker
+	image string
+	armed atomic.Bool
+}
+
+func (i *imageInspectFails) ImageInspect(ctx context.Context, id string, o ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	if id == i.image && i.armed.Load() {
+		return client.ImageInspectResult{}, errors.New("Error response from daemon: i/o timeout")
+	}
+	return i.fakeDocker.ImageInspect(ctx, id, o...)
+}
+
+// A hard disk limit whose image cannot be read is refused rather than started unchecked, with no
+// agent created. The failure is armed once the proxy exists, after the pull and architecture reads
+// that come first; a soft limit goes on without the check.
+func TestCreateSandbox_UnreadableImageUnderAHardDiskLimitIsRefused(t *testing.T) {
+	for _, soft := range []bool{false, true} {
+		f := newFakeDocker()
+		f.info.Driver = "overlay2"
+		f.info.DriverStatus = [][2]string{{"Backing Filesystem", "xfs"}}
+		f.images["busybox:latest"] = true
+		c := &imageInspectFails{fakeDocker: f, image: "busybox:latest"}
+		f.onCreate = func(name string) {
+			if strings.HasPrefix(name, "wardyn-proxy") {
+				c.armed.Store(true)
+			}
+		}
+		d := newWithClient(c, Config{ProxyImage: "wardyn-proxy:dev"})
+		spec := testSpec()
+		spec.Resources.DiskMiB, spec.Resources.DiskMiBSoft = 1024, soft
+		_, err := d.CreateSandbox(context.Background(), spec)
+		agent := f.containers[agentContainerName(spec.RunID)]
+		if soft {
+			if err != nil || agent == nil {
+				t.Errorf("soft limit, unreadable image: CreateSandbox = %v, agent %+v; want it created", err, agent)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "check its volumes against the disk limit") {
+			t.Errorf("hard limit, unreadable image: CreateSandbox = %v, want the refusal", err)
+		}
+		if agent != nil && !agent.removed {
+			t.Errorf("hard limit, unreadable image: an agent was left: %+v", agent)
+		}
+		if slices.Contains(f.startedNames, agentContainerName(spec.RunID)) {
+			t.Errorf("hard limit, unreadable image: the agent was started")
+		}
+	}
+}
+
+// Reviving a kept container whose inspect fails twice (one retry) under a hard disk limit is refused
+// before the start; one failure is retried and the start goes on.
+func TestStartSandbox_UnreadableKeptAgentUnderADiskLimit(t *testing.T) {
+	for _, tc := range []struct {
+		fails   int
+		refused bool
+	}{{1, false}, {2, true}} {
+		_, f := quotaDriver(system.Info{})
+		f.imageVolumes = nil
+		a := &agentInspectFails{fakeDocker: f}
+		d := newWithClient(a, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal"})
+		ctx := context.Background()
+		spec := testSpec()
+		spec.Resources.DiskMiB = 1024
+		sb, err := d.CreateSandbox(ctx, spec)
+		if err != nil {
+			t.Fatalf("CreateSandbox: %v", err)
+		}
+		if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("EndSandbox: %v", err)
+		}
+		if err := d.ReplaceProxy(ctx, sb.Ref, renderedTestConfig(t, "fresh")); err != nil {
+			t.Fatalf("ReplaceProxy: %v", err)
+		}
+		a.ref, a.fails = sb.Ref, tc.fails
+		err = d.StartSandbox(ctx, sb.Ref)
+		running := f.containers[sb.Ref].state.Running
+		if tc.refused && (err == nil || running || !strings.Contains(err.Error(), "check its volumes against the disk limit")) {
+			t.Errorf("%d failed inspects: StartSandbox = %v, running %v; want the refusal and the agent left stopped", tc.fails, err, running)
+		}
+		if !tc.refused && (err != nil || !running) {
+			t.Errorf("%d failed inspect: StartSandbox = %v, running %v; want the retried inspect to start it", tc.fails, err, running)
+		}
 	}
 }
