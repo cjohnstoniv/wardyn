@@ -10,7 +10,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,6 +142,59 @@ func TestCapsSendsNeverAckAnOlderCapture(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // nothing later may put the older capture back
 	if c, _ := org.Caps(); c.Support.NetworkPolicyCheck.Verdict != runner.NetPolRefused {
 		t.Fatalf("the organisation's caps went back to %q", c.Support.NetworkPolicyCheck.Verdict)
+	}
+}
+
+// The macOS VM fallback (Docker down) reads the last caps and the macOS VM state and acks them under the
+// lock every send holds from capture through ack: a send that comes while the fallback is paused in its
+// capture waits, so the fallback's older caps never land after the send's newer ones.
+func TestMacOSCapsFallbackCapturesUnderTheSendLock(t *testing.T) {
+	var dirty atomic.Bool
+	var last atomic.Pointer[runnerwire.Caps]
+	var mu sync.Mutex
+	last.Store(&runnerwire.Caps{Arch: "old"})
+	var orderMu sync.Mutex
+	var order []string
+	acked := func(arch string) {
+		orderMu.Lock()
+		defer orderMu.Unlock()
+		order = append(order, arch)
+	}
+	send := func(context.Context, *runnerwire.Peer, bool, bool) error { return fmt.Errorf("%w: down", errHostCaps) }
+	ack := func(_ context.Context, _ *runnerwire.Peer, c runnerwire.Caps) error { acked(c.Arch); return nil }
+	paused, release := make(chan struct{}), make(chan struct{})
+	cur := func() *runnerwire.MacVMCaps {
+		close(paused)
+		<-release
+		return &runnerwire.MacVMCaps{Max: 1}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resendMacOSCaps(t.Context(), new(runnerwire.Peer), &dirty, &last, &mu, send, ack, cur)
+	}()
+	<-paused
+	// A send as capsReporter.send makes one: capture and ack under the lock.
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		mu.Lock()
+		defer mu.Unlock()
+		last.Store(&runnerwire.Caps{Arch: "new"})
+		acked("new")
+	}()
+	select {
+	case <-sent:
+		t.Fatal("a send acked while the fallback was paused in its capture")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-done
+	<-sent
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	if !slices.Equal(order, []string{"old", "new"}) {
+		t.Fatalf("acked %v, want the fallback's older caps before the send's newer ones", order)
 	}
 }
 

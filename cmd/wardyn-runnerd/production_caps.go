@@ -28,19 +28,25 @@ var errHostCaps = errors.New("the host's caps could not be built")
 // builds the host's caps, and the caps the org last acked go again with only macos_vm replaced, so the
 // drawer keeps showing a Mac's macOS VM state (preparing, waiting for Docker) whatever Docker does. Every
 // other field is what the org already holds. The mark stays set after such a send, because its host part
-// is stale.
+// is stale. The fallback reads the last caps and the macOS VM state and acks them under sendMu, the lock
+// send holds from capture through ack, so a send that lands meanwhile is never overwritten by the older
+// caps; send has returned by then, so the lock is never taken twice.
 func resendMacOSCaps(ctx context.Context, peer *runnerwire.Peer, dirty *atomic.Bool, last *atomic.Pointer[runnerwire.Caps],
-	send func(context.Context, *runnerwire.Peer, bool, bool) error, ack func(context.Context, *runnerwire.Peer, runnerwire.Caps) error,
-	current func() *runnerwire.MacVMCaps) {
+	sendMu *sync.Mutex, send func(context.Context, *runnerwire.Peer, bool, bool) error,
+	ack func(context.Context, *runnerwire.Peer, runnerwire.Caps) error, current func() *runnerwire.MacVMCaps) {
 	dirty.Store(true)
 	if peer == nil {
 		return
 	}
 	err := send(ctx, peer, false, true)
-	if prev := last.Load(); errors.Is(err, errHostCaps) && prev != nil {
-		c := *prev
-		c.MacOSVM = current()
-		err = ack(ctx, peer, c)
+	if errors.Is(err, errHostCaps) {
+		sendMu.Lock()
+		if prev := last.Load(); prev != nil {
+			c := *prev
+			c.MacOSVM = current()
+			err = ack(ctx, peer, c)
+		}
+		sendMu.Unlock()
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "runner caps after a macOS VM change failed", "error", err)
@@ -128,14 +134,7 @@ func (c *capsReporter) afterOnline(ctx context.Context, peer *runnerwire.Peer, r
 
 // resendMacOS is the macOS VM handle's callback after its state changed.
 func (c *capsReporter) resendMacOS(ctx context.Context) {
-	resendMacOSCaps(ctx, c.online.Load(), &c.dirty, &c.last, c.send, c.ackAlone, c.extra.macOSVM.current)
-}
-
-// ackAlone is ack under sendMu, for the macOS VM fallback that acks caps send did not capture.
-func (c *capsReporter) ackAlone(ctx context.Context, peer *runnerwire.Peer, caps runnerwire.Caps) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-	return c.ack(ctx, peer, caps)
+	resendMacOSCaps(ctx, c.online.Load(), &c.dirty, &c.last, &c.sendMu, c.send, c.ack, c.extra.macOSVM.current)
 }
 
 // resendRelay sends the caps again after the relay's status changed.
