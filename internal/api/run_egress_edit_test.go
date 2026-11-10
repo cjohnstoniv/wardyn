@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -401,5 +402,91 @@ func TestEgressEdit_RetiresTheViaOrgEngineBeforeTheAnswer(t *testing.T) {
 	}
 	if len(stored2.ViaOrgRoutes) != 0 {
 		t.Errorf("the stored config the next engine is built from still routes %v to the organisation", stored2.ViaOrgRoutes)
+	}
+}
+
+// blockingStopRunner holds every proxy stop while block is set, until gate closes, as a runner whose
+// stop is slow to land would.
+type blockingStopRunner struct {
+	*hashedReviveRunner
+	block atomic.Bool
+	gate  chan struct{}
+}
+
+func (r *blockingStopRunner) StopProxy(ctx context.Context, ref string) error {
+	if r.block.Load() {
+		<-r.gate
+	}
+	return r.hashedReviveRunner.StopProxy(ctx, ref)
+}
+
+// mismatchAfterAnswer has the edit's new proxy report bytes other than it was handed, after the
+// driver answered: the start fails by its report, not by the revive.
+func (f *readbackFixture) mismatchAfterAnswer(t *testing.T) {
+	t.Helper()
+	f.answeredStart(t, 0)
+	_, _, jti := f.lastHandover(t)
+	go func() { postLoaded(t, f.srv, f.run.ID, jti, hashHex([]byte("other bytes"))) }()
+}
+
+// A start the readback failed is not yet a stopped proxy: while its stop has not landed the edit does
+// not answer, and once it lands the edit answers 503 egress_edit_unconfirmed (stopped).
+func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
+	f := newEgressEditFixture(t)
+	br := &blockingStopRunner{hashedReviveRunner: f.hr, gate: make(chan struct{})}
+	f.srv.cfg.Runner = br
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.editEgress(t, `{"deny_hosts":["evil.example"]}`) }()
+	f.answeredStart(t, 0)
+	br.block.Store(true)
+	f.mismatchAfterAnswer(t)
+	select {
+	case w := <-done:
+		t.Fatalf("the edit answered %d %s before its failed start's stop landed", w.Code, w.Body.String())
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(br.gate)
+	w := <-done
+	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditUnconfirmed {
+		t.Fatalf("edit: %d %s, want 503 %s", w.Code, w.Body.String(), reasonEgressEditUnconfirmed)
+	}
+	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt == nil {
+		t.Errorf("start = %s contained_at = %v, want failed and contained", p.State, p.ContainedAt)
+	}
+}
+
+// A failed start whose stop does not land is answered as unresolved, never as stopped.
+func TestEgressEdit_UnconfirmedStopIsUnresolvedNotStopped(t *testing.T) {
+	f := newEgressEditFixture(t)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.editEgress(t, `{"deny_hosts":["evil.example"]}`) }()
+	f.answeredStart(t, 0)
+	f.setProxyStopErr(errors.New("the runner did not answer the stop"))
+	f.mismatchAfterAnswer(t)
+	w := <-done
+	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditContainmentUnresolved {
+		t.Fatalf("edit: %d %s, want 503 %s", w.Code, w.Body.String(), reasonEgressEditContainmentUnresolved)
+	}
+	if strings.Contains(w.Body.String(), "was stopped") {
+		t.Errorf("an unresolved stop must not be answered as stopped: %s", w.Body.String())
+	}
+}
+
+// A start another revive superseded is that start's to settle: the edit answers without stopping the
+// run's newer proxy.
+func TestEgressEdit_SupersededStartStopsNothing(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.confirmEachReplace(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: %d, want 200", code)
+	}
+	gen := f.active(t).Generation
+	stops := f.lr.proxyStopCount()
+	rerr := f.srv.awaitEgressEditReadback(context.Background(), f.run.ID, gen-1)
+	if rerr == nil || rerr.reason != reasonEgressEditUnconfirmed || strings.Contains(rerr.msg, "was stopped") {
+		t.Fatalf("superseded start: %+v, want egress_edit_unconfirmed that does not claim a stop", rerr)
+	}
+	if f.lr.proxyStopCount() != stops {
+		t.Error("a superseded edit start must not stop the run's newer proxy")
 	}
 }

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -226,14 +227,17 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	}
 	defer s.reviving.Delete(egressEditMark(run.ID))
 	res, rerr := s.reviveFromRequest(r, run, false, edit)
-	if rerr != nil {
+	switch {
+	case rerr != nil && rerr.reason == reasonRevivePolicyUnconfirmedLost:
+		return egressEditResult{}, s.editReviveUnconfirmed(context.WithoutCancel(r.Context()), run.ID)
+	case rerr != nil:
 		return egressEditResult{}, egressEditRefusal(rerr)
 	}
 	// The wait outlives a caller who stops waiting: its end decides whether the proxy keeps running.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), egressEditWait)
 	defer cancel()
-	if why := s.awaitEgressEditReadback(ctx, run.ID, res.generation); why != "" {
-		return egressEditResult{}, egressEditUnconfirmed(why)
+	if rerr := s.awaitEgressEditReadback(ctx, run.ID, res.generation); rerr != nil {
+		return egressEditResult{}, rerr
 	}
 	return egressEditResult{PolicyGeneration: res.generation}, nil
 }
@@ -256,53 +260,104 @@ func (s *Server) egressEditSupported(ctx context.Context, run types.AgentRun) *r
 	return nil
 }
 
-// awaitEgressEditReadback waits for the run's start under gen to be enforced, and answers "" then.
-// Otherwise it answers why not, and the run's proxy is stopped: a start the readback failed was
-// stopped by it, and one past the database's deadline is failed and stopped by expireProxyStart (a
-// no-op before that deadline). Any other end is stopped here: a start that ran unconfirmed or that
-// another start superseded, or one still pending when the wait runs out (a store that did not answer).
-func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, gen int) string {
-	why := "readback_wait_timeout"
+// awaitEgressEditReadback waits for the run's start under gen to be enforced, and answers nil then.
+// Every other end answers why, and claims the proxy stopped only once that stop is recorded for gen.
+// A failed start is contained by whoever failed it, fenced on gen (containProxyStart): its report's
+// handler, or expireProxyStart, which this wait runs past the database's deadline. The wait reads
+// that record and starts no second stop of its own, unless the wait runs out first. A start another
+// revive superseded is that start's to settle and stops nothing here. A start still pending when the
+// wait runs out (a store that did not answer) is the deadline sweep's to fail and contain.
+func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, gen int) *reviveError {
 	st, ok := s.cfg.Store.(store.RunProxyStarts)
 	if !ok || gen < 1 { // egressEditSupported refuses this before any change; never confirmed by default
-		why = "readback_unavailable"
+		return s.stopEditStart(ctx, runID, 0, "readback_unavailable")
 	}
-	for ok && gen >= 1 && ctx.Err() == nil {
+	failed := false
+	for ctx.Err() == nil {
 		p, found, err := st.ActiveProxyStart(ctx, runID)
 		switch {
 		case err != nil: // read again until the wait runs out
-		case !found || p.Generation != gen:
-			why = "start_superseded"
+		case !found || p.Generation != gen || p.State == types.ProxyStartSuperseded:
+			return egressEditSuperseded()
 		case p.State == types.ProxyStartEnforced:
-			return ""
+			return nil
+		case p.State == types.ProxyStartFailed && p.ContainedAt != nil:
+			return egressEditUnconfirmed("start_failed")
+		case p.State == types.ProxyStartFailed && p.ContainmentError != "":
+			return egressEditUnresolved("start_failed", errors.New(p.ContainmentError))
 		case p.State == types.ProxyStartFailed:
-			return "start_failed"
-		case p.State != types.ProxyStartPending:
-			why = "start_" + string(p.State)
+			failed = true // its stop is in flight
+		case p.State != types.ProxyStartPending: // unconfirmed or abandoned: no readback contains it
+			return s.stopEditStart(ctx, runID, gen, "start_"+string(p.State))
 		default:
-			s.expireProxyStart(ctx, runID, gen)
-		}
-		if why != "readback_wait_timeout" {
-			break
+			s.expireProxyStart(ctx, runID, gen) // a no-op before the deadline
 		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(egressEditPoll):
 		}
 	}
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
-	defer cancel()
-	if run, err := s.cfg.Store.GetRun(stopCtx, runID); err == nil {
-		_ = s.stopUnconfirmedProxy(stopCtx, run) // the readback lane's stop now answers whether it landed
+	if failed { // the stop that failed it never recorded an end: try it once more here
+		return s.containEditStart(ctx, runID, gen)
 	}
-	return why
+	return egressEditUnresolved("readback_wait_timeout", ctx.Err())
+}
+
+// stopCtx is a fresh bound for a stop the edit waits on: the readback wait may have run out.
+func stopCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+}
+
+// containEditStart answers a failed start gen once containProxyStart has confirmed its proxy stopped.
+func (s *Server) containEditStart(ctx context.Context, runID uuid.UUID, gen int) *reviveError {
+	ctx, cancel := stopCtx(ctx)
+	defer cancel()
+	switch c := s.containProxyStart(ctx, runID, gen); {
+	case c.Contained:
+		return egressEditUnconfirmed("start_failed")
+	case c.Superseded:
+		return egressEditSuperseded()
+	default:
+		return egressEditUnresolved("start_failed", c.Err)
+	}
+}
+
+// stopEditStart stops the proxy of an edit's start that no readback contains, under the run's lock
+// (which a revive holds from its claim to its settle), and only while gen is still the run's active
+// start (gen 0: no start table to fence on). It claims the stop only once stopUnconfirmedProxy confirms it.
+func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, why string) *reviveError {
+	ctx, cancel := stopCtx(ctx)
+	defer cancel()
+	lctx, unlock, err := s.lockRunOp(ctx, runID)
+	if err != nil {
+		return egressEditUnresolved(why, err)
+	}
+	defer unlock()
+	if st, ok := s.cfg.Store.(store.RunProxyStarts); ok && gen > 0 {
+		p, found, err := st.ActiveProxyStart(lctx, runID)
+		switch {
+		case err != nil:
+			return egressEditUnresolved(why, err)
+		case !found || p.Generation != gen:
+			return egressEditSuperseded()
+		}
+	}
+	run, err := s.cfg.Store.GetRun(lctx, runID)
+	if err != nil {
+		return egressEditUnresolved(why, err)
+	}
+	if err := s.stopUnconfirmedProxy(lctx, run); err != nil {
+		return egressEditUnresolved(why, err)
+	}
+	return egressEditUnconfirmed(why)
 }
 
 // storeRevivedConfig makes a revive's config the run's stored one, the one every later revive starts
 // from. For an ordinary revive a failed write is logged and the previous config kept, from which the
 // next revive re-derives the same result. An edit's write fails closed: a later revive would start
-// from the pre-edit config and reopen the removed or denied hosts, so the new proxy is stopped and the
-// run is lost (reviveFailedAfterClaim), and the edit answers egress_edit_unconfirmed, never 200.
+// from the pre-edit config and reopen the removed or denied hosts, so the new proxy is stopped (the
+// revive still holds the run's lock) and the edit never answers 200; it says stopped only once
+// stopUnconfirmedProxy confirms it.
 func (s *Server) storeRevivedConfig(ctx context.Context, run types.AgentRun, storedJSON []byte, data map[string]any,
 	actorType types.ActorType, actor string, edits []liveEgressEdit) *reviveError {
 	err := s.storeRunProxyConfig(ctx, run.ID, storedJSON)
@@ -318,26 +373,62 @@ func (s *Server) storeRevivedConfig(ctx context.Context, run types.AgentRun, sto
 		return nil
 	}
 	data["error"] = "store the edited proxy config: " + err.Error()
-	return s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonEgressEditUnconfirmed,
-		"the edited proxy config could not be stored, so the new proxy was stopped and the run has no egress until revived", err)
+	why := "the edited config could not be stored"
+	rerr := egressEditUnconfirmed(why)
+	if stopErr := s.stopUnconfirmedProxy(ctx, run); stopErr != nil {
+		data["containment"] = "unresolved"
+		rerr = egressEditUnresolved(why, stopErr)
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+	slog.WarnContext(ctx, "wardynd: storing an edited run's proxy config failed; its new proxy is stopped",
+		slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	return rerr
 }
 
-// egressEditUnconfirmed is the 503 of an edit whose new proxy did not confirm it.
+// egressEditUnconfirmed is the 503 of an edit whose new proxy did not confirm it, once that proxy's
+// stop is confirmed.
 func egressEditUnconfirmed(why string) *reviveError {
 	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditUnconfirmed, lost: true,
 		msg: "the run's new proxy did not confirm the edited policy (" + why + "), so it was stopped and the run has no egress until revived"}
+}
+
+// egressEditSuperseded is the 503 of an edit whose start another revive replaced before it confirmed.
+// That revive started from the stored, edited config, and its own readback settles it.
+func egressEditSuperseded() *reviveError {
+	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditUnconfirmed,
+		msg: "another revive replaced the edit's proxy before it confirmed; the run's proxy now starts from the edited config, and its own readback confirms it"}
+}
+
+// egressEditUnresolved is the 503 of an edit whose new proxy did not confirm it and whose stop is not
+// confirmed yet: the run is lost or being stopped, and the readback sweep or the lease sweep retries it.
+func egressEditUnresolved(why string, err error) *reviveError {
+	msg := "the run's new proxy did not confirm the edited policy (" + why + "); stopping it is not confirmed yet, and the run is being stopped"
+	if err != nil {
+		msg += ": " + err.Error()
+	}
+	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditContainmentUnresolved, lost: true, msg: msg}
+}
+
+// editReviveUnconfirmed answers an edit whose revive put the run back to lost because its new proxy
+// could not run (settleRevivedProxy). That stop is claimed only when the run's active start is failed
+// and its containment recorded; anything else is unresolved.
+func (s *Server) editReviveUnconfirmed(ctx context.Context, runID uuid.UUID) *reviveError {
+	const why = "readback failed"
+	st, ok := s.cfg.Store.(store.RunProxyStarts)
+	if !ok {
+		return egressEditUnresolved(why, nil)
+	}
+	p, found, err := st.ActiveProxyStart(ctx, runID)
+	if err == nil && found && p.State == types.ProxyStartFailed && p.ContainedAt != nil {
+		return egressEditUnconfirmed(why)
+	}
+	return egressEditUnresolved(why, err)
 }
 
 // egressEditRefusal is a revive refusal as an edit answers it: a new proxy that did not confirm its
 // policy is egress_edit_unconfirmed, and where the revive's own words name only the owner's profile
 // they also name the edit, whose denies are checked as that profile's are.
 func egressEditRefusal(rerr *reviveError) *reviveError {
-	switch rerr.reason {
-	case reasonRevivePolicyUnconfirmedLost:
-		return egressEditUnconfirmed("readback failed")
-	case reasonEgressEditUnconfirmed: // storeRevivedConfig
-		return egressEditUnconfirmed("the edited config could not be stored")
-	}
 	door := map[string]string{
 		reasonReviveCeilingDeniesGitBroker:  "GitHub, which this run's git broker needs",
 		reasonReviveCeilingDeniesAzureCLI:   "Azure Resource Manager, which this run's Azure CLI door needs",

@@ -150,7 +150,8 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 2. It is also refused when the new proxy could not confirm what it loaded: a deployment or substrate without the readback (`409 egress_edit_unsupported`), or a runner or proxy image older than 0.10.0-rc.18 (`409 egress_edit_legacy_proxy`).
 3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
 4. Its `via_org` routes go too. The edited config is stored first, so every later revive starts from it, and the organisation's cached engine for the run is retired. The answer then waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
-5. Any other end, a config that could not be stored included, leaves the run with no proxy, lost until revived, and answers `503 egress_edit_unconfirmed`. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
+5. Any other end, a config that could not be stored included, stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed, or when another revive replaced the start. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
+6. While that stop is not confirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop.
 
 Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced.
 
