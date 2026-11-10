@@ -385,7 +385,7 @@ func TestDispatch_ResidentClassesLiftedThroughDispatch(t *testing.T) {
 			}
 			run := f.startingRun(t, func(r *types.AgentRun) { r.State = types.RunPending })
 			g := f.classGrant(t, run, c, "op-secret")
-			p := dispatchParams{RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policyOf(g)}
+			p := dispatchParams{RunToken: runToken(t, f.srv, run.ID), Image: "wardyn/claude-code:latest", Policy: policyOf(g)}
 			switch c.kind {
 			case types.GrantSSHKey:
 				p.SSHGrants = map[string]string{c.host: g.ID.String()}
