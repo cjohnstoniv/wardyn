@@ -193,7 +193,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("docker: create agent: %w", err))
 	}
 	rollback = append(rollback, func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	})
 
 	// Fail closed if the daemon DISCARDED a resource limit we requested (a cgroup controller
@@ -602,7 +602,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 			d.teardownVM(ctx, agentRef, id)
 		}
 	}()
-	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
 

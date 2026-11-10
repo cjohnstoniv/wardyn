@@ -1,0 +1,174 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build docker
+
+package docker
+
+import (
+	"bytes"
+	"context"
+	"log/slog"
+	"path"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/moby/moby/api/types/mount"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+)
+
+// These tests run on hosted CI only: the package builds with -tags docker, which the local go shim
+// refuses.
+
+// rootExecs returns the execs the driver ran as a user it named, in order.
+func rootExecs(f *fakeDocker) []fakeExec {
+	var out []fakeExec
+	for _, e := range f.execLog {
+		if e.user != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// requireSafeRootExecs fails on a root exec that names its binary by bare name, or that does not pin
+// a PATH of root-owned system directories: an image can put a directory the agent writes first on its
+// own PATH, and the exec would then run the agent's file as uid 0.
+func requireSafeRootExecs(t *testing.T, f *fakeDocker, wantAtLeast int) {
+	t.Helper()
+	execs := rootExecs(f)
+	if len(execs) < wantAtLeast {
+		t.Fatalf("root execs = %+v, want at least %d (recording setup)", execs, wantAtLeast)
+	}
+	for _, e := range execs {
+		if len(e.cmd) == 0 || !path.IsAbs(e.cmd[0]) {
+			t.Errorf("root exec %q resolves its binary through the image's PATH", e.cmd)
+		}
+		if !slices.Contains(e.env, "PATH=/usr/sbin:/usr/bin:/sbin:/bin") {
+			t.Errorf("root exec %q env = %q, want the fixed system PATH", e.cmd, e.env)
+		}
+	}
+}
+
+// Recording setup runs mkdir and chmod as uid 0 in the agent: at create and again at every revive.
+// Neither may take its binary from the image's PATH.
+func TestRecordingSetup_RootExecsUseAbsolutePathsAndAFixedPATH(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal", Record: true})
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	requireSafeRootExecs(t, f, 2)
+	atCreate := len(rootExecs(f))
+
+	if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("EndSandbox: %v", err)
+	}
+	if err := d.ReplaceProxy(ctx, sb.Ref, renderedTestConfig(t, "fresh")); err != nil {
+		t.Fatalf("ReplaceProxy: %v", err)
+	}
+	if err := d.StartSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("StartSandbox: %v", err)
+	}
+	requireSafeRootExecs(t, f, atCreate+2)
+}
+
+// A kept end leaves the container (and so its writable layer and volumes) in place for the revive:
+// only the final teardown asks for the anonymous volumes to go.
+func TestEndSandbox_KeepsTheAgentAndItsVolumes(t *testing.T) {
+	f := newFakeDocker()
+	ref, err := keptEnd(t, f, testSpec())
+	if err != nil {
+		t.Fatalf("EndSandbox: %v", err)
+	}
+	if c := f.containers[ref]; c.removed {
+		t.Errorf("agent after a kept end = %+v, want it kept", c)
+	}
+}
+
+// The agent's removal takes the container's anonymous volumes (an image VOLUME) with it: they hold
+// whatever the agent wrote and sit outside the disk cap. Named volumes (drives) are not anonymous,
+// so the option leaves them.
+func TestTeardown_RemovesTheAgentsAnonymousVolumes(t *testing.T) {
+	for name, end := range map[string]func(*Driver, string) error{
+		"kill": func(d *Driver, ref string) error { return d.KillSandbox(context.Background(), ref) },
+		"stop": func(d *Driver, ref string) error { return d.StopSandbox(context.Background(), ref) },
+	} {
+		f := newFakeDocker()
+		f.images["busybox:latest"] = true
+		d := newTestDriver(f)
+		sb, err := d.CreateSandbox(context.Background(), testSpec())
+		if err != nil {
+			t.Fatalf("%s: CreateSandbox: %v", name, err)
+		}
+		if err := end(d, sb.Ref); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if c := f.containers[sb.Ref]; !c.removed || !c.removedVolumes {
+			t.Errorf("%s: agent removal removed=%v removedVolumes=%v, want both", name, c.removed, c.removedVolumes)
+		}
+	}
+}
+
+// A create that fails after the agent exists rolls the agent back, anonymous volumes included.
+func TestCreateSandbox_RollbackRemovesTheAgentsAnonymousVolumes(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	spec := testSpec()
+	f.failStartContainer = agentContainerName(spec.RunID)
+	d := newTestDriver(f)
+	if _, err := d.CreateSandbox(context.Background(), spec); err == nil {
+		t.Fatal("CreateSandbox succeeded, want the agent start to fail")
+	}
+	c := f.containers[agentContainerName(spec.RunID)]
+	if c == nil || !c.removed || !c.removedVolumes {
+		t.Errorf("rolled-back agent = %+v, want removed with its anonymous volumes", c)
+	}
+}
+
+// A read-only workspace bind asks the engine for a recursively read-only mount, as a drive does,
+// so a host submount under the folder cannot be written from the sandbox.
+func TestAgentMounts_ReadOnlyWorkspaceBindIsRecursivelyReadOnly(t *testing.T) {
+	d := newTestDriver(newFakeDocker())
+	src := "/srv/data"
+	for _, tc := range []struct {
+		name     string
+		readOnly bool
+		rro      bool
+		wantRRO  bool
+		wantWarn bool
+	}{
+		{"read-only, runtime supports rro", true, true, true, false},
+		{"read-only, runtime lacks rro", true, false, false, true},
+		{"writable, runtime supports rro", false, true, false, false},
+		{"writable, runtime lacks rro", false, false, false, false},
+	} {
+		var logs bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		spec := testSpec()
+		spec.Mounts = []runner.Mount{{Source: src, Target: "/home/agent/work", ReadOnly: tc.readOnly}}
+		got, err := d.agentMounts(context.Background(), spec, tc.rro)
+		slog.SetDefault(old)
+		if err != nil {
+			t.Fatalf("%s: agentMounts: %v", tc.name, err)
+		}
+		i := slices.IndexFunc(got, func(m mount.Mount) bool { return m.Target == "/home/agent/work" })
+		if i < 0 {
+			t.Fatalf("%s: workspace mount missing from %+v", tc.name, got)
+		}
+		m := got[i]
+		if rro := m.BindOptions != nil && m.BindOptions.ReadOnlyForceRecursive; rro != tc.wantRRO {
+			t.Errorf("%s: ReadOnlyForceRecursive = %v, want %v", tc.name, rro, tc.wantRRO)
+		}
+		warned := strings.Contains(logs.String(), "workspace mount") && strings.Contains(logs.String(), src)
+		if warned != tc.wantWarn {
+			t.Errorf("%s: warned = %v, want %v (log %q)", tc.name, warned, tc.wantWarn, logs.String())
+		}
+	}
+}
