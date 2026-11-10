@@ -4,6 +4,7 @@
 package foldersync
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -185,6 +187,9 @@ type State struct {
 	Files  map[string]FileSeen `json:"files"`
 	// GitSent is what --git last sent; --pull-commits brings back what came after it.
 	GitSent *GitSent `json:"git_sent,omitempty"`
+	// Recovered is the base name an unreadable record was moved aside to (LoadRunnerState): this
+	// state knows nothing, and a runner pass compares every file present on both sides.
+	Recovered string `json:"-"`
 }
 
 type FileSeen struct {
@@ -201,8 +206,21 @@ func StatePath(runID string) (string, error) {
 }
 
 // LoadState reads the state for one run and one local/remote pairing; a
-// missing file, or one for another pairing, is an empty state.
+// missing file, or one for another pairing, is an empty state. An unreadable
+// one is refused, naming the fix.
 func LoadState(file, local, remote string) (*State, error) {
+	return loadState(file, local, remote, false)
+}
+
+// LoadRunnerState is LoadState for a folder runner's pass: an unreadable record
+// is moved aside to <file>.unreadable-<UTC time> and the state is empty, with
+// Recovered set, so the pass compares every file instead of trusting none.
+func LoadRunnerState(file, local, remote string) (*State, error) {
+	return loadState(file, local, remote, true)
+}
+
+func loadState(file, local, remote string, recover bool) (*State, error) {
+	removeStateTemps(file)
 	st := &State{Local: local, Remote: remote, Files: map[string]FileSeen{}}
 	b, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
@@ -213,7 +231,15 @@ func LoadState(file, local, remote string) (*State, error) {
 	}
 	var prev State
 	if err := json.Unmarshal(b, &prev); err != nil {
-		return nil, fmt.Errorf("sync state %s is unreadable (delete it to start over): %w", file, err)
+		if !recover {
+			return nil, fmt.Errorf("sync state %s is unreadable (delete it to start over): %w", file, err)
+		}
+		aside := file + ".unreadable-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+		if rerr := os.Rename(file, aside); rerr != nil {
+			return nil, fmt.Errorf("sync state %s is unreadable and could not be moved aside: %w", file, rerr)
+		}
+		st.Recovered = filepath.Base(aside)
+		return st, nil
 	}
 	if prev.Local == local && prev.Remote == remote && prev.Files != nil {
 		return &prev, nil
@@ -221,19 +247,60 @@ func LoadState(file, local, remote string) (*State, error) {
 	return st, nil
 }
 
+// removeStateTemps removes the temp files a save of file left behind when it
+// was stopped before its rename: <base>.<random>.tmp, and <base>.tmp from
+// before saves used a random name.
+func removeStateTemps(file string) {
+	dir, base := filepath.Dir(file), filepath.Base(file)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		n := e.Name()
+		mid, ok := strings.CutPrefix(n, base+".")
+		if !ok || !e.Type().IsRegular() {
+			continue
+		}
+		if id, ok := strings.CutSuffix(mid, ".tmp"); mid == "tmp" || ok && isStateTempID(id) {
+			_ = os.Remove(filepath.Join(dir, n))
+		}
+	}
+}
+
+func isStateTempID(s string) bool {
+	_, err := hex.DecodeString(s)
+	return len(s) == 16 && err == nil
+}
+
+// Save writes the state through a new random temp file beside it, synced,
+// renamed over the old record, and the directory synced. On an error before
+// the rename the old record is kept.
 func (st *State) Save(file string) error {
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+	dir, base := filepath.Dir(file), filepath.Base(file)
+	if err := mkdirAllDurableOS(dir, 0o700); err != nil {
 		return err
 	}
 	b, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	tmp := file + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, file)
+	defer root.Close()
+	name, f, err := createTemp(root, ".", base+".", ".tmp")
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		_ = root.Remove(name)
+		return err
+	}
+	_, err = installDurable(root, f, name, InstallReplace, base)
+	return err
 }
 
 // StateOutside refuses a local root that contains the state file: the
