@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -312,6 +313,9 @@ func TestEgressEdit_ConfigWriteFailureFailsClosed(t *testing.T) {
 	if lostAt, _ := f.st.lost(); lostAt == nil || f.lr.proxyStopCount() <= stops {
 		t.Fatal("the edit's new proxy must be stopped and the run lost")
 	}
+	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt == nil {
+		t.Errorf("start = %s contained_at = %v, want failed and its containment recorded", p.State, p.ContainedAt)
+	}
 	fs.fail.Store(false)
 	if code := f.revive(t); code != http.StatusOK {
 		t.Fatalf("ordinary revive after the failed edit: %d, want 200", code)
@@ -529,5 +533,34 @@ func TestEgressEdit_ReviveAfterAFailedSettleStartsFromTheEdit(t *testing.T) {
 	p := f.handedPolicy(t)
 	if slices.Contains(p.AllowedDomains, "api.anthropic.com") || !slices.Contains(p.DeniedDomains, "evil.example") {
 		t.Errorf("the revive after a failed settle started from the pre-edit config: allowed %v denied %v", p.AllowedDomains, p.DeniedDomains)
+	}
+}
+
+// An unstored edit whose stop does not land is answered unresolved, and its failed start keeps the
+// stop's error, which the readback sweep retries (OverdueProxyStarts lists it).
+func TestEgressEdit_ConfigWriteFailureWithAFailedStopIsRetried(t *testing.T) {
+	f := newEgressEditFixture(t)
+	fs := &failPutStore{readbackStore: f.rb}
+	fs.fail.Store(true)
+	f.srv.cfg.Store = fs
+	f.rr.onReplace = func([]byte) { f.setProxyStopErr(errors.New("the runner did not answer the stop")) }
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditContainmentUnresolved {
+		t.Fatalf("edit: %d %s, want 503 %s", w.Code, w.Body.String(), reasonEgressEditContainmentUnresolved)
+	}
+	p := f.active(t)
+	if p.State != types.ProxyStartFailed || p.ContainedAt != nil || p.ContainmentError == "" {
+		t.Fatalf("start = %s contained_at = %v error = %q, want failed and unresolved", p.State, p.ContainedAt, p.ContainmentError)
+	}
+	overdue, err := f.rb.OverdueProxyStarts(context.Background())
+	if err != nil || !slices.ContainsFunc(overdue, func(o store.ProxyStart) bool { return o.Generation == p.Generation }) {
+		t.Fatalf("overdue starts = %+v (%v): the sweep must retry the unstored edit's stop", overdue, err)
+	}
+	f.setProxyStopErr(nil)
+	if err := f.srv.sweepOverdueProxyStarts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.active(t); p.ContainedAt == nil {
+		t.Error("the sweep's retry must record the start contained once the stop lands")
 	}
 }

@@ -365,7 +365,7 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, wh
 // same result. An edit stores first, since its config only narrows: any revive after it, a revive
 // that supersedes a failed settle included, starts from the edited config. An edit's write fails
 // closed: a later revive would start from the pre-edit config and reopen the removed or denied hosts,
-// so the new proxy is stopped and the edit never answers 200.
+// so the new proxy's start is failed and contained, and the edit never answers 200.
 func (s *Server) storeAndSettleRevived(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor string,
 	start proxyStartRec, proxyHash, retiring string, renewed renewedTokens, freshJTI string, storedJSON []byte, edits []liveEgressEdit) *reviveError {
 	if len(edits) == 0 {
@@ -379,22 +379,21 @@ func (s *Server) storeAndSettleRevived(ctx context.Context, run types.AgentRun, 
 		return nil
 	}
 	storeErr := s.storeRunProxyConfig(ctx, run.ID, storedJSON)
-	if storeErr == nil {
+	if storeErr != nil {
+		// The hash is withheld, so the settle fails the start (hash missing) and contains it as the
+		// readback contains any failed start: recorded on the start, and retried by its sweep.
+		data["config_store_error"] = storeErr.Error()
+		proxyHash = ""
+		slog.WarnContext(ctx, "wardynd: storing an edited run's proxy config failed; failing its new proxy's start",
+			slog.String("run_id", run.ID.String()), slog.Any("err", storeErr))
+	} else {
 		s.retireViaOrgEngine(run.ID) // no engine built from the pre-edit config serves again
 	}
-	if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil || storeErr == nil {
-		return rerr
+	rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI)
+	if rerr == nil && storeErr != nil { // a start with no hash always fails; never let an unstored edit stand
+		return s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
+			"the edited proxy config could not be stored, so the run's new proxy is being stopped", storeErr)
 	}
-	data["error"] = "store the edited proxy config: " + storeErr.Error()
-	why := "the edited config could not be stored"
-	rerr := egressEditUnconfirmed(why)
-	if stopErr := s.stopUnconfirmedProxy(ctx, run); stopErr != nil {
-		data["containment"] = "unresolved"
-		rerr = egressEditUnresolved(why, stopErr)
-	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
-	slog.WarnContext(ctx, "wardynd: storing an edited run's proxy config failed; its new proxy is stopped",
-		slog.String("run_id", run.ID.String()), slog.Any("err", storeErr))
 	return rerr
 }
 
