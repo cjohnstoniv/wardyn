@@ -1239,9 +1239,10 @@ How a request to a host is decided:
 - [`allowed_methods`](#allowed_methods) still applies on top, on the lanes it covers. `/wardyn/gh/` and `/wardyn/git/` ignore it.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
 - A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`, in any case and with `-` or `_`) naming another method, or with a path, prefix or host override header, is refused.
-- A path, prefix or host override is a header whose name contains one of these, ignoring case and any `-` or `_`. So `X_Script_Name` and `X-Envoy-Original-Path` count.
-  - `original-url`, `original-uri`, `original-path`, `rewrite-url`, `rewrite-uri`, `rewrite-path`, `override-url`, `override-uri`, `override-path`
-  - `forwarded-prefix`, `forwarded-url`, `forwarded-uri`, `forwarded-path`, `forwarded-host`, `script-name`
+- A path, prefix or host override is `Forwarded`, or a header whose name contains one of these, ignoring case and any `-` or `_`. So `X_Script_Name` and `X-Envoy-Original-Path` count.
+  - `original-url`, `original-uri`, `original-path`, `original-host`, `rewrite-url`, `rewrite-uri`, `rewrite-path`, `override-url`, `override-uri`, `override-path`, `host-override`
+  - `forwarded-prefix`, `forwarded-url`, `forwarded-uri`, `forwarded-path`, `forwarded-host`, `script-name`, `matched-path`, `invoke-path`, `replaced-path`
+- This list is fixed. A header outside it that a host honours to serve another path or host is not caught.
 - A model provider's `extra_headers` may not name one. The git routes `/wardyn/gh/` and `/wardyn/git/` drop these headers instead and send the request on, judged by its request line.
 
 Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.

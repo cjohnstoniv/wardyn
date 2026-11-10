@@ -76,18 +76,24 @@ func methodOverride(header string) bool {
 
 // RouteOverrideHeader reports whether a header name asks a front end to act on another path, path prefix
 // or host than the request line's: X-Original-URL, X-Original-URI, X-Original-Path, X-Envoy-Original-Path,
-// X-Rewrite-URL, X-Rewrite-URI, X-Rewrite-Path, X-Forwarded-Prefix, X-Forwarded-URL, X-Forwarded-Uri,
-// X-Forwarded-Path, X-Forwarded-Host, X-Override-URL, X-Override-URI, X-Override-Path, X-Script-Name, in any
-// case and with hyphens or underscores (the name, so folded, contains one of them). Resource Manager refuses
+// X-Original-Host, X-Rewrite-URL, X-Rewrite-URI, X-Rewrite-Path, X-Forwarded-Prefix, X-Forwarded-URL,
+// X-Forwarded-Uri, X-Forwarded-Path, X-Forwarded-Host, X-Override-URL, X-Override-URI, X-Override-Path,
+// X-HTTP-Host-Override, X-Script-Name, X-Matched-Path, X-Invoke-Path, X-Replaced-Path, in any case and with
+// hyphens or underscores (the name, so folded, contains one of them), and Forwarded itself (exactly, so
+// X-Forwarded-For is not one). It is a fixed set: a header outside it that a host honours is not caught. Resource Manager refuses
 // one for the same reason as methodOverride: the path Azure would act on is not knowable. It is the one
 // list: the egress proxy's host-rule gate refuses such a header, its git routes strip one, and a gateway's
 // extra headers may not name one.
 func RouteOverrideHeader(header string) bool {
 	name := normalizedHeader(header)
+	if name == "forwarded" { // RFC 7239: host= and for= of the original request
+		return true
+	}
 	for _, part := range []string{
 		"originalurl", "originaluri", "originalpath", "rewriteurl", "rewriteuri", "rewritepath",
 		"forwardedprefix", "forwardedurl", "forwardeduri", "forwardedpath", "forwardedhost",
 		"overrideurl", "overrideuri", "overridepath", "scriptname",
+		"originalhost", "hostoverride", "matchedpath", "invokepath", "replacedpath",
 	} {
 		if strings.Contains(name, part) {
 			return true

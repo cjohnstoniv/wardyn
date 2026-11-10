@@ -310,7 +310,8 @@ func TestUnnarrowedPATGrantRendersNoScopeKeys(t *testing.T) {
 // routePathOverrideProbes are spellings of path, prefix and host overrides (armscope.RouteOverrideHeader),
 // canonical and folded; TestRoutePathOverrideProbes keeps them in its set.
 var routePathOverrideProbes = []string{"X-Original-URL", "X-Rewrite-URL", "X-Override-URL", "X-Forwarded-Prefix",
-	"X-Script-Name", "X-Forwarded-Host", "X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Forwarded-Path"}
+	"X-Script-Name", "X-Forwarded-Host", "X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Forwarded-Path",
+	"X-Original-Host", "X-HTTP-Host-Override", "Forwarded", "X-Matched-Path", "X-Invoke-Path", "X_Replaced_Path"}
 
 // methodOverrideProbes are spellings of the method overrides (armscope.MethodOverrideHeader), canonical
 // and folded.
@@ -330,6 +331,11 @@ func TestRoutePathOverrideProbes(t *testing.T) {
 	for _, h := range methodOverrideProbes {
 		if !armscope.MethodOverrideHeader(h) {
 			t.Errorf("%s is no method override to armscope.MethodOverrideHeader", h)
+		}
+	}
+	for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Port", "Host", "X-Host-Hint", "X-Portkey-Custom-Host"} {
+		if armscope.RouteOverrideHeader(h) {
+			t.Errorf("%s is a route override to armscope.RouteOverrideHeader, want it left alone", h)
 		}
 	}
 	for _, h := range []string{"X-HTTP-Method-Hint", "X-Method", "Method"} {

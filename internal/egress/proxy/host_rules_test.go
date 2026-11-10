@@ -481,7 +481,7 @@ func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
 		}
 	})
 	for _, h := range []string{"X-Script-Name", "X-Forwarded-Prefix", "X-Forwarded-Host",
-		"X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri"} {
+		"X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Original-Host", "Forwarded"} {
 		t.Run("plain "+h, func(t *testing.T) {
 			cu := captureUpstream(t, false, "ok")
 			buf := &bytes.Buffer{}
