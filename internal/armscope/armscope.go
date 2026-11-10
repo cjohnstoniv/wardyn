@@ -67,7 +67,8 @@ var tenantReads = []string{"subscriptions", "providers", "tenants"}
 
 // methodOverride reports whether a header name is a spelling of "act as this
 // method instead": X-HTTP-Method-Override, X-HTTP-Method, X-Method-Override,
-// X-Ms-Http-Method, X-Method, in any case and with hyphens or underscores. Whether
+// X-Ms-Http-Method, X-Method, X-Original-Method, X-Forwarded-Method, in any case and with hyphens or
+// underscores (the name, so folded, contains "method"). Whether
 // Resource Manager honours one is not documented, so a request that carries
 // one is refused: the method Azure would act on is not knowable.
 func methodOverride(header string) bool {
@@ -78,22 +79,23 @@ func methodOverride(header string) bool {
 // or host than the request line's: X-Original-URL, X-Original-URI, X-Original-Path, X-Envoy-Original-Path,
 // X-Original-Host, X-Rewrite-URL, X-Rewrite-URI, X-Rewrite-Path, X-Forwarded-Prefix, X-Forwarded-URL,
 // X-Forwarded-Uri, X-Forwarded-Path, X-Forwarded-Host, X-Override-URL, X-Override-URI, X-Override-Path,
-// X-HTTP-Host-Override, X-Script-Name, X-Matched-Path, X-Invoke-Path, X-Replaced-Path, in any case and with
-// hyphens or underscores (the name, so folded, contains one of them), and Forwarded itself (exactly, so
-// X-Forwarded-For is not one). It is a fixed set: a header outside it that a host honours is not caught. Resource Manager refuses
+// X-HTTP-Host-Override, X-Script-Name, X-Matched-Path, X-Invoke-Path, X-Replaced-Path, X-Forwarded-Server,
+// in any case and with hyphens or underscores (the name, so folded, contains one of them), and Forwarded
+// and X-Host themselves (exactly, so X-Forwarded-For and X-Hosted-By are not ones). It is a fixed set: a header outside it that a host honours is not caught. Resource Manager refuses
 // one for the same reason as methodOverride: the path Azure would act on is not knowable. It is the one
 // list: the egress proxy's host-rule gate refuses such a header, its git routes strip one, and a gateway's
 // extra headers may not name one.
 func RouteOverrideHeader(header string) bool {
 	name := normalizedHeader(header)
-	if name == "forwarded" { // RFC 7239: host= and for= of the original request
+	switch name {
+	case "forwarded", "xhost": // Forwarded: RFC 7239's host= and for= of the original request
 		return true
 	}
 	for _, part := range []string{
 		"originalurl", "originaluri", "originalpath", "rewriteurl", "rewriteuri", "rewritepath",
 		"forwardedprefix", "forwardedurl", "forwardeduri", "forwardedpath", "forwardedhost",
 		"overrideurl", "overrideuri", "overridepath", "scriptname",
-		"originalhost", "hostoverride", "matchedpath", "invokepath", "replacedpath",
+		"originalhost", "hostoverride", "matchedpath", "invokepath", "replacedpath", "forwardedserver",
 	} {
 		if strings.Contains(name, part) {
 			return true
@@ -103,13 +105,14 @@ func RouteOverrideHeader(header string) bool {
 }
 
 // MethodOverrideHeader reports whether a header name is one a framework reads a method override from:
-// X-HTTP-Method-Override, X-HTTP-Method or X-Method-Override, in any case and with hyphens or underscores
-// (the name, so folded, is exactly one of them). It sits beside RouteOverrideHeader and is read by the same
+// X-HTTP-Method-Override, X-HTTP-Method, X-Method-Override, X-Method, X-Ms-Http-Method, X-Original-Method
+// or X-Forwarded-Method, in any case and with hyphens or underscores (the name, so folded, is exactly one of
+// them). It is a fixed set: a header outside it that a host honours is not caught. It sits beside RouteOverrideHeader and is read by the same
 // egress callers: the host-rule gate refuses one naming another method, the git routes strip one, and a
 // gateway's extra headers may not name one. Resource Manager's own check (methodOverride) is wider.
 func MethodOverrideHeader(header string) bool {
 	switch normalizedHeader(header) {
-	case "xhttpmethodoverride", "xhttpmethod", "xmethodoverride":
+	case "xhttpmethodoverride", "xhttpmethod", "xmethodoverride", "xmethod", "xmshttpmethod", "xoriginalmethod", "xforwardedmethod":
 		return true
 	}
 	return false

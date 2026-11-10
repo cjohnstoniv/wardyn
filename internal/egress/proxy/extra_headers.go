@@ -69,9 +69,9 @@ func ReservedExtraHeader(name string, own ...string) error {
 	case isListed(own):
 		return fmt.Errorf("%q is this provider's own credential header", name)
 	case armscope.MethodOverrideHeader(name):
-		return fmt.Errorf("%q can make a host run another method than the request line's, so host rules refuse it", name)
+		return fmt.Errorf("%q is reserved: it can make a host run another method than the request line's", name)
 	case armscope.RouteOverrideHeader(name):
-		return fmt.Errorf("%q can make a host serve another path or host than the request line's, so host rules refuse it", name)
+		return fmt.Errorf("%q is reserved: it can make a host serve another path or host than the request line's", name)
 	}
 	// "portkey" is a product name, not a key: without it the name of the gateway this exists for
 	// (x-portkey-provider) would read as a credential. x-portkey-api-key still does, by "key" in "api-key".

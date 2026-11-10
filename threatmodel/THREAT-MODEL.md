@@ -958,8 +958,9 @@ is not the deployment described above.**
   Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under
   `allow_all_egress`, a `CONNECT` to the server's IP address or another name for it reads no rule, even when
   the request inside names the rule host; `refuse_ip_literals` blocks only the IP-address form.
-  Override headers are refused from a fixed list ([POLICIES.md](../docs/POLICIES.md#host_rules--hostruleset)). A header
-  outside it that an upstream honours to serve another path or host is not caught.
+  Method, path and host override headers, and trailers declared with those names, are refused from fixed lists
+  ([POLICIES.md](../docs/POLICIES.md#host_rules--hostruleset)). A header outside them that an upstream honours to
+  run another method or serve another path or host is not caught.
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.

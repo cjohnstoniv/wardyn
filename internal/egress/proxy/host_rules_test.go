@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -481,7 +482,8 @@ func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
 		}
 	})
 	for _, h := range []string{"X-Script-Name", "X-Forwarded-Prefix", "X-Forwarded-Host",
-		"X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Original-Host", "Forwarded"} {
+		"X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Original-Host", "Forwarded",
+		"X-Host", "X-Forwarded-Server", "x-method", "X-METHOD", "x_ms_http_method", "X-Original-Method", "X-Forwarded-Method"} {
 		t.Run("plain "+h, func(t *testing.T) {
 			cu := captureUpstream(t, false, "ok")
 			buf := &bytes.Buffer{}
@@ -516,5 +518,86 @@ func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
 				t.Errorf("GET /v1/models with %s = %d reached=%v, want a policy:host-rule refusal:\n%s", h, rec.Code, up.reached, buf.String())
 			}
 		})
+	}
+}
+
+// plainHostRuleRequest sends raw on the plain lane of a proxy whose rules allow /public on hrHost and
+// deny /admin, and answers the status, the upstream's view and the decision rows.
+func plainHostRuleRequest(t *testing.T, raw string) (int, *capturedUpstream, string) {
+	t.Helper()
+	cu := captureUpstream(t, false, "ok")
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
+		Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: []types.HostRuleSet{{Rules: []types.HostRule{
+			{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+			{Host: hrHost, Paths: []string{"/public"}, Effect: types.HostRuleAllow},
+		}}}})})
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(conn, raw)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode, cu, buf.String()
+}
+
+// Headers outside the override lists, close as some are to listed names, reach the host as sent.
+func TestHostRulesLeaveOtherHeadersAlone(t *testing.T) {
+	headers := [][2]string{{"X-Forwarded-For", "10.0.0.1"}, {"X-Forwarded-Proto", "https"}, {"X-Hosted-By", "a"},
+		{"X-Http-Method-Hint", "DELETE"}, {"X-Methods", "DELETE"}, {"Method", "DELETE"}, {"X-Host-Hint", "b"}}
+	raw := "GET http://" + hrHost + "/public/x HTTP/1.1\r\nHost: " + hrHost + "\r\n"
+	for _, h := range headers {
+		raw += h[0] + ": " + h[1] + "\r\n"
+	}
+	status, cu, rows := plainHostRuleRequest(t, raw+"\r\n")
+	if status != http.StatusOK || !cu.reached {
+		t.Fatalf("GET /public/x with no override = %d reached=%v, want it allowed:\n%s", status, cu.reached, rows)
+	}
+	for _, h := range headers {
+		if got := cu.header.Get(h[0]); got != h[1] && h[0] != "X-Forwarded-For" { // the proxy may append its own hop
+			t.Errorf("%s reached the host as %q, want %q", h[0], got, h[1])
+		}
+	}
+}
+
+// A trailer the request declares is judged by its name, before any value arrives: a declared override is
+// refused like the header, and another trailer is not.
+func TestHostRulesRefuseDeclaredOverrideTrailers(t *testing.T) {
+	chunked := func(trailer string) string {
+		return "POST http://" + hrHost + "/public/x HTTP/1.1\r\nHost: " + hrHost + "\r\nTransfer-Encoding: chunked\r\nTrailer: " +
+			trailer + "\r\n\r\n2\r\nhi\r\n0\r\n\r\n"
+	}
+	for _, name := range []string{"X-Original-URL", "x_script_name", "X-HTTP-Method-Override", "X-Method", "Forwarded"} {
+		status, cu, rows := plainHostRuleRequest(t, chunked(name))
+		if status != http.StatusForbidden || cu.reached || !strings.Contains(rows, `"rule_source":"`+ruleSourceHostRule+`"`) || !strings.Contains(rows, "trailer") {
+			t.Errorf("POST /public/x declaring a %s trailer = %d reached=%v, want a policy:host-rule refusal naming the trailer:\n%s", name, status, cu.reached, rows)
+		}
+	}
+	if status, cu, rows := plainHostRuleRequest(t, chunked("X-Checksum")); status != http.StatusOK || !cu.reached {
+		t.Errorf("POST /public/x declaring an X-Checksum trailer = %d reached=%v, want it allowed:\n%s", status, cu.reached, rows)
+	}
+	for _, trailer := range []string{"", "X-Original-Url"} {
+		cu := captureUpstream(t, true, "ok")
+		p, buf, _ := hrProxy(t, hrOpts{}, cu.srv)
+		p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: hrHost, Paths: []string{"/public"}, Effect: types.HostRuleAllow}}}}
+		req := httptest.NewRequest(http.MethodPost, "https://"+hrHost+"/public/x", strings.NewReader("hi"))
+		if trailer != "" {
+			req.Trailer = http.Header{trailer: nil}
+		}
+		rec := httptest.NewRecorder()
+		p.serveMITMRequest(rec, req, hrHost, 443)
+		refused := rec.Code == http.StatusForbidden && !cu.reached && strings.Contains(buf.String(), "trailer")
+		if refused != (trailer != "") {
+			t.Errorf("tunnel POST /public/x declaring trailer %q = %d reached=%v, want refused=%v:\n%s", trailer, rec.Code, cu.reached, trailer != "", buf.String())
+		}
 	}
 }

@@ -104,7 +104,8 @@ func (p *Proxy) hostRuleVerdict(r *http.Request, host, rawPath string) (cause st
 // routeOverrideCause says why a request carries a header that could have its host run another method or
 // path than the one the rules judged, or "": a method override naming another method (patAPIMethodMismatch,
 // the forge API door's check), or any path override. Such a request is refused, never stripped: the rule
-// says what the host may be asked, and the request asks something else.
+// says what the host may be asked, and the request asks something else. A trailer the request declares is
+// judged by its name alone, since its value arrives only after the body.
 func routeOverrideCause(r *http.Request) string {
 	if patAPIMethodMismatch(r) {
 		return "host rules: the request carries a method override that names another method than the request line"
@@ -112,6 +113,11 @@ func routeOverrideCause(r *http.Request) string {
 	for _, k := range slices.Sorted(maps.Keys(r.Header)) {
 		if armscope.RouteOverrideHeader(k) { // any case, '-' or '_'
 			return "host rules: the request carries " + k + ", which a host may route by in place of the request line judged"
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(r.Trailer)) {
+		if armscope.MethodOverrideHeader(k) || armscope.RouteOverrideHeader(k) {
+			return "host rules: the request declares a " + k + " trailer, which a host may route by in place of the request line judged"
 		}
 	}
 	return ""
