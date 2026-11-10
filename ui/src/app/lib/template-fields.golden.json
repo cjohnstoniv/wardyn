@@ -353,6 +353,14 @@
       "section": "run_wide"
     },
     {
+      "name": "refuse_ip_literals",
+      "part": "egress",
+      "omitted": "baseline",
+      "empty": "value",
+      "meaning": "IP address hosts follow the baseline. False is a choice to leave them as allow_all_egress has them.",
+      "section": "run_wide"
+    },
+    {
       "name": "first_use_approval",
       "part": "egress",
       "omitted": "baseline",
