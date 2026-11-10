@@ -470,6 +470,17 @@ func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
 			t.Fatalf("the test never %s", name)
 		}
 	}
+	// The barrier: each further read of the failed start is the edit going round its wait again, so it
+	// did not answer on the reads before it. Only then is the stop released.
+	for range 3 {
+		select {
+		case <-saw:
+		case w := <-done:
+			t.Fatalf("the edit answered %d %s before its failed start's stop landed", w.Code, w.Body.String())
+		case <-time.After(10 * time.Second):
+			t.Fatal("the edit stopped reading its start while the stop was held")
+		}
+	}
 	select {
 	case w := <-done:
 		t.Fatalf("the edit answered %d %s before its failed start's stop landed", w.Code, w.Body.String())
