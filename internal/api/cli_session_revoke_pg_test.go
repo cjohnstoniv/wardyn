@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -201,7 +202,7 @@ func TestPG_CLISession_DemotionSweepWaitsOnTheSessionLock(t *testing.T) {
 	e := newCLIEnv(t)
 	c, g := e.signIn(e.user, nil)
 	ctx := context.Background()
-	tx, err := e.pool.Begin(ctx)
+	tx, err := testutil.PGConn(t, e.pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +255,7 @@ func TestPG_CLISession_RevokeOfAReplacedAccessTokenStillEndsTheSession(t *testin
 	c, g := e.signIn(e.user, nil)
 	ctx := context.Background()
 	oldID := cliAccessTokenID(t, e, g.SessionID)
-	tx, err := e.pool.Begin(ctx)
+	tx, err := testutil.PGConn(t, e.pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +372,9 @@ func TestPG_CLISession_DemotionSweepPassesASiblingItsSessionEndAlreadyRevoked(t 
 // waitForEndWaiter waits until the session end (EndCLISession's UPDATE of cli_sessions, which is what a sweep or
 // a token revoke issues) is blocked on a lock the transaction with backend pid holder holds, and fails the test
 // if that never happens. It identifies the waiter by its statement and by pg_blocking_pids, not by any Lock wait:
-// the store's connection cannot be named without changing production code.
+// the store's connection cannot be named without changing production code. The holder's transaction runs on
+// a session outside e.pool (testutil.PGConn): a pool connection the test goroutine held across this poll would
+// be a nested acquire, which the pool guard (WARDYN_TEST_POOL_GUARD) answers by exiting the test binary.
 func waitForEndWaiter(t *testing.T, e *cliEnv, holder int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
