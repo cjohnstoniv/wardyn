@@ -168,22 +168,22 @@ func (s *Server) sshPerPrincipalCap() int {
 // rejected with msg. Both goroutines end when the caller closes the connection, which closes both
 // channels. The returned channel is closed once the first channel has been rejected.
 func sshRefuseChannels(chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, msg string) <-chan struct{} {
-	go ssh.DiscardRequests(reqs)
+	sshGo(func() { ssh.DiscardRequests(reqs) })
 	first := make(chan struct{})
-	go func() {
+	sshGo(func() {
 		once := sync.OnceFunc(func() { close(first) })
 		defer once() // the connection closing ends the wait too
 		for ch := range chans {
 			_ = ch.Reject(ssh.ResourceShortage, msg)
 			once()
 		}
-	}()
+	})
 	return first
 }
 
 // sshRefuseOverPrincipalCap ends a connection that authenticated over its person's share. It holds
-// no authenticated-connection slot; it keeps its handshake slot until closed, and its caller still
-// holds the source slot, so everything here is under those bounds. The refusal handling is bounded
+// no authenticated-connection slot; its handshake and source slots are released when its handler returns,
+// after the refusal row is written, so everything here is under those bounds. The refusal handling is bounded
 // by the refusal grace: the timer that closes the connection is armed first, and the
 // ssh.connection.reject row is written under a context of that length. The number of such
 // connections in flight is bounded by the handshake slots, not by the grace, since the audit spool

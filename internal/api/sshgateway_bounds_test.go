@@ -609,12 +609,10 @@ func TestSSHGateway_StalledRejectAuditStaysBounded(t *testing.T) {
 	}
 }
 
-// sshFlood pipelines far more global requests and channel opens than the mux's 16-slot buffers
-// hold, waits for the channel opens to be answered (or the connection to close), then closes c.
+// sshFlood pipelines far more channel opens (sent first, so the server's 16-slot new-channel buffer
+// is full and a further open is blocked behind it) and then global requests than the mux buffers
+// hold, waits for the opens to be answered (or the connection to close), then closes c.
 func sshFlood(c *ssh.Client) {
-	for range 40 {
-		_, _, _ = c.SendRequest("flood@wardyn.invalid", false, nil)
-	}
 	var wg sync.WaitGroup
 	for range 40 {
 		wg.Add(1)
@@ -622,6 +620,9 @@ func sshFlood(c *ssh.Client) {
 			defer wg.Done()
 			_, _, _ = c.OpenChannel("flood@wardyn.invalid", nil)
 		}()
+	}
+	for range 40 {
+		_, _, _ = c.SendRequest("flood@wardyn.invalid", false, nil)
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
@@ -666,9 +667,10 @@ func TestSSHGateway_RefusedConnectionPipeliningDoesNotLeakGoroutines(t *testing.
 			t.Fatalf("refused dial %d: %v", i+1, err)
 		}
 		sshFlood(over)
-	}
-	if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline+2 }) {
-		t.Fatalf("goroutines = %d after four flooded refused connections closed, baseline %d", runtime.NumGoroutine(), baseline)
+		// Checked after each connection, with no slack: one parked mux goroutine is one over.
+		if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline }) {
+			t.Fatalf("goroutines = %d after flooded refused connection %d closed, baseline %d", runtime.NumGoroutine(), i+1, baseline)
+		}
 	}
 	if !sshServed(held) {
 		t.Fatal("the held connection stopped being served")
@@ -676,6 +678,9 @@ func TestSSHGateway_RefusedConnectionPipeliningDoesNotLeakGoroutines(t *testing.
 }
 
 // The same for a connection closed because the whole established ceiling is taken by other people.
+// Not a fail-before test: the gateway closes such a connection right after the handshake, before a
+// client can pipeline anything, so this only guards against a regression; the deterministic proof
+// of the drain both arms share is TestSSHRefuseChannels_ServicesWhatTheMuxQueues.
 func TestSSHGateway_CeilingRefusedConnectionPipeliningDoesNotLeakGoroutines(t *testing.T) {
 	st := newSSHMemStore()
 	aliceRun, bobRun := uuid.New(), uuid.New()
@@ -707,8 +712,95 @@ func TestSSHGateway_CeilingRefusedConnectionPipeliningDoesNotLeakGoroutines(t *t
 			t.Fatalf("bob dial %d was served over a full ceiling", i+1)
 		}
 		sshFlood(bob)
+		if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline }) {
+			t.Fatalf("goroutines = %d after ceiling-refused connection %d closed, baseline %d", runtime.NumGoroutine(), i+1, baseline)
+		}
 	}
-	if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline+2 }) {
-		t.Fatalf("goroutines = %d after four ceiling-refused connections closed, baseline %d", runtime.NumGoroutine(), baseline)
+}
+
+// rejectingChannel is an ssh.NewChannel that reports its rejection message.
+type rejectingChannel struct{ got chan<- string }
+
+func (rejectingChannel) Accept() (ssh.Channel, <-chan *ssh.Request, error) {
+	return nil, nil, errors.New("not accepted")
+}
+func (c rejectingChannel) Reject(_ ssh.RejectionReason, msg string) error { c.got <- msg; return nil }
+func (rejectingChannel) ChannelType() string                              { return "session" }
+func (rejectingChannel) ExtraData() []byte                                { return nil }
+
+// sshRefuseChannels is what every close-without-serve arm uses. The mux blocks sending into its
+// queues, so with unbuffered queues and far more entries than 16, every one must be taken: a
+// helper that read one channel and stopped (as the arms did) leaves the senders blocked.
+func TestSSHRefuseChannels_ServicesWhatTheMuxQueues(t *testing.T) {
+	const n = 40
+	chans := make(chan ssh.NewChannel)
+	reqs := make(chan *ssh.Request)
+	got := make(chan string, n)
+	first := sshRefuseChannels(chans, reqs, "full; try later")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range n {
+			chans <- rejectingChannel{got}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range n {
+			reqs <- &ssh.Request{Type: "flood@wardyn.invalid"}
+		}
+	}()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued channels and requests were not all taken: a sender is still blocked")
+	}
+	select {
+	case <-first:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first rejection was never signalled")
+	}
+	if len(got) != n {
+		t.Fatalf("rejected %d of %d channels", len(got), n)
+	}
+	if m := <-got; m != "full; try later" {
+		t.Fatalf("rejection message %q", m)
+	}
+	close(chans)
+	close(reqs)
+}
+
+// panicOnceKeys is a store whose first key lookup panics, as a fault inside the auth callback would.
+type panicOnceKeys struct {
+	*sshMemStore
+	panicked atomic.Bool
+}
+
+func (p *panicOnceKeys) GetSSHKeyByFingerprint(ctx context.Context, fp string) (types.SSHPublicKey, error) {
+	if p.panicked.CompareAndSwap(false, true) {
+		panic("fault inside the auth callback")
+	}
+	return p.sshMemStore.GetSSHKeyByFingerprint(ctx, fp)
+}
+
+// A panic inside ssh.NewServerConn (an auth callback) is contained by sshGo, and must still give
+// back the handshake and source slots the connection took.
+func TestSSHGateway_PanicInAuthCallbackReleasesHandshakeSlots(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, &panicOnceKeys{sshMemStore: st}, &sshFakeRunner{})
+	if c, err := sshDial(t, h, runID.String(), priv); err == nil {
+		_ = c.Close()
+		t.Fatal("the dial whose auth callback panicked succeeded")
+	}
+	lim := h.srv.metrics.sshLimits.Load()
+	if !waitUntil(5*time.Second, func() bool { return len(lim.handshakes) == 0 }) {
+		t.Fatalf("handshake slots held after the panic: %d", len(lim.handshakes))
 	}
 }
