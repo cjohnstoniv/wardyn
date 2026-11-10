@@ -151,7 +151,7 @@ The edit never adds a host: any other field is a `400`. Adding a host to a runni
 3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
 4. Its `via_org` routes go too. The edited config is stored first, so every later revive starts from it, and the organisation's cached engine for the run is retired. The answer then waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
 5. Any other end, a config that could not be stored included, stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
-6. While that stop is not confirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop.
+6. While that stop is not confirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
 7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
 8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config if the edit stored it; if the edit's replace or config write failed first, the edit was not applied and must be sent again.
 
