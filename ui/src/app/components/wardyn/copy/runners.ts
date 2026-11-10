@@ -83,7 +83,7 @@ export const RUNNERS = {
   MANAGED_CARD_TITLE: "Runners",
   MANAGED_LABEL: "Require a managed device",
   MANAGED_HINT:
-    "A new run on a computer marked Personal is refused. Computers marked Managed device, and your organization's own clusters, still take runs. Runs already started keep their computer.",
+    "A new run on a computer marked Personal is refused. Computers marked Managed device, and your organisation's own clusters, still take runs. Runs already started keep their computer.",
   MANAGED_HONEST: "Wardyn goes by the trust class a security admin sets on each runner. It can't check the device itself.",
   MANAGED_RUNNERS_OFF: "Runners are off, so this has no effect yet.",
   MANAGED_NOT_SUPER: "Only a super admin can change this.",
@@ -132,7 +132,7 @@ export const RUNNER = {
 
 export const MY_RUNNER = {
   TITLE: "My runner",
-  LEDE: "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
+  LEDE: "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organisation's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
   NO_RUNNER: "You haven't registered a runner.",
   SUMMARY_NONE: "Not registered",
   SUMMARY_ONE: (name: string, state: string) => `${name} · ${state}`,
@@ -200,8 +200,8 @@ export const RUN_PLACEMENT = {
 /** Pending a mock round: the run's not_recorded, on the Identity card. */
 export const RUN_RECORDING = {
   LABEL: "Recording",
-  org_off: "Not recorded; the organization kept no recordings when it started.",
-  runner_declined: "Not recorded by the runner; the organization kept recordings when it started.",
+  org_off: "Not recorded; the organisation kept no recordings when it started.",
+  runner_declined: "Not recorded by the runner; the organisation kept recordings when it started.",
   // A macOS VM run marked runner_declined: its terminal sessions are recorded, its agent's output is not.
   macos_terminal: "Terminal sessions are recorded at this run's recording level. The agent's output isn't recorded.",
   // Not on the boards: M7-RunStrip state 4 in the Identity card's form.

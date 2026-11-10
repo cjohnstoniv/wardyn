@@ -143,6 +143,25 @@ describe("a long custom trust domain", () => {
   });
 });
 
+// The icon-only states of the header controls: the account trigger shows only
+// initials below sm, and the theme toggle is a two-state switch.
+describe("Header controls announce what they are and their state", () => {
+  it("names the account menu trigger, keeping the signed-in name in it", () => {
+    renderTopBar("admin", undefined, { principal: "alice@example.test", name: "", email: "" });
+    expect(screen.getByRole("button", { name: /account menu.*alice@example\.test/i })).toBeInTheDocument();
+  });
+
+  it("the theme toggle reports whether dark is on", async () => {
+    localStorage.setItem("wardyn-theme", "dark");
+    renderTopBar("admin");
+    const toggle = screen.getByRole("button", { name: "Toggle theme" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    localStorage.removeItem("wardyn-theme");
+  });
+});
+
 // #460 review — every plain <Link> in the header (top-bar.tsx) and the rail
 // goes through the one guardedClick; Settings is the entry the review named
 // explicitly, and since M-2 it lives in the rail's lower slot, not the menu.

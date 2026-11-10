@@ -36,7 +36,7 @@ import { SELECT_CLASS } from "../save-as-dialog";
 import type { GroupProps } from "./group-props";
 
 // The pool line names the pool's kind (canon: new-run-canon.md WHERE_DETAIL, pool words).
-const POOL_KIND_LABEL = { organization: "Organization pool", user: "User pool" } as const;
+const POOL_KIND_LABEL = { organization: "Organisation pool", user: "User pool" } as const;
 const BARRIER_NAME: Record<ConfinementClass, string> = { CC1: NR_SHARED.BARRIER_FENCE, CC2: NR_SHARED.BARRIER_WALL, CC3: NR_SHARED.BARRIER_VAULT };
 
 /**

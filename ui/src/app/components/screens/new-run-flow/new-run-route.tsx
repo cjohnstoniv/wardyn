@@ -206,6 +206,8 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || modalLayerOpen()) return;
+      // Escape in a text field is that field's own (closing an autofill list, clearing a search), not a request to leave.
+      if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
       requestLeave(() => void navigate("/runs"));
     };
     window.addEventListener("keydown", onKey);

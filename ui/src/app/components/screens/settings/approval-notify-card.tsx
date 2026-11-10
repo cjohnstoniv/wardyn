@@ -16,12 +16,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Mono } from "../../wardyn/code-block";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { APPROVAL_NOTIFY as COPY } from "../../wardyn/copy/approval-notify";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { CARD_STATUS } from "../../wardyn/copy/card-status";
 
 export function ApprovalNotifyCard() {
   const [data, setData] = React.useState<ApprovalNotifyStatus | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -31,7 +32,10 @@ export function ApprovalNotifyCard() {
         setData(s);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -59,7 +63,7 @@ export function ApprovalNotifyCard() {
       {status === "loading" ? (
         <TableSkeleton rows={1} cols={6} />
       ) : status === "error" ? (
-        <ErrorState onRetry={load} />
+        <ErrorState message={loadMessage} onRetry={load} />
       ) : channels.length === 0 ? (
         <p className="text-body leading-snug text-muted-foreground">
           {COPY.OFF_BODY[0]}

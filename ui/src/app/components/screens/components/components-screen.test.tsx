@@ -41,6 +41,7 @@ import type { Component } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { ComponentsScreen } from "./components-screen";
 import { aheadByHours } from "../../../lib/test-clock";
+import { STATES } from "../../wardyn/states";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
 const ID2 = "22222222-2222-4222-8222-222222222222";
@@ -136,6 +137,13 @@ describe("catalog", () => {
     expect(await screen.findByText("Requires the admin role.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Add component" })).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("any other failure offers Retry", async () => {

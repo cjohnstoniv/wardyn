@@ -96,6 +96,31 @@ describe("RunStatusStrip egress denies (UXR-23)", () => {
   });
 });
 
+describe("RunStatusStrip: the four-column grid and the cut-off values", () => {
+  it("goes to four columns only at xl, where the sidebar leaves room, not at lg", () => {
+    render(<RunStatusStrip ctx={ctx({ evidence: { files: 0, sandbox: null } })} />);
+    const grid = screen.getByRole("group");
+    expect(grid.className).toContain("xl:grid-cols-4");
+    expect(grid.className).not.toContain("lg:grid-cols-4");
+  });
+
+  it("carries each value in full as a tooltip, since the tile truncates it", () => {
+    render(
+      <RunStatusStrip
+        ctx={ctx({
+          evidence: { files: 0, sandbox: null },
+          heldCount: 2,
+          egress: [...Array(40).fill("allow"), ...Array(3).fill("deny")].map((decision) => ({ decision })) as unknown as WidgetContext["egress"],
+          grants: [{ id: "g" }] as unknown as WidgetContext["grants"],
+        })}
+      />,
+    );
+    expect(tile("Egress").getByText("3 deny").closest("[title]")).toHaveAttribute("title", "2 held · 40 allow · 3 deny");
+    expect(tile("Credentials").getByText("1 eligible · 0 minted")).toHaveAttribute("title", "1 eligible · 0 minted");
+  
+});
+});
+
 describe("useEvidenceFacts (#3038)", () => {
   // The tile has no room for the card's line saying the number is the guest's own (#3924).
   it("does not read a macOS VM guest's CPU for the tile, and still reads its files", async () => {

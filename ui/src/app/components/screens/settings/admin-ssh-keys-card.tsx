@@ -29,7 +29,7 @@ import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import { AddSSHKeyDialog, RemoveSSHKeyDialog, SshKeyChipNotes } from "../ssh-keys";
@@ -49,6 +49,7 @@ export const ADMIN_SSH_KEYS = {
 export function AdminSshKeysCard() {
   const [keys, setKeys] = React.useState<SSHPublicKey[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [addOpen, setAddOpen] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<SSHPublicKey | null>(null);
 
@@ -60,7 +61,10 @@ export function AdminSshKeysCard() {
         setKeys(k);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -94,7 +98,7 @@ export function AdminSshKeysCard() {
         {status === "loading" ? (
           <TableSkeleton rows={1} cols={4} />
         ) : status === "error" ? (
-          <ErrorState size="compact" title={ADMIN_SSH_KEYS.LOAD_FAILED_TITLE} onRetry={load} />
+          <ErrorState size="compact" title={ADMIN_SSH_KEYS.LOAD_FAILED_TITLE} message={loadMessage} onRetry={load} />
         ) : adminKeys.length === 0 ? (
           <EmptyState
             icon={KeyRound}
@@ -110,7 +114,9 @@ export function AdminSshKeysCard() {
                 <TableHead>Name</TableHead>
                 <TableHead>Fingerprint</TableHead>
                 <TableHead>Added</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

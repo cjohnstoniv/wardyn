@@ -366,6 +366,7 @@ export function LiveApprovals({
         await api.deny(a.id, reasonDeny, ...args);
       }
       await refresh();
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
     } catch (e) {
       noteRefusal(a.id, e);
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
@@ -387,6 +388,7 @@ export function LiveApprovals({
       if (approve) await api.approve(a.id, reasonApprove, ...opts);
       else await api.deny(a.id, reasonDeny, ...opts);
       await refresh();
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
     } catch (e) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(e) });
     } finally {

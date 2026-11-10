@@ -32,7 +32,7 @@ import { SIGNED_IN_CLIS as T } from "../../wardyn/copy/cli-sign-in";
 import { MINTED } from "../../wardyn/copy/credentials";
 import { inWords, SERVICES } from "../../wardyn/copy/service-tokens";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../../wardyn/states";
 
 type Load = "loading" | "ready" | "error" | "hidden";
 
@@ -48,6 +48,7 @@ const CELL = "max-md:flex max-md:items-baseline max-md:justify-between max-md:ga
 
 export function SignedInClisCard() {
   const [state, setState] = React.useState<Load>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [rows, setRows] = React.useState<CLISession[]>([]);
   const [leaving, setLeaving] = React.useState<CLISession | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -60,7 +61,10 @@ export function SignedInClisCard() {
         setRows(r);
         setState("ready");
       })
-      .catch((e: unknown) => setState(loadFailure(e)));
+      .catch((e: unknown) => {
+        setLoadMessage(failureSentence(e));
+        setState(loadFailure(e));
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -100,6 +104,7 @@ export function SignedInClisCard() {
         <div role="group" aria-label={T.TABLE_LABEL}>
           <ErrorState
             as="h4"
+            message={loadMessage}
             onRetry={() => {
               setState("loading");
               load();
@@ -121,7 +126,9 @@ export function SignedInClisCard() {
                   <TableHead>{SERVICES.COL_LAST_USED}</TableHead>
                   <TableHead>{T.COL_ENDS}</TableHead>
                   <TableHead>{T.COL_IDLE_END}</TableHead>
-                  <TableHead />
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody className="max-md:block">
