@@ -69,7 +69,7 @@ func syncTemp(tmp *os.File) error {
 }
 
 // installDurable syncs tmp (named tmpName in root, in the directory of every destination), installs
-// it and syncs that directory. It returns the destination used. tmp is closed and removed in every
+// it and syncs that directory and every one above it in root. It returns the destination used. tmp is closed and removed in every
 // case.
 func installDurable(root *os.Root, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
 	if err := syncTemp(tmp); err != nil {
@@ -83,7 +83,9 @@ func installDurable(root *os.Root, tmp *os.File, tmpName string, mode InstallMod
 // installSynced is installDurable after syncTemp: it closes tmp, then with InstallReplace renames it
 // over dsts[0], and with InstallNew puts it at the first of dsts that is free, trying each on the
 // same temp path and never replacing one; a destination already holding the same bytes counts as
-// installed. The temp is removed after success or after the last name failed.
+// installed. It then syncs the destination's directory and every one above it, through root, on
+// every install: a retry, or a copy already in place, included. The temp is removed after success
+// or after the last name failed.
 func installSynced(root *os.Root, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
 	defer func() { _ = root.Remove(tmpName) }() // after a rename or move it names nothing
 	if err := tmp.Close(); err != nil {
@@ -93,10 +95,24 @@ func installSynced(root *os.Root, tmp *os.File, tmpName string, mode InstallMode
 	if err != nil {
 		return "", &InstallError{Step: step, Err: err}
 	}
-	if err := syncDirIn(root, path.Dir(dst)); err != nil {
+	if err := syncDirsUp(root, path.Dir(dst)); err != nil {
 		return dst, &InstallError{Step: "sync-dir", Installed: true, Err: err}
 	}
 	return dst, nil
+}
+
+// syncDirsUp syncs dir and every directory above it in root, root itself last. An entry is durable
+// only once every directory naming it is synced, and that a directory exists never says its own
+// entry reached the disk: an earlier attempt may have made it and failed to sync its parent.
+func syncDirsUp(root *os.Root, dir string) error {
+	for p := dir; ; p = path.Dir(p) {
+		if err := syncDirIn(root, p); err != nil {
+			return err
+		}
+		if p == "." {
+			return nil
+		}
+	}
 }
 
 // place installs tmpName and names the step that failed.
@@ -175,27 +191,8 @@ func createTemp(root *os.Root, dir, prefix, suffix string) (string, *os.File, er
 	return name, f, err
 }
 
-// mkdirAllDurable is root.MkdirAll that also syncs the parent of every directory it creates.
-func mkdirAllDurable(root *os.Root, dir string) error {
-	var made []string
-	for p := dir; p != "." && p != "/"; p = path.Dir(p) {
-		if _, err := root.Lstat(p); err == nil {
-			break
-		}
-		made = append(made, p)
-	}
-	if err := root.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for _, p := range made {
-		if err := syncDirIn(root, path.Dir(p)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// mkdirAllDurableOS is mkdirAllDurable for a directory named by its own path.
+// mkdirAllDurableOS is os.MkdirAll that also syncs the parent of every directory it creates. It
+// knows only the directories it made itself; SaveUnder, which knows the state's root, syncs them all.
 func mkdirAllDurableOS(dir string, perm fs.FileMode) error {
 	var made []string
 	for p := dir; filepath.Dir(p) != p; p = filepath.Dir(p) {

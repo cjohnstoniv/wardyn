@@ -277,10 +277,39 @@ func isStateTempID(s string) bool {
 // renamed over the old record, and the directory synced. On an error before
 // the rename the old record is kept.
 func (st *State) Save(file string) error {
-	dir, base := filepath.Dir(file), filepath.Base(file)
-	if err := mkdirAllDurableOS(dir, 0o700); err != nil {
+	if err := mkdirAllDurableOS(filepath.Dir(file), 0o700); err != nil {
 		return err
 	}
+	return st.install(file)
+}
+
+// SaveUnder is Save for a state file under the existing directory top: after the install it syncs
+// every directory from the state's up to top, on every save, so a directory an earlier save made
+// but could not prove is proven now. A failed sync is an InstallError with Installed set.
+func (st *State) SaveUnder(file, top string) error {
+	dir, top := filepath.Dir(file), filepath.Clean(top)
+	rel, err := filepath.Rel(top, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("sync state %s is not under %s", file, top)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := st.install(file); err != nil {
+		return err
+	}
+	for p := dir; p != top && filepath.Dir(p) != p; {
+		p = filepath.Dir(p)
+		if err := syncDirPath(p); err != nil {
+			return &InstallError{Step: "sync-dir", Installed: true, Err: err}
+		}
+	}
+	return nil
+}
+
+// install writes the state through a temp file in file's directory and installs it durably.
+func (st *State) install(file string) error {
+	dir, base := filepath.Dir(file), filepath.Base(file)
 	b, err := json.Marshal(st)
 	if err != nil {
 		return err

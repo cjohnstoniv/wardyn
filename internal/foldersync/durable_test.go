@@ -226,9 +226,9 @@ func TestLoadState_RemovesTheTempFilesOfAStoppedSave(t *testing.T) {
 	}
 }
 
-// A pulled file in new directories: the parent of each new directory is synced, up to the first
-// that existed, and the file's own directory once it is installed.
-func TestInstall_NewDirectoriesSyncTheirParents(t *testing.T) {
+// A pulled file in new directories: once it is installed, its directory and every one above it are
+// synced, the root last.
+func TestInstall_NewDirectoriesSyncEveryDirectoryUpToTheRoot(t *testing.T) {
 	sy, box, root := pipeSyncer(t, true)
 	putSyncFile(t, filepath.Join(box, "a", "b", "c", "new.txt"), "from the sandbox", 0o644)
 	var synced []string
@@ -243,7 +243,42 @@ func TestInstall_NewDirectoriesSyncTheirParents(t *testing.T) {
 	if _, err := sy.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"a/b", "a", ".", "a/b/c"}; !slices.Equal(synced, want) {
+	if want := []string{"a/b/c", "a/b", "a", "."}; !slices.Equal(synced, want) {
 		t.Errorf("synced %v, want %v", synced, want)
+	}
+}
+
+// A state save whose root sync fails is not durable. A retry finds the state's directory already
+// made and still syncs every directory up to the root; a failure that repeats fails it again.
+func TestSaveUnder_ARetrySyncsEveryDirectoryUpToTheRoot(t *testing.T) {
+	top := t.TempDir()
+	file := filepath.Join(top, "folders", "run.json")
+	st := &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{}}
+	var synced []string
+	failTop := true
+	onSync(t, nil, func(d *os.File) error {
+		switch {
+		case isDir(d, filepath.Join(top, "folders")):
+			synced = append(synced, "folders")
+		case isDir(d, top):
+			synced = append(synced, "top")
+			if failTop {
+				return errFault
+			}
+		}
+		return nil
+	})
+	for i, fail := range []bool{true, true, false} {
+		failTop, synced = fail, nil
+		err := st.SaveUnder(file, top)
+		if fail != errors.Is(err, ErrNotDurable) || (!fail && err != nil) {
+			t.Errorf("save %d: err = %v", i+1, err)
+		}
+		if want := []string{"folders", "top"}; !slices.Equal(synced, want) {
+			t.Errorf("save %d: synced %v, want %v", i+1, synced, want)
+		}
+	}
+	if err := st.SaveUnder(file, filepath.Join(top, "other")); err == nil {
+		t.Error("a state outside its root was saved")
 	}
 }

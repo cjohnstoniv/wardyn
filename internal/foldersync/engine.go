@@ -123,7 +123,19 @@ type Syncer struct {
 	Opts      Options
 	State     *State
 	StateFile string
+	// StateRoot, when set, is the existing directory StateFile's directories are made under: each
+	// save syncs every directory from the state's up to it (SaveUnder). Unset, a save syncs only the
+	// directories it made itself (Save).
+	StateRoot string
 	ig        *syncIgnore // this pass's ignore rules, read by walkLocal
+}
+
+// saveState saves the state to StateFile, under StateRoot when it is set.
+func (sy *Syncer) saveState() error {
+	if sy.StateRoot == "" {
+		return sy.State.Save(sy.StateFile)
+	}
+	return sy.State.SaveUnder(sy.StateFile, sy.StateRoot)
 }
 
 // ListMeter counts the bytes the sftp client reads while a directory listing
@@ -331,7 +343,7 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 			delete(sy.State.Files, rel)
 		}
 	}
-	if err := sy.State.Save(sy.StateFile); err != nil {
+	if err := sy.saveState(); err != nil {
 		return nil, fmt.Errorf("save sync state: %w", err)
 	}
 	return rep, nil
@@ -342,7 +354,7 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 // sides hold it, so State is saved and the report says what was done. Under
 // --pull it also counts the sandbox's changes among left.
 func (sy *Syncer) cut(rep *Report, left []string, v *passView, err error) (*Report, error) {
-	if serr := sy.State.Save(sy.StateFile); serr != nil {
+	if serr := sy.saveState(); serr != nil {
 		return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
 	}
 	if sy.Opts.Pull {
@@ -884,7 +896,7 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 		rep.refuse(rel, "over --max-pull-bytes for this pass")
 		return "", nil, nil
 	}
-	if err := mkdirAllDurable(sy.Root, path.Dir(dst)); err != nil {
+	if err := sy.Root.MkdirAll(path.Dir(dst), 0o755); err != nil { // the install syncs every directory above dst
 		return "", nil, sy.pathFailed(ctx, rep, rel, "create the local directory", err)
 	}
 	src, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))

@@ -276,8 +276,8 @@ func TestSyncer_WithoutRunnerPassKeepsCLIRules(t *testing.T) {
 }
 
 // A conflict copy whose directory is new on the laptop (the developer moved it away after the walk
-// and is writing it back): the new directories' parents are synced as they are made, then the copy's
-// file, then its link, then its directory, and only after all of them may the push truncate the
+// and is writing it back): the copy's file is synced, then it is linked, then its directory and every
+// one above it are synced, the root last, and only after all of them may the push truncate the
 // sandbox's file. A failed directory sync blocks the push.
 func TestInstall_ConflictCopyInANewDirectorySyncsEverythingBeforeThePush(t *testing.T) {
 	for _, failDir := range []bool{false, true} {
@@ -322,10 +322,11 @@ func TestInstall_ConflictCopyInANewDirectorySyncsEverythingBeforeThePush(t *test
 			t.Fatal(err)
 		}
 		want := []string{
-			"dir a, copy present=false, sandbox=sandbox edit!",
-			"dir ., copy present=false, sandbox=sandbox edit!",
 			"file, copy absent=true, sandbox=sandbox edit!",
 			"dir a/b, copy present=true, sandbox=sandbox edit!",
+		}
+		if !failDir {
+			want = append(want, "dir a, copy present=true, sandbox=sandbox edit!", "dir ., copy present=true, sandbox=sandbox edit!")
 		}
 		if !slices.Equal(events, want) {
 			t.Errorf("failDir=%v: events = %q\nwant %q", failDir, events, want)
@@ -384,6 +385,68 @@ func TestInstall_AnIdenticalExistingCopyIsSyncedBeforeThePush(t *testing.T) {
 			}
 		} else if sandbox() != "laptop edit" || rep.Unsynced != 0 {
 			t.Errorf("sandbox = %q, report = %+v", sandbox(), rep)
+		}
+	}
+}
+
+// A conflict copy in new directories whose first install could not sync the root: the push is
+// refused. The retry finds the directories and the copy already in place and still syncs the root
+// before the push may truncate the sandbox's file; a failure that repeats refuses the push again.
+func TestInstall_ARetryAfterAFailedRootSyncSyncsTheRootBeforeThePush(t *testing.T) {
+	for _, again := range []bool{false, true} {
+		sy, box, root := runnerSyncer(t, true)
+		sy.ig = newSyncIgnore(nil)
+		rel := "a/b/x.txt"
+		putSyncFile(t, filepath.Join(box, rel), "sandbox edit!", 0o644)
+		r, err := sy.Client.Stat(filepath.Join(box, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sandbox := func() string { return getSyncFile(t, filepath.Join(box, rel)) }
+		l := syncFile{side: Side{Size: int64(len("laptop edit"))}, mode: 0o644}
+		attempt := func(failRoot bool) (*Report, []string) {
+			var events []string
+			onSync(t, nil, func(d *os.File) error {
+				if isDir(d, filepath.Join(root, "a", "b")) {
+					if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+						// The developer's file is back before the push reads it.
+						putSyncFile(t, filepath.Join(root, rel), "laptop edit", 0o644)
+					}
+				}
+				if !isDir(d, root) {
+					return nil
+				}
+				events = append(events, "dir ., sandbox="+sandbox())
+				if failRoot {
+					return errFault
+				}
+				return nil
+			})
+			rep, pulled := NewReport(), int64(0)
+			if err := sy.conflict(context.Background(), rel, l, r, rep, &pulled); err != nil {
+				t.Fatal(err)
+			}
+			return rep, events
+		}
+		refused := func(n int, rep *Report) {
+			if sandbox() != "sandbox edit!" || len(rep.Pushed) != 0 || !slices.Equal(rep.UnsyncedPaths, []string{rel}) {
+				t.Errorf("again=%v attempt %d: a failed root sync did not block the push: sandbox = %q, report = %+v", again, n, sandbox(), rep)
+			}
+		}
+		want := []string{"dir ., sandbox=sandbox edit!"}
+		rep, events := attempt(true)
+		if !slices.Equal(events, want) {
+			t.Errorf("again=%v attempt 1: events = %q", again, events)
+		}
+		refused(1, rep)
+		rep, events = attempt(again)
+		if !slices.Equal(events, want) {
+			t.Errorf("again=%v attempt 2: events = %q, want the root synced before the push", again, events)
+		}
+		if again {
+			refused(2, rep)
+		} else if sandbox() != "laptop edit" || !slices.Equal(rep.Pushed, []string{rel}) {
+			t.Errorf("attempt 2: sandbox = %q, pushed = %v", sandbox(), rep.Pushed)
 		}
 	}
 }
