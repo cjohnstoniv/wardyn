@@ -154,6 +154,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.TrustedCAFile != "" {
 		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{Type: mount.TypeBind, Source: d.cfg.TrustedCAFile, Target: runner.TrustedCAMountPath, ReadOnly: true})
 	}
+	// The agent's only nameserver is its proxy. Added before the exec-less stash below, so a deferred
+	// agent carries the mount too.
+	undoDNS, err := d.mountProxyResolver(ctx, spec.RunID, proxyIP, info.ServerVersion, agentHost)
+	if undoDNS != nil {
+		rollback = append(rollback, undoDNS)
+	}
+	if err != nil {
+		return fail(err)
+	}
 
 	agentNetCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
@@ -645,7 +654,8 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
-	return nil
+	// The run's resolver volume, which the agent mounted and is gone by now.
+	return d.removeDNSVolume(ctx, id)
 }
 
 // removedElsewhere reports whether err is Docker refusing to remove the container name because another call

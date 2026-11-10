@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -84,6 +85,8 @@ func proxyEnvFromJSON(runID uuid.UUID, controlPlaneURL string) []string {
 		proxyConfigStdinEnv + "=1",
 		"WARDYN_RUN_ID=" + runID.String(),
 		"WARDYN_CONTROL_PLANE_URL=" + controlPlaneURL,
+		// The agent's resolver is this proxy (resolvConfMount): its DNS listener answers on the run network.
+		proxy.DNSListenEnv + "=:53",
 	}
 	// Operator knobs the sidecar reads from its own environment, forwarded
 	// from wardynd's when set. Shared list (runner.ProxySidecarEnvKnobs) with

@@ -27,7 +27,9 @@ import (
 )
 
 // Docker named volumes for MANAGED user drives — the only place in this
-// package that creates a volume, and the only shape it ever creates.
+// package that creates a drive volume, and the only shape it ever creates. The
+// other volume this package creates is a run's own resolver volume
+// (driver_dns.go), which is never a drive and is removed with its run.
 //
 // SECURITY: MANAGED (no host path) means nothing for the bind deny-list to
 // deny and no host-root ceiling to escape; host_path runs that deny matrix

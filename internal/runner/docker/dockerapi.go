@@ -73,9 +73,10 @@ type dockerAPI interface {
 	ExecResize(ctx context.Context, execID string, options client.ExecResizeOptions) (client.ExecResizeResult, error) // honours attach-session PTY window-size changes
 
 	// VolumeInspect / VolumeCreate back MANAGED user drives: a per-person named volume, created on first
-	// use. VolumeRemove is reached from exactly ONE caller — ReclaimDrive, the operator's explicit verb.
-	// SECURITY/invariant: no teardown, sweep or run path may call it — a drive outlives every run that
-	// mounts it, so an automatic reclaim would be data loss, not cleanup.
+	// use. VolumeRemove is reached from exactly TWO callers: ReclaimDrive, the operator's explicit verb, and
+	// removeDNSVolume, which removes only the run's own resolver volume, wardyn-dns-<run-id>, by that exact name.
+	// SECURITY/invariant: no teardown, sweep or run path may remove a drive volume — a drive outlives every run
+	// that mounts it, so an automatic reclaim would be data loss, not cleanup.
 	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	VolumeCreate(ctx context.Context, options client.VolumeCreateOptions) (client.VolumeCreateResult, error)
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
