@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -360,7 +361,7 @@ func (s *Server) recordProxyAddr(ctx context.Context, runID uuid.UUID, addr stri
 
 // beginDispatchProxyStart records a dispatch's pending start, generation 1, on the run token's jti. A
 // start that cannot be recorded fails the run before any create: its proxy could never confirm.
-func (s *Server) beginDispatchProxyStart(ctx context.Context, run types.AgentRun, token string, stopCreateLease func()) (proxyStartRec, bool) {
+func (s *Server) beginDispatchProxyStart(ctx context.Context, run types.AgentRun, token string, done func()) (proxyStartRec, bool) {
 	if _, ok := s.cfg.Store.(store.RunProxyStarts); !ok {
 		return proxyStartRec{}, true
 	}
@@ -370,13 +371,27 @@ func (s *Server) beginDispatchProxyStart(ctx context.Context, run types.AgentRun
 		rec, err = s.beginProxyStart(ctx, run, 1, claims.JTI)
 	}
 	if err != nil {
-		stopCreateLease()
+		done()
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy start could not be recorded")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": "policy_unconfirmed"})))
 		return rec, false
 	}
 	return rec, true
+}
+
+// recordConfirmedSandbox is recordStartedSandbox, then the driver's answer for start: false is a run
+// already failed with its sandbox stopped, for an unrecorded ref or a start that cannot run.
+func (s *Server) recordConfirmedSandbox(ctx context.Context, run types.AgentRun, sb runner.Sandbox, start proxyStartRec) bool {
+	if err := s.recordStartedSandbox(ctx, run, sb); err != nil {
+		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
+		return false
+	}
+	if ok, why := s.proxyStartAnswered(ctx, run.ID, start, sb.ProxyConfigSHA256); !ok {
+		s.abortUnconfirmedSandbox(ctx, run.ID, sb.Ref, why)
+		return false
+	}
+	return true
 }
 
 // abortUnconfirmedSandbox stops a created sandbox whose start did not confirm (why) and fails the run.

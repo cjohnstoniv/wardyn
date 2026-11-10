@@ -674,11 +674,11 @@ func TestReadback_ModeNeedsPositiveEvidence(t *testing.T) {
 		}
 	}
 	for image, want := range map[string]string{
-		"ghcr.io/example/wardyn-proxy:0.10.0-rc.17":             store.ProxyStartLegacy,
-		"ghcr.io/example/wardyn-proxy:0.10.0-rc.18":             store.ProxyStartExpected,
+		"ghcr.io/example/wardyn-proxy:0.10.0-rc.17":           store.ProxyStartLegacy,
+		"ghcr.io/example/wardyn-proxy:0.10.0-rc.18":           store.ProxyStartExpected,
 		"ghcr.io/example/wardyn-proxy@sha256:" + hashHex(nil): store.ProxyStartExpected,
-		"ghcr.io/example/wardyn-proxy:latest":                   store.ProxyStartExpected,
-		"":                                                      store.ProxyStartExpected,
+		"ghcr.io/example/wardyn-proxy:latest":                 store.ProxyStartExpected,
+		"":                                                    store.ProxyStartExpected,
 	} {
 		srv := &Server{cfg: Config{ProxyImage: image}}
 		if got := srv.proxyStartMode(context.Background(), types.AgentRun{ID: uuid.New()}); got != want {
@@ -765,7 +765,7 @@ func TestReadback_DispatchWithoutHashStopsAtOnce(t *testing.T) {
 	if p := d.st.get(d.run.ID, 1); p.State != types.ProxyStartFailed || p.Mode != store.ProxyStartExpected {
 		t.Errorf("start = %s/%s, want failed/expected", p.State, p.Mode)
 	}
-	ev := findAudit(d.audit.events, d.run.ID, "run.create", "failure")
+	ev := findAudit(d.audit.snapshot(), d.run.ID, "run.create", "failure")
 	if ev == nil || !strings.Contains(string(ev.Data), "policy_unconfirmed") || !strings.Contains(string(ev.Data), store.ProxyStartHashMissing) {
 		t.Fatal("want a run.create failure row, reason policy_unconfirmed, readback hash_missing")
 	}
