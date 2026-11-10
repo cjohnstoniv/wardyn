@@ -206,6 +206,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_IMAGE_PULL_SECRET` | string | (unset) | optional pre-existing Secret name threaded onto `imagePullSecrets` for every pod the `k8s` substrate creates (agent, proxy, and the boot-time egress canary) (`-tags k8s`) |
 | `WARDYN_K8S_READ_NODES` | bool | off | list the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`); boot measures the cluster from them. Needs `list` on `nodes`. [Details](#wardyn_k8s_read_nodes) |
 | `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
+| `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE` | string | empty | experimental: a `SandboxTemplate` in each runs namespace whose `sandbox-template.wardyn.dev/` annotations the agent pod takes; needs `WARDYN_K8S_AGENT_SANDBOX`. Chart: `k8s.agentSandbox.template`. [Details](#wardyn_k8s_agent_sandbox_template) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -822,6 +823,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Experimental, off by default (`-tags k8s`). The agent pod is made by a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller from a `Sandbox`; the proxy pod, Secret and NetworkPolicies stay Wardyn's.
 - Boot refuses when the cluster does not serve `agents.x-k8s.io/v1beta1`, when wardynd lacks a needed verb, under `wardyn-runnerd`, or beside `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`.
 - Tested with agent-sandbox v1.0.9 only. Setup, what it widens and what is not supported: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md). Chart: `k8s.agentSandbox.*`.
+
+### `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`
+
+- Experimental, empty by default (`-tags k8s`). The name of an agent-sandbox `SandboxTemplate` in each runs namespace. The agent pod takes only its annotations under `sandbox-template.wardyn.dev/`. Placement and runtime come only from `WARDYN_K8S_SANDBOX_PLACEMENT` and the confinement class, where the boot canary checks NetworkPolicy enforcement.
+- A template that sets any pod field (placement included) or other field, or changes an annotation Wardyn set, refuses the run before its `Sandbox` is created. Boot refuses a template that is missing, unreadable or refused, a name that is not a valid object name, and the variable without `WARDYN_K8S_AGENT_SANDBOX`.
+- Needs `get` on that one name of `sandboxtemplates.extensions.agents.x-k8s.io`. [A platform template](operations/kubernetes-agent-sandbox.md#a-platform-template).
 
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 
