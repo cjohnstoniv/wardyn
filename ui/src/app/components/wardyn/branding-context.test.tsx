@@ -14,11 +14,11 @@ vi.mock("../../lib/api/health", () => ({
 
 import { ThemeProvider } from "./theme-provider";
 import { BrandingProvider } from "./branding-context";
-import { brandColourCSS, brandTitle, unbrandTitle } from "./branded";
+import { brandColourCSS, brandTitle } from "./branded";
 import { SignIn } from "../screens/sign-in";
 import { TopBar } from "../screens/top-bar";
 import type { ShellMeta } from "../screens/app-shell";
-import type { Branding } from "../../lib/branding";
+import { productName, type Branding } from "../../lib/branding";
 
 // Captured from the console BEFORE #1125 (origin/main a7553fc47): the top-bar
 // wordmark and the sign-in lockup, unbranded. An unbranded console must render
@@ -214,26 +214,35 @@ describe("branded console (#1125)", () => {
     expect(brandTitle("Something else", "Example Corp Wardyn")).toBe("Something else");
   });
 
-  it("renames the console's name after a page's own title, and leaving puts it back", () => {
+  it("renames the console's name after a page's own title", () => {
     expect(brandTitle("Runs - Wardyn", "Example Corp Wardyn")).toBe("Runs - Example Corp Wardyn");
     expect(brandTitle("Runs - Wardyn admin", "Example Corp Wardyn")).toBe("Runs - Example Corp Wardyn admin");
     expect(brandTitle("Runs - Example Corp Wardyn", "Example Corp Wardyn")).toBe("Runs - Example Corp Wardyn");
     expect(brandTitle("Runs-Wardyn", "Example Corp Wardyn")).toBe("Runs-Wardyn");
-    expect(unbrandTitle("Runs - Example Corp Wardyn admin", "Example Corp Wardyn")).toBe("Runs - Wardyn admin");
-    expect(unbrandTitle("Example Corp Wardyn", "Example Corp Wardyn")).toBe("Wardyn");
-    expect(unbrandTitle("Runs - Wardyn", "Example Corp Wardyn")).toBe("Runs - Wardyn");
   });
 
-  // brandTitle twice is brandTitle once, and leaving the brand restores the console's own title, for
-  // names that themselves end in " - Wardyn", equal "Wardyn", carry regex characters, or are empty.
-  it.each(["Acme -", "Wardyn", "- Wardyn", "Acme - Wardyn", "Wardyn - Wardyn", "A.c+e (x)", ""])(
-    "is idempotent and reversible for the name %j",
-    (name) => {
-      for (const t of ["Wardyn", "Wardyn admin", "Runs - Wardyn", "Runs - Wardyn admin", "Something else"]) {
-        const once = brandTitle(t, name);
-        expect(brandTitle(once, name)).toBe(once);
-        expect(unbrandTitle(once, name)).toBe(t);
-      }
-    },
-  );
+  // Each console title is renamed once and stays put, and leaving restores it exactly, for brands whose name
+  // collides with a page's title ("Runs -" gives "Runs - Wardyn"), ends in " - Wardyn" or " admin", equals a
+  // console word, or carries regex characters.
+  it.each<Partial<Branding>>([
+    { org_name: "Runs -" }, { org_name: "Acme -" }, { org_name: "-" }, { org_name: "Wardyn -" },
+    { org_name: "Wardyn" }, { org_name: "A.c+e (x)" }, { org_name: "Site admin", name_format: "suffix" },
+  ])("renames each console title once and restores it on leaving, for %j", async (brand) => {
+    const name = productName({ ...BRAND, ...brand } as Branding);
+    publicRead = async () => ({ ...BRAND, ...brand });
+    const { unmount } = renderSignIn();
+    for (const [t, want] of [
+      ["Wardyn", name], ["Wardyn admin", `${name} admin`], ["Runs - Wardyn", `Runs - ${name}`],
+      ["Runs - Wardyn admin", `Runs - ${name} admin`], ["Something else", "Something else"],
+    ]) {
+      document.title = t;
+      await waitFor(() => expect(document.title).toBe(want));
+      await new Promise((r) => setTimeout(r, 10));
+      expect(document.title).toBe(want);
+    }
+    document.title = "Runs - Wardyn";
+    await waitFor(() => expect(document.title).toBe(`Runs - ${name}`));
+    unmount();
+    expect(document.title).toBe("Runs - Wardyn");
+  });
 });

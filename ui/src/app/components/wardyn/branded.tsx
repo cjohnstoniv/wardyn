@@ -68,28 +68,18 @@ export function brandColourCSS(b: Branding): string | null {
 /**
  * The tab title a brand shows for the console's own: "Wardyn" -> the product
  * name, "Wardyn admin" -> "<name> admin" (the Admin view cue stays), alone or
- * after a page's "<page> - ". Any other title is left alone. brandTitle leaves a title that already ends
- * in the name alone, so applying it twice changes nothing; unbrandTitle undoes it.
+ * after a page's "<page> - ". Any other title is left alone. A brand name can
+ * itself end in " - Wardyn" (an organisation named "Acme -"), so the result can
+ * look unbranded again: only the console's own titles are passed in.
  */
-function endsInName(title: string, name: string): string | null {
-  for (const cue of [" admin", ""]) {
-    const own = name + cue;
-    if (title === own || title.endsWith(` - ${own}`)) return cue;
-  }
-  return null;
-}
-
-function swapTitleName(title: string, from: string, to: string): string {
-  const cue = from && to ? endsInName(title, from) : null;
-  return cue === null ? title : title.slice(0, title.length - from.length - cue.length) + to + cue;
-}
-
 export function brandTitle(title: string, name: string): string {
-  return endsInName(title, name) !== null ? title : swapTitleName(title, CONSOLE_VIEW.TITLE_USER, name);
-}
-
-export function unbrandTitle(title: string, name: string): string {
-  return swapTitleName(title, name, CONSOLE_VIEW.TITLE_USER);
+  const own = CONSOLE_VIEW.TITLE_USER;
+  for (const cue of [" admin", ""]) {
+    const from = own + cue;
+    if (title === from) return name + cue;
+    if (title.endsWith(` - ${from}`)) return title.slice(0, -from.length) + name + cue;
+  }
+  return title;
 }
 
 // Colours, tab icon and tab title while a brand is set; leaving restores all
@@ -120,20 +110,22 @@ function BrandEffects({ brand }: { brand: Branding }) {
   }, [icon]);
   const name = productName(brand);
   React.useEffect(() => {
-    // A name can itself end in " - Wardyn" (an organisation named "Acme -"), so renaming its own output
-    // again would never settle: a title this effect wrote is left alone.
+    // The console's own title (index.html, the shell's view effect), kept so leaving restores it exactly. A
+    // title this effect wrote is never renamed again: a brand name can itself end in " - Wardyn".
+    let own = document.title;
     let wrote = "";
     const rename = () => {
       if (document.title === wrote) return;
-      const next = brandTitle(document.title, name);
-      if (next !== document.title) document.title = wrote = next;
+      own = document.title;
+      const next = brandTitle(own, name);
+      if (next !== own) document.title = wrote = next;
     };
     rename();
     const watch = new MutationObserver(rename);
     watch.observe(document.head, { childList: true, characterData: true, subtree: true });
     return () => {
       watch.disconnect();
-      document.title = unbrandTitle(document.title, name);
+      if (document.title === wrote) document.title = own;
     };
   }, [name]);
   return null;
