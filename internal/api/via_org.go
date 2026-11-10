@@ -118,7 +118,11 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		returned = true
 		mu.Unlock()
 	}()
-	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st)
+	// The runner marks a VM guest's flow that came in on its relay listener; the mark counts only for a
+	// VM run, whose runner is the one internalAuth bound this call to.
+	liveRun, live := liveRunFromContext(r.Context())
+	guestRelayed := live && liveRun.MachineKind.IsVM() && r.Header.Get(proxy.ViaOrgRelayedHeader) == "1"
+	out := viaOrgEngineRequest(r.WithContext(st.ctx), rest, restEsc, dest, st, guestRelayed)
 	cw := &viaOrgCountingWriter{ResponseWriter: w, st: st}
 	if dest.broker {
 		gen.engine.ServeBroker(cw, out)
@@ -238,9 +242,14 @@ func viaOrgRest(u *url.URL) (rest, escaped string, ok bool) {
 }
 
 // viaOrgEngineRequest is the request the engine sees: the sandbox's own path, method, headers (its
-// Authorization restored) and body, with the run token and the forwarding headers gone.
-func viaOrgEngineRequest(r *http.Request, rest, restEsc string, dest viaOrgDestination, st *viaOrgStream) *http.Request {
-	out := r.Clone(r.Context())
+// Authorization restored) and body, with the run token and the forwarding headers gone. A relayed
+// guest flow rides the engine's relay lane, so its decision rows are not the run's activity.
+func viaOrgEngineRequest(r *http.Request, rest, restEsc string, dest viaOrgDestination, st *viaOrgStream, relayed bool) *http.Request {
+	ctx := r.Context()
+	if relayed {
+		ctx = proxy.WithRelayLane(ctx)
+	}
+	out := r.Clone(ctx)
 	out.URL.Path, out.URL.RawPath, out.URL.Host, out.URL.Scheme = rest, restEsc, "", ""
 	out.RequestURI = ""
 	out.Host = dest.host
@@ -250,6 +259,8 @@ func viaOrgEngineRequest(r *http.Request, rest, restEsc string, dest viaOrgDesti
 	}
 	out.Header.Del(proxy.ViaOrgAuthorizationHeader)
 	out.Header.Del(proxy.ViaOrgAuthorityHeader)
+	out.Header.Del(proxy.ViaOrgRelayedHeader)
+	out.Header.Del(proxy.DecisionRelayedHeader)
 	if r.Body != nil && r.Body != http.NoBody {
 		out.Body = &viaOrgCountingBody{ReadCloser: r.Body, st: st}
 	}

@@ -473,6 +473,47 @@ func TestViaOrg_EndToEndThroughTheRelay(t *testing.T) {
 	})
 }
 
+// TestViaOrg_RelayedVMFlowIsNotActivity: on a VM run, a forwarded request the runner marked as a guest flow off its
+// relay listener (ViaOrgRelayedHeader) rides the engine's relay lane, so its allow row never moves the idle clock
+// (agent_runs.updated_at); the same request unmarked is the run working and does.
+func TestViaOrg_RelayedVMFlowIsNotActivity(t *testing.T) {
+	for _, marked := range []bool{true, false} {
+		t.Run(map[bool]string{true: "marked", false: "unmarked"}[marked], func(t *testing.T) {
+			f := newViaOrgAPIFixture(t)
+			if _, err := f.pool.Exec(f.ctx, `UPDATE agent_runs SET machine_kind = $2, updated_at = now() - interval '1 hour' WHERE id = $1`,
+				f.run.ID, string(types.MachineLinuxVM)); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, proxy.ViaOrgPathPrefix+f.grant.String()+"/v1/messages", strings.NewReader(`{"q":1}`))
+			req.Header.Set("Authorization", "Bearer "+runToken(t, f.srv, f.run.ID))
+			req.Header.Set(proxy.ViaOrgAuthorityHeader, viaOrgAPIHost)
+			req.Header.Set(proxy.ViaOrgAuthorizationHeader, "Bearer sandbox-own")
+			if marked {
+				req.Header.Set(proxy.ViaOrgRelayedHeader, "1")
+			}
+			req = req.WithContext(relayConnContext(req.Context(), relayedConn{runner: f.rn.ID}))
+			w := httptest.NewRecorder()
+			f.srv.relayRoutes(f.srv.InternalHandler()).ServeHTTP(w, req)
+			if w.Code != http.StatusOK || w.Body.String() != "upstream-ok" {
+				t.Fatalf("via_org = %d %s", w.Code, w.Body)
+			}
+			// The decision rows flush with the engine; the touch is made before the row's audit write.
+			f.srv.endViaOrgRunner(f.rn.ID)
+			waitFor(t, "the org-side allow row", func() bool {
+				_, ok := relayAudit(f.srv, f.run.ID, "egress.allow")
+				return ok
+			})
+			var touched bool
+			if err := f.pool.QueryRow(f.ctx, `SELECT updated_at > now() - interval '30 minutes' FROM agent_runs WHERE id = $1`, f.run.ID).Scan(&touched); err != nil {
+				t.Fatal(err)
+			}
+			if touched == marked {
+				t.Fatalf("marked=%v: the idle clock moved=%v, want %v", marked, touched, !marked)
+			}
+		})
+	}
+}
+
 // viaOrgRelayClient is runnerRelayClient keeping both directions of every relayed byte.
 func viaOrgRelayClient(t *testing.T, peer *runnerwire.Peer, caPEM string, seen io.Writer) *http.Client {
 	t.Helper()

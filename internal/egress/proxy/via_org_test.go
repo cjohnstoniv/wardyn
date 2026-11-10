@@ -80,6 +80,7 @@ type fakeOrg struct {
 	failGrant                        uuid.UUID     // this grant's injection resolve fails
 	block                            chan struct{} // decision posts wait on it
 	decisions                        strings.Builder
+	posts, relayedPosts              int // decision posts, and those carrying DecisionRelayedHeader
 }
 
 func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -110,6 +111,10 @@ func (f *fakeOrg) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		b, _ := io.ReadAll(req.Body)
 		f.decisions.Write(b)
+		f.posts++
+		if req.Header.Get(DecisionRelayedHeader) == "1" {
+			f.relayedPosts++
+		}
 		rec.WriteHeader(http.StatusAccepted)
 	case p == "/api/v1/internal/approvals" && req.Method == http.MethodPost:
 		f.raised++
