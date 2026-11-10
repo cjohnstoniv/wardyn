@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -94,7 +95,7 @@ func hrConnect(t *testing.T, proxyURL string, port string) (int, net.Conn, *bufi
 }
 
 // hrInner sends one request inside an opened tunnel, trusting caPEM; it reports the status.
-func hrInner(t *testing.T, conn net.Conn, caPEM []byte, method, path string) int {
+func hrInner(t *testing.T, conn net.Conn, caPEM []byte, method, path string, hdr ...string) int {
 	t.Helper()
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(caPEM)
@@ -102,12 +103,17 @@ func hrInner(t *testing.T, conn net.Conn, caPEM []byte, method, path string) int
 	if err := tc.Handshake(); err != nil {
 		t.Fatalf("a rule host's tunnel was not opened by the proxy (TLS to the proxy's certificate failed): %v", err)
 	}
-	return hrSend(t, tc, method, path)
+	return hrSend(t, tc, method, path, hdr...)
 }
 
-func hrSend(t *testing.T, c net.Conn, method, path string) int {
+// hrSend writes one request on c, with each of hdr as a header line, and returns the status.
+func hrSend(t *testing.T, c net.Conn, method, path string, hdr ...string) int {
 	t.Helper()
-	if _, err := io.WriteString(c, method+" "+path+" HTTP/1.1\r\nHost: "+hrHost+"\r\nContent-Length: 0\r\n\r\n"); err != nil {
+	extra := ""
+	for _, h := range hdr {
+		extra += h + "\r\n"
+	}
+	if _, err := io.WriteString(c, method+" "+path+" HTTP/1.1\r\nHost: "+hrHost+"\r\n"+extra+"Content-Length: 0\r\n\r\n"); err != nil {
 		t.Fatalf("write inner request: %v", err)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: method})
@@ -192,6 +198,7 @@ func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
 		{"/admin//../users", http.StatusForbidden, "not in normal form"},
 		{"/users/./x", http.StatusForbidden, "not in normal form"},
 		{"/admin", http.StatusForbidden, "rule 0 denies"},
+		{"/Admin", http.StatusForbidden, "differs only in case"},
 		{"/admin;x=1", http.StatusForbidden, "not in normal form"},
 		{"/users", http.StatusOK, ""},
 	} {
@@ -248,37 +255,81 @@ func servletParamGET(t *testing.T, path string) (int, int32, string) {
 	return hrInner(t, conn, caPEM, http.MethodGet, path), reached.Load(), buf.String()
 }
 
-func wantServletParamRefused(t *testing.T, path string) {
-	t.Helper()
-	status, reached, rows := servletParamGET(t, path)
-	if status != http.StatusForbidden || reached != 0 {
-		t.Errorf("GET %s = %d, upstream reached %d time(s), want 403 and never reached", path, status, reached)
+// TestHostRulesRefusePathParameters: each spelling of a path parameter, literal or encoded in either case,
+// at the end or mid-path, is refused on a rule host before an upstream that drops parameters is reached;
+// a plain path still forwards.
+func TestHostRulesRefusePathParameters(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		refused bool
+	}{
+		{"/admin;x=1", true},
+		{"/admin%3Bx=1", true},
+		{"/admin%3bx=1", true},
+		{"/admin%3Bx/users", true},
+		{"/admin;x=1/users", true},
+		{"/users", false},
+	} {
+		status, reached, rows := servletParamGET(t, tc.path)
+		if tc.refused && (status != http.StatusForbidden || reached != 0 || !strings.Contains(rows, "not in normal form")) {
+			t.Errorf("GET %s = %d, upstream reached %d time(s), want 403, never reached, with a normal-form row:\n%s", tc.path, status, reached, rows)
+		}
+		if !tc.refused && (status != http.StatusOK || reached != 1) {
+			t.Errorf("GET %s = %d, upstream reached %d time(s), want 200 once", tc.path, status, reached)
+		}
 	}
-	if !strings.Contains(rows, "not in normal form") {
-		t.Errorf("GET %s: no row naming the path parameter:\n%s", path, rows)
-	}
 }
 
-// Each spelling of a path parameter is refused on a rule host, the way the matcher decodes it.
-func TestHostRulesRefuseALiteralPathParameter(t *testing.T) { wantServletParamRefused(t, "/admin;x=1") }
-
-func TestHostRulesRefuseAnUppercaseEncodedPathParameter(t *testing.T) {
-	wantServletParamRefused(t, "/admin%3Bx=1")
-}
-
-func TestHostRulesRefuseALowercaseEncodedPathParameter(t *testing.T) {
-	wantServletParamRefused(t, "/admin%3bx=1")
-}
-
-func TestHostRulesRefuseAnEncodedPathParameterMidPath(t *testing.T) {
-	wantServletParamRefused(t, "/admin%3Bx/users")
-}
-
-// A literal parameter before a further segment is refused too, and a plain path still forwards.
-func TestHostRulesPathParameterBeforeASegmentAndAPlainPath(t *testing.T) {
-	wantServletParamRefused(t, "/admin;x=1/users")
-	if status, reached, _ := servletParamGET(t, "/users"); status != http.StatusOK || reached != 1 {
-		t.Errorf("GET /users = %d, upstream reached %d time(s), want 200 once", status, reached)
+// TestHostRulesRefuseRouteOverrideHeaders: a host may run the method or path an override header names in
+// place of the request line's, so on a rule host such a request is refused, on the terminated lane and on a
+// brokered forward alike (one helper, routeOverrideCause), even where the rules allow the request line.
+func TestHostRulesRefuseRouteOverrideHeaders(t *testing.T) {
+	rules := []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: hrHost, Methods: []string{"DELETE"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Effect: types.HostRuleAllow},
+	}}}
+	for _, tc := range []struct {
+		method, header string
+		refused        bool
+	}{
+		{"POST", "X-HTTP-Method-Override: DELETE", true},
+		{"POST", "X-HTTP-Method: DELETE", true},
+		{"POST", "X-Method-Override: delete", true},
+		{"POST", "X-HTTP-Method-Override: post", false}, // names the request's own method
+		{"GET", "X-Original-URL: /admin", true},
+		{"GET", "X-Rewrite-URL: /admin", true},
+		{"GET", "X-Override-URL: /admin", true},
+		{"GET", "X-Unrelated: /admin", false},
+	} {
+		t.Run("tunnel "+tc.header, func(t *testing.T) {
+			cu := captureUpstream(t, true, "ok")
+			p, buf, caPEM := hrProxy(t, hrOpts{}, cu.srv)
+			p.policy.hostRules = rules
+			srv := httptest.NewServer(p)
+			status, conn, _ := hrConnect(t, srv.URL, "443")
+			if status != http.StatusOK {
+				t.Fatalf("CONNECT = %d", status)
+			}
+			got := hrInner(t, conn, caPEM, tc.method, "/public", tc.header)
+			srv.Close()
+			if tc.refused != (got == http.StatusForbidden) || tc.refused == cu.reached {
+				t.Errorf("%s /public with %s = %d reached=%v, want refused=%v", tc.method, tc.header, got, cu.reached, tc.refused)
+			}
+			if tc.refused && !strings.Contains(buf.String(), "carries") {
+				t.Errorf("no row naming the override:\n%s", buf.String())
+			}
+		})
+		t.Run("brokered "+tc.header, func(t *testing.T) {
+			p, _, _ := hrProxy(t, hrOpts{}, captureUpstream(t, true, "ok").srv)
+			p.policy.hostRules = rules
+			req := httptest.NewRequest(tc.method, "https://"+hrHost+"/public", nil)
+			k, v, _ := strings.Cut(tc.header, ": ")
+			req.Header.Set(k, v)
+			if _, err := p.outboundHostRuleRefused(req); tc.refused != errors.Is(err, errHostRuleRefused) {
+				t.Errorf("outbound %s /public with %s: err %v, want refused=%v", tc.method, tc.header, err, tc.refused)
+			}
+		})
 	}
 }
 
@@ -362,10 +413,10 @@ func TestHostRulesImposeNothingOnOtherHosts(t *testing.T) {
 	}
 }
 
-// TestConfigRefusesHostRulesAViaOrgRouteServes: a via_org route is sent to the organisation, so a rule on a
-// host one serves is refused at load, as are rules on a VM run. A rule on a host a broker serves is judged
-// on each forward (host_rules_broker_test.go), so it loads.
-func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
+// TestConfigHostRulesLoadOnEveryRouteButAVM: rules on a VM run are refused at load. A rule on a host a
+// broker or a via_org route serves is judged on each request (host_rules_broker_test.go,
+// host_rules_via_org_test.go), so it loads.
+func TestConfigHostRulesLoadOnEveryRouteButAVM(t *testing.T) {
 	rule := func(h string) []types.HostRuleSet {
 		return []types.HostRuleSet{{Rules: []types.HostRule{{Host: h, Effect: types.HostRuleAllow}}}}
 	}
@@ -374,10 +425,6 @@ func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
 		c    Config
 		want string
 	}{
-		"via_org": {Config{Policy: types.RunPolicySpec{HostRules: rule("corp.example.com")}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
-			"config: policy.host_rules: host rules can't name corp.example.com: it is reached through an organisation relay route, which this release can't check per request"},
-		"via_org git": {Config{Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": gitGrant}, ViaOrgRoutes: []ViaOrgRoute{{GrantID: gitGrant}}},
-			"config: policy.host_rules: host rules can't name github.com: it is reached through an organisation relay route, which this release can't check per request"},
 		"vm": {Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true}, "VM run"},
 	} {
 		err := tc.c.validateHostRules()
@@ -391,10 +438,11 @@ func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
 		"pat broker":  {Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}},
 		"mcp broker":  {Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}},
 		"local model": {Policy: types.RunPolicySpec{HostRules: rule("models.internal")}, LocalModels: map[string]types.LocalModelSettings{"models.internal:11434": {}}},
-		"other host":  {Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
+		"via_org":     {Policy: types.RunPolicySpec{HostRules: rule("corp.example.com")}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
+		"via_org git": {Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": gitGrant}, ViaOrgRoutes: []ViaOrgRoute{{GrantID: gitGrant, Host: "github.com"}}},
 	} {
 		if err := c.validateHostRules(); err != nil {
-			t.Errorf("%s: a rule on a host judged per forward was refused: %v", name, err)
+			t.Errorf("%s: a rule on a host judged per request was refused: %v", name, err)
 		}
 	}
 }

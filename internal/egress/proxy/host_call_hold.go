@@ -68,7 +68,7 @@ var hostCallSecond = time.Second
 // the host: a request the rules hold is passed on, to be held in handlePlain only once evaluate allows
 // the host (a held request to a host the policy refuses never asks a person).
 func (p *Proxy) hostRuleRefusedNotHeld(w http.ResponseWriter, r *http.Request, host string, port int) bool {
-	if p.policy.namesRuleHost(host) && types.EvalHostRules(p.policy.hostRules, host, r.Method, requestEscapedPath(r)).Effect == types.HostRuleHold {
+	if _, held := p.hostRuleVerdict(r, host, requestEscapedPath(r)); held {
 		return false
 	}
 	_, refused := p.hostRuleRefused(w, r, host, port)
@@ -136,24 +136,14 @@ func (p *Proxy) holdHostCall(w http.ResponseWriter, r *http.Request, host string
 	return withHostCallAdmitted(r, scope), true
 }
 
-// hostHoldRefused is the outbound gate's refusal of a held request: it carries the row already written and
-// the answer, and is errHostRuleRefused to every caller that only knows that.
-type hostHoldRefused struct {
-	answer hostHoldAnswer
-	log    egress.DecisionLog
-}
-
-func (e *hostHoldRefused) Error() string        { return errHostRuleRefused.Error() + ": " + e.answer.cause }
-func (e *hostHoldRefused) Is(target error) bool { return target == errHostRuleRefused }
-
 // outboundHostCall is the outbound gate's arm for a forward the rules hold, on the host, method and path
 // the host receives. A forward a lane already admitted for that same host call goes on unasked; any other
 // is held here as the lanes hold one. On approval it returns the forward carrying the admission, so the
-// transport's hook passes it without a second row.
+// route sends that one and a second look at the same forward passes it without a second row.
 func (p *Proxy) outboundHostCall(req *http.Request, host string, port int) (*http.Request, error) {
 	scope, bad := hostCallScopeOf(host, req.Method, req.URL.EscapedPath())
 	if bad != nil {
-		return req, &hostHoldRefused{*bad, p.emitHostHold(req, host, port, *bad)}
+		return req, &hostRuleRefusal{log: p.emitHostHold(req, host, port, *bad), hold: bad}
 	}
 	if hostCallAdmitted(req.Context(), scope) {
 		return req, nil
@@ -162,10 +152,11 @@ func (p *Proxy) outboundHostCall(req *http.Request, host string, port int) (*htt
 	switch {
 	case ok:
 		return withHostCallAdmitted(req, scope), nil
-	case refusal == nil: // the client went away
-		return req, errHostRuleRefused
+	case refusal == nil: // the client went away: no row, and the answer reaches nobody
+		gone := hostHoldAnswer{egress.Pending, ruleSourceHostRuleApprovalWait, uuid.Nil, "the client went away", hostCallHeldPrefix + "the client went away."}
+		return req, &hostRuleRefusal{log: decisionLog(p.reqOf(req, host, port), egress.Pending, gone.source), hold: &gone}
 	}
-	return req, &hostHoldRefused{*refusal, p.emitHostHold(req, host, port, *refusal)}
+	return req, &hostRuleRefusal{log: p.emitHostHold(req, host, port, *refusal), hold: refusal}
 }
 
 // awaitHostCall passes an approved call, refuses a declined one, or asks (or rejoins the request pending
@@ -294,17 +285,17 @@ func (p *Proxy) emitHostHold(r *http.Request, host string, port int, a hostHoldA
 // answerHostHold writes one held-request row and answers (writeHostHold).
 func (p *Proxy) answerHostHold(w http.ResponseWriter, r *http.Request, host string, port int, a hostHoldAnswer) {
 	log := p.emitHostHold(r, host, port, a)
-	p.writeHostHold(w, host, port, a, &log)
+	p.writeHostHold(w, p.shapeOfHost(host), host, port, a, &log)
 }
 
 // writeHostHold answers a held request: a pending 403 the sandbox reads as "retry after approval" for a
 // wait, and the egress deny for every other outcome. The text rides the detail header.
-func (p *Proxy) writeHostHold(w http.ResponseWriter, host string, port int, a hostHoldAnswer, log *egress.DecisionLog) {
+func (p *Proxy) writeHostHold(w http.ResponseWriter, shape errShape, host string, port int, a hostHoldAnswer, log *egress.DecisionLog) {
 	w.Header().Set(egressHeaderDetail, a.detail)
 	if a.decision == egress.Pending {
 		setEgressRefusalHeadersWithReason(w, egressRefusalPending, host, a.source)
 		writeApprovalPending(w, log)
 		return
 	}
-	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, log)
+	p.writeEgressDenyLLM(w, shape, host, port, log)
 }

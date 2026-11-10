@@ -506,7 +506,6 @@ func newProxy(opts Options) *Proxy {
 		}
 		return c, nil
 	})
-	p.transport.Proxy = p.hostRuleTransportProxy // before the kube door clones it (host_rules.go)
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)
 	for _, rt := range opts.GatewayIdentity {

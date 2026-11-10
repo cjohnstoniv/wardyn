@@ -155,3 +155,30 @@ func TestAppendHostRuleSetsKeepsEachSetAndIsOrderFree(t *testing.T) {
 		t.Error("within should read sets in normal form, and one set is not within two")
 	}
 }
+
+// A request path that a deny rule's path covers only when case is ignored is refused as not in normal
+// form; an exact match is the rule's own deny, and a different path, or a method the rule does not name,
+// is judged as written.
+func TestEvalHostRulesRefusesACaseOnlyMatchOfADeny(t *testing.T) {
+	sets := []HostRuleSet{{Rules: []HostRule{
+		{Host: "h.example", Methods: []string{"GET"}, Paths: []string{"/admin"}, Effect: HostRuleDeny},
+		{Host: "h.example", Effect: HostRuleAllow},
+	}}}
+	for _, tc := range []struct {
+		method, path string
+		want         HostRuleEffect
+		normalForm   bool
+	}{
+		{"GET", "/Admin", HostRuleDeny, true},
+		{"GET", "/ADMIN/users", HostRuleDeny, true},
+		{"GET", "/admin", HostRuleDeny, false},
+		{"GET", "/Administrator", HostRuleAllow, false},
+		{"POST", "/Admin", HostRuleAllow, false},
+		{"GET", "/public", HostRuleAllow, false},
+	} {
+		d := EvalHostRules(sets, "h.example", tc.method, tc.path)
+		if d.Effect != tc.want || tc.normalForm != strings.Contains(d.Cause, "not in normal form") {
+			t.Errorf("%s %s = %+v, want %s (normal-form refusal %v)", tc.method, tc.path, d, tc.want, tc.normalForm)
+		}
+	}
+}

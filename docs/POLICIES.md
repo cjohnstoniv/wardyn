@@ -1231,18 +1231,24 @@ How a request to a host is decided:
 - Across sets, any deny wins. Otherwise any hold asks a person ([A host rule hold](#a-host-rule-hold-effect-hold)). Otherwise the request is allowed. A set that does not name the host has no say.
 - `allowed_methods` still applies on top.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
+- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or a path override (`X-Original-URL`, `X-Rewrite-URL`, `X-Override-URL`), is refused.
 
 Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.
 
-A path with an encoded slash is refused on a rule host. GitLab API project, file and branch paths use `%2F` (`/projects/team%2Fapp`, `/repository/files/src%2Fmain.go`), so they are refused there. Use numeric project ids, or put no rule on that host.
+A path that matches a deny rule's path only when case is ignored (`/Admin` against a deny on `/admin`) is refused too, since some servers ignore case.
+
+A path with an encoded slash is refused on a rule host. GitLab API project, file and branch paths use `%2F` (`/projects/team%2Fapp`, `/repository/files/src%2Fmain.go`), so they are refused there. A numeric project id removes only the project name's `%2F`: a file or branch name holding a slash is still refused on a rule host.
 
 What the proxy does for a rule host:
 
 - It intercepts TLS to a rule host on port 443, so it can read each request. A run with host rules gets a per-run interception certificate for this.
-- A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` on another port, without that certificate, and on the desktop sign-in lane.
+- A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` without that certificate and on the desktop sign-in lane. When the run's own rules name the host, a `CONNECT` on another port is refused too. A host named only by a set an outer layer adds when the policy is sealed is opened on any port.
 - Plain HTTP to a rule host is checked per request.
-- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A rule host reached through an organisation relay route (`via_org`) is refused when the policy loads.
+- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A request through an organisation relay route (`via_org`) is checked the same way, at the organisation, per request.
 - A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
+- Requests the proxy sends for itself are not checked: handing a GitHub token back, the push check's reads of the forge, and AWS role credentials.
+
+Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under `allow_all_egress`, a `CONNECT` to the server's IP address, or to another name for it, reads no rule, even when the request inside names the rule host. `refuse_ip_literals` blocks only the IP-address form.
 
 ## `recording`
 

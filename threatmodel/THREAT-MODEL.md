@@ -945,9 +945,11 @@ is not the deployment described above.**
   without the per-run CA, on a port it does not open, on a VM run or on the sign-in lane is refused
   (`policy:host-rule-needs-inspection`), and each request's normal-form path is checked inside
   (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). Each brokered or API-door
-  forward is judged again where it is sent (`roundTripUpstream`, the egress transport's per-request hook).
-  Residual: the organisation sends a `via_org` request, so a rule on a `via_org` host is refused at load
-  (`validateHostRules`).
+  forward is judged again where it is sent (`roundTripUpstream`, or before an API door's own transport).
+  A `via_org` request is judged per request by the organisation's engine (`ServeInjected`, `ServeBroker`).
+  Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under
+  `allow_all_egress`, a `CONNECT` to the server's IP address or another name for it reads no rule, even when
+  the request inside names the rule host; `refuse_ip_literals` blocks only the IP-address form.
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.

@@ -261,7 +261,7 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 		p.httpError(w, "via_org destination refused", errViaOrgCleartext, http.StatusForbidden)
 		return
 	}
-	decision, _, log := p.evaluate(r.Context(), host, 443, http.MethodConnect, "")
+	decision, _, log := p.evaluate(context.WithValue(r.Context(), engineHeldRequest{}, true), host, 443, http.MethodConnect, "")
 	switch decision {
 	case egress.Deny:
 		if log != nil {
