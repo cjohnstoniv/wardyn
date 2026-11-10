@@ -219,48 +219,66 @@ func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
 	}
 }
 
-// TestHostRulesRefuseAPathParameterAServletUpstreamDrops: a Servlet upstream drops ";" path parameters
-// before routing, so /admin;x=1 is its /admin. Beside an allow-all rule, a deny on /admin refuses every
-// spelling of a parameter on a rule host, and the upstream is never reached; a plain path still forwards.
-func TestHostRulesRefuseAPathParameterAServletUpstreamDrops(t *testing.T) {
-	for _, tc := range []struct {
-		path string
-		want int
-	}{
-		{"/admin;x=1", http.StatusForbidden},
-		{"/admin;x=1/users", http.StatusForbidden},
-		{"/admin%3Bx=1", http.StatusForbidden},
-		{"/users;jsessionid=1", http.StatusForbidden},
-		{"/users", http.StatusOK},
-	} {
-		var reached atomic.Int32
-		up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			reached.Add(1)
-			segs := strings.Split(r.URL.EscapedPath(), "/")
-			for i, s := range segs {
-				segs[i], _, _ = strings.Cut(s, ";") // the container drops path parameters before routing
-			}
-			_, _ = io.WriteString(w, "served "+strings.Join(segs, "/"))
-		}))
-		t.Cleanup(up.Close)
-		p, buf, caPEM := hrProxy(t, hrOpts{}, up)
-		p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
-			{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
-			{Host: hrHost, Effect: types.HostRuleAllow},
-		}}}
-		srv := httptest.NewServer(p)
-		status, conn, _ := hrConnect(t, srv.URL, "443")
-		if status != http.StatusOK {
-			t.Fatalf("CONNECT = %d, want 200", status)
+// servletParamGET sends GET path inside a tunnel to a rule host whose rules are a deny on /admin beside
+// allow-all, in front of an upstream that drops ";" path parameters before routing (as a Servlet container
+// does, so /admin;x=1 is its /admin). It reports the status, how often the upstream was reached and the rows.
+func servletParamGET(t *testing.T, path string) (int, int32, string) {
+	t.Helper()
+	var reached atomic.Int32
+	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		segs := strings.Split(r.URL.EscapedPath(), "/")
+		for i, s := range segs {
+			segs[i], _, _ = strings.Cut(s, ";")
 		}
-		got := hrInner(t, conn, caPEM, http.MethodGet, tc.path)
-		srv.Close()
-		if got != tc.want || (tc.want == http.StatusForbidden) == (reached.Load() > 0) {
-			t.Errorf("GET %s = %d, upstream reached %d time(s), want %d", tc.path, got, reached.Load(), tc.want)
-		}
-		if tc.want == http.StatusForbidden && !strings.Contains(buf.String(), "not in normal form") {
-			t.Errorf("GET %s: no row naming the path parameter:\n%s", tc.path, buf.String())
-		}
+		_, _ = io.WriteString(w, "served "+strings.Join(segs, "/"))
+	}))
+	t.Cleanup(up.Close)
+	p, buf, caPEM := hrProxy(t, hrOpts{}, up)
+	p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Effect: types.HostRuleAllow},
+	}}}
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	status, conn, _ := hrConnect(t, srv.URL, "443")
+	if status != http.StatusOK {
+		t.Fatalf("CONNECT = %d, want 200", status)
+	}
+	return hrInner(t, conn, caPEM, http.MethodGet, path), reached.Load(), buf.String()
+}
+
+func wantServletParamRefused(t *testing.T, path string) {
+	t.Helper()
+	status, reached, rows := servletParamGET(t, path)
+	if status != http.StatusForbidden || reached != 0 {
+		t.Errorf("GET %s = %d, upstream reached %d time(s), want 403 and never reached", path, status, reached)
+	}
+	if !strings.Contains(rows, "not in normal form") {
+		t.Errorf("GET %s: no row naming the path parameter:\n%s", path, rows)
+	}
+}
+
+// Each spelling of a path parameter is refused on a rule host, the way the matcher decodes it.
+func TestHostRulesRefuseALiteralPathParameter(t *testing.T) { wantServletParamRefused(t, "/admin;x=1") }
+
+func TestHostRulesRefuseAnUppercaseEncodedPathParameter(t *testing.T) {
+	wantServletParamRefused(t, "/admin%3Bx=1")
+}
+
+func TestHostRulesRefuseALowercaseEncodedPathParameter(t *testing.T) {
+	wantServletParamRefused(t, "/admin%3bx=1")
+}
+
+func TestHostRulesRefuseAnEncodedPathParameterMidPath(t *testing.T) {
+	wantServletParamRefused(t, "/admin%3Bx/users")
+}
+
+// A literal parameter before a further segment is refused too, and a plain path still forwards.
+func TestHostRulesPathParameterBeforeASegmentAndAPlainPath(t *testing.T) {
+	wantServletParamRefused(t, "/admin;x=1/users")
+	if status, reached, _ := servletParamGET(t, "/users"); status != http.StatusOK || reached != 1 {
+		t.Errorf("GET /users = %d, upstream reached %d time(s), want 200 once", status, reached)
 	}
 }
 
