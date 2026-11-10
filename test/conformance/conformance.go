@@ -65,10 +65,8 @@ type Options struct {
 	// "scratch" is used (drivers that cannot pull scratch should substitute
 	// their own minimal image).
 	SandboxImage string
-	// DNSProbe, when non-nil, is called with the ref of a sandbox at the strongest class. It must read that
-	// sandbox's resolver and look an external name up from inside it, and assert that the agent's only
-	// nameserver is its run proxy and that the lookup does not succeed. Injected for DefaultRouteProbe's
-	// reason: only the substrate knows how to run a command in its own sandbox. Nil skips the DNSAudit case.
+	// DNSProbe, when non-nil, gets the ref of a sandbox at the strongest class: it reads that sandbox's resolver, looks an external name
+	// up inside it, and asserts the run proxy is the only nameserver and the lookup fails. Injected as DefaultRouteProbe is; nil skips DNSAudit.
 	DNSProbe func(t *testing.T, ref string)
 	// Timeout is applied to each individual operation. Defaults to 30s.
 	Timeout time.Duration
@@ -106,9 +104,8 @@ type Options struct {
 	// Exec returned (running, exit code, pid). Diagnostic only: the Wait
 	// exit-code case logs it when the code is wrong, and asserts nothing on it.
 	ExecState func(ctx context.Context, execID string) string
-	// RealProxy says the sandbox's proxy sidecar is the real wardyn-proxy, so a case may assert its
-	// answers. False is a stand-in that only exists on the network (the docker suites run busybox): the
-	// NoNetwork case then asserts only that a connect through it fails.
+	// RealProxy says the proxy sidecar is the real wardyn-proxy, so a case may assert its answers. False is a stand-in that only
+	// exists on the network (the docker suites run busybox): NoNetwork then asserts only that a connect through it fails.
 	RealProxy bool
 }
 
