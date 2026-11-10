@@ -59,6 +59,7 @@ vi.mock("../../../lib/api/permissions", async () => {
 import { toast } from "sonner";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 import { WORKSPACE_HOSTS } from "../../wardyn/copy/workspace-hosts";
+import { HttpError } from "../../../lib/api/core";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -69,7 +70,7 @@ function ws(over: Partial<Workspace> = {}): Workspace {
     ref: "main",
     status: "scanned",
     created_at: "",
-    updated_at: "",
+    updated_at: "rev-1",
     ...over,
   };
 }
@@ -185,7 +186,7 @@ describe("WorkspaceDetailScreen — Allowed hosts card", () => {
     expect(within(dialog).getByText(/^New runs on this workspace can no longer reach this host.*Runs already started keep their current rules\.$/)).toBeInTheDocument();
     expect(setApprovedEgressMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
-    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", []));
+    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", [], "rev-1"));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(WORKSPACE_HOSTS.REMOVED_ALLOWED("registry.npmjs.org")));
   });
 
@@ -241,7 +242,7 @@ describe("WorkspaceDetailScreen — Denied hosts card", () => {
     expect(within(dialog).getByText(/^New runs on this workspace stop being blocked.*Runs already started keep their current rules\.$/)).toBeInTheDocument();
     expect(setDeniedEgressMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
-    await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", []));
+    await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", [], "rev-1"));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(WORKSPACE_HOSTS.REMOVED_DENIED("evil.example.com")));
   });
 });
@@ -307,6 +308,31 @@ describe("WorkspaceDetailScreen — Allowed hosts, the two-tier remove", () => {
   });
 });
 
+// A save the server refuses as stale (412) changed nothing: the list is reloaded and shows what the
+// server holds, here the host an "always" decision added since this page read the workspace.
+describe("a stale host-list save", () => {
+  it.each([
+    ["approved", "approved_egress", "Allowed hosts", setApprovedEgressMock, "registry.npmjs.org"],
+    ["denied", "denied_egress", "Denied hosts", setDeniedEgressMock, "evil.example.com"],
+  ] as const)("%s: answers 412, applies nothing, and reloads the workspace", async (_kind, field, title, mock, host) => {
+    const decided = "decided.example.com";
+    getWorkspaceMock.mockResolvedValueOnce(ws({ [field]: [host] }));
+    mock.mockRejectedValue(new HttpError(412, "The workspace changed while this edit was being saved", "workspace_update_conflict"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+    await user.click(await screen.findByRole("button", { name: `Remove ${host}` }));
+    // The reload returns the list as the server holds it now.
+    getWorkspaceMock.mockResolvedValue(ws({ [field]: [host, decided], updated_at: "rev-2" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
+    await waitFor(() => expect(mock).toHaveBeenCalledWith("ws-1", [], "rev-1"));
+    expect(toast.error).toHaveBeenCalledWith(`Failed to remove ${host}`, { description: "The workspace changed while this edit was being saved" });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(await screen.findByText(decided)).toBeInTheDocument();
+    expect(screen.getByText(host)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`^${title} · `))).toBeInTheDocument();
+  });
+});
+
 // F5-F3 — Remove must be disabled for a row the remove path cannot reach.
 // Removing a host is PUT .../approved-egress plus, for an operator-authored
 // requirements row, PUT .../requirements — and that second write reads the
@@ -338,7 +364,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     await user.click(await screen.findByRole("button", { name: "Remove pypi.org" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
     await waitFor(() =>
-      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["registry.npmjs.org"]),
+      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["registry.npmjs.org"], "rev-1"),
     );
   });
 

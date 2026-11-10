@@ -560,6 +560,11 @@ func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Re
 	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
+	if errors.Is(err, store.ErrWorkspaceStale) {
+		// Only the egress list saves carry a version (If-Match); see workspaceIfMatch.
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonWorkspaceUpdateConflict, workspaceUpdateConflictMsg)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, action, err)
 		return

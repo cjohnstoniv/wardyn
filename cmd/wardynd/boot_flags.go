@@ -429,6 +429,8 @@ type bootFlags struct {
 	// ceiling and per-source handshake bound.
 	sshMaxConns  *int
 	sshPerSource *int
+	// sshPerPrincipal is one person's share of sshMaxConns; 0 = the default.
+	sshPerPrincipal *int
 	// syncDeny is api.Config.SyncDeny before ParseSyncDeny splits and checks it.
 	syncDeny *string
 	// localFolderSeedWait is api.Config.LocalFolderSeedWait.
@@ -747,6 +749,7 @@ func parseBootFlags() *bootFlags {
 		syncDeny:               flagEnv("sync-deny", "WARDYN_SYNC_DENY", "", "comma-separated ignore patterns (git's syntax) that 'wardyn sync' leaves out on top of every .gitignore and .wardynignore, and that no ignore file can take back, e.g. '.env*,*.pem'; at most 64 patterns of 256 bytes, no control characters. Empty (default) adds none"),
 		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
 		sshMaxConns:            flagIntEnv("ssh-max-connections", "WARDYN_SSH_MAX_CONNECTIONS", api.DefaultSSHMaxConnections, "most authenticated SSH gateway connections open at once, per replica (integer, at least 1); one authenticated over it is closed"),
+		sshPerPrincipal:        flagIntEnv("ssh-max-connections-per-principal", "WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL", 0, "most authenticated SSH gateway connections one person may hold, per replica (integer; 0 = 8 with single sign-on, else all of WARDYN_SSH_MAX_CONNECTIONS); one over it is told why and closed"),
 		sshPerSource:           flagIntEnv("ssh-max-handshakes-per-source", "WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", api.DefaultSSHMaxHandshakesPerSource, "most SSH gateway connections one source address may have handshaking at once, per replica (integer, at least 1); one over it is closed before any byte"),
 		localFolderSeedWait:    flagDuration("local-folder-seed-wait", "WARDYN_LOCAL_FOLDER_SEED_WAIT", api.DefaultLocalFolderSeedWait, "how long a run with a local folder holds its agent for the folder's first 'wardyn sync' before it fails, never past the run's own end (duration, positive)"),
 		computerFolders:        flagBool("computer-folders", "WARDYN_COMPUTER_FOLDERS", false, "let a run take a folder from its creator's own folder-only runner ('wardyn-runnerd serve --substrate folders'), which Wardyn seeds before the agent starts (default false)"),

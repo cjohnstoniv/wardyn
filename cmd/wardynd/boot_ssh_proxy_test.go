@@ -69,3 +69,28 @@ func TestSSHMaxSessionsPerRunBoot(t *testing.T) {
 		t.Errorf("boot with 0 = %v, want a refusal naming the variable", err)
 	}
 }
+
+// WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL: unset is 0 (the gateway picks its default), a positive
+// value is taken as is, and a negative one refuses to boot, naming the variable.
+func TestSSHMaxConnectionsPerPrincipalBoot(t *testing.T) {
+	ensureUnset(t, "WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL")
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"wardynd-test"}
+
+	resetFlags(t)
+	if got := *parseBootFlags().sshPerPrincipal; got != 0 {
+		t.Fatalf("default = %d, want 0 (unset)", got)
+	}
+	t.Setenv("WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL", "20")
+	resetFlags(t)
+	f := parseBootFlags()
+	if got := *f.sshPerPrincipal; got != 20 || validateSSHPerPrincipal(f) != nil {
+		t.Fatalf("env 20 = %d (%v)", got, validateSSHPerPrincipal(f))
+	}
+	t.Setenv("WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL", "-1")
+	resetFlags(t)
+	if err := validateSSHPerPrincipal(parseBootFlags()); err == nil || !strings.Contains(err.Error(), "WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL") {
+		t.Errorf("-1 = %v, want a refusal naming the variable", err)
+	}
+}

@@ -16,6 +16,7 @@ package api
 // ways (the runner substrate cannot revive at all) and share one on purpose.
 const (
 	reasonPolicyPreviewRateLimited    = "policy_preview_rate_limited"
+	reasonProfileSynthesisBusy        = "profile_synthesis_busy"        // two profile syntheses already run on this replica
 	reasonReviveLocalModeNotOwner     = "local_mode_not_owner"          // local mode mints for the run's own owner; nobody else may revive it — the SAME literal this refusal's own audit row already carried
 	reasonReviveUnsupportedDeployment = "revive_unsupported_deployment" // this deployment's store has no RunReviver, or configures no runner at all
 	// reasonReviveUnsupportedRunner covers three arms that all answer the

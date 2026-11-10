@@ -701,10 +701,14 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - It closes the connection when no answer comes within the next 30, so a dead peer is dropped within 30 to 60 seconds and frees its run's attach slot.
   - A failure reply counts as an answer; OpenSSH, PuTTY, paramiko and `wardyn sync` all give one.
   - A client suspended or asleep for more than 30 seconds can lose its session, where TCP alone would have kept it for minutes.
-  - The close writes no audit row and no log line.
+  - The same check re-reads each connection's key, so a deleted key or revoked session closes its idle connections too.
+  - The close writes no audit row.
 - **Connections.** At most 64 connections handshake at once (each within 15 seconds), at most 16 of them from one source address, and, counted apart, 64 authenticated ones stay open.
-  - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` and `WARDYN_SSH_MAX_CONNECTIONS` set them. Behind a NAT, raise the per-source one.
+  - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` sets the per-source bound and `WARDYN_SSH_MAX_CONNECTIONS` the authenticated one; the total of 64 handshakes is fixed. Behind a NAT, raise the per-source one.
   - Over a handshake bound a connection is closed before any byte; over the authenticated one, once it authenticates.
+  - One person holds at most 8 authenticated connections, or all of `WARDYN_SSH_MAX_CONNECTIONS` without SSO, where every key is one person. `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` sets it.
+  - A connection over a person's share holds no authenticated-connection slot and writes an `ssh.connection.reject` row. Its handshake and per-source slots are released when its handler returns, after that row is written. If the refusal pool admits it and it opens a channel within 5 seconds, it is told why.
+  - The pool holds 8 such connections, one per person; any other is closed at once.
   - Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and logs a `connection refused at a cap` warning, at most once a minute.
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed

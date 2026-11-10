@@ -248,10 +248,42 @@ func (s PG) SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (
 // concurrently-persisted async scan. egress_edited_at always bumps, even for
 // an identical list, since ReconcileWorkspaceEgressDecisions treats it as
 // "the operator confirmed this at this moment".
+//
+// Under WithWorkspaceSeenAt the write also requires updated_at to still equal
+// the time the caller read, and returns ErrWorkspaceStale otherwise.
 func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
-	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET approved_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsReadCols,
-		workspaceApprovedParam(domains), id))
+	return s.setEgressList(ctx, id, `approved_egress`, workspaceApprovedParam(domains))
+}
+
+type workspaceSeenAtKey struct{}
+
+// WithWorkspaceSeenAt returns a context under which SetWorkspaceApprovedEgress
+// and SetWorkspaceDeniedEgress write only while the workspace's updated_at still
+// equals at (the version the caller read). Every decision and edit moves
+// updated_at, so a full-list save made from a stale page is refused with
+// ErrWorkspaceStale instead of dropping an "always" decision made since. Unset,
+// the write is unconditional.
+func WithWorkspaceSeenAt(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, workspaceSeenAtKey{}, at)
+}
+
+// setEgressList is the one full-list replace behind both egress setters; col is
+// a literal from the two callers, never caller input.
+func (s PG) setEgressList(ctx context.Context, id uuid.UUID, col string, param any) (types.Workspace, error) {
+	var seen *time.Time
+	if at, ok := ctx.Value(workspaceSeenAtKey{}).(time.Time); ok {
+		seen = &at
+	}
+	out, err := s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
+		`UPDATE workspaces SET `+col+`=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 AND ($3::timestamptz IS NULL OR updated_at=$3) RETURNING `+wsReadCols,
+		param, id, seen))
+	if errors.Is(err, ErrNotFound) && seen != nil {
+		// A guard miss and a missing row look the same to the UPDATE.
+		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
+			return types.Workspace{}, ErrWorkspaceStale
+		}
+	}
+	return out, err
 }
 
 // qAddApprovedEgressDecision and qAddDeniedEgressDecision back
@@ -344,9 +376,7 @@ func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host s
 // replace, same egress_edited_at stamp (removing a permanent DENY is an
 // operator override the boot heal must not undo).
 func (s PG) SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
-	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET denied_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsReadCols,
-		workspaceDeniedParam(domains), id))
+	return s.setEgressList(ctx, id, `denied_egress`, workspaceDeniedParam(domains))
 }
 
 // SetWorkspaceRequirements replaces ONLY the requirements-contract column

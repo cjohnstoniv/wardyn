@@ -18,6 +18,7 @@ import { effectiveWorkspaceRequirements, type Workspace } from "../../../lib/typ
 import { EmptyState } from "../../wardyn/states";
 import { DetailSectionCard } from "./section-card";
 import { HostList, type HostRow } from "./host-list";
+import { reloadIfStale } from "./reload-if-stale";
 import { WORKSPACE_HOSTS as H } from "../../wardyn/copy/workspace-hosts";
 import { useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -136,6 +137,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
       const updated = await workspacesApi.setApprovedEgress(
         ws.id,
         (ws.approved_egress ?? []).filter((h) => h !== host),
+        ws.updated_at,
       );
       // This write has LANDED on the server. Publish it BEFORE attempting the
       // second one below — the two are separate PUTs on separate route tiers
@@ -167,6 +169,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
       if (cleared) toast.success(H.REMOVED_ALLOWED(host));
     } catch (e) {
       toast.error(`Failed to remove ${host}`, { description: getErrorMessage(e) });
+      await reloadIfStale(e, ws.id, onWorkspaceUpdated);
     } finally {
       setRemoving(null);
     }

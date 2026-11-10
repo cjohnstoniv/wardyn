@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1837,10 +1838,57 @@ func TestSSHProbeConnContainsAPanickingRequest(t *testing.T) {
 	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
 	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
 	c := panicConn{closed: make(chan struct{})}
-	go sshProbeConn(context.Background(), c)
+	go sshProbeConn(context.Background(), c, nil)
 	select {
 	case <-c.closed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the connection was not closed after its keepalive request panicked")
+	}
+}
+
+// livePeerConn answers every keepalive and records its Close.
+type livePeerConn struct {
+	ssh.Conn
+	closed chan struct{}
+}
+
+func (livePeerConn) SendRequest(string, bool, []byte) (bool, []byte, error) { return true, nil, nil }
+func (c livePeerConn) Close() error                                         { close(c.closed); return nil }
+
+// The keepalive recheck tells "unknown" from "gone": a failed store read keeps an idle connection,
+// every other reason closes it. One case per arm.
+func TestSSHProbeConnRecheckArms(t *testing.T) {
+	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
+	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	for _, tc := range []struct {
+		name, reason string
+		wantClosed   bool
+	}{
+		{"key lookup failed", sshReasonKeyLookup, false},
+		{"run lookup failed", sshReasonRunLookup, false},
+		{"session cutoff lookup failed", sshReasonCutoffLookup, false},
+		{"key deleted", "SSH key registration changed", true},
+		{"session revoked", "SSH key predates session revocation", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := livePeerConn{closed: make(chan struct{})}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var checks atomic.Int32
+			go sshProbeConn(ctx, c, func() string { checks.Add(1); return tc.reason })
+			select {
+			case <-c.closed:
+				if !tc.wantClosed {
+					t.Fatalf("%q closed an idle connection", tc.reason)
+				}
+			case <-time.After(400 * time.Millisecond):
+				if tc.wantClosed {
+					t.Fatalf("%q did not close the connection", tc.reason)
+				}
+				if checks.Load() < 3 {
+					t.Fatalf("only %d rechecks in 400ms; the keep arm proved nothing", checks.Load())
+				}
+			}
+		})
 	}
 }

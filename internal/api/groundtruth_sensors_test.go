@@ -511,3 +511,51 @@ func TestHealthzEbpfNodeReadFailureIsDegraded(t *testing.T) {
 		t.Fatalf("zero-node status = %s\nwant today's    %s", got, want)
 	}
 }
+
+// pagedNodeSensorStore is nodeSensorStore on a paging store: kernelWindowOnNode must find the run's node
+// through the filtered, newest-first, bounded read and never the whole-trail QueryAuditEvents.
+type pagedNodeSensorStore struct {
+	*nodeSensorStore
+	store.Pager
+	kernel   types.AuditEvent
+	filter   store.AuditFilter
+	page     store.Page
+	pagedFor *uuid.UUID
+	fullRead bool
+}
+
+func (s *pagedNodeSensorStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	s.fullRead = true
+	return nil, nil
+}
+
+func (s *pagedNodeSensorStore) QueryAuditEventsFilteredPage(_ context.Context, runID *uuid.UUID, f store.AuditFilter, p store.Page) ([]types.AuditEvent, error) {
+	s.pagedFor, s.filter, s.page = runID, f, p
+	return []types.AuditEvent{s.kernel}, nil
+}
+
+func TestKernelWindowOnNodeReadsABoundedKernelWindow(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	runID := uuid.New()
+	run := types.AgentRun{ID: runID, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)}
+	exec := podExec(runID, "wardyn-runs/wardyn-agent-"+runID.String(), "/bin/sh")
+	exec.Data, _ = json.Marshal(groundtruth.EventData{Stream: groundtruth.Stream, Correlation: groundtruth.CorrelationMapped, Node: "node-b"})
+	st := &pagedNodeSensorStore{kernel: exec, nodeSensorStore: &nodeSensorStore{run: run, sensors: []store.GroundtruthSensor{
+		{Node: "node-a", LastBeat: now.Add(-2 * time.Minute), ObservedTotal: 50, DroppedUnmapped: 1},
+		{Node: "node-b", LastBeat: now.Add(-3 * time.Minute), ObservedTotal: 0, DroppedUnmapped: 40},
+	}}}
+	srv := nodeSensorServer(h, st, now)
+
+	want := recordmode.KernelWindow{Beat: true, DroppedUnmapped: 40, ObservedTotal: 0}
+	if got := srv.kernelWindow(context.Background(), run); got != want {
+		t.Fatalf("window = %+v, want node-b's beat %+v", got, want)
+	}
+	if st.fullRead {
+		t.Fatal("kernelWindowOnNode read the run's whole audit trail")
+	}
+	if st.pagedFor == nil || *st.pagedFor != runID || st.filter.ActionPrefix != groundtruth.KernelActionPrefix ||
+		!st.page.Newest || st.page.Limit != kernelNodeEventWindow {
+		t.Fatalf("paged read = run %v filter %+v page %+v, want this run's newest %d kernel events", st.pagedFor, st.filter, st.page, kernelNodeEventWindow)
+	}
+}

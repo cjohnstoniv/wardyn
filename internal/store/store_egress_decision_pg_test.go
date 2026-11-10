@@ -456,3 +456,39 @@ func TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits(t *testing.T) {
 		t.Errorf("egress_edited_at = %v, older than the value it replaced (%v) — a stamp must move the column forward", restamped.EgressEditedAt, carried)
 	}
 }
+
+// TestPG_EgressListSaveRefusesAStaleVersion: a full-list save made under a version read before an
+// "always" decision is refused, and the decided host is still on its list. Without the version
+// condition the save wrote unconditionally and stamped the edit, so the boot heal left it dropped.
+func TestPG_EgressListSaveRefusesAStaleVersion(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	for _, allow := range []bool{true, false} {
+		ws := newEgressWorkspace(t, pg, ctx)
+		read, err := pg.GetWorkspace(ctx, ws.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pg.AddWorkspaceEgressDecision(ctx, ws.ID, "decided.example.com", allow, 64); err != nil {
+			t.Fatalf("allow=%v decision: %v", allow, err)
+		}
+		set, list := pg.SetWorkspaceApprovedEgress, func(w types.Workspace) []string { return w.ApprovedEgress }
+		if !allow {
+			set, list = pg.SetWorkspaceDeniedEgress, func(w types.Workspace) []string { return w.DeniedEgress }
+		}
+		if _, err := set(store.WithWorkspaceSeenAt(ctx, read.UpdatedAt), ws.ID, nil); !errors.Is(err, store.ErrWorkspaceStale) {
+			t.Fatalf("allow=%v stale save: err = %v, want ErrWorkspaceStale", allow, err)
+		}
+		got, _ := pg.GetWorkspace(ctx, ws.ID)
+		if !has(list(got), "decided.example.com") {
+			t.Fatalf("allow=%v: the stale save dropped the decided host: %v", allow, list(got))
+		}
+		if _, err := set(store.WithWorkspaceSeenAt(ctx, got.UpdatedAt), ws.ID, nil); err != nil {
+			t.Fatalf("allow=%v save at the current version: %v", allow, err)
+		}
+		if _, err := set(ctx, ws.ID, []string{"free.example.com"}); err != nil {
+			t.Fatalf("allow=%v unconditional save: %v", allow, err)
+		}
+	}
+}

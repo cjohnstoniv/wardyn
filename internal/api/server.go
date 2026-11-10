@@ -674,10 +674,9 @@ type Config struct {
 	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
-	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections and
-	// SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE) one address's handshakes; 0 is the default.
-	SSHMaxConnections         int
-	SSHMaxHandshakesPerSource int
+	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
+	// one address's handshakes and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
+	SSHMaxConnections, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int
 	// SyncDeny is WARDYN_SYNC_DENY: the organisation's ignore patterns, served
 	// on GET /runs/{id} as sync.deny for `wardyn sync` to apply above every
 	// ignore file in the synced tree. Empty adds none.
@@ -782,6 +781,7 @@ type Server struct {
 	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a time on this replica:
 	// the walk hashes the org's whole log over the run's lifetime, so a second check is refused, not queued. Zero value is ready to use.
 	recordingChainWalk sync.Mutex
+	profileSynth       atomic.Int32 // profile syntheses running on this replica (profile.go); each holds a run's audit trail in memory
 	// sshUnbound is set by MarkSSHGatewayUnbound when the SSH gateway could not bind at boot; /healthz then omits ssh.
 	sshUnbound atomic.Bool
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go); fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).

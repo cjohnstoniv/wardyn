@@ -567,8 +567,9 @@ func run() error {
 		CLISignIn:            f.cliSignIn.config(*f.oidcRedirectURL),
 		RoleStampTTL:         *f.roleStampTTL,
 		// The SSH gateway's established-connection ceiling and per-source handshake bound.
-		SSHMaxConnections:         *f.sshMaxConns,
-		SSHMaxHandshakesPerSource: *f.sshPerSource,
+		SSHMaxConnections:             *f.sshMaxConns,
+		SSHMaxHandshakesPerSource:     *f.sshPerSource,
+		SSHMaxConnectionsPerPrincipal: *f.sshPerPrincipal,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,

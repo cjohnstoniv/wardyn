@@ -85,6 +85,7 @@ var sentenceConstNotSentences = map[string]string{
 	"maskFencedReason":      "the session.detach audit reason, " + whyReasonToken,
 	"sshCapReasonChannels":  "an ssh.channel_rejected audit reason, " + whyReasonToken,
 	"sshCapReasonSync":      "an ssh.channel_rejected audit reason, " + whyReasonToken,
+	"sshCapReasonPrincipal": "an ssh.connection.reject audit reason, " + whyReasonToken,
 	"desktopPauseSignin":    "a recorded pause reason the console splices into \"Paused: <reason>\" (recording-level.ts), " + whyReasonToken,
 
 	"bedrockBearerNotRecorded": "opens with the retired grant kind bedrock-api-key, a wire name that is case-significant",

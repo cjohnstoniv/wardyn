@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -70,6 +71,8 @@ type metrics struct {
 	// sshRefused counts SSH gateway connections closed at a connection bound,
 	// by the bound's name (sshConnLimits.refused).
 	sshRefused map[string]int64
+	// sshLimits is the running SSH gateway's connection bounds, kept so a test can read its accounting.
+	sshLimits atomic.Pointer[sshConnLimits]
 	// deviceIngestSuppressed is authFailedSuppressed's twin for
 	// device.audit.ingest: a refusal whose row was folded into its device's
 	// streak or dropped by the per-device bucket (device_audit_bounds.go).
@@ -475,9 +478,9 @@ func (m *metrics) write(w io.Writer) {
 	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures and ticket or key refusals whose audit row (auth.fail, ssh.authenticate, session.attach or ui.authorize) "+
 		"was dropped by a rate limiter: the shared one (about 1 row/sec) or, for refusals naming a registered SSH key, that key's own bucket. This series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
-	fmt.Fprint(w, "# HELP wardyn_ssh_connections_refused_total SSH gateway connections closed at a connection bound, by bound: handshake (all handshakes in progress), source (one source address's share of them) or established (authenticated connections).\n"+
+	fmt.Fprint(w, "# HELP wardyn_ssh_connections_refused_total SSH gateway connections closed at a connection bound, by bound: handshake (all handshakes in progress), source (one source address's share of them), established (authenticated connections) or principal (one person's share of those).\n"+
 		"# TYPE wardyn_ssh_connections_refused_total counter\n")
-	for _, bound := range []string{sshBoundHandshake, sshBoundSource, sshBoundEstablished} {
+	for _, bound := range []string{sshBoundHandshake, sshBoundSource, sshBoundEstablished, sshBoundPrincipal} {
 		fmt.Fprintf(w, "wardyn_ssh_connections_refused_total{bound=%q} %d\n", bound, m.sshRefused[bound])
 	}
 	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+

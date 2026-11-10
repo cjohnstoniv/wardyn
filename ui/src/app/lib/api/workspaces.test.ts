@@ -234,6 +234,19 @@ describe("workspace client methods", () => {
     }));
   });
 
+  it.each([
+    ["setApprovedEgress", "approved-egress"],
+    ["setDeniedEgress", "denied-egress"],
+  ] as const)("%s sends the version it was read at as If-Match, and none when it has none", async (method, suffix) => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ws)));
+    await workspaces[method]("ws-1", ["a.example.com"], "rev-1");
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get("If-Match")).toBe("rev-1");
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/v1/workspaces/ws-1/${suffix}`);
+    fetchMock.mockClear();
+    await workspaces[method]("ws-1", ["a.example.com"]);
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).has("If-Match")).toBe(false);
+  });
+
   it("promoteRecordEgress encodes both IDs and sends only the selected hosts", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(ws)));
     await expect(workspaces.promoteRecordEgress("ws/id", "build/test ?", ["api.example.com"])).resolves.toEqual(ws);

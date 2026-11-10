@@ -18,6 +18,7 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { Workspace } from "../../../lib/types";
 import { DetailSectionCard } from "./section-card";
 import { HostList } from "./host-list";
+import { reloadIfStale } from "./reload-if-stale";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { WORKSPACE_HOSTS as H } from "../../wardyn/copy/workspace-hosts";
@@ -48,11 +49,13 @@ export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onW
       const updated = await workspacesApi.setDeniedEgress(
         ws.id,
         (ws.denied_egress ?? []).filter((h) => h !== host),
+        ws.updated_at,
       );
       onWorkspaceUpdated(updated);
       toast.success(H.REMOVED_DENIED(host));
     } catch (e) {
       toast.error(`Failed to remove ${host}`, { description: getErrorMessage(e) });
+      await reloadIfStale(e, ws.id, onWorkspaceUpdated);
     } finally {
       setRemoving(null);
     }

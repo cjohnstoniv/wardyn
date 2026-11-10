@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -68,6 +69,20 @@ type desktopFilesView struct {
 // own temporary name is one), nothing a list line could not carry.
 func validDesktopFileName(name string) bool {
 	return name != "" && len(name) <= 255 && !strings.HasPrefix(name, ".") && !strings.ContainsAny(name, "/\\\x00\n\r\t")
+}
+
+// desktopFileNameParam is the {name} path segment, unescaped once when the client
+// percent-encoded it. chi routes on RawPath when Go kept one (a name with one of
+// ( ) ! * ' next to a space or a non-ASCII letter), and then hands the segment
+// back still encoded; see principalParam. ok is false for a bad escape. A decoded
+// '/' still fails validDesktopFileName.
+func desktopFileNameParam(r *http.Request) (string, bool) {
+	name := chi.URLParam(r, "name")
+	if r.URL.RawPath == "" {
+		return name, true
+	}
+	u, err := url.PathUnescape(name)
+	return u, err == nil
 }
 
 // desktopRun loads the run for a transfer: the person who may enter it, while it runs, with a
@@ -218,9 +233,9 @@ func (s *Server) handleUploadDesktopFile(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name, nameOK := desktopFileNameParam(r)
 	switch {
-	case !validDesktopFileName(name):
+	case !nameOK || !validDesktopFileName(name):
 		writeErrorReason(w, http.StatusBadRequest, reasonDesktopTransferBadRequest, "a file name is a plain name: no folder, no leading dot")
 		return
 	case r.ContentLength < 0:
@@ -264,9 +279,9 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name, nameOK := desktopFileNameParam(r)
 	switch {
-	case !validDesktopFileName(name):
+	case !nameOK || !validDesktopFileName(name):
 		writeErrorReason(w, http.StatusBadRequest, reasonDesktopTransferBadRequest, "a file name is a plain name: no folder, no leading dot")
 		return
 	case rules.Download == types.TransferReview:

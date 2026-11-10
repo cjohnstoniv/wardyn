@@ -180,17 +180,22 @@ const (
 // override its three constants for another route (the anonymous device
 // enrolment keys one on the TCP peer — devices_auth.go).
 //
-// A full map evicts ONE entry, never all of them: every bucket that has
-// refilled (it carries no state a fresh one would not), or failing that the
-// least recently used. Clearing wholesale would refill every bucket at once,
-// failing open for the whole map — tolerable behind requireSecurityOperator,
-// not on a route an unauthenticated caller can reach.
+// A full map drops only the buckets that have refilled (they carry no state a
+// fresh one would not). When none has, a new key is charged to ONE shared
+// overflow bucket instead of evicting a spent one: evicting would hand a caller
+// who rotates more keys than the table holds a full burst on every visit, so
+// the sustained rate would stop applying. A legitimate new address is slowed
+// during such a flood, never given a fresh burst. Clearing wholesale would
+// refill every bucket at once, failing open for the whole map, which is
+// tolerable behind requireSecurityOperator but not on a route an
+// unauthenticated caller can reach.
 type principalLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*tokenBucket
-	rate    float64
-	burst   float64
-	max     int
+	mu       sync.Mutex
+	buckets  map[string]*tokenBucket
+	overflow *tokenBucket
+	rate     float64
+	burst    float64
+	max      int
 }
 
 type tokenBucket struct {
@@ -214,13 +219,25 @@ func (l *principalLimiter) take(key string, now time.Time, cost float64) bool {
 		l.buckets = make(map[string]*tokenBucket)
 	}
 	b := l.buckets[key]
+	fresh := false
 	if b == nil {
-		if len(l.buckets) >= cmp.Or(l.max, dirLimiterMaxPrincipals) {
+		limit := cmp.Or(l.max, dirLimiterMaxPrincipals)
+		if len(l.buckets) >= limit {
 			l.evict(now, rate, burst)
 		}
-		b = &tokenBucket{tokens: burst}
-		l.buckets[key] = b
-	} else if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+		switch {
+		case len(l.buckets) < limit:
+			b, fresh = &tokenBucket{tokens: burst}, true
+			l.buckets[key] = b
+		case l.overflow == nil:
+			// Every bucket is spent and the table is full: share one.
+			l.overflow = &tokenBucket{tokens: burst}
+			b, fresh = l.overflow, true
+		default:
+			b = l.overflow
+		}
+	}
+	if elapsed := now.Sub(b.last).Seconds(); !fresh && elapsed > 0 {
 		b.tokens = min(b.tokens+elapsed*rate, burst)
 	}
 	b.last = now
@@ -231,18 +248,12 @@ func (l *principalLimiter) take(key string, now time.Time, cost float64) bool {
 	return true
 }
 
-// evict drops every refilled bucket, or the least recently used one when none
-// has refilled. O(max) per call, paid only while the map is full.
+// evict drops every refilled bucket and nothing else. O(max) per call, paid
+// only while the map is full.
 func (l *principalLimiter) evict(now time.Time, rate, burst float64) {
-	oldest, found := "", false
 	for k, b := range l.buckets {
 		if b.tokens+now.Sub(b.last).Seconds()*rate >= burst {
 			delete(l.buckets, k)
-		} else if !found || b.last.Before(l.buckets[oldest].last) {
-			oldest, found = k, true
 		}
-	}
-	if len(l.buckets) >= cmp.Or(l.max, dirLimiterMaxPrincipals) {
-		delete(l.buckets, oldest)
 	}
 }

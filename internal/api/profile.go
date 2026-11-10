@@ -33,6 +33,9 @@ type profileResponse struct {
 	Warnings       []string                `json:"warnings,omitempty"`
 }
 
+// maxProfileSyntheses bounds the profile syntheses running at once on one replica.
+const maxProfileSyntheses = 2
+
 // handleSynthesizeProfile is the Recording Mode endpoint: from a run's already-
 // captured audit / egress-decision / eBPF-ground-truth events it synthesizes a
 // tightened, reusable RunPolicy (a "sandbox profile"). It is ADVISORY and
@@ -54,6 +57,16 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+
+	// Each synthesis holds the run's audit trail in memory (up to maxCaptureAuditEvents rows), so only
+	// maxProfileSyntheses run at once on this replica; the rest are refused rather than queued.
+	if s.profileSynth.Add(1) > maxProfileSyntheses {
+		s.profileSynth.Add(-1)
+		w.Header().Set("Retry-After", "5")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonProfileSynthesisBusy, "profile syntheses are already running; retry when one finishes")
+		return
+	}
+	defer s.profileSynth.Add(-1)
 
 	events, err := s.cfg.Store.QueryAuditEvents(ctx, id, maxCaptureAuditEvents)
 	if err != nil {
