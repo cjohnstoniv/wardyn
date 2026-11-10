@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The census guard for the proxy-settings gate. A 0.9.x runner rebuilds the
@@ -74,6 +75,8 @@ var proxyNestedSettings = map[string]string{
 	ProxySettingAWSSigV4Gateways: "AWSSigV4",
 	// Dropped, an older proxy allows a literal IP host under allow-all.
 	ProxySettingRefuseIPLiterals: "Policy",
+	// Dropped, an older proxy forwards what the rules deny, with no row.
+	ProxySettingHostRules: "Policy",
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
@@ -216,5 +219,17 @@ func TestProxySettingsSet_RefuseIPLiteralsUnderAllowAllOnly(t *testing.T) {
 	pc.Policy.AllowAllEgress = true
 	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingRefuseIPLiterals}) {
 		t.Errorf("allow-all with refuse_ip_literals names %v, want [%s]", got, ProxySettingRefuseIPLiterals)
+	}
+}
+
+// host_rules is named for any run with a rule set, and for no other.
+func TestProxySettingsSet_HostRules(t *testing.T) {
+	pc := runner.ProxyConfig{}
+	if got := ProxySettingsSet(pc); len(got) != 0 {
+		t.Errorf("no rules names %v, want none", got)
+	}
+	pc.Policy.HostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: "api.example.com", Effect: types.HostRuleAllow}}}}
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingHostRules}) {
+		t.Errorf("a rule set names %v, want [%s]", got, ProxySettingHostRules)
 	}
 }
