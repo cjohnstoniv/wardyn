@@ -7,6 +7,7 @@ import * as React from "react";
 import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
 import { getAuthGeneration } from "../../lib/api/core";
 import { onSessionExpiry, sessionExpiry } from "../../lib/api/session-activity";
+import { usePoll } from "../../lib/use-poll";
 import type { Role, UserTypeMeta } from "../wardyn/operator-context";
 import type { ViewUserType } from "../wardyn/view-switch";
 
@@ -117,6 +118,11 @@ export interface ShellMeta {
    *  confirm" (a k8s daemon that omitted the verdict) apart. */
   runner: string;
   networkPolicy: string;
+  /** /healthz's `network_policy_checked_at`: the time of the canary check that
+   *  produced networkPolicy, always taken from the same answer as it. Absent
+   *  ("") on an older daemon. Optional only so a ShellMeta built by hand in a
+   *  test need not name it. */
+  networkPolicyCheckedAt?: string;
   /** #510-F6 — /healthz's `demo_video_base_url`, read once here rather than
    *  once per episode card (use-demo-video-base-url.ts's old per-hook fetch
    *  issued 24 requests on one Getting Started mount). undefined means "no
@@ -167,6 +173,9 @@ function identityFromMe(me: Me | null) {
   } satisfies Partial<ShellMeta>;
 }
 
+/** How often the shell re-reads the confinement posture from /healthz. */
+export const POSTURE_POLL_MS = 30_000;
+
 /** The shell's identity, the retry that re-fires /me (B1's banner action), and
  *  adopt() for a /me the reauth dialog already read (#483). */
 export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
@@ -205,6 +214,7 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     memberPreviewAvailable: false,
     runner: "",
     networkPolicy: "",
+    networkPolicyCheckedAt: "",
     demoVideoBaseUrl: undefined,
     sso: false,
   });
@@ -224,6 +234,7 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
           resolved: true,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
+          networkPolicyCheckedAt: h.network_policy_checked_at ?? "",
           // "" (unset) reads the same as absent: both mean "no mirror".
           demoVideoBaseUrl: h.demo_video_base_url || undefined,
           sso: h.sso ?? false,
@@ -239,6 +250,25 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
       alive = false;
     };
   }, [attempt]);
+  // The canary re-checks the cluster every 10 minutes, so the posture is live, not a fact of the mount:
+  // re-read it, verdict and check time together from one answer, so the band and the chips follow a
+  // change in an open console. An answer without status "ok" (an outage) keeps the last one; the
+  // unreachable banner covers that.
+  usePoll(
+    () =>
+      api.health().then((h) => {
+        if (h.status !== "ok") return;
+        const networkPolicy = h.network_policy ?? "";
+        const networkPolicyCheckedAt = h.network_policy_checked_at ?? "";
+        setMeta((m) =>
+          m.networkPolicy === networkPolicy && m.networkPolicyCheckedAt === networkPolicyCheckedAt
+            ? m
+            : { ...m, networkPolicy, networkPolicyCheckedAt },
+        );
+      }),
+    POSTURE_POLL_MS,
+    false,
+  );
   // While the server renews sessions it names the expiry on every answer: follow it, so a renewal
   // moves the expiry banner's deadline instead of the banner warning about a session still live.
   // An answer before this mount may already have named one, so start from it.

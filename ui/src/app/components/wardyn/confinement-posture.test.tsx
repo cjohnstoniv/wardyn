@@ -159,14 +159,22 @@ describe("ConfinementPostureBanner — failed re-check", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the refused strip as danger, with the check time from /healthz", async () => {
+  it("renders the refused strip as danger, with the check time the shell read", () => {
     const at = new Date();
     const iso = at.toISOString(); // RFC 3339, UTC, as /healthz sends it
     const shown = `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}-${String(at.getUTCDate()).padStart(2, "0")} ${String(at.getUTCHours()).padStart(2, "0")}:${String(at.getUTCMinutes()).padStart(2, "0")} UTC`;
-    vi.spyOn(api, "health").mockResolvedValue({ network_policy: "refused", network_policy_checked_at: iso });
-    const { container } = renderBanner("refused");
+    const health = vi.spyOn(api, "health");
+    const { container } = render(
+      <MemoryRouter>
+        <OperatorProvider operator confinementPosture="refused" confinementCheckedAt={iso}>
+          <ConfinementPostureBanner view="admin" />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
     expect(screen.getByText(POSTURE_REFUSED_BANNER.TITLE)).toBeInTheDocument();
-    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY(shown))).toBeInTheDocument();
+    // The time comes with the verdict from the shell's one /healthz answer, never a second read.
+    expect(screen.getByText(POSTURE_REFUSED_BANNER.BODY(shown))).toBeInTheDocument();
+    expect(health).not.toHaveBeenCalled();
     expect(screen.getByText(POSTURE_REFUSED_BANNER.ACTION)).toBeInTheDocument();
     expect(container.firstElementChild).toHaveClass("bg-danger-subtle");
   });

@@ -602,6 +602,7 @@ export function AppShell({
       userDriveUnavailable={meta.userDriveUnavailable}
       userType={meta.userType}
       confinementPosture={confinementPosture}
+      confinementCheckedAt={meta.networkPolicyCheckedAt}
       demoVideoBaseUrl={meta.demoVideoBaseUrl}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>

@@ -23,14 +23,11 @@
 // EAGER entry chunk — calls the resolver on every render; importing it FROM
 // here would statically pull this file's icon + react-router-dom import back
 // into the entry graph and silently collapse the split (bundle-split.test.ts).
-import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import { health as api } from "../../lib/api/health";
-
 import type { ConfinementPosture } from "./operator-context";
-import { useConfinementPosture, useOperator } from "./operator-context";
+import { useConfinementCheckedAt, useConfinementPosture, useOperator } from "./operator-context";
 import type { ConsoleView } from "./console-view";
 import {
   POSTURE_ACKNOWLEDGED_BANNER,
@@ -77,23 +74,6 @@ function checkTime(iso: string | undefined): string {
   return iso && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso) ? `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC` : "";
 }
 
-// useRefusedCheckTime reads the check time a refused verdict names. Only the
-// refused band asks: the posture context carries the verdict, not its time.
-function useRefusedCheckTime(posture: ConfinementPosture): string {
-  const [time, setTime] = React.useState("");
-  React.useEffect(() => {
-    if (posture !== "refused") return;
-    let alive = true;
-    void api.health().then((h) => {
-      if (alive) setTime(checkTime(h.network_policy_checked_at));
-    });
-    return () => {
-      alive = false;
-    };
-  }, [posture]);
-  return time;
-}
-
 // Mounted by app-shell.tsx LAST in the banner stack, after ModelAccessBanner
 // (ruling 3 on the mock approval): a dead control plane, an unknown identity
 // and a dying session are each the better explanation of what you are looking
@@ -117,10 +97,11 @@ export function ConfinementPostureBanner({ view = "user" }: { view?: ConsoleView
   const posture = useConfinementPosture();
   const operator = useOperator();
   const navigate = useNavigate();
-  const refusedAt = useRefusedCheckTime(posture);
+  // The shell reads the verdict and its check time from the same /healthz answer.
+  const refusedAt = checkTime(useConfinementCheckedAt());
   const found = BANNER_BY_POSTURE[posture];
   if (!found || view !== "admin") return null;
-  // Until its check time arrives, the refused band shows its title alone.
+  // Without a check time (an older daemon), the refused band shows its title alone.
   const spec = posture === "refused" ? { ...found, body: refusedAt ? POSTURE_REFUSED_BANNER.BODY(refusedAt) : "" } : found;
   return (
     <div

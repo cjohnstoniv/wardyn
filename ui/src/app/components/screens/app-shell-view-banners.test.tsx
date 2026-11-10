@@ -11,7 +11,7 @@
 // file is the one seam that proves the real pipeline end to end: an SSO
 // principal's role from /me, through useShellView, into the mounted band.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./app-shell";
@@ -20,7 +20,8 @@ import { BANNER } from "../wardyn/copy/door";
 import { CONSOLE_VIEW } from "../wardyn/copy/console-view";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { GOVERNED_ADMIN_BANNER } from "../../lib/access-posture-copy";
-import { POSTURE_UNENFORCED_BANNER } from "../wardyn/confinement-posture-copy";
+import { POSTURE_REFUSED_BANNER, POSTURE_UNENFORCED_BANNER } from "../wardyn/confinement-posture-copy";
+import { POSTURE_POLL_MS } from "./use-shell-meta";
 import { NO_BARRIER } from "../wardyn/copy";
 import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 // Both bands are React.lazy chunks, and the strip's is the slow one (the login
@@ -48,7 +49,10 @@ const ADMIN_ME = {
   role: "admin",
 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 function renderShellAt(
   path: string,
@@ -167,6 +171,42 @@ describe("the confinement posture band is absent in the User view (§4.2, M-3)",
     // resolved to the User view.
     expect(await screen.findByText(STRIP)).toBeInTheDocument();
     expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeNull();
+  });
+});
+
+// The canary re-checks the cluster while the console stays open: the band
+// follows the health poll in one mounted shell, and the refused band names the
+// check time from the same answer as its verdict.
+describe("the confinement posture band follows the live health poll", () => {
+  it("enforced, then refused, then enforced again, and a new check of the same verdict", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const health: Record<string, unknown> = {
+      status: "ok",
+      trust_domain: "live.corp.example",
+      runner: "k8s",
+      network_policy: "enforced",
+      network_policy_checked_at: "2026-11-10T01:00:00Z",
+    };
+    renderShellAt("/admin/runs", ADMIN_ME, health);
+    const poll = async (verdict: string, at: string) => {
+      Object.assign(health, { network_policy: verdict, network_policy_checked_at: at });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+      });
+    };
+    // Positive control: the shell's mount read landed (its trust domain shows)
+    // with no band, so every change below came through the poll.
+    expect((await screen.findAllByText("live.corp.example")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(POSTURE_REFUSED_BANNER.TITLE)).toBeNull();
+
+    await poll("refused", "2026-11-10T01:10:00Z");
+    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY("2026-11-10 01:10 UTC"))).toBeInTheDocument();
+
+    await poll("refused", "2026-11-10T01:20:00Z");
+    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY("2026-11-10 01:20 UTC"))).toBeInTheDocument();
+
+    await poll("enforced", "2026-11-10T01:30:00Z");
+    await waitFor(() => expect(screen.queryByText(POSTURE_REFUSED_BANNER.TITLE)).toBeNull());
   });
 });
 

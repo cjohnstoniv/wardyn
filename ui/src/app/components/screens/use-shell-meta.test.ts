@@ -4,11 +4,11 @@
  */
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { health, type Me } from "../../lib/api/health";
 import { getAuthGeneration, notifyAuthChange } from "../../lib/api/core";
 import { noteSessionExpiry } from "../../lib/api/session-activity";
-import { useMeta } from "./use-shell-meta";
+import { POSTURE_POLL_MS, useMeta } from "./use-shell-meta";
 
 const me = { principal: "alice", operator: false, security_operator: false, role: "user" } as Me;
 function deferred() {
@@ -96,4 +96,38 @@ it("a /me body never moves the deadline back past an expiry a header already nam
   const { result } = renderHook(useMeta);
   await waitFor(() => expect(result.current[0].identityResolved).toBe(true));
   expect(result.current[0].sessionExpiresAt?.getTime()).toBe(named.getTime());
+});
+
+type Health = Awaited<ReturnType<typeof health.health>>;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// The canary re-checks the cluster while a console stays open: the posture follows the health poll,
+// verdict and check time from the same answer, both ways and on a new check of the same verdict.
+it("follows the confinement posture through the health poll, verdict and check time together", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const answer = (network_policy: Health["network_policy"], network_policy_checked_at: string): Health =>
+    ({ status: "ok", runner: "k8s", network_policy, network_policy_checked_at }) as Health;
+  vi.mocked(health.health).mockResolvedValue(answer("enforced", "2026-11-10T01:00:00Z"));
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].networkPolicy).toBe("enforced"));
+  expect(result.current[0].networkPolicyCheckedAt).toBe("2026-11-10T01:00:00Z");
+
+  const steps: [Health, string, string][] = [
+    [answer("refused", "2026-11-10T01:10:00Z"), "refused", "2026-11-10T01:10:00Z"],
+    [answer("enforced", "2026-11-10T01:20:00Z"), "enforced", "2026-11-10T01:20:00Z"],
+    [answer("enforced", "2026-11-10T01:30:00Z"), "enforced", "2026-11-10T01:30:00Z"],
+    // An outage answers {}: the last posture stays, the unreachable banner says why.
+    [{} as Health, "enforced", "2026-11-10T01:30:00Z"],
+  ];
+  for (const [h, verdict, at] of steps) {
+    vi.mocked(health.health).mockResolvedValue(h);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+    });
+    expect(result.current[0].networkPolicy).toBe(verdict);
+    expect(result.current[0].networkPolicyCheckedAt).toBe(at);
+  }
 });
