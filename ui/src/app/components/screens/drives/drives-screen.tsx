@@ -39,6 +39,7 @@ import {
   drives as api,
   enforcementFor,
   isManagedBackend,
+  teamGrantsKnown,
   teamWritable,
   type UserDriveGrant,
   type UserDriveListItem,
@@ -75,6 +76,14 @@ function allocatedText(d: UserDriveListItem, grants: UserDriveGrant[]): string {
   if (d.grant_count === 0) return DRIVES.ALLOCATED_NONE;
   const names = grants.filter((g) => g.drive_id === d.id).map((g) => g.subject);
   return names.length === d.grant_count ? names.join(", ") : DRIVES.ALLOCATED_COUNT(d.grant_count);
+}
+
+// A writable team drive whose allocations this page does not all list, and whose listed ones all
+// allow writing: the missing ones may or may not, so neither Writable nor Read only is true to say.
+// A listed allocation that lacks the write bit settles it as read-only.
+function modeUnproven(d: UserDriveListItem, grants: UserDriveGrant[]): boolean {
+  if (!d.writable || d.grant_count === 0 || teamGrantsKnown(d, grants)) return false;
+  return grants.filter((g) => g.drive_id === d.id).every((g) => !!g.members_can_write);
 }
 
 const EMPTY: UserDrivesSnapshot = {
@@ -322,7 +331,7 @@ export function DrivesScreen() {
                           </TableCell>
                           <TableCell>
                             {/* A team drive is writable only where its allocations say so too. */}
-                            {unknownTeam ? (
+                            {unknownTeam || (team && modeUnproven(d, snap.grants)) ? (
                               <span className="text-muted-foreground">{DRIVES_TEAM_UNKNOWN.CELL}</span>
                             ) : (
                               <Chip tone={modeTone(team ? teamWritable(d, snap.grants) : d.writable)}>

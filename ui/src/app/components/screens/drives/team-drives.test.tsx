@@ -132,10 +132,18 @@ describe("Drives list, team drive rows", () => {
     expect(table().getByText(DRIVES.MODE_RW)).toBeInTheDocument();
   });
 
-  it("a page of allocations shorter than the count cannot prove write, so the row stays read-only", async () => {
+  it("a page of allocations shorter than the count cannot prove write or read-only, so Mode says Not shown", async () => {
     await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant({ members_can_write: true })] }));
-    expect(table().getByText(DRIVES.MODE_RO)).toBeInTheDocument();
+    const row = within(table().getByRole("row", { name: /platform-ref/ }));
+    expect(row.queryByText(DRIVES.MODE_RO)).toBeNull();
+    expect(row.queryByText(DRIVES.MODE_RW)).toBeNull();
+    expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(1);
     expect(table().getByText(DRIVES.ALLOCATED_COUNT(3))).toBeInTheDocument();
+  });
+
+  it("a short page still says Read only when a listed allocation lacks the write bit", async () => {
+    await renderScreen(snapshot({ drives: [drive({ writable: true, grant_count: 3 })], grants: [grant()] }));
+    expect(table().getByText(DRIVES.MODE_RO)).toBeInTheDocument();
   });
 
   it("switch off: the same drive is today's row, with no chip and no team words", async () => {
