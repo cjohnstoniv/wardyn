@@ -107,8 +107,6 @@ export function SecretsScreen() {
       .catch(() => setBrokerFailed(true));
   }, [operator]);
   React.useEffect(loadBroker, [loadBroker]);
-  // The Add secret dialog only adds a sentence when the switch is known off.
-  const patBrokerEnabled = patBroker !== false;
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -282,7 +280,7 @@ export function SecretsScreen() {
         onSaved={load}
         existingNames={mine}
         ownRows
-        patBrokerEnabled={patBrokerEnabled}
+        patBroker={patBroker}
       />
 
       <AddSecretDialog
@@ -295,7 +293,7 @@ export function SecretsScreen() {
         existingNames={mine}
         ownRows
         initialName={rotateName ?? ""}
-        patBrokerEnabled={patBrokerEnabled}
+        patBroker={patBroker}
       />
 
       <DeleteConfirmDialog
@@ -345,7 +343,7 @@ export function AddSecretDialog({
   lockName,
   host,
   lane,
-  patBrokerEnabled = true,
+  patBroker = null,
   ownRows = false,
 }: {
   open: boolean;
@@ -377,7 +375,8 @@ export function AddSecretDialog({
   // Optional — a caller with no switch value in scope (corp-network-proxy.tsx,
   // whose secret is never a git_pat) gets the 0.7.10 default (on), the same
   // fallback every other unwired surface takes.
-  patBrokerEnabled?: boolean;
+  /** The WARDYN_GIT_PAT_BROKER switch; null = not known (loading, failed, or a viewer who cannot read it): the dialog then claims nothing about where a value or a Git token is held. */
+  patBroker?: boolean | null;
   // The caller writes into the signed-in person's OWN namespace (PUT
   // /secrets/{name} stores under the caller, never another person), which any
   // signed-in person may do. Only the Secrets screen says so; every other
@@ -420,7 +419,9 @@ export function AddSecretDialog({
   const isOverwrite = existingNames.includes(trimmed);
   const resolvedLane: Lane = lane ?? laneOfName(trimmed);
   // #381 F3: pat's meta depends on the real switch; app/ssh keep LANE_META.
-  const resolvedLaneMeta = resolvedLane === "pat" ? patLaneMeta(patBrokerEnabled) : LANE_META[resolvedLane];
+  // An unknown switch gets a plain "PAT" chip: brokered or in-sandbox would be a claim.
+  const resolvedLaneMeta =
+    resolvedLane !== "pat" ? LANE_META[resolvedLane] : patBroker === null ? { ...patLaneMeta(true), label: "PAT", tooltip: "", tone: "neutral" as const } : patLaneMeta(patBroker);
   // Editing the name clears any prior overwrite acknowledgement.
   React.useEffect(() => {
     setConfirmOverwrite(false);
@@ -464,8 +465,10 @@ export function AddSecretDialog({
           <DialogDescription>
             {lockName
               ? "The value is write-only — it can be replaced or removed, never read back."
-              : "The value is stored write-only: it is never returned by the API or shown again. It stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox."}
-            {!lockName && !patBrokerEnabled && " With the token broker off, a stored Git token is handed to git inside the sandbox."}
+              : patBroker === null
+                ? "The value is stored write-only: it is never returned by the API or shown again."
+                : "The value is stored write-only: it is never returned by the API or shown again. It stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox."}
+            {!lockName && patBroker === false && " With the token broker off, a stored Git token is handed to git inside the sandbox."}
           </DialogDescription>
         </DialogHeader>
 
