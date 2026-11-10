@@ -44,7 +44,7 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	probe := f.spec.Clone()
 	probe.AllowedDomains = nil
 	grants := f.spec.EligibleGrants
-	if noNetworkClonesRepo(f.req.Repo, f.spec.WorkspaceRepos, f.wsRefs) {
+	if noNetworkClonesRepo(f.req.Repo, f.spec.WorkspaceRepos) {
 		// A clone needs the network wherever it comes from, a brokered GitHub one included, which adds no
 		// host to the allowlist.
 		add("repository")
@@ -89,15 +89,13 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 			". Remove them, or launch without No network.").write(s, f.w, f.r)
 }
 
-// noNetworkClonesRepo reports whether the run names a repository to clone: the legacy repo field, a
-// repository on the spec, or a repository source of a workspace it attaches. Without one, a git grant the
-// policy carries is a source of nothing: the launcher cannot remove it, and dispatch withholds its lane and
-// credential from a No network run.
-func noNetworkClonesRepo(legacyRepo string, specRepos []types.WorkspaceRepo, wsRefs []types.Workspace) bool {
-	return strings.TrimSpace(legacyRepo) != "" || len(specRepos) > 0 ||
-		slices.ContainsFunc(wsRefs, func(ws types.Workspace) bool {
-			return len(workspaceSourcesOfType(ws, types.WorkspaceSourceTypeRepo)) > 0
-		})
+// noNetworkClonesRepo reports whether the run names a repository to clone: the legacy repo field or a
+// repository on the spec, the two dispatch clones from (buildRepoRecords). A workspace attached for its
+// folders alone (repos: []) keeps its repository sources off the spec and clones none. Without a
+// repository, a git grant the policy carries is a source of nothing: the launcher cannot remove it, and
+// dispatch withholds its lane and credential from a No network run.
+func noNetworkClonesRepo(legacyRepo string, specRepos []types.WorkspaceRepo) bool {
+	return strings.TrimSpace(legacyRepo) != "" || len(specRepos) > 0
 }
 
 // gitLaneGrant reports whether g opens a git credential lane, the kinds deriveRunEgress counts as

@@ -153,6 +153,29 @@ func TestNoNetwork_BrokeredRepositoryRefused(t *testing.T) {
 	}
 }
 
+// TestNoNetwork_FolderOnlyWorkspacePasses: a workspace attached for its folders alone (repos: []) keeps
+// its repository source off the spec, clones nothing, and launches; with that repository selected onto the
+// spec it is refused, naming the repository.
+func TestNoNetwork_FolderOnlyWorkspacePasses(t *testing.T) {
+	ws := types.Workspace{ID: uuid.New(), Name: "app", Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeRepo, Source: "https://github.com/acme/app"},
+		{Type: types.WorkspaceSourceTypeLocalDir, Source: "/home/dev/app"},
+	}}
+	f, w := noNetworkRepoFold(t, "")
+	f.spec.EligibleGrants = f.spec.EligibleGrants[:1]
+	f.wsRefs = []types.Workspace{ws}
+	if !(&Server{}).stepNoNetwork(&f, &foldRecorder{}) {
+		t.Fatalf("a folder-only workspace was refused: %s", w.Body)
+	}
+	f, w = noNetworkRepoFold(t, "")
+	f.spec.EligibleGrants = f.spec.EligibleGrants[:1]
+	f.wsRefs = []types.Workspace{ws}
+	f.spec.WorkspaceRepos = []types.WorkspaceRepo{{Repo: "https://github.com/acme/app"}}
+	if (&Server{}).stepNoNetwork(&f, &foldRecorder{}) || !strings.Contains(w.Body.String(), "repository") {
+		t.Fatalf("a selected repository passed or was not named: %s", w.Body)
+	}
+}
+
 // TestNoNetwork_ComponentsByWhatTheyNeed: a component that needs no host (config only, an env secret, or a
 // local MCP server run from the image) does not refuse a No network launch; a remote MCP server does, though
 // its host is never on the allowlist.
