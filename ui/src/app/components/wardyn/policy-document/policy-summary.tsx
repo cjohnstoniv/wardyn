@@ -204,13 +204,15 @@ function summarize(
   if (blocked.length > 0) network.push(row(SUMMARY.blockedHosts, blocked, "denied_domains"));
   // Shown only when the document names it: an older document that omits it gets no row, never an invented "off".
   // The text describes the setting; a removed value is a struck entry, not a claim about the policy now.
+  // The wire omits false, so a switch turned off can arrive as no value with only its removed `true`: show that.
   const ipLiterals = take("refuse_ip_literals", asBool);
-  if (ipLiterals !== undefined) {
+  const ipRemoved = (marks?.removed("refuse_ip_literals") ?? []).filter((v) => v !== String(ipLiterals));
+  if (ipLiterals !== undefined || ipRemoved.length > 0) {
     const line = (on: boolean | string) => (on === true || on === "true" ? IP_LITERALS.on : IP_LITERALS.off);
     network.push(
       row(IP_LITERALS.label, [
-        text(line(ipLiterals), { mark: marks?.of("refuse_ip_literals", String(ipLiterals)) }),
-        ...(marks?.removed("refuse_ip_literals") ?? []).filter((v) => v !== String(ipLiterals)).map((v) => text(line(v), { mark: "removed" as const })),
+        ...(ipLiterals !== undefined ? [text(line(ipLiterals), { mark: marks?.of("refuse_ip_literals", String(ipLiterals)) })] : []),
+        ...ipRemoved.map((v) => text(line(v), { mark: "removed" as const })),
       ], "refuse_ip_literals"),
     );
   }

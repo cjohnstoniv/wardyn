@@ -323,6 +323,14 @@ describe("PolicySummary — the IP-address switch", () => {
     expect(within(r).getByText(OFF).closest("li")).toHaveTextContent("Added at start");
     expect(within(r).getByText(ON).closest("li")).toHaveTextContent("Removed at start");
   });
+
+  it("shows a switch turned off that the wire omits as its struck removed value, and claims no current value", () => {
+    const marks: PolicyChangeMarks = { of: () => undefined, removed: (field) => (field === "refuse_ip_literals" ? ["true"] : []) };
+    render(<PolicySummary spec={FULL} marks={marks} />);
+    const r = row("Network", "IP addresses");
+    expect(within(r).getByText(ON).closest("li")).toHaveTextContent("Removed at start");
+    expect(within(r).queryByText(OFF)).toBeNull();
+  });
 });
 
 // The host marks (#2956, mock R13). The five strings are the approved copy, character for
