@@ -704,3 +704,30 @@ func TestCapabilities_NetworkPolicyCheckIsTheWorst(t *testing.T) {
 		t.Errorf("check %+v, want %+v", caps.NetworkPolicyCheck, refused)
 	}
 }
+
+// closerSubstrate is fakeSubstrate holding background work its Close stops.
+type closerSubstrate struct {
+	*fakeSubstrate
+	closed *int
+	err    error
+}
+
+func (c closerSubstrate) Close() error { *c.closed++; return c.err }
+
+// TestClose_ClosesEverySubstrateThatCloses: the owner's Close reaches every substrate that is an
+// io.Closer, once, past one that is not and past one whose Close fails, and returns that failure.
+func TestClose_ClosesEverySubstrateThatCloses(t *testing.T) {
+	var a, c int
+	boom := errors.New("boom")
+	o := New(
+		closerSubstrate{&fakeSubstrate{name: "a"}, &a, boom},
+		&fakeSubstrate{name: "b"},
+		closerSubstrate{&fakeSubstrate{name: "c"}, &c, nil},
+	)
+	if err := o.Close(); !errors.Is(err, boom) {
+		t.Errorf("Close: %v, want %v", err, boom)
+	}
+	if a != 1 || c != 1 {
+		t.Errorf("closed a %d, c %d times; want once each", a, c)
+	}
+}

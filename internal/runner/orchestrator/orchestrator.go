@@ -96,6 +96,18 @@ func New(substrates ...substrate.Substrate) *Orchestrator {
 	}
 }
 
+// Close closes every substrate that is an io.Closer (the k8s driver's canary re-check loop, the
+// docker driver's engine client). wardynd calls it once, after the server has drained.
+func (o *Orchestrator) Close() error {
+	var errs []error
+	for _, s := range o.snapshot() {
+		if c, ok := s.(io.Closer); ok {
+			errs = append(errs, c.Close())
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // snapshot is the current substrate set, remote ones included, safe to range over.
 func (o *Orchestrator) snapshot() []substrate.Substrate {
 	o.subsMu.RLock()

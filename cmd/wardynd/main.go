@@ -349,6 +349,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// After the server drains (deferred, so it runs before the pool closes): stops the substrates'
+	// background work, such as the k8s canary re-check loop.
+	if c, ok := run.(io.Closer); ok {
+		defer func() { _ = c.Close() }()
+	}
 
 	// The gated AWS SSO endpoint test hatch — see resolveAWSSSOEndpointOverride.
 	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)

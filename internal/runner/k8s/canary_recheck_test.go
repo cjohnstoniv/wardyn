@@ -22,6 +22,7 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
 )
 
 // recheckCluster is a fake cluster the canary can run on any number of times: a canary pod exits with
@@ -272,9 +273,10 @@ func TestCanaryRecheck_AcknowledgedNeverHidesAFailure(t *testing.T) {
 	}
 }
 
-// TestCanaryRecheck_LoopRunsUntilStopped: the loop re-runs the canary on its interval in every
-// namespace, and stopping it returns once it has ended.
-func TestCanaryRecheck_LoopRunsUntilStopped(t *testing.T) {
+// TestCanaryRecheck_LoopStopsWithItsOwner: the loop re-runs the canary on its interval in every
+// namespace, and the owner's Close (wardynd's orchestrator) returns once it has ended: no canary pod is
+// created after it.
+func TestCanaryRecheck_LoopStopsWithItsOwner(t *testing.T) {
 	old := canaryRecheckInterval
 	canaryRecheckInterval = 5 * time.Millisecond
 	t.Cleanup(func() { canaryRecheckInterval = old })
@@ -286,17 +288,26 @@ func TestCanaryRecheck_LoopRunsUntilStopped(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for c.pods.Load() < booted+4 { // two re-checks, two phases each
 		if time.Now().After(deadline) {
-			d.stopCanaryRecheck()
+			_ = d.Close()
 			t.Fatalf("canary pods %d after 30s, want at least %d", c.pods.Load(), booted+4)
 		}
 		time.Sleep(time.Millisecond)
 	}
-	stopped := make(chan struct{})
-	go func() { d.stopCanaryRecheck(); close(stopped) }()
+	owner := orchestrator.New(d)
+	stopped := make(chan error, 1)
+	go func() { stopped <- owner.Close() }()
 	select {
-	case <-stopped:
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("owner Close: %v", err)
+		}
 	case <-time.After(30 * time.Second):
-		t.Fatal("stopCanaryRecheck did not return")
+		t.Fatal("the owner's Close did not return")
+	}
+	after := c.pods.Load()
+	time.Sleep(20 * canaryRecheckInterval)
+	if got := c.pods.Load(); got != after {
+		t.Errorf("canary pods %d after Close, then %d: the loop still runs", after, got)
 	}
 	if err := d.netPolRefusal(testNamespace); err != nil {
 		t.Errorf("refusal %v after proving re-checks, want none", err)

@@ -164,7 +164,7 @@ func (d *Driver) netPolRefusal(ns string) error {
 }
 
 // startCanaryRecheck starts the loop that re-runs the canary in every runs namespace each
-// canaryRecheckInterval. stopRecheck ends it.
+// canaryRecheckInterval. Close ends it.
 func (d *Driver) startCanaryRecheck() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -188,11 +188,14 @@ func (d *Driver) startCanaryRecheck() {
 	}()
 }
 
-// stopCanaryRecheck stops the re-check loop, if one runs, and waits for it.
-func (d *Driver) stopCanaryRecheck() {
+// Close stops the canary re-check loop, if one runs, and waits for a check in flight to remove its
+// canary pod and policy. The driver's owner calls it at shutdown: wardynd through the orchestrator's
+// Close, wardyn-runnerd when its runtime closes. Calling it again does nothing more.
+func (d *Driver) Close() error {
 	if d.stopRecheck != nil {
 		d.stopRecheck()
 	}
+	return nil
 }
 
 // recheckOnce re-runs the canary in each runs namespace and publishes each result as it lands. The loop
