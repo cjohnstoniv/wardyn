@@ -513,3 +513,21 @@ func TestEgressEdit_RevivesOwnFailedStartAnswersByItsContainment(t *testing.T) {
 		}
 	}
 }
+
+// The edited config is stored before the settle: an edit whose settle fails (its new proxy reports
+// other bytes) answers 503, and the revive that brings the run back starts from the edited config.
+func TestEgressEdit_ReviveAfterAFailedSettleStartsFromTheEdit(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.rr.onReplace = func(cfg []byte) { postLoaded(t, f.srv, f.run.ID, f.tokenJTI(t, cfg), hashHex([]byte("other bytes"))) }
+	if w := f.editEgress(t, `{"remove_hosts":["api.anthropic.com"],"deny_hosts":["evil.example"]}`); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("edit with a failed settle: %d %s, want 503", w.Code, w.Body.String())
+	}
+	f.confirmEachReplace(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive after the failed edit: %d, want 200", code)
+	}
+	p := f.handedPolicy(t)
+	if slices.Contains(p.AllowedDomains, "api.anthropic.com") || !slices.Contains(p.DeniedDomains, "evil.example") {
+		t.Errorf("the revive after a failed settle started from the pre-edit config: allowed %v denied %v", p.AllowedDomains, p.DeniedDomains)
+	}
+}

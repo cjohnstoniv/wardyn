@@ -353,12 +353,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// The new proxy is up behind the fresh token: the retiring one is no
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
 	// return above this point leaves the old proxy running unrevoked.
-	if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil {
+	// The stored config becomes the one now running (storeAndSettleRevived): an edit's before the settle.
+	if rerr := s.storeAndSettleRevived(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI, storedJSON, edits); rerr != nil {
 		return reviveResult{generation: gen}, rerr // the start an edit waits on for its containment
-	}
-	// The stored config becomes the one now running: best-effort for a revive, fail closed for an edit.
-	if rerr := s.storeRevivedConfig(ctx, run, storedJSON, data, actorType, actor, edits); rerr != nil {
-		return reviveResult{}, rerr
 	}
 	if rebooted {
 		// F2: refresh the watcher lease right before starting the agent — on a
