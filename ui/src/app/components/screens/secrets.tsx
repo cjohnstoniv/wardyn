@@ -238,7 +238,7 @@ export function SecretsScreen() {
                           </Chip>
                         )}
                         {ownSet.has(name) ? (
-                          <Chip tone="cyan" className="gap-1" title={WRITE_ONLY.TOOLTIP}>
+                          <Chip tone="cyan" className="gap-1 [tr:hover_&]:bg-card" title={WRITE_ONLY.TOOLTIP}>
                             <Lock className="size-3" /> {WRITE_ONLY.CHIP}
                           </Chip>
                         ) : (

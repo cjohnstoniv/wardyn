@@ -46,6 +46,7 @@ import { SecretsScreen, AddSecretDialog } from "./secrets";
 import { LANE_META } from "../../lib/scm-provider";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
+import { WRITE_ONLY } from "../wardyn/copy/door";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -504,6 +505,18 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
     expect(listSecretsMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /add secret/i })).toBeEnabled();
     expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+  });
+
+  // The cyan tint over the row's hover wash (muted at 50%) measures 4.49:1, under the 4.5:1 text target; over --card it is 5.36:1.
+  it("member: the Write-only chip sits on the card colour while its row is hovered, so its text keeps contrast", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    const chip = screen.getByTitle(WRITE_ONLY.TOOLTIP);
+    expect(chip.className).toContain("[tr:hover_&]:bg-card");
   });
 
   it("member: Rotate and Delete act on their own row only; the admin's name has no actions", async () => {
