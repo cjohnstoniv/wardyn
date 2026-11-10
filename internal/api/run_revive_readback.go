@@ -129,8 +129,11 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 }
 
 // storedRunFate is what the store holds for a run after its revive failed: "; the run is ended" or
-// "; the run is lost until revived", or "" when it holds neither or cannot be read.
+// "; the run is lost until revived", or "" when it holds neither or cannot be read. Its read is bound
+// apart from the request's, which a readback wait may have run out.
 func (s *Server) storedRunFate(ctx context.Context, id uuid.UUID) string {
+	ctx, cancel := stopCtx(ctx)
+	defer cancel()
 	run, err := s.cfg.Store.GetRun(ctx, id)
 	switch {
 	case err != nil:

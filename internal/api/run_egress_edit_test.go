@@ -626,21 +626,60 @@ func TestEgressEdit_ReplaceFailureAnswersFromTheConfirmedStop(t *testing.T) {
 	}
 }
 
-// A stopped edit says the run is lost until revived only where the run can be kept; a headless run
-// off the person's own machine is ended instead.
+// A stopped edit names the fate the store holds, never one it guessed; an unresolved one that recorded
+// none says the run will be lost until revived where it can be kept, and ended where it cannot.
 func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
-	f := newEgressEditFixture(t)
-	kept := types.AgentRun{State: types.RunRunning, Interactive: true, SandboxRef: "sbx"}
-	ended := types.AgentRun{State: types.RunRunning, SandboxRef: "sbx"}
-	for run, want := range map[*types.AgentRun][2]string{&kept: {"is lost until revived", "will be lost until revived"}, &ended: {"is ended", "will be ended"}} {
-		for i, rerr := range []*reviveError{egressEditUnconfirmed("start_failed"), egressEditUnresolved("start_failed", nil)} {
-			if got := f.srv.withRunFate(*run, rerr).msg; !strings.Contains(got, want[i]) {
-				t.Errorf("interactive=%v %s: %q, want it to say %q", run.Interactive, rerr.reason, got, want[i])
-			}
+	now := time.Now()
+	for _, c := range []struct {
+		name        string
+		stored      func(*readbackFixture)
+		interactive bool
+		rerr        *reviveError
+		want, never string
+	}{
+		{"stored lost", func(f *readbackFixture) { f.st.run.LostAt = &now }, true, egressEditUnconfirmed("start_failed"), "is lost until revived", "ended"},
+		{"stored ended", func(f *readbackFixture) { f.st.state = types.RunFailed }, false, egressEditUnconfirmed("start_failed"), "is ended", "lost until revived"},
+		{"stop confirmed, nothing recorded", func(*readbackFixture) {}, false, egressEditUnconfirmed("start_failed"), "", "ended"},
+		{"unresolved, kept", func(*readbackFixture) {}, true, egressEditUnresolved("start_failed", nil), "will be lost until revived", "is lost"},
+		{"unresolved, not kept", func(*readbackFixture) {}, false, egressEditUnresolved("start_failed", nil), "will be ended", "is ended"},
+	} {
+		f := newEgressEditFixture(t)
+		c.stored(f)
+		run := types.AgentRun{ID: f.run.ID, State: types.RunRunning, Interactive: c.interactive, SandboxRef: "sbx"}
+		got := f.srv.withRunFate(context.Background(), run, c.rerr).msg
+		if !strings.Contains(got, c.want) || strings.Contains(got, c.never) {
+			t.Errorf("%s: %q, want it to say %q and never %q", c.name, got, c.want, c.never)
 		}
 	}
-	if got := f.srv.withRunFate(ended, egressEditSuperseded(true)).msg; strings.Contains(got, "ended") {
+	f := newEgressEditFixture(t)
+	if got := f.srv.withRunFate(context.Background(), f.run, egressEditSuperseded(true)).msg; strings.Contains(got, "ended") {
 		t.Errorf("a superseded edit stopped nothing, so it names no fate: %q", got)
+	}
+}
+
+// failEndStore fails every write ending the run, as a database blip would.
+type failEndStore struct {
+	*readbackStore
+}
+
+func (s *failEndStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	if to.IsTerminal() {
+		return false, errors.New("injected end-write failure")
+	}
+	return s.readbackStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+// A headless run's edit whose replace fails has its sandbox stopped; with the end not written, the
+// answer never says the run is ended.
+func TestEgressEdit_AnUnwrittenEndClaimsNoFate(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.st.run.Interactive, f.run.Interactive = false, false
+	f.srv.cfg.Store = &failEndStore{readbackStore: f.rb}
+	f.rr.replaceErr = runner.ErrProxyReplaceFailed
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	body := w.Body.String()
+	if r := errorReason(w); (r != reasonEgressEditUnconfirmed && r != reasonEgressEditContainmentUnresolved) || strings.Contains(body, "is ended") || strings.Contains(body, "lost until revived") {
+		t.Errorf("%d %s: want a stopped or stopping edit that names no recorded fate", w.Code, body)
 	}
 }
 

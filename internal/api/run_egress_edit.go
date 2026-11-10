@@ -201,7 +201,7 @@ func (s *Server) retireViaOrgEngine(runID uuid.UUID) {
 func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	res, rerr := s.editRunEgressOnce(r, run, edit)
-	rerr = s.withRunFate(run, rerr)
+	rerr = s.withRunFate(r.Context(), run, rerr)
 	data := map[string]any{"subject": run.CreatedBy, "removed_hosts": nonNilStrings(edit.remove), "denied_hosts": nonNilStrings(edit.deny)}
 	outcome := "success"
 	if rerr != nil {
@@ -255,25 +255,24 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	return egressEditResult{PolicyGeneration: res.generation}, nil
 }
 
-// withRunFate ends an edit's stopped or stopping answer with what happens to the run: a run that can
-// be kept is lost until revived, and one that cannot (a headless run off the person's own machine) is
-// ended (lostRunKeepable, the predicate the stop itself follows). An unresolved containment has not
-// recorded that outcome yet (its stop or its lost mark did not land), so it says what will happen.
-func (s *Server) withRunFate(run types.AgentRun, rerr *reviveError) *reviveError {
+// withRunFate ends an edit's stopped or stopping answer with the run's fate as the store now holds it
+// (storedRunFate): a confirmed stop is not a recorded end or lost mark. An unresolved containment that
+// recorded neither says what will happen once its stop is done: a run that can be kept is lost until
+// revived, and one that cannot (a headless run off the person's own machine) is ended
+// (lostRunKeepable, the predicate the stop itself follows).
+func (s *Server) withRunFate(ctx context.Context, run types.AgentRun, rerr *reviveError) *reviveError {
 	if rerr == nil || (rerr.reason != reasonEgressEditUnconfirmed && rerr.reason != reasonEgressEditContainmentUnresolved) {
 		return rerr
 	}
 	out := *rerr
-	keep := s.lostRunKeepable(run, s.cfg.Now())
-	switch {
-	case rerr.reason == reasonEgressEditContainmentUnresolved && keep:
+	switch fate := s.storedRunFate(ctx, run.ID); {
+	case fate != "":
+		out.msg += fate
+	case rerr.reason != reasonEgressEditContainmentUnresolved:
+	case s.lostRunKeepable(run, s.cfg.Now()):
 		out.msg += "; once that is done, the run will be lost until revived"
-	case rerr.reason == reasonEgressEditContainmentUnresolved:
-		out.msg += "; once that is done, the run will be ended, since a headless run off your own machine cannot be kept"
-	case keep:
-		out.msg += "; the run is lost until revived"
 	default:
-		out.msg += "; the run is ended, since a headless run off your own machine cannot be kept"
+		out.msg += "; once that is done, the run will be ended, since a headless run off your own machine cannot be kept"
 	}
 	return &out
 }
