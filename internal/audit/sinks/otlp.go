@@ -50,6 +50,10 @@ type OTLPConfig struct {
 	// Timeout bounds each HTTP request, including the final flush on shutdown
 	// (default and maximum WebhookTimeout, the budget wardynd's shutdown grace is sized on).
 	Timeout string `json:"timeout,omitempty"`
+	// Traces, when true, also sends one span per run-scoped audit row to
+	// "<endpoint>/v1/traces", and puts the span's trace and span ids on the row's
+	// log record. Off by default: a collector that takes logs only sees no change.
+	Traces bool `json:"traces,omitempty"`
 }
 
 func (c OTLPConfig) withDefaults() OTLPConfig {
@@ -160,6 +164,7 @@ func (c OTLPConfig) validateHeaders() error {
 type OTLPSink struct {
 	cfg       OTLPConfig
 	target    string
+	traces    string // "<endpoint>/v1/traces", or "" when cfg.Traces is off
 	interval  time.Duration
 	baseDelay time.Duration
 	queue     chan types.AuditEvent
@@ -178,9 +183,14 @@ func NewOTLPSink(cfg OTLPConfig) (*OTLPSink, error) {
 	if err != nil {
 		return nil, err
 	}
+	var traces string
+	if cfg.Traces {
+		traces = tracesTarget(target)
+	}
 	return &OTLPSink{
 		cfg:       cfg,
 		target:    target,
+		traces:    traces,
 		interval:  interval,
 		baseDelay: base,
 		queue:     make(chan types.AuditEvent, cfg.BufferSize),
@@ -273,29 +283,50 @@ func (o *OTLPSink) Close() error {
 	return nil
 }
 
-// deliverWithRetry POSTs batch, retrying up to MaxRetries times with doubling
-// backoff. A batch that still fails, or is abandoned by shutdown mid-backoff,
-// is counted in the drop counter and not re-queued.
+// deliverWithRetry sends batch as logs and, when traces are on, its run-scoped
+// rows as spans. Each signal is delivered and counted on its own.
 func (o *OTLPSink) deliverWithRetry(ctx context.Context, batch []types.AuditEvent) {
-	body, err := encodeOTLPLogs(batch)
+	body, err := encodeOTLPLogs(batch, o.traces != "")
 	if err != nil {
-		o.drops.Add(int64(len(batch)))
-		slog.Error("sinks.otlp: encode batch failed",
-			slog.Any("err", err), slog.Int("dropped_events", len(batch)), slog.Int64("drops", o.drops.Load()))
+		o.dropEncode(len(batch), err)
+	} else {
+		o.sendWithRetry(ctx, o.target, body, len(batch))
+	}
+	if o.traces == "" {
 		return
 	}
+	spans, n, err := encodeOTLPSpans(batch)
+	switch {
+	case err != nil:
+		o.dropEncode(n, err)
+	case n > 0:
+		o.sendWithRetry(ctx, o.traces, spans, n)
+	}
+}
+
+func (o *OTLPSink) dropEncode(n int, err error) {
+	o.drops.Add(int64(n))
+	slog.Error("sinks.otlp: encode batch failed",
+		slog.Any("err", err), slog.Int("dropped_events", n), slog.Int64("drops", o.drops.Load()))
+}
+
+// sendWithRetry POSTs body to target, which carries n records, retrying up to
+// MaxRetries times with doubling backoff. A request that still fails, or is
+// abandoned by shutdown mid-backoff, adds n to the drop counter and is not
+// re-queued.
+func (o *OTLPSink) sendWithRetry(ctx context.Context, target string, body []byte, n int) {
 	delay := o.baseDelay
 	for attempt := 1; attempt <= o.cfg.MaxRetries; attempt++ {
-		rejected, err := o.post(ctx, body)
+		rejected, err := o.postTo(ctx, target, body, target == o.traces)
 		if err == nil {
-			o.countRejected(rejected, len(batch))
+			o.countRejected(rejected, n)
 			return
 		}
 		if attempt == o.cfg.MaxRetries {
-			o.drops.Add(int64(len(batch)))
+			o.drops.Add(int64(n))
 			slog.Error("sinks.otlp: delivery failed, retries exhausted",
 				slog.Int("attempts", o.cfg.MaxRetries), slog.Any("err", err),
-				slog.Int("batch_size", len(batch)), slog.Int64("drops", o.drops.Load()))
+				slog.Int("batch_size", n), slog.Int64("drops", o.drops.Load()))
 			return
 		}
 		slog.Warn("sinks.otlp: delivery attempt failed, retrying",
@@ -303,10 +334,10 @@ func (o *OTLPSink) deliverWithRetry(ctx context.Context, batch []types.AuditEven
 			slog.Any("err", err), slog.Duration("retry_in", delay))
 		select {
 		case <-ctx.Done():
-			o.drops.Add(int64(len(batch)))
+			o.drops.Add(int64(n))
 			return
 		case <-o.stop:
-			o.drops.Add(int64(len(batch)))
+			o.drops.Add(int64(n))
 			return
 		case <-time.After(delay):
 		}
@@ -334,7 +365,12 @@ func (o *OTLPSink) countRejected(rejected int64, batchLen int) {
 // endpoint (net/http's *url.Error embeds it, query included) appears in the
 // returned error.
 func (o *OTLPSink) post(ctx context.Context, body []byte) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.target, bytes.NewReader(body))
+	return o.postTo(ctx, o.target, body, false)
+}
+
+// postTo is post to an explicit collector URL: the logs target, or the traces one when spans is true.
+func (o *OTLPSink) postTo(ctx context.Context, target string, body []byte, spans bool) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return 0, fmt.Errorf("build request: %w", withoutURL(err))
 	}
@@ -355,22 +391,29 @@ func (o *OTLPSink) post(ctx context.Context, body []byte) (int64, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, fmt.Errorf("http post: unexpected status %d", resp.StatusCode)
 	}
-	return rejectedRecords(reply), nil
+	return rejectedRecords(reply, spans), nil
 }
 
-// rejectedRecords reads partialSuccess.rejectedLogRecords from an
-// ExportLogsServiceResponse. The protocol's JSON mapping writes the int64 as a
-// string; a number is read too. Anything unparseable reads as 0.
-func rejectedRecords(reply []byte) int64 {
+// rejectedRecords reads partialSuccess.rejectedSpans from an
+// ExportTraceServiceResponse when spans is true, else
+// partialSuccess.rejectedLogRecords from an ExportLogsServiceResponse. The
+// protocol's JSON mapping writes the int64 as a string; a number is read too.
+// Anything unparseable reads as 0.
+func rejectedRecords(reply []byte, spans bool) int64 {
 	var r struct {
 		PartialSuccess struct {
-			Rejected json.Number `json:"rejectedLogRecords"`
+			RejectedLogs  json.Number `json:"rejectedLogRecords"`
+			RejectedSpans json.Number `json:"rejectedSpans"`
 		} `json:"partialSuccess"`
 	}
 	if json.Unmarshal(reply, &r) != nil {
 		return 0
 	}
-	n, err := r.PartialSuccess.Rejected.Int64()
+	rejected := r.PartialSuccess.RejectedLogs
+	if spans {
+		rejected = r.PartialSuccess.RejectedSpans
+	}
+	n, err := rejected.Int64()
 	if err != nil {
 		return 0
 	}

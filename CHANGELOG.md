@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- The `otlp` audit sink takes `"traces": true`: each run-scoped audit row is also sent to `<endpoint>/v1/traces` as a span, and joins the caller's trace when the run's correlation id is a valid W3C `traceparent`. Off by default; see [monitoring](docs/operations/monitoring.md#opentelemetry-logs).
+
 ## [0.10.0-rc.17] — 2026-11-09
 
 ### Before you upgrade

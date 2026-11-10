@@ -2231,7 +2231,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Each audit row becomes one OTLP/HTTP JSON log record, POSTed in batches to `<endpoint>/v1/logs` (the path is added unless `endpoint` already ends in it). Stdlib only, no SDK.
 - Best-effort, like the webhook sink: a full queue or a batch that fails every retry is shed and counted in `wardyn_audit_sink_drops_total{sink="otlp"}`. It is not lossless; use the acknowledged webhook for that.
-- Spans are not exported yet.
+- Spans are off unless `traces` is `true`; see [monitoring](operations/monitoring.md#opentelemetry-logs).
 
 | Field | Default | Notes |
 |---|---|---|
@@ -2239,6 +2239,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `bearer_token` | (unset) | sent as `Authorization: Bearer`; requires an `https://` endpoint, boot fails otherwise |
 | `headers` | (unset) | extra request headers, for example a tenant id; sent as written, so a secret in one travels in cleartext over `http://`. `Authorization`, `Content-Type`, `Content-Length` and `Host` are refused |
 | `batch_size` | `100` | records per POST |
+| `traces` | `false` | also POST one span per run-scoped row to `<endpoint>/v1/traces`, and add the span's `traceId` and `spanId` to the row's log record |
 | `flush_interval`, `buffer_size`, `max_retries`, `retry_base_delay`, `timeout` | as `webhook` | same meaning and limits, including the `15s` timeout cap |
 
 | Record part | Value |
