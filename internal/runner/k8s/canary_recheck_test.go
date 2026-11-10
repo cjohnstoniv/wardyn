@@ -7,7 +7,12 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,7 +23,9 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -421,5 +428,90 @@ func TestCanaryRecheck_AcknowledgedBesideUnenforcedReadsUnenforced(t *testing.T)
 	}
 	if got := healthCheck(t, d).Verdict; got != runner.NetPolUnenforced {
 		t.Errorf("health verdict %q, want %q", got, runner.NetPolUnenforced)
+	}
+}
+
+// stallingCleanupAPI is an API server for the canary that creates objects and reports every canary pod
+// exited 0, but takes each DELETE and never answers it until the client gives up.
+func stallingCleanupAPI(t *testing.T) (kubernetes.Interface, *atomic.Int32) {
+	t.Helper()
+	var deletes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodDelete:
+			deletes.Add(1)
+			<-r.Context().Done()
+		case r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.Copy(w, r.Body) // the created object is what was sent
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/pods/"):
+			_ = json.NewEncoder(w).Encode(&corev1.Pod{
+				TypeMeta:   metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: path.Base(r.URL.Path), Namespace: testNamespace},
+				Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  canaryContainerName,
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}},
+				}}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{
+		ContentType: "application/json", AcceptContentTypes: "application/json",
+	}})
+	if err != nil {
+		t.Fatalf("clientset: %v", err)
+	}
+	return cs, &deletes
+}
+
+// TestCanaryCleanup_StalledDeleteIsBounded: an API server that takes the canary's cleanup deletes and
+// never answers holds a check only canaryCleanupTimeout per delete, so the next check, and the
+// driver's Close, are never held up for good.
+func TestCanaryCleanup_StalledDeleteIsBounded(t *testing.T) {
+	oldCleanup, oldInterval := canaryCleanupTimeout, canaryRecheckInterval
+	canaryCleanupTimeout, canaryRecheckInterval = 50*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { canaryCleanupTimeout, canaryRecheckInterval = oldCleanup, oldInterval })
+
+	c := newRecheckCluster(t)
+	d, _ := c.boot(t, Config{})
+	cs, deletes := stallingCleanupAPI(t)
+	d.clientset = cs
+
+	checked := make(chan struct{})
+	go func() {
+		d.recheckOnce(context.Background())
+		close(checked)
+	}()
+	select {
+	case <-checked:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a check whose cleanup deletes never answer did not return")
+	}
+	if got := deletes.Load(); got < 3 { // phase A's pod, phase B's policy and pod
+		t.Fatalf("cleanup deletes %d reached the server, want 3", got)
+	}
+
+	d.startCanaryRecheck()
+	before := deletes.Load()
+	deadline := time.Now().Add(30 * time.Second)
+	for deletes.Load() == before { // a loop check is now inside a stalled delete
+		if time.Now().After(deadline) {
+			t.Fatal("the loop never reached a cleanup delete")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	closed := make(chan struct{})
+	go func() {
+		_ = d.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Close did not return while a cleanup delete stalled")
 	}
 }

@@ -30,7 +30,19 @@ var (
 	// two phases of it must fit inside the chart's 450s startupProbe, so raising a run's start budget
 	// must never move it.
 	canaryWaitTimeout = 3 * time.Minute
+	// canaryCleanupTimeout bounds each delete of a canary's pod and policy. The deletes run on a fresh
+	// context, so a check cut short still cleans up, but an API server that never answers must not hold
+	// up the driver's Close or the next check. Two phases of canaryWaitTimeout plus three of these
+	// still fit inside the chart's 450s startupProbe.
+	canaryCleanupTimeout = 15 * time.Second
 )
+
+// deleteCanaryObject runs one cleanup delete on its own bounded context.
+func deleteCanaryObject(del func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), canaryCleanupTimeout)
+	defer cancel()
+	_ = del(ctx)
+}
 
 // canaryVerdict is the boot-time egress canary's outcome.
 type canaryVerdict int
@@ -128,9 +140,9 @@ func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyA
 		if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, netpol, metav1.CreateOptions{}); err != nil {
 			return canaryPhaseResult{err: fmt.Errorf("%s: create deny-all netpol: %w", phaseName, err)}
 		}
-		defer func() {
-			_ = d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(context.Background(), netpolName, metav1.DeleteOptions{})
-		}()
+		defer deleteCanaryObject(func(ctx context.Context) error {
+			return d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, netpolName, metav1.DeleteOptions{})
+		})
 	}
 
 	pod := &corev1.Pod{
@@ -158,9 +170,9 @@ func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyA
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return canaryPhaseResult{err: fmt.Errorf("%s: create canary pod: %w", phaseName, err)}
 	}
-	defer func() {
-		_ = d.clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
-	}()
+	defer deleteCanaryObject(func(ctx context.Context) error {
+		return d.clientset.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{})
+	})
 
 	reached, code, err := d.waitCanaryTerminal(ctx, ns, podName)
 	if err != nil {
