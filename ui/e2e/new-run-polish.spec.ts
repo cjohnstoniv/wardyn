@@ -17,7 +17,7 @@ import { SCENARIO_ACCESS } from "../src/app/lib/new-run-fixtures/scenarios/tools
 import { NR_MACHINE } from "../src/app/components/wardyn/copy/new-run/machine";
 
 
-const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: environment\n  experience: interactive\n  machine_kind: linux_vm\n  no_repositories_or_drives: true\n";
+const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: environment\n  experience: interactive\n  no_repositories_or_drives: true\n";
 const OPEN = { ...SCENARIO_ACCESS.member, unlisted: { mode: "deny_with_review", allow_all: true, decider: "you" } };
 
 async function openReview(page: Page) {
@@ -40,6 +40,14 @@ async function openReview(page: Page) {
     await route.fulfill({ json: status });
   });
   await page.route("**/api/v1/runs/preflight", (route) => route.fulfill({ json: { ...SCENARIO_PREFLIGHT.member, access: OPEN } }));
+  // The kind of sandbox is chosen at each launch, so the import door refuses machine_kind in a document. The real
+  // answer gets it here, as the Run step would set it.
+  await page.route("**/api/v1/templates/import", async (route) => {
+    const res = await route.fetch();
+    const body = (await res.json()) as { document?: { intent?: Record<string, unknown> } };
+    if (body.document?.intent) body.document.intent.machine_kind = "linux_vm";
+    await route.fulfill({ response: res, json: body });
+  });
   await gotoConsole(page);
   await navToRoute(page, "/runs/new");
   await page.getByRole("button", { name: NR_START.DOC_YAML, exact: true }).click();
