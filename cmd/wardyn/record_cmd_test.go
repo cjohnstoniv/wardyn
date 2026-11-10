@@ -124,6 +124,72 @@ func TestRecordCommands(t *testing.T) {
 	})
 }
 
+// TestRecordSaveAsTemplate: a member cannot write a policy, so --template saves the
+// synthesized profile as a person-scope template, and the 403 without it names the flag.
+func TestRecordSaveAsTemplate(t *testing.T) {
+	runID, tplID := uuid.New(), uuid.New()
+	var tplBody map[string]any
+	var policyPosts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/runs/" + runID.String() + "/profile/synthesize":
+			fmt.Fprint(w, profileBody)
+		case "POST /api/v1/policies":
+			policyPosts++
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"error":"operator only","reason":"operator_required"}`)
+		case "POST /api/v1/templates":
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &tplBody)
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"id":%q,"name":"learned","scope":"person"}`, tplID)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	run := func(args ...string) (string, error) {
+		return execCmdCapture(t, append(args, "--url", srv.URL, "--token", "tok")...)
+	}
+
+	out, err := run("record", "save", runID.String(), "--name", "learned", "--template")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `saved sandbox profile as your template "learned" (id ` + tplID.String() + `)`; !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+	if policyPosts != 0 {
+		t.Errorf("--template wrote %d policies, want none", policyPosts)
+	}
+	if tplBody["scope"] != "person" || tplBody["name"] != "learned" || tplBody["group_id"] != nil {
+		t.Errorf("template request = %v, want person scope, the name, no group", tplBody)
+	}
+	doc, _ := tplBody["document"].(map[string]any)
+	intent, _ := doc["intent"].(map[string]any)
+	pol, _ := intent["inline_policy"].(map[string]any)
+	if d, _ := pol["allowed_domains"].([]any); len(d) != 2 {
+		t.Errorf("inline_policy %v, want the synthesized allowed domains", pol)
+	}
+	if pol["min_confinement_class"] != "CC2" || pol["allow_all_egress"] != false {
+		t.Errorf("inline_policy %v, want the confinement floor and allow_all_egress false", pol)
+	}
+	for _, zero := range []string{"auto_stop_after_sec", "workspace_mounts", "resources", "llm_inspection", "eligible_grants"} {
+		if _, has := pol[zero]; has {
+			t.Errorf("inline_policy carries the unset key %q: a template reads a present key as a choice", zero)
+		}
+	}
+	if doc["kind"] != "RunTemplate" || doc["coverage"] != "partial" {
+		t.Errorf("document = %v, want a partial RunTemplate", doc)
+	}
+
+	_, err = run("record", "save", runID.String(), "--name", "learned")
+	if err == nil || !strings.Contains(err.Error(), "Members can save it as their own template with --template.") {
+		t.Errorf("a 403 without --template: err = %v, want the hint naming the flag", err)
+	}
+}
+
 func TestOrDashShowsEmptyAndNullAsADash(t *testing.T) {
 	for in, want := range map[string]string{"": "-", "null": "-", "low": "low"} {
 		if got := orDash(in); got != want {

@@ -44,7 +44,6 @@ import {
   type UserDriveListItem,
   type UserDrivesSnapshot,
 } from "../../../lib/api/drives";
-import { providers as providersApi } from "../../../lib/api/providers";
 import { getErrorMessage } from "../../../lib/format";
 import { ACCESS_STATE, DRIVES, DRIVES_TEAM_UNKNOWN, PEOPLE } from "../../../lib/user-drives-copy";
 import {
@@ -100,20 +99,11 @@ export function DrivesScreen() {
   const [toDelete, setToDelete] = React.useState<UserDriveListItem | null>(null);
   const [deleteError, setDeleteError] = React.useState<{ title?: string; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
-  // storage.user_drive.team_drives, read from the same site config the Storage
-  // tab edits. null = not known (loading or the read failed): a failed read is
-  // not "off", so a drive the server marks as team claims nothing until it is
-  // read. Off (read) is today's screen.
-  const [teamSetting, setTeamSetting] = React.useState<boolean | null>(null);
-  const [teamFailed, setTeamFailed] = React.useState(false);
-  const loadTeamSetting = React.useCallback(() => {
-    setTeamFailed(false);
-    providersApi
-      .getWorkspaceProviders()
-      .then((s) => setTeamSetting(!!s.providers.storage?.user_drive?.team_drives))
-      .catch(() => setTeamFailed(true));
-  }, []);
-  React.useEffect(loadTeamSetting, [loadTeamSetting]);
+  // storage.user_drive.team_drives, carried by GET /drives for every reader, a
+  // security admin included. null = the answer does not say (a daemon older than
+  // that field): not "off", so a drive the server marks as team claims nothing
+  // until a read says. Off (read) is today's screen.
+  const teamSetting: boolean | null = snap.team_drives ?? null;
   const teamDrives = teamSetting === true;
   const teamUnknown = teamSetting === null;
 
@@ -267,10 +257,10 @@ export function DrivesScreen() {
                 />
               ) : (
                 <>
-                  {teamFailed && teamUnknown && snap.drives.some((d) => d.team) && (
+                  {teamUnknown && snap.drives.some((d) => d.team) && (
                     <p role="status" className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3 text-meta text-muted-foreground">
                       {DRIVES_TEAM_UNKNOWN.NOTE}
-                      <Button variant="outline" size="sm" onClick={loadTeamSetting}>
+                      <Button variant="outline" size="sm" onClick={load}>
                         {DRIVES_TEAM_UNKNOWN.RETRY}
                       </Button>
                     </p>

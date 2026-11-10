@@ -140,7 +140,11 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 
 ## The claims a gateway receives
 
-- Experimental until 0.11. The token format (`wardyn_format` is `experimental-1`) and the key set's address may change before then.
+- Compatibility. The token format is `1` (`wardyn_format`).
+  - Within format 1, claims are only added: none is removed, renamed or given a different type. A gateway rule should ignore a claim it does not know.
+  - The token is ES256 and carries the signing key's `kid` in its header.
+  - The key set's address is stable through 0.11.
+  - A format 2 is announced a minor release ahead.
 - With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It does the same on an organisation MCP server's address when the component sets `mcp.gateway_audience`. It never uses `Authorization`, which carries a person's own credential.
 - The token is ES256 with the key's `kid` in its header, and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). An MCP server's token always lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
 
@@ -157,7 +161,7 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 | `jti` | A fresh UUID per token | |
 | `iat` | When the token was issued | Unix seconds |
 | `exp` | `iat` plus the provider's token lifetime, 10 minutes unless set | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
-| `wardyn_format` | `experimental-1` | |
+| `wardyn_format` | `1` | |
 | `wardyn_delegate` | The portal's id | Present only on a run a portal launched for the person; see [api-tokens.md](api-tokens.md) |
 | `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape. On a portal run whose portal named the acting agent it nests that agent: `{"sub": "spiffe://<trust domain>/agent-run/<run id>", "act": {"sub": "<agent>", "iss": "<issuer>"}}` |
 

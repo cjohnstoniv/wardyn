@@ -174,9 +174,8 @@
   - compute: the substrate, or a sandbox platform under it (above);
   - network, credentials, approvals and audit: `wardyn-proxy` and `wardynd`;
   - model and tool access: an AI gateway (above), inside what Wardyn lets the run reach.
-- Two gaps today:
-  - the gateway gets no person or run identity (above), so its per-person rules cannot follow a Wardyn run;
-  - stored policies are an administrator's ([who can change what](operations/admin-only-writes.md)), so a person or a machine cannot yet save its own narrower policy.
+- A model gateway can receive a signed person and run token when the provider opts in ([the claims](operations/ai-gateway.md#the-claims-a-gateway-receives)), so its per-person rules can follow a Wardyn run.
+- Stored policies are an administrator's ([who can change what](operations/admin-only-writes.md)). A person saves a synthesized one as their own template with `wardyn record save <run-id> --name <n> --template`; the template is bounded by that person's ceiling when a run uses it.
 
 ## 3. Blessed-default-vs-alternate matrix
 

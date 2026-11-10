@@ -137,6 +137,12 @@ export interface UserDrivesSnapshot {
    * grant write answers 422 and no run mounts one; everything here is kept.
    */
   disabled: boolean;
+  /**
+   * The deployment's `storage.user_drive.team_drives` switch, for every reader of
+   * this answer (a security admin's included): off, a drive marked `team` resolves
+   * per person. Absent on a daemon older than the field, which reads as unknown.
+   */
+  team_drives?: boolean;
 }
 
 // pkg/client.MemberDriveAdminItem — one person's drive in GET /drives/member (super admin). The registry's own

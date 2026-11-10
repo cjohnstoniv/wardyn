@@ -4,9 +4,14 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -22,7 +27,8 @@ func recordCmd(client clientFn) *cobra.Command {
 			"ACTUALLY did — the egress domains, files, and credentials it used, as captured in the\n" +
 			"audit / ground-truth streams. Launch an open (allow-all egress) recording run, let it\n" +
 			"work, then `wardyn record synthesize <run-id>` to preview the least-privilege profile or\n" +
-			"`wardyn record save <run-id> --name <n>` to save it for reuse by future enforced runs.",
+			"`wardyn record save <run-id> --name <n>` to save it for reuse by future enforced runs\n" +
+			"(`--template` saves it as your own template, which a member may do).",
 	}
 
 	var synthJSON bool
@@ -49,11 +55,15 @@ func recordCmd(client clientFn) *cobra.Command {
 	synth.Flags().BoolVar(&synthJSON, "json", false, "emit the synthesized profile as JSON")
 
 	var name string
-	var saveJSON bool
+	var saveJSON, asTemplate bool
 	save := &cobra.Command{
 		Use:   "save <run-id> --name <policy-name>",
 		Short: "Synthesize a sandbox profile from a run and save it as a named policy",
-		Args:  cobra.ExactArgs(1),
+		Long: "Saves the synthesized profile as a stored policy, which only an administrator may write.\n" +
+			"With --template it is saved as your own template instead: the profile's network and\n" +
+			"credential rules, laid onto the policy a run starts from and bounded by your own ceiling\n" +
+			"when a run uses it. It never writes a shared policy or another person's template.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("run", args[0])
 			if err != nil {
@@ -63,8 +73,28 @@ func recordCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if asTemplate {
+				doc, err := profileTemplateDocument(p.Proposed.InlinePolicy)
+				if err != nil {
+					return err
+				}
+				tpl, err := client().SaveTemplate(cmd.Context(), uuid.Nil, sdk.TemplateSaveRequest{Scope: sdk.TemplateScopePerson, Name: name, Document: doc})
+				if err != nil {
+					return err
+				}
+				if saveJSON {
+					return emitJSON(cmd.OutOrStdout(), tpl)
+				}
+				printProfile(cmd.OutOrStdout(), p)
+				fmt.Fprintf(cmd.OutOrStdout(), "\nsaved sandbox profile as your template %q (id %s)\n", tpl.Name, tpl.ID)
+				return nil
+			}
 			pol, err := client().CreatePolicy(cmd.Context(), sdk.PolicyRequest{Name: name, Spec: p.Proposed.InlinePolicy})
 			if err != nil {
+				var ae *sdk.APIError
+				if errors.As(err, &ae) && ae.Status == http.StatusForbidden {
+					return fmt.Errorf("%w. Members can save it as their own template with --template.", err)
+				}
 				return err
 			}
 			if saveJSON {
@@ -77,7 +107,8 @@ func recordCmd(client clientFn) *cobra.Command {
 		},
 	}
 	save.Flags().StringVar(&name, "name", "", "name for the saved policy (required)")
-	save.Flags().BoolVar(&saveJSON, "json", false, "emit the saved policy as JSON")
+	save.Flags().BoolVar(&saveJSON, "json", false, "emit the saved policy or template as JSON")
+	save.Flags().BoolVar(&asTemplate, "template", false, "save as your own template, not a stored policy (a member may; the policy is an administrator's)")
 	_ = save.MarkFlagRequired("name")
 
 	var taskJSON bool
@@ -118,6 +149,43 @@ func recordCmd(client clientFn) *cobra.Command {
 
 	cmd.AddCommand(synth, save, task)
 	return subcommandGroup(cmd)
+}
+
+// profileTemplateDocument is the personal template a synthesized profile
+// becomes: a partial template whose inline_policy is the profile. A template
+// reads a key that is present as a choice, so the keys the profile leaves at
+// their zero value are dropped (a zero auto_stop_after_sec would mean "never
+// stop"). allowed_domains and allow_all_egress are always kept: an empty list
+// and a false are the recording's own choice to allow nothing more.
+func profileTemplateDocument(spec sdk.RunPolicySpec) (sdk.TemplateDocument, error) {
+	body, err := json.Marshal(spec)
+	if err != nil {
+		return sdk.TemplateDocument{}, err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(body, &keys); err != nil {
+		return sdk.TemplateDocument{}, err
+	}
+	for k, v := range keys {
+		switch string(v) {
+		case "null", `""`, "0", "[]", "{}":
+			delete(keys, k)
+		}
+	}
+	if _, ok := keys["allowed_domains"]; !ok {
+		keys["allowed_domains"] = json.RawMessage("[]")
+	}
+	keys["allow_all_egress"] = json.RawMessage(strconv.FormatBool(spec.AllowAllEgress))
+	var intent sdk.TemplateIntent
+	if err := intent.Set("inline_policy", keys); err != nil {
+		return sdk.TemplateDocument{}, err
+	}
+	return sdk.TemplateDocument{
+		APIVersion: sdk.TemplateDocumentVersion,
+		Kind:       sdk.TemplateDocumentKind,
+		Coverage:   sdk.TemplateCoveragePartial,
+		Intent:     intent,
+	}, nil
 }
 
 func printProfile(w io.Writer, p sdk.ProfileResult) {
