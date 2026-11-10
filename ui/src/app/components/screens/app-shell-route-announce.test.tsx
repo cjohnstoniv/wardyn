@@ -17,6 +17,7 @@ vi.mock("../wardyn/needs-you-notices", () => ({ NeedsYouNotices: () => null }));
 import { AppShell } from "./app-shell";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { CONSOLE_VIEW } from "../wardyn/copy/console-view";
+import { setTitleBrand } from "../../lib/console-title";
 
 function Screen({ name, ownFocus }: { name: string; ownFocus?: boolean }) {
   const [, setParams] = useSearchParams();
@@ -88,6 +89,38 @@ describe("AppShell route announcement", () => {
     await waitFor(() => expect(document.title).toMatch(/^Screen A - /));
     view.unmount();
     expect(document.title).toBe(CONSOLE_VIEW.TITLE_USER);
+  });
+
+  // Branded, the brand renames the shell's title on the way out. A change inside <main> that leaves the shell's
+  // title as it was must not write the tab title at all.
+  it("writes no tab title for a change inside <main> that leaves the title as it was, branded", async () => {
+    setTitleBrand((t) => `${t} - Example Corp`);
+    try {
+      renderShell();
+      await screen.findByRole("heading", { name: "Screen A" });
+      await waitFor(() => expect(document.title).toBe(`Screen A - ${CONSOLE_VIEW.TITLE_USER} - Example Corp`));
+      const titleDesc = Object.getOwnPropertyDescriptor(Document.prototype, "title")!;
+      const writes: string[] = [];
+      Object.defineProperty(document, "title", {
+        configurable: true,
+        get: () => titleDesc.get!.call(document),
+        set: (v: string) => {
+          writes.push(v);
+          titleDesc.set!.call(document, v);
+        },
+      });
+      try {
+        act(() => {
+          document.querySelector("main")!.appendChild(document.createElement("span"));
+        });
+        await new Promise((r) => setTimeout(r, 0)); // the observer's microtask has run
+        expect(writes).toEqual([]);
+      } finally {
+        delete (document as { title?: string }).title;
+      }
+    } finally {
+      setTitleBrand(null);
+    }
   });
 
   it("moves focus to the new page's heading after a navigation, not on first load", async () => {
