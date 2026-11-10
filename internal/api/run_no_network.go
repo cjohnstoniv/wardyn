@@ -44,7 +44,7 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	probe := f.spec.Clone()
 	probe.AllowedDomains = nil
 	grants := f.spec.EligibleGrants
-	if noNetworkClonesRepo(f) {
+	if noNetworkClonesRepo(f.req.Repo, f.spec.WorkspaceRepos, f.wsRefs) {
 		// A clone needs the network wherever it comes from, a brokered GitHub one included, which adds no
 		// host to the allowlist.
 		add("repository")
@@ -93,9 +93,9 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 // repository on the spec, or a repository source of a workspace it attaches. Without one, a git grant the
 // policy carries is a source of nothing: the launcher cannot remove it, and dispatch withholds its lane and
 // credential from a No network run.
-func noNetworkClonesRepo(f *runFold) bool {
-	return strings.TrimSpace(f.req.Repo) != "" || len(f.spec.WorkspaceRepos) > 0 ||
-		slices.ContainsFunc(f.wsRefs, func(ws types.Workspace) bool {
+func noNetworkClonesRepo(legacyRepo string, specRepos []types.WorkspaceRepo, wsRefs []types.Workspace) bool {
+	return strings.TrimSpace(legacyRepo) != "" || len(specRepos) > 0 ||
+		slices.ContainsFunc(wsRefs, func(ws types.Workspace) bool {
 			return len(workspaceSourcesOfType(ws, types.WorkspaceSourceTypeRepo)) > 0
 		})
 }
