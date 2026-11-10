@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -95,11 +97,17 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	}
 	data["error"] = "policy readback: " + why
 	rerr := s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
-		"the run's new proxy did not confirm its policy, so it was stopped and the run is lost until revived", errors.New(why))
-	// The answer's stop wording comes from the containment result, never from the lost mark's outcome.
+		"the run's new proxy did not confirm its policy, so it was stopped", errors.New(why))
+	// The answer's stop wording comes from the containment result, its fate from what the store now
+	// holds, never from the lost mark's outcome.
 	c := s.containProxyStartLocked(ctx, run.ID, start.gen)
 	if failed != nil {
 		s.auditReadbackFailure(ctx, *failed, c)
+	}
+	fate := ""
+	if rerr.reason == reasonRevivePolicyUnconfirmedLost {
+		fate = s.storedRunFate(ctx, run.ID)
+		rerr.msg += fate
 	}
 	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) {
 		return rerr
@@ -111,11 +119,26 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	}
 	switch rerr.reason {
 	case reasonRevivePolicyUnconfirmedLost:
-		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy and the run is lost until revived; "+
+		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy"+fate+"; "+
 			"stopping that proxy is not confirmed yet"+retry, errors.New(why))
 	case reasonReviveRecoveryUnresolved:
 		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, "+
 			"but stopping its proxy is not confirmed yet"+retry, errors.New(why))
 	}
 	return rerr
+}
+
+// storedRunFate is what the store holds for a run after its revive failed: "; the run is ended" or
+// "; the run is lost until revived", or "" when it holds neither or cannot be read.
+func (s *Server) storedRunFate(ctx context.Context, id uuid.UUID) string {
+	run, err := s.cfg.Store.GetRun(ctx, id)
+	switch {
+	case err != nil:
+		return ""
+	case run.State.IsTerminal():
+		return "; the run is ended"
+	case run.LostAt != nil:
+		return "; the run is lost until revived"
+	}
+	return ""
 }

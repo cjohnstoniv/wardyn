@@ -420,6 +420,32 @@ func TestReadback_ReportBeforeReviveReturnsDifferentHashStops(t *testing.T) {
 	}
 }
 
+// A failed readback says the run is lost until revived only where the store has it lost; a run that
+// cannot be kept is torn down, and the answer says it is ended.
+func TestReadback_FailureAnswerNamesTheStoredFate(t *testing.T) {
+	for _, interactive := range []bool{true, false} {
+		f := newReadbackFixture(t)
+		f.st.run.Interactive, f.run.Interactive = interactive, interactive
+		f.rr.onReplace = func(cfg []byte) {
+			var c struct {
+				RunToken string `json:"run_token"`
+			}
+			_ = json.Unmarshal(cfg, &c)
+			claims, _ := f.srv.cfg.Identity.Verify(context.Background(), c.RunToken, internalAudience)
+			postLoaded(t, f.srv, f.run.ID, claims.JTI, hashHex([]byte("other bytes")))
+		}
+		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		run, _ := f.st.GetRun(context.Background(), f.run.ID)
+		want, never := "lost until revived", "is ended"
+		if !interactive {
+			want, never = "is ended", "lost until revived"
+		}
+		if body := w.Body.String(); w.Code != http.StatusBadGateway || !strings.Contains(body, want) || strings.Contains(body, never) {
+			t.Errorf("interactive=%v (stored %s, lost %v): %d %s, want 502 saying %q", interactive, run.State, run.LostAt != nil, w.Code, body, want)
+		}
+	}
+}
+
 // A driver that answers without a hash stops the new proxy at once (hash_missing), never legacy, and
 // with no grace.
 func TestReadback_ReviveWithoutHashStopsAtOnce(t *testing.T) {
