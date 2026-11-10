@@ -59,6 +59,16 @@ const (
 // wait real seconds.
 var hostCallSecond = time.Second
 
+// hostRuleRefusedNotHeld is hostRuleRefused for the plain lane's first look, before the policy decides
+// the host: a request the rules hold is passed on, to be held in handlePlain only once evaluate allows
+// it, so a host the policy refuses never asks anyone.
+func (p *Proxy) hostRuleRefusedNotHeld(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	if p.policy.namesRuleHost(host) && types.EvalHostRules(p.policy.hostRules, host, r.Method, requestEscapedPath(r)).Effect == types.HostRuleHold {
+		return false
+	}
+	return p.hostRuleRefused(w, r, host, port)
+}
+
 // holdHostCall is hostRuleRefused's arm for a request the rules hold: true when a person approved its
 // host, method and path (now or earlier in the run), so the request goes on to the rest of the lane.
 // When it reports false it has answered.

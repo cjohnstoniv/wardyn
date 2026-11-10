@@ -4,10 +4,13 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -494,5 +497,64 @@ func TestHostCallRememberedKeysAreBounded(t *testing.T) {
 	}
 	if _, sent := hcSend(p, "POST", "http://"+hrHost+"/k/0"); !sent {
 		t.Error("an approved call was refused once the key bound was reached")
+	}
+}
+
+// hcPlain sends one absolute-form plain-HTTP request through the proxy's own handler and reports the status.
+func hcPlain(t *testing.T, p *Proxy, method, path string) int {
+	t.Helper()
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := io.WriteString(conn, method+" http://"+hrHost+path+" HTTP/1.1\r\nHost: "+hrHost+"\r\nContent-Length: 0\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: method})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestHostCallPlainHoldAfterThePolicy: on plain HTTP a held request asks a person only once the policy
+// allows its host. A rule host the policy does not allow is refused without a host call raise; an allowed
+// one asks, and an approval lets it reach the upstream.
+func TestHostCallPlainHoldAfterThePolicy(t *testing.T) {
+	cu := captureUpstream(t, false, "ok")
+	plainProxy := func(allowed string) *Proxy {
+		return newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
+			Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+			Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{allowed}, HostRules: []types.HostRuleSet{hcHoldSet()}})})
+	}
+	p := plainProxy("other.example.com")
+	cp := newHCCP(t, p)
+	cp.newState = types.ApprovalApproved
+	if got := hcPlain(t, p, "POST", "/admin"); got != http.StatusForbidden || cu.reached {
+		t.Fatalf("a held request to a host the policy does not allow = %d reached=%v", got, cu.reached)
+	}
+	cp.mu.Lock()
+	var hostRows int
+	for _, row := range cp.rows {
+		if row.scope.CallSHA256 != "" {
+			hostRows++
+		}
+	}
+	cp.mu.Unlock()
+	if hostRows != 0 {
+		t.Fatalf("a host the policy does not allow raised %d host call approvals", hostRows)
+	}
+
+	p = plainProxy(hrHost)
+	p.approval = newApprovalClient(cp.srv.URL, newTokenSource("tok"), p.runID, cp.srv.Client())
+	if got := hcPlain(t, p, "POST", "/admin"); got != http.StatusOK || !cu.reached {
+		t.Fatalf("an approved held request to an allowed host = %d reached=%v", got, cu.reached)
+	}
+	if rows, _, _ := cp.counts(); rows != 1 {
+		t.Errorf("rows=%d, want one host call asked", rows)
 	}
 }

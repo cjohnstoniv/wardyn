@@ -40,10 +40,11 @@ func (p *Proxy) hostRuleConnectDeny(ctx context.Context, req egress.Request) *eg
 	return &log
 }
 
-// servePlainJudged is servePlain after host rules judge the request by its escaped path.
+// servePlainJudged is servePlain after host rules judge the request by its escaped path. A request the
+// rules hold goes on: handlePlain holds it only once the policy allows the host (plainHostRuleHeld).
 func (p *Proxy) servePlainJudged(w http.ResponseWriter, r *http.Request) {
 	if r.URL != nil && r.URL.Host != "" {
-		if host, port := splitHostPort(r.URL.Host, defaultPortForScheme(r.URL.Scheme)); p.hostRuleRefused(w, r, host, port) {
+		if host, port := splitHostPort(r.URL.Host, defaultPortForScheme(r.URL.Scheme)); p.hostRuleRefusedNotHeld(w, r, host, port) {
 			return
 		}
 	}

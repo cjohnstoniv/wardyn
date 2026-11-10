@@ -82,6 +82,10 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		writeApprovalPending(w, log)
 		return
 	}
+	// A request the host rules hold asks a person only now, once the policy allows the host (host_call_hold.go).
+	if p.hostRuleRefused(w, r, host, port) {
+		return
+	}
 
 	// require_tls: the operator declared this host's credential may ride only TLS, and this
 	// request is cleartext — refuse the REQUEST before inspection, since a refusal ends it and
