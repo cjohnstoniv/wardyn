@@ -71,6 +71,9 @@ type nsVerdict struct {
 	state netPolState
 	// strikes counts the indeterminate checks in a row since the last definite one.
 	strikes int
+	// escaped: the last definite result showed egress through a deny-all policy. It outlives the
+	// "not enforced" state itself, so no result but proof of enforcement lifts the refusal.
+	escaped bool
 	// verdictAt is when the check that produced state finished: the latest check that agreed with it,
 	// or the one that changed it. A disagreeing check that has not changed it yet never moves it.
 	verdictAt time.Time
@@ -224,21 +227,23 @@ func (d *Driver) recheckOnce(ctx context.Context) {
 // a row move it. An indeterminate check then makes it "not proven". An acknowledged result (phase A's
 // pod ran and exited 1, which a pod-network blip produces as well as an ambient default-deny) proves
 // nothing either way, so it is applied at once only where nothing definite stands; after a proven
-// verdict the strikes make it acknowledged, and after an escape "not proven", since only proof of
-// enforcement lifts a refusal.
+// verdict the strikes make it acknowledged, and after an escape "not proven", where it stays: an
+// escape is kept on record (escaped) until proof of enforcement, the only result that lifts it.
 func (d *Driver) advance(ns string, prev nsVerdict, verdict canaryVerdict, err error) nsVerdict {
 	got, now := stateOf(verdict), d.now()
-	next := nsVerdict{state: prev.state, verdictAt: prev.verdictAt}
-	definite := prev.state == netPolProven || prev.state == netPolUnenforced // the verdict stands on a definite result
+	// An escape stays on record through every result but proof of enforcement.
+	escaped := prev.escaped || prev.state == netPolUnenforced
+	next := nsVerdict{state: prev.state, verdictAt: prev.verdictAt, escaped: escaped}
+	definite := prev.state == netPolProven || escaped // the verdict stands on a definite result
 	switch {
 	case verdict == canaryEnforced:
-		next.state, next.verdictAt = netPolProven, now
+		next.state, next.verdictAt, next.escaped = netPolProven, now, false
 	case verdict == canaryUnenforced:
-		next.state, next.verdictAt = netPolUnenforced, now
+		next.state, next.verdictAt, next.escaped = netPolUnenforced, now, true
 	case verdict == canaryAcknowledged && !definite:
 		next.state, next.verdictAt = netPolAcknowledged, now
-	case verdict == canaryIndeterminate && prev.state == netPolNotProven:
-		next.verdictAt = now
+	case prev.state == netPolNotProven && (verdict == canaryIndeterminate || escaped):
+		next.verdictAt = now // still not proven; after an escape an acknowledged result changes nothing either
 	default: // a non-definite result against a standing verdict: count it
 		if next.strikes = prev.strikes + 1; next.strikes >= canaryRecheckStrikes {
 			next.state, next.strikes, next.verdictAt = netPolNotProven, 0, now
