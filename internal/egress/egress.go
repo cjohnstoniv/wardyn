@@ -129,6 +129,23 @@ type DecisionLog struct {
 	// ModelTunnel marks the allow of a CONNECT the proxy tunnelled opaquely to a model host: a model call it
 	// could not read, whether or not content inspection is on. Absent on every other row.
 	ModelTunnel bool `json:"model_tunnel,omitempty"`
+	// DNS, when non-nil, makes this row one DNS query from the run's sandbox,
+	// written as run.dns.query and never as an egress decision.
+	DNS *DNSQuery `json:"dns,omitempty"`
+}
+
+// DNSQuery is one DNS query a run's sandbox asked and what it was told. Name is
+// empty when its spelling was refused. Via says who answered: "vm_relay" (a VM
+// guest's relay, from its own name table) or "proxy" (the run proxy's listener,
+// which refuses every query). Neither looks anything up.
+type DNSQuery struct {
+	Name    string `json:"name,omitempty"`
+	Type    string `json:"type"`
+	Outcome string `json:"outcome"` // answered | refused | prep_refused
+	Cause   string `json:"cause,omitempty"`
+	Answer  string `json:"answer,omitempty"` // the synthetic address of an answered A query
+	Via     string `json:"via"`
+	Repeat  int    `json:"repeat,omitempty"`
 }
 
 // ModelUsage is one model call's token counts, read from the provider's own

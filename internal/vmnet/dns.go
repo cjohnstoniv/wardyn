@@ -24,7 +24,7 @@ type dnsResult struct {
 // query is the audit record of one answered query: the outcome answer or refuseAll
 // computed, never a lookup of its own.
 func (r dnsResult) query() dnsRecord {
-	q := dnsRecord{Name: r.name, Type: r.qtype, Outcome: dnsAnswered}
+	q := dnsRecord{Name: r.name, Type: strings.TrimPrefix(r.qtype, "Type"), Outcome: dnsAnswered}
 	switch {
 	case r.refused == "prep":
 		q.Outcome = dnsPrepRefused

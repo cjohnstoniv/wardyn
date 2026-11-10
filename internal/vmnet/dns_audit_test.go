@@ -50,7 +50,7 @@ func TestRelayDNSAuditKeepsSyntheticAnswers(t *testing.T) {
 	if got, ok := rl.names.lookup(addr); !ok || got != "origin.test" {
 		t.Fatalf("name table maps %v to %q, %v; want origin.test", addr, got, ok)
 	}
-	answered := dnsRecord{Name: "origin.test", Type: "TypeA", Outcome: dnsAnswered, Answer: net.IP(addr[:]).String()}
+	answered := dnsRecord{Name: "origin.test", Type: "A", Outcome: dnsAnswered, Answer: net.IP(addr[:]).String()}
 	waitFor(t, "answered A record", f.dnsWith(answered))
 
 	c, err := g.Dial(addr, 443, 3*time.Second)
@@ -73,12 +73,12 @@ func TestRelayDNSAuditKeepsSyntheticAnswers(t *testing.T) {
 	if m, err := g.Query([]string{"origin", "test"}, dnsmessage.TypeAAAA); err != nil || m.Header.RCode != dnsmessage.RCodeSuccess {
 		t.Fatalf("AAAA: %+v, %v", m, err)
 	}
-	waitFor(t, "AAAA record", f.dnsWith(dnsRecord{Name: "origin.test", Type: "TypeAAAA", Outcome: dnsAnswered}))
+	waitFor(t, "AAAA record", f.dnsWith(dnsRecord{Name: "origin.test", Type: "AAAA", Outcome: dnsAnswered}))
 
 	if m, err := g.Query([]string{"evil\r\nx", "test"}, dnsmessage.TypeA); err != nil || m.Header.RCode != dnsmessage.RCodeRefused {
 		t.Fatalf("bad name: %+v, %v", m, err)
 	}
-	waitFor(t, "refused record", f.dnsWith(dnsRecord{Type: "TypeA", Outcome: dnsRefused, Cause: "name"}))
+	waitFor(t, "refused record", f.dnsWith(dnsRecord{Type: "A", Outcome: dnsRefused, Cause: "name"}))
 }
 
 // A full name table refuses with cause "full", and the record says so.
@@ -96,7 +96,7 @@ func TestDNSRecordOfAFullTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := res.query(), (dnsRecord{Name: "two.test", Type: "TypeA", Outcome: dnsRefused, Cause: "full"}); got != want {
+	if got, want := res.query(), (dnsRecord{Name: "two.test", Type: "A", Outcome: dnsRefused, Cause: "full"}); got != want {
 		t.Fatalf("record %+v, want %+v", got, want)
 	}
 }
@@ -132,7 +132,7 @@ func TestPrepDNSRecordsPrepRefused(t *testing.T) {
 	}
 	waitFor(t, "prep_refused log line", func() bool {
 		s := logs.String()
-		return strings.Contains(s, `"msg":"dns","name":"origin.test","type":"TypeA","outcome":"prep_refused"`)
+		return strings.Contains(s, `"msg":"dns","name":"origin.test","type":"A","outcome":"prep_refused"`)
 	})
 }
 
@@ -143,7 +143,7 @@ func TestReporterBoundsDNSRecords(t *testing.T) {
 	sent := make(chan dnsRecord, 4*maxDNSReports)
 	rp := newReporter(c.now, slog.New(slog.DiscardHandler), func(refusal) {})
 	rp.sendDNS = func(q dnsRecord) { sent <- q }
-	q := dnsRecord{Name: "flood.test", Type: "TypeA", Outcome: dnsAnswered, Answer: "198.18.0.1"}
+	q := dnsRecord{Name: "flood.test", Type: "A", Outcome: dnsAnswered, Answer: "198.18.0.1"}
 	for i := 0; i < 50; i++ {
 		rp.dns(q)
 	}
@@ -159,7 +159,7 @@ func TestReporterBoundsDNSRecords(t *testing.T) {
 
 	c.t = c.t.Add(reportInterval)
 	for i := 0; i < 2*maxDNSReports; i++ {
-		rp.dns(dnsRecord{Name: fmt.Sprintf("n%d.test", i), Type: "TypeA", Outcome: dnsAnswered})
+		rp.dns(dnsRecord{Name: fmt.Sprintf("n%d.test", i), Type: "A", Outcome: dnsAnswered})
 	}
 	for i := 0; i < maxDNSReports; i++ {
 		recv(t, sent)

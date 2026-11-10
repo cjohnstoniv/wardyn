@@ -74,6 +74,7 @@ func stagedConnect(t *testing.T, proxyAddr, target, flow, stage string) (int, ne
 	return resp.StatusCode, c, br
 }
 
+// rows gives the egress decision rows in buf.
 func rows(t *testing.T, buf *syncBuf) []egress.DecisionLog {
 	t.Helper()
 	var out []egress.DecisionLog
@@ -84,6 +85,9 @@ func rows(t *testing.T, buf *syncBuf) []egress.DecisionLog {
 		var d egress.DecisionLog
 		if err := json.Unmarshal([]byte(l), &d); err != nil {
 			t.Fatalf("row %q: %v", l, err)
+		}
+		if d.DNS != nil {
+			continue // a DNS query row, not an egress decision (dnsRows)
 		}
 		out = append(out, d)
 	}

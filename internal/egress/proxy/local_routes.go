@@ -103,6 +103,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerSSOToken(w, r)
 	case p.vm && onVMNetLane(r.Context()) && r.Method == http.MethodPost && path == routeVMNetRefusals:
 		p.handleVMNetRefusal(w, r)
+	case p.vm && onVMNetLane(r.Context()) && r.Method == http.MethodPost && path == routeVMNetDNS:
+		p.handleVMNetDNS(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):
 		p.handleLLMAnthropic(w, r)
 	case strings.HasPrefix(path, llmOpenAIPrefix):

@@ -76,6 +76,8 @@ type SinkFrame struct {
 	// accept: the runner replays rows carrying model-token counts. An older runner never sets it,
 	// and an older proxy ignores it.
 	Usage bool `json:"usage,omitempty"`
+	// accept: the runner replays DNS query rows (run.dns.query). As Usage.
+	DNS bool `json:"dns,omitempty"`
 	// grant
 	Epoch   uuid.UUID `json:"epoch,omitempty"`
 	Base    int64     `json:"base,omitempty"`
@@ -194,6 +196,7 @@ type remoteSink struct {
 	drainFor time.Duration
 
 	usage        atomic.Bool // the connected runner replays usage rows (its accept said so)
+	dns          atomic.Bool // the connected runner replays DNS query rows (its accept said so)
 	mu           sync.Mutex
 	cond         *sync.Cond
 	gen          uint64
@@ -461,6 +464,7 @@ func (s *remoteSink) session() error {
 	}
 	s.gen, s.live, s.conn = acc.Gen, true, conn
 	s.usage.Store(acc.Usage)
+	s.dns.Store(acc.DNS)
 	s.ackLocked(acc.Seq)
 	s.mu.Unlock()
 	readErr := make(chan error, 1)
