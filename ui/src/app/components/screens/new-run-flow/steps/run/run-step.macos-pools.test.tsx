@@ -131,3 +131,46 @@ describe("Run step: pools that offer macOS", () => {
     expect(offerRow()).toBeNull();
   });
 });
+
+// UX-C-019: a pick of another Mac pool while already on macOS raises the figures again; leaving macOS takes them back.
+describe("Run step: pool pick while already on macOS", () => {
+  const LOW = mac("c6666666-6666-4666-8666-666666666666", "Low Macs", 2, 4096);
+  const MAC: RunIntent = { shape: "agent_task", experience: "interactive", machine_kind: "macos_vm" };
+  const linux = () => within(osGroup()).getByRole("button", { name: NR_MACHINE.OS_LINUX });
+
+  it("autofilled figures raised by the pick are removed on leaving macOS", async () => {
+    show(list(CLUSTER, LOW, BUILD), VM);
+    await waitFor(() => expect(offerRow()).not.toBeNull());
+    await userEvent.click(pick("Low Macs"));
+    expect(intentNow().resources).toEqual({ cpu_millis: 2000, memory_mib: 4096 });
+    // A pool of no Macs, then the offer button for a pool with a higher minimum.
+    await userEvent.selectOptions(select(), CLUSTER.id);
+    await waitFor(() => expect(offerRow()).not.toBeNull());
+    await userEvent.click(pick("Build Macs"));
+    expect(intentNow().resources).toEqual({ cpu_millis: 6000, memory_mib: 16384 });
+    await userEvent.click(linux());
+    expect(intentNow().machine_kind).toBe("linux_vm");
+    expect(intentNow().resources).toBeUndefined();
+  });
+
+  it.each([
+    ["CPU", { cpu_millis: 12000 }, { cpu_millis: 12000, memory_mib: 16384 }, { cpu_millis: 12000 }],
+    ["memory", { memory_mib: 65536 }, { cpu_millis: 6000, memory_mib: 65536 }, { memory_mib: 65536 }],
+  ])("a loaded macOS draft with a person-set %s above the minimum: the pick raises only the other figure, and leaving takes back only that one", async (_n, asked, afterPick, afterLeave) => {
+    show(list(CLUSTER, BUILD), { ...MAC, runner_pool_id: CLUSTER.id, resources: asked } as RunIntent);
+    await waitFor(() => expect(offerRow()).not.toBeNull());
+    await userEvent.click(pick("Build Macs"));
+    expect(intentNow().resources).toEqual(afterPick);
+    await userEvent.click(linux());
+    expect(intentNow().resources).toEqual(afterLeave);
+  });
+
+  it("a loaded macOS draft with no recorded fill: the pick's minimums are taken back on leaving", async () => {
+    show(list(CLUSTER, BUILD), { ...MAC, runner_pool_id: CLUSTER.id } as RunIntent);
+    await waitFor(() => expect(offerRow()).not.toBeNull());
+    await userEvent.click(pick("Build Macs"));
+    expect(intentNow().resources).toEqual({ cpu_millis: 6000, memory_mib: 16384 });
+    await userEvent.click(linux());
+    expect(intentNow().resources).toBeUndefined();
+  });
+});

@@ -17,7 +17,7 @@ import { stepIssues } from "../../lenses/local-issues";
 import { keepRunning, mayKeepRunning, setHealth, setPort, setProbe, setRestart } from "../../lenses/service-lens";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
-import { dropMinimum, minimumFill, startAtMinimum, type MacOSMinimum } from "../../lenses/limits-lens";
+import { dropMinimum, minimumFill, refillMinimum, startAtMinimum, type MacOSMinimum } from "../../lenses/limits-lens";
 import { deleteMachine, keepMachine, nameKeptMachine, resumeMachine, startFresh } from "../../lenses/machine-lens";
 import { chooseBarrier, chooseMacOSBase, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
@@ -103,7 +103,11 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const applyKind = (kind: MachineKind, min: MacOSMinimum | undefined, poolId?: string) => {
     const onMac = intent.machine_kind === "macos_vm";
     if (kind === "macos_vm" && !onMac && min) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, min) } });
-    else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
+    // Already on macOS: the pool's minimum may raise the figures again, and leaving macOS must take those back too.
+    else if (kind === "macos_vm" && onMac && min) {
+      const next = refillMinimum(intent, fill, min);
+      if (next !== fill) dispatch({ type: "guided", patch: { macosFill: next } });
+    } else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
     // The window goes with macOS (chooseMachineKind), and its cleared notice with it.
     if (kind !== "macos_vm" && draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
     if (kind !== "macos_vm" && draft.guided.windowCleared) dispatch({ type: "guided", patch: { windowCleared: undefined } });
