@@ -94,6 +94,21 @@ func (sy *Syncer) conflict(ctx context.Context, rel string, l syncFile, r os.Fil
 	return sy.push(ctx, rel, l, rep)
 }
 
+// listedConflict is a conflict a pass only lists. A runner pass back keeps the sandbox's copy as a
+// conflict copy (keepConflict); one it cannot keep is not brought back and not preserved.
+func (sy *Syncer) listedConflict(ctx context.Context, rel string, r os.FileInfo, rep *Report, pulled *int64) error {
+	rep.Conflicts = append(rep.Conflicts, rel)
+	if !sy.Opts.RunnerPass || !sy.Opts.Pull {
+		return nil
+	}
+	kept, err := sy.keepConflict(ctx, rel, r, rep, pulled)
+	if !kept {
+		rep.unsynced(rel)
+		rep.notPreserved("keep the sandbox copy of " + rel + ": not kept")
+	}
+	return err
+}
+
 // keepConflict pulls the sandbox's rel to the first free conflict copy name, durably, never
 // replacing a file; a name already holding the same bytes counts as kept. It reports whether the
 // copy is kept and proven durable.

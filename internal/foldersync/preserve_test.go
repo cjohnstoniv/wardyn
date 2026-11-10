@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // failLaptopDirs makes every sync of a directory on the laptop fail with errno, and nothing else.
@@ -192,6 +193,108 @@ func TestSyncer_WithoutRunnerPassNothingIsMarkedNotPreserved(t *testing.T) {
 		rep := pass(t, sy)
 		if rep.NotPreserved != "" || getSyncFile(t, filepath.Join(box, "x.txt")) != "laptop edit" {
 			t.Errorf("report = %+v", rep)
+		}
+	})
+}
+
+// sentThenSandboxChanged is x.txt (and, with keep, keep.txt) sent by a first pass, then x.txt
+// deleted on the laptop and changed in the sandbox.
+func sentThenSandboxChanged(t *testing.T, sy *Syncer, box, root string, keep bool) {
+	t.Helper()
+	putSyncFile(t, filepath.Join(root, "x.txt"), "base", 0o644)
+	if keep {
+		putSyncFile(t, filepath.Join(root, "keep.txt"), "kept", 0o644)
+	}
+	pass(t, sy)
+	if err := os.Remove(filepath.Join(root, "x.txt")); err != nil {
+		t.Fatal(err)
+	}
+	putSyncFile(t, filepath.Join(box, "x.txt"), "sandbox edit!", 0o644)
+	later := time.Now().Add(time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(filepath.Join(box, "x.txt"), later, later); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// T7: a conflict a runner pass back only lists keeps the sandbox's copy beside the laptop's: a file
+// the laptop deleted and the sandbox changed (with the laptop folder emptied, or not), and one the
+// laptop changed while the pass fetched it. One whose copy cannot be kept is not preserved.
+func TestPass_AListedConflictKeepsTheSandboxCopy(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		sy, box, root := runnerSyncer(t, true)
+		sentThenSandboxChanged(t, sy, box, root, keep)
+		rep := pass(t, sy)
+		if got := getSyncFile(t, filepath.Join(root, copyName(1))); got != "sandbox edit!" || rep.NotPreserved != "" || !slices.Contains(rep.Conflicts, "x.txt") {
+			t.Errorf("laptop delete (folder kept %v): copy = %q, report = %+v", keep, got, rep)
+		}
+		if _, err := os.Stat(filepath.Join(root, "x.txt")); !os.IsNotExist(err) {
+			t.Errorf("laptop delete (folder kept %v): the deleted file came back", keep)
+		}
+	}
+
+	t.Run("every name taken", func(t *testing.T) {
+		sy, box, root := runnerSyncer(t, true)
+		sentThenSandboxChanged(t, sy, box, root, true)
+		for i := 1; i <= maxConflictCopies; i++ {
+			putSyncFile(t, filepath.Join(root, copyName(i)), "another copy", 0o644)
+		}
+		rep := pass(t, sy)
+		if rep.NotPreserved == "" || !slices.Equal(rep.UnsyncedPaths, []string{"x.txt"}) {
+			t.Errorf("report = %+v", rep)
+		}
+	})
+
+	t.Run("sandbox changed after the walk", func(t *testing.T) {
+		sy, box, root := runnerSyncer(t, true)
+		putSyncFile(t, filepath.Join(root, "x.txt"), "base", 0o644)
+		putSyncFile(t, filepath.Join(root, "keep.txt"), "kept", 0o644)
+		pass(t, sy)
+		if err := os.Remove(filepath.Join(root, "x.txt")); err != nil {
+			t.Fatal(err)
+		}
+		// a.txt, new in the sandbox, is pulled before x.txt; while it is, the agent changes x.txt.
+		putSyncFile(t, filepath.Join(box, "a.txt"), "new", 0o644)
+		onSync(t, func(f *os.File) error {
+			if laptopTemp(f) && !strings.Contains(f.Name(), "sandbox conflict") {
+				if getSyncFile(t, filepath.Join(box, "x.txt")) == "base" {
+					putSyncFile(t, filepath.Join(box, "x.txt"), "late edit", 0o644)
+				}
+			}
+			return nil
+		}, nil)
+		rep := pass(t, sy)
+		if got := getSyncFile(t, filepath.Join(root, copyName(1))); got != "late edit" || getSyncFile(t, filepath.Join(box, "x.txt")) != "late edit" || rep.NotPreserved != "" {
+			t.Errorf("copy = %q, sandbox = %q, report = %+v", got, getSyncFile(t, filepath.Join(box, "x.txt")), rep)
+		}
+	})
+
+	t.Run("laptop changed during the pull", func(t *testing.T) {
+		sy, box, root := runnerSyncer(t, true)
+		putSyncFile(t, filepath.Join(root, "x.txt"), "base", 0o644)
+		pass(t, sy)
+		putSyncFile(t, filepath.Join(box, "x.txt"), "sandbox edit!", 0o644)
+		later := time.Now().Add(time.Hour).Truncate(time.Second)
+		if err := os.Chtimes(filepath.Join(box, "x.txt"), later, later); err != nil {
+			t.Fatal(err)
+		}
+		onSync(t, func(f *os.File) error {
+			if laptopTemp(f) && getSyncFile(t, filepath.Join(root, "x.txt")) == "base" {
+				putSyncFile(t, filepath.Join(root, "x.txt"), "laptop save", 0o644)
+			}
+			return nil
+		}, nil)
+		rep := pass(t, sy)
+		if got := getSyncFile(t, filepath.Join(root, copyName(1))); got != "sandbox edit!" || getSyncFile(t, filepath.Join(root, "x.txt")) != "laptop save" || rep.NotPreserved != "" {
+			t.Errorf("copy = %q, laptop = %q, report = %+v", got, getSyncFile(t, filepath.Join(root, "x.txt")), rep)
+		}
+	})
+
+	t.Run("wardyn sync lists it only", func(t *testing.T) {
+		sy, box, root := pipeSyncer(t, true)
+		sentThenSandboxChanged(t, sy, box, root, true)
+		rep := pass(t, sy)
+		if _, err := os.Stat(filepath.Join(root, copyName(1))); err == nil || rep.NotPreserved != "" || !slices.Contains(rep.Conflicts, "x.txt") {
+			t.Errorf("report = %+v, copy stat err = %v", rep, err)
 		}
 	})
 }

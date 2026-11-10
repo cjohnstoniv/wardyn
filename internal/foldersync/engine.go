@@ -404,7 +404,7 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 	lChanged := hasL && (!known || l.side != seen.Local)
 	rChanged := hasR && (!known || rSide != seen.Remote)
 	if known {
-		if done, err := sy.deleted(ctx, rel, v, rep, hasL, hasR, lChanged, rChanged); done {
+		if done, err := sy.deleted(ctx, rel, v, rep, pulled, hasL, hasR, lChanged, rChanged); done {
 			return err
 		}
 	}
@@ -424,8 +424,7 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 		return sy.pull(ctx, rel, r, &l, rep, pulled)
 	case !hasL && hasR && sy.Opts.Pull && rChanged:
 		if known {
-			rep.Conflicts = append(rep.Conflicts, rel)
-			return nil
+			return sy.listedConflict(ctx, rel, r, rep, pulled)
 		}
 		return sy.pull(ctx, rel, r, nil, rep, pulled)
 	}
@@ -443,14 +442,13 @@ func (sy *Syncer) recovering(known, hasL, hasR bool) bool {
 // laptop delete removes the sandbox copy unless the sandbox changed it; a
 // sandbox delete of a file the laptop left alone is queued for deleteLocal,
 // under --pull-deletes only. It reports whether rel was handled.
-func (sy *Syncer) deleted(ctx context.Context, rel string, v *passView, rep *Report, hasL, hasR, lChanged, rChanged bool) (bool, error) {
+func (sy *Syncer) deleted(ctx context.Context, rel string, v *passView, rep *Report, pulled *int64, hasL, hasR, lChanged, rChanged bool) (bool, error) {
 	switch {
 	case !hasL && hasR && v.laptopDeleted(rel):
 		if rChanged {
-			rep.Conflicts = append(rep.Conflicts, rel)
-			return true, nil
+			return true, sy.listedConflict(ctx, rel, v.remote.files[rel], rep, pulled)
 		}
-		return true, sy.removeRemote(ctx, rel, v, rep)
+		return true, sy.removeRemote(ctx, rel, v, rep, pulled)
 	case hasL && !hasR && !lChanged && sy.Opts.PullDeletes && len(v.remote.seen) > 0 && v.remote.gone(rel):
 		if syncIsIgnoreFile(rel) {
 			rep.refuse(rel, "ignore file")
@@ -556,7 +554,7 @@ func (sy *Syncer) sameBytes(rel string, lsize int64, remote string, rsize int64)
 	return lerr == nil && rerr == nil && ln == lsize && rn == rsize && bytes.Equal(lh.Sum(nil), rh.Sum(nil))
 }
 
-func (sy *Syncer) removeRemote(ctx context.Context, rel string, v *passView, rep *Report) error {
+func (sy *Syncer) removeRemote(ctx context.Context, rel string, v *passView, rep *Report, pulled *int64) error {
 	p := path.Join(sy.Opts.Remote, rel)
 	// The agent may have written the file since the walk: only the copy the
 	// walk saw is deleted, and a changed one is kept as a conflict.
@@ -564,9 +562,12 @@ func (sy *Syncer) removeRemote(ctx context.Context, rel string, v *passView, rep
 	if err != nil {
 		return sy.pathFailed(ctx, rep, rel, "stat in the sandbox", err)
 	}
-	if !fi.Mode().IsRegular() || remoteSide(fi) != remoteSide(v.remote.files[rel]) {
+	if !fi.Mode().IsRegular() {
 		rep.Conflicts = append(rep.Conflicts, rel)
 		return nil
+	}
+	if remoteSide(fi) != remoteSide(v.remote.files[rel]) {
+		return sy.listedConflict(ctx, rel, fi, rep, pulled)
 	}
 	if err := sy.Client.Remove(p); err != nil {
 		return sy.pathFailed(ctx, rep, rel, "delete in the sandbox", err)
@@ -872,8 +873,7 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
 	if !sy.unchangedLocally(rel, walked) {
-		rep.Conflicts = append(rep.Conflicts, rel)
-		return nil
+		return sy.listedConflict(ctx, rel, r, rep, pulled)
 	}
 	if _, err := installSynced(sy.Root, sy.dirs, tmp, tmpName, InstallReplace, rel); err != nil {
 		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
