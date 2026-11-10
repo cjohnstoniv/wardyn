@@ -394,6 +394,9 @@ export const health = {
     // The time of the canary check that produced network_policy (RFC 3339,
     // UTC). Absent on an older daemon or runner.
     network_policy_checked_at?: string;
+    // "runner" when network_policy is a connected Kubernetes runner's verdict, worse
+    // than the daemon's own cluster's; absent when it is the daemon's own.
+    network_policy_source?: "runner";
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
     sso?: boolean;

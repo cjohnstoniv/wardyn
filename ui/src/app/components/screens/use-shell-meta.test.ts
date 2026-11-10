@@ -162,3 +162,20 @@ it("learns the posture after a failed first read and keeps it through a retry's 
   });
   expect(result.current[0]).toMatchObject({ runner: "k8s", networkPolicy: "enforced", networkPolicyCheckedAt: checkedAt(20) });
 });
+
+// The verdict's source rides the same answer: a Docker control plane carries a connected Kubernetes
+// runner's verdict with network_policy_source "runner", and a later answer without it clears it.
+it("carries the verdict's source with the posture", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const fromRunner = { status: "ok", runner: "docker", network_policy: "refused", network_policy_checked_at: checkedAt(10), network_policy_source: "runner" } as Health;
+  vi.mocked(health.health).mockResolvedValue(fromRunner);
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].networkPolicySource).toBe("runner"));
+  expect(result.current[0]).toMatchObject({ runner: "docker", networkPolicy: "refused", networkPolicyCheckedAt: checkedAt(10) });
+
+  vi.mocked(health.health).mockResolvedValue({ status: "ok", runner: "docker" } as Health);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+  });
+  expect(result.current[0]).toMatchObject({ networkPolicy: "", networkPolicySource: "" });
+});

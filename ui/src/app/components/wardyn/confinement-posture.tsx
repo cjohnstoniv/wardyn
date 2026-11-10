@@ -27,12 +27,16 @@ import { AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import type { ConfinementPosture } from "./operator-context";
-import { useConfinementCheckedAt, useConfinementPosture, useOperator } from "./operator-context";
+import { useConfinementCheckedAt, useConfinementPosture, useConfinementSource, useOperator } from "./operator-context";
 import type { ConsoleView } from "./console-view";
 import {
   POSTURE_ACKNOWLEDGED_BANNER,
   POSTURE_NOT_PROVEN_BANNER,
   POSTURE_REFUSED_BANNER,
+  POSTURE_RUNNER_ACKNOWLEDGED_BANNER,
+  POSTURE_RUNNER_NOT_PROVEN_BANNER,
+  POSTURE_RUNNER_REFUSED_BANNER,
+  POSTURE_RUNNER_UNENFORCED_BANNER,
   POSTURE_UNENFORCED_BANNER,
   POSTURE_UNKNOWN_BANNER,
 } from "./confinement-posture-copy";
@@ -68,6 +72,30 @@ const BANNER_BY_POSTURE: Partial<
   },
 };
 
+// The bands for a connected Kubernetes runner's verdict (network_policy_source
+// "runner"): the same tones, worded for that runner rather than this cluster.
+const RUNNER_BANNER_BY_POSTURE: typeof BANNER_BY_POSTURE = {
+  acknowledged: {
+    tone: "warning",
+    title: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.TITLE,
+    body: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.BODY,
+    action: POSTURE_RUNNER_ACKNOWLEDGED_BANNER.ACTION,
+  },
+  unenforced: {
+    tone: "danger",
+    title: POSTURE_RUNNER_UNENFORCED_BANNER.TITLE,
+    body: POSTURE_RUNNER_UNENFORCED_BANNER.BODY,
+    action: POSTURE_RUNNER_UNENFORCED_BANNER.ACTION,
+  },
+  refused: { tone: "danger", title: POSTURE_RUNNER_REFUSED_BANNER.TITLE, body: "", action: POSTURE_RUNNER_REFUSED_BANNER.ACTION },
+  not_proven: {
+    tone: "danger",
+    title: POSTURE_RUNNER_NOT_PROVEN_BANNER.TITLE,
+    body: POSTURE_RUNNER_NOT_PROVEN_BANNER.BODY,
+    action: POSTURE_RUNNER_NOT_PROVEN_BANNER.ACTION,
+  },
+};
+
 // checkTime renders /healthz's network_policy_checked_at (RFC 3339, UTC) as the
 // setup row does, "2006-01-02 15:04 UTC"; "" when absent or not that shape.
 function checkTime(iso: string | undefined): string {
@@ -99,10 +127,12 @@ export function ConfinementPostureBanner({ view = "user" }: { view?: ConsoleView
   const navigate = useNavigate();
   // The shell reads the verdict and its check time from the same /healthz answer.
   const refusedAt = checkTime(useConfinementCheckedAt());
-  const found = BANNER_BY_POSTURE[posture];
+  const fromRunner = useConfinementSource() === "runner";
+  const found = (fromRunner ? RUNNER_BANNER_BY_POSTURE[posture] : undefined) ?? BANNER_BY_POSTURE[posture];
   if (!found || view !== "admin") return null;
   // Without a check time (an older daemon), the refused band shows its title alone.
-  const spec = posture === "refused" ? { ...found, body: refusedAt ? POSTURE_REFUSED_BANNER.BODY(refusedAt) : "" } : found;
+  const refusedBody = fromRunner ? POSTURE_RUNNER_REFUSED_BANNER.BODY : POSTURE_REFUSED_BANNER.BODY;
+  const spec = posture === "refused" ? { ...found, body: refusedAt ? refusedBody(refusedAt) : "" } : found;
   return (
     <div
       className={

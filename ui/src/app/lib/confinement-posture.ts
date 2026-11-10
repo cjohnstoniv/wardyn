@@ -35,10 +35,13 @@
 // older daemon, or any future substrate) resolves the same as Docker: silent.
 // That is deliberate — a posture warning must never be INVENTED ahead of a
 // real /healthz answer just because the field is momentarily empty.
+//
+// A verdict /healthz does carry is shown whatever `runner` says: on a Docker
+// (or any) control plane it is a connected Kubernetes runner's
+// (`network_policy_source: "runner"`), and it is just as real.
 import type { ConfinementPosture } from "../components/wardyn/operator-context";
 
 export function resolveConfinementPosture(runner: string, networkPolicy: string): ConfinementPosture {
-  if (runner !== "k8s") return "";
   if (
     networkPolicy === "enforced" ||
     networkPolicy === "acknowledged" ||
@@ -48,5 +51,5 @@ export function resolveConfinementPosture(runner: string, networkPolicy: string)
   ) {
     return networkPolicy;
   }
-  return "unknown";
+  return runner === "k8s" ? "unknown" : "";
 }

@@ -139,6 +139,9 @@ export interface MeIdentity {
   // /healthz's network_policy_checked_at, from the same answer as the posture:
   // the check that produced it, RFC 3339 UTC. "" when absent.
   confinementCheckedAt: string;
+  // /healthz's network_policy_source, from the same answer: "runner" when the
+  // posture is a connected Kubernetes runner's, "" when it is this cluster's.
+  confinementSource: string;
 
   // #510-F6 — /healthz's `demo_video_base_url`, the operator-run mirror the
   // Getting Started demo episodes stream from on an air-gapped deployment.
@@ -232,6 +235,7 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   userType: null,
   confinementPosture: "",
   confinementCheckedAt: "",
+  confinementSource: "",
   demoVideoBaseUrl: undefined,
 };
 
@@ -253,6 +257,7 @@ export function OperatorProvider({
   userType = null,
   confinementPosture = "",
   confinementCheckedAt = "",
+  confinementSource = "",
   demoVideoBaseUrl = undefined,
   children,
 }: {
@@ -289,6 +294,8 @@ export function OperatorProvider({
   confinementPosture?: ConfinementPosture;
   /** See MeIdentity.confinementCheckedAt. Optional, defaulting "". */
   confinementCheckedAt?: string;
+  /** See MeIdentity.confinementSource. Optional, defaulting "". */
+  confinementSource?: string;
   /** #510-F6 — see MeIdentity.demoVideoBaseUrl above. Optional, defaulting
    *  undefined ("no mirror configured"), so every existing caller keeps
    *  today's GitHub-default behaviour. */
@@ -326,9 +333,10 @@ export function OperatorProvider({
       userType,
       confinementPosture,
       confinementCheckedAt,
+      confinementSource,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, userViewSuperAdmin, unitAdminOf, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, confinementCheckedAt, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, userViewSuperAdmin, unitAdminOf, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, confinementCheckedAt, confinementSource, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -486,6 +494,11 @@ export function useConfinementPosture(): ConfinementPosture {
 // The time of the check that produced the posture — see MeIdentity.confinementCheckedAt.
 export function useConfinementCheckedAt(): string {
   return React.useContext(MeIdentityContext).confinementCheckedAt;
+}
+
+// Where the posture comes from — see MeIdentity.confinementSource.
+export function useConfinementSource(): string {
+  return React.useContext(MeIdentityContext).confinementSource;
 }
 
 // The operator-run demo mirror — see MeIdentity.demoVideoBaseUrl above.

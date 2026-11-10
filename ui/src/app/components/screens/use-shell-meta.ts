@@ -123,6 +123,9 @@ export interface ShellMeta {
    *  ("") on an older daemon. Optional only so a ShellMeta built by hand in a
    *  test need not name it. */
   networkPolicyCheckedAt?: string;
+  /** /healthz's `network_policy_source`: "runner" when networkPolicy is a connected Kubernetes
+   *  runner's, "" when it is this cluster's own. Optional like networkPolicyCheckedAt. */
+  networkPolicySource?: string;
   /** #510-F6 — /healthz's `demo_video_base_url`, read once here rather than
    *  once per episode card (use-demo-video-base-url.ts's old per-hook fetch
    *  issued 24 requests on one Getting Started mount). undefined means "no
@@ -173,17 +176,27 @@ function identityFromMe(me: Me | null) {
   } satisfies Partial<ShellMeta>;
 }
 
-type Posture = Pick<ShellMeta, "runner" | "networkPolicy" | "networkPolicyCheckedAt">;
+type Posture = Pick<ShellMeta, "runner" | "networkPolicy" | "networkPolicyCheckedAt" | "networkPolicySource">;
 
 /** The confinement posture one /healthz answer carries, or null for an outage: health() answers {}
  *  for a failed read, and every answer the daemon gives carries status "ok". */
 function postureOf(h: Awaited<ReturnType<typeof api.health>>): Posture | null {
   if (h.status !== "ok") return null;
-  return { runner: h.runner ?? "", networkPolicy: h.network_policy ?? "", networkPolicyCheckedAt: h.network_policy_checked_at ?? "" };
+  return {
+    runner: h.runner ?? "",
+    networkPolicy: h.network_policy ?? "",
+    networkPolicyCheckedAt: h.network_policy_checked_at ?? "",
+    networkPolicySource: h.network_policy_source ?? "",
+  };
 }
 
 function postureFields(m: ShellMeta): Posture {
-  return { runner: m.runner, networkPolicy: m.networkPolicy, networkPolicyCheckedAt: m.networkPolicyCheckedAt };
+  return {
+    runner: m.runner,
+    networkPolicy: m.networkPolicy,
+    networkPolicyCheckedAt: m.networkPolicyCheckedAt,
+    networkPolicySource: m.networkPolicySource,
+  };
 }
 
 /** How often the shell re-reads the confinement posture from /healthz. */
@@ -228,6 +241,7 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     runner: "",
     networkPolicy: "",
     networkPolicyCheckedAt: "",
+    networkPolicySource: "",
     demoVideoBaseUrl: undefined,
     sso: false,
   });
@@ -274,7 +288,8 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
         setMeta((m) =>
           m.runner === next.runner &&
           m.networkPolicy === next.networkPolicy &&
-          m.networkPolicyCheckedAt === next.networkPolicyCheckedAt
+          m.networkPolicyCheckedAt === next.networkPolicyCheckedAt &&
+          m.networkPolicySource === next.networkPolicySource
             ? m
             : { ...m, ...next },
         );

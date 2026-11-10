@@ -11,9 +11,11 @@ import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, RUN_COCKPIT, WIRE_
 import {
   POSTURE_CHIP_SUFFIX_ACKNOWLEDGED,
   POSTURE_CHIP_SUFFIX_NOT_PROVEN,
+  POSTURE_CHIP_SUFFIX_RUNNER_NOT_PROVEN,
+  POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED,
   POSTURE_CHIP_SUFFIX_UNENFORCED,
 } from "./confinement-posture-copy";
-import { useConfinementPosture, type ConfinementPosture } from "./operator-context";
+import { useConfinementPosture, useConfinementSource, type ConfinementPosture } from "./operator-context";
 import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import {
   Archive,
@@ -304,6 +306,13 @@ const POSTURE_SUFFIX: Partial<Record<ConfinementPosture, string>> = {
   acknowledged: POSTURE_CHIP_SUFFIX_ACKNOWLEDGED,
   not_proven: POSTURE_CHIP_SUFFIX_NOT_PROVEN,
 };
+// The suffixes for a connected Kubernetes runner's verdict (network_policy_source "runner").
+const RUNNER_POSTURE_SUFFIX: Partial<Record<ConfinementPosture, string>> = {
+  ...POSTURE_SUFFIX,
+  unenforced: POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED,
+  refused: POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED,
+  not_proven: POSTURE_CHIP_SUFFIX_RUNNER_NOT_PROVEN,
+};
 
 export function ConfinementChip({ value }: { value: ConfinementClass }) {
   const meta = CC_META[value as ConfinementClass];
@@ -311,7 +320,7 @@ export function ConfinementChip({ value }: { value: ConfinementClass }) {
   const mechanism = meta?.mechanism ?? String(value);
   const m = metaFor(ccMeta, value as string, ccMetaFallback);
   const posture = useConfinementPosture();
-  const suffix = POSTURE_SUFFIX[posture] ?? "";
+  const suffix = (useConfinementSource() === "runner" ? RUNNER_POSTURE_SUFFIX : POSTURE_SUFFIX)[posture] ?? "";
   const title = `${label} — ${mechanism} · internal class ${value}${suffix}`;
   return (
     <Chip

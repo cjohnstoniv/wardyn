@@ -41,6 +41,15 @@ describe("resolveConfinementPosture", () => {
     // doesn't know about yet — must never invent a posture ahead of a real
     // /healthz answer just because the field is momentarily empty.
     expect(resolveConfinementPosture("", "")).toBe("");
-    expect(resolveConfinementPosture("orchestrator", "unenforced")).toBe("");
+    expect(resolveConfinementPosture("orchestrator", "")).toBe("");
+  });
+
+  it("a verdict /healthz carries shows whatever the runner: a connected Kubernetes runner's on Docker", () => {
+    expect(resolveConfinementPosture("docker", "refused")).toBe("refused");
+    expect(resolveConfinementPosture("docker", "not_proven")).toBe("not_proven");
+    expect(resolveConfinementPosture("docker", "enforced")).toBe("enforced");
+    expect(resolveConfinementPosture("orchestrator", "unenforced")).toBe("unenforced");
+    expect(resolveConfinementPosture("", "acknowledged")).toBe("acknowledged");
+    expect(resolveConfinementPosture("docker", "")).toBe("");
   });
 });

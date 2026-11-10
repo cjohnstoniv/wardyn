@@ -20,7 +20,11 @@ import { BANNER } from "../wardyn/copy/door";
 import { CONSOLE_VIEW } from "../wardyn/copy/console-view";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { GOVERNED_ADMIN_BANNER } from "../../lib/access-posture-copy";
-import { POSTURE_REFUSED_BANNER, POSTURE_UNENFORCED_BANNER } from "../wardyn/confinement-posture-copy";
+import {
+  POSTURE_REFUSED_BANNER,
+  POSTURE_RUNNER_UNENFORCED_BANNER,
+  POSTURE_UNENFORCED_BANNER,
+} from "../wardyn/confinement-posture-copy";
 import { POSTURE_POLL_MS } from "./use-shell-meta";
 import { NO_BARRIER } from "../wardyn/copy";
 import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
@@ -160,6 +164,12 @@ describe("the confinement posture band is absent in the User view (§4.2, M-3)",
   it("an unenforced posture warns an admin in /admin/runs", async () => {
     renderShellAt("/admin/runs", ADMIN_ME, { runner: "k8s", network_policy: "unenforced" });
     expect(await screen.findByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
+  });
+
+  it("a Docker control plane shows a connected Kubernetes runner's verdict, naming the runner", async () => {
+    renderShellAt("/admin/runs", ADMIN_ME, { runner: "docker", network_policy: "unenforced", network_policy_source: "runner" });
+    expect(await screen.findByText(POSTURE_RUNNER_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeNull();
   });
 
   it("the same unenforced posture stays silent for a user in /runs", async () => {

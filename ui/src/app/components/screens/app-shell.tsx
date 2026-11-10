@@ -603,6 +603,7 @@ export function AppShell({
       userType={meta.userType}
       confinementPosture={confinementPosture}
       confinementCheckedAt={meta.networkPolicyCheckedAt}
+      confinementSource={meta.networkPolicySource}
       demoVideoBaseUrl={meta.demoVideoBaseUrl}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>

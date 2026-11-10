@@ -15,9 +15,15 @@ import {
   POSTURE_ACKNOWLEDGED_BANNER,
   POSTURE_CHIP_SUFFIX_ACKNOWLEDGED,
   POSTURE_CHIP_SUFFIX_NOT_PROVEN,
+  POSTURE_CHIP_SUFFIX_RUNNER_NOT_PROVEN,
+  POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED,
   POSTURE_CHIP_SUFFIX_UNENFORCED,
   POSTURE_NOT_PROVEN_BANNER,
   POSTURE_REFUSED_BANNER,
+  POSTURE_RUNNER_ACKNOWLEDGED_BANNER,
+  POSTURE_RUNNER_NOT_PROVEN_BANNER,
+  POSTURE_RUNNER_REFUSED_BANNER,
+  POSTURE_RUNNER_UNENFORCED_BANNER,
   POSTURE_UNENFORCED_BANNER,
   POSTURE_UNKNOWN_BANNER,
 } from "./confinement-posture-copy";
@@ -220,5 +226,57 @@ describe("ConfinementPostureBanner — failed re-check", () => {
     expect(screen.getByText(POSTURE_NOT_PROVEN_BANNER.BODY)).toBeInTheDocument();
     expect(container.firstElementChild).toHaveClass("bg-danger-subtle");
     expect(health).not.toHaveBeenCalled();
+  });
+});
+
+// A verdict from a connected Kubernetes runner (network_policy_source "runner") names that runner,
+// never "this cluster": the same tones, the runner's wording, on the band and the chip.
+describe("ConfinementPostureBanner and ConfinementChip — a runner's verdict", () => {
+  const renderRunner = (posture: ConfinementPosture, checkedAt = "") =>
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator confinementPosture={posture} confinementCheckedAt={checkedAt} confinementSource="runner">
+          <ConfinementPostureBanner view="admin" />
+          <ConfinementChip value="CC2" />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  const chipTitle = (container: HTMLElement) =>
+    [...container.querySelectorAll("[title]")].at(-1)?.getAttribute("title") ?? "";
+
+  it("refused names the runner and the check time", () => {
+    const at = new Date();
+    const iso = at.toISOString();
+    const shown = `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+    const { container } = renderRunner("refused", iso);
+    expect(screen.getByText(POSTURE_RUNNER_REFUSED_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(POSTURE_RUNNER_REFUSED_BANNER.BODY(shown))).toBeInTheDocument();
+    expect(screen.queryByText(POSTURE_REFUSED_BANNER.BODY(shown))).toBeNull();
+    expect(container.firstElementChild).toHaveClass("bg-danger-subtle");
+    expect(chipTitle(container).endsWith(POSTURE_CHIP_SUFFIX_RUNNER_UNENFORCED)).toBe(true);
+  });
+
+  it("not_proven, unenforced and acknowledged name the runner", () => {
+    const notProven = renderRunner("not_proven");
+    expect(screen.getByText(POSTURE_RUNNER_NOT_PROVEN_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(POSTURE_RUNNER_NOT_PROVEN_BANNER.BODY)).toBeInTheDocument();
+    expect(chipTitle(notProven.container).endsWith(POSTURE_CHIP_SUFFIX_RUNNER_NOT_PROVEN)).toBe(true);
+    notProven.unmount();
+
+    const unenforced = renderRunner("unenforced");
+    expect(screen.getByText(POSTURE_RUNNER_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(POSTURE_RUNNER_UNENFORCED_BANNER.BODY)).toBeInTheDocument();
+    expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeNull();
+    unenforced.unmount();
+
+    const acknowledged = renderRunner("acknowledged");
+    expect(screen.getByText(POSTURE_RUNNER_ACKNOWLEDGED_BANNER.BODY)).toBeInTheDocument();
+    expect(chipTitle(acknowledged.container).endsWith(POSTURE_CHIP_SUFFIX_ACKNOWLEDGED)).toBe(true);
+  });
+
+  it("without a source the band keeps this cluster's wording", () => {
+    renderBanner("not_proven");
+    expect(screen.getByText(POSTURE_NOT_PROVEN_BANNER.BODY)).toBeInTheDocument();
+    expect(screen.queryByText(POSTURE_RUNNER_NOT_PROVEN_BANNER.BODY)).toBeNull();
   });
 });
