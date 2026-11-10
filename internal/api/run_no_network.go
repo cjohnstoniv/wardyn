@@ -134,7 +134,8 @@ var packageFetchers = []string{"npx", "pnpx", "bunx", "uvx", "pipx"}
 
 // launchFetches reports whether a local server's launch downloads what it runs: a package fetcher, or one
 // behind env or a shell's -c, a container run (docker or podman pulls its image), or a deno run of an npm:,
-// jsr: or URL module. A wrapper is looked through at most twice.
+// jsr: or URL module, or a package manager's fetching subcommand (npm exec, pnpm dlx). A wrapper is looked
+// through at most twice.
 func launchFetches(cmd string, args []string, depth int) bool {
 	switch base := path.Base(cmd); {
 	case slices.Contains(packageFetchers, base):
@@ -143,6 +144,8 @@ func launchFetches(cmd string, args []string, depth int) bool {
 		return containerRun(args)
 	case base == "deno":
 		return denoRunsRemoteEntry(args)
+	case subcommandFetches(base, args):
+		return true
 	case depth >= 2:
 		return false
 	case base == "env":
@@ -294,7 +297,27 @@ func shellSubstitutes(s string) bool {
 // denoRunValueFlags are the deno run options whose value is the next argument; every other option is a
 // switch, or takes its value after "=".
 var denoRunValueFlags = []string{"-c", "--config", "--import-map", "--cert", "--location", "--seed", "--ext",
-	"-L", "--log-level", "--preload", "--conditions"}
+	"-L", "--log-level", "--preload", "--import", "--require", "--conditions", "--lock",
+	"--minimum-dependency-age", "--min-dep-age"}
+
+// subcommandFetchers are package managers, by base name, with the subcommands that download the package
+// they run; "tool run" is two words.
+var subcommandFetchers = map[string][]string{
+	"npm": {"exec", "x"}, "pnpm": {"dlx"}, "yarn": {"dlx"}, "bun": {"x"}, "uv": {"tool run"},
+}
+
+// subcommandFetches reports whether args name one of subcommandFetchers' subcommands for base.
+func subcommandFetches(base string, args []string) bool {
+	verbs, ok := subcommandFetchers[base]
+	i := firstPositional(args, nil)
+	if !ok || i < 0 {
+		return false
+	}
+	if j := firstPositional(args[i+1:], nil); j >= 0 && slices.Contains(verbs, args[i]+" "+args[i+1+j]) {
+		return true
+	}
+	return slices.Contains(verbs, args[i])
+}
 
 // firstPositional is the index of args' first argument that is neither an option nor the value of one of
 // valueFlags, or -1.
@@ -310,19 +333,22 @@ func firstPositional(args, valueFlags []string) int {
 	return -1
 }
 
-// denoRunsRemoteEntry reports whether args are a deno run whose entry module is an npm:, jsr: or URL module.
-// Only the entry module counts: the arguments after it are the program's own (Deno.args), not modules.
+// denoRunsRemoteEntry reports whether args run an npm:, jsr: or URL entry module, with deno run or, as Deno 2
+// allows, with no subcommand. Only the entry module counts: the arguments after it are the program's own
+// (Deno.args), not modules.
 func denoRunsRemoteEntry(args []string) bool {
-	i := firstPositional(args, nil)
-	if i < 0 || args[i] != "run" {
+	i := firstPositional(args, denoRunValueFlags)
+	if i >= 0 && args[i] == "run" {
+		j := firstPositional(args[i+1:], denoRunValueFlags)
+		if j < 0 {
+			return false
+		}
+		i += 1 + j
+	}
+	if i < 0 {
 		return false
 	}
-	rest := args[i+1:]
-	j := firstPositional(rest, denoRunValueFlags)
-	if j < 0 {
-		return false
-	}
-	entry := rest[j]
+	entry := args[i]
 	return strings.HasPrefix(entry, "npm:") || strings.HasPrefix(entry, "jsr:") ||
 		strings.HasPrefix(entry, "http:") || strings.HasPrefix(entry, "https:")
 }
