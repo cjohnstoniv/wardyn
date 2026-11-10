@@ -290,6 +290,10 @@ type FolderPass struct {
 	Unsynced int `json:"unsynced,omitempty"`
 	// UnsyncedPaths names those files, sorted, at most MaxFolderUnsyncedPaths of them.
 	UnsyncedPaths []string `json:"unsynced_paths,omitempty"`
+	// NotPreserved, from a runner of this release, is the first reason a change the pass owed the
+	// laptop was not proven kept there: an install, a directory sync or the state save failed. A pass
+	// that sets it brought nothing back for good that it did not record, and is never a success.
+	NotPreserved string `json:"not_preserved,omitempty"`
 	// Recovered is the base name of an unreadable sync record the pass moved aside before comparing every file.
 	Recovered string `json:"recovered,omitempty"`
 	Error     string `json:"error,omitempty"`

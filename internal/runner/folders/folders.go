@@ -399,7 +399,7 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 	}
 	out := runnerwire.FolderPass{Pushed: len(rep.Pushed), Pulled: len(rep.Pulled), Conflicts: len(rep.Conflicts),
 		Ignored: rep.Ignored, BytesOut: rep.BytesOut, BytesIn: rep.BytesIn, Unsynced: rep.Unsynced, Refused: []runnerwire.FolderRefusal{},
-		Recovered: st.Recovered}
+		NotPreserved: foldersync.Shown(rep.NotPreserved), Recovered: st.Recovered}
 	if err != nil {
 		out.Error = foldersync.Shown(err.Error())
 	}
