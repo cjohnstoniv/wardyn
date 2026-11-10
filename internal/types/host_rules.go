@@ -125,9 +125,10 @@ func isHTTPToken(s string) bool {
 }
 
 // NormalizeRequestPath is the one path form host rules match: the path without its query or fragment,
-// unreserved bytes percent-decoded once (other escapes kept, hex uppercased), dot segments removed and
-// repeated slashes collapsed. It refuses what two readers could split differently: an encoded "/" or
-// "\", a backslash, "%00", any control byte and a malformed escape. raw is the request's escaped path.
+// unreserved bytes percent-decoded once (other escapes kept, hex uppercased). Matching is case-sensitive,
+// and ";" and what follows it are part of the segment. It refuses what two readers could resolve
+// differently: an empty segment ("//"), a "." or ".." segment (encoded, or before a ";"), an encoded "/" or "\",
+// a backslash, "%00", any control byte and a malformed escape. raw is the request's escaped path.
 func NormalizeRequestPath(raw string) (string, error) {
 	if i := strings.IndexAny(raw, "?#"); i >= 0 {
 		raw = raw[:i]
@@ -170,38 +171,16 @@ func NormalizeRequestPath(raw string) (string, error) {
 			}
 		}
 	}
-	return removeDotSegments(b.String()), nil
-}
-
-// removeDotSegments drops "." and empty segments and resolves ".." (never above the root). A path that
-// ended on "/", ".", or ".." keeps a trailing slash, as RFC 3986 §5.2.4 does.
-func removeDotSegments(p string) string {
-	parts := strings.Split(p[1:], "/")
-	var out []string
-	trailing := false
-	for i, s := range parts {
-		last := i == len(parts)-1
-		switch s {
-		case "", ".":
-			trailing = last
-		case "..":
-			if len(out) > 0 {
-				out = out[:len(out)-1]
-			}
-			trailing = last
-		default:
-			out = append(out, s)
-			trailing = false
+	n := b.String()
+	segs := strings.Split(n[1:], "/")
+	for i, seg := range segs {
+		// A layer that strips ";" parameters reads "..;x" as "..", so the part before ";" is checked too.
+		base, _, param := strings.Cut(seg, ";")
+		if base == "." || base == ".." || base == "" && (param || i < len(segs)-1) {
+			return "", fmt.Errorf("path %q is not in normal form: it has an empty, \".\" or \"..\" segment", raw)
 		}
 	}
-	if len(out) == 0 {
-		return "/"
-	}
-	n := "/" + strings.Join(out, "/")
-	if trailing {
-		n += "/"
-	}
-	return n
+	return n, nil
 }
 
 func isHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' }

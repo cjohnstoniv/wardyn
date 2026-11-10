@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -178,6 +179,46 @@ func TestHostRulesJudgeEachRequestInsideTheTunnel(t *testing.T) {
 	}
 }
 
+// TestHostRulesRefuseAPathNotInNormalForm: beside an allow-all rule, a deny on /admin. An upstream that
+// resolves /admin//../users by RFC 3986 reads /admin/users, so on a rule host a path with an empty, "."
+// or ".." segment is refused rather than judged in a form the host does not read. ";" is part of the
+// segment, so /admin;x=1 is judged as written: not under /admin.
+func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
+	for _, tc := range []struct {
+		path  string
+		want  int
+		cause string
+	}{
+		{"/admin//../users", http.StatusForbidden, "not in normal form"},
+		{"/users/./x", http.StatusForbidden, "not in normal form"},
+		{"/admin", http.StatusForbidden, "rule 0 denies"},
+		{"/admin;x=1", http.StatusOK, ""},
+		{"/users", http.StatusOK, ""},
+	} {
+		cu := captureUpstream(t, true, "ok")
+		p, buf, caPEM := hrProxy(t, hrOpts{}, cu.srv)
+		p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+			{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+			{Host: hrHost, Effect: types.HostRuleAllow},
+		}}}
+		srv := httptest.NewServer(p)
+		status, conn, _ := hrConnect(t, srv.URL, "443")
+		if status != http.StatusOK {
+			t.Fatalf("CONNECT = %d, want 200", status)
+		}
+		got := hrInner(t, conn, caPEM, http.MethodGet, tc.path)
+		srv.Close()
+		if got != tc.want || (got == http.StatusForbidden) == cu.reached {
+			t.Errorf("GET %s = %d reached=%v, want %d", tc.path, got, cu.reached, tc.want)
+		}
+		if tc.cause != "" && !slices.ContainsFunc(hrRows(t, buf), func(d egress.DecisionLog) bool {
+			return d.RuleSource == ruleSourceHostRule && strings.Contains(d.Cause, tc.cause)
+		}) {
+			t.Errorf("GET %s: no policy:host-rule row with %q:\n%s", tc.path, tc.cause, buf.String())
+		}
+	}
+}
+
 // TestHostRulesRefuseAnUninspectedConnect: no CA, a port the proxy does not open for the host, and a VM
 // proxy each refuse the CONNECT with policy:host-rule-needs-inspection, never an opaque tunnel.
 func TestHostRulesRefuseAnUninspectedConnect(t *testing.T) {
@@ -221,7 +262,7 @@ func TestHostRulesJudgePlainHTTP(t *testing.T) {
 		{"GET", "/public", http.StatusOK},
 		{"GET", "/admin", http.StatusForbidden},
 		{"GET", "/public/%2e%2e/admin", http.StatusForbidden},
-		{"GET", "/public//x", http.StatusOK},
+		{"GET", "/public//x", http.StatusForbidden}, // an empty segment is not normal form
 		{"GET", "/public%00", http.StatusForbidden},
 	} {
 		cu := captureUpstream(t, false, "ok")

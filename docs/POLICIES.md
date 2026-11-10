@@ -1212,7 +1212,7 @@ How a request to a host is decided:
 - `allowed_methods` still applies on top.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
 
-Paths are matched in one normal form: the query and fragment dropped, escaped unreserved characters (`%41`, `%2e`) decoded once, `.` and `..` segments resolved and repeated slashes collapsed. A request path with an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character is refused when its host has rules.
+Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. `;` and what follows it are part of the segment, so `/admin;x=1` is not under `/admin`. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` and `..;x` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character.
 
 What the proxy does for a rule host:
 
