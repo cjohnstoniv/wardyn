@@ -167,7 +167,7 @@ func TestAgentNetPolEgressPeerIsExactlyTheProxy(t *testing.T) {
 	}
 	// The proxy's port, and 53 over TCP and UDP for its refuse-all DNS listener, on this one
 	// proxy-peer rule: the agent's DNS reaches its own proxy pod and nothing else.
-	want := []corev1.NetworkPolicyPort{
+	want := []networkingv1.NetworkPolicyPort{
 		{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(runner.ProxyListenPort))},
 		{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
 		{Protocol: protoPtr(corev1.ProtocolUDP), Port: intOrStrPtr(intstr.FromInt32(53))},
