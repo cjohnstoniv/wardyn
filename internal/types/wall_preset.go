@@ -28,7 +28,7 @@ const (
 
 // WallPreset is one wall preset as it is stored and answered.
 type WallPreset struct {
-	// ID is a uuid, or the built-in's name ("open", "read-only", "sealed").
+	// ID is a uuid, or the built-in's name ("open", "read-only", "sealed", "no-network").
 	ID          string            `json:"id"`
 	Scope       WallPresetScope   `json:"scope"`
 	GroupID     string            `json:"group_id,omitempty"`
@@ -71,33 +71,46 @@ type WallPresetChange struct {
 	Gone    bool `json:"gone,omitempty"`
 }
 
-// The built-in presets' ids. Each is also its name, lower-cased, and every audience's name is checked
-// against them, so a stored preset cannot shadow one.
+// The built-in presets' ids. Each is also its name, lower-cased with a hyphen for each space, and
+// every audience's name is checked against them, so a stored preset cannot shadow one.
 const (
 	WallPresetOpen     = "open"
 	WallPresetReadOnly = "read-only"
 	WallPresetSealed   = "sealed"
+	// WallPresetNoNetwork is Sealed with no network at all: its seal layer empties the allowlist, the
+	// run's proxy refuses every request (no_network), create refuses a run that needs a host, and
+	// every egress approval for such a run is refused.
+	WallPresetNoNetwork = "no-network"
 )
 
 // builtinWallPresetVersion is the built-ins' version: bumped when a release changes what one narrows.
 const builtinWallPresetVersion = 1
 
-// BuiltinWallPresets returns Open, Read-only and Sealed, widest first, each a fresh copy a caller may
-// change. They nest: every knob Read-only names, Sealed names at least as narrowly.
+// BuiltinWallPresets returns Open, Read-only, Sealed and No network, widest first, each a fresh copy a
+// caller may change. They nest: every knob Read-only names, Sealed names at least as narrowly, and No
+// network's spec is Sealed's.
 func BuiltinWallPresets() []WallPreset {
 	readOnly := readOnlyWalls()
-	sealed := readOnlyWalls()
-	none, never := []string{}, FirstUseAlwaysDeny
-	sealed.AllowedDomains, sealed.FirstUseApproval = &none, &never
-	sealed.Desktop = &DesktopControls{PasteIn: TransferBlocked, CopyOut: TransferBlocked, Upload: TransferBlocked, Download: TransferBlocked}
 	return []WallPreset{
 		{ID: WallPresetOpen, Scope: WallPresetScopeBuiltin, Name: "Open", Version: builtinWallPresetVersion,
 			Description: "Your policy as it stands."},
 		{ID: WallPresetReadOnly, Scope: WallPresetScopeBuiltin, Name: "Read-only", Version: builtinWallPresetVersion, Spec: readOnly,
 			Description: "Keeps only the Azure DevOps and GitHub read capabilities and refuses every push, so the run can read but not push. " + PushDenyAllSecretsNote},
-		{ID: WallPresetSealed, Scope: WallPresetScopeBuiltin, Name: "Sealed", Version: builtinWallPresetVersion, Spec: sealed,
+		{ID: WallPresetSealed, Scope: WallPresetScopeBuiltin, Name: "Sealed", Version: builtinWallPresetVersion, Spec: sealedWalls(),
 			Description: "Read-only, so every push is refused, plus only the sites the run's own setup needs; an unlisted site is refused, not asked about, and no desktop transfers. " + PushDenyAllSecretsNote},
+		{ID: WallPresetNoNetwork, Scope: WallPresetScopeBuiltin, Name: "No network", Version: builtinWallPresetVersion, Spec: sealedWalls(),
+			Description: "Sealed, and no network at all: a run that needs a host is refused at create, and every approval for one is refused."},
 	}
+}
+
+// sealedWalls is Read-only, plus no site beyond the run's setup, an unlisted site refused and every
+// desktop transfer blocked.
+func sealedWalls() PersonalWallsSpec {
+	sealed := readOnlyWalls()
+	none, never := []string{}, FirstUseAlwaysDeny
+	sealed.AllowedDomains, sealed.FirstUseApproval = &none, &never
+	sealed.Desktop = &DesktopControls{PasteIn: TransferBlocked, CopyOut: TransferBlocked, Upload: TransferBlocked, Download: TransferBlocked}
+	return sealed
 }
 
 // readOnlyWalls keeps every grantable read capability of both forges and nothing else, and refuses
@@ -123,9 +136,13 @@ func BuiltinWallPreset(id string) (WallPreset, bool) {
 	return WallPreset{}, false
 }
 
-// IsBuiltinWallPresetName reports whether name is a built-in's name in any case, which no stored preset
-// may take.
+// IsBuiltinWallPresetName reports whether name is a built-in's name or id in any case, which no stored
+// preset may take. A built-in's name is its id with a space for each hyphen ("No network").
 func IsBuiltinWallPresetName(name string) bool {
-	_, ok := BuiltinWallPreset(strings.ToLower(strings.TrimSpace(name)))
+	n := strings.ToLower(strings.TrimSpace(name))
+	_, ok := BuiltinWallPreset(n)
+	if !ok {
+		_, ok = BuiltinWallPreset(strings.ReplaceAll(n, " ", "-"))
+	}
 	return ok
 }

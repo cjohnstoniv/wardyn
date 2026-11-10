@@ -114,6 +114,8 @@ type Options struct {
 	Unattended bool
 	// ScrubResponses is Config.ScrubResponses.
 	ScrubResponses bool
+	// NoNetwork is Config.NoNetwork.
+	NoNetwork bool
 	// CanonicalPushRepos is Config.CanonicalPushRepos.
 	CanonicalPushRepos bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.

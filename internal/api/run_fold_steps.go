@@ -150,9 +150,10 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	}
 	carriers := rule.index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
+	cloned := runRepoLocators(f.spec, f.req.Repo)
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
-		_, dropped := runCloneEgress(ws, f.ceiling.Spec.AllowedDomains)
+		_, dropped := runSelectedCloneEgress(ws, cloned, f.ceiling.Spec.AllowedDomains)
 		for _, h := range dropped {
 			f.policyWarns = append(f.policyWarns, cloneHostDropWarning(h, "workspace", ws.Name))
 		}
@@ -222,12 +223,13 @@ func (s *Server) stepPushRuleSets(f *runFold, rec *foldRecorder) bool {
 // The SSH, site-config and ADO lanes need grant wiring that does not exist
 // before the mint and stay create's.
 func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
+	cloned := runRepoLocators(f.spec, f.req.Repo)
 	for _, ws := range f.wsRefs {
 		var contributed types.RunPolicySpec
-		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws}, f.ceiling.Spec.AllowedDomains)
+		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws}, cloned, f.ceiling.Spec.AllowedDomains)
 		recordSpecAdds(rec, types.RunPolicySpec{}, contributed, workspaceProvSource(ws))
 	}
-	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs, f.ceiling.Spec.AllowedDomains)
+	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs, cloned, f.ceiling.Spec.AllowedDomains)
 	return true
 }
 
@@ -263,7 +265,7 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// Review's checklist read the same map.
 	f.present = s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(f.r))
 	selections := resolveWorkspaceSelections(*f.req)
-	ahead := previewWorkspaceEgressHosts(f.wsRefs, f.ceiling.Spec.AllowedDomains)
+	ahead := previewWorkspaceEgressHosts(f.wsRefs, runRepoLocators(f.spec, f.req.Repo), f.ceiling.Spec.AllowedDomains)
 	// The denies create unions after this fold; the dry doors already hold the workspaces' in f.spec.
 	denied := slices.Concat(f.ceiling.Spec.DeniedDomains, workspaceDeniedEgress(f.wsRefs))
 	// One workspace at a time, so each one's additions are its own.

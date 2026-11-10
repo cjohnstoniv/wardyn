@@ -295,6 +295,7 @@ type Proxy struct {
 	openTunnels atomic.Int32
 	maxTunnels  int32
 	meterOff    bool // Config.DisableModelUsage: no model-token metering; the zero value meters
+	noNetwork   bool // Config.NoNetwork: refuse every sandbox request (literalIPGuard, noNetworkDial)
 }
 
 // maxOpenTunnels is the most opaque CONNECT tunnels a run's proxy holds at once,
@@ -419,6 +420,7 @@ func newProxy(opts Options) *Proxy {
 		localModels:          compileLocalModels(opts.LocalModels, opts.RunnerLocalModels),
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		scrubResponses:       opts.ScrubResponses,
+		noNetwork:            opts.NoNetwork,
 		canonicalPushRepos:   opts.CanonicalPushRepos,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
@@ -476,6 +478,7 @@ func newProxy(opts Options) *Proxy {
 			return p.dialThroughUpstream(ctx, host, port)
 		}
 	}
+	egressDial = p.noNetworkDial(egressDial) // never directDial: the control-plane transport shares it
 	mkTransport := func(dc func(context.Context, string, string) (net.Conn, error)) *http.Transport {
 		return &http.Transport{
 			DialContext: dc,
@@ -938,7 +941,9 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 		upstream net.Conn
 		err      error
 	)
-	if p.upstream != nil && !p.bypassUpstream(host) {
+	if p.noNetwork {
+		err = errNoNetwork
+	} else if p.upstream != nil && !p.bypassUpstream(host) {
 		upstream, err = p.dialThroughUpstream(r.Context(), host, port)
 	} else {
 		upstream, err = p.dial(r.Context(), "tcp", target)
@@ -984,16 +989,4 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 	}
 	first, err := tunnel(client, watch)
 	p.tunnelEnded(log, host, watch, first, err)
-}
-
-// canonicalPATGrants keys the git_pat grants by lower-cased host and drops an entry with no
-// host or no grant id. The proxy and Config.TerminatesTLS read the same set.
-func canonicalPATGrants(in map[string]PATGrant) map[string]PATGrant {
-	out := make(map[string]PATGrant, len(in))
-	for k, g := range in {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
-			out[k] = g
-		}
-	}
-	return out
 }

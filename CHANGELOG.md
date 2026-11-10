@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A fourth built-in wall preset, `no-network` ("No network"), for a run with no network at all: `"wall_preset": "no-network"` on `POST /runs`, `--wall-preset no-network` on the CLI. A launch that would need a host is refused `422` `no_network_needs_egress`, naming each source, at create, Review and the policy preview alike; a harness whose model is reached over the network is refused. The run's proxy refuses every request (`policy:no-network`) while still reaching the control plane, the seal empties the allowlist, and every approval for the run is refused.
+- A policy switch, `refuse_ip_literals`: under `allow_all_egress`, every IP-address host is refused (`policy:ip-literal`) in any spelling, through `CONNECT` and plain HTTP. An IP address listed exactly in `allowed_domains` is still allowed. An organisation default or a ceiling that sets it holds every run under it.
+
+### Changed
+
+- A run adds a workspace's clone host only for a repository it clones. A workspace attached for its folders alone (`repos: []`) no longer opens its repositories' hosts, at create, Review and the preview alike. A run that needs a forge it does not clone from keeps it once that host is added to the workspace's approved egress.
+
 ### Fixed
 
 - macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit, never kills it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. Retest on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.

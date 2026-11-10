@@ -806,11 +806,20 @@ func (s *Server) personalWallsSealLayer(ctx context.Context, run types.AgentRun)
 // wallPresetSealLayer is the run's wall preset as a seal layer, built as the owner's walls' is
 // (wallsSealLayer) from the frozen copy on the run: no store read, so it cannot fail open or seal the
 // run to nothing, and a later edit or delete of the preset changes nothing.
+//
+// The No network preset adds a layer that empties the allowlist and turns open egress off, so the seal
+// removes every host a step after resolve added, at dispatch and at revive alike.
 func wallPresetSealLayer(run types.AgentRun) []sealLayer {
 	if run.WallPreset == nil {
 		return nil
 	}
-	return wallsSealLayer(wallPresetProvenance(run.WallPreset), run.WallPreset.Spec)
+	layers := wallsSealLayer(wallPresetProvenance(run.WallPreset), run.WallPreset.Spec)
+	if noNetworkPreset(run.WallPreset) {
+		off := false
+		layers = append(layers, sealLayer{rec: wallPresetProvenance(run.WallPreset),
+			egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off}})
+	}
+	return layers
 }
 
 // wallsSealLayer is one walls document's seal layer, none when it names nothing the seal re-asserts.
@@ -831,11 +840,10 @@ func wallsSealLayer(rec policyref.Provenance, walls types.PersonalWallsSpec) []s
 // decides. A host outside their allowlist follows their own choice for a site that is not listed, so it
 // is not refused here. Walls that cannot be read refuse the approve (500). ok=false: the answer is
 // written and the approval stays pending. It returns the run, read here when the gates before it had
-// not. A store that keeps neither walls nor stored presets has no host to deny: a built-in denies none.
+// not. A run launched with the No network preset is refused every approval, whatever the store keeps.
+// Otherwise a store that keeps neither walls nor stored presets has no host to deny: a built-in denies
+// none.
 func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
-	if !s.wallsDenyHosts() {
-		return run, haveRun, true
-	}
 	if !haveRun {
 		var err error
 		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
@@ -844,13 +852,22 @@ func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap t
 		}
 		haveRun = true
 	}
+	host := approvalHost(ap)
+	owner := principalFromRequest(r) == run.CreatedBy
+	if p := run.WallPreset; noNetworkPreset(p) {
+		msg := "This run was launched with " + wallPresetLabel(p, owner) + ", which refuses every host, " + host + " included. Launch a new run without it."
+		prov := wallPresetProvenance(p)
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonWallPresetHost, msg, policyref.WallPreset(prov.Name, run.CreatedBy), prov)
+		return run, haveRun, false
+	}
+	if !s.wallsDenyHosts() {
+		return run, haveRun, true
+	}
 	walls, err := s.personalWalls(r.Context(), run.CreatedBy)
 	if err != nil {
 		writeServerError(w, r, "read the run owner's walls", err)
 		return run, haveRun, false
 	}
-	host := approvalHost(ap)
-	owner := principalFromRequest(r) == run.CreatedBy
 	if d := walls.DeniedDomains; d != nil && ceilingDenies(*d, host) {
 		msg := run.CreatedBy + "'s walls block " + host + " for this run."
 		if owner {

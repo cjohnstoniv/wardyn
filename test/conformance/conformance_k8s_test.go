@@ -122,6 +122,8 @@ func TestConformanceK8s(t *testing.T) {
 		// Wardyn SENDS, never what a real apiserver then defaults.
 		EphemeralStorageProbe: ephemeralStorageProbe,
 		UserDrives:            k8sDriveFixture(t, cs, ns, agentImage),
+		// The suite refuses to start without the real wardyn-proxy (WARDYN_PROXY_IMAGE above).
+		RealProxy: true,
 		// DefaultRouteProbe: nil (deliberately). This substrate declares
 		// StructuralEgress:false — it proves L1 (NetworkPolicy), never L0
 		// (see internal/runner/k8s's package doc) — so conformance.go's own

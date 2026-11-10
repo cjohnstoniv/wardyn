@@ -290,6 +290,9 @@ export interface RunPolicySpec {
   // wins, allowed_domains may be empty. The SSRF/private-IP guard and the
   // exact-host allowlist required for credential injection are UNCHANGED.
   allow_all_egress?: boolean;
+  // When true the proxy refuses every IP-literal host, in any spelling, except an
+  // address listed exactly in allowed_domains. It only narrows.
+  refuse_ip_literals?: boolean;
   // Outbound LLM content inspection. Omitted => OFF (the safe default).
   llm_inspection?: LLMInspectionSpec;
   // Sandbox CPU/memory/PID/disk caps. Omitted => platform defaults.

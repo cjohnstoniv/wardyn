@@ -53,6 +53,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "per-entry shape; the ceiling's denies are unioned in (a deny only ever widens)"},
 	"AllowAllEgress": {validated: false, clamped: true,
 		why: "a bool: nothing bounds it at write (validateLLMInspection only READS it to decide whether a sidecar URL's host is allowed). Documented inert under allow-all; forced false when the ceiling is not allow-all"},
+	"RefuseIPLiterals": {validated: false, clamped: true,
+		why: "a bool that only narrows; Clamp keeps it on where the ceiling sets it (clampOperatorSwitches)"},
 	"FirstUseApproval": {validated: true, clamped: true,
 		why: "closed enum; raised to the ceiling's stricter mode by firstUseApprovalRank"},
 	"FirstUseHoldSeconds": {validated: true, clamped: true,

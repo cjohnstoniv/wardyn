@@ -211,7 +211,7 @@ func TestWallPresetListAndBuiltins(t *testing.T) {
 		for _, p := range l.Presets {
 			ids = append(ids, p.ID)
 		}
-		want := []string{types.WallPresetOpen, types.WallPresetReadOnly, types.WallPresetSealed}
+		want := []string{types.WallPresetOpen, types.WallPresetReadOnly, types.WallPresetSealed, types.WallPresetNoNetwork}
 		if who == alice {
 			want = append(want, mine.ID)
 		}

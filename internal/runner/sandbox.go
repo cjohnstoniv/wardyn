@@ -240,6 +240,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		ActivityIgnoreHosts:  pc.ActivityIgnoreHosts,
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
+		NoNetwork:            pc.NoNetwork,
 	}
 	if pc.DesktopSignins {
 		cfg.SigninListen = ":" + strconv.Itoa(SigninListenPort)

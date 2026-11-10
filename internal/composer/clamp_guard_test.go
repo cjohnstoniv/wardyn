@@ -25,6 +25,7 @@ var clampRules = map[string]string{
 	"allowed_domains":                  "intersected with the ceiling's allowlist unless the ceiling allows all egress",
 	"denied_domains":                   "the ceiling's denials unioned in",
 	"allow_all_egress":                 "kept only where the ceiling sets it (clampOperatorSwitches)",
+	"refuse_ip_literals":               "set where the ceiling sets it (clampOperatorSwitches)",
 	"first_use_approval":               "raised to the ceiling's rank",
 	"first_use_hold_seconds":           "lowered to the ceiling's",
 	"max_holds":                        "lowered to the ceiling's",

@@ -28,6 +28,7 @@ type CeilingOverlay struct {
 	AllowedDomains          *[]string              `json:"allowed_domains,omitempty"`
 	DeniedDomains           *[]string              `json:"denied_domains,omitempty"`
 	AllowAllEgress          *bool                  `json:"allow_all_egress,omitempty"`
+	RefuseIPLiterals        *bool                  `json:"refuse_ip_literals,omitempty"`
 	FirstUseApproval        *FirstUseMode          `json:"first_use_approval,omitempty"`
 	FirstUseHoldSeconds     *int                   `json:"first_use_hold_seconds,omitempty"`
 	MaxHolds                *int                   `json:"max_holds,omitempty"`

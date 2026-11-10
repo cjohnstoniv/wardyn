@@ -374,7 +374,7 @@ func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, leg
 	out.DeniedDomains = slices.Clone(spec.DeniedDomains)
 	unionWorkspaceEgress(&out, wsRefs)
 	for _, ws := range wsRefs {
-		kept, _ := runCloneEgress(ws, trusted)
+		kept, _ := runSelectedCloneEgress(ws, runRepoLocators(spec, legacyRepo), trusted)
 		unionAllowedDomains(&out, kept)
 	}
 	// A run that declares no repo at all inherits no SCM lane at launch and
