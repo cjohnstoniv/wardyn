@@ -71,12 +71,19 @@ func (s *Server) lock(ctx context.Context, class int32, parts ...string) (contex
 // refusal (no capacity, the database not answering) is ok=false too, logged:
 // every caller is a sweep that retries on its next pass.
 func (s *Server) tryLock(ctx context.Context, class int32, parts ...string) (context.Context, func(), bool) {
+	lctx, unlock, ok, _ := s.tryLockHeld(ctx, class, parts...)
+	return lctx, unlock, ok
+}
+
+// tryLockHeld is tryLock that also says why it failed: held is true only when the lock is held
+// elsewhere, never for a refusal. A caller that acts on a held lock (the forced stop) uses this.
+func (s *Server) tryLockHeld(ctx context.Context, class int32, parts ...string) (lctx context.Context, unlock func(), ok, held bool) {
 	lctx, unlock, ok, err := s.locker().TryLock(ctx, db.NewLockKey(class, parts...))
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not take a lock; skipping until the next pass", slog.Any("err", err))
-		return ctx, nil, false
+		return ctx, nil, false, false
 	}
-	return lctx, unlock, ok
+	return lctx, unlock, ok, !ok
 }
 
 // lockDoor takes a lock for an HTTP handler and rebinds r to the lock's
@@ -132,6 +139,11 @@ func (s *Server) lockRunOp(ctx context.Context, id uuid.UUID) (context.Context, 
 // tryLockRunOp is lockRunOp that gives up instead of waiting.
 func (s *Server) tryLockRunOp(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
 	return s.tryLock(ctx, db.RunOpLockClass, id.String())
+}
+
+// tryLockRunOpHeld is tryLockRunOp that also says whether the lock was found held (tryLockHeld).
+func (s *Server) tryLockRunOpHeld(ctx context.Context, id uuid.UUID) (context.Context, func(), bool, bool) {
+	return s.tryLockHeld(ctx, db.RunOpLockClass, id.String())
 }
 
 // lockRunEnd is lockRunOp for an end that publishes the run's terminal state and then runs its tail:

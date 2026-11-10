@@ -57,7 +57,7 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 		s.leaseRun(ctx, leaser, run)
 	}
 	// A run the sweep no longer lists (torn down, killed) needs no entry.
-	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending, &s.renewalRefused, &s.keptEndHeldOff, &s.keptEndForced} {
+	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending, &s.renewalRefused, &s.keptEndForced} {
 		m.Range(func(id, _ any) bool {
 			if !listed[id.(uuid.UUID)] {
 				m.Delete(id)
@@ -444,17 +444,19 @@ func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, 
 // through it.
 //
 // It holds the run's lock across the transition and the tail, or does nothing: a run whose lock is held
-// publishes no end and starts no pass, and the next pass retries. A run held off past
-// keptEndHoldOffLimit is stopped without the lock instead (forceKeptStop).
+// publishes no end and starts no pass, and the next pass retries. A lock found held (not one that could
+// not be asked) keptEndHoldOffLimit past the run's due end is cut by stopping the sandbox without it
+// instead (forceKeptStop).
 func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
-	lctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
+	lctx, unlock, ok, held := s.tryLockRunOpHeld(ctx, run.ID)
 	if !ok {
-		s.forceKeptStop(ctx, run, action)
+		if held {
+			s.forceKeptStop(ctx, run, action)
+		}
 		return
 	}
 	defer unlock()
 	ctx = lctx
-	s.keptEndHeldOff.Delete(run.ID)
 	s.keptEndForced.Delete(run.ID)
 	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
 	if err != nil {

@@ -364,7 +364,7 @@ What happens:
 - If the agent can't be stopped, no pass runs, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
 - If the sandbox's proxy can't be stopped, the sandbox is stopped and its folder changes are not brought back.
 - A run stopped for being idle or for its maximum age brings its changes back the same way, so the stop can take up to 2 more minutes while they come back.
-- A run kept after its end is torn down on the first pass that can take its lock, and brings its changes back the same way. If that lock stays held for 5 minutes, the sandbox is stopped without bringing its changes back, at most about 7 minutes after the run was due to be torn down.
+- A run kept after its end is torn down on the first pass that can take its lock, and brings its changes back the same way. If that lock is held 5 minutes after the end was due, the sandbox is stopped without its changes: about 6 to 7 minutes after, on a sweep running on time.
 - A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
 - Update the Wardyn runner on every laptop: most folder sync fixes in this release run in the runner, so a laptop with an older runner keeps the older folder sync behaviour.
 - An older runner keeps working. If one of its passes back goes unanswered, the next is sent an hour or more later, on the hourly sweep. That pass can still run beside a stuck one, which only an updated runner prevents. A run started before the server was updated waits the same way for its first pass back.

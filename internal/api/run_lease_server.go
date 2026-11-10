@@ -51,10 +51,7 @@ type runLeaseState struct {
 	// run's proxy (run_revive.go, #1005), so a revive of a live run is bounded
 	// to one per reviveLiveEvery. An entry drops itself once it has lapsed.
 	liveRevived sync.Map
-	// keptEndHeldOff holds, per kept run whose due end found its lock held (stopKeptRun), the end it
-	// was due at and when it was first held off, so forceKeptStop can tell how long it has waited.
-	// keptEndForced holds every such run forceKeptStop has stopped, so it stops and audits once.
-	// Both clear when the end takes the lock and are pruned by the sweep.
-	keptEndHeldOff sync.Map
-	keptEndForced  sync.Map
+	// keptEndForced holds, per kept run forceKeptStop has stopped, the end it was due at, so it stops
+	// and audits once per end. It clears when the end takes the lock and is pruned by the sweep.
+	keptEndForced sync.Map
 }
