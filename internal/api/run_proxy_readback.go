@@ -499,10 +499,13 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (ha
 }
 
 // unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy and was
-// stopped; unconfirmedStopPendingHint the same while that stop is not confirmed.
+// stopped; unconfirmedStopPendingHint the same while that stop is not confirmed. Both name the likely
+// cause: a proxy image pin older than the server that the server cannot read a release from (a
+// digest, no tag, :latest) is read as current, and that proxy never reports.
 const (
-	unconfirmedPolicyHint      = "The run's proxy did not confirm the policy it loaded, so it was stopped"
-	unconfirmedStopPendingHint = "The run's proxy did not confirm the policy it loaded; stopping it is not confirmed yet and is retried"
+	unconfirmedImageCause      = ". A proxy image older than this server, pinned by digest, untagged or :latest, never confirms: move the proxy image pin (WARDYN_PROXY_IMAGE, or a runner's --proxy-image) with the server"
+	unconfirmedPolicyHint      = "The run's proxy did not confirm the policy it loaded, so it was stopped" + unconfirmedImageCause
+	unconfirmedStopPendingHint = "The run's proxy did not confirm the policy it loaded; stopping it is not confirmed yet and is retried" + unconfirmedImageCause
 )
 
 // unconfirmedHint is the failure hint for a stop that was (stopped) or was not confirmed.

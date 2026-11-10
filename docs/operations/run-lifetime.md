@@ -133,6 +133,8 @@ A report counts only for the run's newest start. Its token must be that start's 
 
 A start is `legacy` only when a runner's registered version, or the proxy image tag, names a release older than 0.10.0-rc.18. A legacy start runs as before, unconfirmed (`run.policy.unconfirmed`, reason `legacy`). An empty or unparsable version is not legacy. A revive that must confirm, on a substrate that cannot answer the hash, is refused before anything changes (`409 revive_readback_unsupported`).
 
+A proxy image pinned by digest, untagged or `:latest` names no release, so it is read as current. If that image is older than 0.10.0-rc.18, its proxy never reports, and every run on it fails at the deadline (reason `deadline`), with a failure hint that names the proxy image pin. Move `WARDYN_PROXY_IMAGE`, and any runner's `--proxy-image` pin, in the same step as the server.
+
 `GET /runs/{id}` shows the newest start as `policy_readback`: its `state`, `generation` and `confirmed_at`, without either hash. The address the agent reaches its proxy on is stored with the run for the audit and is not on the run's JSON.
 
 ### Live egress edit
