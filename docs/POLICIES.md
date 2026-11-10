@@ -1219,7 +1219,7 @@ What the proxy does for a rule host:
 - It intercepts TLS to a rule host on port 443, so it can read each request. A run with host rules gets a per-run interception certificate for this.
 - A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` on another port, without that certificate, and on the desktop sign-in lane.
 - Plain HTTP to a rule host is checked per request.
-- A brokered route (the model routes, the git and git credential brokers, the MCP broker) sends its requests outside the lanes these rules read. A run whose rules name a host one of those routes serves is refused at start.
+- A run whose rules name a host a brokered route serves (the model routes, the git and git credential brokers, the MCP broker) is refused at start. Each request forwarded on any route is checked against the rules too.
 - A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
 
 ## `recording`

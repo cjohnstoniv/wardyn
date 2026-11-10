@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -101,6 +102,40 @@ func (p *Proxy) innerMethodRefused(w http.ResponseWriter, r *http.Request, host 
 	// memoed=false: built right here (policy:method on an inner request), never from the private-IP memo.
 	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
 	return true
+}
+
+// errHostRuleRefused is a forward the host rules refuse (outboundHostRuleRefused).
+var errHostRuleRefused = errors.New("wardyn: refused by host rules")
+
+// outboundHostRuleRefused judges a request the proxy is about to send upstream, whichever route built it.
+// The brokered routes (model, git, git credential, MCP) and the API doors re-originate outside the CONNECT
+// and plain lanes, so this is where their requests are judged, on the method and path the host receives.
+// A refusal writes the policy:host-rule row and returns errHostRuleRefused.
+func (p *Proxy) outboundHostRuleRefused(req *http.Request) error {
+	if req.URL == nil {
+		return nil
+	}
+	host, port := splitHostPort(req.URL.Host, defaultPortForScheme(req.URL.Scheme))
+	if !p.policy.namesRuleHost(host) {
+		return nil
+	}
+	d := types.EvalHostRules(p.policy.hostRules, host, req.Method, req.URL.EscapedPath())
+	if d.Effect == types.HostRuleAllow {
+		return nil
+	}
+	log := decisionLog(p.reqOf(req, host, port), egress.Deny, ruleSourceHostRule)
+	log.Cause = hostRuleCause(d)
+	if p.sink != nil {
+		p.sink.emit(log)
+	}
+	return errHostRuleRefused
+}
+
+// hostRuleTransportProxy is the egress transport's Proxy hook. The transport calls it for every request,
+// a reused connection's included, so a route that sends on the transport itself (the kube door's clone of
+// it) is judged as roundTripUpstream's callers are. It names no proxy.
+func (p *Proxy) hostRuleTransportProxy(req *http.Request) (*url.URL, error) {
+	return nil, p.outboundHostRuleRefused(req)
 }
 
 // requestEscapedPath is the path as the request carried it, escapes kept, so an encoded "/" is seen and
