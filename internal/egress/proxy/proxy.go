@@ -595,13 +595,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleLocalRoute(w, r)
 		return
 	}
-	// Host rules judge each plain-HTTP request by its escaped path (host_rules.go).
-	if r.URL != nil && r.URL.Host != "" {
-		if host, port := splitHostPort(r.URL.Host, defaultPortForScheme(r.URL.Scheme)); p.hostRuleRefused(w, r, host, port) {
-			return
-		}
-	}
-	p.servePlain(w, r)
+	p.servePlainJudged(w, r)
 }
 
 // splitHostPort returns the host (lowercased, no port) and port, defaulting
@@ -666,14 +660,8 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		log := decisionLog(req, egress.Deny, gate.refusal)
 		return egress.Deny, "", &log
 	}
-	// A rule host is reached only through a connection this proxy opens (host_rules.go), before any
-	// first-use approval: no approval can make an unopened tunnel judgeable.
-	if req.Method == http.MethodConnect {
-		if cause := p.hostRuleUninspected(ctx, host, port); cause != "" {
-			log := decisionLog(req, egress.Deny, ruleSourceHostRuleNeedsInspection)
-			log.Cause = cause
-			return egress.Deny, "", &log
-		}
+	if log := p.hostRuleConnectDeny(ctx, req); log != nil { // before any approval (host_rules.go)
+		return egress.Deny, "", log
 	}
 	// Under push_rules.deny_all, a code host no door serves (push_deny_all_forge.go).
 	if log := p.pushDenyAllForgeDeny(req, host, gate.verdict); log != nil {
@@ -875,16 +863,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// an ordinary opaque tunnel, still gated by the policy decision above — and
 	// the SAME clamp is inside mitmLLMHost below, so the fall-through cannot be
 	// re-admitted by the LLM branch for a host that is both.
-	// A rule host is always opened, so each request inside is judged (host_rules.go); evaluate refused
-	// it above when this proxy cannot open it.
-	if p.policy.namesRuleHost(host) {
-		if log != nil {
-			p.sink.emit(*log)
-		}
-		p.mitmConnect(w, r, host, port)
-		return
-	}
-	if p.ca != nil && p.isCorpMITMHost(host) {
+	// A rule host is always opened here, so each request inside is judged (host_rules.go).
+	if p.ca != nil && (p.isCorpMITMHost(host) || p.policy.namesRuleHost(host)) {
 		if p.mitmPortAllowed(host, port) {
 			if log != nil {
 				p.sink.emit(*log)

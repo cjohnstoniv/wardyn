@@ -172,6 +172,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Policy", Path: "FirstUseHoldSeconds", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "MaxHolds", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "AllowedMethods", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "HostRules", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "MinConfinementClass", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "AutoStopAfterSec", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "WorkspaceMounts", Class: ClassExempt, Rule: RuleExempt},

@@ -158,6 +158,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepNoNetwork", foldCreate | foldPreflight | foldPreview},
+	{"stepHostRulesVM", foldCreate | foldPreflight | foldPreview},
 	{"stepMacOSHold", foldCreate | foldPreflight | foldPreview},
 	{"stepMacWindow", foldCreate | foldPreflight | foldPreview},
 	{"stepKeptMachine", foldCreate | foldPreflight | foldPreview},

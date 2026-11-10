@@ -1064,6 +1064,7 @@ start.
 | `wall_preset_name_taken` / `wall_preset_version_conflict` / `wall_preset_limit_reached` | `409`: another preset of the same audience, or a built-in, has the name; the preset changed since the version you read; the audience holds the most presets it may. |
 | `wall_preset_unknown` / `wall_preset_host` / `wall_presets_unavailable` | `422` a launch names a preset that does not exist or is not open to you; `403` `POST /approvals/{id}/approve` of a host the run's wall preset denies; `501` this server's store keeps no wall presets. |
 | `no_network_needs_egress` | `422` a `no-network` launch would need a host; the message names each source. |
+| `host_rules_need_inspected_vm` | `422` a VM run (`linux_vm`, `macos_vm`) whose policy has `host_rules`; host rules are not yet judged on a VM guest's flows. |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary or the run owner's walls now withhold the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile, the Wardyn boundary or the run owner's walls could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |

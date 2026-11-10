@@ -185,11 +185,6 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if c.AllowedMethods != nil && len(normMethods(*c.AllowedMethods)) == 0 {
 		m.fail(ReasonOverlayInvalid, "allowed_methods", "an empty list would allow every method; omit the field to inherit the base's")
 	}
-	if c.HostRules != nil {
-		if err := types.ValidateHostRuleSets(*c.HostRules); err != nil {
-			m.fail(ReasonOverlayInvalid, "host_rules", "%v", err)
-		}
-	}
 	if c.AllowedDomains != nil && len(*c.AllowedDomains) > types.MaxAllowedDomainsPerSpec {
 		m.fail(ReasonOverlayInvalid, "allowed_domains", "at most %d entries, got %d", types.MaxAllowedDomainsPerSpec, len(*c.AllowedDomains))
 	}

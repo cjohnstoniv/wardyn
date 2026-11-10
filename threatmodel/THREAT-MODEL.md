@@ -935,6 +935,12 @@ is not the deployment described above.**
 - **`no_network`** (the `no-network` wall preset) refuses every request at step 0, before a `via_org`
   forward, and in both egress dials; the control-plane dial never reads it.
 - **`refuse_ip_literals`** refuses every IP literal under `allow_all_egress`, except one listed exactly.
+- **`host_rules`** are judged per request on a connection the proxy opens: a `CONNECT` to a rule host
+  without the per-run CA, on a port it does not open, on a VM run or on the sign-in lane is refused
+  (`policy:host-rule-needs-inspection`), and each request's normal-form path is checked inside
+  (`policy:host-rule`, [`host_rules.go`](../internal/egress/proxy/host_rules.go)). Residual: a brokered
+  route re-originates outside these lanes, so a config naming a brokered host is refused at load
+  (`validateHostRules`); a broker added later must be added to `brokeredHosts` or rules on its host go unread.
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.

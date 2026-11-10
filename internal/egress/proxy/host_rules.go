@@ -25,8 +25,33 @@ const (
 	ruleSourceHostRuleNeedsInspection = "policy:host-rule-needs-inspection"
 )
 
-// hostRuleUninspected is evaluate's CONNECT half: why a CONNECT to a rule host cannot be opened here,
-// or "" when it can (or the host is no rule host).
+// hostRuleConnectDeny is evaluate's CONNECT half: the deny row for a CONNECT to a rule host this proxy
+// cannot open, or nil. It runs before any first-use approval: no approval makes an unopened tunnel judgeable.
+func (p *Proxy) hostRuleConnectDeny(ctx context.Context, req egress.Request) *egress.DecisionLog {
+	if req.Method != http.MethodConnect {
+		return nil
+	}
+	cause := p.hostRuleUninspected(ctx, req.Host, req.Port)
+	if cause == "" {
+		return nil
+	}
+	log := decisionLog(req, egress.Deny, ruleSourceHostRuleNeedsInspection)
+	log.Cause = cause
+	return &log
+}
+
+// servePlainJudged is servePlain after host rules judge the request by its escaped path.
+func (p *Proxy) servePlainJudged(w http.ResponseWriter, r *http.Request) {
+	if r.URL != nil && r.URL.Host != "" {
+		if host, port := splitHostPort(r.URL.Host, defaultPortForScheme(r.URL.Scheme)); p.hostRuleRefused(w, r, host, port) {
+			return
+		}
+	}
+	p.servePlain(w, r)
+}
+
+// hostRuleUninspected says why a CONNECT to a rule host cannot be opened here, or "" when it can (or the
+// host is no rule host).
 func (p *Proxy) hostRuleUninspected(ctx context.Context, host string, port int) string {
 	if !p.policy.namesRuleHost(host) {
 		return ""
@@ -63,6 +88,21 @@ func (p *Proxy) hostRuleRefused(w http.ResponseWriter, r *http.Request, host str
 	if p.sink != nil {
 		p.sink.emit(log)
 	}
+	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
+	return true
+}
+
+// innerMethodRefused is allowed_methods on a request inside a terminated tunnel (serveAdmittedMITMRequest):
+// it writes the policy:method refusal and reports whether it did.
+func (p *Proxy) innerMethodRefused(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	if p.evaluator.MethodAllowed(r.Method) {
+		return false
+	}
+	log := decisionLog(p.reqOf(r, host, port), egress.Deny, "policy:method")
+	if p.sink != nil {
+		p.sink.emit(log)
+	}
+	// memoed=false: built right here (policy:method on an inner request), never from the private-IP memo.
 	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
 	return true
 }
@@ -137,6 +177,16 @@ func (c *Config) brokeredHosts() map[string]string {
 	}
 	for _, s := range c.MCPServers {
 		addURL(s.URL, "MCP broker")
+	}
+	for k := range c.LocalModels {
+		h, _ := splitHostPort(k, 0)
+		out[h] = "brokered model route"
+	}
+	for _, r := range c.GatewayIdentity {
+		out[hostKey(r.Host)] = "brokered model route"
+	}
+	for _, r := range c.ViaOrgRoutes {
+		out[hostKey(r.Host)] = "via_org route"
 	}
 	return out
 }

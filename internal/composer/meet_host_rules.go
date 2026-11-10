@@ -6,10 +6,15 @@ package composer
 import "github.com/cjohnstoniv/wardyn/internal/types"
 
 // meetHostRules appends the overlay's host rule sets to the base's (types.AppendHostRuleSets): a set
-// only ever refuses more, so nothing is a widening, and no rule is merged across layers. More sets than
-// a policy may hold has no representable result.
+// only ever refuses more, so nothing is a widening, and no rule is merged across layers. A malformed set
+// is refused as validatePresence refuses its fields; more sets than a policy may hold has no
+// representable result.
 func (m *meeter) meetHostRules(o *[]types.HostRuleSet) {
 	if o == nil {
+		return
+	}
+	if err := types.ValidateHostRuleSets(*o); err != nil {
+		m.fail(ReasonOverlayInvalid, "host_rules", "%v", err)
 		return
 	}
 	c := &m.out.Ceiling

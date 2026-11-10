@@ -54,6 +54,7 @@
 | `first_use_hold_seconds` | `int` | `0` (→ `30`) | Only `wait_for_review`: how long a connection is held awaiting a decision before it fails closed. `0`/absent keeps the built-in **30s**. |
 | `max_holds` | `int` | `0` (→ `16`) | Only `wait_for_review`: cap on concurrent held connections; the next held connection over the cap fails fast. `0`/absent keeps the built-in **16**. |
 | `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction, enforced on the forward, `CONNECT`, TLS-intercepted and brokered model lanes; a refused request is `403` with `rule_source` `policy:method`. See [`allowed_methods`](#allowed_methods). |
+| `host_rules` | `[]HostRuleSet` | `[]` (none) | Per-host method and path rules, one set per layer; each set naming a host must allow a request to it. A `CONNECT` to a rule host is TLS-intercepted; a refusal is `403` `policy:host-rule`. See [`host_rules`](#host_rules--hostruleset). |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. [Which barrier for which agent](CONFINEMENT.md). |
 | `eligible_grants` | `[]GrantSpec` | `[]` | The ceiling of credential scopes this run may request. Eligibility is not issuance — the broker still mints. |
 | `auto_stop_after_sec` | `int` | `0` | Idle auto-stop in seconds: `> 0` stops an idle run after that time plus 30s slack, `0` or negative never reaps it, and a pending request keeps a run alive; details in [`auto_stop_after_sec`](#auto_stop_after_sec). |
@@ -1195,6 +1196,43 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 5. Start a background Claude Code run, or a Codex CLI run, and ask it to call `echo`. The call waits for a person to approve it with its exact arguments.
 6. `GET /_seen` on the fake lists every request it received. `tool_calls` stays `0` until you approve and becomes `1` after.
 
+
+## `host_rules` — `[]HostRuleSet`
+
+Rules for what a run may send to one host: which methods, on which paths. `host_rules` is a list of rule sets. You write one set; each layer that adds rules (a ceiling, a profile, a restriction) keeps its own set beside yours, and the sets are not merged.
+
+```json
+"host_rules": [{"rules": [
+  {"host": "api.example.com", "methods": ["DELETE"], "effect": "deny"},
+  {"host": "api.example.com", "methods": ["GET"], "paths": ["/repos"], "effect": "allow"}
+]}]
+```
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `rules` | `[]HostRule` | — (required) | The set's rules, read in order. At most 64 rules per set and 16 sets per policy, the sets other layers add included. |
+| `host` | `string` | — (required) | One exact host, lowercase, with no wildcard, port or path. |
+| `methods` | `[]string` | `[]` (all) | Uppercase HTTP methods the rule matches. |
+| `paths` | `[]string` | `[]` (all) | Paths the rule matches, each with the paths below it: `/repos` matches `/repos` and `/repos/a`, not `/reposx`. Written in normal form (below), with no query or fragment. |
+
+`effect` is `allow` or `deny`. `hold` is refused for now; it arrives in a later release.
+
+How a request to a host is decided:
+
+- Each set that names the host decides by its first matching rule. A set that names the host and matches no rule denies.
+- Across sets, any deny wins; otherwise the request is allowed. A set that does not name the host has no say.
+- `allowed_methods` still applies on top.
+- A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
+
+Paths are matched in one normal form: the query and fragment dropped, escaped unreserved characters (`%41`, `%2e`) decoded once, `.` and `..` segments resolved and repeated slashes collapsed. A request path with an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character is refused when its host has rules.
+
+What the proxy does for a rule host:
+
+- It intercepts TLS to a rule host on port 443, so it can read each request. A run with host rules gets a per-run interception certificate for this.
+- A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` on another port, without that certificate, and on the desktop sign-in lane.
+- Plain HTTP to a rule host is checked per request.
+- A brokered route (the model routes, the git and git credential brokers, the MCP broker) sends its requests outside the lanes these rules read. A run whose rules name a host one of those routes serves is refused at start.
+- A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
 
 ## `recording`
 
