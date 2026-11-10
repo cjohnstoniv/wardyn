@@ -314,6 +314,7 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 			return egressEditUnresolved("start_failed", errors.New(p.ContainmentError))
 		case p.State == types.ProxyStartFailed:
 			why = "start_failed"
+			egressEditSawUncontained()
 			if rerr, done := s.containEditStart(ctx, runID, gen); done {
 				return rerr
 			}
@@ -329,6 +330,10 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 	}
 	return egressEditUnresolved(why, ctx.Err())
 }
+
+// egressEditSawUncontained runs when an edit reads its start failed with no containment recorded yet.
+// A test hook.
+var egressEditSawUncontained = func() {}
 
 // stopCtx is a fresh bound for a stop the edit waits on: the readback wait may have run out.
 func stopCtx(ctx context.Context) (context.Context, context.CancelFunc) {

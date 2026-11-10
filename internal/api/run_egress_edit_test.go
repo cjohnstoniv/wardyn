@@ -442,13 +442,27 @@ func TestEgressEdit_FailedStartAnswersOnlyOnceItsStopLands(t *testing.T) {
 	f.srv.cfg.Runner = br
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.editEgress(t, `{"deny_hosts":["evil.example"]}`) }()
+	saw := make(chan struct{}, 1)
+	hook := egressEditSawUncontained
+	egressEditSawUncontained = func() {
+		select {
+		case saw <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() { egressEditSawUncontained = hook })
 	f.answeredStart(t, 0)
 	br.block.Store(true)
 	f.mismatchAfterAnswer(t)
+	select { // the edit has read its start failed while the stop that contains it is held
+	case <-saw:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the edit never read its failed start")
+	}
 	select {
 	case w := <-done:
 		t.Fatalf("the edit answered %d %s before its failed start's stop landed", w.Code, w.Body.String())
-	case <-time.After(200 * time.Millisecond):
+	default:
 	}
 	close(br.gate)
 	w := <-done
