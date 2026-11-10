@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- Kubernetes: the NetworkPolicy egress canary now re-runs every 10 minutes in each runs namespace, not only at boot. After three failed checks in a row, new sandboxes in that namespace are refused; running ones keep running. `/healthz` adds `network_policy_checked_at` and reports `network_policy: recheck_failed`, and the setup page's egress-containment row shows the failure and its check time. The prewrapped image check follows the same live verdict.
+- Kubernetes: the NetworkPolicy egress canary now re-runs every 10 minutes in each runs namespace, not only at boot. After three failed checks in a row, new sandboxes in that namespace are refused; running ones keep running. `/healthz` adds `network_policy_checked_at`, the time of the check that produced the verdict, and reports `network_policy` as `refused` or `not_proven` after a failed re-check. The setup page's egress-containment row shows the verdict and that time. The prewrapped image check follows the same live verdict.
 
 ## [0.10.0-rc.17] — 2026-11-09
 

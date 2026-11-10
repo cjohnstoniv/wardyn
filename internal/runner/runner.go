@@ -35,13 +35,7 @@ type Capabilities struct {
 	NetworkPolicy             bool                              `json:"network_policy"`                        // L1 (nftables / NetworkPolicy default-deny)
 	NetworkPolicyAcknowledged bool                              `json:"network_policy_acknowledged,omitempty"` // operator accepted a canary failure as expected rather than proven
 	SessionRecording          bool                              `json:"session_recording"`                     // wardyn-rec sidecar support
-	// NetworkPolicyCheckedAt is when the k8s NetworkPolicy canary last ran (the oldest across namespaces
-	// and substrates); absent where no canary runs. NetworkPolicyRecheckFailed: a re-check since boot
-	// stopped proving enforcement there, and new sandboxes are refused. OR-aggregated.
-	NetworkPolicyCheckedAt     time.Time `json:"network_policy_checked_at,omitzero"`
-	NetworkPolicyRecheckFailed bool      `json:"network_policy_recheck_failed,omitempty"`
-	// UserDrives and ManagedFiles are fail-closed: false means the control
-	// plane refuses rather than admit a request the driver would reject.
+	// UserDrives and ManagedFiles are fail-closed: false means the control plane refuses rather than admit a request the driver would reject.
 	UserDrives   bool `json:"user_drives,omitempty"`
 	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
@@ -54,7 +48,8 @@ type Capabilities struct {
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
-	ExecOutputUncaptured bool `json:"-"`
+	ExecOutputUncaptured bool        `json:"-"`
+	NetworkPolicyCheck   NetPolCheck `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.

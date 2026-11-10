@@ -383,11 +383,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.StructuralEgress = caps.StructuralEgress || cs.StructuralEgress
 		caps.NetworkPolicy = caps.NetworkPolicy || cs.NetworkPolicy
 		caps.NetworkPolicyAcknowledged = caps.NetworkPolicyAcknowledged || cs.NetworkPolicyAcknowledged
-		caps.NetworkPolicyRecheckFailed = caps.NetworkPolicyRecheckFailed || cs.NetworkPolicyRecheckFailed
-		// The oldest canary check: every substrate's verdict is at least this fresh.
-		if t := cs.NetworkPolicyCheckedAt; !t.IsZero() && (caps.NetworkPolicyCheckedAt.IsZero() || t.Before(caps.NetworkPolicyCheckedAt)) {
-			caps.NetworkPolicyCheckedAt = t
-		}
+		caps.NetworkPolicyCheck = runner.WorseNetPolCheck(caps.NetworkPolicyCheck, cs.NetworkPolicyCheck)
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
 		caps.ExecOutputUncaptured = caps.ExecOutputUncaptured || cs.ExecOutputUncaptured
 		drives = drives && cs.UserDrives

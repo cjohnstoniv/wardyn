@@ -594,18 +594,19 @@ func TestProbeFailureNamesTheUnreadableExecutor(t *testing.T) {
 	}
 }
 
-// TestIntersectCapabilities_NetworkPolicyCheck: a failed canary re-check on any placement shows, and the
-// check time is the oldest one reported (a placement with none is skipped).
+// TestIntersectCapabilities_NetworkPolicyCheck: the worst placement's canary verdict shows, with its
+// own time; a placement reporting none never wins.
 func TestIntersectCapabilities_NetworkPolicyCheck(t *testing.T) {
 	older := time.Now().Add(-time.Hour).UTC()
-	at := func(checked time.Time, failed bool) placementCaps {
-		return placementCaps{Capabilities: runner.Capabilities{NetworkPolicyCheckedAt: checked, NetworkPolicyRecheckFailed: failed}}
+	at := func(c runner.NetPolCheck) placementCaps {
+		return placementCaps{Capabilities: runner.Capabilities{NetworkPolicyCheck: c}}
 	}
-	got := intersectCapabilities(at(older.Add(time.Minute), false), at(time.Time{}, false), at(older, true))
-	if !got.NetworkPolicyCheckedAt.Equal(older) || !got.NetworkPolicyRecheckFailed {
-		t.Errorf("checked %v, failed %v; want %v and true", got.NetworkPolicyCheckedAt, got.NetworkPolicyRecheckFailed, older)
+	notProven := runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: older.Add(time.Minute)}
+	got := intersectCapabilities(at(runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: older}), at(runner.NetPolCheck{}), at(notProven))
+	if got.NetworkPolicyCheck != notProven {
+		t.Errorf("check %+v, want %+v", got.NetworkPolicyCheck, notProven)
 	}
-	if got := intersectCapabilities(at(time.Time{}, false)); !got.NetworkPolicyCheckedAt.IsZero() || got.NetworkPolicyRecheckFailed {
-		t.Errorf("checked %v, failed %v; want zero and false", got.NetworkPolicyCheckedAt, got.NetworkPolicyRecheckFailed)
+	if got := intersectCapabilities(at(runner.NetPolCheck{})); got.NetworkPolicyCheck != (runner.NetPolCheck{}) {
+		t.Errorf("check %+v, want none", got.NetworkPolicyCheck)
 	}
 }

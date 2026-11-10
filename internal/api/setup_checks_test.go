@@ -347,11 +347,11 @@ func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
 }
 
 // TestK8sEgressContainmentCheck_RecheckFailedNamesItsCheckTime: the failed
-// re-check row says when the canary last ran and never claims the operator set
-// WARDYN_K8S_ALLOW_UNENFORCED_NETPOL.
+// re-check row says when the check behind it ran and never claims the operator
+// set WARDYN_K8S_ALLOW_UNENFORCED_NETPOL.
 func TestK8sEgressContainmentCheck_RecheckFailedNamesItsCheckTime(t *testing.T) {
 	at := time.Now().UTC().Truncate(time.Second)
-	chk, ok := k8sEgressContainmentCheck("k8s", "recheck_failed", false, at)
+	chk, ok := k8sEgressContainmentCheck("k8s", "refused", false, at)
 	if !ok || chk.Status != "fail" {
 		t.Fatalf("ok %v status %q, want a fail row", ok, chk.Status)
 	}
@@ -387,7 +387,8 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 		{"k8s acknowledged (B1): warn, never fail or ok", "k8s", "acknowledged", true, "warn", false},
 		// A failed re-check is not the operator's override: fail, and the fix
 		// never tells them to unset an env var they did not set.
-		{"k8s re-check failed: fail, fix never names the opt-out", "k8s", "recheck_failed", true, "fail", false},
+		{"k8s re-check refused: fail, fix never names the opt-out", "k8s", "refused", true, "fail", false},
+		{"k8s not proven: fail, fix never names the opt-out", "k8s", "not_proven", true, "fail", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -878,7 +879,7 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, envBuilderCheck(true))
 	assertSetupCheckBlocking(t, envBuilderCheck(false))
 
-	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", "recheck_failed", ""} {
+	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", "refused", "not_proven", ""} {
 		chk, ok := k8sEgressContainmentCheck("k8s", netpol, false, time.Time{})
 		if !ok {
 			t.Fatalf("k8sEgressContainmentCheck(%q) absent", netpol)

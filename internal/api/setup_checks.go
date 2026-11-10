@@ -238,16 +238,17 @@ func formatStartDeadline(seconds int) string {
 // "can't confirm", never a silent Enforcing. The last (capsUnreadable) points at
 // substrate_health, since no upgrade changes a runner that did not answer.
 //
-// "recheck_failed" is a later re-check of the canary that stopped proving
-// enforcement: FAIL, with checkedAt (when the canary last ran), and never the
-// "unenforced" row's claim that the operator set the override.
+// "refused" and "not_proven" are a later re-check of the canary that stopped
+// proving enforcement: FAIL, with checkedAt (the check that produced the
+// verdict), and never the "unenforced" row's claim that the operator set the
+// override.
 func k8sEgressContainmentCheck(driver, netpolProven string, capsUnreadable bool, checkedAt time.Time) (SetupCheck, bool) {
 	if driver != "k8s" {
 		return SetupCheck{}, false
 	}
 	const id, label = "k8s_egress_containment", "Egress containment"
 	switch netpolProven {
-	case "recheck_failed":
+	case "refused", "not_proven":
 		when := ""
 		if !checkedAt.IsZero() {
 			when = " (last check " + checkedAt.UTC().Format(time.RFC3339) + ")"

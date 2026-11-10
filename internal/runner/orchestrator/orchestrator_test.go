@@ -675,39 +675,32 @@ func TestCapabilities_FreezeAggregatesPerClass(t *testing.T) {
 	}
 }
 
-// netpolSubstrate is fakeSubstrate reporting a NetworkPolicy canary check time and whether a re-check failed.
+// netpolSubstrate is fakeSubstrate reporting a NetworkPolicy canary check.
 type netpolSubstrate struct {
 	*fakeSubstrate
-	checkedAt time.Time
-	failed    bool
+	check runner.NetPolCheck
 }
 
 func (n netpolSubstrate) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 	cs, err := n.fakeSubstrate.Classes(ctx)
-	cs.NetworkPolicyCheckedAt, cs.NetworkPolicyRecheckFailed = n.checkedAt, n.failed
+	cs.NetworkPolicyCheck = n.check
 	return cs, err
 }
 
-// TestCapabilities_NetworkPolicyCheckIsTheOldestAndAnyFailure: one substrate's failed re-check shows in
-// the aggregate, and the check time is the oldest a substrate reports (one with none is skipped).
-func TestCapabilities_NetworkPolicyCheckIsTheOldestAndAnyFailure(t *testing.T) {
+// TestCapabilities_NetworkPolicyCheckIsTheWorst: the aggregate carries the worst substrate's verdict
+// with that verdict's own time; a substrate reporting none never wins.
+func TestCapabilities_NetworkPolicyCheckIsTheWorst(t *testing.T) {
 	older := time.Now().Add(-time.Hour).UTC()
 	newer := older.Add(30 * time.Minute)
-	sub := func(name string, at time.Time, failed bool) netpolSubstrate {
-		return netpolSubstrate{&fakeSubstrate{name: name, classes: []types.ConfinementClass{types.CC1}}, at, failed}
+	sub := func(name string, check runner.NetPolCheck) netpolSubstrate {
+		return netpolSubstrate{&fakeSubstrate{name: name, classes: []types.ConfinementClass{types.CC1}}, check}
 	}
-	caps, err := New(sub("a", newer, false), sub("b", time.Time{}, false), sub("c", older, true)).Capabilities(context.Background())
+	refused := runner.NetPolCheck{Verdict: runner.NetPolRefused, At: newer}
+	caps, err := New(sub("a", runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: older}), sub("b", runner.NetPolCheck{}), sub("c", refused)).Capabilities(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !caps.NetworkPolicyCheckedAt.Equal(older) || !caps.NetworkPolicyRecheckFailed {
-		t.Errorf("checked %v, failed %v; want %v and true", caps.NetworkPolicyCheckedAt, caps.NetworkPolicyRecheckFailed, older)
-	}
-	caps, err = New(sub("a", newer, false)).Capabilities(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !caps.NetworkPolicyCheckedAt.Equal(newer) || caps.NetworkPolicyRecheckFailed {
-		t.Errorf("checked %v, failed %v; want %v and false", caps.NetworkPolicyCheckedAt, caps.NetworkPolicyRecheckFailed, newer)
+	if caps.NetworkPolicyCheck != refused {
+		t.Errorf("check %+v, want %+v", caps.NetworkPolicyCheck, refused)
 	}
 }

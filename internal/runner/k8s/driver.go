@@ -353,7 +353,7 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 	live := &netPolVerdict{byNS: make(map[string]nsVerdict, len(cfg.Namespaces))}
 	for _, ns := range cfg.Namespaces {
 		verdict, cerr := d.runEgressCanary(ctx, ns)
-		live.byNS[ns] = nsVerdict{state: stateOf(verdict), checkedAt: d.now()}
+		live.byNS[ns] = nsVerdict{state: stateOf(verdict), verdictAt: d.now()}
 		switch verdict {
 		case canaryIndeterminate:
 			return nil, fmt.Errorf("k8s: refusing to boot: %w", d.inNamespace(ns, cerr))
@@ -455,9 +455,8 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// rather than the canary proving enforcement. Never true at the same
 		// time as NetworkPolicy — mutually exclusive canary outcomes.
 		NetworkPolicyAcknowledged: netPol.acknowledged(),
-		// A re-check since boot stopped proving enforcement, and when the canary last ran.
-		NetworkPolicyRecheckFailed: netPol.recheckFailed(),
-		NetworkPolicyCheckedAt:     netPol.checkedAt(),
+		// The live verdict for health, with the time of the check that produced it.
+		NetworkPolicyCheck: d.netPolCheck(),
 		// Exec (exec.go's recordCmd) wraps the ephemeral-container argv with
 		// wardyn-rec via the masked brokered proxy upload — the only path
 		// this substrate supports, since mounts (and shared-volume delivery)

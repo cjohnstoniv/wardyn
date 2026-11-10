@@ -284,17 +284,15 @@ func (r k8sRunner) Capabilities(context.Context) (runner.Capabilities, error) {
 	}, nil
 }
 
-// k8sRecheckRunner is k8sRunner reporting a canary check time and whether a
-// re-check since boot failed.
+// k8sRecheckRunner is k8sRunner reporting a canary verdict of its own.
 type k8sRecheckRunner struct {
 	k8sRunner
-	checkedAt time.Time
-	failed    bool
+	check runner.NetPolCheck
 }
 
 func (r k8sRecheckRunner) Capabilities(ctx context.Context) (runner.Capabilities, error) {
 	c, err := r.k8sRunner.Capabilities(ctx)
-	c.NetworkPolicyCheckedAt, c.NetworkPolicyRecheckFailed = r.checkedAt, r.failed
+	c.NetworkPolicyCheck = r.check
 	return c, err
 }
 
@@ -303,7 +301,7 @@ func (r k8sRecheckRunner) Capabilities(ctx context.Context) (runner.Capabilities
 // real Capabilities() call.
 func TestSetupStatus_K8sEgressContainmentCheck_RecheckFailed(t *testing.T) {
 	at := time.Now().UTC().Truncate(time.Second)
-	srv := New(Config{BaseCtx: testBaseCtx(t), AdminToken: adminToken, Runner: k8sRecheckRunner{checkedAt: at, failed: true}})
+	srv := New(Config{BaseCtx: testBaseCtx(t), AdminToken: adminToken, Runner: k8sRecheckRunner{check: runner.NetPolCheck{Verdict: runner.NetPolRefused, At: at}}})
 	code, st := decodeSetup(t, srv, adminToken)
 	if code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", code)
@@ -338,9 +336,11 @@ func TestK8sNetpolVerdict(t *testing.T) {
 		{"k8s acknowledged", "k8s", runner.Capabilities{NetworkPolicyAcknowledged: true}, "acknowledged"},
 		{"acknowledged wins over a stale NetworkPolicy=true", "k8s",
 			runner.Capabilities{NetworkPolicy: true, NetworkPolicyAcknowledged: true}, "acknowledged"},
-		{"k8s re-check failed", "k8s", runner.Capabilities{NetworkPolicyRecheckFailed: true}, "recheck_failed"},
-		{"a failed re-check wins over acknowledged", "k8s",
-			runner.Capabilities{NetworkPolicyAcknowledged: true, NetworkPolicyRecheckFailed: true}, "recheck_failed"},
+		{"k8s re-check refused", "k8s", runner.Capabilities{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolRefused}}, "refused"},
+		{"the substrate's own verdict wins over the flags", "k8s",
+			runner.Capabilities{NetworkPolicyAcknowledged: true, NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolNotProven}}, "not_proven"},
+		{"an unknown verdict falls back to the flags", "k8s",
+			runner.Capabilities{NetworkPolicy: true, NetworkPolicyCheck: runner.NetPolCheck{Verdict: "newer-word"}}, "enforced"},
 		{"docker driver: empty regardless of caps", "docker", runner.Capabilities{NetworkPolicy: true}, ""},
 	}
 	for _, tc := range cases {

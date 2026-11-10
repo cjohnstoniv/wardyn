@@ -174,9 +174,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
-	// The live canary verdict, re-checked since boot: a namespace that stopped proving NetworkPolicy
-	// enforced refuses new sandboxes. Sandboxes already running are untouched.
-	if err := d.netPolRefusal(ns); err != nil {
+	if err := d.netPolRefusal(ns); err != nil { // the canary's live verdict; running sandboxes are untouched
 		return runner.Sandbox{}, err
 	}
 

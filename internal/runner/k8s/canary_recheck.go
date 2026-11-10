@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"maps"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // Vars, not consts, only so tests can shorten them.
@@ -69,10 +71,9 @@ type nsVerdict struct {
 	state netPolState
 	// strikes counts the checks in a row whose result disagreed with state.
 	strikes int
-	// checkedAt is when the namespace's last check finished, whatever it found.
-	checkedAt time.Time
-	// byRecheck: a re-check, not boot, set state.
-	byRecheck bool
+	// verdictAt is when the check that produced state finished: the latest check that agreed with it,
+	// or the one that changed it. A disagreeing check that has not changed it yet never moves it.
+	verdictAt time.Time
 }
 
 // netPolVerdict is the live verdict across the runs namespaces. Replaced whole, never changed in place.
@@ -112,32 +113,33 @@ func (v *netPolVerdict) acknowledged() bool {
 	return acked
 }
 
-// recheckFailed: a re-check since boot moved some namespace to not enforced or not proven. Boot's own
-// unenforced verdict under WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is not a failed re-check.
-func (v *netPolVerdict) recheckFailed() bool {
-	if v == nil {
-		return false
-	}
-	for _, n := range v.byNS {
-		if n.byRecheck && (n.state == netPolUnenforced || n.state == netPolNotProven) {
-			return true
+// netPolCheck is the live verdict as health reads it: the worst namespace's, with the time of the check
+// that produced it.
+func (d *Driver) netPolCheck() runner.NetPolCheck {
+	var out runner.NetPolCheck
+	if v := d.netPol.Load(); v != nil {
+		for _, n := range v.byNS {
+			out = runner.WorseNetPolCheck(out, runner.NetPolCheck{Verdict: d.wireVerdict(n.state), At: n.verdictAt})
 		}
 	}
-	return false
+	return out
 }
 
-// checkedAt is the oldest namespace's last check: every namespace was checked at least this recently.
-func (v *netPolVerdict) checkedAt() time.Time {
-	var oldest time.Time
-	if v == nil {
-		return oldest
-	}
-	for _, n := range v.byNS {
-		if oldest.IsZero() || n.checkedAt.Before(oldest) {
-			oldest = n.checkedAt
+// wireVerdict names a namespace state for health: not enforced splits on whether the override still
+// lets plain sandboxes start.
+func (d *Driver) wireVerdict(s netPolState) string {
+	switch s {
+	case netPolProven:
+		return runner.NetPolEnforced
+	case netPolAcknowledged:
+		return runner.NetPolAcknowledged
+	case netPolUnenforced:
+		if d.cfg.AllowUnenforcedNetPol {
+			return runner.NetPolUnenforced
 		}
+		return runner.NetPolRefused
 	}
-	return oldest
+	return runner.NetPolNotProven
 }
 
 // netPolRefusal says why a new sandbox may not start in ns under the live verdict, or nil. Running
@@ -158,7 +160,7 @@ func (d *Driver) netPolRefusal(ns string) error {
 		return nil
 	}
 	return fmt.Errorf("k8s: refusing a new sandbox in namespace %q: %w (%s, checked %s); running sandboxes keep running",
-		ns, errNetPolNotProven, n.state, n.checkedAt.UTC().Format(time.RFC3339))
+		ns, errNetPolNotProven, n.state, n.verdictAt.UTC().Format(time.RFC3339))
 }
 
 // startCanaryRecheck starts the loop that re-runs the canary in every runs namespace each
@@ -212,19 +214,17 @@ func (d *Driver) recheckOnce(ctx context.Context) {
 }
 
 // advance applies one check's result to a namespace's verdict: a result that agrees, or proves
-// enforcement, settles it at once; any other must repeat canaryRecheckStrikes times in a row, and the
-// last of them becomes the verdict (indeterminate ones as "not proven").
+// enforcement, settles it at once and stamps its time; any other must repeat canaryRecheckStrikes times
+// in a row, and the last of them becomes the verdict (indeterminate ones as "not proven"). Until then
+// the verdict keeps the time of the check that produced it.
 func (d *Driver) advance(ns string, prev nsVerdict, verdict canaryVerdict, err error) nsVerdict {
-	got := stateOf(verdict)
-	next := nsVerdict{state: prev.state, strikes: prev.strikes + 1, checkedAt: d.now(), byRecheck: prev.byRecheck}
+	got, now := stateOf(verdict), d.now()
+	next := nsVerdict{state: prev.state, strikes: prev.strikes + 1, verdictAt: prev.verdictAt}
 	if got == prev.state || got == netPolProven || next.strikes >= canaryRecheckStrikes {
-		if got != prev.state {
-			next.byRecheck = true
-		}
-		next.state, next.strikes = got, 0
+		next.state, next.strikes, next.verdictAt = got, 0, now
 	}
 	attrs := []any{slog.String("namespace", ns), slog.String("result", got.String()), slog.String("verdict", next.state.String()),
-		slog.Time("checked_at", next.checkedAt)}
+		slog.Time("checked_at", now)}
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}

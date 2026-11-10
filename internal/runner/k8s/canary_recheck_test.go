@@ -20,6 +20,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // recheckCluster is a fake cluster the canary can run on any number of times: a canary pod exits with
@@ -138,8 +140,8 @@ func TestCanaryRecheck_ThreeFailedChecksRefuseNewSandboxes(t *testing.T) {
 			t.Fatalf("after %d failed checks: refusal %v, NetworkPolicy %v; want refused and false", i, err, enforced)
 		}
 	}
-	if got := d.netPol.Load().byNS[testNamespace]; got.state != netPolUnenforced || !got.checkedAt.Equal(*clock) {
-		t.Errorf("verdict %v checked %v, want %v checked %v", got.state, got.checkedAt, netPolUnenforced, *clock)
+	if got := d.netPol.Load().byNS[testNamespace]; got.state != netPolUnenforced || !got.verdictAt.Equal(*clock) {
+		t.Errorf("verdict %v at %v, want %v at %v", got.state, got.verdictAt, netPolUnenforced, *clock)
 	}
 	if err := d.netPolRefusal(testNamespace); !strings.Contains(err.Error(), clock.Format(time.RFC3339)) {
 		t.Errorf("refusal %q does not name the check time %s", err, clock.Format(time.RFC3339))
@@ -233,8 +235,8 @@ func TestCanaryRecheck_AcknowledgedRefusesAgentSandboxOnly(t *testing.T) {
 	}
 }
 
-// TestCanaryRecheck_PerNamespace: a failing namespace refuses its own new sandboxes only, health's
-// aggregate reads false, and the aggregate check time is the oldest namespace's.
+// TestCanaryRecheck_PerNamespace: a failing namespace refuses its own new sandboxes only, and health
+// reads the worst namespace's verdict with that verdict's own time.
 func TestCanaryRecheck_PerNamespace(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, clock := c.boot(t, Config{Namespaces: []string{"runs-a", "runs-b"}})
@@ -243,8 +245,8 @@ func TestCanaryRecheck_PerNamespace(t *testing.T) {
 		t.Fatal("boot did not prove both namespaces")
 	}
 	next := &netPolVerdict{byNS: map[string]nsVerdict{
-		"runs-a": {state: netPolProven, checkedAt: booted},
-		"runs-b": {state: netPolUnenforced, checkedAt: booted.Add(time.Minute)},
+		"runs-a": {state: netPolProven, verdictAt: booted},
+		"runs-b": {state: netPolUnenforced, verdictAt: booted.Add(time.Minute)},
 	}}
 	d.netPol.Store(next)
 	if err := d.netPolRefusal("runs-a"); err != nil {
@@ -259,8 +261,8 @@ func TestCanaryRecheck_PerNamespace(t *testing.T) {
 	if enforced, _ := networkPolicyClaim(t, d); enforced {
 		t.Error("NetworkPolicy true with one namespace unenforced")
 	}
-	if got := next.checkedAt(); !got.Equal(booted) {
-		t.Errorf("checkedAt %v, want the oldest %v", got, booted)
+	if got, want := d.netPolCheck(), (runner.NetPolCheck{Verdict: runner.NetPolRefused, At: booted.Add(time.Minute)}); got != want {
+		t.Errorf("health check %+v, want the worst namespace's %+v", got, want)
 	}
 }
 
@@ -272,7 +274,7 @@ func TestCanaryRecheck_AcknowledgedNeverHidesAFailure(t *testing.T) {
 		t.Errorf("acknowledged %v enforced %v, want both false", v.acknowledged(), v.enforced())
 	}
 	var none *netPolVerdict
-	if none.enforced() || none.acknowledged() || !none.checkedAt().IsZero() {
+	if none.enforced() || none.acknowledged() {
 		t.Error("a nil verdict must prove nothing")
 	}
 }
@@ -329,37 +331,64 @@ func TestCanaryRecheck_CreateSandboxRefusedAfterFailedRecheck(t *testing.T) {
 	}
 }
 
-// TestCanaryRecheck_ClassesCarryCheckTimeAndFailure: Classes reports when the canary last ran and
-// whether a re-check failed, so health and the setup page can say so.
-func TestCanaryRecheck_ClassesCarryCheckTimeAndFailure(t *testing.T) {
+// healthCheck is what Classes reports for health.
+func healthCheck(t *testing.T, d *Driver) runner.NetPolCheck {
+	t.Helper()
+	cls, err := d.Classes(context.Background())
+	if err != nil {
+		t.Fatalf("Classes: %v", err)
+	}
+	return cls.NetworkPolicyCheck
+}
+
+// TestCanaryRecheck_VerdictKeepsTheTimeOfTheCheckThatProducedIt: proven at T1, two failed checks at T2
+// and T3 leave it proven at T1; the third at T4 flips it, at T4. A check that agrees moves the time.
+func TestCanaryRecheck_VerdictKeepsTheTimeOfTheCheckThatProducedIt(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, clock := c.boot(t, Config{})
 	d.recheckOnce(context.Background())
-	cls, err := d.Classes(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cls.NetworkPolicyCheckedAt.Equal(*clock) || cls.NetworkPolicyRecheckFailed {
-		t.Fatalf("checked %v, failed %v; want %v and false", cls.NetworkPolicyCheckedAt, cls.NetworkPolicyRecheckFailed, *clock)
+	t1 := *clock
+	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: t1}); got != want {
+		t.Fatalf("at T1: %+v, want %+v", got, want)
 	}
 	c.phaseB.Store(0)
+	for i := 2; i <= 3; i++ {
+		*clock = clock.Add(canaryRecheckInterval)
+		d.recheckOnce(context.Background())
+		if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: t1}); got != want {
+			t.Fatalf("after the failed check at T%d: %+v, want %+v", i, got, want)
+		}
+	}
+	*clock = clock.Add(canaryRecheckInterval)
+	d.recheckOnce(context.Background())
+	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolRefused, At: *clock}); got != want {
+		t.Fatalf("after the third failed check at T4: %+v, want %+v", got, want)
+	}
+	c.phaseB.Store(1)
+	*clock = clock.Add(canaryRecheckInterval)
+	d.recheckOnce(context.Background())
+	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: *clock}); got != want {
+		t.Errorf("after a proving check: %+v, want %+v", got, want)
+	}
+}
+
+// TestCanaryRecheck_NotProvenAfterThreeIndeterminate: three checks that could not tell read
+// "not_proven" for health, at the third.
+func TestCanaryRecheck_NotProvenAfterThreeIndeterminate(t *testing.T) {
+	c := newRecheckCluster(t)
+	d, clock := c.boot(t, Config{})
+	c.phaseB.Store(128)
 	for i := 0; i < canaryRecheckStrikes; i++ {
 		*clock = clock.Add(canaryRecheckInterval)
 		d.recheckOnce(context.Background())
 	}
-	if cls, _ = d.Classes(context.Background()); !cls.NetworkPolicyRecheckFailed || !cls.NetworkPolicyCheckedAt.Equal(*clock) {
-		t.Fatalf("checked %v, failed %v; want %v and true", cls.NetworkPolicyCheckedAt, cls.NetworkPolicyRecheckFailed, *clock)
-	}
-	c.phaseB.Store(1)
-	d.recheckOnce(context.Background())
-	if cls, _ = d.Classes(context.Background()); cls.NetworkPolicyRecheckFailed || !cls.NetworkPolicy {
-		t.Errorf("after a proving check: failed %v, NetworkPolicy %v; want false and true", cls.NetworkPolicyRecheckFailed, cls.NetworkPolicy)
+	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: *clock}); got != want {
+		t.Errorf("%+v, want %+v", got, want)
 	}
 }
 
-// TestCanaryRecheck_BootOverrideIsNotAFailedRecheck: an unenforced boot verdict under
-// WARDYN_K8S_ALLOW_UNENFORCED_NETPOL that re-checks keep finding is the operator's choice, not a
-// failed re-check.
+// TestCanaryRecheck_BootOverrideIsNotAFailedRecheck: an unenforced verdict under
+// WARDYN_K8S_ALLOW_UNENFORCED_NETPOL reads "unenforced" (the operator's choice), never "refused".
 func TestCanaryRecheck_BootOverrideIsNotAFailedRecheck(t *testing.T) {
 	c := newRecheckCluster(t)
 	c.phaseB.Store(0)
@@ -371,8 +400,8 @@ func TestCanaryRecheck_BootOverrideIsNotAFailedRecheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cls.NetworkPolicy || cls.NetworkPolicyRecheckFailed {
-		t.Errorf("NetworkPolicy %v, failed %v; want both false", cls.NetworkPolicy, cls.NetworkPolicyRecheckFailed)
+	if cls.NetworkPolicy || cls.NetworkPolicyCheck.Verdict != runner.NetPolUnenforced {
+		t.Errorf("NetworkPolicy %v, verdict %q; want false and %q", cls.NetworkPolicy, cls.NetworkPolicyCheck.Verdict, runner.NetPolUnenforced)
 	}
 }
 
@@ -385,6 +414,9 @@ func TestCanaryRecheck_AcknowledgedBesideUnenforcedReadsUnenforced(t *testing.T)
 	d, _ := c.boot(t, Config{Namespaces: []string{"runs-a", "runs-b"}, AckAmbientDefaultDeny: true, AllowUnenforcedNetPol: true})
 	enforced, acked := networkPolicyClaim(t, d)
 	if enforced || acked {
-		t.Errorf("NetworkPolicy %v, acknowledged %v; want both false, which health grades unenforced", enforced, acked)
+		t.Errorf("NetworkPolicy %v, acknowledged %v; want both false", enforced, acked)
+	}
+	if got := healthCheck(t, d).Verdict; got != runner.NetPolUnenforced {
+		t.Errorf("health verdict %q, want %q", got, runner.NetPolUnenforced)
 	}
 }

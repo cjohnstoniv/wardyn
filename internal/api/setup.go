@@ -232,8 +232,8 @@ type SetupRunner struct {
 	// call failed, so runnerCheck can tell it from "no runner configured". Never
 	// on the wire.
 	capsUnreadable bool
-	// netpolCheckedAt is when the k8s NetworkPolicy canary last ran, for the
-	// egress-containment row. Never on the wire.
+	// netpolCheckedAt is when the k8s canary check that produced the verdict
+	// ran, for the egress-containment row. Never on the wire.
 	netpolCheckedAt time.Time
 }
 
@@ -699,12 +699,14 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 		}
 	}
 	out.EphemeralDiskEnforcement = c.EphemeralDiskEnforcement
-	out.netpolCheckedAt = c.NetworkPolicyCheckedAt
+	if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
+		out.netpolCheckedAt = c.NetworkPolicyCheck.At
+	}
 	return out, k8sNetpolVerdict(out.Driver, c)
 }
 
 // k8sNetpolVerdict grades a runner's aggregated NetworkPolicy signals into the
-// four live-daemon verdicts, or "" on any non-k8s driver. Shared by
+// live-daemon verdicts (runner.NetPolCheck's), or "" on any non-k8s driver. Shared by
 // setupRunnerInfo (admin-only /setup/status, its return value here is a k8s
 // egress-containment checklist row) and handleHealthz (anonymous /healthz's
 // "network_policy" field) — both already hold a driver name and a
@@ -723,12 +725,13 @@ func k8sNetpolVerdict(driver string, caps runner.Capabilities) string {
 	// produces a driver that never set NetworkPolicy true (it is not proof), so
 	// the two are mutually exclusive in practice, but acknowledged-not-proven
 	// must never read as the stronger "enforced" claim if that ever changed.
-	// A failed re-check is checked first: since boot, the canary stopped proving
-	// enforcement and new sandboxes are refused. It must never read as the
-	// operator's boot-time override ("unenforced") or as "acknowledged".
+	// A substrate that re-checks names its verdict itself, including "refused"
+	// and "not_proven" after a failed re-check; the flags below are the
+	// fallback for one that predates it, or names a verdict this build lacks.
+	if v := caps.NetworkPolicyCheck.Verdict; runner.KnownNetPolVerdict(v) {
+		return v
+	}
 	switch {
-	case caps.NetworkPolicyRecheckFailed:
-		return "recheck_failed"
 	case caps.NetworkPolicyAcknowledged:
 		return "acknowledged"
 	case caps.NetworkPolicy:

@@ -648,13 +648,14 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 			t.Errorf("network_policy_checked_at = %v, want absent when the runner reports no check time", v)
 		}
 	})
-	// A failed re-check shows as its own grade with the time the canary last ran.
-	t.Run("k8s re-check failed", func(t *testing.T) {
+	// A failed re-check shows as its own grade with the time of the check that produced it.
+	t.Run("k8s re-check refused", func(t *testing.T) {
 		at := time.Now().UTC().Truncate(time.Second)
-		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRecheckRunner{k8sRunner: k8sRunner{networkPolicy: true}, checkedAt: at, failed: true}})
+		check := runner.NetPolCheck{Verdict: runner.NetPolRefused, At: at}
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRecheckRunner{k8sRunner: k8sRunner{networkPolicy: true}, check: check}})
 		body := decode(t, srv)
-		if body["network_policy"] != "recheck_failed" || body["network_policy_checked_at"] != at.Format(time.RFC3339) {
-			t.Errorf("network_policy = %v checked %v, want recheck_failed checked %s", body["network_policy"], body["network_policy_checked_at"], at.Format(time.RFC3339))
+		if body["network_policy"] != "refused" || body["network_policy_checked_at"] != at.Format(time.RFC3339) {
+			t.Errorf("network_policy = %v checked %v, want refused checked %s", body["network_policy"], body["network_policy_checked_at"], at.Format(time.RFC3339))
 		}
 	})
 	// Negative control: a non-k8s driver must OMIT the key entirely, never
