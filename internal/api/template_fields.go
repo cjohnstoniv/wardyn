@@ -267,6 +267,8 @@ var templatePolicyRules = []TemplateFieldRule{
 		"The built-in cap on concurrent holds applies. Zero is the same."),
 	carriedField("allowed_methods", partEgress, templateOmitBaseline, templateEmptyAll,
 		"Methods follow the baseline. An empty list allows every method."),
+	carriedField("host_rules", partEgress, templateOmitOptional, templateEmptySame,
+		"No host rules are added. A template's rule sets apply beside the sets of every other layer."),
 	carriedField("min_confinement_class", partRunner, templateOmitBaseline, templateEmptySame,
 		"The floor follows the organisation's. A template cannot lower a managed floor."),
 	carriedField("eligible_grants", partCreds, templateOmitOptional, templateEmptyValue,
@@ -330,6 +332,8 @@ var templateNestedCarried = map[string]string{
 	"GitPATOverride":      "host repos access api",
 	"GrantSpec":           "kind scope ttl_seconds requires_approval owner_only",
 	"HarnessInnerWalls":   "sandbox_mode approvals",
+	"HostRuleSet":         "rules",
+	"HostRule":            "host methods paths effect",
 	"DesktopControls":     "paste_in copy_out upload download",
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url detector_sidecar_format " +
