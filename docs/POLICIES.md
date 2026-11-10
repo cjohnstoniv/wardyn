@@ -1215,7 +1215,7 @@ Rules for what a run may send to one host: which methods, on which paths. `host_
 | `methods` | `[]string` | `[]` (all) | Uppercase HTTP methods the rule matches. |
 | `paths` | `[]string` | `[]` (all) | Paths the rule matches, each with the paths below it: `/repos` matches `/repos` and `/repos/a`, not `/reposx`. Written in normal form (below), with no query or fragment. |
 
-`effect` is `allow` or `deny`. `hold` is refused for now; it arrives in a later release.
+`effect` is `allow`, `deny` or `hold`. A hold waits for a person to decide the request: see [A host rule hold](#a-host-rule-hold-effect-hold).
 
 How a request to a host is decided:
 
