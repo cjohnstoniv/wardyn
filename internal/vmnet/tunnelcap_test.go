@@ -47,6 +47,10 @@ func startHoldProxy(t *testing.T) *holdProxy {
 	}
 	h.addr = l.Addr().String()
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == dnsPath {
+			w.WriteHeader(http.StatusNoContent) // the relay's DNS records; these tests count refusals
+			return
+		}
 		if r.Method != http.MethodConnect {
 			var rf refusal
 			_ = json.NewDecoder(r.Body).Decode(&rf)

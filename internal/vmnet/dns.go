@@ -5,6 +5,7 @@ package vmnet
 
 import (
 	"errors"
+	"net"
 	"strings"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -16,8 +17,23 @@ type dnsResult struct {
 	qtype   string
 	addr    [4]byte
 	given   bool   // an A answer was given
-	refused string // "name" (bad spelling) or "full" (table full of live names)
+	refused string // "name" (bad spelling), "full" (table full of live names) or "prep" (a preparation relay)
 	evicted string
+}
+
+// query is the audit record of one answered query: the outcome answer or refuseAll
+// computed, never a lookup of its own.
+func (r dnsResult) query() dnsRecord {
+	q := dnsRecord{Name: r.name, Type: r.qtype, Outcome: dnsAnswered}
+	switch {
+	case r.refused == "prep":
+		q.Outcome = dnsPrepRefused
+	case r.refused != "":
+		q.Outcome, q.Cause = dnsRefused, r.refused
+	case r.given:
+		q.Answer = net.IP(r.addr[:]).String()
+	}
+	return q
 }
 
 // answer builds the reply to one guest DNS query from the name table alone:
@@ -69,21 +85,26 @@ func answer(t *nameTable, q []byte) ([]byte, dnsResult, error) {
 // table behind it. A synthetic answer makes the guest believe the network is up and keep retrying (Setup
 // Assistant waits on Screen Time for minutes); a refusal ends the wait. A query that does not parse, or asks more
 // or less than one question, gets no reply, as in answer.
-func refuseAll(q []byte) ([]byte, error) {
+// The result names the question for the relay's log: the name only when its spelling is valid.
+func refuseAll(q []byte) ([]byte, dnsResult, error) {
 	var p dnsmessage.Parser
 	h, err := p.Start(q)
 	if err != nil {
-		return nil, err
+		return nil, dnsResult{}, err
 	}
 	qs, err := p.AllQuestions()
 	if err != nil {
-		return nil, err
+		return nil, dnsResult{}, err
 	}
 	if h.Response || len(qs) != 1 {
-		return nil, errors.New("want one question")
+		return nil, dnsResult{}, errors.New("want one question")
+	}
+	res := dnsResult{qtype: qs[0].Type.String(), refused: "prep"}
+	if name := strings.TrimSuffix(strings.ToLower(qs[0].Name.String()), "."); validName(name) {
+		res.name = name
 	}
 	hdr := dnsmessage.Header{ID: h.ID, Response: true, Authoritative: true, RecursionDesired: h.RecursionDesired, RecursionAvailable: true, RCode: dnsmessage.RCodeRefused}
-	return build(hdr, qs[0], nil), nil
+	return build(hdr, qs[0], nil), res, nil
 }
 
 func build(hdr dnsmessage.Header, q dnsmessage.Question, a *dnsmessage.AResource) []byte {
