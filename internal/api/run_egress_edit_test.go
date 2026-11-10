@@ -632,15 +632,37 @@ func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 	f := newEgressEditFixture(t)
 	kept := types.AgentRun{State: types.RunRunning, Interactive: true, SandboxRef: "sbx"}
 	ended := types.AgentRun{State: types.RunRunning, SandboxRef: "sbx"}
-	for run, want := range map[*types.AgentRun]string{&kept: "lost until revived", &ended: "is ended"} {
-		for _, rerr := range []*reviveError{egressEditUnconfirmed("start_failed"), egressEditUnresolved("start_failed", nil)} {
-			if got := f.srv.withRunFate(*run, rerr).msg; !strings.Contains(got, want) {
-				t.Errorf("interactive=%v %s: %q, want it to say %q", run.Interactive, rerr.reason, got, want)
+	for run, want := range map[*types.AgentRun][2]string{&kept: {"is lost until revived", "will be lost until revived"}, &ended: {"is ended", "will be ended"}} {
+		for i, rerr := range []*reviveError{egressEditUnconfirmed("start_failed"), egressEditUnresolved("start_failed", nil)} {
+			if got := f.srv.withRunFate(*run, rerr).msg; !strings.Contains(got, want[i]) {
+				t.Errorf("interactive=%v %s: %q, want it to say %q", run.Interactive, rerr.reason, got, want[i])
 			}
 		}
 	}
 	if got := f.srv.withRunFate(ended, egressEditSuperseded(true)).msg; strings.Contains(got, "ended") {
 		t.Errorf("a superseded edit stopped nothing, so it names no fate: %q", got)
+	}
+}
+
+// failLostMarkStore fails the run's lost mark, as a database blip would.
+type failLostMarkStore struct {
+	*readbackStore
+}
+
+func (s *failLostMarkStore) MarkRunLost(context.Context, uuid.UUID, types.LostReason, time.Time, time.Duration) (bool, error) {
+	return false, errors.New("injected lost-mark failure")
+}
+
+// An edit whose replace fails and whose lost mark is not written, though its proxy stop lands, is
+// unresolved and never says the run is lost: that outcome was not recorded.
+func TestEgressEdit_AnUnwrittenLostMarkClaimsNoFate(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.srv.cfg.Store = &failLostMarkStore{readbackStore: f.rb}
+	f.rr.replaceErr = runner.ErrProxyReplaceFailed
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	body := w.Body.String()
+	if errorReason(w) != reasonEgressEditContainmentUnresolved || strings.Contains(body, "is lost until revived") || strings.Contains(body, "is ended") {
+		t.Errorf("%d %s: want %s that names no recorded fate", w.Code, body, reasonEgressEditContainmentUnresolved)
 	}
 }
 
