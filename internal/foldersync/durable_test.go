@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +21,18 @@ import (
 )
 
 var errFault = &os.PathError{Op: "fsync", Path: "x", Err: syscall.EIO}
+
+// dirSyncs is whether directories are synced through fsyncDir here. Windows has no directory sync:
+// the write-through move stands for it (durable_windows.go).
+const dirSyncs = runtime.GOOS != "windows"
+
+// unixDirSync skips a test, or a subtest, that is only about directory syncs where there are none.
+func unixDirSync(t *testing.T) {
+	t.Helper()
+	if !dirSyncs {
+		t.Skip("no directory sync on Windows: the write-through move stands for it")
+	}
+}
 
 // onSync replaces the two sync calls for one test.
 func onSync(t *testing.T, file, dir func(*os.File) error) {
@@ -86,6 +99,7 @@ func TestInstall_PullSyncFailureKeepsTheLaptopFile(t *testing.T) {
 // After the rename the new file is in place, but a failed directory sync leaves it unproven: the
 // pull is refused and not recorded, so the next pass looks again.
 func TestInstall_PullDirSyncFailureIsRefusedAndNotRecorded(t *testing.T) {
+	unixDirSync(t)
 	sy, box, root := pipeSyncer(t, true)
 	changedInSandbox(t, sy, box, root)
 	before := sy.State.Files["x.txt"]
@@ -144,6 +158,7 @@ func TestInstall_PreInstallFailureLeavesDst(t *testing.T) {
 }
 
 func TestInstall_PostInstallDirSyncFailureIsInstalledNotDurable(t *testing.T) {
+	unixDirSync(t)
 	dir, root, name, f := tempBeside(t)
 	onSync(t, func(*os.File) error { return nil }, func(*os.File) error { return errFault })
 	_, err := installDurable(root, nil, f, name, InstallReplace, "dst")
@@ -180,7 +195,7 @@ func TestInstall_StateSaveFailureKeepsThePreviousState(t *testing.T) {
 		t.Errorf("file sync failure: err = %v, saved = %s, want the previous state", err, saved())
 	}
 	onSync(t, func(*os.File) error { return nil }, func(*os.File) error { return errFault })
-	if err := save(3); !errors.Is(err, ErrNotDurable) || saved() != "3" {
+	if err := save(3); dirSyncs && (!errors.Is(err, ErrNotDurable) || saved() != "3") {
 		t.Errorf("directory sync failure: err = %v, saved = %s", err, saved())
 	}
 	if ents, _ := os.ReadDir(filepath.Dir(file)); len(ents) != 1 {
@@ -231,6 +246,7 @@ func TestLoadState_RemovesTheTempFilesOfAStoppedSave(t *testing.T) {
 // A pulled file in new directories: once it is installed, its directory and every one above it are
 // synced, the root last.
 func TestInstall_NewDirectoriesSyncEveryDirectoryUpToTheRoot(t *testing.T) {
+	unixDirSync(t)
 	sy, box, root := pipeSyncer(t, true)
 	putSyncFile(t, filepath.Join(box, "a", "b", "c", "new.txt"), "from the sandbox", 0o644)
 	var synced []string
@@ -253,6 +269,7 @@ func TestInstall_NewDirectoriesSyncEveryDirectoryUpToTheRoot(t *testing.T) {
 // A state save whose root sync fails is not durable. A retry finds the state's directory already
 // made and still syncs every directory up to the root; a failure that repeats fails it again.
 func TestSaveUnder_ARetrySyncsEveryDirectoryUpToTheRoot(t *testing.T) {
+	unixDirSync(t)
 	top := t.TempDir()
 	file := filepath.Join(top, "folders", "run.json")
 	st := &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{}}
@@ -316,6 +333,9 @@ func TestSaveState_TheCLIStatePathSyncsUpToTheHomeOnEverySave(t *testing.T) {
 		return nil
 	})
 	for i, fail := range []bool{true, true, false} {
+		if !dirSyncs {
+			break
+		}
 		failHome, synced = fail, nil
 		err := sy.saveState()
 		if fail != errors.Is(err, ErrNotDurable) || (!fail && err != nil) {
@@ -361,6 +381,9 @@ func TestInstall_AnUnsupportedDirSyncIsBestEffortAndWarnedOnce(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.dir != nil {
+				unixDirSync(t)
+			}
 			sy, box, root := runnerSyncer(t, true)
 			bothChanged(t, sy, box, root)
 			putSyncFile(t, filepath.Join(box, "a", "b", "new.txt"), "from the sandbox", 0o644)

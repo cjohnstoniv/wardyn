@@ -91,6 +91,9 @@ func TestInstall_Order(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"file sync, copy absent=true, sandbox=sandbox edit!", "dir sync, copy present=true, sandbox=sandbox edit!"}
+	if !dirSyncs {
+		want = want[:1]
+	}
 	if !slices.Equal(events, want) || sandbox() != "laptop edit" {
 		t.Errorf("events = %q, sandbox after = %q", events, sandbox())
 	}
@@ -116,6 +119,9 @@ func TestInstall_ConflictSyncFailuresRefuseThePush(t *testing.T) {
 		"directory sync": {nil, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
+			if name == "directory sync" {
+				unixDirSync(t)
+			}
 			sy, box, root := runnerSyncer(t, true)
 			bothChanged(t, sy, box, root)
 			before := sy.State.Files["x.txt"]
@@ -280,6 +286,7 @@ func TestSyncer_WithoutRunnerPassKeepsCLIRules(t *testing.T) {
 // one above it are synced, the root last, and only after all of them may the push truncate the
 // sandbox's file. A failed directory sync blocks the push.
 func TestInstall_ConflictCopyInANewDirectorySyncsEverythingBeforeThePush(t *testing.T) {
+	unixDirSync(t)
 	for _, failDir := range []bool{false, true} {
 		sy, box, root := runnerSyncer(t, true)
 		sy.ig = newSyncIgnore(nil)
@@ -393,6 +400,7 @@ func TestInstall_AnIdenticalExistingCopyIsSyncedBeforeThePush(t *testing.T) {
 // refused. The retry finds the directories and the copy already in place and still syncs the root
 // before the push may truncate the sandbox's file; a failure that repeats refuses the push again.
 func TestInstall_ARetryAfterAFailedRootSyncSyncsTheRootBeforeThePush(t *testing.T) {
+	unixDirSync(t)
 	for _, again := range []bool{false, true} {
 		sy, box, root := runnerSyncer(t, true)
 		sy.ig = newSyncIgnore(nil)
