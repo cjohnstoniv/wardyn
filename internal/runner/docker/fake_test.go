@@ -254,6 +254,9 @@ type fakeDocker struct {
 	// run against one drive creates nothing (idempotence is the contract, not
 	// merely the observable end state).
 	volumeCreates int
+	// apiVersion/apiVersionSet: see ClientVersion.
+	apiVersion    string
+	apiVersionSet bool
 	// failVolumeInspect makes VolumeInspect return a NON-not-found error — the
 	// "the daemon cannot say whether it exists" arm, which must fail closed
 	// rather than create over the top of it.
@@ -769,6 +772,9 @@ type fakeCopy struct {
 }
 
 func (f *fakeDocker) CopyToContainer(ctx context.Context, id string, opts client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	if err := ctx.Err(); err != nil {
+		return client.CopyToContainerResult{}, err
+	}
 	body, err := io.ReadAll(opts.Content)
 	if err != nil {
 		return client.CopyToContainerResult{}, err
@@ -1258,7 +1264,8 @@ func (f *fakeDocker) VolumeCreate(ctx context.Context, opts client.VolumeCreateO
 	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Driver: opts.Driver, Labels: opts.Labels}}, nil
 }
 
-// VolumeRemove is ReclaimDrive's destroy call and nothing else's. It answers
+// VolumeRemove is the destroy call of its two callers: ReclaimDrive, and removeDNSVolume for a run's own
+// DNS volume. It answers
 // the two errors the real daemon answers and that the driver branches on: a
 // not-found for a name this fake does not hold, and a CONFLICT (the errdefs
 // shape a live daemon returns for "volume is in use") when volumeInUse names
@@ -1303,3 +1310,17 @@ type fakeAddr struct{}
 
 func (fakeAddr) Network() string { return "fake" }
 func (fakeAddr) String() string  { return "fake" }
+
+// apiVersion is what ClientVersion answers when apiVersionSet: "" is then the client before its first request.
+// Otherwise the answer is a current API.
+func (f *fakeDocker) ClientVersion() string {
+	if f.apiVersionSet {
+		return f.apiVersion
+	}
+	return "1.56"
+}
+
+// volumeOf is the volume a daemon holds for a create request, as an inspect reports it.
+func volumeOf(o client.VolumeCreateOptions) volume.Volume {
+	return volume.Volume{Name: o.Name, Driver: o.Driver, Labels: o.Labels, Options: o.DriverOpts}
+}

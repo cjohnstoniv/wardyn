@@ -26,7 +26,7 @@ import (
 
 // helper: run CreateSandbox with the given mounts and return the agent's applied
 // bind mounts (excluding the recording mount, which is off in these tests) plus
-// any error.
+// any error. The run's resolver volume mount (driver_dns.go) is among them.
 func createWithMounts(t *testing.T, mounts []runner.Mount) ([]mount.Mount, error) {
 	t.Helper()
 	f := newFakeDocker()
@@ -101,6 +101,7 @@ func TestCreateSandbox_AllowedMountApplied(t *testing.T) {
 	// and only this line is about the mounts nobody asked for.
 	assertMountSet(t, got, []mountSummary{
 		{Target: "/home/agent/work", Source: "/home/maintainer/repo", ReadOnly: false},
+		resolverSummary(testSpec().RunID), // the run's resolver file (driver_dns.go), asserted in full by driver_dns_test.go
 	})
 	var found *mount.Mount
 	for i := range got {
@@ -646,9 +647,9 @@ func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
 // validated before the drive is appended, so the refusal lands before
 // ensureDriveVolume: a run that fails on a legacy policy row must not leave a
 // persistent, member-owned volume behind, and nothing in this package removes
-// one (there is no VolumeRemove call anywhere in it, and CreateSandbox's
-// rollback deliberately skips drive volumes so a retry finds the member's
-// files). Reordered, every failed run on such a deployment would allocate
+// one (the only VolumeRemove calls in it are ReclaimDrive's and the removal of a
+// run's own resolver volume, and CreateSandbox's rollback deliberately skips
+// drive volumes so a retry finds the member's files). Reordered, every failed run on such a deployment would allocate
 // storage nobody ever reclaims.
 //
 // Asserted with AND without a drive on the same run, so the refusal is a
