@@ -220,6 +220,35 @@ func TestMacOSCapsFallbackCapturesUnderTheSendLock(t *testing.T) {
 	}
 }
 
+// The fallback reads the last caps after it holds the lock, not before: a send that stores newer caps while
+// the fallback waits on the lock is the base the fallback acks. A read taken before the lock would ack the
+// older base over it. (The fallback is given time to reach the lock; the wait only makes a misplaced read
+// fail, never a correct one.)
+func TestMacOSCapsFallbackReadsLastCapsInsideTheLock(t *testing.T) {
+	var dirty atomic.Bool
+	var last atomic.Pointer[runnerwire.Caps]
+	var mu sync.Mutex
+	last.Store(&runnerwire.Caps{Arch: "old"})
+	send := func(context.Context, *runnerwire.Peer, bool, bool) error { return fmt.Errorf("%w: down", errHostCaps) }
+	acked := make(chan string, 1)
+	ack := func(_ context.Context, _ *runnerwire.Peer, c runnerwire.Caps) error { acked <- c.Arch; return nil }
+	cur := func() *runnerwire.MacVMCaps { return &runnerwire.MacVMCaps{Max: 1} }
+
+	mu.Lock() // a send in progress
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resendMacOSCaps(t.Context(), new(runnerwire.Peer), &dirty, &last, &mu, send, ack, cur)
+	}()
+	time.Sleep(200 * time.Millisecond) // the fallback is at the lock
+	last.Store(&runnerwire.Caps{Arch: "new"})
+	mu.Unlock()
+	<-done
+	if got := <-acked; got != "new" {
+		t.Fatalf("the fallback acked the %q base, want the %q one a send stored while it waited on the lock", got, "new")
+	}
+}
+
 // capsGate holds one caps event at the organisation: paused closes when it arrives, and it is let
 // through when release closes.
 type capsGate struct{ paused, release chan struct{} }
