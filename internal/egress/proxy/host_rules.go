@@ -7,8 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -98,12 +101,6 @@ func (p *Proxy) hostRuleVerdict(r *http.Request, host, rawPath string) (cause st
 	}
 }
 
-// pathOverrideHeaders are headers a server or framework may read a request path, path prefix or host from
-// in place of the request line. The one list: the host-rule gate refuses a request carrying any of them
-// (routeOverrideCause), and the git broker lanes strip them (stripRouteOverrides).
-var pathOverrideHeaders = []string{"X-Original-URL", "X-Rewrite-URL", "X-Override-URL",
-	"X-Forwarded-Prefix", "X-Script-Name", "X-Forwarded-Host"}
-
 // routeOverrideCause says why a request carries a header that could have its host run another method or
 // path than the one the rules judged, or "": a method override naming another method (patAPIMethodMismatch,
 // the forge API door's check), or any path override. Such a request is refused, never stripped: the rule
@@ -112,8 +109,8 @@ func routeOverrideCause(r *http.Request) string {
 	if patAPIMethodMismatch(r) {
 		return "host rules: the request carries a method override that names another method than the request line"
 	}
-	for _, k := range pathOverrideHeaders {
-		if len(r.Header.Values(k)) > 0 {
+	for _, k := range slices.Sorted(maps.Keys(r.Header)) {
+		if armscope.RouteOverrideHeader(k) { // any case, '-' or '_'
 			return "host rules: the request carries " + k + ", which a host may route by in place of the request line judged"
 		}
 	}

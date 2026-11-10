@@ -798,7 +798,11 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
 - An approval lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline refuses them all for the run. The answer lives in the run's proxy, so a new proxy asks again.
-- On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. That engine is let go after 10 minutes with nothing open, or when the runner goes offline, and the call is then asked about again.
+- On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. The call is asked about again once that engine is let go, which happens:
+  - when it has had nothing open for 10 minutes;
+  - when the run is kept, its runner goes offline, or two reads of the run fail in a row;
+  - when the run moves to another runner;
+  - when the control plane stops.
 - A request a brokered route or an API door sends is held the same way, on the method and path its host receives. A request a lane already held and let through is not asked about again when it is sent.
 - The approval names no port or scheme. It covers that host, method and path on any port, over HTTP or HTTPS.
 - A hold never outranks a deny. Each request is judged afresh: if any rule set denies it, or names the host and matches nothing, it is refused, approved or not. An approval answers only the hold.
@@ -1213,10 +1217,10 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 Rules for what a run may send to one host: which methods, on which paths. `host_rules` is a list of rule sets. You write one set; each layer that adds rules (a ceiling, a profile, a restriction) keeps its own set beside yours, and the sets are not merged.
 
 ```json
-"host_rules": [{"rules": [
+{ "host_rules": [{"rules": [
   {"host": "api.example.com", "methods": ["DELETE"], "effect": "deny"},
   {"host": "api.example.com", "methods": ["GET"], "paths": ["/repos"], "effect": "allow"}
-]}]
+]}] }
 ```
 
 | Field | Type | Default | What it does |
@@ -1234,7 +1238,11 @@ How a request to a host is decided:
 - Across sets, any deny wins. Otherwise any hold asks a person ([A host rule hold](#a-host-rule-hold-effect-hold)). Otherwise the request is allowed. A set that does not name the host has no say.
 - [`allowed_methods`](#allowed_methods) still applies on top, on the lanes it covers. `/wardyn/gh/` and `/wardyn/git/` ignore it.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
-- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or a path, prefix or host override (`X-Original-URL`, `X-Rewrite-URL`, `X-Override-URL`, `X-Forwarded-Prefix`, `X-Script-Name`, `X-Forwarded-Host`), is refused. The git routes `/wardyn/gh/` and `/wardyn/git/` drop these headers instead and send the request on, judged by its request line.
+- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or with a path, prefix or host override header, is refused.
+- A path, prefix or host override is a header whose name contains one of these, ignoring case and any `-` or `_`. So `X_Script_Name` and `X-Envoy-Original-Path` count.
+  - `original-url`, `original-uri`, `original-path`, `rewrite-url`, `rewrite-uri`, `rewrite-path`, `override-url`, `override-uri`, `override-path`
+  - `forwarded-prefix`, `forwarded-url`, `forwarded-uri`, `forwarded-path`, `forwarded-host`, `script-name`
+- A model provider's `extra_headers` may not name one. The git routes `/wardyn/gh/` and `/wardyn/git/` drop these headers instead and send the request on, judged by its request line.
 
 Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.
 

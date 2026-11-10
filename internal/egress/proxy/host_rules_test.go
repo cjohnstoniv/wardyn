@@ -447,10 +447,11 @@ func TestConfigHostRulesLoadOnEveryRouteButAVM(t *testing.T) {
 	}
 }
 
-// TestHostRulesRefusePrefixOverrideHeaders: a path prefix or host header (X-Forwarded-Prefix, X-Script-Name,
-// X-Forwarded-Host) can make a host serve another route than the request line's. On a rule host such a
-// request is refused with a policy:host-rule row, on the plain lane and on the brokered model route alike,
-// though the rules allow the request line: X-Script-Name /public turns /public/admin/x into /admin/x.
+// TestHostRulesRefusePrefixOverrideHeaders: a path, prefix or host header (X-Forwarded-Prefix, X-Script-Name,
+// X-Forwarded-Host, X-Original-URI, X-Forwarded-Uri), in any case and with '-' or '_', can make a host serve
+// another route than the request line's. On a rule host such a request is refused with a policy:host-rule
+// row, on the plain lane, inside a tunnel and on the brokered model route alike, though the rules allow the
+// request line: X-Script-Name /public turns /public/admin/x into /admin/x.
 func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
 	ruled := func(host, allow, deny string) []types.HostRuleSet {
 		return []types.HostRuleSet{{Rules: []types.HostRule{
@@ -461,7 +462,22 @@ func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
 	refusedRow := func(log string) bool {
 		return strings.Contains(log, `"rule_source":"`+ruleSourceHostRule+`"`) && strings.Contains(log, "carries")
 	}
-	for _, h := range []string{"X-Script-Name", "X-Forwarded-Prefix", "X-Forwarded-Host"} {
+	t.Run("tunnel X_Script_Name", func(t *testing.T) {
+		cu := captureUpstream(t, true, "ok")
+		p, buf, caPEM := hrProxy(t, hrOpts{}, cu.srv)
+		p.policy.hostRules = ruled(hrHost, "/public", "/admin")
+		srv := httptest.NewServer(p)
+		defer srv.Close()
+		status, conn, _ := hrConnect(t, srv.URL, "443")
+		if status != http.StatusOK {
+			t.Fatalf("CONNECT = %d", status)
+		}
+		if got := hrInner(t, conn, caPEM, "GET", "/public/admin/x", "X_Script_Name: /public"); got != http.StatusForbidden || cu.reached || !refusedRow(buf.String()) {
+			t.Errorf("inner GET /public/admin/x with X_Script_Name = %d reached=%v, want a policy:host-rule refusal:\n%s", got, cu.reached, buf.String())
+		}
+	})
+	for _, h := range []string{"X-Script-Name", "X-Forwarded-Prefix", "X-Forwarded-Host",
+		"X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri"} {
 		t.Run("plain "+h, func(t *testing.T) {
 			cu := captureUpstream(t, false, "ok")
 			buf := &bytes.Buffer{}

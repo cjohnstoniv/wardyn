@@ -949,8 +949,12 @@ is not the deployment described above.**
   A `via_org` request is judged per request by the organisation's engine (`ServeInjected`, `ServeBroker`).
   Exempt: the proxy's own sends (`withProxyOwnSend`). Among them are the push comparison's forge API reads
   ([`push_forge.go`](../internal/egress/proxy/push_forge.go), `push_forge_ado.go`), which a deny rule does not
-  stop. Their path parts are checked (`gitSegSafe` owner and name, `CheckRefName` and `PathEscape` for refs,
-  hex commit ids), and their answers are decoded for the comparison and not relayed to the sandbox.
+  stop. Their path parts are checked. On GitHub: `gitSegSafe` owner and name, `CheckRefName` and
+  `PathEscape` for refs, hex commit ids. On Azure DevOps: its own segment check and `PathEscape` for the
+  organisation, project and repository ([`push_forge_ado.go`](../internal/egress/proxy/push_forge_ado.go)), and
+  `QueryEscape` for refs. The default branch name, the forge's own answer, is only escaped. A response body is
+  decoded for the comparison and not relayed to the sandbox; the verdict and a forge status code can appear
+  in the refusal reason.
   Residual: a rule constrains requests addressed to its host name, not every route to the same server. Under
   `allow_all_egress`, a `CONNECT` to the server's IP address or another name for it reads no rule, even when
   the request inside names the rule host; `refuse_ip_literals` blocks only the IP-address form.

@@ -298,3 +298,13 @@ func TestNewServer_CarriesLLMHeadersToTheInjector(t *testing.T) {
 		t.Fatalf("injector headers for the gateway = %v, want x-portkey-provider from the config", got)
 	}
 }
+
+// A gateway's extra header may not be a route override (armscope.RouteOverrideHeader) in any spelling: host
+// rules would refuse every model call that carried it.
+func TestExtraHeaders_RouteOverridesReserved(t *testing.T) {
+	for _, name := range []string{"X-Forwarded-Host", "X-Script-Name", "X_Forwarded_Prefix", "x-original-uri", "X-Forwarded-Uri", "X-Rewrite-URL"} {
+		if err := ReservedExtraHeader(name); err == nil || !strings.Contains(err.Error(), "another path or host") {
+			t.Errorf("ReservedExtraHeader(%q) = %v, want the route override refusal", name, err)
+		}
+	}
+}

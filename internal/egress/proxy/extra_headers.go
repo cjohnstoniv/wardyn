@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/net/http/httpguts"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
@@ -67,6 +68,8 @@ func ReservedExtraHeader(name string, own ...string) error {
 		return fmt.Errorf("%q is a Wardyn header", name)
 	case isListed(own):
 		return fmt.Errorf("%q is this provider's own credential header", name)
+	case armscope.RouteOverrideHeader(name):
+		return fmt.Errorf("%q can make a host serve another path or host than the request line's, so host rules refuse it", name)
 	}
 	// "portkey" is a product name, not a key: without it the name of the gateway this exists for
 	// (x-portkey-provider) would read as a credential. x-portkey-api-key still does, by "key" in "api-key".
