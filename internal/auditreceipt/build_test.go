@@ -165,6 +165,9 @@ func TestAssemble_Refusals(t *testing.T) {
 	// A hash list that disagrees with the row is a server fault, not a receipt.
 	bad := rows[1][1]
 	other := "ff" + (*bad.RowHash)[2:]
+	if other == *bad.RowHash { // a hash that already starts with ff (1 in 256 runs)
+		other = "00" + (*bad.RowHash)[2:]
+	}
 	bad.RowHash = &other
 	if err := run(evs(bad), cps, false); !errors.Is(err, ErrUnchained) && !errors.Is(err, ErrInconsistent) {
 		t.Fatalf("a row whose hash is not in the list: %v", err)
