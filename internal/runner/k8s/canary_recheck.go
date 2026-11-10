@@ -23,9 +23,9 @@ var (
 	canaryRecheckInterval = 10 * time.Minute
 )
 
-// canaryRecheckStrikes is how many checks in a row must disagree with a namespace's verdict before it
-// changes, so one flaky CNI answer or apiserver error never moves it. A check that proves enforcement
-// changes it at once.
+// canaryRecheckStrikes is how many indeterminate checks in a row (an apiserver error, a pod that never
+// ran) turn a namespace's verdict into "not proven", so one flaky check never moves it. A definite
+// result changes it at once.
 const canaryRecheckStrikes = 3
 
 // errNetPolNotProven: the live verdict no longer lets a new sandbox start in the namespace.
@@ -69,7 +69,7 @@ func stateOf(v canaryVerdict) netPolState {
 // nsVerdict is one namespace's live verdict.
 type nsVerdict struct {
 	state netPolState
-	// strikes counts the checks in a row whose result disagreed with state.
+	// strikes counts the indeterminate checks in a row since the last definite one.
 	strikes int
 	// verdictAt is when the check that produced state finished: the latest check that agreed with it,
 	// or the one that changed it. A disagreeing check that has not changed it yet never moves it.
@@ -213,15 +213,27 @@ func (d *Driver) recheckOnce(ctx context.Context) {
 	}
 }
 
-// advance applies one check's result to a namespace's verdict: a result that agrees, or proves
-// enforcement, settles it at once and stamps its time; any other must repeat canaryRecheckStrikes times
-// in a row, and the last of them becomes the verdict (indeterminate ones as "not proven"). Until then
-// the verdict keeps the time of the check that produced it.
+// advance applies one check's result to a namespace's verdict, stamping the time of the check that
+// produced it. A definite result applies at once: a deny-all policy that leaks is proof the boundary is
+// gone, so new sandboxes stop with the first such check, and proof of enforcement restores them. Only
+// an indeterminate check is debounced: it keeps the verdict, and its time, until canaryRecheckStrikes
+// of them in a row make it "not proven".
 func (d *Driver) advance(ns string, prev nsVerdict, verdict canaryVerdict, err error) nsVerdict {
 	got, now := stateOf(verdict), d.now()
-	next := nsVerdict{state: prev.state, strikes: prev.strikes + 1, verdictAt: prev.verdictAt}
-	if got == prev.state || got == netPolProven || next.strikes >= canaryRecheckStrikes {
-		next.state, next.strikes, next.verdictAt = got, 0, now
+	next := nsVerdict{state: prev.state, verdictAt: prev.verdictAt}
+	switch verdict {
+	case canaryEnforced:
+		next.state, next.verdictAt = netPolProven, now
+	case canaryUnenforced:
+		next.state, next.verdictAt = netPolUnenforced, now
+	case canaryAcknowledged:
+		next.state, next.verdictAt = netPolAcknowledged, now
+	default: // canaryIndeterminate
+		if prev.state == netPolNotProven {
+			next.verdictAt = now
+		} else if next.strikes = prev.strikes + 1; next.strikes >= canaryRecheckStrikes {
+			next.state, next.strikes, next.verdictAt = netPolNotProven, 0, now
+		}
 	}
 	attrs := []any{slog.String("namespace", ns), slog.String("result", got.String()), slog.String("verdict", next.state.String()),
 		slog.Time("checked_at", now)}
@@ -235,7 +247,7 @@ func (d *Driver) advance(ns string, prev nsVerdict, verdict canaryVerdict, err e
 		slog.Warn("wardynd: k8s egress canary re-check changed the NetworkPolicy verdict", attrs...)
 	case next.strikes > 0:
 		attrs = append(attrs, slog.Int("failed_checks", next.strikes), slog.Int("of", canaryRecheckStrikes))
-		slog.Warn("wardynd: k8s egress canary re-check disagreed with the NetworkPolicy verdict; it changes after repeated failures", attrs...)
+		slog.Warn("wardynd: k8s egress canary re-check could not tell; the verdict reads not proven after repeated failures", attrs...)
 	}
 	return next
 }

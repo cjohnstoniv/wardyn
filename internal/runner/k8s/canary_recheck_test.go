@@ -117,10 +117,10 @@ func networkPolicyClaim(t *testing.T, d *Driver) (enforced, acknowledged bool) {
 	return cls.NetworkPolicy, cls.NetworkPolicyAcknowledged
 }
 
-// TestCanaryRecheck_ThreeFailedChecksRefuseNewSandboxes: a cluster that stops enforcing NetworkPolicy
-// keeps its proven verdict for two failed checks, loses it on the third (Classes reads false and new
-// sandboxes are refused), and gets it back on the first check that proves enforcement again.
-func TestCanaryRecheck_ThreeFailedChecksRefuseNewSandboxes(t *testing.T) {
+// TestCanaryRecheck_FirstEscapeRefusesAtOnce: the first check showing that a deny-all policy leaks
+// refuses new sandboxes, reads NetworkPolicy false and stops the image check at once, carrying its own
+// time; the first check that proves enforcement again restores all three.
+func TestCanaryRecheck_FirstEscapeRefusesAtOnce(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, clock := c.boot(t, Config{})
 	if err := d.netPolRefusal(testNamespace); err != nil {
@@ -128,23 +128,20 @@ func TestCanaryRecheck_ThreeFailedChecksRefuseNewSandboxes(t *testing.T) {
 	}
 
 	c.phaseB.Store(0) // the CNI stops enforcing
-	for i := 1; i <= canaryRecheckStrikes; i++ {
-		*clock = clock.Add(canaryRecheckInterval)
-		d.recheckOnce(context.Background())
-		err := d.netPolRefusal(testNamespace)
-		enforced, _ := networkPolicyClaim(t, d)
-		if i < canaryRecheckStrikes && (err != nil || !enforced) {
-			t.Fatalf("after %d failed check(s): refusal %v, NetworkPolicy %v; want the proven verdict kept", i, err, enforced)
-		}
-		if i == canaryRecheckStrikes && (!errors.Is(err, errNetPolNotProven) || enforced) {
-			t.Fatalf("after %d failed checks: refusal %v, NetworkPolicy %v; want refused and false", i, err, enforced)
-		}
+	*clock = clock.Add(canaryRecheckInterval)
+	d.recheckOnce(context.Background())
+	err := d.netPolRefusal(testNamespace)
+	if !errors.Is(err, errNetPolNotProven) || !strings.Contains(err.Error(), clock.Format(time.RFC3339)) {
+		t.Fatalf("after one escape: refusal %v, want errNetPolNotProven naming %s", err, clock.Format(time.RFC3339))
 	}
-	if got := d.netPol.Load().byNS[testNamespace]; got.state != netPolUnenforced || !got.verdictAt.Equal(*clock) {
-		t.Errorf("verdict %v at %v, want %v at %v", got.state, got.verdictAt, netPolUnenforced, *clock)
+	if enforced, _ := networkPolicyClaim(t, d); enforced {
+		t.Error("after one escape: NetworkPolicy true, want false")
 	}
-	if err := d.netPolRefusal(testNamespace); !strings.Contains(err.Error(), clock.Format(time.RFC3339)) {
-		t.Errorf("refusal %q does not name the check time %s", err, clock.Format(time.RFC3339))
+	if d.PrewrappedCheckUnavailable() == "" {
+		t.Error("after one escape: the image check is available, want a reason")
+	}
+	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolRefused, At: *clock}); got != want {
+		t.Errorf("after one escape: health %+v, want %+v", got, want)
 	}
 
 	c.phaseB.Store(1) // fixed
@@ -152,22 +149,22 @@ func TestCanaryRecheck_ThreeFailedChecksRefuseNewSandboxes(t *testing.T) {
 	if err := d.netPolRefusal(testNamespace); err != nil {
 		t.Errorf("after a proving check: refusal %v, want none", err)
 	}
-	if enforced, _ := networkPolicyClaim(t, d); !enforced {
-		t.Error("after a proving check: NetworkPolicy false, want true")
+	if enforced, _ := networkPolicyClaim(t, d); !enforced || d.PrewrappedCheckUnavailable() != "" {
+		t.Error("after a proving check: NetworkPolicy false or the image check unavailable, want both restored")
 	}
 	assertCanaryCleanedUp(t, c.cs)
 }
 
-// TestCanaryRecheck_AFlakeBetweenProofsChangesNothing: failures that never reach three in a row never
-// move the verdict.
+// TestCanaryRecheck_AFlakeBetweenProofsChangesNothing: checks that could not tell, never three in a
+// row, never move the verdict.
 func TestCanaryRecheck_AFlakeBetweenProofsChangesNothing(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{})
-	for _, phaseB := range []int32{0, 0, 1, 0, 0, 1, 0, 0} {
+	for _, phaseB := range []int32{128, 128, 1, 128, 128, 1, 128, 128} { // 128: neither 0 nor 1, indeterminate
 		c.phaseB.Store(phaseB)
 		d.recheckOnce(context.Background())
 		if err := d.netPolRefusal(testNamespace); err != nil {
-			t.Fatalf("refusal %v after phase B exit %d, want none: no three failures in a row", err, phaseB)
+			t.Fatalf("refusal %v after phase B exit %d, want none: no three indeterminate checks in a row", err, phaseB)
 		}
 	}
 }
@@ -202,9 +199,7 @@ func TestCanaryRecheck_OverrideNeverCoversAgentSandbox(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{AllowUnenforcedNetPol: true})
 	c.phaseB.Store(0)
-	for i := 0; i < canaryRecheckStrikes; i++ {
-		d.recheckOnce(context.Background())
-	}
+	d.recheckOnce(context.Background())
 	if err := d.netPolRefusal(testNamespace); err != nil {
 		t.Errorf("plain sandbox under the override: refusal %v, want none", err)
 	}
@@ -219,10 +214,8 @@ func TestCanaryRecheck_OverrideNeverCoversAgentSandbox(t *testing.T) {
 func TestCanaryRecheck_AcknowledgedRefusesAgentSandboxOnly(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{AckAmbientDefaultDeny: true})
-	c.phaseA.Store(1) // an ambient default-deny appears
-	for i := 0; i < canaryRecheckStrikes; i++ {
-		d.recheckOnce(context.Background())
-	}
+	c.phaseA.Store(1) // an ambient default-deny appears, and one check applies it
+	d.recheckOnce(context.Background())
 	if enforced, acked := networkPolicyClaim(t, d); enforced || !acked {
 		t.Fatalf("NetworkPolicy %v, acknowledged %v; want false and true", enforced, acked)
 	}
@@ -311,14 +304,12 @@ func TestCanaryRecheck_LoopRunsUntilStopped(t *testing.T) {
 }
 
 // TestCanaryRecheck_CreateSandboxRefusedAfterFailedRecheck: CreateSandbox asks the live verdict first,
-// so after three failed checks it refuses before it creates a single object.
+// so after one check showing an escape it refuses before it creates a single object.
 func TestCanaryRecheck_CreateSandboxRefusedAfterFailedRecheck(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{})
 	c.phaseB.Store(0)
-	for i := 0; i < canaryRecheckStrikes; i++ {
-		d.recheckOnce(context.Background())
-	}
+	d.recheckOnce(context.Background())
 	if _, err := d.CreateSandbox(context.Background(), testSandboxSpec()); !errors.Is(err, errNetPolNotProven) {
 		t.Fatalf("CreateSandbox: %v, want errNetPolNotProven", err)
 	}
@@ -341,8 +332,9 @@ func healthCheck(t *testing.T, d *Driver) runner.NetPolCheck {
 	return cls.NetworkPolicyCheck
 }
 
-// TestCanaryRecheck_VerdictKeepsTheTimeOfTheCheckThatProducedIt: proven at T1, two failed checks at T2
-// and T3 leave it proven at T1; the third at T4 flips it, at T4. A check that agrees moves the time.
+// TestCanaryRecheck_VerdictKeepsTheTimeOfTheCheckThatProducedIt: proven at T1, two indeterminate checks
+// at T2 and T3 leave it proven at T1; the third at T4 makes it not proven, at T4. A check that agrees
+// moves the time.
 func TestCanaryRecheck_VerdictKeepsTheTimeOfTheCheckThatProducedIt(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, clock := c.boot(t, Config{})
@@ -351,18 +343,18 @@ func TestCanaryRecheck_VerdictKeepsTheTimeOfTheCheckThatProducedIt(t *testing.T)
 	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: t1}); got != want {
 		t.Fatalf("at T1: %+v, want %+v", got, want)
 	}
-	c.phaseB.Store(0)
+	c.phaseB.Store(128)
 	for i := 2; i <= 3; i++ {
 		*clock = clock.Add(canaryRecheckInterval)
 		d.recheckOnce(context.Background())
 		if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: t1}); got != want {
-			t.Fatalf("after the failed check at T%d: %+v, want %+v", i, got, want)
+			t.Fatalf("after the indeterminate check at T%d: %+v, want %+v", i, got, want)
 		}
 	}
 	*clock = clock.Add(canaryRecheckInterval)
 	d.recheckOnce(context.Background())
-	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolRefused, At: *clock}); got != want {
-		t.Fatalf("after the third failed check at T4: %+v, want %+v", got, want)
+	if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: *clock}); got != want {
+		t.Fatalf("after the third indeterminate check at T4: %+v, want %+v", got, want)
 	}
 	c.phaseB.Store(1)
 	*clock = clock.Add(canaryRecheckInterval)
