@@ -127,7 +127,7 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	}
 
 	legacy := newFolderRun()
-	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = '{"back":{"at":"2026-11-01T00:00:00Z","files":4,"bytes":9,"refused":[]}}'::jsonb WHERE id = $1`, legacy); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = jsonb_build_object('back', jsonb_build_object('at', now(), 'files', 4, 'bytes', 9, 'refused', '[]'::jsonb)) WHERE id = $1`, legacy); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := pg.RunLocalFolderStatus(ctx, legacy); err != nil || st.Gen != 0 || st.Back == nil {
@@ -230,7 +230,7 @@ func TestPG_FolderGiveUp_EndsAResumeOnceAndFencesItsOwner(t *testing.T) {
 	}
 
 	past := store.FolderGiveUpWhen{Cap: time.Hour}
-	for name, status := range map[string]string{"null": "", "gen-less": `{"seed":{"at":"2026-11-01T00:00:00Z","files":1,"bytes":1,"refused":[]}}`} {
+	for name, status := range map[string]string{"null": "", "gen-less": `{"seed":{"files":1,"bytes":1,"refused":[]}}`} {
 		id := giveUpRun(t, pool, types.RunStopped, status, 2*time.Hour)
 		if gen, ok, err := pg.GiveUpRunLocalFolder(ctx, id, past, givenUp, giveUpEvent, prepareSpoolTest); !ok || err != nil || gen != 1 {
 			t.Errorf("%s: give-up = %d %v %v, want gen 1", name, gen, ok, err)
@@ -310,7 +310,7 @@ func TestPG_ContainmentDue_GoAndSQLAgree(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
-	end := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	end := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
 	grace := time.Hour
 	for name, tc := range map[string]struct {
 		set    string
