@@ -240,11 +240,38 @@ type proxyContainment struct {
 	Err error
 }
 
-// containProxyStart stops the proxy of the run's failed start gen and records the result on the start
-// (store.ProxyStart.ContainedAt, or ContainmentError while unresolved). It is fenced on gen: once a
-// newer start is the run's active one it stops nothing. A start already contained answers Contained
-// with no second stop. It may run again, and on any replica.
+// errRunOpBusy is a containment skipped because another operation holds the run's lock.
+var errRunOpBusy = errors.New("another operation holds the run's lock; the sweep retries")
+
+// containProxyStart is containProxyStartLocked under the run's operation lock (locks.go), for a
+// caller that does not hold it: the report handler, the deadline watchdog, the reconcile sweep and
+// the egress edit. It never waits: a lock another operation holds (a revive among them) leaves the
+// start unresolved (errRunOpBusy) for the sweep's next pass. Its runner calls are bounded as the
+// rebooted-run sweep's are, so it cannot hold the lock past a wedged daemon.
 func (s *Server) containProxyStart(ctx context.Context, runID uuid.UUID, gen int) proxyContainment {
+	lctx, unlock, ok := s.tryLockRunOp(ctx, runID)
+	if !ok {
+		return proxyContainment{Err: errRunOpBusy}
+	}
+	defer unlock()
+	if _, busy := s.reviving.Load(runID); busy {
+		return proxyContainment{Err: errRunOpBusy}
+	}
+	lctx, cancel := context.WithTimeout(lctx, keepRebootedRunTimeout)
+	defer cancel()
+	return s.containProxyStartLocked(lctx, runID, gen)
+}
+
+// proxyContainPaused runs between containment's generation read and its stop. A test hook.
+var proxyContainPaused = func() {}
+
+// containProxyStartLocked stops the proxy of the run's failed start gen and records the result on the
+// start (store.ProxyStart.ContainedAt, or ContainmentError while unresolved). The caller holds the
+// run's operation lock, and ctx is the lock's: the generation read, the run read, the stop and the
+// record all happen under it, so a revive cannot start a newer proxy between the read and the stop.
+// It is fenced on gen: once a newer start is the run's active one it stops nothing. A start already
+// contained answers Contained with no second stop. It may run again, and on any replica.
+func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, gen int) proxyContainment {
 	st, ok := s.cfg.Store.(store.RunProxyStarts)
 	if !ok {
 		return proxyContainment{Err: errors.New("the store keeps no proxy starts")}
@@ -260,6 +287,7 @@ func (s *Server) containProxyStart(ctx context.Context, runID uuid.UUID, gen int
 	case p.State != types.ProxyStartFailed:
 		return proxyContainment{Err: fmt.Errorf("proxy start %d is %s, not failed", gen, p.State)}
 	}
+	proxyContainPaused()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return proxyContainment{Err: err}

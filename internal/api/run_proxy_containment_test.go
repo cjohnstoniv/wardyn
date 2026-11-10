@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -104,5 +105,55 @@ func TestReadback_ContainmentNeverStopsANewerStart(t *testing.T) {
 	}
 	if p := f.rb.get(f.run.ID, gen); p.ContainedAt != nil {
 		t.Error("an older start whose stop was never confirmed must not be recorded contained")
+	}
+}
+
+// A revive that arrives while containment of the failed start N is paused between its generation read
+// and its stop must not have its new proxy (N+1) stopped: containment holds the run's lock across the
+// read and the stop, so the revive waits for it and replaces the proxy after the stop. Containment
+// asked again then answers Superseded and stops nothing.
+func TestReadback_ContainmentPausedAcrossARevive(t *testing.T) {
+	f := newReadbackFixture(t)
+	gen := f.failWithUnstoppableProxy(t)
+	f.setProxyStopErr(nil)
+	f.srv.liveRevived.Delete(f.run.ID) // the live-revive bound is not what this test is about
+	stopsAtReplace := -1
+	f.rr.onReplace = func([]byte) { stopsAtReplace = f.lr.proxyStopCount() }
+	revived := make(chan int, 1)
+	old := proxyContainPaused
+	proxyContainPaused = func() {
+		proxyContainPaused = func() {}
+		go func() { revived <- f.revive(t) }()
+		select { // without the lock the revive completes here, before the stop
+		case code := <-revived:
+			revived <- code
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	t.Cleanup(func() { proxyContainPaused = old })
+	c := f.srv.containProxyStart(context.Background(), f.run.ID, gen)
+	var code int
+	select {
+	case code = <-revived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the revive never finished")
+	}
+	if code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	if !c.Contained || c.Err != nil {
+		t.Errorf("containment of start %d = %+v, want contained before the revive", gen, c)
+	}
+	if p := f.active(t); p.Generation <= gen {
+		t.Fatalf("active start %d after the revive, want newer than %d", p.Generation, gen)
+	}
+	if stops := f.lr.proxyStopCount(); stopsAtReplace < 0 || stops != stopsAtReplace {
+		t.Fatalf("proxy stops = %d, %d at the revive's replace: the newer start's proxy was stopped", stops, stopsAtReplace)
+	}
+	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Superseded || c.Contained {
+		t.Errorf("containment of start %d after the revive = %+v, want superseded", gen, c)
+	}
+	if f.lr.proxyStopCount() != stopsAtReplace {
+		t.Error("containment of an older start stopped the newer start's proxy")
 	}
 }
