@@ -44,6 +44,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- An ended run's page, and `wardyn folder`, no longer say a computer folder's sandbox copy was deleted. They now say the copy may no longer be available.
 - macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit with SIGTERM; it does not force-kill it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. To check on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.
 - A security admin's Drives page now shows a team drive as one (the Team badge, One host only, and whether members can write), and every reader of `GET /drives` gets the deployment's `team_drives` switch in the answer. Before, the console had to read the switch from a page only an administrator may open, and showed a team drive as a plain one when that read was refused.
 - The docs said the gateway gets no person or run identity and that a service has no check from outside the sandbox. Both are corrected: a gateway can receive a signed person and run token, and `health.probe: control_plane` is Wardyn's own check.
@@ -89,6 +90,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Security
 
 - The `git_pat` broker route (`/wardyn/git/<host>/`) now judges the whole request path, not only its last segment. Before, a forge API path that happened to end in `git-upload-pack` was forwarded with the PAT, so on Gitea or Forgejo a run could write a file to any branch past `api: false`, `access: read` and every push rule. A path that reaches the forge's API mount is now refused, under a deployment prefix too: `api/` or `api/<version>/`, Bitbucket Server's `rest/<name>/<version>/`, Bitbucket Cloud's `!api`, Azure DevOps' `_apis`, and GitLab's `-`; on `gitea` also any `api` before the repository name, and on `generic` also `_api`. Wardyn has no setting for a forge's deployment root, so a GitLab repository under subgroups named `api/v<digits>/` or `api/graphql/` is refused too. A path with an empty segment, or still holding a percent escape after decoding, is refused. A `generic` grant is judged only by these known mounts, so set `forge` or `repos` for another forge. On `bitbucket_server` the path must be `[<context path>/]scm/<project>/<repo>`, and a context path now works with `repos` too. On Azure DevOps Services the Entra sign-in route now reaches git only at `[<project>/]_git/<repository>`, as on a Server. Both git broker routes also stop forwarding any query beyond the refs discovery `service`, and they and the API doors stop forwarding method- and path-override headers (`X-HTTP-Method-Override`, `X-Original-URL`, `X-Rewrite-URL`, `X-Forwarded-Prefix` and the like).
+
+### Known issues
+
+- Computer folders that sync both ways still behave as in rc.17 when a run ends. A run's changes can be lost in these cases:
+  - a periodic sandbox sweep stops the sandbox while its changes are still being copied back;
+  - a run stopped for being idle or for reaching its maximum age;
+  - two copies back running at once for the same folder;
+  - a crash during a copy back.
+  Copy changes off the sandbox before a run ends if you cannot lose them. Fixes are planned for the next release candidate.
 
 ### Before you upgrade
 
