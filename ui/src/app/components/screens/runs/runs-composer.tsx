@@ -72,7 +72,12 @@ export function RunsComposer() {
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           {RUNS_COMPOSER.WORKSPACE}
           <Select value={workspaceId} onValueChange={setWorkspaceId}>
-            <SelectTrigger size="sm" aria-label={RUNS_COMPOSER.WORKSPACE} className="w-auto">
+            <SelectTrigger
+              size="sm"
+              aria-label={RUNS_COMPOSER.WORKSPACE}
+              aria-describedby={loading ? "runs-composer-workspaces-status" : undefined}
+              className="w-auto"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -84,8 +89,12 @@ export function RunsComposer() {
               ))}
             </SelectContent>
           </Select>
-          {loading && <span role="status">{RUNS_COMPOSER.WORKSPACES_LOADING}</span>}
         </label>
+        {loading && (
+          <span id="runs-composer-workspaces-status" role="status" className="text-xs text-muted-foreground">
+            {RUNS_COMPOSER.WORKSPACES_LOADING}
+          </span>
+        )}
         {error && !loading && (
           <span role="alert" className="flex items-center gap-2 text-xs text-danger">
             {RUNS_COMPOSER.WORKSPACES_UNAVAILABLE}

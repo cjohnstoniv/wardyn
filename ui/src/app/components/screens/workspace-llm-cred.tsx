@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
+import { MODEL_PROVIDERS_UNAVAILABLE } from "../wardyn/copy/lookup-failures";
 import { useOperator } from "../wardyn/operator-context";
 
 // Human label for the current model-provider binding (list/detail display).
@@ -111,9 +112,9 @@ export function LLMCredFields({
       {providers === null && !failed && <p className="text-meta leading-snug text-muted-foreground">Loading model providers…</p>}
       {providers === null && failed && (
         <p role="alert" className="flex flex-wrap items-center gap-2 text-meta leading-snug text-danger">
-          Couldn&apos;t load the model providers, so the list is not shown. None still works.
+          {MODEL_PROVIDERS_UNAVAILABLE.NOTE}
           <Button type="button" variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>
-            Try again
+            {MODEL_PROVIDERS_UNAVAILABLE.RETRY}
           </Button>
         </p>
       )}

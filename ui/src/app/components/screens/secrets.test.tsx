@@ -246,6 +246,7 @@ describe("AddSecretDialog — locked, host-aware mode", () => {
         host="dev.azure.com"
         lane="pat"
         initialName="git-pat-dev-azure-com"
+        patBroker
       />,
     );
     // The host is a fact (Mono text), not a labelled/editable field.
@@ -261,7 +262,7 @@ describe("AddSecretDialog — locked, host-aware mode", () => {
 
   // #381 F8: the ON-default test above proves nothing about the off
   // position — this is the real coverage the review found missing.
-  it("renders the pre-0.7 in-sandbox label when patBrokerEnabled is false", () => {
+  it("renders the pre-0.7 in-sandbox label when the broker is known off", () => {
     render(
       <AddSecretDialog
         open
@@ -270,7 +271,7 @@ describe("AddSecretDialog — locked, host-aware mode", () => {
         host="dev.azure.com"
         lane="pat"
         initialName="git-pat-dev-azure-com"
-        patBrokerEnabled={false}
+        patBroker={false}
       />,
     );
     expect(screen.getByText("PAT · in-sandbox")).toBeInTheDocument();
@@ -389,7 +390,8 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     expect(await screen.findByText(/Couldn't check how stored Git tokens are handled/)).toBeInTheDocument();
     expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/stays in Wardyn, unless a run delivers it/)).not.toBeInTheDocument();
+    // What a stored value is does not depend on the broker, so it stays; only the Git-token sentence waits.
+    expect(screen.getByText(/A stored value stays in Wardyn, unless a run delivers it/)).toBeInTheDocument();
     getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText(/Exception: A git access token is handed to git inside the sandbox/)).toBeInTheDocument();
@@ -402,6 +404,60 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     await screen.findByRole("heading", { name: "Secrets" });
     expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
     expect(screen.queryByText(/handed to git inside the sandbox/)).not.toBeInTheDocument();
+  });
+
+  const openAdd = async () => userEvent.click(await screen.findByRole("button", { name: /add secret/i }));
+  const noExclusiveClaim = () => {
+    const d = within(screen.getByRole("dialog"));
+    expect(d.getByText(/stored write-only: it is never returned by the API or shown again\./)).toBeInTheDocument();
+    expect(d.queryByText(/stays in Wardyn/)).toBeNull();
+    expect(d.queryByText(/token broker off/i)).toBeNull();
+  };
+
+  it("after a failed lookup, Add and Rotate make no exclusive residency claim and still store", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    getWorkspaceProvidersMock.mockRejectedValue(new Error("HTTP 500"));
+    render(<SecretsScreen />);
+    await screen.findByText(/Couldn't check how stored Git tokens/);
+    await openAdd();
+    noExclusiveClaim();
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /cancel/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /secret actions/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /rotate/i }));
+    noExclusiveClaim();
+  });
+
+  it("in the member view the setting is never read, so Add makes no exclusive claim", async () => {
+    listSecretsMineMock.mockResolvedValue({ names: ["my-key"], mine: ["my-key"] });
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+    // The header still says what a stored value is; only the Git-token sentence needs the switch.
+    expect(screen.getByText(/A stored value stays in Wardyn, unless a run delivers it/)).toBeInTheDocument();
+    expect(screen.queryByText(/stored git access token|Exception:/)).toBeNull();
+    await openAdd();
+    noExclusiveClaim();
+  });
+
+  it("known off: Add and Rotate show the Git token exception; known on: the existing copy", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
+    const { unmount } = render(<SecretsScreen />);
+    await screen.findByText(/Exception: A git access token is handed to git/);
+    await openAdd();
+    expect(screen.getByText(/With the token broker off, a stored Git token is handed to git inside the sandbox\./)).toBeInTheDocument();
+    unmount();
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
+    render(<SecretsScreen />);
+    await screen.findByText(/A stored git access token is attached to the request by the proxy/);
+    await openAdd();
+    const d = within(screen.getByRole("dialog"));
+    expect(d.getByText(/stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox/)).toBeInTheDocument();
+    expect(d.queryByText(/token broker off/i)).toBeNull();
   });
 
   it("says the pre-0.7 exception sentence when the switch resolves off", async () => {
@@ -615,17 +671,16 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
   it("the page header says the exception and no longer promises a short-lived credential", async () => {
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
     listSecretsMineMock.mockResolvedValue([]);
-    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
     render(<SecretsScreen />);
     await screen.findByText("anthropic-api-key");
     expect(
-      await screen.findByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/short-lived, scoped credential/i)).not.toBeInTheDocument();
   });
 
   it("the Add secret dialog names the exception and no longer says injected proxy-side", () => {
-    render(<AddSecretDialog open onOpenChange={() => {}} />);
+    render(<AddSecretDialog open onOpenChange={() => {}} patBroker />);
     expect(
       screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
     ).toBeInTheDocument();
@@ -634,8 +689,24 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
     expect(screen.queryByText(/token broker off/i)).not.toBeInTheDocument();
   });
 
+  it("an unknown broker setting claims nothing about where a value is held, and storing stays allowed", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText(/stored write-only: it is never returned by the API or shown again\./)).toBeInTheDocument();
+    expect(screen.queryByText(/stays in Wardyn/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/token broker off/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "any-key" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "v" } });
+    expect(screen.getByRole("button", { name: /save secret/i })).toBeEnabled();
+  });
+
+  it("an unknown setting gives a plain PAT chip, not brokered or in-sandbox", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} lockName host="dev.azure.com" lane="pat" initialName="git-pat-dev-azure-com" />);
+    expect(screen.getByText("PAT")).toBeInTheDocument();
+    expect(screen.queryByText(/brokered|in-sandbox/)).not.toBeInTheDocument();
+  });
+
   it("the Add secret dialog also names the git token exception when the token broker is off", () => {
-    render(<AddSecretDialog open onOpenChange={() => {}} patBrokerEnabled={false} />);
+    render(<AddSecretDialog open onOpenChange={() => {}} patBroker={false} />);
     expect(
       screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
     ).toBeInTheDocument();
