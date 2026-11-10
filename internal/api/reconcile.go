@@ -895,16 +895,20 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				tick.Reset(baseInterval)
 			}
 			if isTerminalRunState(st.State) {
-				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
-					switch s.probeRunnerSandbox(ctx, run, ref, st) {
-					case runnerProbeEnded:
-						return
-					case runnerProbeAbsent:
-						continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
-					}
-					if s.keepRebootedRun(ctx, run, st) {
-						return
-					}
+				run, gerr := s.cfg.Store.GetRun(ctx, runID)
+				if gerr != nil {
+					// One failed read must not skip the keep-after-reboot path and finalize: the next tick reads again.
+					slog.WarnContext(ctx, "reconcile watch: read run before finalizing", slog.String("run_id", runID.String()), slog.Any("err", gerr))
+					continue
+				}
+				switch s.probeRunnerSandbox(ctx, run, ref, st) {
+				case runnerProbeEnded:
+					return
+				case runnerProbeAbsent:
+					continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
+				}
+				if s.keepRebootedRun(ctx, run, st) {
+					return
 				}
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {
