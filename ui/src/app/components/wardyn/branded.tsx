@@ -19,6 +19,7 @@ import { CONSOLE_VIEW } from "./copy/console-view";
 import { asJson, wfetch } from "../../lib/api/core";
 import { isHexColour, monogram, productName, type Branding } from "../../lib/branding";
 import { BRAND_HEADER } from "../../lib/branding-copy";
+import { setTitleBrand } from "../../lib/console-title";
 
 // head: colours, tab icon and title (document.head); gate: the sign-in
 // lockup; bar: the top-bar wordmark; link: the header's Support link.
@@ -70,7 +71,7 @@ export function brandColourCSS(b: Branding): string | null {
  * name, "Wardyn admin" -> "<name> admin" (the Admin view cue stays), alone or
  * after a page's "<page> - ". Any other title is left alone. A brand name can
  * itself end in " - Wardyn" (an organisation named "Acme -"), so the result can
- * look unbranded again: only the console's own titles are passed in.
+ * look unbranded again: only the console's own titles are passed in (console-title.ts).
  */
 export function brandTitle(title: string, name: string): string {
   const own = CONSOLE_VIEW.TITLE_USER;
@@ -83,8 +84,7 @@ export function brandTitle(title: string, name: string): string {
 }
 
 // Colours, tab icon and tab title while a brand is set; leaving restores all
-// three. The title is renamed wherever the console sets it (index.html, the
-// shell's view effect) by watching <head>, so those writers stay as they were.
+// three. The title is renamed through console-title.ts, its one writer.
 function BrandEffects({ brand }: { brand: Branding }) {
   const css = brandColourCSS(brand);
   React.useEffect(() => {
@@ -110,23 +110,8 @@ function BrandEffects({ brand }: { brand: Branding }) {
   }, [icon]);
   const name = productName(brand);
   React.useEffect(() => {
-    // The console's own title (index.html, the shell's view effect), kept so leaving restores it exactly. A
-    // title this effect wrote is never renamed again: a brand name can itself end in " - Wardyn".
-    let own = document.title;
-    let wrote = "";
-    const rename = () => {
-      if (document.title === wrote) return;
-      own = document.title;
-      const next = brandTitle(own, name);
-      if (next !== own) document.title = wrote = next;
-    };
-    rename();
-    const watch = new MutationObserver(rename);
-    watch.observe(document.head, { childList: true, characterData: true, subtree: true });
-    return () => {
-      watch.disconnect();
-      if (document.title === wrote) document.title = own;
-    };
+    setTitleBrand((title) => brandTitle(title, name));
+    return () => setTitleBrand(null);
   }, [name]);
   return null;
 }

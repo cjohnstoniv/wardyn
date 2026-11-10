@@ -84,6 +84,7 @@ import {
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
 import { PEOPLE_PAGE } from "../wardyn/copy/people";
 import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
+import { setConsoleTitle } from "../../lib/console-title";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -525,7 +526,7 @@ export function AppShell({
     const sync = () => {
       const text = heading()?.textContent?.trim();
       const title = text ? `${text} - ${base}` : base;
-      if (document.title !== title) document.title = title;
+      setConsoleTitle(title);
     };
     sync();
     if (!main) return;

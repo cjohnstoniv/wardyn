@@ -15,6 +15,7 @@ vi.mock("../../lib/api/health", () => ({
 import { ThemeProvider } from "./theme-provider";
 import { BrandingProvider } from "./branding-context";
 import { brandColourCSS, brandTitle } from "./branded";
+import { setConsoleTitle } from "../../lib/console-title";
 import { SignIn } from "../screens/sign-in";
 import { TopBar } from "../screens/top-bar";
 import type { ShellMeta } from "../screens/app-shell";
@@ -153,8 +154,8 @@ describe("branded console (#1125)", () => {
     expect(document.querySelector("style[data-wardyn-brand]")?.textContent).toBe(
       "html:root{--primary:#7c3aed;--primary-foreground:#ffffff}html.dark{--primary:#9058f0;--primary-foreground:#0a0a0a}",
     );
-    // A later title write by the console (the shell's view effect) is renamed too.
-    document.title = "Wardyn admin";
+    // A later title the console sets (the shell's view effect) is renamed too.
+    setConsoleTitle("Wardyn admin");
     await waitFor(() => expect(document.title).toBe("Example Corp Wardyn admin"));
     unmount();
     // Leaving restores what was there.
@@ -165,12 +166,12 @@ describe("branded console (#1125)", () => {
 
   it("a name that itself ends in ' - Wardyn' is applied once, not again to its own output", async () => {
     publicRead = async () => ({ ...BRAND, org_name: "Acme -" });
-    document.title = "Runs - Wardyn";
+    setConsoleTitle("Runs - Wardyn");
     const { unmount } = renderSignIn();
     await waitFor(() => expect(document.title).toBe("Runs - Acme - Wardyn"));
     await new Promise((r) => setTimeout(r, 20));
     expect(document.title).toBe("Runs - Acme - Wardyn");
-    document.title = "Settings - Wardyn admin";
+    setConsoleTitle("Settings - Wardyn admin");
     await waitFor(() => expect(document.title).toBe("Settings - Acme - Wardyn admin"));
     unmount();
     expect(document.title).toBe("Settings - Wardyn admin");
@@ -235,14 +236,29 @@ describe("branded console (#1125)", () => {
       ["Wardyn", name], ["Wardyn admin", `${name} admin`], ["Runs - Wardyn", `Runs - ${name}`],
       ["Runs - Wardyn admin", `Runs - ${name} admin`], ["Something else", "Something else"],
     ]) {
-      document.title = t;
+      setConsoleTitle(t);
       await waitFor(() => expect(document.title).toBe(want));
       await new Promise((r) => setTimeout(r, 10));
       expect(document.title).toBe(want);
     }
-    document.title = "Runs - Wardyn";
+    setConsoleTitle("Runs - Wardyn");
     await waitFor(() => expect(document.title).toBe(`Runs - ${name}`));
     unmount();
     expect(document.title).toBe("Runs - Wardyn");
+  });
+
+  // A brand name equal to a page's title: going straight from the sign-in title to the Runs page still names
+  // both, and leaving restores the page's own title (the string alone cannot tell them apart).
+  it("tells a page title from an equal brand name, and restores the page on leaving", async () => {
+    publicRead = async () => ({ ...BRAND, org_name: "Runs -" });
+    for (const [first, page] of [["Wardyn", "Runs - Wardyn"], ["Wardyn admin", "Runs - Wardyn admin"]]) {
+      setConsoleTitle(first);
+      const { unmount } = renderSignIn();
+      await waitFor(() => expect(document.title).toBe(first.replace("Wardyn", "Runs - Wardyn")));
+      setConsoleTitle(page);
+      expect(document.title).toBe(page.replace("Wardyn", "Runs - Wardyn"));
+      unmount();
+      expect(document.title).toBe(page);
+    }
   });
 });
