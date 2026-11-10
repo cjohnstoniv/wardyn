@@ -5,10 +5,12 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +171,13 @@ func TestUISession_BoundToItsCredential(t *testing.T) {
 	byToken := open(ticketActor{tokenID: tokenID})
 	byCLI := open(ticketActor{cliSessionID: sessionID})
 	console := open(ticketActor{})
+	// A console session's cookie carries no credential ids at all.
+	payload, _, _ := strings.Cut(h.srv.encodeUISession(console), ".")
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil || strings.Contains(string(raw), `"ct"`) || strings.Contains(string(raw), `"cs"`) {
+		t.Fatalf("console cookie payload %q (%v) carries credential ids", raw, err)
+	}
+	}
 	for name, sess := range map[string]uiSession{"token": byToken, "CLI": byCLI, "console": console} {
 		if de := refused(sess); de != nil {
 			t.Fatalf("%s session with its credential live: refused %+v", name, de)

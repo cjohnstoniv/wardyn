@@ -699,9 +699,13 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 	}
 	// principal names the token's OWNER, which is the whole point of the row on
 	// the admin lane: the actor is the admin, the subject is someone else.
+	detail := map[string]any{"principal": revoked.Principal, "name": revoked.Name, "minted_by": revoked.MintedBy}
+	if revoked.Kind == types.APITokenKindCLIAccess && revoked.CLISessionID != nil {
+		// Revoking a CLI access token ends its whole sign-in (store.RevokeAPIToken).
+		detail["cli_session"], detail["session_ended"] = revoked.CLISessionID.String(), true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"token.revoke", revoked.ID.String(), "success",
-		mustJSON(map[string]any{"principal": revoked.Principal, "name": revoked.Name, "minted_by": revoked.MintedBy})))
+		"token.revoke", revoked.ID.String(), "success", mustJSON(detail)))
 	w.WriteHeader(http.StatusNoContent)
 }
 

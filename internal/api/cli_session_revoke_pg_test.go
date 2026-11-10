@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,10 @@ func TestPG_CLISession_RevokingTheAccessTokenEndsTheSession(t *testing.T) {
 	}
 	if got.EndedAt == nil || got.EndReason != types.CLISessionEndRevoked {
 		t.Fatalf("session after its access token was revoked = %+v, want ended, reason revoked", got)
+	}
+	if ev := lastAuditEvent(t, e.h.audit.snapshot(), "token.revoke"); !strings.Contains(string(ev.Data), `"session_ended":true`) ||
+		!strings.Contains(string(ev.Data), g.SessionID.String()) {
+		t.Fatalf("token.revoke = %s, want it to name the ended session", ev.Data)
 	}
 	if n := liveSessionTokens(t, e, g.SessionID); n != 0 {
 		t.Fatalf("live access tokens of the ended session = %d, want 0", n)
@@ -204,6 +209,10 @@ func TestPG_CLISession_DemotionSweepWaitsOnTheSessionLock(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM cli_sessions WHERE id = $1 FOR UPDATE`, g.SessionID); err != nil {
 		t.Fatal(err)
 	}
+	var holder int
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
 	type result struct {
 		n   int
 		err error
@@ -213,20 +222,7 @@ func TestPG_CLISession_DemotionSweepWaitsOnTheSessionLock(t *testing.T) {
 		n, err := e.srv.revokeAPITokensFor(ctx, "sub-user")
 		done <- result{n, err}
 	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var waiting int
-		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()`).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the sweep never waited on the session lock")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitForEndWaiter(t, e, holder)
 	select {
 	case r := <-done:
 		t.Fatalf("the sweep finished while the session was locked: %+v", r)
@@ -266,24 +262,15 @@ func TestPG_CLISession_RevokeOfAReplacedAccessTokenStillEndsTheSession(t *testin
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM cli_sessions WHERE id = $1 FOR UPDATE`, g.SessionID); err != nil {
 		t.Fatal(err)
 	}
+	var holder int
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
 	code := make(chan int, 1)
 	go func() {
 		code <- e.req(http.MethodDelete, "/api/v1/me/tokens/"+oldID.String(), "", e.user, "", "", "").Code
 	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var waiting int
-		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()`).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the revoke never waited on the session lock")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitForEndWaiter(t, e, holder)
 	// The rotation: the session moves on a generation, the old token is revoked, the new one written.
 	newRaw := "wdn_" + uuid.NewString()
 	sum := sha256.Sum256([]byte(newRaw))
@@ -378,5 +365,29 @@ func TestPG_CLISession_DemotionSweepPassesASiblingItsSessionEndAlreadyRevoked(t 
 	}
 	if n := liveSessionTokens(t, e, g.SessionID); n != 0 {
 		t.Fatalf("live access tokens = %d, want 0", n)
+	}
+}
+
+// waitForEndWaiter waits until the session end (EndCLISession's UPDATE of cli_sessions, which is what a sweep or
+// a token revoke issues) is blocked on a lock the transaction with backend pid holder holds, and fails the test
+// if that never happens. It identifies the waiter by its statement and by pg_blocking_pids, not by any Lock wait:
+// the store's connection cannot be named without changing production code.
+func waitForEndWaiter(t *testing.T, e *cliEnv, holder int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))
+			  AND query LIKE '%UPDATE cli_sessions SET ended_at%'`, holder).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session end never waited on the lock the test holds")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

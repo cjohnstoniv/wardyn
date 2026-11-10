@@ -45,6 +45,15 @@ func TestMigrate_AttachTicketCredentialPurgesOnlyRefreshLeftovers(t *testing.T) 
 		}
 		return id
 	}
+	// audited writes an audit row naming id by action, as the revoke door does for a token revoked on purpose.
+	audited := func(action string, id uuid.UUID) uuid.UUID {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, target, outcome)
+			VALUES (gen_random_uuid(), 'human', 'sub-a', $1, $2, 'success')`, action, id.String()); err != nil {
+			t.Fatalf("seed audit row: %v", err)
+		}
+		return id
+	}
 	live, ended := session(false), session(true)
 	want := map[string]struct {
 		id   uuid.UUID
@@ -59,6 +68,7 @@ func TestMigrate_AttachTicketCredentialPurgesOnlyRefreshLeftovers(t *testing.T) 
 		"ended: refreshed, revoked at end":      {token(&ended, "cli_access", "3 hours", "now() - interval '1 hour'"), true},
 		"personal, revoked":                     {token(nil, "api", "9 hours", "now() - interval '2 hours'"), true},
 		"personal, live":                        {token(nil, "api", "9 hours", ""), true},
+		"live: refreshed, revoked on purpose":   {audited("token.revoke", token(&live, "cli_access", "2 hours", "now() - interval '30 minutes'")), true},
 	}
 	sql, err := migrationFS.ReadFile("migrations/0274_attach_ticket_credential.sql")
 	if err != nil {

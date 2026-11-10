@@ -13,7 +13,9 @@ ALTER TABLE attach_tickets ADD COLUMN IF NOT EXISTS cli_session_id UUID;
 -- A CLI refresh now deletes the access token it replaces instead of leaving a revoked row (a session's
 -- first token is kept: its creation is audited). This removes the rows earlier refreshes left behind: a
 -- revoked cli_access token that has an older sibling in its session and was revoked before the session
--- ended. The session's first token, its cli_admin tokens and every personal token stay.
+-- ended. The session's first token, its cli_admin tokens and every personal token stay, and so does any
+-- token an audit row names by id (a token.create or token.revoke row): a refresh writes no such row for the
+-- token it mints, so a named one was revoked on purpose.
 DELETE FROM api_tokens t
  WHERE t.kind = 'cli_access'
    AND t.revoked_at IS NOT NULL
@@ -22,4 +24,6 @@ DELETE FROM api_tokens t
                 WHERE o.cli_session_id = t.cli_session_id AND o.kind = 'cli_access' AND o.id <> t.id
                   AND (o.created_at, o.id) < (t.created_at, t.id))
    AND NOT EXISTS (SELECT 1 FROM cli_sessions cs
-                    WHERE cs.id = t.cli_session_id AND cs.ended_at IS NOT NULL AND cs.ended_at <= t.revoked_at);
+                    WHERE cs.id = t.cli_session_id AND cs.ended_at IS NOT NULL AND cs.ended_at <= t.revoked_at)
+   AND NOT EXISTS (SELECT 1 FROM audit_events a
+                    WHERE a.target = t.id::text AND a.action IN ('token.create', 'token.revoke'));

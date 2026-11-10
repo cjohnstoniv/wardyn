@@ -144,8 +144,8 @@ type uiSession struct {
 	// whose access token did (credentialBinding: a cli_admin step-up binds to its token); both uuid.Nil for a
 	// console session's or the admin token's ticket. The re-check ends the session when that credential is
 	// revoked, expired or signed out, which no person-level cut records (uiSessionStillAuthorized).
-	CredToken   uuid.UUID `json:"ct,omitempty"`
-	CredSession uuid.UUID `json:"cs,omitempty"`
+	CredToken   uuid.UUID `json:"ct,omitzero"`
+	CredSession uuid.UUID `json:"cs,omitzero"`
 	// tokenID and sponsor ride an inbound token's session only, never a cookie: the token its rows name,
 	// and the sponsor of the service identity that holds it.
 	tokenID uuid.UUID
