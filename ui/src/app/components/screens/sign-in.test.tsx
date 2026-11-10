@@ -709,4 +709,15 @@ describe("SignIn — the token field and the page landmark", () => {
       new RegExp(`${SIGNIN.TOKEN_HINT.slice(0, 20)}.*rejected`, "is"),
     );
   });
+
+  it("does not mark the token field invalid when the failure is not about the token", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    renderSignIn();
+    const input = await screen.findByLabelText(/admin token/i);
+    await userEvent.type(input, "goodtoken");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.UNREACHABLE_ERROR);
+    expect(input).not.toHaveAttribute("aria-invalid");
+  });
 });

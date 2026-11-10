@@ -434,7 +434,7 @@ export function SignIn({
                   }}
                   className="pl-9 font-mono"
                   autoComplete="off"
-                  aria-invalid={error ? true : undefined}
+                  aria-invalid={error === SIGNIN.TOKEN_REJECTED ? true : undefined}
                   aria-describedby={error ? "token-hint token-error" : "token-hint"}
                 />
               </div>
