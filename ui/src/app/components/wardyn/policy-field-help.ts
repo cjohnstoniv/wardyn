@@ -75,7 +75,7 @@ export const FIELD_HELP = {
   host_rules: {
     what: "Per-host method and path rules, one rule set per layer. Every set that names a host must allow a request on it.",
     values:
-      "rules: host (exact, lowercase) + methods + paths + effect: allow | deny | hold. Inside a set the first matching rule decides, and no match is a deny. Empty imposes nothing.",
+      "rules: host (exact, lowercase) + methods + paths + effect: allow | deny | hold (hold waits for a person to decide the request's host, method and path, then that answer stands for the run). Inside a set the first matching rule decides, and no match is a deny. Empty imposes nothing.",
     doc: "host_rules--hostruleset",
     snippet: [{ rules: [{ host: "api.example.com", methods: ["GET"], paths: ["/public"], effect: "allow" }] }],
   },
