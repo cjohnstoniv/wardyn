@@ -609,7 +609,8 @@ What the check does and does not settle:
 - A wall preset is a named set of walls, in the same knobs as [Your walls](#your-walls), that you pick for one run. It only narrows, like your walls.
 - Four are built in: `open` (narrows nothing), `read-only` (keeps the read capabilities and refuses every push), `sealed` (read-only, plus only the sites the run's setup needs and no desktop transfers) and `no-network` (no network). You can keep your own, a group's template managers can keep one for the group, and an organisation administrator can keep one for everyone.
 - `network: none` is `wall_preset: no-network`, which is `sealed` with no network at all:
-  - A run that would need a host is refused `422` `no_network_needs_egress`, at create, Review and the preview alike, naming each source. A harness whose model is reached over the network is refused, and so is a repository to clone, a brokered GitHub one included. The policy's git grants count only for a run that clones a repository, and a component only when it needs a host: one with only settings, or a local MCP server run from a program in the image, does not.
+  - A run that would need a host is refused `422` `no_network_needs_egress`, at create, Review and the preview alike, naming each source. A harness whose model is reached over the network is refused.
+  - A repository to clone is a source, a brokered GitHub one too. The policy's git grants are one only with a repository, and a component only when it needs a host.
   - The proxy refuses every request (`policy:no-network`) but still reaches the control plane, the seal empties the allowlist, and every approval is refused.
 - Start a run with one using `wardyn run --wall-preset <name|id>`, which also goes with `--file`. A name is looked up across the audiences open to you. A name in more than one is refused with the audiences listed: use its id.
 - Manage them with `wardyn walls presets`:
