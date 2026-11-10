@@ -8,8 +8,12 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -33,18 +37,24 @@ func TestPassBack_ACompletedPassIsSettledAtItsOwnGeneration(t *testing.T) {
 	if s.bringComputerFolderBack(context.Background(), run.ID, "sbx") {
 		t.Error("a completed pass kept the sandbox")
 	}
-	if st := cs.folderStatus(); st.Back == nil || st.Back.Error != "" || st.Gen != 1 || st.Settled != 1 {
-		t.Errorf("record %+v, want the completed pass at gen 1, settled", st)
+	// The seed owns gen 1, the pass back gen 2.
+	if st := cs.folderStatus(); st.Back == nil || st.Back.Error != "" || st.Gen != 2 || st.Settled != 2 {
+		t.Errorf("record %+v, want the completed pass at gen 2, settled", st)
 	}
 }
 
-// oldRunnerFixture is computerFolderFixture whose runner runs whatever pass it is sent (no
-// Caps.FolderPassOnce), seeded, with the record at gen and settled.
-func oldRunnerFixture(t *testing.T, gen, settled int) (*Server, *computerFolderStore, *folderSandboxRunner) {
+// passFixture is computerFolderFixture seeded, with the record then set to gen and settled and a resume
+// kept, and the folder's runner set by runnerAs.
+type passFixture struct {
+	s    *Server
+	cs   *computerFolderStore
+	sb   *folderSandboxRunner
+	home string
+}
+
+func newPassFixture(t *testing.T, gen, settled int) *passFixture {
 	t.Helper()
 	s, cs, _, run, sb, app := computerFolderFixture(t, types.ComputerFolderBoth)
-	home := filepath.Dir(filepath.Dir(app))
-	s.runnerStreams.subs[cs.runner.ID] = folderRunnerEndpointCaps(t, cs.runner.ID, runnerwire.Caps{Folders: true, MachineName: "alice-laptop"}, home)
 	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
 		t.Fatal(cs.FailureHint())
 	}
@@ -52,26 +62,78 @@ func oldRunnerFixture(t *testing.T, gen, settled int) (*Server, *computerFolderS
 	cs.status.Gen, cs.status.Settled, cs.status.Resume = gen, settled, &types.FolderResume{Stalled: 1, Unsynced: 1}
 	cs.smu.Unlock()
 	agentWrites(t, sb, "a.txt")
-	return s, cs, sb
+	return &passFixture{s: s, cs: cs, sb: sb, home: filepath.Dir(filepath.Dir(app))}
 }
 
-// An older runner gets no pass back while its last one is unsettled: the record says so and the sandbox is
-// stopped, as a pass that cannot run is. Once settled, the pass runs.
-func TestPassBack_AnOlderRunnerPassesOnlyWhenTheLastPassIsSettled(t *testing.T) {
-	s, cs, sb := oldRunnerFixture(t, 2, 1)
-	seen := passSeen(sb)
-	if s.bringComputerFolderBack(context.Background(), cs.run.ID, "sbx") || seen.Load() {
-		t.Fatalf("pass %v; want no pass and the sandbox left to its stop", seen.Load())
+// runnerAs connects the folder's runner advertising caps, or with caps nil takes it offline.
+func (f *passFixture) runnerAs(t *testing.T, caps *runnerwire.Caps) {
+	t.Helper()
+	id := f.cs.runner.ID
+	var ep runnerEndpoint
+	if caps != nil {
+		ep = folderRunnerEndpointCaps(t, id, *caps, f.home)
 	}
-	if st := cs.folderStatus(); st.Gen != 2 || st.Resume != nil || st.Back == nil || !strings.Contains(st.Back.Error, "was not confirmed") {
-		t.Errorf("record %+v, want gen 2 and the unconfirmed pass named", st)
+	f.s.runnerStreams.subsMu.Lock()
+	defer f.s.runnerStreams.subsMu.Unlock()
+	if caps == nil {
+		delete(f.s.runnerStreams.subs, id)
+		return
+	}
+	f.s.runnerStreams.subs[id] = ep
+}
+
+var (
+	olderRunnerCaps  = runnerwire.Caps{Folders: true, MachineName: "alice-laptop"}
+	onePerRunnerCaps = runnerwire.Caps{Folders: true, FolderPassOnce: true, MachineName: "alice-laptop"}
+)
+
+// An older runner gets no pass back while its last one is unsettled: the record says so, stays unsettled,
+// and the sandbox is kept for a resume. Once settled, the pass runs.
+func TestPassBack_AnOlderRunnerPassesOnlyWhenTheLastPassIsSettled(t *testing.T) {
+	f := newPassFixture(t, 2, 1)
+	f.runnerAs(t, &olderRunnerCaps)
+	seen := passSeen(f.sb)
+	if !f.s.bringComputerFolderBack(context.Background(), f.cs.run.ID, "sbx") || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox kept", seen.Load())
+	}
+	if st := f.cs.folderStatus(); st.Gen != 3 || st.Settled != 1 || st.Resume == nil || st.Back == nil || !strings.Contains(st.Back.Error, "was not confirmed") {
+		t.Errorf("record %+v, want gen 3 unsettled, the resume kept and the unconfirmed pass named", st)
 	}
 
-	s, cs, sb = oldRunnerFixture(t, 2, 2)
-	seen = passSeen(sb)
-	s.bringComputerFolderBack(context.Background(), cs.run.ID, "sbx")
-	if st := cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 {
+	f = newPassFixture(t, 2, 2)
+	f.runnerAs(t, &olderRunnerCaps)
+	seen = passSeen(f.sb)
+	f.s.bringComputerFolderBack(context.Background(), f.cs.run.ID, "sbx")
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 3 || st.Settled != 3 {
 		t.Errorf("pass %v, record %+v; want the pass at gen 3, settled", seen.Load(), st)
+	}
+}
+
+// While the last pass is unsettled, the runner the pass is sent to decides it: one offline at the pass,
+// then back as an older runner, gets no pass, and neither leaves the generation settled for a later one;
+// a runner that says it runs one pass per run at a time gets the pass.
+func TestPassBack_AnUnsettledPassGoesOnlyToARunnerThatRunsOnePerRun(t *testing.T) {
+	f := newPassFixture(t, 2, 1)
+	seen := passSeen(f.sb)
+	back := func() bool { return f.s.bringComputerFolderBack(context.Background(), f.cs.run.ID, "sbx") }
+	f.runnerAs(t, nil)
+	if !back() || seen.Load() {
+		t.Fatalf("offline: pass %v; want no pass and the sandbox kept", seen.Load())
+	}
+	if st := f.cs.folderStatus(); st.Gen != 3 || st.Settled != 1 || st.Resume == nil {
+		t.Errorf("offline: record %+v, want gen 3 unsettled, the resume kept", st)
+	}
+	f.runnerAs(t, &olderRunnerCaps)
+	if !back() || seen.Load() {
+		t.Fatalf("older runner back: pass %v; want no pass and the sandbox kept", seen.Load())
+	}
+	if st := f.cs.folderStatus(); st.Gen != 4 || st.Settled != 1 || st.Resume == nil {
+		t.Errorf("older runner back: record %+v, want gen 4 unsettled, the resume kept", st)
+	}
+	f.runnerAs(t, &onePerRunnerCaps)
+	back()
+	if st := f.cs.folderStatus(); !seen.Load() || st.Gen != 5 || st.Settled != 5 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("pass %v, record %+v; want the pass at gen 5, completed and settled", seen.Load(), st)
 	}
 }
 
@@ -81,15 +143,16 @@ func TestPassBack_ABusyRunnerIsTriedAgainLater(t *testing.T) {
 	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
 		t.Fatal(cs.FailureHint())
 	}
-	gen, ok := s.bumpComputerFolderGen(context.Background(), run.ID, 0)
-	if !ok || gen != 1 {
-		t.Fatalf("bump = %d %v", gen, ok)
+	// The seed owns gen 1; the pass back moves the record to gen 2.
+	rec, ok := s.bumpComputerFolderGen(context.Background(), run.ID, 1)
+	if !ok || rec.Gen != 2 {
+		t.Fatalf("bump = %+v %v", rec, ok)
 	}
-	if !s.recordFolderPassBusy(context.Background(), run.ID, *cs.folder, gen) {
+	if !s.recordFolderPassBusy(context.Background(), run.ID, *cs.folder, rec.Gen) {
 		t.Fatal("a busy pass was not kept")
 	}
-	if st := cs.folderStatus(); st.Resume == nil || st.Settled != 1 || st.Back != nil {
-		t.Errorf("record %+v, want a resume kept, settled at gen 1, no back", st)
+	if st := cs.folderStatus(); st.Resume == nil || st.Settled != 2 || st.Back != nil {
+		t.Errorf("record %+v, want a resume kept, settled at gen 2, no back", st)
 	}
 	if ev := findAudit(audit.snapshot(), run.ID, "run.folder.transfer", "failure"); ev == nil || !strings.Contains(string(ev.Data), "tries again") {
 		t.Errorf("row %+v, want the busy pass audited", ev)
@@ -133,8 +196,72 @@ func TestPassBack_ADelayedOwnerNeitherWritesNorStops(t *testing.T) {
 	if bKept.Load() {
 		t.Error("owner B's completed pass kept the sandbox")
 	}
-	if st := cs.folderStatus(); st.Gen != 2 || st.Settled != 2 || st.Back == nil || st.Back.Error != "" {
-		t.Errorf("record %+v, want owner B's settled pass at gen 2 and nothing from A", st)
+	// The seed owns gen 1, owner A gen 2, owner B gen 3.
+	if st := cs.folderStatus(); st.Gen != 3 || st.Settled != 3 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("record %+v, want owner B's settled pass at gen 3 and nothing from A", st)
+	}
+}
+
+// A delayed seed whose generation another owner moved on during its pass records, audits and publishes
+// nothing: the run's first sync is left to that owner.
+func TestSeed_ADelayedSeedNeitherRecordsNorPublishes(t *testing.T) {
+	s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	var moved atomic.Bool
+	sb.onPass = func() {
+		if _, ok := s.bumpComputerFolderGen(context.Background(), run.ID, 1); ok {
+			moved.Store(true)
+		}
+	}
+	s.seedComputerFolder(context.Background(), run, *cs.folder, 20*time.Second)
+	if !moved.Load() {
+		t.Fatal("the other owner did not move the record on during the seed's pass")
+	}
+	if st := cs.folderStatus(); st.Gen != 2 || st.Seed != nil {
+		t.Errorf("record %+v, want gen 2 and no seed from the delayed one", st)
+	}
+	if _, seed, err := cs.RunLocalFolderSeed(context.Background(), run.ID); err != nil || seed.SeededAt != nil || seed.Error != "" {
+		t.Errorf("first sync %+v %v, want none published", seed, err)
+	}
+	events := audit.snapshot()
+	for _, outcome := range []string{"success", "failure"} {
+		if findAudit(events, run.ID, "run.folder.transfer", outcome) != nil || findAudit(events, run.ID, "run.seed", outcome) != nil {
+			t.Errorf("a %s pass or first sync was audited for the delayed seed", outcome)
+		}
+	}
+}
+
+// statusLandsAfterRead is computerFolderStore on which another owner's completed pass back lands once, just
+// after the first read of the record.
+type statusLandsAfterRead struct {
+	*computerFolderStore
+	once sync.Once
+}
+
+func (s *statusLandsAfterRead) RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
+	rec, err := s.computerFolderStore.RunLocalFolderStatus(ctx, id)
+	s.once.Do(func() {
+		s.smu.Lock()
+		defer s.smu.Unlock()
+		s.status.Back, s.status.Settled = &types.FolderPassRecord{At: time.Now()}, s.status.Gen
+	})
+	return rec, err
+}
+
+// A pass back that completed between the read of the record and the bump is seen in the bumped record:
+// no second pass runs, and the sandbox is left to its stop.
+func TestPassBack_ABackThatLandedBeforeTheBumpRunsNoPass(t *testing.T) {
+	s, cs, _, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	agentWrites(t, sb, "a.txt")
+	seen := passSeen(sb)
+	s.cfg.Store = &statusLandsAfterRead{computerFolderStore: cs}
+	if s.bringComputerFolderBack(context.Background(), run.ID, "sbx") || seen.Load() {
+		t.Fatalf("pass %v; want no pass and the sandbox left to its stop", seen.Load())
+	}
+	if st := cs.folderStatus(); st.Gen != 2 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("record %+v, want the landed pass kept, moved to gen 2", st)
 	}
 }
 
