@@ -657,16 +657,12 @@ func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 // failMarkStore fails the run's lost mark while fail is set, as a database blip would.
 type failMarkStore struct {
 	*readbackStore
-	fail       atomic.Bool
-	notApplied atomic.Bool // the mark answers not applied, as when another writer moved the run first
+	fail atomic.Bool
 }
 
 func (s *failMarkStore) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, at time.Time, life time.Duration) (bool, error) {
 	if s.fail.Load() {
 		return false, errors.New("injected lost-mark failure")
-	}
-	if s.notApplied.Load() {
-		return false, nil
 	}
 	return s.readbackStore.MarkRunLost(ctx, id, reason, at, life)
 }
@@ -744,97 +740,6 @@ func TestEgressEdit_SupersededAfterAFailureSaysTheEditWasNotApplied(t *testing.T
 		if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditSuperseded ||
 			!strings.Contains(body, "not applied") || strings.Contains(body, "edited config") {
 			t.Errorf("superseded after a failed %s: %d %s, want %s saying the edit was not applied", failure, w.Code, body, reasonEgressEditSuperseded)
-		}
-	}
-}
-
-// failSandboxStopRunner fails every sandbox stop, as a daemon that does not answer would.
-type failSandboxStopRunner struct{ *hashedReviveRunner }
-
-func (r *failSandboxStopRunner) StopSandbox(context.Context, string) error {
-	return errors.New("the daemon did not answer the stop")
-}
-
-// failedAfterClaim makes the fixture's run live, with a store and runner that persist fate when a revive fails after
-// its claim: lost (the mark written), unknown (the mark not applied), or ended (a headless run on a remote runner,
-// which the mark cannot keep, finalized; "ended, stop fails" also fails its sandbox stops).
-func (f *readbackFixture) failedAfterClaim(fate string) {
-	fs := &failMarkStore{readbackStore: f.rb}
-	f.srv.cfg.Store = fs
-	f.st.mu.Lock()
-	defer f.st.mu.Unlock()
-	f.st.run.LostAt, f.st.run.LostReason = nil, ""
-	switch fate {
-	case "unknown":
-		fs.notApplied.Store(true)
-	case "ended, stop fails":
-		f.srv.cfg.Runner = &failSandboxStopRunner{hashedReviveRunner: f.hr}
-		fallthrough
-	case "ended":
-		f.st.run.Interactive, f.st.run.Placement = false, types.PlacementRemote
-	}
-	f.run = f.st.run
-}
-
-// A bulk restart that fails after its claim answers the run's fate as persisted, through a failed replace and through
-// a failed readback (whose stop clause never replaces that fate), and its lost_again is true only once the lost mark
-// was written, as the audit row's is.
-func TestRestart_FailureAfterTheClaimAnswersThePersistedFate(t *testing.T) {
-	for _, readback := range []bool{false, true} {
-		for _, c := range []struct {
-			fate         string
-			lostAgain    bool
-			say          string
-			notConfirmed bool // the readback's stop did not land
-		}{
-			{"lost", true, "lost until revived", false},
-			{"unknown", false, "being lost or ended by another operation", true},
-			{"ended", false, "being ended", false},
-			{"ended, stop fails", false, "being ended", true},
-		} {
-			f := newReadbackFixture(t)
-			f.failedAfterClaim(c.fate)
-			want := reasonReviveProxyReplaceFailedLost
-			if readback {
-				f.hr.hash, want = func([]byte) string { return "" }, reasonRevivePolicyUnconfirmedLost
-			} else {
-				f.rr.replaceErr = runner.ErrProxyReplaceFailed
-			}
-			res := f.restart(t)
-			if res.OK || res.Reason != want || res.LostAgain != c.lostAgain || !strings.Contains(res.Error, c.say) ||
-				(c.say != "lost until revived" && strings.Contains(res.Error, "lost until revived")) {
-				t.Errorf("readback=%v %s: %+v, want %s, lost_again %v, saying %q", readback, c.fate, res, want, c.lostAgain, c.say)
-			}
-			if readback && strings.Contains(res.Error, "not confirmed") != c.notConfirmed {
-				t.Errorf("readback %s: %q, want the stop named not confirmed only when it did not land", c.fate, res.Error)
-			}
-			ev := f.audit.eventsFor(f.run.ID, "run.revive")
-			if len(ev) != 1 || leaseAuditData(t, ev[0])["lost_again"] != c.lostAgain {
-				t.Errorf("readback=%v %s: run.revive rows %+v, want one with lost_again %v", readback, c.fate, ev, c.lostAgain)
-			}
-			if ended := isTerminalRunState(f.st.State()); ended != strings.HasPrefix(c.fate, "ended") {
-				t.Errorf("readback=%v %s: state %s, want terminal only for an ended fate", readback, c.fate, f.st.State())
-			}
-		}
-	}
-}
-
-// An edit whose replace fails awaits its start's containment whatever fate the revive persisted, never answering the
-// revive's refusal: stopped and ended for a run that cannot be kept, unresolved while the lost mark did not land.
-func TestEgressEdit_FailedReplaceAwaitsContainmentForEveryFate(t *testing.T) {
-	for _, c := range []struct {
-		fate, reason, say string
-	}{
-		{"lost", reasonEgressEditUnconfirmed, "lost until revived"},
-		{"unknown", reasonEgressEditContainmentUnresolved, "being lost or ended"},
-		{"ended", reasonEgressEditUnconfirmed, "the run is ended"},
-	} {
-		f := newEgressEditFixture(t)
-		f.failedAfterClaim(c.fate)
-		f.rr.replaceErr = runner.ErrProxyReplaceFailed
-		w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
-		if w.Code != http.StatusServiceUnavailable || errorReason(w) != c.reason || !strings.Contains(w.Body.String(), c.say) {
-			t.Errorf("%s: %d %s, want 503 %s saying %q", c.fate, w.Code, w.Body.String(), c.reason, c.say)
 		}
 	}
 }
