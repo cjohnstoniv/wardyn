@@ -38,7 +38,7 @@ type memProxyStarts struct {
 }
 
 func newMemProxyStarts() *memProxyStarts {
-	return &memProxyStarts{clock: time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC),
+	return &memProxyStarts{clock: time.Now().UTC(),
 		starts: map[uuid.UUID]map[int]*store.ProxyStart{}, addrs: map[uuid.UUID]string{}}
 }
 

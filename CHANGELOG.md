@@ -11,6 +11,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
+  `run_proxy_starts`. Without it, every run fails at create because its proxy start cannot be recorded. An upgrade
+  from before 0.10.0-rc.17 also needs the 0.10.0-rc.16 grants: `SELECT, INSERT, UPDATE, DELETE` on
+  `governance_unit_deciders` and `governance_envelopes`. An upgrade from
+  before 0.10.0-rc.14 also needs every grant the 0.10.0-rc.14 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `run_create_keys`, `wall_presets`, `kept_machines`, `workloads`, `workload_bindings`, `workload_run_ends`,
+  `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`,
+  `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`, `governance_restrictions`,
+  `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`,
+  `SELECT, INSERT, UPDATE` on `groundtruth_sensors`, `runner_health`, `launch_preset_version_floor`, `cli_sessions`
+  and `governance_boundary` (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`), and `SELECT, INSERT`
+  on `audit_checkpoints` and `run_model_usage`.
+
 ### Added
 
 - Each proxy start now confirms the policy its proxy loaded. The driver reports the SHA-256 of the config bytes it handed the proxy, and the proxy reports the SHA-256 of the bytes it loaded. The start is enforced when the two are equal. The proxy is stopped when the driver sends no hash, when the hashes differ, or when no report arrives within 60 seconds of the driver's answer. The run read shows the result as `policy_readback`. Runners and proxy images older than 0.10.0-rc.18 run as before, unconfirmed. A revive that must confirm, on a substrate that cannot report the hash, is refused before anything changes.
