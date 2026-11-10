@@ -357,6 +357,7 @@ What happens:
   back (or `wardyn folder bring-back <run>`) before you end the run.
 - If the agent can't be stopped, no pass runs, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
 - A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
+- A runner older than this release keeps working, but brings a folder back only when its last pass was confirmed.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:

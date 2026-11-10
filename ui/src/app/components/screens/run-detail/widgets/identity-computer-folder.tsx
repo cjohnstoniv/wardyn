@@ -50,7 +50,7 @@ export function ComputerFolderRows({ run }: { run: RunDetail }) {
       {refused > 0 && <p className="col-span-2 text-meta text-muted-foreground">{C.REFUSED(count(refused))}</p>}
       {ended && f.back && !f.back.error && <p className="col-span-2 text-meta text-muted-foreground">{C.BACK_AT(shortTime(f.back.at), count(f.back.files))}</p>}
       {f.back?.error && <p role="alert" className="col-span-2 text-meta text-danger">{C.BACK_FAILED(f.back.error)}</p>}
-      {ended && f.state === "synced" && <p className="col-span-2 text-meta text-muted-foreground">{C.DELETED}</p>}
+      {ended && f.state === "synced" && <p className="col-span-2 text-meta text-muted-foreground">{C.MAY_BE_GONE}</p>}
     </>
   );
 }
