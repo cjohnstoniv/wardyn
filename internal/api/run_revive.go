@@ -191,7 +191,7 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 // a failure before a live run's old proxy is touched. Otherwise a proxy that
 // cannot be replaced, or an agent that cannot be started, puts the run back to
 // lost with its proxy and agent stopped, so it never runs without the proxy it
-// was promised. edits, from a live egress edit only, narrow the stored config before the seal.
+// was promised. edits, from a live egress edit only, narrow the config at the ceiling's re-assertion.
 func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool, edits ...liveEgressEdit) (reviveResult, *reviveError) {
 	reviver, rv, starter, rebooted, rerr := s.reviveSupported(ctx, run, startAgent)
 	if rerr != nil {
@@ -230,15 +230,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveCarryRecordedRules(ctx, run.ID, cfg); rerr != nil {
 		return reviveResult{}, rerr
 	}
-	if rerr := applyEgressEdits(&c, &cfg.Policy, edits); rerr != nil {
-		return reviveResult{}, rerr
-	}
 	corpus := inspectionCorpusOf(cfg.Policy) // the organisation's, before a laptop copy drops it
 	// The final seal, as dispatch's (run_policy_seal.go), then the ceiling's re-assertion over the
 	// layers it read, so a credential the boundary withholds goes as one the profile denies does.
 	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
 	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
-	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
+	re, rerr := reassertProxyCeiling(run, cfg, c, layers, edits...)
 	if rerr != nil {
 		s.auditReviveCeilingRefusal(ctx, run, rerr, actorType, actor)
 		return reviveResult{}, rerr

@@ -23,8 +23,8 @@ import (
 // A live egress edit (PATCH /runs/{id}/egress) narrows a running run's egress at once: it removes
 // allowlist entries and adds denies, and never adds a host, so widening a live run stays an approval.
 // It is applied by the live revive path (run_revive.go): a new proxy built from the run's stored
-// config, with the edit applied before the final seal, under a fresh run token. Each removed or
-// denied host goes through the owner-ceiling re-assertion as a profile deny does, so the credential
+// config under a fresh run token, with the edit applied after the final seal, at the owner-ceiling
+// re-assertion. Each removed or denied host is withheld there as a profile deny is, so the credential
 // lanes to it are dropped, or the edit is refused where a lane cannot go (the git broker, the Azure
 // CLI and kubectl doors). A removed host is denied as well, so a later first-use approval in this run
 // cannot reopen it; widening the run again is a new run or an approval of another host.
@@ -138,10 +138,10 @@ func egressEditHosts(field string, hosts []string) ([]string, string) {
 	return out, ""
 }
 
-// applyEgressEdits applies a revive's edits to the config it starts from, before the final seal: each
-// removed entry must be on the run's allowlist and leaves it, and every removed and denied host joins
-// the owner ceiling's denies, so the re-assertion denies it and drops its credential lanes. The seal
-// after this only intersects the allowlist and merges denies, so nothing brings a removed host back.
+// applyEgressEdits applies a revive's edits to the sealed config, first in reassertProxyCeiling: each
+// removed entry must be on the run's sealed allowlist and leaves it, and every removed and denied host
+// joins the owner ceiling's denies, so the re-assertion denies it and drops its credential lanes.
+// Nothing after the re-assertion adds an allowlist entry (the seal census), so no removed host returns.
 func applyEgressEdits(c *ownerCeiling, policy *types.RunPolicySpec, edits []liveEgressEdit) *reviveError {
 	for _, e := range edits {
 		for _, h := range e.remove {
