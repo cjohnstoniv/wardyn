@@ -519,6 +519,16 @@ describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
     expect(chip.className).toContain("[tr:hover_&]:bg-card");
   });
 
+  it("names the search box, not only by its placeholder", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    expect(screen.getByRole("textbox", { name: "Search secrets" })).toBeInTheDocument();
+  });
+
   it("member: Rotate and Delete act on their own row only; the admin's name has no actions", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(

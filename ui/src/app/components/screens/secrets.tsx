@@ -168,6 +168,7 @@ export function SecretsScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search secrets by name…"
+            aria-label="Search secrets"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 max-w-sm"
