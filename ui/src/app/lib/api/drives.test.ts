@@ -50,6 +50,15 @@ describe("drives.getDrives() — the disclosure keys survive the projection", ()
     expect(snap.grants).toHaveLength(1);
   });
 
+  it("carries the team_drives switch through, on and off, and leaves it undefined when the daemon does not send it", async () => {
+    fetchMock.mockResolvedValueOnce(body({ team_drives: true }));
+    expect((await drives.getDrives()).team_drives).toBe(true);
+    fetchMock.mockResolvedValueOnce(body({ team_drives: false }));
+    expect((await drives.getDrives()).team_drives).toBe(false);
+    fetchMock.mockResolvedValueOnce(body());
+    expect((await drives.getDrives()).team_drives).toBeUndefined();
+  });
+
   it("leaves grant_total undefined for a pre-0.7 daemon that never sends it", async () => {
     fetchMock.mockResolvedValueOnce(body());
     const snap = await drives.getDrives();

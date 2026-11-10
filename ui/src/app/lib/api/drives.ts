@@ -373,6 +373,8 @@ export const drives = {
       host_roots_configured: !!body.host_roots_configured,
       runner_target: body.runner_target ?? "",
       disabled: !!body.disabled,
+      // Carried as sent: absent (an older daemon) is "unknown", not off.
+      team_drives: typeof body.team_drives === "boolean" ? body.team_drives : undefined,
     };
   },
 
