@@ -10,7 +10,7 @@ const RuleSourceApprovals = "brokered:approvals"
 
 // RuleSourceUpstreamProxy is the rule source of the one allow row a proxy writes when it starts with an
 // upstream proxy: it records the private-IP guard's relaxation for that hop, not a request.
-const RuleSourceUpstreamProxy = "builtin:upstream-proxy"
+const RuleSourceUpstreamProxy string = "builtin:upstream-proxy"
 
 // CountsAsActivity reports whether a decision is the run doing something, and so moves the idle clock and
 // the pause's presence clock. Only an allowed request is: a refused or held one is the run being told no,
