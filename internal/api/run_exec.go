@@ -39,7 +39,7 @@ const (
 	// runExecAuditCommandCap is how much of the command its audit row keeps.
 	runExecAuditCommandCap = 4 << 10
 	// runExecCallerLeft is the run.command.exec error for a caller who left before the command ended.
-	runExecCallerLeft = "the caller left before the command ended"
+	runExecCallerLeft = "The caller left before the command ended."
 	// runExecStreamCap is how much of each stream the reply keeps. Reading never stops there: a stream
 	// nobody reads blocks the command (runner.ExecSession's streaming contract).
 	runExecStreamCap = 1 << 20
