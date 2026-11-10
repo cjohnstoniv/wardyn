@@ -469,10 +469,11 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed. vm_machine is also in runCols: at insert it
 // holds a macOS VM run's picked base alone (types.VMMachine.MacOSBase), until SetRunVMMachine.
 // wall_preset (0248, types.AgentRun.WallPreset) and image_admission (types.AgentRun.ImageAdmission) are in
-// runCols too, and a queued start rewrites both.
+// runCols too, and a queued start rewrites both. proxy_addr (0275) is read through COALESCE AS proxy_addr,
+// so a CTE that RETURNs runCols (PromoteQueuedRun's moved) still has the column its SELECT names.
 const runInsertOnlyCols = `local_folder, vm_machine, wall_preset, image_admission`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status, wall_preset, policy_digest, image_admission, COALESCE(proxy_addr, '')`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status, wall_preset, policy_digest, image_admission, COALESCE(proxy_addr, '') AS proxy_addr`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
