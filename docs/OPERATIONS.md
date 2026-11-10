@@ -4069,7 +4069,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0271` (`0271_approval_file_review`) replaces `approvals_kind_check` (`0001`'s table) to admit `file_download` and adds a partial unique index that keeps one pending review of a file per run; no row or grant change.
 - `0272` (`0272_context_pins`) adds `components.owning_unit_id` (a foreign key to `governance_units`, restrict on delete; organisation rows only) and `workspaces.owning_unit_strict` (default false; true needs a pin). No grant change.
 - `0273` (`0273_governance_elevation`) adds `governance_memberships.expires_at` (with a partial index on it) and widens `agent_runs_lifetime_cap_source_check` (`0001`'s table) to admit `elevation`; no row or grant change.
-- `0274` (`0274_attach_ticket_credential`) adds two nullable columns to `attach_tickets` (`0026`'s table) and deletes dead CLI access-token rows; no grant change.
+- `0274` (`0274_attach_ticket_credential`) adds two nullable columns to `attach_tickets` (`0026`'s table) and deletes dead CLI access-token rows; no grant change. Tickets and relay cookies issued before the upgrade carry no credential and keep the old behaviour until they expire.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

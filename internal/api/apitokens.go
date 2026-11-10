@@ -84,6 +84,23 @@ func withCLISessionID(ctx context.Context, id uuid.UUID) context.Context {
 	return context.WithValue(ctx, cliSessionIDCtxKey{}, id)
 }
 
+// apiTokenKindCtxKey carries the kind of the api token that authenticated the current request.
+type apiTokenKindCtxKey struct{}
+
+// credentialBinding is the credential a decision that must outlive the request binds to: a CLI sign-in's
+// access token binds to its session alone, because a refresh replaces the token and the session lives on;
+// every other token, a cli_admin step-up included (it is never rotated and is revoked and expires on its
+// own), binds to its own id. Both are uuid.Nil on a console session or the admin token.
+func credentialBinding(ctx context.Context) (tokenID, sessionID uuid.UUID) {
+	tokenID, sessionID = apiTokenIDFromContext(ctx), cliSessionIDFromContext(ctx)
+	if kind, _ := ctx.Value(apiTokenKindCtxKey{}).(string); sessionID != uuid.Nil && kind == types.APITokenKindCLIAccess {
+		tokenID = uuid.Nil
+	} else {
+		sessionID = uuid.Nil
+	}
+	return tokenID, sessionID
+}
+
 func cliSessionIDFromContext(ctx context.Context) uuid.UUID {
 	id, _ := ctx.Value(cliSessionIDCtxKey{}).(uuid.UUID)
 	return id
@@ -159,6 +176,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		if t.CLISessionID != nil {
 			ctx = withCLISessionID(ctx, *t.CLISessionID)
 		}
+		ctx = context.WithValue(ctx, apiTokenKindCtxKey{}, t.Kind)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -123,9 +123,9 @@ type ticketActor struct {
 	// app its person matched (inbound_ticket.go); a ticket with either never opens a terminal.
 	caller, app string
 	// tokenID is the personal API token the ticket was minted under, and cliSessionID the CLI session whose
-	// access token did; both uuid.Nil for a console session's or the admin token's ticket. A CLI session wins
-	// over its token (a refresh replaces the token and the session lives on), as for a Mac window. The
-	// ticket's authority check asks after whichever is set, so a revoke, an expiry or a sign-out of that
+	// access token did; both uuid.Nil for a console session's or the admin token's ticket. A CLI sign-in's
+	// access token binds to its session alone (a refresh replaces it and the session lives on), as for a Mac
+	// window; a cli_admin step-up binds to its own token (credentialBinding). The ticket's authority check asks after whichever is set, so a revoke, an expiry or a sign-out of that
 	// credential ends the terminal it opened (ticketAuthority).
 	tokenID, cliSessionID uuid.UUID
 }
@@ -216,10 +216,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 // admitted at authorizedAt, and answers {ticket, expires_in_seconds}.
 func (s *Server) issueAttachTicket(w http.ResponseWriter, r *http.Request, t store.AttachTicket, authorizedAt time.Time) {
 	// The ticket is bound to the credential that asked for it, so ending that credential ends the terminal.
-	t.TokenID, t.CLISessionID = apiTokenIDFromContext(r.Context()), cliSessionIDFromContext(r.Context())
-	if t.CLISessionID != uuid.Nil {
-		t.TokenID = uuid.Nil
-	}
+	t.TokenID, t.CLISessionID = credentialBinding(r.Context())
 	// The ticket's sequence is read before the late re-check, so a cut that commits between the two draws
 	// a sequence above the one recorded and ends the ticket (the order handleCreateAPIToken and
 	// handleAddSSHKey keep).

@@ -141,7 +141,7 @@ type uiSession struct {
 	Inbound bool   `json:"n,omitempty"`
 	Caller  string `json:"k,omitempty"`
 	// CredToken is the personal API token the entry ticket was minted under, and CredSession the CLI session
-	// whose access token did (a CLI session wins over its token, as for a Mac window); both uuid.Nil for a
+	// whose access token did (credentialBinding: a cli_admin step-up binds to its token); both uuid.Nil for a
 	// console session's or the admin token's ticket. The re-check ends the session when that credential is
 	// revoked, expired or signed out, which no person-level cut records (uiSessionStillAuthorized).
 	CredToken   uuid.UUID `json:"ct,omitempty"`

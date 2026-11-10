@@ -25,9 +25,15 @@ type credentialStore struct {
 	store.Store
 	tokens   map[uuid.UUID]bool
 	sessions map[uuid.UUID]store.CLISessionRow
+	// expiry is when a token stops reading as live, as the store's liveness read applies a token's expires_at.
+	expiry map[uuid.UUID]time.Time
+	now    func() time.Time
 }
 
 func (s *credentialStore) GetLiveAPIToken(_ context.Context, id uuid.UUID) (types.APIToken, error) {
+	if exp, ok := s.expiry[id]; ok && !s.now().Before(exp) {
+		return types.APIToken{}, store.ErrNotFound
+	}
 	if !s.tokens[id] {
 		return types.APIToken{}, store.ErrNotFound
 	}
@@ -42,13 +48,18 @@ func (s *credentialStore) GetCLISession(_ context.Context, id uuid.UUID) (store.
 	return row, nil
 }
 
+func withTokenKind(ctx context.Context, kind string) context.Context {
+	return context.WithValue(ctx, apiTokenKindCtxKey{}, kind)
+}
+
 // TestAttachTicket_BoundToItsCredential: a ticket minted with a personal token or a CLI sign-in's access token
 // carries that credential (the session, for a CLI sign-in), and the open terminal's authority check ends it when
 // the token is revoked, the session is signed out or has expired; a CLI refresh, which only replaces the access
 // token, leaves it open.
 func TestAttachTicket_BoundToItsCredential(t *testing.T) {
 	h := newUIHarness(t, okBackend())
-	cs := &credentialStore{Store: h.srv.cfg.Store, tokens: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]store.CLISessionRow{}}
+	cs := &credentialStore{Store: h.srv.cfg.Store, tokens: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]store.CLISessionRow{},
+		expiry: map[uuid.UUID]time.Time{}, now: h.srv.cfg.Now}
 	h.srv.cfg.Store = cs
 	tokenID, sessionID, accessID := uuid.New(), uuid.New(), uuid.New()
 	cs.tokens[tokenID], cs.tokens[accessID] = true, true
@@ -87,7 +98,7 @@ func TestAttachTicket_BoundToItsCredential(t *testing.T) {
 	if byToken.tokenID != tokenID || byToken.cliSessionID != uuid.Nil {
 		t.Fatalf("token ticket binds token %v session %v, want %v and none", byToken.tokenID, byToken.cliSessionID, tokenID)
 	}
-	byCLI := mint(withCLISessionID(withAPITokenID(context.Background(), accessID), sessionID))
+	byCLI := mint(withTokenKind(withCLISessionID(withAPITokenID(context.Background(), accessID), sessionID), types.APITokenKindCLIAccess))
 	if byCLI.cliSessionID != sessionID || byCLI.tokenID != uuid.Nil {
 		t.Fatalf("CLI ticket binds token %v session %v, want none and %v", byCLI.tokenID, byCLI.cliSessionID, sessionID)
 	}
@@ -131,7 +142,8 @@ func TestAttachTicket_BoundToItsCredential(t *testing.T) {
 // refresh, which only replaces the access token, does not end the session.
 func TestUISession_BoundToItsCredential(t *testing.T) {
 	h := newUIHarness(t, okBackend())
-	cs := &credentialStore{Store: h.srv.cfg.Store, tokens: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]store.CLISessionRow{}}
+	cs := &credentialStore{Store: h.srv.cfg.Store, tokens: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]store.CLISessionRow{},
+		expiry: map[uuid.UUID]time.Time{}, now: h.srv.cfg.Now}
 	h.srv.cfg.Store = cs
 	tokenID, sessionID := uuid.New(), uuid.New()
 	cs.tokens[tokenID] = true
@@ -176,5 +188,84 @@ func TestUISession_BoundToItsCredential(t *testing.T) {
 	}
 	if de := refused(console); de != nil {
 		t.Fatalf("console session refused by a credential check: %+v", de)
+	}
+}
+
+// TestCredentialBinding_CLIAdminBindsToItsOwnToken: a cli_admin step-up is never rotated and is revoked and
+// expires on its own while its session goes on, so a terminal or relay session it opened is bound to the
+// token, not the session: its revoke, or its one-hour expiry, ends them. An ordinary cli_access token binds to
+// its session, so a rotation keeps them.
+func TestCredentialBinding_CLIAdminBindsToItsOwnToken(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	cs := &credentialStore{Store: h.srv.cfg.Store, tokens: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]store.CLISessionRow{},
+		expiry: map[uuid.UUID]time.Time{}, now: h.srv.cfg.Now}
+	h.srv.cfg.Store = cs
+	sessionID, accessID, adminID := uuid.New(), uuid.New(), uuid.New()
+	cs.sessions[sessionID] = store.CLISessionRow{ID: sessionID, ExpiresAt: h.srv.cfg.Now().Add(24 * time.Hour)}
+	cs.tokens[accessID], cs.tokens[adminID] = true, true
+	cs.expiry[adminID] = h.srv.cfg.Now().Add(time.Hour)
+
+	adminCtx := withTokenKind(withCLISessionID(withAPITokenID(context.Background(), adminID), sessionID), types.APITokenKindCLIAdmin)
+	accessCtx := withTokenKind(withCLISessionID(withAPITokenID(context.Background(), accessID), sessionID), types.APITokenKindCLIAccess)
+	if tok, sess := credentialBinding(adminCtx); tok != adminID || sess != uuid.Nil {
+		t.Fatalf("cli_admin binding = %v/%v, want its token %v and no session", tok, sess, adminID)
+	}
+	if tok, sess := credentialBinding(accessCtx); tok != uuid.Nil || sess != sessionID {
+		t.Fatalf("cli_access binding = %v/%v, want the session %v alone", tok, sess, sessionID)
+	}
+	if a := macWindowAuthorityFrom(adminCtx, types.ActorHuman, h.owner, h.srv.cfg.Now()); a.TokenID != adminID || a.CLISessionID != uuid.Nil {
+		t.Fatalf("Mac window authority of a cli_admin token = %v/%v, want its token alone", a.TokenID, a.CLISessionID)
+	}
+
+	attachAlive := func(ta ticketActor) bool {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+h.run.ID.String()+"/attach", nil)
+		fn := h.srv.attachAuthority(r.WithContext(withTicketActor(r.Context(), ta)), h.run.ID)
+		if fn == nil {
+			t.Fatal("a ticket bound to a credential has no re-check")
+		}
+		return fn(context.Background()) == nil
+	}
+	relayAlive := func(ta ticketActor) bool {
+		ta.actorType, ta.principal, ta.role, ta.authorizedAt = types.ActorHuman, h.owner, oidc.RoleUser, h.srv.cfg.Now()
+		sess := h.srv.newUISession(h.run, ta, "code", uiTestPort, 3*time.Hour)
+		return h.srv.uiSessionStillAuthorized(context.Background(), sess, h.run) == nil
+	}
+	bind := func(ctx context.Context) ticketActor {
+		tok, sess := credentialBinding(ctx)
+		return ticketActor{actorType: types.ActorHuman, principal: h.owner, role: oidc.RoleUser, authorizedAt: h.srv.cfg.Now(), tokenID: tok, cliSessionID: sess}
+	}
+	admin, access := bind(adminCtx), bind(accessCtx)
+	for name, alive := range map[string]func(ticketActor) bool{"attach": attachAlive, "relay": relayAlive} {
+		if !alive(admin) || !alive(access) {
+			t.Fatalf("%s: a live cli_admin or cli_access credential was refused", name)
+		}
+	}
+	// A rotation replaces the access token; its terminal and relay stay.
+	delete(cs.tokens, accessID)
+	for name, alive := range map[string]func(ticketActor) bool{"attach": attachAlive, "relay": relayAlive} {
+		if !alive(access) {
+			t.Fatalf("%s: a cli_access rotation ended the session-bound credential", name)
+		}
+	}
+	// The step-up's own expiry ends its terminal and relay, the session still live.
+	h.clock.advance(time.Hour + time.Second)
+	for name, alive := range map[string]func(ticketActor) bool{"attach": attachAlive, "relay": relayAlive} {
+		if alive(admin) {
+			t.Fatalf("%s: a cli_admin token past its expiry still opens the session", name)
+		}
+		if !alive(access) {
+			t.Fatalf("%s: the cli_access session ended with the step-up's expiry", name)
+		}
+	}
+	// So does its revoke.
+	cs.expiry[adminID] = h.srv.cfg.Now().Add(time.Hour)
+	if !attachAlive(admin) || !relayAlive(admin) {
+		t.Fatal("control: the cli_admin token should read live again")
+	}
+	delete(cs.tokens, adminID)
+	for name, alive := range map[string]func(ticketActor) bool{"attach": attachAlive, "relay": relayAlive} {
+		if alive(admin) {
+			t.Fatalf("%s: a revoked cli_admin token still opens the session", name)
+		}
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -124,4 +125,122 @@ func TestPG_CLISession_RotationLeavesNoDeadRows(t *testing.T) {
 	if n := liveSessionTokens(t, e, g.SessionID); n != 1 {
 		t.Fatalf("live access tokens = %d, want 1", n)
 	}
+}
+
+// sweepRaceStore runs afterList once, right after a revoke sweep has read its snapshot of a person's tokens.
+type sweepRaceStore struct {
+	store.PG
+	afterList func()
+}
+
+func (s *sweepRaceStore) ListAPITokensByIdentity(ctx context.Context, name string) ([]types.APIToken, error) {
+	toks, err := s.PG.ListAPITokensByIdentity(ctx, name)
+	if f := s.afterList; f != nil {
+		s.afterList = nil
+		f()
+	}
+	return toks, err
+}
+
+// A refresh that lands between the demotion sweep's snapshot and its revoke replaces (first rotation: revokes;
+// later ones: deletes) the access token the snapshot holds. The sweep still ends the session by the id the
+// snapshot carries, so the next refresh is refused and the token the racing refresh minted is dead.
+func TestPG_CLISession_DemotionSweepEndsASessionThatRefreshedMeanwhile(t *testing.T) {
+	for name, earlier := range map[string]int{"first rotation": 0, "later rotation": 1} {
+		t.Run(name, func(t *testing.T) {
+			e := newCLIEnv(t)
+			c, g := e.signIn(e.user, nil)
+			refresh := func() {
+				t.Helper()
+				e.advance(7 * time.Minute)
+				w := c.refresh(g.SessionID, g.Secret)
+				if w.Code != http.StatusOK {
+					t.Fatalf("refresh = %d %s", w.Code, w.Body)
+				}
+				g = decodeJSON[types.CLISessionGrant](t, w)
+			}
+			for i := 0; i < earlier; i++ {
+				refresh()
+			}
+			raced := g
+			e.srv.cfg.Store = &sweepRaceStore{PG: e.pg, afterList: func() {
+				refresh()
+				raced = g
+			}}
+			if n, err := e.srv.revokeAPITokensFor(context.Background(), "sub-user"); err != nil || n != 1 {
+				t.Fatalf("sweep = %d, %v, want 1 token and no error", n, err)
+			}
+			got, err := e.pg.GetCLISession(context.Background(), g.SessionID)
+			if err != nil || got.EndedAt == nil || got.EndReason != types.CLISessionEndRevoked {
+				t.Fatalf("session after the sweep = %+v, %v; want ended, reason revoked", got, err)
+			}
+			if n := liveSessionTokens(t, e, g.SessionID); n != 0 {
+				t.Fatalf("live access tokens after the sweep = %d, want 0 (the racing refresh's token included)", n)
+			}
+			if code, _ := e.me(raced.AccessToken); code != http.StatusUnauthorized {
+				t.Fatalf("the racing refresh's access token = %d as a bearer, want 401", code)
+			}
+			e.advance(time.Minute)
+			wantCLIReason(t, c.refresh(g.SessionID, g.Secret), http.StatusUnauthorized, reasonCLISessionInvalid)
+		})
+	}
+}
+
+// A sweep that reaches the session while a rotation holds its row lock waits for the lock, then ends the
+// session: it does not read the token row the rotation is about to replace, and does not roll back.
+func TestPG_CLISession_DemotionSweepWaitsOnTheSessionLock(t *testing.T) {
+	e := newCLIEnv(t)
+	c, g := e.signIn(e.user, nil)
+	ctx := context.Background()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM cli_sessions WHERE id = $1 FOR UPDATE`, g.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		n, err := e.srv.revokeAPITokensFor(ctx, "sub-user")
+		done <- result{n, err}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sweep never waited on the session lock")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case r := <-done:
+		t.Fatalf("the sweep finished while the session was locked: %+v", r)
+	default:
+	}
+	// The rotation's side of the lock: the session moves on a generation, then the lock is released.
+	if _, err := tx.Exec(ctx, `UPDATE cli_sessions SET generation = generation + 1 WHERE id = $1`, g.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.err != nil || r.n != 1 {
+		t.Fatalf("sweep = %d, %v, want 1 token and no error", r.n, r.err)
+	}
+	if got, _ := e.pg.GetCLISession(ctx, g.SessionID); got.EndedAt == nil || got.EndReason != types.CLISessionEndRevoked {
+		t.Fatalf("session after the sweep = %+v, want ended, reason revoked", got)
+	}
+	e.advance(time.Minute)
+	wantCLIReason(t, c.refresh(g.SessionID, g.Secret), http.StatusUnauthorized, reasonCLISessionInvalid)
 }
