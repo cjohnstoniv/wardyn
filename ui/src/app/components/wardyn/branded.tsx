@@ -115,9 +115,13 @@ function BrandEffects({ brand }: { brand: Branding }) {
   }, [icon]);
   const name = productName(brand);
   React.useEffect(() => {
+    // A name can itself end in " - Wardyn" (an organisation named "Acme -"), so renaming its own output
+    // again would never settle: a title this effect wrote is left alone.
+    let wrote = "";
     const rename = () => {
+      if (document.title === wrote) return;
       const next = brandTitle(document.title, name);
-      if (next !== document.title) document.title = next;
+      if (next !== document.title) document.title = wrote = next;
     };
     rename();
     const watch = new MutationObserver(rename);

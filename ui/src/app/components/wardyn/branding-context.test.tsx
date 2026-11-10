@@ -163,6 +163,19 @@ describe("branded console (#1125)", () => {
     expect(document.title).toBe("Wardyn admin");
   });
 
+  it("a name that itself ends in ' - Wardyn' is applied once, not again to its own output", async () => {
+    publicRead = async () => ({ ...BRAND, org_name: "Acme -" });
+    document.title = "Runs - Wardyn";
+    const { unmount } = renderSignIn();
+    await waitFor(() => expect(document.title).toBe("Runs - Acme - Wardyn"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(document.title).toBe("Runs - Acme - Wardyn");
+    document.title = "Settings - Wardyn admin";
+    await waitFor(() => expect(document.title).toBe("Settings - Acme - Wardyn admin"));
+    unmount();
+    expect(document.title).toBe("Settings - Wardyn admin");
+  });
+
   it("reads Wardyn for <Company> in the suffix format, with the uploaded logo", async () => {
     publicRead = async () => ({ ...BRAND, name_format: "suffix", logo_url: "/api/v1/branding/logo?v=abc" });
     renderSignIn();
