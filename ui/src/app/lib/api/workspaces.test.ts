@@ -239,8 +239,8 @@ describe("workspace client methods", () => {
     ["setDeniedEgress", "denied-egress"],
   ] as const)("%s sends the version it was read at as If-Match, and none when it has none", async (method, suffix) => {
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(ws)));
-    await workspaces[method]("ws-1", ["a.example.com"], "2026-01-02T03:04:05.123456Z");
-    expect(new Headers(fetchMock.mock.calls[0][1].headers).get("If-Match")).toBe("2026-01-02T03:04:05.123456Z");
+    await workspaces[method]("ws-1", ["a.example.com"], "rev-1");
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get("If-Match")).toBe("rev-1");
     expect(fetchMock.mock.calls[0][0]).toBe(`/api/v1/workspaces/ws-1/${suffix}`);
     fetchMock.mockClear();
     await workspaces[method]("ws-1", ["a.example.com"]);

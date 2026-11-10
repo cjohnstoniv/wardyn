@@ -70,7 +70,7 @@ function ws(over: Partial<Workspace> = {}): Workspace {
     ref: "main",
     status: "scanned",
     created_at: "",
-    updated_at: "2026-01-02T03:04:05.123456Z",
+    updated_at: "rev-1",
     ...over,
   };
 }
@@ -186,7 +186,7 @@ describe("WorkspaceDetailScreen — Allowed hosts card", () => {
     expect(within(dialog).getByText(/^New runs on this workspace can no longer reach this host.*Runs already started keep their current rules\.$/)).toBeInTheDocument();
     expect(setApprovedEgressMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
-    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", [], "2026-01-02T03:04:05.123456Z"));
+    await waitFor(() => expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", [], "rev-1"));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(WORKSPACE_HOSTS.REMOVED_ALLOWED("registry.npmjs.org")));
   });
 
@@ -242,7 +242,7 @@ describe("WorkspaceDetailScreen — Denied hosts card", () => {
     expect(within(dialog).getByText(/^New runs on this workspace stop being blocked.*Runs already started keep their current rules\.$/)).toBeInTheDocument();
     expect(setDeniedEgressMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
-    await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", [], "2026-01-02T03:04:05.123456Z"));
+    await waitFor(() => expect(setDeniedEgressMock).toHaveBeenCalledWith("ws-1", [], "rev-1"));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(WORKSPACE_HOSTS.REMOVED_DENIED("evil.example.com")));
   });
 });
@@ -322,9 +322,9 @@ describe("a stale host-list save", () => {
     renderDetail();
     await user.click(await screen.findByRole("button", { name: `Remove ${host}` }));
     // The reload returns the list as the server holds it now.
-    getWorkspaceMock.mockResolvedValue(ws({ [field]: [host, decided], updated_at: "2026-01-02T03:04:06.000000Z" }));
+    getWorkspaceMock.mockResolvedValue(ws({ [field]: [host, decided], updated_at: "rev-2" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
-    await waitFor(() => expect(mock).toHaveBeenCalledWith("ws-1", [], "2026-01-02T03:04:05.123456Z"));
+    await waitFor(() => expect(mock).toHaveBeenCalledWith("ws-1", [], "rev-1"));
     expect(toast.error).toHaveBeenCalledWith(`Failed to remove ${host}`, { description: "The workspace changed while this edit was being saved" });
     expect(toast.success).not.toHaveBeenCalled();
     expect(await screen.findByText(decided)).toBeInTheDocument();
@@ -364,7 +364,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     await user.click(await screen.findByRole("button", { name: "Remove pypi.org" }));
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: WORKSPACE_HOSTS.CONFIRM }));
     await waitFor(() =>
-      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["registry.npmjs.org"], "2026-01-02T03:04:05.123456Z"),
+      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["registry.npmjs.org"], "rev-1"),
     );
   });
 
