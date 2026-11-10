@@ -340,8 +340,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 			s.restoreRunTokenLineage(ctx, run.ID, freshJTI, renewed)
-			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
-				loggedMsg(ctx, "the run's proxy was not replaced, and the run keeps its current proxy", err))
+			return reviveResult{}, reviveKeptCurrent(ctx, err)
 		}
 		// The old proxy is, or may be, gone: nothing is left to serve on the
 		// retiring token, so revoking it here is safe (F4).
