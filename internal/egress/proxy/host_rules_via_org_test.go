@@ -4,9 +4,15 @@
 package proxy
 
 import (
+	"bytes"
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -20,7 +26,13 @@ import (
 // header grant's host and the GitHub grant's).
 func viaOrgRuleFixture(t *testing.T, rules ...types.HostRule) *viaOrgFixture {
 	t.Helper()
-	return newViaOrgFixture(t, nil, func(c *Config) {
+	return viaOrgRuleFixtureWith(t, &fakeOrg{}, rules...)
+}
+
+// viaOrgRuleFixtureWith is viaOrgRuleFixture on org, so two engines can share one organisation.
+func viaOrgRuleFixtureWith(t *testing.T, org *fakeOrg, rules ...types.HostRule) *viaOrgFixture {
+	t.Helper()
+	return newViaOrgFixtureWith(t, org, nil, func(c *Config) {
 		c.ViaOrgRoutes = []ViaOrgRoute{{GrantID: c.Injection[0].GrantID, Host: viaOrgHost}, {GrantID: c.GitGrants["octocat/hello-world"], Host: githubHost}}
 		c.Policy.HostRules = []types.HostRuleSet{{Rules: rules}}
 		// wardynd's reduction loads the stored config, routes included (LoadConfigBytes runs this check),
@@ -112,5 +124,97 @@ func TestViaOrgEngineAllowanceIsNotASandboxConnect(t *testing.T) {
 	p.engine = true
 	if d, _, log := p.evaluate(t.Context(), hrHost, 443, http.MethodConnect, ""); d != egress.Deny || log == nil || log.RuleSource != ruleSourceHostRuleNeedsInspection {
 		t.Fatalf("an engine's CONNECT outside ServeInjected = %s %+v, want deny %s", d, log, ruleSourceHostRuleNeedsInspection)
+	}
+}
+
+// viaOrgHoldRules hold POST /v1/messages on the via_org host and allow everything else there.
+func viaOrgHoldRules() []types.HostRule {
+	return []types.HostRule{
+		{Host: viaOrgHost, Methods: []string{"POST"}, Paths: []string{"/v1/messages"}, Effect: types.HostRuleHold},
+		{Host: viaOrgHost, Effect: types.HostRuleAllow},
+	}
+}
+
+// shortHostCallWindow makes the hold window and its poll milliseconds for the test.
+func shortHostCallWindow(t *testing.T) {
+	prevPoll, prevSecond := holdPollInterval, hostCallSecond
+	holdPollInterval, hostCallSecond = 2*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { holdPollInterval, hostCallSecond = prevPoll, prevSecond })
+}
+
+// A host rule hold on a via_org host is held by the organisation's engine: undecided, the sandbox reads the
+// pending 403; approved, the request reaches the host; declined, it is refused. The answers live in that
+// engine, so a new engine for the run asks again.
+func TestViaOrgHoldIsHeldAtTheOrganisation(t *testing.T) {
+	shortHostCallWindow(t)
+	for _, tc := range []struct {
+		state  types.ApprovalState
+		status int
+		pass   bool
+		source string
+	}{
+		{"", http.StatusForbidden, false, ruleSourceHostRuleApprovalWait},
+		{types.ApprovalApproved, http.StatusOK, true, ruleSourceHostRuleApprovalApproved},
+		{types.ApprovalDenied, http.StatusForbidden, false, ruleSourceHostRuleApprovalDenied},
+	} {
+		org := &fakeOrg{pollState: tc.state}
+		f := viaOrgRuleFixtureWith(t, org, viaOrgHoldRules()...)
+		w := f.inject(http.MethodPost, "/v1/messages", nil)
+		hits, _, _ := f.up.seen()
+		if w.Code != tc.status || (hits == 1) != tc.pass {
+			t.Errorf("%q: status %d, upstream hits %d, want %d and reached=%v", tc.state, w.Code, hits, tc.status, tc.pass)
+		}
+		if tc.state == "" && w.Header().Get(egressHeaderStatus) != egressRefusalPending {
+			t.Errorf("undecided: %v, want the pending answer", w.Header())
+		}
+		if rows := f.decisions(t); !strings.Contains(rows, `"rule_source":"`+tc.source+`"`) {
+			t.Errorf("%q: no %s row:\n%s", tc.state, tc.source, rows)
+		}
+	}
+
+	org := &fakeOrg{pollState: types.ApprovalApproved}
+	for i := range 2 {
+		f := viaOrgRuleFixtureWith(t, org, viaOrgHoldRules()...)
+		if w := f.inject(http.MethodPost, "/v1/messages", nil); w.Code != http.StatusOK {
+			t.Fatalf("engine %d: status %d, want 200", i, w.Code)
+		}
+		_ = f.engine.Close(context.Background())
+	}
+	if org.mu.Lock(); org.raised != 2 {
+		t.Errorf("two engines raised %d approvals, want each to ask", org.raised)
+	}
+	org.mu.Unlock()
+}
+
+// deadlineWriter records the read deadline a handler sets on its connection.
+type deadlineWriter struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+}
+
+func (d *deadlineWriter) SetReadDeadline(t time.Time) error { d.deadline = t; return nil }
+
+// A via_org request the host rules hold waits at the organisation, up to the hold window, before its body
+// is read, so the sandbox proxy gives the body its full read time after that window. A request the rules
+// allow keeps the deadline its headers set.
+func TestViaOrgHeldRequestBodyKeepsItsReadTime(t *testing.T) {
+	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{},
+		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		ViaOrgRoutes: []ViaOrgRoute{{GrantID: uuid.New(), Host: viaOrgHost}},
+		Policy:       CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{viaOrgHost}, HostRules: []types.HostRuleSet{{Rules: viaOrgHoldRules()}}})})
+	for _, tc := range []struct {
+		method string
+		held   bool
+	}{{http.MethodPost, true}, {http.MethodGet, false}} {
+		w := &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+		start := time.Now()
+		p.serveMITMRequest(w, httptest.NewRequest(tc.method, "https://"+viaOrgHost+"/v1/messages", strings.NewReader("{}")), viaOrgHost, 443)
+		want := start.Add(hostCallWindow*hostCallSecond + mitmReadTimeout)
+		if tc.held && w.deadline.Before(want) {
+			t.Errorf("held %s: read deadline %v, want at least %v (the window plus the read time)", tc.method, w.deadline, want)
+		}
+		if !tc.held && !w.deadline.IsZero() {
+			t.Errorf("allowed %s: read deadline set to %v, want the one its headers set", tc.method, w.deadline)
+		}
 	}
 }
