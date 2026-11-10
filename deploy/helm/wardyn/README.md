@@ -64,6 +64,7 @@ Wardyn is up.
     - (kind's default kindnet is the classic case — the conformance CI lane pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the refusal to a loud warning).
   - A DIFFERENT knob, `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, never downgrades this enforcement refusal — it only acknowledges the SEPARATE trap below (an ambient default-deny already present in `k8s.runsNamespace`),
     - and only when the canary pod actually ran and could not connect.
+- **Pod sysctls allowed in `k8s.runsNamespace`** (with `k8s.enabled`): each run's proxy pod sets `net.ipv4.ip_unprivileged_port_start=53`, a namespaced safe sysctl, to bind its DNS listener without a capability. A cluster whose admission forbids pod sysctls fails every run at proxy start.
 - **Postgres 13+** (external or managed).
 - A wardynd image:
   - the chart's default pulls the CI-published one for a released version (see the callout at the top), or **build and push your own** (see below) for a fork, a private registry, or an unreleased change.
