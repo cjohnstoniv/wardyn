@@ -222,8 +222,10 @@ func TestCanaryRecheck_OverrideNeverCoversAgentSandbox(t *testing.T) {
 func TestCanaryRecheck_AcknowledgedRefusesAgentSandboxOnly(t *testing.T) {
 	c := newRecheckCluster(t)
 	d, _ := c.boot(t, Config{AckAmbientDefaultDeny: true})
-	c.phaseA.Store(1) // an ambient default-deny appears, and one check applies it
-	d.recheckOnce(context.Background())
+	c.phaseA.Store(1) // an ambient default-deny appears; after a proven boot it takes three checks to apply
+	for i := 0; i < canaryRecheckStrikes; i++ {
+		d.recheckOnce(context.Background())
+	}
 	if enforced, acked := networkPolicyClaim(t, d); enforced || !acked {
 		t.Fatalf("NetworkPolicy %v, acknowledged %v; want false and true", enforced, acked)
 	}
@@ -233,6 +235,71 @@ func TestCanaryRecheck_AcknowledgedRefusesAgentSandboxOnly(t *testing.T) {
 	d.cfg.AgentSandbox = true
 	if err := d.netPolRefusal(testNamespace); !errors.Is(err, errNetPolNotProven) {
 		t.Errorf("agent-sandbox: refusal %v, want errNetPolNotProven", err)
+	}
+}
+
+// TestCanaryRecheck_AcknowledgedNeverLiftsAnEscape: with the ambient default-deny acknowledged, checks
+// whose phase A pod exits 1 after one that showed an escape keep new sandboxes refused. Fewer than three
+// keep the refused verdict and its time; three read not proven. Only proof of enforcement lifts it.
+func TestCanaryRecheck_AcknowledgedNeverLiftsAnEscape(t *testing.T) {
+	c := newRecheckCluster(t)
+	d, clock := c.boot(t, Config{AckAmbientDefaultDeny: true})
+	c.phaseB.Store(0) // the CNI stops enforcing
+	*clock = clock.Add(canaryRecheckInterval)
+	d.recheckOnce(context.Background())
+	escaped := *clock
+	c.phaseA.Store(1) // then phase A exits 1: a pod-network blip looks the same as an ambient default-deny
+	for i := 1; i <= canaryRecheckStrikes; i++ {
+		*clock = clock.Add(canaryRecheckInterval)
+		d.recheckOnce(context.Background())
+		if err := d.netPolRefusal(testNamespace); !errors.Is(err, errNetPolNotProven) {
+			t.Fatalf("after %d acknowledged check(s): refusal %v, want errNetPolNotProven", i, err)
+		}
+		want := runner.NetPolCheck{Verdict: runner.NetPolRefused, At: escaped}
+		if i == canaryRecheckStrikes {
+			want = runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: *clock}
+		}
+		if got := healthCheck(t, d); got != want {
+			t.Fatalf("after %d acknowledged check(s): health %+v, want %+v", i, got, want)
+		}
+	}
+	c.phaseA.Store(0)
+	c.phaseB.Store(1)
+	d.recheckOnce(context.Background())
+	if err := d.netPolRefusal(testNamespace); err != nil {
+		t.Errorf("after a proving check: refusal %v, want none", err)
+	}
+}
+
+// TestCanaryRecheck_AcknowledgedBlipKeepsProof: booted proven with the ambient default-deny
+// acknowledged, a phase A pod that exits 1 fewer than three times in a row keeps the proven verdict,
+// its time and the image check, in plain and agent-sandbox mode alike; three make it acknowledged.
+func TestCanaryRecheck_AcknowledgedBlipKeepsProof(t *testing.T) {
+	for _, agentSandbox := range []bool{false, true} {
+		c := newRecheckCluster(t)
+		d, clock := c.boot(t, Config{AckAmbientDefaultDeny: true})
+		d.cfg.AgentSandbox = agentSandbox // the check alone is under test, as in OverrideNeverCoversAgentSandbox
+		d.recheckOnce(context.Background())
+		proven := *clock
+		c.phaseA.Store(1)
+		for i := 1; i < canaryRecheckStrikes; i++ {
+			*clock = clock.Add(canaryRecheckInterval)
+			d.recheckOnce(context.Background())
+			if err := d.netPolRefusal(testNamespace); err != nil {
+				t.Fatalf("agent-sandbox %v, after %d acknowledged check(s): refusal %v, want none", agentSandbox, i, err)
+			}
+			if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: proven}); got != want {
+				t.Fatalf("agent-sandbox %v, after %d acknowledged check(s): health %+v, want %+v", agentSandbox, i, got, want)
+			}
+			if reason := d.PrewrappedCheckUnavailable(); reason != "" {
+				t.Fatalf("agent-sandbox %v, after %d acknowledged check(s): image check unavailable (%s), want available", agentSandbox, i, reason)
+			}
+		}
+		*clock = clock.Add(canaryRecheckInterval)
+		d.recheckOnce(context.Background())
+		if got, want := healthCheck(t, d), (runner.NetPolCheck{Verdict: runner.NetPolAcknowledged, At: *clock}); got != want {
+			t.Errorf("agent-sandbox %v, after %d acknowledged checks: health %+v, want %+v", agentSandbox, canaryRecheckStrikes, got, want)
+		}
 	}
 }
 
