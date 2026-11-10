@@ -174,6 +174,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	if err := d.netPolRefusal(ns); err != nil { // the canary's live verdict; running sandboxes are untouched
+		return runner.Sandbox{}, err
+	}
 
 	// (1) Preflight: fail closed BEFORE creating anything.
 	runtimeClassName, runtimeHandler, enforced, err := d.createPreflight(ctx, spec)
