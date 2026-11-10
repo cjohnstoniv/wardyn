@@ -59,6 +59,15 @@ var terminalWriterCensus = map[string]string{
 	// (3) The idle reaper, in this package. Reaches the same helper through
 	// api.Server.CancelTerminalRunApprovals, threaded in at boot.
 	"StopRun": "calls cancelApprovals (api.Server.CancelTerminalRunApprovals)",
+	// The reaper's max-age stop: UpdateRunStateIfCreatedBefore inside stop, which
+	// calls cancelApprovals (cancelMaxAgeApprovals).
+	"StopRunMaxAge": "stop calls cancelApprovals",
+	// A run past its lifetime: KillRunAtLifetimeIf, then cancelRunApprovals and
+	// killTeardownTail.
+	"killRunAtLifetime": "kills, then calls cancelRunApprovals directly",
+	// A kept machine's kill: KillRunMarkingKeptMachine inside
+	// claimKillTransitionWith, which calls cancelRunApprovals.
+	"claimKill": "claimKillTransitionWith calls cancelRunApprovals",
 	// (4) The create/dispatch compensator, which is BOTH: it cascades when it is
 	// handed from=RunRunning (runs_dispatch.go fails a run three times after the
 	// STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed `agent-run
@@ -160,8 +169,9 @@ func TestTerminalRunStateWriterCensus(t *testing.T) {
 // one of the terminal states — the three primitives every transition goes
 // through (internal/api's casRunState, its StopKeptRunIf sibling for a kept
 // run's atomic-mark CAS (F04), and the reaper's guarded UpdateRunStateIfIdle)
-// — or a finalize helper handed a terminal state — or one of the two runner
-// store methods that end runs themselves (RevokeRunner, AcceptRunnerExit).
+// — or the max-age stop's UpdateRunStateIfCreatedBefore — or a finalize helper
+// handed a terminal state — or one of the store methods that end runs themselves
+// (RevokeRunner, AcceptRunnerExit, KillRunAtLifetimeIf, KillRunMarkingKeptMachine).
 func writesTerminalState(call *ast.CallExpr) bool {
 	name := ""
 	switch fn := call.Fun.(type) {
@@ -171,11 +181,11 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		name = fn.Sel.Name
 	}
 	switch name {
-	case "RevokeRunner", "AcceptRunnerExit":
+	case "RevokeRunner", "AcceptRunnerExit", "KillRunAtLifetimeIf", "KillRunMarkingKeptMachine":
 		// Store methods that end runs in SQL, with the terminal state inside the
 		// statement rather than in an argument.
 		return true
-	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize", "reconcileFinalizeHint":
+	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "UpdateRunStateIfCreatedBefore", "reconcileFinalize", "reconcileFinalizeHint":
 	default:
 		return false
 	}
