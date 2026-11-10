@@ -69,25 +69,49 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session
 	}
 }
 
-// auditRunnerNetpol writes "k8s.netpol.update" when a Kubernetes runner's caps carry a NetworkPolicy
-// verdict other than its last caps did: a canary re-check, sent mid-session, or a new session's boot
-// canary. The row names the runner. The last caps are still the substrate's here, since remote.Link keeps
-// a caps event only after this checked handler ran. A runner's first verdict on this replica is the
-// baseline, and a verdict this build does not know is no change (runner.NetPolVerdictChanged).
+// runnerNetPolCheck is the NetworkPolicy check a runner's caps carry, as wardynd takes it: only from a
+// Kubernetes runner (its caps name runs namespaces), only a verdict this build knows, and without a check
+// time later than now plus runnerClockSkew. ok is false when there is none to take.
+func runnerNetPolCheck(c runnerwire.Caps, now time.Time) (runner.NetPolCheck, bool) {
+	check := c.Support.NetworkPolicyCheck
+	if len(c.RunsNamespaces) == 0 || !runner.KnownNetPolVerdict(check.Verdict) {
+		return runner.NetPolCheck{}, false
+	}
+	if check.At.After(now.Add(runnerClockSkew)) {
+		check.At = time.Time{}
+	}
+	return check, true
+}
+
+// auditRunnerNetpol audits the NetworkPolicy verdict a Kubernetes runner's caps carry against the last
+// one this process took from that runner. A change writes "k8s.netpol.update", either way. A first
+// verdict that is not "enforced" writes "k8s.netpol.fail", as wardynd's own boot does for its own
+// cluster. Caps with no verdict to take (runnerNetPolCheck) keep the last one, so a later change is
+// still compared with it. Every row names the runner.
 func (s *Server) auditRunnerNetpol(ctx context.Context, runnerID uuid.UUID, next runnerwire.Caps) {
-	s.runnerStreams.subsMu.Lock()
-	ep, ok := s.runnerStreams.subs[runnerID]
-	s.runnerStreams.subsMu.Unlock()
+	check, ok := runnerNetPolCheck(next, s.cfg.Now())
 	if !ok {
 		return
 	}
-	prev, ok := ep.sub.Caps()
-	from, to := prev.Support.NetworkPolicyCheck.Verdict, next.Support.NetworkPolicyCheck
-	if !ok || !runner.NetPolVerdictChanged(from, to.Verdict) {
-		return
+	s.runnerStreams.subsMu.Lock()
+	prev := s.runnerStreams.netpolLast[runnerID]
+	if s.runnerStreams.netpolLast == nil {
+		s.runnerStreams.netpolLast = map[uuid.UUID]string{}
 	}
+	s.runnerStreams.netpolLast[runnerID] = check.Verdict
+	s.runnerStreams.subsMu.Unlock()
 	id := runnerID.String()
-	s.auditNetpolUpdate(ctx, "runner:"+id, id, to.Verdict, from, to.At, map[string]any{"driver": "k8s", "runner_id": id})
+	data := map[string]any{"driver": "k8s", "runner_id": id}
+	switch {
+	case runner.NetPolVerdictChanged(prev, check.Verdict):
+		s.auditNetpolUpdate(ctx, "runner:"+id, id, check.Verdict, prev, check.At, data)
+	case prev == "" && check.Verdict != runner.NetPolEnforced:
+		data["verdict"] = check.Verdict
+		if !check.At.IsZero() {
+			data["checked_at"] = check.At.UTC().Format(time.RFC3339)
+		}
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+id, "k8s.netpol.fail", id, "failure", mustJSON(data)))
+	}
 }
 
 // handleUpdateMyRunner is PUT /api/v1/me/runners/{id}: a person declares their own runner's limits,

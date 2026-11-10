@@ -47,17 +47,25 @@ import (
 // structurally impossible: the stream is "healthy" only while events arrive.
 const ebpfHeartbeatTTL = 2 * time.Minute
 
-// runnersNetPolCheck is the worst NetworkPolicy verdict, with its own time, across the connected runners
-// whose last caps carry one (Kubernetes runners); zero when none does. A runner sends its caps again after
-// each re-check that changes the verdict or its time, so this is as live as the runner's own.
+// runnersNetPolCheck is the worst NetworkPolicy verdict, with its own time, across the connected
+// Kubernetes runners, as runnerNetPolCheck takes each; zero when none has one. A runner sends its caps
+// again after each re-check that changes the verdict or its time, so this is as live as the runner's
+// own. An offline runner is left out: it takes no new sandbox, and its verdict comes back with its caps
+// when it reconnects.
 func (s *Server) runnersNetPolCheck(ctx context.Context) runner.NetPolCheck {
 	s.runnerStreams.subsMu.Lock()
 	eps := slices.Collect(maps.Values(s.runnerStreams.subs))
 	s.runnerStreams.subsMu.Unlock()
+	now := s.cfg.Now()
 	var out runner.NetPolCheck
 	for _, ep := range eps {
-		if cs, err := ep.sub.Classes(ctx); err == nil { // offline, or no caps yet: no verdict
-			out = runner.WorseNetPolCheck(out, cs.NetworkPolicyCheck)
+		if _, err := ep.sub.Classes(ctx); err != nil { // offline, or no caps yet
+			continue
+		}
+		if c, ok := ep.sub.Caps(); ok {
+			if check, ok := runnerNetPolCheck(c, now); ok {
+				out = runner.WorseNetPolCheck(out, check)
+			}
 		}
 	}
 	return out
@@ -82,21 +90,32 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	runnerName := ""
 	caps := []types.ConfinementClass(nil)
 	var substrates map[types.ConfinementClass]string
-	var netpol runner.NetPolCheck
+	var own runner.NetPolCheck
+	ownUnread := false // a Kubernetes daemon whose own verdict could not be read
 	if s.cfg.Runner != nil {
 		runnerName = s.cfg.Runner.Name()
 		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
 			caps = c.ConfinementClasses
 			substrates = c.Resolved
-			netpol.Verdict = k8sNetpolVerdict(runnerName, c)
+			own.Verdict = k8sNetpolVerdict(runnerName, c)
 			if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
-				netpol.At = c.NetworkPolicyCheck.At
+				own.At = c.NetworkPolicyCheck.At
 			}
+		} else {
+			ownUnread = runnerName == "k8s"
 		}
 	}
 	// The worst of this daemon's verdict and its connected Kubernetes runners', with that one's time.
-	netpol = runner.WorseNetPolCheck(netpol, s.runnersNetPolCheck(r.Context()))
+	// When the daemon could not read its own, a runner's verdict shows only if it is at least as bad
+	// as not_proven: a better one must not hide that the daemon's own cluster cannot be confirmed.
+	runners := s.runnersNetPolCheck(r.Context())
+	if ownUnread && !runner.NetPolAtLeast(runners.Verdict, runner.NetPolNotProven) {
+		runners = runner.NetPolCheck{}
+	}
+	netpol := runner.WorseNetPolCheck(own, runners)
 	netpolVerdict, netpolCheckedAt := netpol.Verdict, netpol.At
+	// The verdict is a runner's when it is worse than the daemon's own, or the daemon has none.
+	netpolFromRunner := netpolVerdict != "" && netpolVerdict != own.Verdict
 	gtStatus := s.ebpfGroundtruthStatus(r.Context())
 	gtPublic := ebpfGroundtruthPublic(gtStatus)
 	body := map[string]any{
@@ -221,6 +240,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// when the substrate reports no check (an older daemon or runner).
 	if netpolVerdict != "" && !netpolCheckedAt.IsZero() {
 		body["network_policy_checked_at"] = netpolCheckedAt.UTC().Format(time.RFC3339)
+	}
+	// network_policy_source is "runner" when network_policy is a connected Kubernetes runner's verdict
+	// rather than this daemon's own cluster's, so the console names the right place. Absent otherwise.
+	// No runner id: this body is anonymous.
+	if netpolFromRunner {
+		body["network_policy_source"] = "runner"
 	}
 	// cli_artifact_base is WARDYN_CLI_ARTIFACT_BASE, the operator's internal
 	// mirror of the release assets. Absent (not "") while unset, so a deployment

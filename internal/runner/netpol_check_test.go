@@ -59,3 +59,26 @@ func TestNetPolVerdictChanged(t *testing.T) {
 		}
 	}
 }
+
+// TestNetPolAtLeast: a known verdict ranks against the floor; an empty or unknown one never reaches it.
+func TestNetPolAtLeast(t *testing.T) {
+	for _, tc := range []struct {
+		v    string
+		want bool
+	}{
+		{NetPolEnforced, false},
+		{NetPolAcknowledged, false},
+		{NetPolNotProven, true},
+		{NetPolRefused, true},
+		{NetPolUnenforced, true},
+		{"", false},
+		{"newer-word", false},
+	} {
+		if got := NetPolAtLeast(tc.v, NetPolNotProven); got != tc.want {
+			t.Errorf("NetPolAtLeast(%q, not_proven) = %v, want %v", tc.v, got, tc.want)
+		}
+	}
+	if !NetPolAtLeast(NetPolEnforced, NetPolEnforced) || NetPolAtLeast(NetPolEnforced, NetPolAcknowledged) {
+		t.Error("NetPolAtLeast against enforced and acknowledged floors")
+	}
+}

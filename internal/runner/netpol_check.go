@@ -36,6 +36,11 @@ func NetPolVerdictChanged(prev, next string) bool {
 	return KnownNetPolVerdict(prev) && KnownNetPolVerdict(next) && prev != next
 }
 
+// NetPolAtLeast reports whether v is a known verdict at least as bad as floor.
+func NetPolAtLeast(v, floor string) bool {
+	return KnownNetPolVerdict(v) && netPolRank[v] >= netPolRank[floor]
+}
+
 // WorseNetPolCheck returns the worse of two checks, each keeping its own time. Between equal verdicts it
 // returns the older check, so "last confirmed" never claims more than every substrate showed.
 func WorseNetPolCheck(a, b NetPolCheck) NetPolCheck {

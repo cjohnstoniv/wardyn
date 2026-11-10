@@ -27,6 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -660,31 +661,62 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 		}
 	})
 	// A connected Kubernetes runner's verdict counts: the worst of this daemon's and the runners' wins,
-	// with its own time; an offline runner's last verdict does not.
+	// with its own time, and network_policy_source says when it is a runner's. An offline runner's last
+	// verdict does not count; neither does one from caps that name no runs namespaces (not Kubernetes).
 	t.Run("connected runner's worse verdict wins", func(t *testing.T) {
 		at := time.Now().UTC().Truncate(time.Second)
 		local := runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at}
 		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRecheckRunner{k8sRunner: k8sRunner{networkPolicy: true}, check: local}})
 		remoteAt := at.Add(-time.Minute)
-		_, link := connectRunner(t, srv, uuid.New(), substrate.ClassSupport{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolRefused, At: remoteAt}})
-		connectRunner(t, srv, uuid.New(), substrate.ClassSupport{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at.Add(-time.Hour)}})
+		link := connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: remoteAt})
+		connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at.Add(-time.Hour)})
+		connectRunner(t, srv, uuid.New(), substrate.ClassSupport{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolUnenforced, At: at}})
 		body := decode(t, srv)
-		if body["network_policy"] != "refused" || body["network_policy_checked_at"] != remoteAt.Format(time.RFC3339) {
-			t.Errorf("network_policy = %v checked %v, want the runner's refused checked %s", body["network_policy"], body["network_policy_checked_at"], remoteAt.Format(time.RFC3339))
+		if body["network_policy"] != "refused" || body["network_policy_checked_at"] != remoteAt.Format(time.RFC3339) || body["network_policy_source"] != "runner" {
+			t.Errorf("network_policy = %v checked %v source %v, want the runner's refused checked %s, source runner",
+				body["network_policy"], body["network_policy_checked_at"], body["network_policy_source"], remoteAt.Format(time.RFC3339))
 		}
 		link.online = false
 		body = decode(t, srv)
 		if body["network_policy"] != "enforced" || body["network_policy_checked_at"] != at.Add(-time.Hour).Format(time.RFC3339) {
 			t.Errorf("runner offline: network_policy = %v checked %v, want enforced at the older check %s", body["network_policy"], body["network_policy_checked_at"], at.Add(-time.Hour).Format(time.RFC3339))
 		}
+		if v, ok := body["network_policy_source"]; ok {
+			t.Errorf("network_policy_source = %v with the daemon's own verdict, want absent", v)
+		}
 	})
 	t.Run("docker daemon reports a connected k8s runner's verdict", func(t *testing.T) {
 		at := time.Now().UTC().Truncate(time.Second)
 		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: &fakeRunner{}})
-		connectRunner(t, srv, uuid.New(), substrate.ClassSupport{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: at}})
+		connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: at})
 		body := decode(t, srv)
-		if body["network_policy"] != "not_proven" || body["network_policy_checked_at"] != at.Format(time.RFC3339) {
-			t.Errorf("network_policy = %v checked %v, want not_proven checked %s", body["network_policy"], body["network_policy_checked_at"], at.Format(time.RFC3339))
+		if body["network_policy"] != "not_proven" || body["network_policy_checked_at"] != at.Format(time.RFC3339) || body["network_policy_source"] != "runner" {
+			t.Errorf("network_policy = %v checked %v source %v, want not_proven checked %s, source runner", body["network_policy"], body["network_policy_checked_at"], body["network_policy_source"], at.Format(time.RFC3339))
+		}
+	})
+	// A runner's check time past the clock skew is dropped; its verdict stays.
+	t.Run("a runner's future check time is dropped", func(t *testing.T) {
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: &fakeRunner{}})
+		connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: time.Now().Add(2 * runnerClockSkew)})
+		body := decode(t, srv)
+		if v, ok := body["network_policy_checked_at"]; body["network_policy"] != "refused" || ok {
+			t.Errorf("network_policy = %v checked %v, want refused with no check time", body["network_policy"], v)
+		}
+	})
+	// A Kubernetes daemon that cannot read its own verdict stays "could not confirm" (no field): a
+	// runner's better verdict must not fill in for it, and only one at least as bad as not_proven shows.
+	t.Run("k8s driver unreadable: a runner's enforced does not hide it", func(t *testing.T) {
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRunner{capsErr: errors.New("k8s api unreachable")}})
+		connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: time.Now().UTC()})
+		connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolAcknowledged, At: time.Now().UTC()})
+		body := decode(t, srv)
+		if v, ok := body["network_policy"]; ok {
+			t.Errorf("network_policy = %v, want absent while the daemon's own verdict cannot be read", v)
+		}
+		connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: time.Now().UTC()})
+		body = decode(t, srv)
+		if body["network_policy"] != "refused" || body["network_policy_source"] != "runner" {
+			t.Errorf("network_policy = %v source %v, want a runner's refused", body["network_policy"], body["network_policy_source"])
 		}
 	})
 	// Negative control: a non-k8s driver must OMIT the key entirely, never
@@ -706,6 +738,19 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 			t.Errorf("network_policy = %v, want key entirely absent on a Capabilities() error", v)
 		}
 	})
+}
+
+// connectK8sRunner connects a new Kubernetes runner (its caps name a runs namespace) whose caps carry
+// check, and returns its link.
+func connectK8sRunner(t *testing.T, srv *Server, check runner.NetPolCheck) *capsTransport {
+	t.Helper()
+	sub, link := connectRunner(t, srv, uuid.New(), substrate.ClassSupport{})
+	data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{NetworkPolicyCheck: check}, RunsNamespaces: []string{"wardyn-runs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	return link
 }
 
 // TestHealthz_TokenLoginAndSSOOnly pins the two bits #378/#379 added to the
