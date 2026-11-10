@@ -616,7 +616,7 @@ test.describe("Run detail: Folders from your computer", () => {
     await page.reload();
     await expect(page.getByText(RUN_COMPUTER_FOLDER.ENDED, { exact: true })).toBeVisible();
     await expect(page.getByText(RUN_COMPUTER_FOLDER.FILES("3"), { exact: true })).toBeVisible();
-    await expect(page.getByText(RUN_COMPUTER_FOLDER.DELETED)).toBeVisible();
+    await expect(page.getByText(RUN_COMPUTER_FOLDER.MAY_BE_GONE)).toBeVisible();
   });
 });
 
