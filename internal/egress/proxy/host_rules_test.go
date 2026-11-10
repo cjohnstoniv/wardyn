@@ -297,6 +297,10 @@ func TestHostRulesRefuseRouteOverrideHeaders(t *testing.T) {
 		{"POST", "X-HTTP-Method: DELETE", true},
 		{"POST", "X-Method-Override: delete", true},
 		{"POST", "X-HTTP-Method-Override: post", false}, // names the request's own method
+		{"POST", "X_HTTP_Method_Override: DELETE", true},
+		{"POST", "x-http-METHOD-override: DELETE", true},
+		{"POST", "X_Method_Override: delete", true},
+		{"POST", "x_http_method: post", false},
 		{"GET", "X-Original-URL: /admin", true},
 		{"GET", "X-Rewrite-URL: /admin", true},
 		{"GET", "X-Override-URL: /admin", true},

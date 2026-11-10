@@ -1238,7 +1238,7 @@ How a request to a host is decided:
 - Across sets, any deny wins. Otherwise any hold asks a person ([A host rule hold](#a-host-rule-hold-effect-hold)). Otherwise the request is allowed. A set that does not name the host has no say.
 - [`allowed_methods`](#allowed_methods) still applies on top, on the lanes it covers. `/wardyn/gh/` and `/wardyn/git/` ignore it.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
-- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`) naming another method, or with a path, prefix or host override header, is refused.
+- A request with a method override (`X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`, in any case and with `-` or `_`) naming another method, or with a path, prefix or host override header, is refused.
 - A path, prefix or host override is a header whose name contains one of these, ignoring case and any `-` or `_`. So `X_Script_Name` and `X-Envoy-Original-Path` count.
   - `original-url`, `original-uri`, `original-path`, `rewrite-url`, `rewrite-uri`, `rewrite-path`, `override-url`, `override-uri`, `override-path`
   - `forwarded-prefix`, `forwarded-url`, `forwarded-uri`, `forwarded-path`, `forwarded-host`, `script-name`

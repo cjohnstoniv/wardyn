@@ -96,6 +96,19 @@ func RouteOverrideHeader(header string) bool {
 	return false
 }
 
+// MethodOverrideHeader reports whether a header name is one a framework reads a method override from:
+// X-HTTP-Method-Override, X-HTTP-Method or X-Method-Override, in any case and with hyphens or underscores
+// (the name, so folded, is exactly one of them). It sits beside RouteOverrideHeader and is read by the same
+// egress callers: the host-rule gate refuses one naming another method, the git routes strip one, and a
+// gateway's extra headers may not name one. Resource Manager's own check (methodOverride) is wider.
+func MethodOverrideHeader(header string) bool {
+	switch normalizedHeader(header) {
+	case "xhttpmethodoverride", "xhttpmethod", "xmethodoverride":
+		return true
+	}
+	return false
+}
+
 func normalizedHeader(header string) string {
 	return strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(header))
 }

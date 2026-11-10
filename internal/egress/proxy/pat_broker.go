@@ -288,11 +288,8 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 // brokered git request: the checks judged the request line's method and path,
 // and a forge that honoured an override would run another route.
 func stripRouteOverrides(h http.Header) {
-	for _, k := range patAPIMethodOverrides {
-		h.Del(k)
-	}
-	for k := range h { // every spelling, so by the header's own key (armscope.RouteOverrideHeader)
-		if armscope.RouteOverrideHeader(k) {
+	for k := range h { // every spelling, so by the header's own key
+		if armscope.MethodOverrideHeader(k) || armscope.RouteOverrideHeader(k) {
 			delete(h, k)
 		}
 	}

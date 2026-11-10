@@ -312,14 +312,29 @@ func TestUnnarrowedPATGrantRendersNoScopeKeys(t *testing.T) {
 var routePathOverrideProbes = []string{"X-Original-URL", "X-Rewrite-URL", "X-Override-URL", "X-Forwarded-Prefix",
 	"X-Script-Name", "X-Forwarded-Host", "X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Forwarded-Path"}
 
+// methodOverrideProbes are spellings of the method overrides (armscope.MethodOverrideHeader), canonical
+// and folded.
+var methodOverrideProbes = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override",
+	"X_HTTP_Method_Override", "x-http-method", "X_Method_Override"}
+
 // routeOverrideHeaders are the method- and path-override headers neither git
 // broker lane forwards.
-var routeOverrideHeaders = slices.Concat(patAPIMethodOverrides, routePathOverrideProbes)
+var routeOverrideHeaders = slices.Concat(methodOverrideProbes, routePathOverrideProbes)
 
 func TestRoutePathOverrideProbes(t *testing.T) {
 	for _, h := range routePathOverrideProbes {
 		if !armscope.RouteOverrideHeader(h) {
 			t.Errorf("%s is no route override to armscope.RouteOverrideHeader", h)
+		}
+	}
+	for _, h := range methodOverrideProbes {
+		if !armscope.MethodOverrideHeader(h) {
+			t.Errorf("%s is no method override to armscope.MethodOverrideHeader", h)
+		}
+	}
+	for _, h := range []string{"X-HTTP-Method-Hint", "X-Method", "Method"} {
+		if armscope.MethodOverrideHeader(h) {
+			t.Errorf("%s is a method override to armscope.MethodOverrideHeader, want only the three names", h)
 		}
 	}
 }
