@@ -310,21 +310,27 @@ func (s *Server) sshPerPrincipalCap() int {
 	return DefaultSSHMaxConnectionsPerPrincipal
 }
 
-// sshRefuseOverPrincipalCap ends a connection that authenticated over its person's share. It writes
-// an ssh.connection.reject row, then gives the client a reason: the first channel it opens is
-// rejected with a message (an interactive ssh opens one at once), and the connection closes after
-// that or after sshRefusalGrace, so a client that opens none is not held.
-func (s *Server) sshRefuseOverPrincipalCap(ctx context.Context, sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, limit int) {
+// sshRefuseOverPrincipalCap ends a connection that authenticated over its person's share. It holds
+// no established slot. It writes an ssh.connection.reject row, then, if the small refusal pool
+// admits it (one per person, sshRefusalPool in all), keeps it up to the refusal grace so the first
+// channel it opens is rejected with a message (an interactive ssh opens one at once). Otherwise it
+// is closed at once: the message is best-effort, the row and the metric are not.
+func (s *Server) sshRefuseOverPrincipalCap(ctx context.Context, sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, lim *sshConnLimits, principal string) {
 	ext := sconn.Permissions.Extensions
 	if runID, err := uuid.Parse(ext["run_id"]); err == nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, ext["principal"], "ssh.connection.reject",
-			ext["key_fingerprint"], "failure", mustJSON(map[string]any{"reason": sshCapReasonPrincipal, "max": limit})))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.connection.reject",
+			ext["key_fingerprint"], "failure", mustJSON(map[string]any{"reason": sshCapReasonPrincipal, "max": lim.perPrincipal})))
 	}
+	if !lim.enterRefusal(principal) {
+		_ = sconn.Close()
+		return
+	}
+	defer lim.leaveRefusal(principal) // on timeout, on the first channel's rejection, and on client close
 	go ssh.DiscardRequests(reqs)
-	t := time.AfterFunc(sshRefusalGrace, func() { _ = sconn.Close() })
+	t := time.AfterFunc(sshRefusalGraceFor(), func() { _ = sconn.Close() })
 	defer t.Stop()
 	if newCh, ok := <-chans; ok {
-		_ = newCh.Reject(ssh.ResourceShortage, fmt.Sprintf("too many SSH connections for this person (max %d); close one and try again", limit))
+		_ = newCh.Reject(ssh.ResourceShortage, fmt.Sprintf("too many SSH connections for this person (max %d); close one and try again", lim.perPrincipal))
 	}
 	_ = sconn.Close()
 }
@@ -627,6 +633,19 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	<-lim.handshakes
 	lim.leaveSource(src)
 	if err == nil {
+		// One person's share is judged BEFORE a global slot is taken, so a connection over it never
+		// holds a slot another person could use, not even during its refusal grace.
+		principal := sconn.Permissions.Extensions["principal"]
+		if !lim.enterPrincipal(principal) {
+			bound := sshBoundPrincipal
+			if lim.perPrincipal >= cap(lim.established) {
+				bound = sshBoundEstablished // the share is the whole ceiling: this is the ceiling's refusal
+			}
+			lim.refused(bound, lim.perPrincipal)
+			s.sshRefuseOverPrincipalCap(ctx, sconn, chans, globalReqs, lim, principal)
+			return
+		}
+		defer lim.leavePrincipal(principal)
 		select {
 		case lim.established <- struct{}{}:
 			defer func() { <-lim.established }()
@@ -635,14 +654,6 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 			_ = sconn.Close()
 			return
 		}
-		// One person's share of those slots: counted after the global one, released before it.
-		principal := sconn.Permissions.Extensions["principal"]
-		if !lim.enterPrincipal(principal) {
-			lim.refused(sshBoundPrincipal, lim.perPrincipal)
-			s.sshRefuseOverPrincipalCap(ctx, sconn, chans, globalReqs, lim.perPrincipal)
-			return
-		}
-		defer lim.leavePrincipal(principal)
 	}
 	if err != nil {
 		// sshAuth already audited a specific reason when PublicKeyCallback was

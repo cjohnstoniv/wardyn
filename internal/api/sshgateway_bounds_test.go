@@ -363,3 +363,132 @@ func TestSSHGateway_OverPrincipalCapIsToldAndAudited(t *testing.T) {
 		t.Fatalf("ssh.connection.reject row = %+v", ev)
 	}
 }
+
+// The refusal pool: one refusal-grace slot per person and sshRefusalPool in all, released on leave.
+func TestSSHConnLimits_RefusalPoolBounds(t *testing.T) {
+	l := &sshConnLimits{}
+	if !l.enterRefusal("alice") || l.enterRefusal("alice") {
+		t.Fatal("a person must hold exactly one refusal-grace slot")
+	}
+	for i := 1; i < sshRefusalPool; i++ {
+		if !l.enterRefusal("p" + strings.Repeat("x", i)) {
+			t.Fatalf("slot %d of %d refused", i+1, sshRefusalPool)
+		}
+	}
+	if l.enterRefusal("one-more") {
+		t.Fatalf("slot %d admitted, want the pool of %d full", sshRefusalPool+1, sshRefusalPool)
+	}
+	l.leaveRefusal("alice")
+	if !l.enterRefusal("one-more") || l.enterRefusal("another") {
+		t.Fatal("a released slot must be reusable exactly once")
+	}
+	if l.refusing != sshRefusalPool {
+		t.Fatalf("refusing = %d, want %d", l.refusing, sshRefusalPool)
+	}
+}
+
+// Alice's connections over her share never take a slot from Bob. Global ceiling 3, share 1: before,
+// alice's two no-channel excess connections each held a global slot for the whole refusal grace, so
+// bob (within his share) was refused; now they hold none.
+func TestSSHGateway_ExcessConnectionsDoNotStarveAnotherPerson(t *testing.T) {
+	st := newSSHMemStore()
+	aliceRun, bobRun := uuid.New(), uuid.New()
+	st.putRun(types.AgentRun{ID: aliceRun, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	st.putRun(types.AgentRun{ID: bobRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-2"})
+	alicePriv, alicePub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(alicePub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(alicePub))})
+	bobPriv, bobPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(bobPub), Principal: "bob@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(bobPub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnections = 3; c.SSHMaxConnectionsPerPrincipal = 1 })
+
+	first, err := sshDial(t, h, aliceRun.String(), alicePriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if _, _, err := first.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 { // no channel opened: they sit in the refusal wait or are closed at once
+		c, err := sshDial(t, h, aliceRun.String(), alicePriv)
+		if err != nil {
+			t.Fatalf("excess %d: %v", i+1, err)
+		}
+		defer c.Close()
+	}
+	time.Sleep(200 * time.Millisecond) // let the gateway finish admitting alice's excess connections
+	bob, err := sshDial(t, h, bobRun.String(), bobPriv)
+	if err != nil {
+		t.Fatalf("bob: %v", err)
+	}
+	defer bob.Close()
+	if _, _, err := bob.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatalf("bob was refused while alice's excess connections waited: %v", err)
+	}
+}
+
+// The refusal wait gives its slot back on timeout and on the first channel's rejection: with one
+// slot per person, every excess connection in turn must still be admitted to the wait and told why.
+func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
+	prev := setSSHRefusalGrace(200 * time.Millisecond)
+	t.Cleanup(func() { setSSHRefusalGrace(prev) })
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnectionsPerPrincipal = 1 })
+	held, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if _, _, err := held.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	told := func(c *ssh.Client) bool {
+		_, err := c.NewSession()
+		return err != nil && strings.Contains(err.Error(), "too many SSH connections for this person")
+	}
+	closedWithin := func(c *ssh.Client, d time.Duration) bool {
+		done := make(chan struct{})
+		go func() { _ = c.Wait(); close(done) }()
+		select {
+		case <-done:
+			return true
+		case <-time.After(d):
+			return false
+		}
+	}
+
+	// First-channel rejection releases: three in a row are each told.
+	for i := range 3 {
+		c, err := sshDial(t, h, runID.String(), priv)
+		if err != nil {
+			t.Fatalf("excess %d: %v", i+1, err)
+		}
+		if !told(c) {
+			t.Fatalf("excess %d was not told why: the wait slot was not released", i+1)
+		}
+		_ = c.Close()
+	}
+
+	// Timeout releases: a connection that opens no channel is closed after the grace, and the person's
+	// slot is free again for the next.
+	waiting, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiting.Close()
+	if !closedWithin(waiting, 3*time.Second) {
+		t.Fatal("a refused connection that opened no channel was not closed after the grace")
+	}
+	after, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	if !told(after) {
+		t.Fatal("after the grace timed out the person's wait slot was not free")
+	}
+}
