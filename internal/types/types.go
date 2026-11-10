@@ -801,13 +801,10 @@ type RunLocalFolderStatus struct {
 
 // FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that
 // saved nothing, and Unsynced is the sandbox's changed files the latest pass that counted them
-// had not brought back. Counted is set when Unsynced came from a runner's report; Paths names at most
-// runnerwire.MaxFolderUnsyncedPaths of them (none from a runner that does not list them).
+// had not brought back.
 type FolderResume struct {
-	Stalled  int      `json:"stalled"`
-	Unsynced int      `json:"unsynced,omitempty"`
-	Counted  bool     `json:"counted,omitempty"`
-	Paths    []string `json:"paths,omitempty"`
+	Stalled  int `json:"stalled"`
+	Unsynced int `json:"unsynced,omitempty"`
 }
 
 // FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.
@@ -817,13 +814,6 @@ type FolderPassRecord struct {
 	Bytes   int64           `json:"bytes"`
 	Refused []FolderRefusal `json:"refused"`
 	Error   string          `json:"error,omitempty"`
-	// GivenUpAt marks a pass back given up: final, never resumed. GivenUpCount is the changed files it
-	// left behind (nil: not counted, never 0 for unknown), and GivenUpPaths at most 50 of them from the
-	// last transfer report, with GivenUpPathsMore the rest.
-	GivenUpAt        *time.Time `json:"given_up_at,omitempty"`
-	GivenUpCount     *int       `json:"given_up_count,omitempty"`
-	GivenUpPaths     []string   `json:"given_up_paths,omitempty"`
-	GivenUpPathsMore int        `json:"given_up_paths_more,omitempty"`
 }
 
 // FolderRefusal is one path a pass refused and why.

@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -89,72 +88,7 @@ type RunLocalFolderStatuses interface {
 	// nothing else, and answers the record as it then stands. False when the stored record does not
 	// meet guard, or the run has no local folder.
 	BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard FolderStatusGuard) (types.RunLocalFolderStatus, bool, error)
-	// GiveUpRunLocalFolder ends run id's pass back as given up, at any generation, once when allows it:
-	// back is recorded with GivenUpAt set, any resume dropped, and the generation moved on, so no owner's
-	// later write lands. ev, through prepare, is its one audit row, written with it and only when it
-	// applies. It answers the new generation, and false when it did not apply: a live run, one with no
-	// sandbox, one not yet due, or a record already done (a back and no resume).
-	GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, when FolderGiveUpWhen, back types.FolderPassRecord, ev types.AuditEvent, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error)
 }
-
-// FolderGiveUpWhen is when a terminal run's pass back may be given up, on the database's clock: once
-// Cap has passed since its end (ended_at, else updated_at), or, for a caller that observed its sandbox
-// cannot be kept with its egress cut (D1), once Hold has passed since its containment was due
-// (ContainmentDue, with Grace and MaxAge) and either the substrate refused the proxy stop
-// (Unsupported) or its containment has failed for ContainErrAge.
-type FolderGiveUpWhen struct {
-	Cap           time.Duration
-	D1            bool
-	Hold          time.Duration
-	Unsupported   bool
-	ContainErrAge time.Duration
-	Grace         time.Duration
-	MaxAge        time.Duration
-}
-
-// ContainmentDue is when run's containment was due: its end, or earlier where it was kept past its
-// time: a run kept lost after it ended at the loss plus grace, one kept lost with a lease end at that
-// end plus grace (the server's keptUntil), and with a max age (0: none) at its age anchor (admitted_at,
-// else created_at) plus maxAge. containmentDueSQL is the same on a row.
-func ContainmentDue(run types.AgentRun, grace, maxAge time.Duration) time.Time {
-	due := run.UpdatedAt
-	if run.EndedAt != nil {
-		due = *run.EndedAt
-	}
-	var kept *time.Time
-	switch maxAge = maxAge.Truncate(time.Second); {
-	case run.LostAt != nil && run.LostReason == types.LostEnded:
-		t := run.LostAt.Add(grace)
-		kept = &t
-	case run.LostAt != nil && run.EndsAt != nil:
-		t := run.EndsAt.Add(grace)
-		kept = &t
-	case maxAge > 0:
-		anchor := run.CreatedAt
-		if run.AdmittedAt != nil {
-			anchor = *run.AdmittedAt
-		}
-		t := anchor.Add(maxAge)
-		kept = &t
-	}
-	if kept != nil && kept.Before(due) {
-		return *kept
-	}
-	return due
-}
-
-// containmentDueSQL is ContainmentDue on an agent_runs row, its grace in seconds at $g and its max age
-// in whole seconds (maxAgeSecs) at $m.
-func containmentDueSQL(g, m int) string {
-	return fmt.Sprintf(`LEAST(COALESCE(ended_at, updated_at),
-        CASE WHEN lost_at IS NOT NULL AND lost_reason = 'ended' THEN lost_at + make_interval(secs => $%[1]d)
-             WHEN lost_at IS NOT NULL AND ends_at IS NOT NULL THEN ends_at + make_interval(secs => $%[1]d)
-             WHEN $%[2]d > 0 THEN COALESCE(admitted_at, created_at) + make_interval(secs => $%[2]d)
-        END)`, g, m)
-}
-
-// maxAgeSecs is a max age as containmentDueSQL's integer parameter.
-func maxAgeSecs(d time.Duration) int64 { return int64(d / time.Second) }
 
 // FolderStatusGuard is what a write of a run's folder record requires of the stored one: the
 // generation its writer read or owns. A record with no generation, or no record, is at 0.
@@ -224,74 +158,4 @@ func (s PG) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID, guard Folde
 	}
 	st, err := unmarshalFolderStatus(raw)
 	return st, err == nil, err
-}
-
-// errGiveUpNoAudit is a give-up asked without its audit row.
-var errGiveUpNoAudit = errors.New("store: a pass back's give-up needs its audit row")
-
-// GiveUpRunLocalFolder implements RunLocalFolderStatuses: one statement, with no generation guard, and
-// its audit row in the same transaction. now() is the transaction's time, so back's GivenUpAt and the
-// row's time are the statement's.
-func (s PG) GiveUpRunLocalFolder(ctx context.Context, id uuid.UUID, when FolderGiveUpWhen, back types.FolderPassRecord, ev types.AuditEvent, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error) {
-	if prepare == nil {
-		return 0, false, errGiveUpNoAudit
-	}
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return 0, false, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
-	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
-		return 0, false, err
-	}
-	var at time.Time
-	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&at); err != nil {
-		return 0, false, err
-	}
-	back.GivenUpAt = &at
-	raw, err := json.Marshal(back)
-	if err != nil {
-		return 0, false, fmt.Errorf("store: marshal a given-up pass back: %w", err)
-	}
-	var gen int
-	err = tx.QueryRow(ctx, `UPDATE agent_runs
-SET local_folder_status = (COALESCE(local_folder_status::jsonb,'{}'::jsonb) - 'resume')
-    || jsonb_build_object('gen', COALESCE((local_folder_status->>'gen')::int,0)+1, 'back', $2::jsonb)
-WHERE id = $1
-  AND sandbox_ref <> ''
-  AND NOT (state = ANY($3))
-  AND NOT (COALESCE(local_folder_status::jsonb,'{}'::jsonb) ? 'back'
-           AND NOT (COALESCE(local_folder_status::jsonb,'{}'::jsonb) ? 'resume'))
-  AND ( COALESCE(ended_at, updated_at) + make_interval(secs => $4) <= now()
-     OR ( $5::boolean
-          AND `+containmentDueSQL(9, 10)+` + make_interval(secs => $6) <= now()
-          AND ( $7::boolean
-             OR (containment_error_at IS NOT NULL
-                 AND containment_error_at <= now() - make_interval(secs => $8)) ) ) )
-RETURNING (local_folder_status->>'gen')::int`, id, raw, nonTerminalStateNames(),
-		when.Cap.Seconds(), when.D1, when.Hold.Seconds(), when.Unsupported, when.ContainErrAge.Seconds(),
-		when.Grace.Seconds(), maxAgeSecs(when.MaxAge)).Scan(&gen)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, tx.Commit(ctx)
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("store: give up a pass back: %w", err)
-	}
-	if ev.ID == uuid.Nil {
-		ev.ID = uuid.New()
-	}
-	ev.RunID, ev.Time = &id, at
-	if ev, err = prepare(ctx, ev); err != nil {
-		return 0, false, err
-	}
-	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
-		return 0, false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, false, err
-	}
-	if s.SIEM != nil {
-		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
-	}
-	return gen, true, nil
 }

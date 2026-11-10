@@ -53,7 +53,7 @@ func TestFinalizeRunEffects_WritesAfterTheStopHaveTheirOwnBudget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	_ = finalizeHeld(t, s, ctx, run.ID, "sbx", "run.complete", nil, false, false)
+	_ = s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false)
 
 	rec.mu.Lock()
 	audited, ok := rec.deadlines["run.complete/failure"]
@@ -96,7 +96,7 @@ func TestFinalizeRunEffects_AMacOSVMStopGetsItsOwnBudget(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			_ = finalizeHeld(t, s, ctx, run.ID, "sbx", "run.complete", nil, false, false)
+			_ = s.finalizeRunEffects(ctx, run.ID, "sbx", "run.complete", nil, false, false)
 
 			if got := findAudit(audit.snapshot(), run.ID, "run.complete", "failure") != nil; got != tc.wantFailure {
 				t.Fatalf("a teardown-error run.complete for a %s run: %v, want %v", tc.kind, got, tc.wantFailure)

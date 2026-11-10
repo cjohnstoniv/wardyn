@@ -302,7 +302,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 				return false
 			}
 			defer unlock()
-			return !s.runPending(lctx, run)
+			return !s.computerFolderKept(lctx, runID)
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -380,8 +380,8 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 
 // reconcileOrphanedRun is reconcileOrphanedSandbox for one terminal run, under the run's lock.
 func (s *Server) reconcileOrphanedRun(ctx context.Context, run types.AgentRun) {
-	if kept, _ := s.containPending(ctx, run, "sandbox.orphan.sweep"); kept {
-		return // kept, its proxy stopped, for the pass back resumeComputerFolderBacks resumes
+	if s.computerFolderKept(ctx, run.ID) {
+		return // kept for its computer folder's pass back, which resumeComputerFolderBacks resumes
 	}
 	kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 	torn := false

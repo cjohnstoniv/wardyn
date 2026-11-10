@@ -49,10 +49,6 @@ func (s *folderStatusStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.U
 	return st, err == nil, err
 }
 
-func (s *folderStatusStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord, types.AuditEvent, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error) {
-	return 1, true, nil
-}
-
 // keptFolderFailedStart revives the fixture's run and has its new proxy report other bytes while another operation
 // holds the run's lock, so the start fails uncontained. The run then stands as a finalize that kept its sandbox for a
 // computer folder's pass back leaves it: terminal, its sandbox ref still recorded, its folder record as mode says.
@@ -251,10 +247,6 @@ func (s *keptSweepStore) BumpRunLocalFolderGen(ctx context.Context, id uuid.UUID
 	return st, err == nil, err
 }
 
-func (s *keptSweepStore) GiveUpRunLocalFolder(context.Context, uuid.UUID, store.FolderGiveUpWhen, types.FolderPassRecord, types.AuditEvent, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (int, bool, error) {
-	return 1, true, nil
-}
-
 // newKeptSweep is a terminal-sandbox sweep over runs, every sandbox probed live, with the folder records fake answers.
 func newKeptSweep(t *testing.T, fake *keptSweepStore) (*Server, *sweepProxyRunner, *harness) {
 	t.Helper()
@@ -325,8 +317,7 @@ func TestSweepTerminalSandboxes_UnreadableFolderRecordKeepsTheSandbox(t *testing
 	}
 }
 
-// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row, never silent, and is stopped:
-// containment wins over the pass back.
+// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row, never silent.
 func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T) {
 	kept := sweepRun(types.RunFailed, "sbx-kept")
 	srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept}}, kept: kept.ID})
@@ -336,23 +327,23 @@ func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T
 	}
 	rows := runRows(h.audit.snapshot(), kept.ID)
 	if len(rows) != 1 || rows[0].Action != "sandbox.sweep" || rows[0].Outcome != "failure" ||
-		!strings.Contains(string(rows[0].Data), "proxy_stop_error") || !slices.Equal(rr.stopped, []string{"sbx-kept"}) {
-		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with proxy_stop_error and the sandbox stopped", rows, rr.stopped)
+		!strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
+		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with proxy_stop_error and no sandbox stop", rows, rr.stopped)
 	}
 }
 
-// A kept sandbox whose proxy stop fails is the run.reconcile failure row naming that stop, and is contained by
-// stopping the sandbox: containment wins over the pass back.
-func TestReadback_KeptFolderProxyStopFailureIsAuditedAndStopsTheSandbox(t *testing.T) {
+// A kept sandbox whose proxy stop fails stays unresolved, as the run.reconcile failure row naming that stop; the
+// sandbox, and the files it is kept for, are not stopped.
+func TestReadback_KeptFolderProxyStopFailureIsAuditedAndUnresolved(t *testing.T) {
 	f := newReadbackFixture(t)
 	_, gen := f.keptFolderFailedStart(t, "kept")
 	sandboxStops := f.lr.stopCount()
 	f.setProxyStopErr(errors.New("daemon down"))
-	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); !c.Contained || c.Err != nil {
-		t.Fatalf("containment = %+v, want contained by the sandbox stop", c)
+	if c := f.srv.containProxyStart(context.Background(), f.run.ID, gen); c.Contained || c.Err == nil {
+		t.Fatalf("containment = %+v, want unresolved while the proxy stop fails", c)
 	}
-	if n := f.lr.stopCount() - sandboxStops; n != 1 {
-		t.Errorf("sandbox stops +%d, want 1: a pending sandbox whose proxy stop failed is stopped", n)
+	if n := f.lr.stopCount() - sandboxStops; n != 0 {
+		t.Errorf("sandbox stops +%d, want none: the sandbox is kept for its folder's pass back", n)
 	}
 	var rows int
 	for _, ev := range f.audit.eventsFor(f.run.ID, "run.reconcile") {

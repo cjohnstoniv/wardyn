@@ -151,16 +151,15 @@ func readbackFateClause(fate reloseFate) string {
 // reloseEnded is the fate of a run reloseRun asked to end (reconcileFinalize, or loseRunStopped's teardown on a
 // substrate that cannot keep a sandbox), read back rather than assumed: ended only once the store has it terminal,
 // its stop confirmed only once its sandbox ref is cleared (finalizeRunEffects clears it only after its own stop
-// succeeded) or its sandbox is kept for its computer folder's pass back with its proxy stop observed (keepForPass's keep). A run still kept is lost with its stop unconfirmed; any other is left to whatever moves it.
+// succeeded) or its sandbox is kept for its computer folder's pass back (quiesceKeptSandbox stopped its proxy). A run still kept is lost with its stop unconfirmed; any other is left to whatever moves it.
 func (s *Server) reloseEnded(ctx context.Context, runID uuid.UUID) (reloseFate, error) {
 	cur, err := s.cfg.Store.GetRun(ctx, runID)
 	switch {
 	case err != nil:
 		return relostUnknown, fmt.Errorf("the run could not be read back after its end: %w", err)
 	case isTerminalRunState(cur.State) && cur.SandboxRef != "":
-		// A sandbox kept for the pass back its computer folder is owed is confirmed only by its proxy stop,
-		// observed again here (a proxy already gone stops as nil).
-		if s.runPending(ctx, cur) && s.sandboxQuiescable(cur) && s.stopProxyOrAudit(ctx, runID, cur.SandboxRef, "run.revive") == nil {
+		// A sandbox kept for its computer folder's pass back had its proxy stopped before it was kept.
+		if kept, ferr := s.computerFolderKeptRead(ctx, runID); kept && ferr == nil {
 			return relostEnded, nil
 		}
 		return relostEnded, errors.New("the run was ended, but its sandbox stop is not confirmed (its ref is still recorded)")
