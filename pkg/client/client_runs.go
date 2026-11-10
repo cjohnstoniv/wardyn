@@ -105,6 +105,29 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 	return out, err
 }
 
+// EditRunEgressRequest is PATCH /api/v1/runs/{id}/egress's body: allowlist entries to remove and
+// hosts to deny. It has no field that adds a host; widening a live run stays an approval.
+type EditRunEgressRequest struct {
+	RemoveHosts []string `json:"remove_hosts,omitempty"`
+	DenyHosts   []string `json:"deny_hosts,omitempty"`
+}
+
+// EditRunEgressResponse is the 200 answer: the policy generation the run's new proxy confirmed.
+type EditRunEgressResponse struct {
+	PolicyGeneration int `json:"policy_generation"`
+}
+
+// EditRunEgress narrows a live run's egress at once: the run's proxy is replaced with one that
+// enforces the edit, and the answer comes only after that proxy reports the config it loaded.
+// A removed host is denied too, for the rest of the run. A 409 egress_edit_in_progress means another
+// edit of the run has not answered yet; a 503 egress_edit_unconfirmed means the new proxy did not
+// confirm, so it was stopped and the run has no egress until revived.
+func (c *Client) EditRunEgress(ctx context.Context, runID uuid.UUID, req EditRunEgressRequest) (EditRunEgressResponse, error) {
+	var out EditRunEgressResponse
+	err := c.do(ctx, http.MethodPatch, "/api/v1/runs/"+runID.String()+"/egress", req, &out)
+	return out, err
+}
+
 // ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
 // Mode): the synthesized least-privilege sandbox profile plus the observations
 // it was built from. Only the fields callers render/save are modeled — the full
