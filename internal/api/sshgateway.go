@@ -609,8 +609,9 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		// separately audited here.
 		return
 	}
-	// One person's share is judged BEFORE a global slot is taken, so a connection over it never
-	// holds a slot another person could use, not even during its refusal grace.
+	// One person's share is judged BEFORE a global slot is taken, so a connection over it never holds
+	// an established-connection slot another person could use, not even during its refusal grace. Its
+	// refusal work still counts against the handshake/source bounds: release() has not run yet.
 	principal := sconn.Permissions.Extensions["principal"]
 	if !lim.enterPrincipal(principal) {
 		bound := sshBoundPrincipal
