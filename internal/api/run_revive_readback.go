@@ -96,9 +96,18 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	data["error"] = "policy readback: " + why
 	rerr := s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
 		"the run's new proxy did not confirm its policy, so it was stopped and the run is lost until revived", errors.New(why))
-	if c := s.containProxyStartLocked(ctx, run.ID, start.gen); !c.Contained && !c.Superseded && rerr.reason == reasonRevivePolicyUnconfirmedLost {
+	// The answer's stop wording comes from the containment result, never from the lost mark's outcome.
+	c := s.containProxyStartLocked(ctx, run.ID, start.gen)
+	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) {
+		return rerr
+	}
+	switch rerr.reason {
+	case reasonRevivePolicyUnconfirmedLost:
 		rerr.msg = loggedMsg(ctx, "the run's new proxy did not confirm its policy and the run is lost until revived; "+
 			"stopping that proxy is not confirmed yet, and a later sweep retries it", errors.New(why))
+	case reasonReviveRecoveryUnresolved:
+		rerr.msg = loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, "+
+			"but stopping its proxy is not confirmed yet, and a later sweep recovers it", errors.New(why))
 	}
 	return rerr
 }

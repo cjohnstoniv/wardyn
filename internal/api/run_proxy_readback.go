@@ -317,7 +317,7 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 	switch {
 	case run.State == types.RunStarting:
 		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.create")
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, unconfirmedPolicyHint)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, unconfirmedHint(ok))
 		if !ok {
 			return errProxyStopUnconfirmed
 		}
@@ -328,7 +328,12 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 		if handled, err := s.loseUnconfirmedRun(ctx, run); handled {
 			return err
 		}
-		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedPolicyHint)
+		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(ok))
+		if !ok {
+			return errProxyStopUnconfirmed
+		}
+		return nil
 	}
 	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
 		return errProxyStopUnconfirmed
@@ -338,6 +343,10 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
 var errProxyStopUnconfirmed = errors.New("the sandbox stop failed")
+
+// errLostMarkUnwritten is a containment whose proxy stop succeeded but whose lost mark could not be
+// written: still unresolved, so a retry writes the mark.
+var errLostMarkUnwritten = errors.New("the run's proxy was stopped, but its lost mark could not be written")
 
 // loseUnconfirmedRun marks a running run lost (outage) and stops its proxy, answering the stop's
 // error. handled is false for a run that cannot be kept, which the caller tears down. A lost mark
@@ -361,14 +370,26 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (ha
 		if err := s.stopLostSandbox(ctx, run, now); err != nil {
 			return true, err
 		}
-		return true, errors.New("the run's lost mark could not be written")
+		return true, errLostMarkUnwritten
 	default:
 		return true, errors.New("the run's lost mark did not land")
 	}
 }
 
-// unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy.
-const unconfirmedPolicyHint = "The run's proxy did not confirm the policy it loaded, so it was stopped"
+// unconfirmedPolicyHint is the failure hint of a run whose proxy did not confirm its policy and was
+// stopped; unconfirmedStopPendingHint the same while that stop is not confirmed.
+const (
+	unconfirmedPolicyHint      = "The run's proxy did not confirm the policy it loaded, so it was stopped"
+	unconfirmedStopPendingHint = "The run's proxy did not confirm the policy it loaded; stopping it is not confirmed yet and is retried"
+)
+
+// unconfirmedHint is the failure hint for a stop that was (stopped) or was not confirmed.
+func unconfirmedHint(stopped bool) string {
+	if stopped {
+		return unconfirmedPolicyHint
+	}
+	return unconfirmedStopPendingHint
+}
 
 func (s *Server) auditReadback(ctx context.Context, runID uuid.UUID, action, outcome string, gen int, data map[string]any) {
 	data["generation"] = gen
@@ -520,11 +541,11 @@ func (s *Server) abortUnconfirmedSandbox(ctx context.Context, runID uuid.UUID, r
 	defer cancel()
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
 		runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "reason": "policy_unconfirmed", "readback": why})))
-	stopErr := ""
-	if !s.stopSandboxOrAudit(ctx, runID, ref, "run.create") {
+	stopErr, stopped := "", s.stopSandboxOrAudit(ctx, runID, ref, "run.create")
+	if !stopped {
 		stopErr = errProxyStopUnconfirmed.Error()
 	}
-	s.failAndRevoke(ctx, runID, types.RunStarting, unconfirmedPolicyHint)
+	s.failAndRevoke(ctx, runID, types.RunStarting, unconfirmedHint(stopped))
 	if st, ok := s.cfg.Store.(store.RunProxyStarts); ok && start.active {
 		if err := st.RecordProxyContainment(ctx, runID, start.gen, stopErr); err != nil {
 			slog.WarnContext(ctx, "wardynd: recording a failed proxy start's stop failed; the sweep retries",

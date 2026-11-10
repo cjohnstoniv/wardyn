@@ -157,3 +157,30 @@ func TestReadback_ContainmentPausedAcrossARevive(t *testing.T) {
 		t.Error("containment of an older start stopped the newer start's proxy")
 	}
 }
+
+// lostWriteFailStore is readbackStore whose lost marks cannot be written, as during a database blip.
+type lostWriteFailStore struct{ *readbackStore }
+
+func (lostWriteFailStore) MarkRunLost(context.Context, uuid.UUID, types.LostReason, time.Time, time.Duration) (bool, error) {
+	return false, errors.New("database down")
+}
+
+// A revive whose new proxy sends no hash, when neither the lost mark nor the proxy stop lands: the
+// answer keeps 503 revive_recovery_unresolved but never says the proxy was stopped, and the start
+// stays unresolved.
+func TestReadback_ReviveUnresolvedNeverClaimsAStopThatFailed(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.srv.cfg.Store = lostWriteFailStore{f.rb}
+	f.hr.hash = func([]byte) string { return "" }
+	f.setProxyStopErr(errors.New("daemon down"))
+	rec := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), reasonReviveRecoveryUnresolved) {
+		t.Fatalf("revive = %d %s, want 503 %s", rec.Code, rec.Body.String(), reasonReviveRecoveryUnresolved)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "was stopped") || !strings.Contains(body, "not confirmed") {
+		t.Errorf("the answer claims a stop that failed: %s", body)
+	}
+	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt != nil || p.ContainmentError == "" {
+		t.Errorf("start = %s (contained %v, error %q), want failed and unresolved", p.State, p.ContainedAt, p.ContainmentError)
+	}
+}
