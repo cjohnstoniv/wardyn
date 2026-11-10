@@ -861,6 +861,20 @@ func (s *Server) recordAuditDurably(ctx context.Context, ev types.AuditEvent) bo
 	if s.cfg.Audit == nil {
 		return true
 	}
+	ev = s.stampAuditEvent(ctx, ev)
+	// Invariant 6, C1: the audit log is the system of record. A failed durable
+	// write is handled by the shared recorder chain (spoolingRecorder below
+	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
+	// event to the durable local fallback so it is never silently lost — for every
+	// audit writer, not just this one. So there is no API-layer-only spool here.
+	err := s.cfg.Audit.Record(ctx, ev)
+	return err == nil || errors.Is(err, audit.ErrSpooled)
+}
+
+// stampAuditEvent fills ev's id and time when unset and stamps what the request context says about
+// who acted: the relay, the delegation, the sponsor and the proxy peer. Every API-written row takes
+// it, the strict intent row (audit_strict.go) included.
+func (s *Server) stampAuditEvent(ctx context.Context, ev types.AuditEvent) types.AuditEvent {
 	if ev.ID == uuid.Nil {
 		ev.ID = uuid.New()
 	}
@@ -871,11 +885,5 @@ func (s *Server) recordAuditDurably(ctx context.Context, ev types.AuditEvent) bo
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
 	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
 	ev.Data = audit.StampProxyPeer(ctx, ev.SourceIP, ev.Data)
-	// Invariant 6, C1: the audit log is the system of record. A failed durable
-	// write is handled by the shared recorder chain (spoolingRecorder below
-	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
-	// event to the durable local fallback so it is never silently lost — for every
-	// audit writer, not just this one. So there is no API-layer-only spool here.
-	err := s.cfg.Audit.Record(ctx, ev)
-	return err == nil || errors.Is(err, audit.ErrSpooled)
+	return ev
 }
