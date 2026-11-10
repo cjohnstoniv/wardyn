@@ -46,6 +46,9 @@ describe("RunsComposer — 'Start a run'", () => {
     try {
       render(<MemoryRouter><RunsComposer /></MemoryRouter>);
       expect(screen.getByRole("status")).toHaveTextContent(RUNS_COMPOSER.WORKSPACES_LOADING);
+      // The note is outside the label, so the picker keeps its own name and gains the note as its description.
+      const picker = screen.getByRole("combobox", { name: RUNS_COMPOSER.WORKSPACE });
+      expect(picker).toHaveAccessibleDescription(RUNS_COMPOSER.WORKSPACES_LOADING);
       expect(screen.queryByRole("alert")).toBeNull();
     } finally {
       listState.loading = false;
