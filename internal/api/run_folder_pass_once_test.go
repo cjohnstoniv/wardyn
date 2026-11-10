@@ -281,26 +281,38 @@ func TestPassBack_AnOpenPassAtAResumeVisitKeepsTheSandboxAsItIs(t *testing.T) {
 	}
 }
 
-// A pass the runner never answered for (its connection dropped as the pass started) does not stop the
-// sandbox at its visit: it is kept as a stall. The next visit inside the bound sends nothing; once the runner
-// says it runs one pass per run at a time, the next visit sends the pass, and its completion tears down.
-func TestPassBack_AnUnansweredPassKeepsTheSandboxUntilTheRunnerIsUpdated(t *testing.T) {
-	f := newPassFixture(t, 1, 1, nil)
-	peer := f.runnerAs(t, &olderRunnerCaps)
+// dropOnPass has the next pass's runner connection drop as the pass starts, so the runner never answers for
+// it.
+func (f *passFixture) dropOnPass(peer *runnerwire.Peer) {
 	var dropped atomic.Bool
 	f.sb.onPass = func() {
 		if !dropped.Swap(true) {
 			peer.Close()
 		}
 	}
+}
+
+// keptUnanswered runs one finalize whose pass the runner never answers for, and checks it kept the sandbox
+// with stalled stalls, its generation unsettled.
+func (f *passFixture) keptUnanswered(t *testing.T, stalled int) {
+	t.Helper()
 	_, err := boundedFinalize(t, f.s, f.run, time.Second)
 	if !errors.Is(err, errComputerFolderResumes) || f.sb.stopCount() != 0 {
 		t.Fatalf("finalize = %v, stops %d; want the sandbox kept", err, f.sb.stopCount())
 	}
 	st := f.cs.folderStatus()
-	if st.Gen != 2 || st.Settled != 1 || st.Resume == nil || st.Resume.Stalled != computerFolderStalls || st.Back == nil || !strings.Contains(st.Back.Error, "did not answer for this pass") {
-		t.Fatalf("record %+v, want gen 2 unsettled, kept as a stall, the unanswered pass named", st)
+	if st.Gen == st.Settled || st.Resume == nil || st.Resume.Stalled != stalled || st.Back == nil || !strings.Contains(st.Back.Error, "did not answer for this pass") {
+		t.Fatalf("record %+v, want an unsettled generation kept with %d stalls, the unanswered pass named", st, stalled)
 	}
+}
+
+// A pass the runner never answered for (its connection dropped as the pass started) does not stop the
+// sandbox at its visit: it is kept, one stall. The next visit inside the bound sends nothing; once the runner
+// says it runs one pass per run at a time, the next visit sends the pass, and its completion tears down.
+func TestPassBack_AnUnansweredPassKeepsTheSandboxUntilTheRunnerIsUpdated(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	f.dropOnPass(f.runnerAs(t, &olderRunnerCaps))
+	f.keptUnanswered(t, 1)
 	seen := passSeen(f.sb)
 	f.runnerAs(t, &olderRunnerCaps)
 	if !f.back() || seen.Load() {
@@ -312,6 +324,94 @@ func TestPassBack_AnUnansweredPassKeepsTheSandboxUntilTheRunnerIsUpdated(t *test
 	}
 	if st := f.cs.folderStatus(); st.Gen != 3 || st.Settled != 3 || st.Back == nil || st.Back.Error != "" {
 		t.Errorf("record %+v, want the completed pass at gen 3, settled", st)
+	}
+}
+
+// With the runner still an older one, an unanswered pass gets its retry past the bound; only a second
+// attempt in a row that brings nothing back, unanswered too, earns the give-up, past its own bound.
+func TestPassBack_AnOlderRunnersUnansweredPassIsRetriedOnceBeforeItGivesUp(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	f.dropOnPass(f.runnerAs(t, &olderRunnerCaps))
+	f.keptUnanswered(t, 1)
+	f.advance(oldPassBound)
+	seen := passSeen(f.sb)
+	peer := f.runnerAs(t, &olderRunnerCaps)
+	var dropped atomic.Bool
+	f.sb.onPass = func() {
+		seen.Store(true)
+		if !dropped.Swap(true) {
+			peer.Close()
+		}
+	}
+	f.keptUnanswered(t, computerFolderStalls)
+	if !seen.Load() {
+		t.Fatal("past the bound, the retry was not sent")
+	}
+	f.advance(oldPassBound)
+	if err := f.s.finalizeRunEffects(context.Background(), f.run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+		t.Errorf("finalize: %v", err)
+	}
+	assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, "the runner did not answer for its last pass back; 2 passes in a row brought nothing back")
+}
+
+// runnerTurnsAfterBump is computerFolderStore whose folder runner turns into another, once, at the first
+// runner read after the pass record moved to gen: between a pass back's check and its send. It records the
+// sandbox refs the sweeps clear.
+type runnerTurnsAfterBump struct {
+	*computerFolderStore
+	gen     int
+	turn    func()
+	once    sync.Once
+	cleared atomic.Int32
+}
+
+func (s *runnerTurnsAfterBump) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
+	if s.folderStatus().Gen == s.gen {
+		s.once.Do(s.turn)
+	}
+	return s.computerFolderStore.GetRunner(ctx, id)
+}
+
+func (s *runnerTurnsAfterBump) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
+	if ref == "" {
+		s.cleared.Add(1)
+	}
+	return s.computerFolderStore.SetSandboxRef(ctx, id, ref)
+}
+
+// A first visit whose runner turns into an older one between the check and the send keeps the sandbox with
+// a resume written, so neither the resume sweep nor the orphan sweep stops it or clears its ref while the
+// pass is still owed; the first pass the runner answers then tears it down.
+func TestPassBack_ARunnerThatTurnsOlderBeforeTheSendKeepsTheSandboxForTheSweeps(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &onePerRunnerCaps)
+	turns := &runnerTurnsAfterBump{computerFolderStore: f.cs, gen: 1, turn: func() { f.runnerAs(t, &olderRunnerCaps) }}
+	f.s.cfg.Store = turns
+	seen := passSeen(f.sb)
+	if !f.back() || seen.Load() || f.sb.stopCount() != 0 {
+		t.Fatalf("pass %v, stops %d; want no pass and the sandbox kept", seen.Load(), f.sb.stopCount())
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil || st.Gen != 1 || st.Settled != 0 {
+		t.Fatalf("record %+v, want a resume at gen 1, unsettled", st)
+	}
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.state, ds.run.SandboxRef = types.RunCompleted, "sbx"
+	ds.mu.Unlock()
+	run, err := ds.GetRun(context.Background(), f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.reconcileOrphanedRun(context.Background(), run)
+	f.s.resumeComputerFolderBack(context.Background(), run.ID)
+	if seen.Load() || f.sb.stopCount() != 0 || turns.cleared.Load() != 0 {
+		t.Fatalf("pass %v, stops %d, refs cleared %d; want the owed sandbox left as it is", seen.Load(), f.sb.stopCount(), turns.cleared.Load())
+	}
+	f.runnerAs(t, &onePerRunnerCaps)
+	f.s.resumeComputerFolderBack(context.Background(), run.ID)
+	if st := f.cs.folderStatus(); !seen.Load() || f.sb.stopCount() != 1 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("pass %v, stops %d, record %+v; want the completed pass, then the stop", seen.Load(), f.sb.stopCount(), st)
 	}
 }
 

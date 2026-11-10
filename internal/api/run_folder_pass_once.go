@@ -89,19 +89,32 @@ func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder
 			return s.recordFolderBackAt(rctx, run.ID, folder, prev.Gen, false, nil, runnerwire.FolderPass{}, errText)
 		}
 	}
-	if prev.Resume == nil || prev.GenAt.IsZero() {
-		rctx, cancel := teardownCtx(ctx)
-		defer cancel()
-		s.writeComputerFolderStatus(rctx, run.ID, prev.Gen, func(st *types.RunLocalFolderStatus) {
-			if st.Resume == nil {
-				st.Resume = &types.FolderResume{}
-			}
-			if st.GenAt.IsZero() {
-				st.GenAt = s.cfg.Now()
-			}
-		})
+	return s.keepForResume(ctx, run.ID, folder, prev.Gen, prev)
+}
+
+// keepForResume keeps run id's sandbox for a later pass, at gen, with no stall counted and nothing claimed
+// done. The sweeps keep only a sandbox whose record holds a resume (computerFolderKept), so one is written
+// where rec, the record as read, has none, and a send time where it has none. A resume that cannot be
+// written stops the sandbox with its changes not brought back; a send time that cannot is stamped later.
+func (s *Server) keepForResume(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int, rec types.RunLocalFolderStatus) bool {
+	if rec.Resume != nil && !rec.GenAt.IsZero() {
+		return true
 	}
-	return true
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	if s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
+		if st.Resume == nil {
+			st.Resume = &types.FolderResume{}
+		}
+		if st.GenAt.IsZero() {
+			st.GenAt = s.cfg.Now()
+		}
+	}) || rec.Resume != nil {
+		return true
+	}
+	errText := folderBackGivenUp("no pass ran; the runner may still be running its last pass back",
+		"the sandbox could not be kept for a later pass", 0)
+	return s.recordFolderBackAt(rctx, id, folder, gen, false, nil, runnerwire.FolderPass{}, errText)
 }
 
 // unansweredStallsPast is a last pass, unanswered and past its bound, that was a stall in a row of them:
@@ -110,15 +123,22 @@ func (s *Server) unansweredStallsPast(prev types.RunLocalFolderStatus) bool {
 	return lastPassUnsettled(prev) && prev.Resume != nil && prev.Resume.Stalled >= computerFolderStalls && s.pastOldPassBound(prev)
 }
 
-// keptUnanswered is the verdict on a pass the runner did not answer for, given folderBackVerdict's: one it
-// may still be running never stops the sandbox at its own visit. It counts as a stall, and its give-up comes
-// past its bound (unansweredStallsPast). A sandbox not quiesced (qerr) is not kept.
-func keptUnanswered(next *types.FolderResume, errText, passErr string, unsynced int, qerr error) (*types.FolderResume, string) {
+// keptUnanswered is the verdict on a pass the runner did not answer for, given folderBackVerdict's and the
+// resume before the pass (prev): one it may still be running never stops the sandbox at its own visit. It
+// counts once as a stall against prev, and a give-up it earns comes past its bound (unansweredStallsPast). A
+// sandbox not quiesced (qerr) is not kept.
+func keptUnanswered(prev, next *types.FolderResume, errText, passErr string, unsynced int, qerr error) (*types.FolderResume, string) {
 	if next != nil || qerr != nil {
 		return next, errText
 	}
-	return &types.FolderResume{Stalled: computerFolderStalls, Unsynced: unsynced},
-		passErr + "; the runner did not answer for this pass, so the sandbox is kept with its agent stopped and no egress, and the next pass waits until the runner answers for this one or about an hour has passed"
+	next = &types.FolderResume{Stalled: 1, Unsynced: unsynced}
+	if prev != nil {
+		next.Stalled = prev.Stalled + 1
+		if unsynced == 0 {
+			next.Unsynced = prev.Unsynced
+		}
+	}
+	return next, passErr + "; the runner did not answer for this pass, so the sandbox is kept with its agent stopped and no egress, and the next pass waits until the runner answers for this one or about an hour has passed"
 }
 
 // folderBroughtBack is a record whose pass back completed with nothing owed.

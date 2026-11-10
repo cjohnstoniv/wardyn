@@ -309,13 +309,13 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return s.recordFolderPassBusy(ctx, runID, *folder, gen)
 	case out.unconfirmed:
 		// The runner the pass was to go to turned out to be one that may still run the last: kept, as
-		// lastPassOpen keeps it, with nothing written.
-		return true
+		// lastPassOpen keeps it, with nothing counted.
+		return s.keepForResume(ctx, runID, *folder, gen, rec)
 	}
 	res, passErr, cut := out.FolderPass, out.errText, out.cut
 	next, errText := s.folderBackVerdict(ctx, run, &res, passErr, cut, qerr)
 	if !out.settled {
-		next, errText = keptUnanswered(next, errText, passErr, res.Unsynced, qerr)
+		next, errText = keptUnanswered(prev.Resume, next, errText, passErr, res.Unsynced, qerr)
 	}
 	return s.recordFolderBackAt(rctx, runID, *folder, gen, out.settled, next, res, errText)
 }
