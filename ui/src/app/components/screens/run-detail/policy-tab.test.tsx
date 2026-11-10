@@ -23,7 +23,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
-import { CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB } from "./policy-tab-copy";
+import { CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
 import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 
 const RUN = {
@@ -267,7 +267,8 @@ describe("PolicyTab — changes grouped by cause", () => {
     expect(within(mirror).getByText("registry.npmjs.org").parentElement).toHaveTextContent("Removed at start");
   });
 
-  it("reads the IP-address switch in words, labelled, for an addition and a removal", async () => {
+  it("reads the IP-address switch as the setting, labelled, for an addition and a removal", async () => {
+    const ON = "When allow-all egress is on, refuse connections to IP addresses unless they are listed exactly in Allowed hosts.";
     show(
       view({
         changes: [
@@ -278,14 +279,15 @@ describe("PolicyTab — changes grouped by cause", () => {
     );
     await ready();
     const set = screen.getByRole("heading", { name: CHANGE_HEADING.overlay }).parentElement!;
-    const added = within(set).getByText(IP_LITERALS.refused).parentElement!;
+    const added = within(set).getByText(ON).parentElement!;
     expect(added).toHaveTextContent("Added at start");
-    expect(added).toHaveTextContent(FIELD_LABEL.refuse_ip_literals);
-    expect(within(set).getByText(IP_LITERALS.refused)).not.toHaveClass("font-mono");
+    expect(added).toHaveTextContent("IP addresses");
+    expect(within(set).getByText(ON)).not.toHaveClass("font-mono");
     const launch = screen.getByRole("heading", { name: CHANGE_HEADING.launch }).parentElement!;
-    const removed = within(launch).getByText(IP_LITERALS.refused).parentElement!;
+    const removed = within(launch).getByText(ON).parentElement!;
     expect(removed).toHaveTextContent("Removed at start");
-    expect(removed).toHaveTextContent("Refuse IP addresses");
+    expect(removed).toHaveTextContent("IP addresses");
+    expect(removed).not.toHaveTextContent("Refuse IP addresses");
     expect(screen.queryByText("true")).not.toBeInTheDocument();
   });
 

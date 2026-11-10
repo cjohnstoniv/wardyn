@@ -314,7 +314,7 @@ function entryText(field: string, text: string, holdSeconds?: number): string {
     case "allow_all_egress":
       return text === "true" ? CAPABILITY.allowAllEgress : text;
     case "refuse_ip_literals":
-      return text === "true" ? IP_LITERALS.refused : IP_LITERALS.allowed;
+      return text === "true" ? IP_LITERALS.on : IP_LITERALS.off;
     case "auto_stop_after_sec":
       return lifecycleSummary({ auto_stop_after_sec: n } as RunPolicySpec);
     case "resources.cpu_millis":

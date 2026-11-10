@@ -291,6 +291,40 @@ describe("PolicySummary — push limits (#2601)", () => {
   });
 });
 
+describe("PolicySummary — the IP-address switch", () => {
+  const ON = "When allow-all egress is on, refuse connections to IP addresses unless they are listed exactly in Allowed hosts.";
+  const OFF = "This setting adds no IP-address restriction.";
+  const withIp = (v: unknown) => ({ ...FULL, refuse_ip_literals: v }) as unknown as RunPolicySpec;
+
+  it("reads a present true and a present false as a Network row, not as an Other setting", () => {
+    const { unmount } = render(<PolicySummary spec={withIp(true)} />);
+    expect(row("Network", "IP addresses")).toHaveTextContent(ON);
+    expect(screen.queryByText("refuse_ip_literals")).toBeNull();
+    unmount();
+    render(<PolicySummary spec={withIp(false)} />);
+    expect(row("Network", "IP addresses")).toHaveTextContent(OFF);
+    expect(screen.queryByText("refuse_ip_literals")).toBeNull();
+  });
+
+  it("shows no row when the document omits it, and never invents an off value", () => {
+    render(<PolicySummary spec={FULL} />);
+    expect(screen.queryByText("IP addresses")).toBeNull();
+    expect(screen.queryByText(OFF)).toBeNull();
+    expect(screen.queryByText("refuse_ip_literals")).toBeNull();
+  });
+
+  it("flags an addition, and lists a removed value as a struck entry that makes no claim about the policy now", () => {
+    const marks: PolicyChangeMarks = {
+      of: (field, entry) => (field === "refuse_ip_literals" && entry === "false" ? "added" : undefined),
+      removed: (field) => (field === "refuse_ip_literals" ? ["true"] : []),
+    };
+    render(<PolicySummary spec={withIp(false)} marks={marks} />);
+    const r = row("Network", "IP addresses");
+    expect(within(r).getByText(OFF).closest("li")).toHaveTextContent("Added at start");
+    expect(within(r).getByText(ON).closest("li")).toHaveTextContent("Removed at start");
+  });
+});
+
 // The host marks (#2956, mock R13). The five strings are the approved copy, character for
 // character; cmd/wardyn/run_policy.go prints the same five, so that file is read here too.
 describe("PolicySummary host marks", () => {
