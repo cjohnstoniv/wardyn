@@ -541,7 +541,7 @@ func newProxy(opts Options) *Proxy {
 			Method: http.MethodConnect,
 			Time:   now(),
 		}
-		p.sink.emit(decisionLog(req, egress.Allow, egress.RuleSourceUpstreamProxy))
+		p.sink.emit(decisionLog(req, egress.Allow, "builtin:upstream-proxy"))
 	}
 	return p
 }
