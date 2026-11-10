@@ -39,7 +39,7 @@ const (
 	// runExecSandboxGoneMsg answers a run whose sandbox went away between the state check and the exec.
 	runExecSandboxGoneMsg = "The run's sandbox is gone; the run is ending."
 	// runExecFailedMsg answers a runner that could not start the command; the cause goes to the log.
-	runExecFailedMsg = "the runner could not start the command"
+	runExecFailedMsg = "The runner could not start the command."
 )
 
 func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
