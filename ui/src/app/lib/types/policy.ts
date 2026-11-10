@@ -162,8 +162,9 @@ export interface ToolRule {
 
 // Per-host method and path rules (mirrors types.HostRuleSet / types.HostRule). host_rules is a list of
 // sets, one per layer: every set that names a host must allow a request on it, by first match inside
-// that set. Empty methods or paths match all. "hold" is refused by the server until a later release.
-export type HostRuleEffect = "allow" | "deny";
+// that set. Empty methods or paths match all. "hold" waits for a person to decide the request's host,
+// method and path (a host_call approval).
+export type HostRuleEffect = "allow" | "deny" | "hold";
 
 export interface HostRule {
   host: string;

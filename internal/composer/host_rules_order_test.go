@@ -128,11 +128,17 @@ func TestHostRulesLeqOrderIndependent(t *testing.T) {
 	}
 }
 
-// An overlay's malformed set is refused at write and at resolve alike, never appended.
+// An overlay's malformed set is refused at write and at resolve alike, never appended; a hold is a
+// well-formed set and is appended.
 func TestHostRulesOverlayRefusesAMalformedSet(t *testing.T) {
-	hold := ruleSet(types.HostRuleHold, "GET", "/")
-	_, _, err := ApplyOverlay(Authority{}, Overlay{Ceiling: types.CeilingOverlay{HostRules: &hold}})
+	bad := ruleSet(types.HostRuleEffect("maybe"), "GET", "/")
+	_, _, err := ApplyOverlay(Authority{}, Overlay{Ceiling: types.CeilingOverlay{HostRules: &bad}})
 	if oe, ok := err.(*OverlayError); !ok || oe.Reason != ReasonOverlayInvalid || oe.Field != "host_rules" {
-		t.Fatalf("ApplyOverlay with effect hold: err = %v, want %s on host_rules", err, ReasonOverlayInvalid)
+		t.Fatalf("ApplyOverlay with effect maybe: err = %v, want %s on host_rules", err, ReasonOverlayInvalid)
+	}
+	hold := ruleSet(types.HostRuleHold, "POST", "/admin")
+	out, _, err := ApplyOverlay(Authority{}, Overlay{Ceiling: types.CeilingOverlay{HostRules: &hold}})
+	if err != nil || len(out.Ceiling.HostRules) != 1 || out.Ceiling.HostRules[0].Rules[0].Effect != types.HostRuleHold {
+		t.Fatalf("ApplyOverlay with effect hold: err = %v, host_rules %+v, want the hold set appended", err, out.Ceiling.HostRules)
 	}
 }

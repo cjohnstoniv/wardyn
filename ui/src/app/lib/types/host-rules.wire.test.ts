@@ -52,7 +52,7 @@ describe("host_rules wire", () => {
 
   it("names the effects validation accepts today", () => {
     const union = /export type HostRuleEffect =([^;]+);/.exec(policyTs)?.[1] ?? "";
-    expect(new Set([...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]))).toEqual(new Set(["allow", "deny"]));
-    expect(goSrc).toMatch(/case HostRuleAllow, HostRuleDeny:\n\t\treturn nil/);
+    expect(new Set([...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]))).toEqual(new Set(["allow", "deny", "hold"]));
+    expect(goSrc).toMatch(/case HostRuleAllow, HostRuleDeny, HostRuleHold:\n\t\treturn nil/);
   });
 });
