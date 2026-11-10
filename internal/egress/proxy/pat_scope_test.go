@@ -362,10 +362,8 @@ func TestPATGitRepoPerForge(t *testing.T) {
 		{"scm under an API mount", "api/scm/P/r/git-upload-pack", "RRRR"},
 		{"only: case fold in the context path", "bitbucket/REST/scm/P/r.git/info/refs", "AAAR"},
 		{"scm under a doubled slash", "bitbucket//scm/P/r.git/info/refs", "RRRR"},
-		// generic only: Azure DevOps _api and Gerrit's REST.
+		// generic only: Azure DevOps _api.
 		{"Azure DevOps _api", "org/_api/x/git-upload-pack", "RAAR"},
-		{"Gerrit REST", "a/projects/p/branches/git-upload-pack", "RAAR"},
-		{"Gerrit REST under a prefix", "gerrit/a/changes/1/revisions/git-upload-pack", "RAAR"},
 		// Real repositories: admitted wherever the forge allows the name.
 		{"GitLab subgroup api", "group/api/project.git/info/refs", "AARR"},
 		{"GitLab subgroup api, project v4", "group/api/v4/info/refs", "AARR"},
@@ -375,11 +373,14 @@ func TestPATGitRepoPerForge(t *testing.T) {
 		{"Azure DevOps project API", "org/API/_git/repo/info/refs", "AARR"},
 		{"a repository named api", "team/api/git-upload-pack", "AAAR"},
 		{"Gerrit authenticated clone", "a/project.git/info/refs", "AAAR"},
-		{"only: Gerrit collection as the last segment", "a/projects/git-upload-pack", "RAAR"},
-		{"Gerrit project named projects, through a/", "a/projects/info/refs", "RAAR"},
-		{"Gerrit project under a collection name, through a/", "a/plugins/replication/info/refs", "RAAR"},
+		// Gerrit: its git servlet takes every [a/]<project>/<git verb> path ahead of REST.
+		{"Gerrit project named projects, through a/", "a/projects/git-upload-pack", "AAAR"},
+		{"Gerrit project under a collection name, through a/", "a/plugins/replication/info/refs", "AAAR"},
+		{"Gerrit project named config, through a/", "a/config/info/refs", "AAAR"},
+		{"Gerrit project under projects/, through a/", "a/projects/p/branches/git-upload-pack", "AAAR"},
 		{"Gerrit project named projects, without a/", "projects/info/refs", "AAAR"},
 		{"GitLab subgroups api and v4 (refused: no deployment root is configured)", "group/api/v4/project.git/info/refs", "RRRR"},
+		{"GitLab subgroups api and graphql (refused: no deployment root is configured)", "group/api/graphql/project.git/info/refs", "RRRR"},
 		{"Bitbucket Server", "scm/PROJ/repo.git/git-upload-pack", "AAAA"},
 		{"Bitbucket Server project API", "scm/API/repo.git/git-upload-pack", "AARA"},
 		{"Bitbucket Server personal", "scm/~user/repo.git/info/refs", "AAAA"},

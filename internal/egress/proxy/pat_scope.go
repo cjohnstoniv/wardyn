@@ -109,7 +109,9 @@ func patRequestRepoKey(forge, rest, verb string) (string, bool) {
 //   - every forge but bitbucket_server: patAPIMount;
 //   - gitea also: "api" anywhere before the repository name (Gitea reserves
 //     it as an owner, so there it is the API mount under a sub-path);
-//   - generic also: "_api" (Azure DevOps) and Gerrit's "a/<collection>/";
+//   - generic also: "_api" (Azure DevOps). Gerrit needs no rule: it binds its
+//     git servlet, which takes every [a/]<project>/<git verb> path, ahead of
+//     its REST servlets (Daemon.java GitOverHttpModule before WebModule).
 //   - bitbucket_server: exactly [<context path>/]scm/<project>/<repo>, the
 //     context path free of the server's own routes, and the repository is
 //     <project>/<repo>.
@@ -134,7 +136,7 @@ func patGitRepo(forge, rest, verb string) (string, bool) {
 	for i := range segs[:len(segs)-1] {
 		if patAPIMount(segs, i) ||
 			(forge == types.PATForgeGitea && patSegIs(segs[i], "api")) ||
-			(forge == types.PATForgeGeneric && (patSegIs(segs[i], "_api") || patGerritREST(segs, i))) {
+			(forge == types.PATForgeGeneric && patSegIs(segs[i], "_api")) {
 			return "", false
 		}
 	}
@@ -178,19 +180,6 @@ func patAPIMount(segs []string, i int) bool {
 		return i+2 < len(segs)-1 && patBitbucketVersion(segs[i+2])
 	}
 	return patSegIs(s, "!api") || patSegIs(s, "_apis") || patSegIs(s, "-")
-}
-
-// patGerritREST reports whether segs[i] is Gerrit's authenticated prefix "a"
-// followed by one of its REST collections, the collection being the last
-// segment too ("a/projects/git-upload-pack" would be its create view). Gerrit
-// serves git under the same prefix (a/<project>), so a project whose name is,
-// or starts with, a collection name is refused through a/ too.
-func patGerritREST(segs []string, i int) bool {
-	if !patSegIs(segs[i], "a") || i+1 >= len(segs) {
-		return false
-	}
-	return slices.ContainsFunc([]string{"access", "accounts", "changes", "config", "groups", "plugins", "projects"},
-		func(c string) bool { return patSegIs(segs[i+1], c) })
 }
 
 // patBitbucketServerRoutes are the Bitbucket Server routes that take a free

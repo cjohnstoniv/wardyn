@@ -317,7 +317,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - The PAT stays exactly as broad as its issuer made it everywhere outside Wardyn, and a request to the plain forward lane for the host is refused whatever its path.
 - The broker admits the same smart-HTTP surface the GitHub lane does — refs discovery and the two pack endpoints, outside the forge's API mounts.
 - On `generic` only the mounts Wardyn knows are refused, so set `forge` or `repos`.
-- A GitLab repository under nested subgroups named `api` then `v` and digits (`group/api/v4/project.git`) is refused: from the path alone it cannot be told from the API of a GitLab installed under a sub-path.
+- A GitLab repository under nested subgroups named `api` then `v` and digits or `graphql` (`group/api/v4/project.git`, `group/api/graphql/project.git`) is refused: from the path alone it cannot be told from the API of a GitLab installed under a sub-path.
 - A broker that forwarded arbitrary paths would be a credentialed proxy to the whole forge, REST API included.
 - `WARDYN_GIT_PAT_BROKER=off` restores the pre-0.7 resident lane.
 - It exists because the broker changes the git transport for those hosts, and a forge that behaves unexpectedly under the rewrite must not leave a fleet unable to clone.

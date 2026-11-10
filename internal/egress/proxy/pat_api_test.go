@@ -662,3 +662,23 @@ func TestPATAPIDoorForwardsToAnIPv6LiteralHost(t *testing.T) {
 	}
 	up.mu.Unlock()
 }
+
+// The API door judged the request line's method and path, so it forwards no
+// header a forge could read another route from.
+func TestPATAPIForwardsNoRouteOverride(t *testing.T) {
+	h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+	hdr := map[string]string{"X-HTTP-Method-Override": "GET"}
+	for _, k := range gitPathOverrides {
+		hdr[k] = "/api/v4/projects/team%2Fother/variables"
+	}
+	if rec := h.serve(t, apiReq{method: "GET", target: glBase + "/issues", hdr: hdr}); rec.Code != http.StatusOK {
+		t.Fatalf("status %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	h.up.mu.Lock()
+	defer h.up.mu.Unlock()
+	for k := range hdr {
+		if v := h.up.gitHeaders.Values(k); len(v) != 0 {
+			t.Errorf("forge saw %s: %q, want it stripped", k, v)
+		}
+	}
+}
