@@ -136,6 +136,10 @@ type RunPolicySpec struct {
 	// STILL wins, the SSRF/private-IP guard is unaffected, and credential injection STILL requires
 	// an EXACT allowlist entry, so allow-all never widens where a secret may be injected.
 	AllowAllEgress bool `json:"allow_all_egress,omitempty"`
+	// RefuseIPLiterals refuses, under allow_all_egress, every request whose host is an IP address in
+	// any spelling (dotted, bare decimal, hex, octal, bracketed or zoned v6, v4-mapped). An address
+	// listed exactly in AllowedDomains is still allowed. True only ever narrows.
+	RefuseIPLiterals bool `json:"refuse_ip_literals,omitempty"`
 	// FirstUseApproval controls how an unknown domain is handled: always_deny,
 	// deny_with_review, or wait_for_review. Accepts the legacy boolean on the
 	// wire. Inert under allow-all.

@@ -857,13 +857,16 @@ func clampMethods(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns [
 }
 
 // clampOperatorSwitches forces off boolean controls only an operator may widen: allow-all egress and
-// git_push_any_branch. Without this a member could disable push confinement by posting the field.
+// git_push_any_branch. Without this a member could disable push confinement by posting the field. It
+// also keeps refuse_ip_literals on where the ceiling sets it.
 // Split out of Clamp to keep its branch count under the gocyclo gate.
 func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
 	if out.AllowAllEgress && !ceiling.AllowAllEgress {
 		warns = append(warns, "allow_all_egress disabled: operator policy does not permit allow-all egress")
 		out.AllowAllEgress = false
 	}
+	// refuse_ip_literals: a ceiling that sets it keeps it on; a proposal may set it itself.
+	out.RefuseIPLiterals = out.RefuseIPLiterals || ceiling.RefuseIPLiterals
 	if out.GitPushAnyBranch && !ceiling.GitPushAnyBranch {
 		warns = append(warns, "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on")
 		out.GitPushAnyBranch = false

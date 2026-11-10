@@ -64,6 +64,7 @@ var proxySettingOfField = map[string]string{
 	// Dropped, the gateway gets the request without the headers its admin set to route it, and may
 	// route it somewhere the admin did not choose: an older remote executor must refuse the run.
 	"LLMHeaders": ProxySettingLLMHeaders,
+	"NoNetwork":  ProxySettingNoNetwork,
 }
 
 // proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.
@@ -71,6 +72,8 @@ var proxyNestedSettings = map[string]string{
 	// Dropped, a newer proxy serves the gateway through its generic forwarder with calls the sandbox
 	// signed with the placeholder: they fail at AWS rather than being refused when placed.
 	ProxySettingAWSSigV4Gateways: "AWSSigV4",
+	// Dropped, an older proxy allows a literal IP host under allow-all.
+	ProxySettingRefuseIPLiterals: "Policy",
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner

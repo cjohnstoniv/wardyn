@@ -261,6 +261,8 @@ type ProxyConfig struct {
 	// approve_each, so an older proxy refuses the config and the run does not start on it.
 	MCPApproveEach      *proxy.MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
 	ActivityIgnoreHosts []string                    `json:"activity_ignore_hosts,omitempty"` // proxy.Config.ActivityIgnoreHosts: hosts whose allowed requests are not activity
+	// NoNetwork is proxy.Config.NoNetwork: a run launched with the no-network wall preset.
+	NoNetwork bool `json:"no_network,omitempty"`
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

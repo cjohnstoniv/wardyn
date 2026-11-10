@@ -41,6 +41,7 @@ var meetRules = map[string]meetRule{
 	"allowed_domains":                  {"nothing allowed (default deny)", "pairwise intersection of the two lists under internal/egress/domainmatch; an overlay entry the base's own list does not cover is invalid at write"},
 	"denied_domains":                   {"none", "union"},
 	"allow_all_egress":                 {"false", "AND"},
+	"refuse_ip_literals":               {"false", "OR"},
 	"first_use_approval":               {"always_deny (Normalize)", "stricter by firstUseApprovalRank"},
 	"first_use_hold_seconds":           {"30 s, cut to 600 s", "smaller after normalising"},
 	"max_holds":                        {"16, cut to 256", "smaller after normalising"},

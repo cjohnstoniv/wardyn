@@ -42,6 +42,10 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingForgeHosts:     func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
 	runnerwire.ProxySettingAllowedModels:  func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
 	runnerwire.ProxySettingMCPApproveEach: func(pc *runner.ProxyConfig) { pc.MCPApproveEach = &proxy.MCPApproveEachConfig{} },
+	runnerwire.ProxySettingNoNetwork:      func(pc *runner.ProxyConfig) { pc.NoNetwork = true },
+	runnerwire.ProxySettingRefuseIPLiterals: func(pc *runner.ProxyConfig) {
+		pc.Policy.RefuseIPLiterals = true
+	},
 	runnerwire.ProxySettingLLMHeaders: func(pc *runner.ProxyConfig) {
 		pc.LLMHeaders = map[string]map[string]string{"gw.corp.example": {"X-Team": "platform"}}
 	},

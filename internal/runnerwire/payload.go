@@ -205,6 +205,13 @@ const (
 	// for AWS, so such a runner is refused a run that carries one.
 	ProxySettingAWSSigV4Gateways = "aws_sigv4_gateways"
 	ProxySettingMCPApproveEach   = "mcp_approve_each"
+	// ProxySettingNoNetwork is no_network. Dropped, the run's proxy would serve the doors its allowlist
+	// does not key, so such a runner is refused the run.
+	ProxySettingNoNetwork = "no_network"
+	// ProxySettingRefuseIPLiterals is policy.refuse_ip_literals, a field inside policy: a runner that
+	// predates it decodes the policy without it, and its proxy then allows a literal under allow-all,
+	// so such a runner is refused a run that sets it.
+	ProxySettingRefuseIPLiterals = "refuse_ip_literals"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -230,7 +237,7 @@ var ProxySettings = []string{
 	ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels,
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
-	ProxySettingLLMHeaders,
+	ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -240,7 +247,9 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0, pc.ModelLimit != nil,
 		pc.AWSSigV4 != nil && len(pc.AWSSigV4.Gateways) != 0,
 		pc.MCPApproveEach != nil,
-		len(pc.LLMHeaders) != 0} {
+		len(pc.LLMHeaders) != 0,
+		pc.NoNetwork,
+		pc.Policy.RefuseIPLiterals} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

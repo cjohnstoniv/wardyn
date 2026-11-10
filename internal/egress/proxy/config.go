@@ -401,6 +401,10 @@ type Config struct {
 	// default with nothing in the config. Only an admin's opt-out sets it, so a
 	// default config still loads on an older proxy, which refuses this key.
 	DisableModelUsage bool `json:"disable_model_usage,omitempty"`
+	// NoNetwork is a run launched with the no-network wall preset: every sandbox request is refused
+	// (policy:no-network) and no egress dial is made, while the proxy's own control-plane calls go on.
+	// An older proxy refuses the key, so such a run never starts on one.
+	NoNetwork bool `json:"no_network,omitempty"`
 }
 
 // MCPServerConfig is one remote MCP server on the broker route.

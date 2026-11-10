@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -37,11 +38,71 @@ import (
 //
 // The non-canonical arm is DENY-ONLY (see nonCanonicalLiteralIP): a spelling the operator didn't type can
 // never inherit an allowed_domains grant.
+//
+// A run with no network (Config.NoNetwork) is refused here first, for every host. A policy with
+// refuse_ip_literals refuses every literal host, in any spelling, after the blocked-range checks; an
+// address listed exactly in the allowlist (Policy.AllowsLiteralIP) is still allowed.
 func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.IP, *egress.DecisionLog) {
+	if p.noNetwork {
+		log := decisionLog(req, egress.Deny, ruleSourceNoNetwork)
+		return nil, &log
+	}
 	deny := func() (net.IP, *egress.DecisionLog) {
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
 		return nil, &log
 	}
+	trusted, denied := p.blockedLiteralIPGuard(deny, host, port)
+	if denied != nil || trusted != nil || p.policy == nil || !p.policy.refuseIPLiterals {
+		return trusted, denied
+	}
+	if ip := literalHostIP(host); ip != nil {
+		// Only the canonical spelling can match an exact entry: allowed_domains is authored and
+		// matched in canonical form, so a non-canonical spelling is always refused.
+		if net.ParseIP(trimLiteralHost(host)) == nil || !p.policy.AllowsLiteralIP(ip.String(), port) {
+			log := decisionLog(req, egress.Deny, ruleSourceIPLiteral)
+			return nil, &log
+		}
+	}
+	return nil, nil
+}
+
+// The rule sources literalIPGuard writes beside builtin:private-ip.
+const (
+	ruleSourceNoNetwork = "policy:no-network"
+	ruleSourceIPLiteral = "policy:ip-literal"
+)
+
+// refuseNoNetwork writes a run with no network's refusal of a request that never reaches evaluate.
+func (p *Proxy) refuseNoNetwork(w http.ResponseWriter, r *http.Request, authority string) {
+	host, port := splitHostPort(authority, 443)
+	log := decisionLog(egress.Request{AuditReservation: spoolTicket(r.Context()), RunID: p.runID, Host: host, Port: port,
+		Method: strings.ToUpper(r.Method), Time: p.now()}, egress.Deny, ruleSourceNoNetwork)
+	p.sink.emit(log)
+	p.writeEgressDeny(w, host, port, &log, false)
+}
+
+// trimLiteralHost is host lower-cased, without a trailing dot or the brackets of an IPv6 authority.
+func trimLiteralHost(host string) string {
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
+		h = h[1 : len(h)-1]
+	}
+	return h
+}
+
+// literalHostIP is the address host names when it is an IP literal in any spelling net.ParseIP or a
+// resolver accepts (nonCanonicalLiteralIP), nil for a hostname.
+func literalHostIP(host string) net.IP {
+	h := trimLiteralHost(host)
+	if ip := net.ParseIP(h); ip != nil {
+		return ip
+	}
+	return nonCanonicalLiteralIP(h)
+}
+
+// blockedLiteralIPGuard is the blocked-range half of literalIPGuard: a literal in a blocked range is
+// denied unless it is a trusted exact entry, which it returns.
+func (p *Proxy) blockedLiteralIPGuard(deny func() (net.IP, *egress.DecisionLog), host string, port int) (net.IP, *egress.DecisionLog) {
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
 		// A k8s runner's hard deny beats the exact-literal trust below, as it beats every admission in
 		// egressTarget: no allow, approval or redirect reopens it. A trusted literal skips egressTarget,
