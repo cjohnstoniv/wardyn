@@ -210,7 +210,7 @@ const (
 	ProxySettingNoNetwork = "no_network"
 	// ProxySettingRefuseIPLiterals is policy.refuse_ip_literals, a field inside policy: a runner that
 	// predates it decodes the policy without it, and its proxy then allows a literal under allow-all,
-	// so such a runner is refused a run that sets it.
+	// so such a runner is refused a run that sets it under allow_all_egress, the only place it acts.
 	ProxySettingRefuseIPLiterals = "refuse_ip_literals"
 )
 
@@ -249,7 +249,7 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		pc.MCPApproveEach != nil,
 		len(pc.LLMHeaders) != 0,
 		pc.NoNetwork,
-		pc.Policy.RefuseIPLiterals} {
+		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

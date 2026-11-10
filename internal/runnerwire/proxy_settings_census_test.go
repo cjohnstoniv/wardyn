@@ -204,3 +204,17 @@ func TestProxySettingAWSSigV4GatewaysNamed(t *testing.T) {
 		t.Errorf("a gateway: %v", got)
 	}
 }
+
+// refuse_ip_literals acts only under allow_all_egress, so only such a run needs a runner that carries it:
+// on a default-deny run it is not named, and an older runner is not refused the run for it.
+func TestProxySettingsSet_RefuseIPLiteralsUnderAllowAllOnly(t *testing.T) {
+	pc := runner.ProxyConfig{}
+	pc.Policy.RefuseIPLiterals = true
+	if got := ProxySettingsSet(pc); len(got) != 0 {
+		t.Errorf("default-deny with refuse_ip_literals names %v, want none", got)
+	}
+	pc.Policy.AllowAllEgress = true
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingRefuseIPLiterals}) {
+		t.Errorf("allow-all with refuse_ip_literals names %v, want [%s]", got, ProxySettingRefuseIPLiterals)
+	}
+}

@@ -44,7 +44,7 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingMCPApproveEach: func(pc *runner.ProxyConfig) { pc.MCPApproveEach = &proxy.MCPApproveEachConfig{} },
 	runnerwire.ProxySettingNoNetwork:      func(pc *runner.ProxyConfig) { pc.NoNetwork = true },
 	runnerwire.ProxySettingRefuseIPLiterals: func(pc *runner.ProxyConfig) {
-		pc.Policy.RefuseIPLiterals = true
+		pc.Policy.RefuseIPLiterals, pc.Policy.AllowAllEgress = true, true
 	},
 	runnerwire.ProxySettingLLMHeaders: func(pc *runner.ProxyConfig) {
 		pc.LLMHeaders = map[string]map[string]string{"gw.corp.example": {"X-Team": "platform"}}
