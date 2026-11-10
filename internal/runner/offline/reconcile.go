@@ -137,7 +137,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	}
 	if r.ContainmentOnly && !missingIdentityAction(a) {
 		// Refused for the same reason: a record kept only for containment never takes another action,
-		// and every control-plane boot queues an end for a terminal run that kept its sandbox ref.
+		// and an older control plane queued an end at every boot for a terminal run that kept its sandbox ref.
 		return m.refuseAction(ctx, a, refusal(errors.New("containment-only identity refuses this action")))
 	}
 	if a.Kind == types.RunnerActionRecoverContainment {

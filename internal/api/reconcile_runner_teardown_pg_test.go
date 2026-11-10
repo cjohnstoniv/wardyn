@@ -17,12 +17,15 @@ import (
 
 // The boot pass queues a kill for a terminal run on a runner, never an end: a runner that cannot keep an
 // ended sandbox (a Kubernetes runner) refuses an end, and a record kept only for containment refuses one
-// too. An end another path queued and the runner refused is followed by a kill, not the same end again.
-// A kill the runner applied clears the ref; a kill it refused is not queued again.
+// too. An end another path queued and the runner refused is followed by a kill, not the same end again;
+// one it applied clears the ref; one still unanswered (an older control plane's, or a runner still
+// stuck on it) gets a kill queued behind it. A kill the runner applied clears the ref; a kill it refused
+// is not queued again.
 func TestPG_OrphanSweep_QueuesAKillNeverAnEnd(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
 	f.offline(t)
 	applied, refused, endRefused := f.terminalRunnerRun(t), f.terminalRunnerRun(t), f.terminalRunnerRun(t)
+	ended, endOpen := f.terminalRunnerRun(t), f.terminalRunnerRun(t)
 	sweep := func() {
 		t.Helper()
 		if err := f.srv.reconcileOrphanedSandbox(f.ctx); err != nil {
@@ -30,16 +33,24 @@ func TestPG_OrphanSweep_QueuesAKillNeverAnEnd(t *testing.T) {
 		}
 	}
 	// A finalize's stop while the runner is away is queued as an end (this runner keeps ended sandboxes).
-	if err := f.srv.cfg.Runner.StopSandbox(f.ctx, endRefused.SandboxRef); !errors.Is(err, runner.ErrPendingOnRunner) {
-		t.Fatalf("offline stop = %v, want it queued", err)
+	for _, run := range []types.AgentRun{endRefused, ended, endOpen} {
+		if err := f.srv.cfg.Runner.StopSandbox(f.ctx, run.SandboxRef); !errors.Is(err, runner.ErrPendingOnRunner) {
+			t.Fatalf("offline stop = %v, want it queued", err)
+		}
 	}
 	f.answer(t, endRefused, types.RunnerActionEnd, types.RunnerActionRefused)
+	f.answer(t, ended, types.RunnerActionEnd, types.RunnerActionSuccess)
 
 	sweep()
 	sweep() // each kill is still open: nothing new is queued
 	f.teardowns(t, applied, 0, 1)
 	f.teardowns(t, refused, 0, 1)
 	f.teardowns(t, endRefused, 1, 1)
+	f.teardowns(t, ended, 1, 0)
+	f.teardowns(t, endOpen, 1, 1)
+	if got := f.sandboxRef(t, ended); got != "" {
+		t.Fatalf("a run whose end the runner applied keeps its ref %q", got)
+	}
 
 	f.answer(t, applied, types.RunnerActionKill, types.RunnerActionSuccess)
 	f.answer(t, refused, types.RunnerActionKill, types.RunnerActionRefused)

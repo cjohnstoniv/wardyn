@@ -269,8 +269,9 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	// carries, not the pre-claim (nil) one it read before MarkRunEnded.
 	run.LostAt, run.LostReason = &now, types.LostEnded
 	data := map[string]any{"ends_at": run.EndsAt}
-	// A target known not to keep an ended sandbox is not asked to: its runner, offline, would be
-	// queued an end it can only refuse, and the run audited kept.
+	// A target known not to keep an ended sandbox is not asked to; the run is stopped instead. Known
+	// here means an online runner or a local executor: for an offline runner the facts are unknown,
+	// and its substrate answers the end itself (ErrEndUnsupported once the runner said it cannot keep).
 	keeps, known := s.endKeepsRunTarget(ctx, run)
 	if known && !keeps && s.endKeepsRun(run) {
 		data["end_error"] = runner.ErrEndUnsupported.Error()

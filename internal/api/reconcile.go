@@ -355,7 +355,8 @@ func boundedTeardown(teardown func(context.Context, string) error) func(context.
 
 // lastRunnerTeardown is the runner's latest answer to a queued end or kill of
 // run's sandbox, or answered false off Postgres, for a run on no runner, or
-// when it cannot be read (the sweep then queues the end it always has).
+// when it cannot be read (the sweep then tears the sandbox down as for no answer:
+// a kill for a run on a runner, a stop otherwise).
 func (s *Server) lastRunnerTeardown(ctx context.Context, run types.AgentRun) (types.RunnerActionKind, string, bool) {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok || run.RunnerID == nil || s.cfg.Runner == nil {

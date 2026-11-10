@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A Kubernetes runner no longer stays offline for good after a run on it ends while it is away, for example a run killed before the control plane restarts. Every reconnect failed with "runner: this substrate cannot keep an ended sandbox". The control plane now removes such a run's pod instead of asking the runner to keep it, and a run that reaches its end on a Kubernetes runner is stopped and shown as not kept, instead of kept. A runner already stuck this way comes back once it is upgraded.
+- A Kubernetes runner no longer stays offline for good after a run on it ends while it is away, for example a run killed before the control plane restarts. Every reconnect failed with "runner: this substrate cannot keep an ended sandbox". The upgraded runner now turns down that request and connects. The control plane, after a restart, removes a finished run's pod on any runner instead of asking the runner to keep it. Once a Kubernetes runner has connected, the control plane also stops asking it to keep a run's pod, and a run that reaches its end there is stopped and shown as not kept. That last part works only on the control-plane process the runner is connected to. Another process, when you run more than one, or any process before the runner first connects to it, can still ask, and can still show such a run as kept until the process the runner is connected to stops it. Upgrade your Kubernetes runners together with the control plane: an older runner can still get stuck this way. A runner already stuck comes back once it is upgraded.
 
 ## [0.10.0-rc.17] — 2026-11-09
 
