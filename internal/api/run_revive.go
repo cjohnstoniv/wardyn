@@ -451,23 +451,12 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // anyway (reloseRun), and the answer says the recovery is unresolved, for a
 // later sweep to settle. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
 func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
-	unresolved, stopErr := s.reloseRun(ctx, run)
+	unresolved := s.reloseRun(ctx, run)
 	data["lost_again"] = !unresolved
-	// A readback failure's stop wording is settleRevivedProxy's, from its own containment result.
-	unconfirmed := stopErr != nil && reason != reasonRevivePolicyUnconfirmedLost
-	if unconfirmed {
-		data["containment"] = "unresolved"
-	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
-	switch {
-	case unresolved && unconfirmed:
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
-			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, but stopping its proxy is not confirmed yet, and a later sweep recovers it", err))
-	case unresolved:
+	if unresolved {
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
 			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it", err))
-	case unconfirmed:
-		msg = "the revive failed and the run is lost until revived; stopping its proxy is not confirmed yet, and a later sweep retries it"
 	}
 	return &reviveError{status: http.StatusBadGateway, reason: reason, lost: true, msg: loggedMsg(ctx, msg, err)}
 }
@@ -842,10 +831,8 @@ func reviveFrom(run types.AgentRun) string {
 // It reports whether the recovery is unresolved: the lost mark could not be
 // written, so nothing says the run is lost. The run is contained anyway, its
 // proxy stopped and its broker credentials revoked, and a sweep settles the
-// rest; the caller must not tell anyone the run is lost. stopErr is non-nil
-// when the proxy stop is not confirmed (a stop that failed, or a lost mark
-// another writer landed first), so the caller must not say it was stopped.
-func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (unresolved bool, stopErr error) {
+// rest; the caller must not tell anyone the run is lost.
+func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (unresolved bool) {
 	reason, at := types.LostOutage, s.cfg.Now()
 	switch run.LostReason {
 	case types.LostReboot:
@@ -857,26 +844,23 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (unresolved 
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
 	if ok && lok {
-		switch o, err := s.loseRunStopped(ctx, loser, leaser, run, reason, types.RunFailed, 0, at); o {
+		switch s.loseRun(ctx, loser, leaser, run, reason, types.RunFailed, 0, at) {
 		case loseWriteFailed:
 			s.revokeRunBroker(ctx, run.ID)
 			run.LostAt, run.LostReason = &at, reason
 			if err := s.stopLostSandbox(ctx, run, s.cfg.Now()); err != nil {
 				slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
 					slog.String("run_id", run.ID.String()), slog.Any("err", err))
-				return true, err
 			}
-			return true, nil
-		case loseApplied:
-			return false, err
-		case loseNotApplied:
-			return false, errors.New("the run's lost mark did not land, so this revive did not stop its proxy")
+			return true
+		case loseApplied, loseNotApplied:
+			return false
 		}
 	}
 	slog.WarnContext(ctx, "wardynd: a run whose proxy could not be replaced cannot be kept; tearing it down",
 		slog.String("run_id", run.ID.String()))
 	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "its proxy could not be replaced at revive")
-	return false, nil
+	return false
 }
 
 // adminRestartRequest is POST /api/v1/admin/runs/restart's body.
