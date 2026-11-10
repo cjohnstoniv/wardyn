@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -90,11 +92,7 @@ func recordCmd(client clientFn) *cobra.Command {
 			}
 			pol, err := client().CreatePolicy(cmd.Context(), sdk.PolicyRequest{Name: name, Spec: p.Proposed.InlinePolicy})
 			if err != nil {
-				var ae *sdk.APIError
-				if errors.As(err, &ae) && ae.Status == http.StatusForbidden {
-					return fmt.Errorf("%w. Members can save it as their own template with --template.", err)
-				}
-				return err
+				return templateHint(err)
 			}
 			if saveJSON {
 				return emitJSON(cmd.OutOrStdout(), pol)
@@ -150,6 +148,23 @@ func recordCmd(client clientFn) *cobra.Command {
 	return subcommandGroup(cmd)
 }
 
+// templateHint adds the --template remedy to a refused policy save. The route's own reason says it was
+// the admin-only gate ("admin_surface"), and then a member is told plainly; a 403 that names another
+// reason (governance, an admin-only write) is left alone, and one with no reason gets the conditional.
+func templateHint(err error) error {
+	var ae *sdk.APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusForbidden {
+		return err
+	}
+	switch ae.Reason {
+	case "admin_surface":
+		return fmt.Errorf("%w. Members can save it as their own template with --template.", err)
+	case "":
+		return fmt.Errorf("%w. If you are a member, you can save it as your own template with --template.", err)
+	}
+	return err
+}
+
 // recordedPolicyKeys are the inline_policy keys a recording decides, and so the only ones a saved
 // template carries (internal/recordmode Synthesize sets exactly these). A template lays each present
 // key onto the person's source policy and keeps the source's value for a key it leaves out, so a
@@ -174,6 +189,12 @@ var recordedEmptyKeys = map[string]json.RawMessage{
 // profileTemplateDocument is the personal template a synthesized profile becomes: a partial
 // template whose inline_policy holds the recorded keys (recordedPolicyKeys) and no others.
 func profileTemplateDocument(spec sdk.RunPolicySpec) (sdk.TemplateDocument, error) {
+	// A grant with no scope marshals "scope": null, which the template door refuses as a value. It names
+	// no credential to keep, so it is left out (the narrower result) rather than failing the whole save.
+	spec.EligibleGrants = slices.DeleteFunc(slices.Clone(spec.EligibleGrants), func(g sdk.GrantSpec) bool {
+		scope := strings.TrimSpace(string(g.Scope))
+		return scope == "" || scope == "null"
+	})
 	body, err := json.Marshal(spec)
 	if err != nil {
 		return sdk.TemplateDocument{}, err

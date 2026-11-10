@@ -130,6 +130,7 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 	runID, tplID := uuid.New(), uuid.New()
 	var tplBody map[string]any
 	var policyPosts int
+	policyReason := "admin_surface"
 	profile := profileBody
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -139,7 +140,7 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 		case "POST /api/v1/policies":
 			policyPosts++
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `{"error":"operator only","reason":"operator_required"}`)
+			fmt.Fprintf(w, `{"error":"requires the admin role","reason":%q}`, policyReason)
 		case "POST /api/v1/templates":
 			body, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(body, &tplBody)
@@ -191,7 +192,7 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 
 	// A recorded grant is kept as it is, and the keys a recording never decides stay out even when the proposal fills them.
 	profile = `{"proposed":{"inline_policy":{"allowed_domains":[],"min_confinement_class":"CC2","auto_stop_after_sec":3600,` +
-		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.example.com","header":"x-api-key"},"ttl_seconds":600}],` +
+		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.example.com","header":"x-api-key"},"ttl_seconds":600},{"kind":"api_key","scope":null}],` +
 		`"denied_domains":["bad.example.com"],"resources":{"cpu_millis":2000},"workspace_mounts":[{"host_path":"/srv"}]}}}`
 	if _, err := run("record", "save", runID.String(), "--name", "learned", "--template"); err != nil {
 		t.Fatal(err)
@@ -201,7 +202,7 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 	pol, _ = intent["inline_policy"].(map[string]any)
 	grants, _ := pol["eligible_grants"].([]any)
 	if len(grants) != 1 {
-		t.Fatalf("eligible_grants = %v, want the one recorded grant", pol["eligible_grants"])
+		t.Fatalf("eligible_grants = %v, want the one recorded grant and none with a null scope", pol["eligible_grants"])
 	}
 	if g, _ := grants[0].(map[string]any); g["kind"] != "api_key" || g["ttl_seconds"] != float64(600) {
 		t.Errorf("grant = %v, want it unchanged", grants[0])
@@ -217,7 +218,16 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 
 	_, err = run("record", "save", runID.String(), "--name", "learned")
 	if err == nil || !strings.Contains(err.Error(), "Members can save it as their own template with --template.") {
-		t.Errorf("a 403 without --template: err = %v, want the hint naming the flag", err)
+		t.Errorf("an admin-only 403 without --template: err = %v, want the hint naming the flag", err)
+	}
+	// A 403 from another gate is not about membership: no hint. One with no reason gets the conditional wording.
+	policyReason = "governance_hold"
+	if _, err = run("record", "save", runID.String(), "--name", "learned"); err == nil || strings.Contains(err.Error(), "--template") {
+		t.Errorf("a 403 for another reason: err = %v, want no --template hint", err)
+	}
+	policyReason = ""
+	if _, err = run("record", "save", runID.String(), "--name", "learned"); err == nil || !strings.Contains(err.Error(), "If you are a member, you can save it as your own template with --template.") {
+		t.Errorf("a 403 with no reason: err = %v, want the conditional hint", err)
 	}
 }
 

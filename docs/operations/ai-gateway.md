@@ -142,11 +142,10 @@ The gateway image is the operator's own choice to trust. This setup uses `agentg
 
 - Compatibility. The token format is `1` (`wardyn_format`).
   - Within format 1, claims are only added: none is removed, renamed or given a different type. A gateway rule should ignore a claim it does not know.
-  - The token is ES256 and carries the signing key's `kid` in its header.
   - The key set's address is stable through 0.11.
   - A format 2 is announced a minor release ahead.
 - With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It does the same on an organisation MCP server's address when the component sets `mcp.gateway_audience`. It never uses `Authorization`, which carries a person's own credential.
-- The token is ES256 with the key's `kid` in its header, and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). An MCP server's token always lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
+- The token is ES256 with the key's `kid` in its header (format 1 keeps both), and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). An MCP server's token always lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
 
 | Claim | Value | Notes |
 |---|---|---|
