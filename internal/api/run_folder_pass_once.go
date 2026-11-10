@@ -104,6 +104,28 @@ func (s *Server) keepForOpenPass(ctx context.Context, run types.AgentRun, folder
 	return true
 }
 
+// unansweredStallsPast is a last pass, unanswered and past its bound, that was a stall in a row of them:
+// the visit gives the changes up without a pass.
+func (s *Server) unansweredStallsPast(prev types.RunLocalFolderStatus) bool {
+	return lastPassUnsettled(prev) && prev.Resume != nil && prev.Resume.Stalled >= computerFolderStalls && s.pastOldPassBound(prev)
+}
+
+// keptUnanswered is the verdict on a pass the runner did not answer for, given folderBackVerdict's: one it
+// may still be running never stops the sandbox at its own visit. It counts as a stall, and its give-up comes
+// past its bound (unansweredStallsPast). A sandbox not quiesced (qerr) is not kept.
+func keptUnanswered(next *types.FolderResume, errText, passErr string, unsynced int, qerr error) (*types.FolderResume, string) {
+	if next != nil || qerr != nil {
+		return next, errText
+	}
+	return &types.FolderResume{Stalled: computerFolderStalls, Unsynced: unsynced},
+		passErr + "; the runner did not answer for this pass, so the sandbox is kept with its agent stopped and no egress, and the next pass waits until the runner answers for this one or about an hour has passed"
+}
+
+// folderBroughtBack is a record whose pass back completed with nothing owed.
+func folderBroughtBack(rec types.RunLocalFolderStatus) bool {
+	return rec.Back != nil && rec.Back.Error == ""
+}
+
 // passMayRunBeside is a runner, as folderRunner answered it, not known to run one pass per run at a time.
 func passMayRunBeside(sub *remote.Substrate, refusal *runRefusal) bool {
 	return refusal != nil || !runsOnePassPerRun(sub.Caps())

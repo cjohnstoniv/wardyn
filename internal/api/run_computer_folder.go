@@ -233,7 +233,7 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	var prev types.RunLocalFolderStatus
 	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
 		if rec, err := ss.RunLocalFolderStatus(rctx, runID); err == nil {
-			if rec.Back != nil && rec.Back.Error == "" {
+			if folderBroughtBack(rec) {
 				cancel()
 				return false
 			}
@@ -259,15 +259,14 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	if !ok {
 		return true
 	}
-	if rec.Back != nil && rec.Back.Error == "" {
+	if folderBroughtBack(rec) {
 		// A pass back completed between the read above and the bump: none runs again.
 		return false
 	}
 	gen := rec.Gen
 	rctx, cancel = teardownCtx(ctx)
 	defer cancel()
-	if lastPassUnsettled(prev) && prev.Resume != nil && prev.Resume.Stalled >= computerFolderStalls && s.pastOldPassBound(prev) {
-		// Past its bound, an unanswered pass that was a stall in a row of them gives the changes up.
+	if s.unansweredStallsPast(prev) {
 		errText := folderBackGivenUp("the runner did not answer for its last pass back",
 			fmt.Sprintf("%d passes in a row brought nothing back", prev.Resume.Stalled), prev.Resume.Unsynced)
 		return s.recordFolderBackAt(rctx, runID, *folder, gen, true, nil, runnerwire.FolderPass{}, errText)
@@ -315,11 +314,8 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	}
 	res, passErr, cut := out.FolderPass, out.errText, out.cut
 	next, errText := s.folderBackVerdict(ctx, run, &res, passErr, cut, qerr)
-	if !out.settled && qerr == nil && next == nil {
-		// A pass the runner did not answer for may still be running: it never stops the sandbox at its
-		// own visit. It counts as a stall, and its give-up comes past its bound (oldPassBound).
-		next = &types.FolderResume{Stalled: computerFolderStalls, Unsynced: res.Unsynced}
-		errText = passErr + "; the runner did not answer for this pass, so the sandbox is kept with its agent stopped and no egress, and the next pass waits until the runner answers for this one or about an hour has passed"
+	if !out.settled {
+		next, errText = keptUnanswered(next, errText, passErr, res.Unsynced, qerr)
 	}
 	return s.recordFolderBackAt(rctx, runID, *folder, gen, out.settled, next, res, errText)
 }
