@@ -685,6 +685,29 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 			t.Errorf("network_policy_source = %v with the daemon's own verdict, want absent", v)
 		}
 	})
+	// Between equal verdicts the older check wins, and its source goes with it: the time shown is never
+	// one cluster's check under the other's name. Both orders.
+	t.Run("equal verdicts: the older check gives the time and the source", func(t *testing.T) {
+		at := time.Now().UTC().Truncate(time.Second)
+		for _, tc := range []struct {
+			name                string
+			own, remote, wantAt time.Time
+			wantSource          bool
+		}{
+			{name: "runner older", own: at, remote: at.Add(-10 * time.Minute), wantAt: at.Add(-10 * time.Minute), wantSource: true},
+			{name: "daemon older", own: at.Add(-10 * time.Minute), remote: at, wantAt: at.Add(-10 * time.Minute)},
+		} {
+			local := runner.NetPolCheck{Verdict: runner.NetPolRefused, At: tc.own}
+			srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRecheckRunner{k8sRunner: k8sRunner{networkPolicy: true}, check: local}})
+			connectK8sRunner(t, srv, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: tc.remote})
+			body := decode(t, srv)
+			_, hasSource := body["network_policy_source"]
+			if body["network_policy"] != "refused" || body["network_policy_checked_at"] != tc.wantAt.Format(time.RFC3339) || hasSource != tc.wantSource {
+				t.Errorf("%s: network_policy = %v checked %v source %v; want refused checked %s, source from the runner %v",
+					tc.name, body["network_policy"], body["network_policy_checked_at"], body["network_policy_source"], tc.wantAt.Format(time.RFC3339), tc.wantSource)
+			}
+		}
+	})
 	t.Run("docker daemon reports a connected k8s runner's verdict", func(t *testing.T) {
 		at := time.Now().UTC().Truncate(time.Second)
 		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: &fakeRunner{}})

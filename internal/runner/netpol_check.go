@@ -44,15 +44,19 @@ func NetPolAtLeast(v, floor string) bool {
 // WorseNetPolCheck returns the worse of two checks, each keeping its own time. Between equal verdicts it
 // returns the older check, so "last confirmed" never claims more than every substrate showed.
 func WorseNetPolCheck(a, b NetPolCheck) NetPolCheck {
-	ra, rb := netPolRank[a.Verdict], netPolRank[b.Verdict]
-	switch {
-	case ra != rb:
-		if rb > ra {
-			return b
-		}
-		return a
-	case a.At.IsZero() || !b.At.IsZero() && b.At.Before(a.At):
+	if NetPolSecondWins(a, b) {
 		return b
 	}
 	return a
+}
+
+// NetPolSecondWins reports whether WorseNetPolCheck(a, b) returns b: its verdict is worse, or the
+// verdicts rank the same and b is the older check (or a has no time). A caller that must say whose
+// check won (its verdict, time and source together) asks this rather than comparing verdicts.
+func NetPolSecondWins(a, b NetPolCheck) bool {
+	ra, rb := netPolRank[a.Verdict], netPolRank[b.Verdict]
+	if ra != rb {
+		return rb > ra
+	}
+	return a.At.IsZero() || !b.At.IsZero() && b.At.Before(a.At)
 }
