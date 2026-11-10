@@ -24,6 +24,11 @@ describe("field homes (U7)", () => {
     expect(sortedKeys(FIELD_HOME)).toEqual(REGISTRY);
   });
 
+  it("homes the no-network create refusal on Tools, by reason or by the wall_preset field", () => {
+    expect(homeOfRefusal("no_network_needs_egress")).toBe("tools");
+    expect(homeOfRefusal("anything", "wall_preset")).toBe("tools");
+  });
+
   it("home a refusal by the field it names before its reason, and by its reason without one", () => {
     expect(homeOfRefusal("placement_capability", "machine_kind")).toBe("run");
     expect(homeOfRefusal("placement_capability", "harness")).toBe("harnesses");

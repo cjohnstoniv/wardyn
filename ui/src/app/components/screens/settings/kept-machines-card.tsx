@@ -20,13 +20,14 @@ import { Button, buttonVariants } from "../../ui/button";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { gbOf, KEEP_LIST as T } from "../../wardyn/copy/keep-machine";
 import { Chip } from "../../wardyn/primitives";
-import { ErrorState } from "../../wardyn/states";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { useHolderLabels, shortRunId } from "./use-holder-labels";
 import { macOf, macsOf, rowOf } from "./kept-machines-model";
 
 export function KeptMachinesCard() {
   const [data, setData] = React.useState<MyMachines | null>(null);
   const [state, setState] = React.useState<"loading" | "absent" | "failed" | "ready">("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [toDelete, setToDelete] = React.useState<KeptMachine | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
@@ -42,7 +43,10 @@ export function KeptMachinesCard() {
         setData(d);
         setState("ready");
       })
-      .catch((e) => setState(e instanceof HttpError && (e.status === 403 || e.status === 404) ? "absent" : "failed"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setState(e instanceof HttpError && (e.status === 403 || e.status === 404) ? "absent" : "failed");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -80,7 +84,7 @@ export function KeptMachinesCard() {
   return (
     <CollapsibleCard title={T.TITLE} summary={state === "ready" ? (machines.length ? T.SUMMARY(machines.length, macsOf(machines).join(", ")) : T.NONE) : undefined} testId="kept-machines-card" id="kept-machines" ref={ref} tabIndex={-1} open={open} onOpenChange={setOpen} className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]">
       {state === "failed" ? (
-        <ErrorState size="compact" title={T.LOAD_FAILED} onRetry={load} />
+        <ErrorState size="compact" title={T.LOAD_FAILED} message={loadMessage} onRetry={load} />
       ) : (
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">{T.LEDE(data?.idle_days)}</p>

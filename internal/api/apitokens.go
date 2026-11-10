@@ -84,6 +84,23 @@ func withCLISessionID(ctx context.Context, id uuid.UUID) context.Context {
 	return context.WithValue(ctx, cliSessionIDCtxKey{}, id)
 }
 
+// apiTokenKindCtxKey carries the kind of the api token that authenticated the current request.
+type apiTokenKindCtxKey struct{}
+
+// credentialBinding is the credential a decision that must outlive the request binds to: a CLI sign-in's
+// access token binds to its session alone, because a refresh replaces the token and the session lives on;
+// every other token, a cli_admin step-up included (it is never rotated and is revoked and expires on its
+// own), binds to its own id. Both are uuid.Nil on a console session or the admin token.
+func credentialBinding(ctx context.Context) (tokenID, sessionID uuid.UUID) {
+	tokenID, sessionID = apiTokenIDFromContext(ctx), cliSessionIDFromContext(ctx)
+	if kind, _ := ctx.Value(apiTokenKindCtxKey{}).(string); sessionID != uuid.Nil && kind == types.APITokenKindCLIAccess {
+		tokenID = uuid.Nil
+	} else {
+		sessionID = uuid.Nil
+	}
+	return tokenID, sessionID
+}
+
 func cliSessionIDFromContext(ctx context.Context) uuid.UUID {
 	id, _ := ctx.Value(cliSessionIDCtxKey{}).(uuid.UUID)
 	return id
@@ -159,6 +176,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		if t.CLISessionID != nil {
 			ctx = withCLISessionID(ctx, *t.CLISessionID)
 		}
+		ctx = context.WithValue(ctx, apiTokenKindCtxKey{}, t.Kind)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -681,9 +699,13 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 	}
 	// principal names the token's OWNER, which is the whole point of the row on
 	// the admin lane: the actor is the admin, the subject is someone else.
+	detail := map[string]any{"principal": revoked.Principal, "name": revoked.Name, "minted_by": revoked.MintedBy}
+	if revoked.Kind == types.APITokenKindCLIAccess && revoked.CLISessionID != nil {
+		// Revoking a CLI access token ends its whole sign-in (store.RevokeAPIToken).
+		detail["cli_session"], detail["session_ended"] = revoked.CLISessionID.String(), true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"token.revoke", revoked.ID.String(), "success",
-		mustJSON(map[string]any{"principal": revoked.Principal, "name": revoked.Name, "minted_by": revoked.MintedBy})))
+		"token.revoke", revoked.ID.String(), "success", mustJSON(detail)))
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -285,7 +285,7 @@ func (s *Server) isRunsOwnPerson(ctx context.Context, run types.AgentRun, princi
 // memberDecidesWithoutRules reports the kinds a run's owner decides with no deciders rule.
 func memberDecidesWithoutRules(ap types.ApprovalRequest) bool {
 	_, isADO := adoEscalationScope(ap)
-	return ap.Kind == types.ApprovalEgressDomain || isADO || isMCPCallRow(ap) || isHostCallRow(ap)
+	return ap.Kind == types.ApprovalEgressDomain || isADO || isExactCallRow(ap)
 }
 
 // deciderMemberGate is authorizeUserDecision's arm for a member when a rule may govern ap. handled false leaves

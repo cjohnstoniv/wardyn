@@ -4,9 +4,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 import type { SetupModelProvider, Workspace, WorkspaceProfile } from "../../lib/types";
 import { baseStatus } from "../../lib/test-fixtures";
 
@@ -59,6 +60,8 @@ import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { setField } from "../../../test/set-field";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 function renderScreen(path = "/") {
   return render(
@@ -87,6 +90,42 @@ describe("WorkspacesScreen — list columns", () => {
     listWorkspacesMock.mockReset();
   });
 
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listWorkspacesMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("reads the search text from the URL, so Back from a workspace lands on the same filtered list", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { id: "ws-1", name: "payments", kind: "repo", source: "acme/payments" }),
+      ws({}, { id: "ws-2", name: "search", kind: "repo", source: "acme/search" }),
+    ]);
+    renderScreen("/?q=pay");
+    expect(await screen.findByText("payments")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search by name or source…")).toHaveValue("pay");
+    expect(screen.queryByText("search")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments", kind: "repo", source: "acme/payments" })]);
+    render(
+      <LaggingRouter>
+        <WorkspacesScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("payments");
+    const box = screen.getByPlaceholderText("Search by name or source…");
+    // Each keystroke lands before the URL has echoed the last one; the box must keep what was typed.
+    for (const text of ["a", "ab", "abc"]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
+  });
+
   it("Workspace + Source columns: the kind icon and name in one cell, the mono sub-line in another", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments", kind: "repo", source: "acme/payments", ref: "main", status: "scanned" })]);
     renderScreen();
@@ -102,6 +141,20 @@ describe("WorkspacesScreen — list columns", () => {
     expect(label).toHaveAttribute("title", name);
     expect(label.className).toContain("truncate");
     expect(screen.getByRole("button", { name: `Workspace actions: ${name}` })).toBeInTheDocument();
+  });
+
+  it("names the actions column for assistive tech", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments" })]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+  });
+
+  it("names the search box, not only by its placeholder", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments" })]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.getByRole("textbox", { name: "Search workspaces" })).toBeInTheDocument();
   });
 
   it("each row's actions menu is named after the workspace", async () => {

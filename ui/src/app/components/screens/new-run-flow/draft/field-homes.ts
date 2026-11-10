@@ -140,10 +140,15 @@ export const DESKTOP_WINDOW_FIELD = "desktop_window";
  *  refusal of a window on the Mac names desktop_window, which the Run step sets. */
 export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = {
   machine_kind: "run", macos_base: "run", desktop_window: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review",
+  // The wall preset is chosen on Tools: a run that the No network preset cannot serve goes back there (B1).
+  wall_preset: "tools",
 };
 
+/** The create refusal for a run that needs a host while its wall preset allows none; the console has no typed reason for it. */
+export const NO_NETWORK_NEEDS_EGRESS = "no_network_needs_egress";
+
 /** A refusal's step: its field's, when the console knows that field, else its reason's. */
-export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? homeOfReason(reason);
+export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? (reason === NO_NETWORK_NEEDS_EGRESS ? "tools" : homeOfReason(reason));
 
 /** A document path's home: the longest known subpath, else its top-level field (or `inline_policy.<name>`). */
 export function homeOfPath(path: string): FieldHome | undefined {

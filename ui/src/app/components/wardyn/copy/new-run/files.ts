@@ -16,6 +16,8 @@ export const NR_FILES = {
   SIZE_LABEL: "Size",
   /** `size` carries its unit: "4 GiB" or "1000 MiB". */
   UP_TO: (size: string | number) => `Up to ${size} in this pool`,
+  /** A stored size over the cap, as a template, a run again or a pool change leaves it: the run gets the cap (A3.3). */
+  OVER_CAP: (size: string | number, cap: string | number) => `${size} is over the ${cap} cap. The run gets ${cap}.`,
   CLAMP_POOL: (size: string | number, pool: string | number) => `Clamped to ${size} by the ${pool} pool.`,
   /** pending W-11: the recommended text until the owner answers. */
   CLAMP_PROFILE: (size: string | number, profile: string | number) => `Clamped to ${size} by ${profile}.`,

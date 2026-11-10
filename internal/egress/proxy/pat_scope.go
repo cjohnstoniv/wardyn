@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -71,25 +73,19 @@ func validPATGrants(grants map[string]PATGrant) error {
 
 // patRequestRepoKey reads the repository a smart-HTTP request names out of the
 // upstream path rest ("/<repo path>/<tail>", tail being info/refs or the verb),
-// with the forge's path table, and returns its key through types.PATRepoKey, the
-// one repository-identity function. rest is the DECODED path, which is also the
+// with patGitRepo, and returns its key through types.PATRepoKey, the one
+// repository-identity function. rest is the DECODED path, which is also the
 // value forwardBrokeredGit rebuilds the upstream URL from, so the key compared
 // here and the path forwarded are one string.
 //
-// No forge canonicalises: a form the table does not list (an empty repository,
-// a Bitbucket Server path outside /scm/) is refused, never guessed at. Bitbucket
-// Server serves its repositories under /scm/<project>/<repo>, so that prefix is
-// part of the request form and not of the key.
+// No forge canonicalises: a form patGitRepo does not admit is refused, never
+// guessed at. Bitbucket Server serves its repositories under
+// [<context path>/]scm/<project>/<repo>, so what precedes <project> is part of
+// the request form and not of the key.
 func patRequestRepoKey(forge, rest, verb string) (string, bool) {
-	repo, ok := strings.CutSuffix(rest, "/"+verb)
+	repo, ok := patGitRepo(forge, rest, verb)
 	if !ok {
 		return "", false
-	}
-	repo = strings.TrimPrefix(repo, "/")
-	if forge == types.PATForgeBitbucketServer {
-		if repo, ok = strings.CutPrefix(repo, "scm/"); !ok {
-			return "", false
-		}
 	}
 	key, ok := types.PATRepoKey(forge, repo)
 	// A request names one concrete repository, never a wildcard.
@@ -97,6 +93,163 @@ func patRequestRepoKey(forge, rest, verb string) (string, bool) {
 		return "", false
 	}
 	return key, true
+}
+
+// patGitRepo judges rest ("/<repo path>/<tail>", tail the verb the caller
+// validated) against the forge's git URL form and returns the repository path
+// it names. Each forge mounts its API at a known place on the git host, so a
+// path is refused when its repository part reaches one of those mounts, under
+// any deployment prefix: whatever its last segment spells, it is a forge route
+// the PAT must not reach. The repository's own name, the last segment, is never
+// read as a mount. A doubly encoded path is refused, since a front end that
+// decodes again would read another path: any decoded "%" on the named forges,
+// whose names never hold one, and on generic a "%" before two hex digits
+// (Azure DevOps names may hold a "%", as in "100% Done").
+//
+//   - every forge but bitbucket_server: patAPIMount;
+//   - gitea also: "api" anywhere before the repository name (Gitea reserves
+//     it as an owner, so there it is the API mount under a sub-path);
+//   - generic also: "_api" (Azure DevOps). Gerrit needs no rule: with HTTP git
+//     download enabled it binds its git servlet, which takes every
+//     [a/]<project>/<git verb> path, ahead of its REST servlets (Daemon.java
+//     GitOverHttpModule before WebModule). With HTTP git off, the broker
+//     cannot clone from it at all.
+//   - bitbucket_server: exactly [<context path>/]scm/<project>/<repo>, the
+//     context path free of the server's own routes, and the repository is
+//     <project>/<repo>.
+func patGitRepo(forge, rest, verb string) (string, bool) {
+	repo, ok := strings.CutSuffix(rest, "/"+verb)
+	if forge == "" {
+		forge = types.PATForgeGeneric
+	}
+	if !ok || patDoublyEncoded(forge, repo) {
+		return "", false
+	}
+	segs := strings.Split(strings.TrimPrefix(repo, "/"), "/")
+	// No clone URL has an empty segment, and one would move a mount off its
+	// anchor ("//api/..."): refused, as is one a server reads as empty (";x").
+	if slices.ContainsFunc(segs, func(s string) bool { return patSegRead(s) == "" }) {
+		return "", false
+	}
+	repo = strings.Join(segs, "/")
+	if forge == types.PATForgeBitbucketServer {
+		return patBitbucketServerRepo(segs)
+	}
+	for i := range segs[:len(segs)-1] {
+		if patAPIMount(segs, i) ||
+			(forge == types.PATForgeGitea && patSegIs(segs[i], "api")) ||
+			(forge == types.PATForgeGeneric && patSegIs(segs[i], "_api")) {
+			return "", false
+		}
+	}
+	return repo, true
+}
+
+// patDoublyEncoded reports whether a decoded repository path still holds a
+// percent escape (patGitRepo).
+func patDoublyEncoded(forge, repo string) bool {
+	if forge != types.PATForgeGeneric {
+		return strings.ContainsRune(repo, '%')
+	}
+	for i := strings.IndexByte(repo, '%'); i >= 0; i = strings.IndexByte(repo, '%') {
+		if len(repo) > i+2 && strings.Trim(repo[i+1:i+3], "0123456789abcdefABCDEF") == "" {
+			return true
+		}
+		repo = repo[i+1:]
+	}
+	return false
+}
+
+// patGitPath reports whether patGitRepo admits rest.
+func patGitPath(forge, rest, verb string) bool {
+	_, ok := patGitRepo(forge, rest, verb)
+	return ok
+}
+
+// patAPIMount reports whether segs[i], which is not the repository's own name,
+// starts a forge API mount:
+//   - "api" first, or followed by a version (/api/v1 Gitea and Forgejo, /api/v3
+//     and /api/graphql GitHub Enterprise, /api/v4 GitLab, under a sub-path too);
+//   - "rest/<name>/<version>" (Bitbucket Server, /rest/api/1.0, /rest/git/latest);
+//   - "!api" (Bitbucket Cloud), "_apis" (Azure DevOps), "-" (GitLab's route
+//     scope; GitLab refuses it as a name at every level).
+func patAPIMount(segs []string, i int) bool {
+	s := segs[i]
+	switch {
+	case patSegIs(s, "api"):
+		return i == 0 || (i+1 < len(segs)-1 && patAPIVersion(segs[i+1]))
+	case patSegIs(s, "rest"):
+		return i+2 < len(segs)-1 && patBitbucketVersion(segs[i+2])
+	}
+	return patSegIs(s, "!api") || patSegIs(s, "_apis") || patSegIs(s, "-")
+}
+
+// patBitbucketServerRoutes are the Bitbucket Server routes that take a free
+// path after them; a context path holding one is not a context path.
+var patBitbucketServerRoutes = []string{"scm", "rest", "plugins", "projects", "users"}
+
+// patBitbucketServerRepo admits [<context path>/]scm/<project>/<repo> and returns
+// <project>/<repo>.
+func patBitbucketServerRepo(segs []string) (string, bool) {
+	n := len(segs)
+	if n < 3 || segs[n-3] != "scm" || segs[n-2] == "" || segs[n-1] == "" {
+		return "", false
+	}
+	for i, s := range segs[:n-3] {
+		if s == "" || patAPIMount(segs[:n-3], i) ||
+			slices.ContainsFunc(patBitbucketServerRoutes, func(r string) bool { return patSegIs(s, r) }) {
+			return "", false
+		}
+	}
+	return segs[n-2] + "/" + segs[n-1], true
+}
+
+// patSegIs reports whether a decoded path segment reads as word to a server
+// that drops ";" path parameters, trims trailing dots and spaces, and matches
+// routes case-insensitively, under any case mapping that lands on ASCII:
+// "ſ" (U+017F) reads as "s", "K" (U+212A) as "k", "ı" (U+0131) and "İ"
+// (U+0130) as "i".
+func patSegIs(seg, word string) bool {
+	return strings.EqualFold(strings.Map(patASCIICase, patSegRead(seg)), word)
+}
+
+// patASCIICase maps a non-ASCII rune to the ASCII letter its upper or lower
+// case is, if either is one.
+func patASCIICase(r rune) rune {
+	if r < utf8.RuneSelf {
+		return r
+	}
+	if u := unicode.ToUpper(r); u < utf8.RuneSelf {
+		return u
+	}
+	if l := unicode.ToLower(r); l < utf8.RuneSelf {
+		return l
+	}
+	return r
+}
+
+func patSegRead(seg string) string {
+	seg, _, _ = strings.Cut(seg, ";")
+	return strings.TrimRight(seg, ". ")
+}
+
+// patAPIVersion: v<digits> or graphql, as patSegIs reads a segment.
+func patAPIVersion(seg string) bool {
+	s := patSegRead(seg)
+	if strings.EqualFold(s, "graphql") {
+		return true
+	}
+	return len(s) > 1 && (s[0] == 'v' || s[0] == 'V') && strings.Trim(s[1:], "0123456789") == ""
+}
+
+// patBitbucketVersion: <digits>.<digits> or latest, as patSegIs reads a segment.
+func patBitbucketVersion(seg string) bool {
+	s := patSegRead(seg)
+	if strings.EqualFold(s, "latest") {
+		return true
+	}
+	major, minor, ok := strings.Cut(s, ".")
+	return ok && major != "" && minor != "" && strings.Trim(major+minor, "0123456789") == ""
 }
 
 // patRepoAllowed reports whether the grant's repos cover the repository the

@@ -49,7 +49,7 @@ func (b *Builder) readPinFile(ctx context.Context, imageRef string) []byte {
 	defer func() {
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), pinReadTimeout)
 		defer rmCancel()
-		_, _ = b.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true})
+		_, _ = b.cli.ContainerRemove(rmCtx, created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	}()
 	res, err := b.cli.CopyFromContainer(ctx, created.ID, client.CopyFromContainerOptions{SourcePath: pinFilePath})
 	if err != nil {

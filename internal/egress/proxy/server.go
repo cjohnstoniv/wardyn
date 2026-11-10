@@ -86,6 +86,7 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 	}
 	p.maskKey, out.maskKey = h.maskKey, h.maskKey
 	if h.engine {
+		p.engine = true
 		p.localClient = client
 		return
 	}

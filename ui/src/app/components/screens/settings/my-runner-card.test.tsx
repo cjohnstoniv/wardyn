@@ -5,6 +5,7 @@
 
 // 0.9 Your account -> My runner and My pools (packet M-RN-2, mock M-POOLS v6). The strings are written out,
 // not read from the copy modules, so a drift in them fails this suite.
+import { STATES } from "../../wardyn/states";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -201,7 +202,7 @@ describe("My runner card", () => {
     await expand(user);
     expect(
       screen.getByText(
-        "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
+        "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organisation's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("You haven't registered a runner.")).toBeInTheDocument();
@@ -237,6 +238,23 @@ describe("My runner card", () => {
     const block = screen.getByRole("heading", { name: "Add this computer" }).closest("section") as HTMLElement;
     expect(within(block).queryByText("wardyn runner setup")).toBeNull();
     expect(within(block).queryByRole("heading", { level: 5 })).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMineMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "runners_failed"));
+    const user = userEvent.setup();
+    renderCard();
+    await expand(user);
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    listMineMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+    const user = userEvent.setup();
+    renderCard();
+    await expand(user);
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("a read failure says so with a Retry and no summary", async () => {
@@ -552,7 +570,7 @@ describe("My runner card: resources and limits", () => {
     expect(screen.getByText("Runs at once: 2")).toBeInTheDocument();
     expect(screen.getByText(/Running now: 2 of 2/)).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /^CPU/ })).toHaveTextContent("4 CPUs");
-    expect(screen.getByText(/This computer reports 8 CPUs · 16 GB memory · 500 GB disk\. Your limits can't be higher\./)).toBeInTheDocument();
+    expect(screen.getByText(/This computer reports 8 CPUs · 16 GiB memory · 500 GiB disk\. Your limits can't be higher\./)).toBeInTheDocument();
   });
 
   it("Edit limits saves the whole set, and refuses a total above what the computer reports before asking the server", async () => {
@@ -564,10 +582,10 @@ describe("My runner card: resources and limits", () => {
     const dialog = await screen.findByRole("dialog", { name: "Limits for laptop-7" });
     expect(within(dialog).getByText("They are prefilled from what this computer reports, and you can lower them. Every run on it stays within them.")).toBeInTheDocument();
     expect(within(dialog).getByText("Reported: 16")).toBeInTheDocument();
-    const memory = within(dialog).getAllByRole("spinbutton", { name: "Memory (GB)" });
+    const memory = within(dialog).getAllByRole("spinbutton", { name: "Memory (GiB)" });
     setField(memory[0], "64");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(within(dialog).getAllByText("Not allowed: this computer reports 16 GB memory.").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("Not allowed: this computer reports 16 GiB memory.").length).toBeGreaterThan(0);
     expect(updateMineMock).not.toHaveBeenCalled();
     setField(memory[0], "12");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -590,7 +608,7 @@ describe("My runner card: resources and limits", () => {
     expect(screen.getByText("Every runner needs limits before it can run anything: in total, per run, and how many runs at once.")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Suggested: half of what it reports as the total (4 CPUs · 16 GB memory · 250 GB disk), 4 runs at once, and each run gets the total ÷ \"Runs at once\" (1 CPU · 4 GB memory · 62 GB disk).",
+        "Suggested: half of what it reports as the total (4 CPUs · 16 GiB memory · 250 GiB disk), 4 runs at once, and each run gets the total ÷ \"Runs at once\" (1 CPU · 4 GiB memory · 62 GiB disk).",
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Set limits for laptop-7" }));

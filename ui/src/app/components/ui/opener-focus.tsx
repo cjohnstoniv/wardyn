@@ -75,6 +75,13 @@ function recoverFocus(slot: Slot | null) {
  * the only timer is the short settle wait armed by a DOM change (or at once, if the opener is already gone), and
  * it ends in stop() or re-arms on the next change.
  */
+const liveWatches = new Set<() => void>();
+
+/** Ends every focus watch still running. The test setup calls it between tests, so no settle timer outlives the page it watched. */
+export function stopFocusWatches() {
+  for (const stop of [...liveWatches]) stop();
+}
+
 function watchLoss(opener: Element, slot: Slot | null) {
   const until = Date.now() + WATCH_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -83,6 +90,7 @@ function watchLoss(opener: Element, slot: Slot | null) {
     timer = undefined;
     observer.disconnect();
     document.removeEventListener("focusin", stop, true);
+    liveWatches.delete(stop);
   };
   const check = () => {
     timer = undefined;
@@ -111,6 +119,7 @@ function watchLoss(opener: Element, slot: Slot | null) {
   // `disabled` is watched too: a button disabled while it holds focus loses it without any node leaving the page.
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled"] });
   document.addEventListener("focusin", stop, true);
+  liveWatches.add(stop);
   if (!opener.isConnected) arm();
 }
 

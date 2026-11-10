@@ -17,7 +17,7 @@ import { stepIssues } from "../../lenses/local-issues";
 import { keepRunning, mayKeepRunning, setHealth, setPort, setProbe, setRestart } from "../../lenses/service-lens";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
-import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
+import { dropMinimum, minimumFill, refillMinimum, startAtMinimum, type MacOSMinimum } from "../../lenses/limits-lens";
 import { deleteMachine, keepMachine, nameKeptMachine, resumeMachine, startFresh } from "../../lenses/machine-lens";
 import { chooseBarrier, chooseMacOSBase, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
@@ -28,7 +28,7 @@ import { MachineKindSection } from "./machine-kind-section";
 import { KEEP_NEW_RUN } from "../../../../wardyn/copy/keep-machine";
 import { keptChoiceOf, keptReadRetry, useDropProvenMachine } from "./kept-machine-choice";
 import { useKeptMachines } from "./kept-machines-provider";
-import { useMacOSOffer } from "./macos-offer";
+import { macOSOfferOf, useMacOSOffer } from "./macos-offer";
 import { ModeSection } from "./mode-section";
 import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
@@ -98,18 +98,32 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
     edit(apply);
   };
-  const chooseKind = (kind: MachineKind) => {
+  // `min` is the minimum of the pool the kind is chosen in: picking a pool and macOS together must read the picked
+  // pool's offer, never the one the run was refused in.
+  const applyKind = (kind: MachineKind, min: MacOSMinimum | undefined, poolId?: string) => {
     const onMac = intent.machine_kind === "macos_vm";
-    if (kind === "macos_vm" && !onMac && minimum) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, minimum) } });
-    else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
+    if (kind === "macos_vm" && !onMac && min) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, min) } });
+    // Already on macOS: the pool's minimum may raise the figures again, and leaving macOS must take those back too.
+    else if (kind === "macos_vm" && onMac && min) {
+      const next = refillMinimum(intent, fill, min);
+      if (next !== fill) dispatch({ type: "guided", patch: { macosFill: next } });
+    } else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
     // The window goes with macOS (chooseMachineKind), and its cleared notice with it.
     if (kind !== "macos_vm" && draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
     if (kind !== "macos_vm" && draft.guided.windowCleared) dispatch({ type: "guided", patch: { windowCleared: undefined } });
     edit((i) => {
       const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" ? dropMinimum(i, fill) : i;
-      const next = chooseMachineKind(leaving, kind);
-      return kind === "macos_vm" && minimum ? startAtMinimum(next, minimum) : next;
+      const next = chooseMachineKind(poolId ? choosePool(leaving, poolId) : leaving, kind);
+      return kind === "macos_vm" && min ? startAtMinimum(next, min) : next;
     });
+  };
+  const chooseKind = (kind: MachineKind) => applyKind(kind, minimum);
+  // The pools, other than the chosen one, that offer macOS now: the refusal's way out (A3.4). Pool-list order, as the select's.
+  const macPools = list ? usablePools(list).filter((p) => p.availability === "available" && p.macos_vm?.offered && p.id !== chosen?.id).map((p) => ({ id: p.id, name: p.name })) : [];
+  const pickMacPool = (poolId: string) => {
+    const pool = list && usablePools(list).find((p) => p.id === poolId);
+    const picked = macOSOfferOf(pool?.macos_vm, list?.allowance?.unit_name, pool?.scope);
+    applyKind("macos_vm", picked?.ok ? { cpuMillis: picked.minCPUs * 1000, memoryMib: picked.minMemoryMiB } : undefined, poolId);
   };
 
   return (
@@ -171,6 +185,8 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
             onResume: (id) => choose((i) => resumeMachine(i, id)),
             onFresh: (fresh) => edit((i) => startFresh(i, fresh)),
           }}
+          macPools={macPools}
+          onPickMacPool={pickMacPool}
           onChoose={chooseKind}
           onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))}
         />

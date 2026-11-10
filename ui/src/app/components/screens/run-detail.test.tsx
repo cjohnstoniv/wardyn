@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { STATES } from "../wardyn/states";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
 
@@ -89,6 +90,7 @@ import { RUN_STARTUP } from "./run-status-detail";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { aheadByHours } from "../../lib/test-clock";
+import { HttpError } from "../../lib/api/core";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -140,6 +142,19 @@ function renderOwn(run: Record<string, unknown>) {
     </MemoryRouter>,
   );
 }
+
+it("a read the server worded shows its sentence, not the default line", async () => {
+  getRunMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+  render(
+    <MemoryRouter initialEntries={["/runs/run-1"]}>
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailScreen />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+  expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+});
 
 describe("RunDetailScreen — 'Run not found' names lack-of-access as a real reason", () => {
   it("mentions not having access alongside archived/deleted/stale-link", async () => {

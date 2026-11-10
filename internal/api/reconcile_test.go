@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -105,6 +107,171 @@ func TestAuditK8sNetpolIfUnenforced(t *testing.T) {
 			t.Errorf("k8s.netpol.fail fired despite a Capabilities() error: %+v", ev)
 		}
 	})
+}
+
+// TestAuditK8sNetpolChange: a re-check that changes the verdict writes one
+// "k8s.netpol.update" row, in either direction, naming both verdicts and the
+// check time; an unchanged verdict, an unreadable one and the first one read
+// write nothing.
+func TestAuditK8sNetpolChange(t *testing.T) {
+	at := time.Now().UTC().Truncate(time.Second)
+	rn := &k8sRecheckRunner{check: runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at}}
+	audit := &recRecorder{}
+	srv := New(Config{BaseCtx: testBaseCtx(t), Runner: rn, Audit: audit})
+	ctx := context.Background()
+	updates := func() []types.AuditEvent {
+		var out []types.AuditEvent
+		for _, ev := range audit.snapshot() {
+			if ev.Action == "k8s.netpol.update" {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+
+	last := srv.auditK8sNetpolIfUnenforced(ctx)
+	if last != "enforced" {
+		t.Fatalf("boot verdict %q, want enforced", last)
+	}
+	last = srv.auditK8sNetpolChange(ctx, last)
+	if n := len(updates()); n != 0 {
+		t.Fatalf("%d rows for an unchanged verdict, want none", n)
+	}
+
+	rn.check = runner.NetPolCheck{Verdict: runner.NetPolRefused, At: at.Add(10 * time.Minute)}
+	last = srv.auditK8sNetpolChange(ctx, last)
+	last = srv.auditK8sNetpolChange(ctx, last)
+	rn.check = runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at.Add(20 * time.Minute)}
+	last = srv.auditK8sNetpolChange(ctx, last)
+	rows := updates()
+	if len(rows) != 2 || last != "enforced" {
+		t.Fatalf("%d rows, last %q; want 2 (one per change) and enforced", len(rows), last)
+	}
+	for i, want := range []struct {
+		outcome, verdict, previous string
+		at                         time.Time
+	}{
+		{"failure", "refused", "enforced", at.Add(10 * time.Minute)},
+		{"success", "enforced", "refused", at.Add(20 * time.Minute)},
+	} {
+		var data struct {
+			Verdict, Previous, Driver string
+			CheckedAt                 string `json:"checked_at"`
+		}
+		if err := json.Unmarshal(rows[i].Data, &data); err != nil {
+			t.Fatalf("row %d: decode Data: %v", i, err)
+		}
+		got := struct {
+			outcome, verdict, previous string
+			at                         time.Time
+		}{rows[i].Outcome, data.Verdict, data.Previous, time.Time{}}
+		got.at, _ = time.Parse(time.RFC3339, data.CheckedAt)
+		if got != want || data.Driver != "k8s" || rows[i].RunID != nil || rows[i].ActorType != types.ActorSystem {
+			t.Errorf("row %d: %+v driver %q run %v actor %q; want %+v, k8s, nil, system", i, got, data.Driver, rows[i].RunID, rows[i].ActorType, want)
+		}
+	}
+
+	rn.capsErr = errors.New("k8s api unreachable")
+	if got := srv.auditK8sNetpolChange(ctx, "enforced"); got != "enforced" || len(updates()) != 2 {
+		t.Errorf("unreadable verdict: kept %q with %d rows, want enforced and no new row", got, len(updates()))
+	}
+	rn.capsErr = nil
+	rn.check.Verdict = runner.NetPolNotProven
+	if got := srv.auditK8sNetpolChange(ctx, ""); got != "not_proven" || len(updates()) != 2 {
+		t.Errorf("first read: %q with %d rows, want not_proven as the baseline and no new row", got, len(updates()))
+	}
+}
+
+// TestAuditRunnerNetpolChange: against the last verdict this process took from a Kubernetes runner, a
+// changed verdict writes one "k8s.netpol.update" row and the same verdict none; caps with no verdict, an
+// unknown word or no runs namespaces are not taken and keep the last verdict; a first verdict writes no
+// row when it is "enforced" and one "k8s.netpol.fail" row otherwise. Every row names the runner, and a
+// check time past the clock skew is dropped.
+func TestAuditRunnerNetpolChange(t *testing.T) {
+	audit := &recRecorder{}
+	srv := New(Config{BaseCtx: testBaseCtx(t), Runner: &fakeRunner{}, Audit: audit})
+	ctx := context.Background()
+	at := time.Now().UTC().Truncate(time.Second)
+	rows := func(action string) []types.AuditEvent {
+		var out []types.AuditEvent
+		for _, ev := range audit.snapshot() {
+			if ev.Action == action {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+	type rowData struct {
+		Verdict, Previous, Driver string
+		RunnerID                  string `json:"runner_id"`
+		CheckedAt                 string `json:"checked_at"`
+	}
+	decode := func(t *testing.T, ev types.AuditEvent) rowData {
+		t.Helper()
+		var d rowData
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatalf("decode Data: %v", err)
+		}
+		return d
+	}
+	// caps is runner id's caps event; a Kubernetes runner's names its runs namespaces.
+	caps := func(id uuid.UUID, k8s bool, check runner.NetPolCheck) {
+		t.Helper()
+		c := runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC2}, NetworkPolicyCheck: check}}
+		if k8s {
+			c.RunsNamespaces = []string{"wardyn-runs"}
+		}
+		data, err := runnerwire.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv.capsFromRunner(ctx, id, "", runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	}
+
+	a := uuid.New()
+	caps(a, true, runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at})
+	caps(a, true, runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at.Add(10 * time.Minute)})
+	if n := len(audit.snapshot()); n != 0 {
+		t.Fatalf("%d rows for a first enforced verdict and the same again, want none", n)
+	}
+	caps(a, true, runner.NetPolCheck{})                                       // no verdict: keeps enforced
+	caps(a, true, runner.NetPolCheck{Verdict: "newer-word", At: at})          // unknown: keeps enforced
+	caps(a, false, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: at}) // not a k8s runner's caps
+	if n := len(audit.snapshot()); n != 0 {
+		t.Fatalf("%d rows for caps with nothing to take, want none", n)
+	}
+	caps(a, true, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: at.Add(20 * time.Minute)})
+	up := rows("k8s.netpol.update")
+	if len(up) != 1 {
+		t.Fatalf("%d update rows after enforced, no verdict, refused; want 1", len(up))
+	}
+	d := decode(t, up[0])
+	if want := at.Add(20 * time.Minute).Format(time.RFC3339); up[0].Outcome != "failure" || d.Verdict != "refused" || d.Previous != "enforced" ||
+		d.Driver != "k8s" || d.RunnerID != a.String() || d.CheckedAt != want || up[0].RunID != nil || up[0].ActorType != types.ActorSystem {
+		t.Errorf("row %+v data %+v; want failure, refused from enforced, k8s, runner %s, checked %s, nil run, system", up[0], d, a, want)
+	}
+	caps(a, true, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: at.Add(30 * time.Minute)})
+	if n := len(rows("k8s.netpol.update")); n != 1 {
+		t.Fatalf("%d update rows after the same verdict again, want still 1", n)
+	}
+
+	b := uuid.New()
+	caps(b, true, runner.NetPolCheck{Verdict: runner.NetPolUnenforced, At: at})
+	c := uuid.New()
+	caps(c, true, runner.NetPolCheck{Verdict: runner.NetPolRefused, At: time.Now().Add(2 * runnerClockSkew)})
+	fails := rows("k8s.netpol.fail")
+	if len(fails) != 2 {
+		t.Fatalf("%d fail rows for two first verdicts that are not enforced, want 2", len(fails))
+	}
+	if d := decode(t, fails[0]); fails[0].Outcome != "failure" || d.Verdict != "unenforced" || d.RunnerID != b.String() || d.CheckedAt != at.Format(time.RFC3339) {
+		t.Errorf("first fail row %+v data %+v; want failure, unenforced, runner %s, checked %s", fails[0], d, b, at.Format(time.RFC3339))
+	}
+	if d := decode(t, fails[1]); d.Verdict != "refused" || d.RunnerID != c.String() || d.CheckedAt != "" {
+		t.Errorf("second fail row data %+v; want refused, runner %s, no check time (it was in the future)", d, c)
+	}
+	if n := len(rows("k8s.netpol.update")); n != 1 {
+		t.Errorf("%d update rows after first verdicts, want still 1", n)
+	}
 }
 
 // TestReconcileFinalize_TeardownErrorAudited covers finding N2: when the boot

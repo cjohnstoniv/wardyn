@@ -31,7 +31,7 @@ func TestOTLPSink_BearerSentOverHTTPSAndNeverInErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink.client = srv.Client()
-	body, err := encodeOTLPLogs([]types.AuditEvent{{Action: "a", Outcome: "success", Time: time.Now()}})
+	body, err := encodeOTLPLogs([]types.AuditEvent{{Action: "a", Outcome: "success", Time: time.Now()}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -293,7 +293,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
         />
         <MountMap attachments={inCardOrder(attachments, items)} size={sizeText} />
         <FilesSummary
-          tone={settled && sizeText !== undefined ? "done" : attempted ? "error" : "prompt"}
+          tone={settled && sizeText !== undefined && !size.over ? "done" : attempted ? "error" : "prompt"}
           text={sizeText === undefined ? NR_FILES.SIZE_ERROR : summaryText({
             size: sizeText,
             noExtra,

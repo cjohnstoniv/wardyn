@@ -208,6 +208,9 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.token.Get())
+	if log.Request.Relayed {
+		req.Header.Set(DecisionRelayedHeader, "1")
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return err

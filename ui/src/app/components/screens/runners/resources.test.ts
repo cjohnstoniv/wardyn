@@ -39,9 +39,9 @@ describe("a runner's resources", () => {
     expect(r.rows.cpu).toEqual({ total: 6, perRun: 2, inUse: 4, available: 2 });
     expect(r.rows.runs).toEqual({ total: 3, perRun: null, inUse: 2, available: 1 });
     expect(fmtInUse("cpu", r.rows.cpu)).toBe("4 of 6 CPUs");
-    expect(fmtInUse("mem", r.rows.mem)).toBe("8 GB of 12 GB");
+    expect(fmtInUse("mem", r.rows.mem)).toBe("8 GiB of 12 GiB");
     expect(fmtInUse("runs", r.rows.runs)).toBe("2 of 3");
-    expect(fmtAmount("disk", r.rows.disk.available)).toBe("100 GB");
+    expect(fmtAmount("disk", r.rows.disk.available)).toBe("100 GiB");
     expect(usedPct(r.rows.cpu)).toBe(67);
   });
 
@@ -50,9 +50,9 @@ describe("a runner's resources", () => {
     expect(runnerRes(null, usage(true, laptop, 0, 0, 0, 0))).toBeNull();
   });
 
-  it("writes amounts in CPUs and GB, one CPU in the singular", () => {
-    expect(amountsText({ cpu_millis: 8000, memory_mib: 16 * G, disk_mib: 500 * G })).toBe("8 CPUs · 16 GB memory · 500 GB disk");
-    expect(amountsText({ cpu_millis: 1000, memory_mib: 1536, disk_mib: G })).toBe("1 CPU · 1.5 GB memory · 1 GB disk");
+  it("writes amounts in CPUs and GiB, one CPU in the singular", () => {
+    expect(amountsText({ cpu_millis: 8000, memory_mib: 16 * G, disk_mib: 500 * G })).toBe("8 CPUs · 16 GiB memory · 500 GiB disk");
+    expect(amountsText({ cpu_millis: 1000, memory_mib: 1536, disk_mib: G })).toBe("1 CPU · 1.5 GiB memory · 1 GiB disk");
   });
 });
 
@@ -121,7 +121,7 @@ describe("membership from the runner reads", () => {
 });
 
 describe("limits setup", () => {
-  it("shares a total between runs: at least 1 CPU and 1 GB, disk in whole GB, never past the total", () => {
+  it("shares a total between runs: at least 1 CPU and 1 GiB, disk in whole GiB, never past the total", () => {
     expect(perRunShare({ cpu: 24, mem: 96, disk: 1000 }, 6)).toEqual({ cpu: 4, mem: 16, disk: 166 });
     expect(perRunShare({ cpu: 6, mem: 12, disk: 200 }, 3)).toEqual({ cpu: 2, mem: 4, disk: 66 });
     expect(perRunShare({ cpu: 2, mem: 2, disk: 3 }, 4)).toEqual({ cpu: 1, mem: 1, disk: 1 });
@@ -133,7 +133,7 @@ describe("limits setup", () => {
   it("proposes half of what the computer reports, with Runs at once about half its CPUs", () => {
     const p = proposeLimits({ cpu_millis: 8000, memory_mib: 32 * G, disk_mib: 500 * G });
     expect(p.runs_at_once).toBe(4);
-    expect(amountsText(p.total)).toBe("4 CPUs · 16 GB memory · 250 GB disk");
-    expect(amountsText(p.per_run)).toBe("1 CPU · 4 GB memory · 62 GB disk");
+    expect(amountsText(p.total)).toBe("4 CPUs · 16 GiB memory · 250 GiB disk");
+    expect(amountsText(p.per_run)).toBe("1 CPU · 4 GiB memory · 62 GiB disk");
   });
 });

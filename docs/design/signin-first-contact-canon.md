@@ -95,6 +95,7 @@ because #457 touches its neighbors).
 | — | Reused (inline JSX) | SSO control | Sign in with SSO |
 | `STATES.ERROR_TITLE` | Reused | `ErrorState` heading, every pane | Something went wrong |
 | `STATES.ERROR_DEFAULT` | Changed | `ErrorState` body, no `message` passed | Wardyn isn't answering. Try again. |
+| `STATES.ERROR_ANSWERED` | New (rc.18) | `ErrorState` body for a server answer that gave no real reason (a plain 500 or no reason) | Couldn't load this. Try again. |
 | `STATES.RETRY` | Reused | `ErrorState` retry button | Retry |
 
 **`USER_TYPE_AMBIGUOUS` / `USER_TYPE_UNKNOWN`** were added by #778 (0.8 user types), transcribed

@@ -74,11 +74,11 @@ type Config struct {
 	// organisation's GitHub App (workspace_branches.go). Nil: GitHub
 	// repositories answer the branch list with no_credential.
 	GitHubBranches BranchLister
-	// Audit records control-plane-originated audit events. The recorder handed in
-	// is the shared masking → spooling → store/fanout chain (see cmd/wardynd), so a
-	// failed durable write is masked, logged loudly, and spooled to the local
-	// append-only fallback for EVERY writer — the API layer no longer spools itself.
-	Audit audit.Recorder
+	// Audit records control-plane audit events through the shared masking → spooling → store/fanout chain
+	// (cmd/wardynd), so a failed durable write is masked, logged and spooled for EVERY writer. AuditStrict (WARDYN_AUDIT_STRICT, nil = off)
+	// masks and stores a covered change's audit.intent.record row with no spool, before its handler runs (audit_strict.go).
+	Audit       audit.Recorder
+	AuditStrict audit.Recorder
 	// RunnerAuditPrepare applies the serving audit mask/seal policy before the
 	// spool receipt and audit row commit in one database transaction.
 	RunnerAuditPrepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)

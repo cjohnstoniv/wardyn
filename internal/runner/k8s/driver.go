@@ -111,6 +111,10 @@ type Config struct {
 	// agents.x-k8s.io/v1beta1 Sandbox makes the agent pod, held by a scheduling gate until Wardyn has
 	// read it back (agentsandbox.go). Off builds no dynamic client and takes none of its branches.
 	AgentSandbox bool
+	// AgentSandboxTemplate is WARDYN_K8S_AGENT_SANDBOX_TEMPLATE (experimental, needs AgentSandbox): the
+	// SandboxTemplate in each runs namespace whose prefixed annotations the agent pod takes; placement stays Wardyn's
+	// (agentsandbox_template.go). Empty takes none.
+	AgentSandboxTemplate string
 	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the
 	// read-back passed and before the gate is removed, while the pod is still unscheduled. Nil in
 	// production; an error refuses the run.
@@ -207,8 +211,9 @@ type Driver struct {
 	// — the egress canary's dial target.
 	apiserverHostPort string
 
-	// netPolEnforced is the boot-time canary's verdict, fixed at construction
-	// (re-running per Classes()/healthz call would create pods on every poll).
+	// netPolEnforced is the boot-time canary's verdict, fixed at construction:
+	// what New decided boot on. The live verdict, which the re-check loop
+	// replaces, is netPol below; Classes, creates and the image check read that one.
 	// netPolOptedOut records WHY it may be false despite success
 	// (AllowUnenforcedNetPol), diagnostics only.
 	netPolEnforced bool
@@ -219,6 +224,13 @@ type Driver struct {
 	// risk is not proof, and ClassSupport.NetworkPolicy must never overclaim.
 	// Surfaced as ClassSupport.NetworkPolicyAcknowledged instead.
 	netPolAcked bool
+	// netPol is the live NetworkPolicy verdict per runs namespace, seeded by
+	// the boot canary and replaced whole by each re-check (canary_recheck.go).
+	netPol atomic.Pointer[netPolVerdict]
+	// netPolChanged is OnNetPolChange's hook, nil until one is set.
+	netPolChanged atomic.Pointer[func()]
+	// stopRecheck stops the re-check loop and waits for it; nil until it starts.
+	stopRecheck func()
 
 	// linuxVM is set by EnableLinuxVM; unset, every non-container kind is refused.
 	linuxVM atomic.Bool
@@ -271,7 +283,12 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newWithClient(context.Background(), cs, restCfg, cfg)
+	d, err := newWithClient(context.Background(), cs, restCfg, cfg)
+	if err != nil {
+		return nil, err
+	}
+	d.startCanaryRecheck()
+	return d, nil
 }
 
 // clientQPS and clientBurst replace client-go's 5/10 default, which one
@@ -339,8 +356,10 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 	// The canary runs in every namespace: each is where some run's NetworkPolicies must hold.
 	// NetworkPolicy reads as enforced only when every namespace proved it.
 	enforced := true
+	live := &netPolVerdict{byNS: make(map[string]nsVerdict, len(cfg.Namespaces))}
 	for _, ns := range cfg.Namespaces {
 		verdict, cerr := d.runEgressCanary(ctx, ns)
+		live.byNS[ns] = nsVerdict{state: stateOf(verdict), verdictAt: d.now()}
 		switch verdict {
 		case canaryIndeterminate:
 			return nil, fmt.Errorf("k8s: refusing to boot: %w", d.inNamespace(ns, cerr))
@@ -357,6 +376,7 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 		}
 	}
 	d.netPolEnforced = enforced
+	d.netPol.Store(live)
 	if cfg.AgentSandbox && !d.netPolEnforced {
 		return nil, errAgentSandboxNetPol
 	}
@@ -402,7 +422,8 @@ func (d *Driver) Name() string { return driverName }
 
 // Classes reports the Confinement Classes this substrate can enforce. CC1 is
 // unconditional: reaching this point already proves the canary passed or the
-// operator opted out (see New). CC2/CC3 each require an explicit
+// operator opted out (see New); a later failed re-check refuses creates instead
+// (netPolRefusal) and reads here as NetworkPolicy false. CC2/CC3 each require an explicit
 // WARDYN_CONFINEMENT_MAP pin resolving to a RuntimeClass that exists and
 // whose .Handler passes the class's floor guard.
 func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
@@ -430,15 +451,18 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		}
 	}
 
+	netPol := d.netPol.Load()
 	return substrate.ClassSupport{
 		Classes:          classes,
 		Resolved:         resolved,
 		StructuralEgress: false, // this substrate proves L1, never L0 (see package doc)
-		NetworkPolicy:    d.netPolEnforced,
+		NetworkPolicy:    netPol.enforced(),
 		// The operator accepted an ambient-default-deny-shaped canary failure
-		// rather than the canary proving enforcement (netPolAcked). Never true
-		// at the same time as NetworkPolicy — mutually exclusive canary outcomes.
-		NetworkPolicyAcknowledged: d.netPolAcked,
+		// rather than the canary proving enforcement. Never true at the same
+		// time as NetworkPolicy — mutually exclusive canary outcomes.
+		NetworkPolicyAcknowledged: netPol.acknowledged(),
+		// The live verdict for health, with the time of the check that produced it.
+		NetworkPolicyCheck: d.netPolCheck(),
 		// Exec (exec.go's recordCmd) wraps the ephemeral-container argv with
 		// wardyn-rec via the masked brokered proxy upload — the only path
 		// this substrate supports, since mounts (and shared-volume delivery)

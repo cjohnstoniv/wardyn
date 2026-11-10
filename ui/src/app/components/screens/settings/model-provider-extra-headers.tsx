@@ -36,12 +36,14 @@ export function ExtraHeaders({
           <Input
             className="min-w-0 flex-1 font-mono"
             placeholder={PROVIDER_EDITOR.HEADER_NAME_PLACEHOLDER}
+            aria-label={`Header ${i + 1} name`}
             value={row.name}
             onChange={(e) => edit(i, { name: e.target.value })}
           />
           <Input
             className="min-w-0 flex-1 font-mono"
             placeholder={row.placeholder ?? PROVIDER_EDITOR.HEADER_VALUE_PLACEHOLDER}
+            aria-label={`Header ${i + 1} value`}
             value={row.value}
             onChange={(e) => edit(i, { value: e.target.value })}
           />

@@ -82,7 +82,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (1) Per-run internal network and (2) the wardyn-proxy sidecar on it.
-	intNetID, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -126,11 +126,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// Split literal: the envdoc guard scans raw file bytes for the quote-delimited var name alone.
 		env = append(env, "WARDYN_RECORDING"+"=1")
 	}
+	agentLabels := withRecordLabel(d.labels(spec.RunID, componentAgent, spec.Labels), record)
+	if spec.Resources.DiskMiB > 0 && spec.Resources.DiskMiBSoft {
+		agentLabels[labelDiskSoft] = "true" // read by a revive: see checkKeptVolumesUnderCap
+	}
 	agentCfg := &container.Config{
 		Image:    spec.Image,
 		Hostname: "agent",
 		Env:      env,
-		Labels:   withRecordLabel(d.labels(spec.RunID, componentAgent, spec.Labels), record),
+		Labels:   agentLabels,
 		Tty:      true, // keep a TTY so Exec can attach a PTY for recording.
 		Cmd:      idleCmd,
 	}
@@ -153,6 +157,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	agentHost.Mounts = append(agentHost.Mounts, agentMounts...)
 	if d.cfg.TrustedCAFile != "" {
 		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{Type: mount.TypeBind, Source: d.cfg.TrustedCAFile, Target: runner.TrustedCAMountPath, ReadOnly: true})
+	}
+	// Before the exec / exec-less split, so both paths answer an image VOLUME the disk limit cannot reach.
+	if err := d.checkImageVolumesUnderCap(ctx, spec.Image, spec.Resources, agentHost, info); err != nil {
+		return fail(err)
 	}
 
 	agentNetCfg := &network.NetworkingConfig{
@@ -180,7 +188,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg, managed: spec.ManagedFiles}
 		d.mu.Unlock()
 		d.keepExecOutput(name, spec.ExecOutput)
-		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced}, nil
+		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced, ProxyConfigSHA256: proxySHA, ProxyAddr: proxyIP}, nil
 	}
 
 	agentResp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
@@ -193,7 +201,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("docker: create agent: %w", err))
 	}
 	rollback = append(rollback, func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(context.Background(), agentResp.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	})
 
 	// Fail closed if the daemon DISCARDED a resource limit we requested (a cgroup controller
@@ -229,22 +237,25 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// driver makes on Ref, but teardown's not-found fallback (runIDFromAgentName) can only
 		// recover a run id from THIS form — a raw daemon-assigned ID would leak the proxy sidecar +
 		// per-run network whenever the agent container was already gone at teardown.
-		Ref:           agentContainerName(spec.RunID),
-		Driver:        driverName,
-		EnforcedClass: enforced,
+		Ref:               agentContainerName(spec.RunID),
+		Driver:            driverName,
+		EnforcedClass:     enforced,
+		ProxyConfigSHA256: proxySHA,
+		ProxyAddr:         proxyIP,
 	}, nil
 }
 
 // runNetworkAndProxy brings up a run's per-run internal network and its wardyn-proxy sidecar, for a
-// container and a VM alike. It returns the network's id, the proxy's IP on it, and the undo that
-// removes both; on an error it has already undone them.
-func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP string, undo func(), err error) {
+// container and a VM alike. It returns the network's id, the proxy's IP on it, the hash of the
+// config written to the proxy (startProxy), and the undo that removes both; on an error it has
+// already undone them.
+func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
 	// (1) Per-run internal network. Internal=true takes away its route off the host, and the isolated
 	// gateway mode leaves no address on the host's side (run_network_shape.go): together these uphold
 	// L0 even though the agent is *connected* to it.
 	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels))
 	if err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 	// rollback collects teardown steps to run on any later failure.
 	var rollback []func()
@@ -254,9 +265,9 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 			rollback[i]()
 		}
 	}
-	fail := func(err error) (string, string, func(), error) {
+	fail := func(err error) (string, string, string, func(), error) {
 		undo()
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 
 	// (2) wardyn-proxy sidecar: attached to the per-run internal network now; the control-plane-facing
@@ -268,7 +279,7 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg, spec.MachineKind.IsVM())
 	var proxyID string
 	if err == nil {
-		proxyID, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
+		proxyID, proxySHA, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
 			proxyEnvs, prep, netip.Addr{})
 	}
 	if err != nil {
@@ -301,7 +312,7 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 	if proxyIP == "" {
 		return fail(fmt.Errorf("docker: proxy has no IP on the per-run internal network %q", internalNetName(spec.RunID)))
 	}
-	return intNetID, proxyIP, undo, nil
+	return intNetID, proxyIP, proxySHA, undo, nil
 }
 
 // createRunNetwork creates runID's internal network with a user-specified IPv4 subnet and returns
@@ -602,7 +613,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 			d.teardownVM(ctx, agentRef, id)
 		}
 	}()
-	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, agentRef, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove agent: %w", err)
 	}
 
@@ -642,7 +653,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	}
 	// A drive seed left by a crash between its create and its removal still
 	// holds that drive's volume.
-	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
 	return nil
@@ -686,7 +697,7 @@ func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI,
 			d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
 			continue
 		}
-		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 			errs = append(errs, fmt.Errorf("docker: remove leftover drive seed %s: %w", c.ID, err))
 			continue
 		}
