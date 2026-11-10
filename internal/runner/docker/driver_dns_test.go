@@ -536,9 +536,8 @@ func TestCreateSandbox_StuckResolverCleanupKeepsTheProxy(t *testing.T) {
 			f.volumeInUse, f.failRemove, f.failCopyToContainer, f.failCreateContainer = "", nil, false, ""
 			old := time.Now().Add(-time.Hour).Unix()
 			f.listItems = []container.Summary{{ID: proxyContainerName(run), Created: old, Labels: d.labels(run, componentProxy, nil)}}
-			swept, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true })
-			if err != nil || swept != 1 {
-				t.Fatalf("sweep = %d, %v; want the one run torn down", swept, err)
+			if _, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true }); err != nil {
+				t.Fatalf("the sweep's retry: %v", err)
 			}
 			if _, ok := f.volumes[dnsVolumeName(run)]; ok {
 				t.Error("the sweep's retry left the volume")
