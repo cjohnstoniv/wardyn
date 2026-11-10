@@ -27,7 +27,7 @@ const GRANTS = [grant("b1", REF.id, "platform-team"), grant("b2", SCRATCH.id, "d
 
 type Sent = { puts: { id: string; body: Record<string, unknown> }[]; posts: Record<string, unknown>[]; grants: Record<string, unknown>[]; deletes: string[] };
 
-/** GET /drives, the site config's switch, and the writes, answered the way a server with team drives would. */
+/** GET /drives (which carries the switch as team_drives), the site config's switch, and the writes, answered the way a server with team drives would. */
 async function stubAdmin(page: Page, opts: { on: boolean }): Promise<Sent> {
   const sent: Sent = { puts: [], posts: [], grants: [], deletes: [] };
   await page.route("**/api/v1/workspace-providers", (route) =>
@@ -39,7 +39,7 @@ async function stubAdmin(page: Page, opts: { on: boolean }): Promise<Sent> {
       sent.posts.push(body);
       return route.fulfill({ status: 201, json: { id: "a3333333-3333-4333-8333-333333333333", ...body, created_at: WHEN, updated_at: WHEN } });
     }
-    return route.fulfill({ json: { drives: [REF, SCRATCH], grants: GRANTS, grant_total: GRANTS.length, host_roots_configured: true, runner_target: "docker", disabled: false } });
+    return route.fulfill({ json: { drives: [REF, SCRATCH], grants: GRANTS, grant_total: GRANTS.length, host_roots_configured: true, runner_target: "docker", disabled: false, team_drives: opts.on } });
   });
   await page.route("**/api/v1/drives/grants", (route) => {
     sent.grants.push(route.request().postDataJSON() as Record<string, unknown>);

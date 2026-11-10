@@ -10,11 +10,15 @@ import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { stopFocusWatches } from "../app/components/ui/opener-focus";
 
-afterEach(() => {
+afterEach(async () => {
   // A focus watch's settle timer must not fire after its page is gone: once the file's DOM is torn down it
   // reads `document` and throws an uncaught error that fails the whole run.
   stopFocusWatches();
   cleanup();
+  // cleanup() can unmount an open dialog, and Radix runs its focus restore in a setTimeout(0) after unmount,
+  // which starts a new watch. Let that run, then stop it too.
+  if (!vi.isFakeTimers()) await new Promise((resolve) => setTimeout(resolve, 0));
+  stopFocusWatches();
 });
 
 // jsdom doesn't implement a handful of DOM APIs that Radix UI primitives
