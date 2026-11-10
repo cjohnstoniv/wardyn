@@ -132,11 +132,11 @@ test.describe("Admin Drives: team drives", () => {
     const HIDDEN = { ...GRANTS[2], id: "b9", subject: "hidden-team", priority: 7, enabled: false, members_can_write: true };
     await page.route("**/api/v1/drives", (route: Route) =>
       route.request().method() === "GET"
-        ? route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1]], grant_total: 3, host_roots_configured: true, runner_target: "docker", disabled: false } })
+        ? route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1]], grant_total: 3, host_roots_configured: true, runner_target: "docker", disabled: false, team_drives: true } })
         : route.fallback(),
     );
     await page.route(/\/api\/v1\/drives\?limit=1000/, (route) =>
-      route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1], HIDDEN, GRANTS[2]], grant_total: 3, host_roots_configured: true, runner_target: "docker", disabled: false } }),
+      route.fulfill({ json: { drives: [CUT], grants: [GRANTS[1], HIDDEN, GRANTS[2]], grant_total: 3, host_roots_configured: true, runner_target: "docker", disabled: false, team_drives: true } }),
     );
     await openDrives(page);
     await driveRow(page, CUT.name).getByRole("button", { name: `${DRIVES.EDIT} ${CUT.name}` }).click();
@@ -165,7 +165,7 @@ test.describe("Admin Drives: team drives", () => {
     const MIXED = [GRANTS[1], { ...GRANTS[2], members_can_write: false }];
     await page.route("**/api/v1/drives", (route: Route) =>
       route.request().method() === "GET"
-        ? route.fulfill({ json: { drives: [SCRATCH], grants: MIXED, grant_total: 2, host_roots_configured: true, runner_target: "docker", disabled: false } })
+        ? route.fulfill({ json: { drives: [SCRATCH], grants: MIXED, grant_total: 2, host_roots_configured: true, runner_target: "docker", disabled: false, team_drives: true } })
         : route.fallback(),
     );
     await openDrives(page);
