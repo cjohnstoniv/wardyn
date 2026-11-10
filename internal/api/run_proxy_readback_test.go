@@ -34,8 +34,9 @@ type memProxyStarts struct {
 	// lineage is the run's token lineage as agent_runs holds it: current jti, previous jti, renewed at.
 	lineage func(uuid.UUID) (string, string, time.Time)
 	// failReports is how many more ReportProxyStart calls fail, as a database blip would; failAnswers
-	// the same for AnswerProxyStart.
-	failReports, failAnswers int
+	// the same for AnswerProxyStart; commitThenFailAnswers how many more apply and then fail, as a
+	// lost commit acknowledgement would.
+	failReports, failAnswers, commitThenFailAnswers int
 }
 
 func newMemProxyStarts() *memProxyStarts {
@@ -134,6 +135,10 @@ func (m *memProxyStarts) AnswerProxyStart(_ context.Context, runID uuid.UUID, ge
 		if g < gen && p.State == types.ProxyStartPending {
 			p.State = types.ProxyStartSuperseded
 		}
+	}
+	if m.commitThenFailAnswers > 0 {
+		m.commitThenFailAnswers--
+		return store.ProxyStartChange{}, errors.New("commit acknowledgement lost")
 	}
 	return ch, nil
 }
