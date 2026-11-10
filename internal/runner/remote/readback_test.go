@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package remote
+package remote_test
 
 import (
 	"strings"
