@@ -8,6 +8,7 @@ import {
   canDecideApproval,
   decisionArgs,
   isHeld,
+  isHostCallRequest,
   isKubeCallRequest,
   isMCPCallRequest,
   type ApprovalKind,
@@ -251,5 +252,31 @@ describe("canDecideApproval on a held kubectl write", () => {
   it("does not offer decide to someone else", () => {
     expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: kubeScope, decidable: false })).toBe(false);
     expect(canDecideApproval(false, "tool_call", { grant_id: "g1", requested_scope: kubeScope })).toBe(false);
+  });
+});
+
+// A held host request is a call_sha256 and a host with no cluster (WIRE.md); an MCP call and a kubectl write are not.
+describe("isHostCallRequest", () => {
+  const key = "ab".repeat(32);
+  const host = { kind: "tool_call" as const, grant_id: undefined,
+    requested_scope: { host: "api.example.com", method: "POST", path: "/v1/refunds", call_sha256: key, hold_seconds: 90 } };
+  const mcp = { kind: "tool_call" as const, grant_id: undefined, requested_scope: { tool: "mcp__jira__x", mcp_server: "jira", mcp_host: "jira.example.com", call_sha256: key } };
+  const kube = { kind: "tool_call" as const, grant_id: undefined,
+    requested_scope: { cluster: "k8s.example.com", namespace: "team-a", method: "PATCH", path: "/apis/apps/v1/x", call_sha256: key } };
+  it("reads a host call row and no other kind of row as one", () => {
+    expect(isHostCallRequest(host)).toBe(true);
+    expect(isHostCallRequest(mcp)).toBe(false);
+    expect(isHostCallRequest(kube)).toBe(false);
+    expect(isHostCallRequest({ ...host, grant_id: "g1" })).toBe(false);
+    expect(isHostCallRequest({ ...host, kind: "egress_domain" as never })).toBe(false);
+    expect(isHostCallRequest({ ...host, requested_scope: { ...host.requested_scope, call_sha256: "" } })).toBe(false);
+  });
+  it("is never an MCP call or a kubectl write", () => {
+    expect(isMCPCallRequest(host)).toBe(false);
+    expect(isKubeCallRequest(host)).toBe(false);
+  });
+  it("is one the run's owner may decide, the server's per-row verdict leading", () => {
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: host.requested_scope, decidable: true })).toBe(true);
+    expect(canDecideApproval(false, "tool_call", { grant_id: undefined, requested_scope: host.requested_scope, decidable: false })).toBe(false);
   });
 });

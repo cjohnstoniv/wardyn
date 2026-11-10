@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import {
   canDecideApproval,
   isMCPCallRequest,
+  isHostCallRequest,
   decisionArgs,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
@@ -34,6 +35,7 @@ import {
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "./push-content-card";
 import { McpCallCard } from "./mcp-call-card";
+import { HostCallCard } from "./host-call-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
@@ -559,6 +561,21 @@ export function LiveApprovals({
         if (isMCPCallRequest(a) && a.state === "PENDING") {
           return (
             <McpCallCard
+              key={a.id}
+              item={a}
+              canDecide={canDecide(a)}
+              run={run}
+              busy={busy === a.id ? busyAction : null}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
+            />
+          );
+        }
+        // One held request to a rule-held host: its own card, which shows the whole host, method and path and says the
+        // approval lasts the run (the strip's plain row clips a long title and offers a bare Approve).
+        if (isHostCallRequest(a) && a.state === "PENDING") {
+          return (
+            <HostCallCard
               key={a.id}
               item={a}
               canDecide={canDecide(a)}

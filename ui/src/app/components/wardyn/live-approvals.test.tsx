@@ -11,6 +11,7 @@ import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "./copy";
 import { aheadByHours } from "../../lib/test-clock";
+import { HOST_CALL_CARD } from "./copy/files-review";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -880,5 +881,31 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     render(<LiveApprovals runId="r1" run={many} />);
     expect(await screen.findByText("Reach registry.npmjs.org")).toBeInTheDocument();
     expect(screen.queryByText(/Asked by/)).toBeNull();
+  });
+
+  it("a held host request renders the host call card, whole host and run-scope note, not the generic row", async () => {
+    const host = "api.payments.example.com";
+    const path = "/v1/" + "refunds/".repeat(9) + "xxxx"; // 80 chars: the generic row's 72-char title would clip the host away
+    expect(path).toHaveLength(80);
+    listApprovalsMock.mockResolvedValue([
+      pending({
+        id: "h1",
+        kind: "tool_call",
+        requested_scope: { host, method: "POST", path, call_sha256: "7ab4c1e09d3f".padEnd(64, "0") },
+      }),
+    ]);
+    render(
+      <OperatorProvider operator securityOperator principal="dana@acme.example">
+        <LiveApprovals runId="r1" />
+      </OperatorProvider>,
+    );
+    const card = await screen.findByTestId("host-call-card");
+    expect(screen.queryByTestId("live-approval-row")).toBeNull();
+    expect(within(card).getAllByRole("definition").map((d) => d.textContent)).toEqual([host, "POST", path]);
+    expect(card).toHaveTextContent(HOST_CALL_CARD.WHAT("POST", path, host));
+    expect(within(card).getByRole("button", { name: HOST_CALL_CARD.APPROVE })).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /^Approve$/ })).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: HOST_CALL_CARD.APPROVE }));
+    expect(approveMock).toHaveBeenCalledWith("h1", "approved live");
   });
 });

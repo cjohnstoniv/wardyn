@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The words of two approval cards: one reviewed file download (wardyn/file-download-card.tsx) and one held kubectl
-// write (wardyn/kube-call-card.tsx). The strings they share with the MCP call card (the Once chip, Approve once,
+// The words of three approval cards: one reviewed file download (wardyn/file-download-card.tsx), one held kubectl
+// write (wardyn/kube-call-card.tsx) and one held host request (wardyn/host-call-card.tsx). The strings they share with the MCP call card (the Once chip, Approve once,
 // Deny, the call fingerprint, the deny note) stay in copy/approvals.ts and copy/deciders-inbox.ts.
 
 export const FILE_DOWNLOAD_CARD = {
@@ -41,4 +41,20 @@ export const KUBE_CALL_CARD = {
   HELD_EXPIRED: "No longer waiting. Approving lets the next identical request through, once.",
   NO_TEXT: "This server did not send the request's exact body, so Approve is off. Deny stays available.",
   LIST_TITLE: (method: string, ns: string) => `kubectl ${method} in ${ns}`,
+} as const;
+
+// HC-1 (rc.18 mock verdicts): the held host-rule request. Approving covers the method and path on the host for the
+// rest of the run, so the card says that, not "once".
+export const HOST_CALL_CARD = {
+  TITLE: "Approve requests to one host",
+  FIELD_HOST: "Host",
+  FIELD_METHOD: "Method",
+  FIELD_PATH: "Path",
+  WHAT: (method: string, path: string, host: string) => `allowing ${method} requests to ${path} on ${host} for the rest of this run.`,
+  BLAST: "This covers any query or body sent with this host, method and path. Other policy rules still apply.",
+  APPROVE: "Approve for this run",
+  DENY_NOTE: "Refuses this method and path on this host for the rest of the run.",
+  HELD_NOTE: "If the request is still waiting, approving lets it proceed when all other rules allow it.",
+  HELD_EXPIRED: "No longer waiting. This approval covers retries with the same host, method and path for the rest of the run. Other policy rules still apply.",
+  LIST_TITLE: (method: string, path: string, host: string) => `${method} ${path} on ${host}`,
 } as const;
