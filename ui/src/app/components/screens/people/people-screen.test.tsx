@@ -49,6 +49,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { PeopleScreen } from "./people-screen";
 import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
 import { setField } from "../../../../test/set-field";
+import { STATES } from "../../wardyn/states";
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const HOUR = 3_600_000;
@@ -100,6 +101,13 @@ beforeEach(() => {
 });
 
 describe("the people table", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("shows the heading, lead and each person's state and holdings", async () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: "People", level: 1 })).toBeInTheDocument();

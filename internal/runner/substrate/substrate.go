@@ -34,6 +34,9 @@ type ClassSupport struct {
 	NetworkPolicy             bool                              // L1, true only once a boot-time canary confirms enforcement
 	NetworkPolicyAcknowledged bool                              // an OPERATOR accepted a canary failure; never a substitute for NetworkPolicy=true
 	SessionRecording          bool                              // wardyn-rec PTY recording support
+	// NetworkPolicyCheck is the NetworkPolicy canary's live verdict (the worst across runs namespaces)
+	// and the time of the check that produced it; zero on a substrate with no canary.
+	NetworkPolicyCheck runner.NetPolCheck
 	// RecordPerRun says the substrate records each run as its SandboxSpec.Record says, within
 	// SessionRecording. A runner that predates it records by its own setting whatever the org asks,
 	// so the org treats it as one that does not record on its word (TargetFacts.Records).

@@ -35,6 +35,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: (...a: unknown[]) =
 import { HttpError } from "../../lib/api/core";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { AuditScreen } from "./audit";
+import { STATES } from "../wardyn/states";
 
 function status(over: Partial<AuditRetentionStatus> = {}): AuditRetentionStatus {
   return {
@@ -189,6 +190,13 @@ describe("Audit → Retention", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/months of partitions ready$/)).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getRetentionMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    await openRetention();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("a failed read is an error with a retry, not an empty card", async () => {

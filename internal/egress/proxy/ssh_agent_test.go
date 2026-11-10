@@ -248,6 +248,45 @@ func TestBrokerMint_SSHKeyAnswerWithheld(t *testing.T) {
 	}
 }
 
+// A mint answer the relay cannot read whole never reaches the sandbox, even
+// in part: a private key can come before the fields that name it an ssh_key.
+// Cut short (a broken connection), over the size cap, or undecodable, it is a
+// deny with none of the key's bytes in the answer.
+func TestBrokerMint_PartialAnswerFailsClosed(t *testing.T) {
+	const key = "SENTINEL-PRIVATE-KEY"
+	head := `{"kind":"ssh_key","token":"` + key + `","jti":`
+	for _, tc := range []struct {
+		name  string
+		serve func(w http.ResponseWriter)
+	}{
+		{"connection drops mid-answer", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Length", "4096")
+			_, _ = io.WriteString(w, head)
+			w.(http.Flusher).Flush()
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+		}},
+		{"over the size cap", func(w http.ResponseWriter) {
+			_, _ = io.WriteString(w, `{"kind":"git_pat","token":"`+key+`","pad":"`+strings.Repeat("x", maxBrokeredBody)+`"}`)
+		}},
+		{"undecodable 200", func(w http.ResponseWriter) { _, _ = io.WriteString(w, head) }},
+		{"no kind", func(w http.ResponseWriter) { _, _ = io.WriteString(w, `{"token":"`+key+`"}`) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { tc.serve(w) }))
+			t.Cleanup(cp.Close)
+			p, buf, _ := sshAgentProxy(t, uuid.New(), "", "", func(o *Options) { o.Dial = redirectDial(upstreamAddr(cp)) })
+			rec := residentMintCall(t, p, uuid.New())
+			if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), key) {
+				t.Fatalf("answer %d %q, want a refusal with no key bytes", rec.Code, rec.Body.String())
+			}
+			if d := lastDecision(t, buf); d.Decision != egress.Deny || d.RuleSource != ruleSourceMint {
+				t.Fatalf("decision = %+v, want a mint deny", d)
+			}
+		})
+	}
+}
+
 // A grant that is not an ssh_key gets no agent and no key; a grant a
 // broker mints is refused before any mint.
 func TestSSHAgent_RefusesOtherGrants(t *testing.T) {

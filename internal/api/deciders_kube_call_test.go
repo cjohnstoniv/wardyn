@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -57,4 +58,22 @@ func TestKubeCallDecidersRuleDropsOwner(t *testing.T) {
 	held := g.kubeHold()
 	g.wantStatus("an mcp_call rule's unit admin", g.decide(dcMember(t, dcAdmin), held, "deny", ""), http.StatusNotFound, reasonApprovalNotFound, held)
 	g.wantStatus("owner under an mcp_call rule", g.decide(dcMember(t, dcOwner), held, "deny", ""), http.StatusOK, "", held)
+}
+
+// A kube_call rule that names unit admins and leaves second_human off still takes the write from the run's
+// owner: the second-human gate is not what stops them. Approve and deny both answer 403 not_a_decider, the
+// row stays PENDING, the list does not offer it to them, and a unit admin decides it.
+func TestKubeCallDecidersRuleDropsOwnerWithoutSecondHuman(t *testing.T) {
+	f := newDCFix(t)
+	f.st.setRules(f.root.ID, dcRule(types.DeciderKindKubeCall, types.DeciderUnitAdmins))
+	ap := f.kubeHold()
+	f.wantStatus("owner approve", f.decide(dcMember(t, dcOwner), ap, "approve", ""), http.StatusForbidden, "not_a_decider", ap)
+	f.wantStatus("owner deny", f.decide(dcMember(t, dcOwner), ap, "deny", ""), http.StatusForbidden, "not_a_decider", ap)
+	if ids := f.inboxIDs(dcMember(t, dcOwner)); slices.Contains(ids, ap.ID.String()) {
+		t.Errorf("the owner's decidable list holds the write the rule took from them: %v", ids)
+	}
+	if ids := f.inboxIDs(dcMember(t, dcAdmin)); !slices.Contains(ids, ap.ID.String()) {
+		t.Errorf("the unit admin's decidable list lacks the write: %v", ids)
+	}
+	f.wantStatus("unit admin", f.decide(dcMember(t, dcAdmin), ap, "approve", ""), http.StatusOK, "", ap)
 }

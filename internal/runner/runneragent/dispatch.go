@@ -503,6 +503,10 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		if err != nil {
 			return nil, err
 		}
+		if hashed, ok := proxy.(runner.ProxyReviverHashed); ok {
+			sum, err := hashed.ReplaceProxyHashed(ctx, ref, cfg)
+			return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+		}
 		return nil, proxy.ReplaceProxy(ctx, ref, cfg)
 	default:
 		return nil, runnerwire.Refuse("unknown runner method")

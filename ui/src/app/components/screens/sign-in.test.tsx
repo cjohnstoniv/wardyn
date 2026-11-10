@@ -676,3 +676,50 @@ describe("SignIn — no env var names, no 'Please' (#457)", () => {
     }
   });
 });
+
+// A failed token marks the field invalid and ties the hint and the error to it;
+// the card sits in a <main> landmark.
+describe("SignIn — the token field and the page landmark", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("wraps the card in a main landmark", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderSignIn();
+    await screen.findByLabelText(/admin token/i);
+    expect(screen.getByRole("main")).toContainElement(screen.getByRole("heading", { level: 1 }));
+  });
+
+  it("marks the token field invalid and describes it by the hint and the error after a rejected token", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 401, statusText: "Unauthorized" })),
+    );
+    renderSignIn();
+    const input = await screen.findByLabelText(/admin token/i);
+    expect(input).not.toHaveAttribute("aria-invalid");
+    expect(input).toHaveAccessibleDescription(SIGNIN.TOKEN_HINT);
+    await userEvent.type(input, "badtoken");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const alert = await screen.findByRole("alert");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    const ids = (input.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(ids).toContain(alert.id);
+    expect(input).toHaveAccessibleDescription(
+      new RegExp(`${SIGNIN.TOKEN_HINT.slice(0, 20)}.*rejected`, "is"),
+    );
+  });
+
+  it("does not mark the token field invalid when the failure is not about the token", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    renderSignIn();
+    const input = await screen.findByLabelText(/admin token/i);
+    await userEvent.type(input, "goodtoken");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(SIGNIN.UNREACHABLE_ERROR);
+    expect(input).not.toHaveAttribute("aria-invalid");
+    expect((input.getAttribute("aria-describedby") ?? "").split(" ")).not.toContain(alert.id);
+  });
+});

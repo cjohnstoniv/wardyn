@@ -204,16 +204,16 @@ func (s *Server) cliSessionEnded(sess store.CLISessionRow, now time.Time) string
 
 // handleCLISessionRefresh is POST /api/v1/cli/sessions/{id}/refresh, anonymous: authenticated by the
 // session secret and the device proof, rate-limited per client address and per session. The proof is
-// checked first, so nothing about the session changes for a caller without the device key.
+// checked first, so nothing about the session changes for a caller without the device key, and the
+// session's own bucket is spent only by a caller who holds it.
 func (s *Server) handleCLISessionRefresh(w http.ResponseWriter, r *http.Request) {
 	now := s.cfg.Now().UTC()
 	id, ok := parseIDParam(w, r, "id", "session")
 	if !ok {
 		return
 	}
-	if !s.cliRefreshPeerLimiter.allow(peerKey(r.RemoteAddr), now) || !s.cliRefreshSessionLimiter.allow(id.String(), now) {
-		w.Header().Set("Retry-After", "60")
-		writeErrorReason(w, http.StatusTooManyRequests, reasonCLISignInRateLimited, "too many refreshes; retry later")
+	if !s.cliRefreshPeerLimiter.allow(peerKey(r.RemoteAddr), now) {
+		cliRefreshRateLimited(w)
 		return
 	}
 	var req types.CLISessionRefreshRequest
@@ -234,6 +234,12 @@ func (s *Server) handleCLISessionRefresh(w http.ResponseWriter, r *http.Request)
 		cliSessionInvalid(w)
 		return
 	}
+	// The per-session bucket is charged once the device proof holds: the session id is not a secret, so a
+	// caller who only knows it must not be able to spend the bucket the real CLI refreshes under.
+	if !s.cliRefreshSessionLimiter.allow(id.String(), now) {
+		cliRefreshRateLimited(w)
+		return
+	}
 	if reason := s.cliSessionEnded(sess, now); reason != "" {
 		s.refuseRefresh(w, r, sess, reason, now)
 		return
@@ -246,6 +252,12 @@ func (s *Server) handleCLISessionRefresh(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.rotateCLISession(w, r, sess, now)
+}
+
+// cliRefreshRateLimited is the refresh's 429.
+func cliRefreshRateLimited(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "60")
+	writeErrorReason(w, http.StatusTooManyRequests, reasonCLISignInRateLimited, "too many refreshes; retry later")
 }
 
 // refuseRefresh ends sess for reason when that is an end reason it does not carry yet, writes the

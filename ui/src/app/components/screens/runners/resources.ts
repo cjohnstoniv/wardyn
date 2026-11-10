@@ -7,7 +7,7 @@
 // the biggest run it can take), In use and Available for CPU, memory, disk and runs. Every number is the
 // server's: In use and Available come from usage, never from a subtraction here, and a pool's figures are
 // the sums of its members' the way the server's own pool capacity adds them. Display units are CPUs and
-// GB (the wire's MiB over 1024), one decimal at most.
+// GiB (the wire's MiB over 1024), one decimal at most.
 
 import { BARRIER_LABEL } from "../../../lib/runner-pool-refusals";
 import type { RemoteRunnerView, RunnerPool, RunnerPoolLimits, RunnerPoolMemberView, RunnerPoolRunType } from "../../../lib/types/runner-pools";

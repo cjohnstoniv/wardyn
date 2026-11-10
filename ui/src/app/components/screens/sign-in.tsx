@@ -291,7 +291,7 @@ export function SignIn({
         )}
       </Button>
 
-      <div className="relative w-full max-w-[400px]">
+      <main className="relative w-full max-w-[400px]">
         {/* #1125: a brand's logo (or monogram) and product name; unbranded,
             exactly the shield and "Wardyn" as before. */}
         <BrandSlot
@@ -434,9 +434,13 @@ export function SignIn({
                   }}
                   className="pl-9 font-mono"
                   autoComplete="off"
+                  aria-invalid={error === SIGNIN.TOKEN_REJECTED ? true : undefined}
+                  aria-describedby={error === SIGNIN.TOKEN_REJECTED ? "token-hint token-error" : "token-hint"}
                 />
               </div>
-              <p className="text-xs text-muted-foreground">{SIGNIN.TOKEN_HINT}</p>
+              <p id="token-hint" className="text-xs text-muted-foreground">
+                {SIGNIN.TOKEN_HINT}
+              </p>
               <label className="mt-1 flex items-start gap-2 text-xs text-muted-foreground">
                 <Checkbox
                   checked={remember}
@@ -471,6 +475,7 @@ export function SignIn({
 
           {error && (
             <div
+              id="token-error"
               role="alert"
               className={`mt-3 ${NOTE_BOX} border-danger/30 bg-danger-subtle text-danger`}
             >
@@ -482,7 +487,7 @@ export function SignIn({
             <SignInHelp text={help.text} url={help.url} />
           )}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

@@ -520,13 +520,18 @@ export function HostProxyTab({
               type="button"
               disabled={!seeded}
               className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              aria-expanded={disclosureOpen}
+              aria-controls="corp-proxy-secret-panel"
               onClick={() => setDisclosureOpen((o) => !o)}
             >
-              <ChevronDown className={cn("size-3.5 transition-transform", !disclosureOpen && "-rotate-90")} />
+              <ChevronDown
+                aria-hidden="true"
+                className={cn("size-3.5 transition-transform", !disclosureOpen && "-rotate-90")}
+              />
               Use a stored secret instead
             </button>
             {disclosureOpen && (
-              <>
+              <div id="corp-proxy-secret-panel" className="space-y-2.5">
                 <div className="flex items-end gap-2">
                   <Field label="Secret name" htmlFor="corp-proxy-secret" className="flex-1">
                     <Input
@@ -559,7 +564,7 @@ export function HostProxyTab({
                     Enter a URL instead
                   </button>
                 </div>
-              </>
+              </div>
             )}
           </div>
         ) : (
@@ -567,12 +572,13 @@ export function HostProxyTab({
             type="button"
             disabled={!seeded}
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            aria-expanded={false}
             onClick={() => {
               setUseSecret(true);
               setDisclosureOpen(true);
             }}
           >
-            <ChevronDown className="size-3.5 -rotate-90" />
+            <ChevronDown aria-hidden="true" className="size-3.5 -rotate-90" />
             Use a stored secret instead
           </button>
         )}

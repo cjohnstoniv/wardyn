@@ -34,7 +34,7 @@ import { getErrorMessage } from "../../lib/format";
 import { grantsWrite, scopeRepos } from "../../lib/grant-sentence";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { ReasonDialog } from "../wardyn/reason-dialog";
@@ -335,6 +335,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const [decidedLongest, setDecidedLongest] = React.useState(0);
   // The decided history is fetched when the Decided tab is open, not on every visit to the page.
   const [decidedStatus, setDecidedStatus] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
+  const [decidedMessage, setDecidedMessage] = React.useState<string | undefined>();
+  const [pendingMessage, setPendingMessage] = React.useState<string | undefined>();
   // The list is asked for in the view the page is in, the scope the nav badge counts: the User view is
   // the person's own runs' approvals, the Admin view everyone's.
   const view = useConsoleMode();
@@ -477,7 +479,10 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     setDecidedStatus((st) => (st === "ready" ? st : "loading"));
     fetchDecided()
       .then(() => setDecidedStatus("ready"))
-      .catch(() => setDecidedStatus((st) => (st === "ready" ? st : "error")));
+      .catch((e) => {
+        setDecidedMessage(failureSentence(e));
+        setDecidedStatus((st) => (st === "ready" ? st : "error"));
+      });
   }, [fetchDecided]);
   // A view switch keeps this screen mounted: the other view's decided rows are not "ready" for this one.
   React.useEffect(() => setDecidedStatus("idle"), [view]);
@@ -508,7 +513,10 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     setStatus("loading");
     fetchPending()
       .then(() => setStatus("ready"))
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setPendingMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, [fetchPending]);
   React.useEffect(load, [load]);
 
@@ -747,7 +755,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         </div>
       ) : shown === "PENDING" && status === "error" ? (
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState onRetry={load} />
+          <ErrorState message={pendingMessage} onRetry={load} />
         </div>
       ) : shown === "PENDING" ? (
         pendingItems.length === 0 ? (
@@ -770,7 +778,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         )
       ) : decidedStatus === "error" ? (
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState onRetry={loadDecided} />
+          <ErrorState message={decidedMessage} onRetry={loadDecided} />
         </div>
       ) : decidedStatus !== "ready" ? (
         <div className="rounded-xl border border-border bg-card">

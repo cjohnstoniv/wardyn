@@ -49,6 +49,12 @@ describe("ExtraHeaders", () => {
     expect(rows()).toEqual([{ name: "", value: "" }]);
   });
 
+  it("names each row's name and value fields by their position", () => {
+    render(<Harness start={[{ name: "a", value: "1" }, { name: "b", value: "2" }]} />);
+    expect(screen.getByRole("textbox", { name: "Header 1 name" })).toHaveValue("a");
+    expect(screen.getByRole("textbox", { name: "Header 2 value" })).toHaveValue("2");
+  });
+
   it("at eight rows Add header is disabled, with At most 8 headers. beside it; removing one lifts it", async () => {
     const user = userEvent.setup();
     render(<Harness start={eight()} />);

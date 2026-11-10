@@ -43,6 +43,8 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import type { MeCapabilities } from "../../lib/types";
 import { setField } from "../../../test/set-field";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 function renderScreen() {
   return render(
@@ -71,6 +73,13 @@ beforeEach(() => {
 });
 
 describe("SshKeysPane — empty state", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listKeysMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("shows the empty-state copy and an Add key affordance", async () => {
     listKeysMock.mockResolvedValue([]);
     renderScreen();
@@ -127,6 +136,12 @@ describe("SshKeysPane — list + remove", () => {
     renderScreen();
     await screen.findByText("laptop");
     expect(screen.getByText("SHA256:abc/def")).toBeInTheDocument();
+  });
+
+  it("names the actions column for assistive tech", async () => {
+    renderScreen();
+    await screen.findByText("laptop");
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
   });
 
   it("removes a key after confirm, and toasts success", async () => {

@@ -4,6 +4,7 @@
  */
 
 // KM-4: Your settings, Your kept machines. Each test names the board frame it draws.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -216,6 +217,19 @@ describe("Your kept machines", () => {
     listMock.mockRejectedValueOnce(new HttpError(500, "boom"));
     const card = await mount();
     expect(within(card).getByText(T.LOAD_FAILED)).toBeInTheDocument();
+  });
+
+  it("a load the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "kept_machine_list_failed"));
+    const card = await mount();
+    expect(within(card).getByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(within(card).queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    listMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+    const card = await mount();
+    expect(within(card).getByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("the link from a run's Machine tile opens the card and focuses it once the list is drawn, and a refresh does not reopen it", async () => {

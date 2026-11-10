@@ -21,7 +21,7 @@ import { readPATScope } from "../../../lib/git-pat-scope";
 import { asFirstUseMode } from "../../../lib/types";
 import type { ConfinementClass, RunPolicyHostMarks, RunPolicySpec, ToolRule } from "../../../lib/types";
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
-import { POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
+import { IP_LITERALS, POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
 import { pushesLines, toolRulesTail } from "./policy-facts";
 import { WALL_PRESETS } from "../copy/wall-presets";
 
@@ -202,6 +202,18 @@ function summarize(
   }
   const blocked = entries(take("denied_domains", asStrings) ?? [], "denied_domains");
   if (blocked.length > 0) network.push(row(SUMMARY.blockedHosts, blocked, "denied_domains"));
+  // Shown only when the document names it: an older document that omits it gets no row, never an invented "off".
+  // The text describes the setting; a removed value is a struck entry, not a claim about the policy now.
+  const ipLiterals = take("refuse_ip_literals", asBool);
+  if (ipLiterals !== undefined) {
+    const line = (on: boolean | string) => (on === true || on === "true" ? IP_LITERALS.on : IP_LITERALS.off);
+    network.push(
+      row(IP_LITERALS.label, [
+        text(line(ipLiterals), { mark: marks?.of("refuse_ip_literals", String(ipLiterals)) }),
+        ...(marks?.removed("refuse_ip_literals") ?? []).filter((v) => v !== String(ipLiterals)).map((v) => text(line(v), { mark: "removed" as const })),
+      ], "refuse_ip_literals"),
+    );
+  }
   // The wire still accepts the legacy boolean here.
   const firstUse = take("first_use_approval", (v) => (typeof v === "string" || typeof v === "boolean" ? v : undefined));
   // The hold is read whether or not the policy names a mode: it shows under the

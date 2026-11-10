@@ -67,8 +67,9 @@ func (s *Server) attachAuthorityLookupBound() time.Duration {
 // caller (runUngoverned) or an operator-owned run (refuseNoTicketAttach).
 //
 //   - Ticket lane: what redemption asked (ticketAuthority), against the ticket's own issue time and
-//     sequence, and the run's entry rule (a service identity's sponsor still its sponsor since the
-//     ticket's authority time). The ticket's 30-second redemption window is not the terminal's lifetime; with
+//     sequence, the personal token or CLI session the ticket was minted under (still live: a revoke, an
+//     expiry or a sign-out of it ends the socket), and the run's entry rule (a service identity's sponsor
+//     still its sponsor since the ticket's authority time). The ticket's 30-second redemption window is not the terminal's lifetime; with
 //     RoleStampTTL set the socket ends at the ticket's issue time plus it, and when the handshake also
 //     carries the same person's session cookie, at that cookie's deadline too.
 //   - Session cookie lane: the cookie's owner check as the OIDC middleware asks it (identity, authority
@@ -89,7 +90,8 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 			}
 		}
 		superAdmin := ta.role == oidc.RoleAdmin
-		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() && superAdmin && !s.cfg.GovernAdminRuns {
+		bound := ta.tokenID != uuid.Nil || ta.cliSessionID != uuid.Nil
+		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() && superAdmin && !s.cfg.GovernAdminRuns && !bound {
 			return nil
 		}
 		return func(lctx context.Context) error {

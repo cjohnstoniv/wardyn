@@ -269,7 +269,14 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	// carries, not the pre-claim (nil) one it read before MarkRunEnded.
 	run.LostAt, run.LostReason = &now, types.LostEnded
 	data := map[string]any{"ends_at": run.EndsAt}
-	if s.endKeepsRun(run) {
+	// A target known not to keep an ended sandbox is not asked to; the run is stopped instead. Known
+	// here means an online runner or a local executor: for an offline runner the facts are unknown,
+	// and its substrate answers the end itself (ErrEndUnsupported once the runner said it cannot keep).
+	keeps, known := s.endKeepsRunTarget(ctx, run)
+	if known && !keeps && s.endKeepsRun(run) {
+		data["end_error"] = runner.ErrEndUnsupported.Error()
+	}
+	if keeps || !known {
 		wipeFailed, err := s.endSandbox(ctx, run)
 		if !errors.Is(err, runner.ErrEndUnsupported) {
 			// Cancel/revoke only once the run is sure to be kept: on
@@ -300,11 +307,11 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", data)
 }
 
-// endKeepsRun is whether endRun tries to keep run past its end, its files kept
-// for the grace: the runner can end a sandbox, there is a grace, and the run
-// has a sandbox. A router whose substrate for the run cannot keep one answers
-// only at the end itself (runner.ErrEndUnsupported); a warning ahead of the end
-// asks endKeepsRunTarget.
+// endKeepsRun is whether endRun may keep run past its end, its files kept for
+// the grace: the runner can end a sandbox, there is a grace, and the run has a
+// sandbox. A router whose target for the run cannot keep one is told apart by
+// endKeepsRunTarget, which endRun and the warning ahead of the end ask; when no
+// fact settles it, the end itself answers (runner.ErrEndUnsupported).
 func (s *Server) endKeepsRun(run types.AgentRun) bool {
 	_, canKeep := s.cfg.Runner.(runner.SandboxEnder)
 	return canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != ""

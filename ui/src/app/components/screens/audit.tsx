@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   ScrollText,
   Search,
@@ -50,7 +50,8 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
@@ -104,6 +105,7 @@ const KIND_META: Record<EventKind, { label: string; Icon: React.ElementType }> =
 
 // Display order for the Event facet — matches how an operator scans severity:
 // network -> execution -> credentials -> human review -> everything else -> kill.
+const ACTOR_TYPES: ActorType[] = ["human", "agent", "system", "service"];
 const KIND_ORDER: EventKind[] = ["egress", "tool", "credentials", "approvals", "lifecycle", "enforcement"];
 
 function eventKind(e: AuditEvent): EventKind {
@@ -208,24 +210,36 @@ export function AuditScreen() {
   const view = useConsoleMode();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
   // W25-W25.2-3: the run filter lives in the URL (?run_id=), not component
   // state. A member's ONLY reachable trail is a run they own (the server 200s
   // an empty list for any unfiltered /audit query), so the filter has to be
   // reachable from outside this screen — run-detail's "open full Audit" link
   // carries the run into it. Deep-linkable and survives a reload for free.
-  const [searchParams, setSearchParams] = useSearchParams();
+  // The search text and the Event/Actor facets live there too (q, kind, actor), so Back from a row lands on the
+  // same filtered list. Opening a run is a drill-in: it pushes an entry, and Back removes it.
+  const [searchParams, setFilters] = useUrlFilters();
   const runFilter = searchParams.get("run_id") ?? "";
   const setRunFilter = React.useCallback(
-    (id: string) => setSearchParams(id ? { run_id: id } : {}, { replace: true }),
-    [setSearchParams],
+    (id: string) => setFilters({ run_id: id }, { push: id !== "" && id !== runFilter }),
+    [setFilters, runFilter],
   );
+  const query = searchParams.get("q") ?? "";
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   // The Retention tab (mock packet M4) is the security tier's; everyone else
   // has the feed alone.
   const [tab, setTab] = React.useState<"events" | "retention">("events");
   const showRetention = securityOperator && tab === "retention";
-  const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
-  const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
+  const kindParam = searchParams.get("kind") ?? "";
+  const urlKind: EventKind | "all" = (KIND_ORDER as string[]).includes(kindParam) ? (kindParam as EventKind) : "all";
+  // What load reads, so a change of kind (or of the router's setter, which follows the URL) does not reload.
+  const dropKindRef = React.useRef({ urlKind, setFilters });
+  React.useEffect(() => {
+    dropKindRef.current = { urlKind, setFilters };
+  }, [urlKind, setFilters]);
+  const setKindFilter = (k: EventKind | "all") => setFilters({ kind: k === "all" ? "" : k });
+  const actorParam = searchParams.get("actor") ?? "";
+  const actorFilter: ActorType | "all" = ACTOR_TYPES.includes(actorParam as ActorType) ? (actorParam as ActorType) : "all";
+  const setActorFilter = (a: ActorType | "all") => setFilters({ actor: a === "all" ? "" : a });
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
 
   // #3036: run titles for the rows' run references, read once from the runs list. A failed or partial read only
@@ -273,10 +287,27 @@ export function AuditScreen() {
     void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
     // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
     // investigating: ask for its newest page.
+    // Resolves with the list it set, or null when a newer read superseded it.
     return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then((list) => {
-      if (eventsRequestId.current === requestId) setEvents(list);
+      if (eventsRequestId.current !== requestId) return null;
+      setEvents(list);
+      return list;
     });
   }, [runFilter]);
+  // A read that answers after the screen is gone is superseded: it must not write the URL from a screen that has left.
+  React.useEffect(
+    () => () => {
+      eventsRequestId.current++;
+    },
+    [],
+  );
+  // The kind in the URL, dropped when the list a read just answered with lacks it. Called from a load and from a
+  // poll tick, on the list that read set (null: superseded or unmounted, so nothing is judged). A kind that
+  // leaves the window must not stay in the URL to narrow the list again when a later tick brings it back.
+  const dropAbsentKind = (list: AuditEvent[] | null) => {
+    const { urlKind: kind, setFilters: drop } = dropKindRef.current;
+    if (list && kind !== "all" && !list.some((e) => eventKind(e) === kind)) drop({ kind: "" });
+  };
 
   // Whether the LAST read actually answered. `status` cannot carry this: the
   // live tail deliberately keeps the last good view on a failed tick and so
@@ -285,14 +316,19 @@ export function AuditScreen() {
   // (CONSOLE-RULES §10 — a result verb needs a real result behind it).
   const [pollStale, setPollStale] = React.useState(false);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
     fetchEvents()
-      .then(() => {
+      .then((list) => {
         setPollStale(false);
         setStatus("ready");
+        dropAbsentKind(list);
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, [fetchEvents]);
   React.useEffect(load, [load]);
 
@@ -303,7 +339,10 @@ export function AuditScreen() {
   // interval would otherwise be overtaken by the next tick and dropped by the request-id guard above, every time.
   const tick = React.useCallback(() => {
     return fetchEvents()
-      .then(() => setPollStale(false))
+      .then((list) => {
+        setPollStale(false);
+        dropAbsentKind(list);
+      })
       .catch(() => {
         /* transient poll failure — keep the last good view and retry next
            tick, but stop asserting the trail is live while it is not. */
@@ -361,13 +400,13 @@ export function AuditScreen() {
   // The Event facet's own SelectItem list is `KIND_ORDER.filter((k) =>
   // presentKinds.has(k))` — when the loaded window narrows (a run_id drill-in
   // whose authoritative trail lacks the selected kind) that item unmounts
-  // while `kindFilter` still points at it, leaving the trigger blank over a
-  // filter that now matches nothing. Fall back to "all" the moment the
-  // selected kind is no longer present; an append-only poll tick only ever
-  // GROWS presentKinds, so this never fires on one.
-  React.useEffect(() => {
-    if (kindFilter !== "all" && !presentKinds.has(kindFilter)) setKindFilter("all");
-  }, [presentKinds, kindFilter]);
+  // while the URL still names it, leaving the trigger blank over a filter that
+  // now matches nothing. So the kind in force is "all" once the loaded window
+  // lacks it. It is derived, not written back to the URL: on Back or Forward
+  // the events still belong to the previous filter for one render, and a write
+  // from that render would drop a kind the entry being returned to carries.
+  // Not before the first answer: a kind from the URL is not absent from a window that has not loaded.
+  const kindFilter: EventKind | "all" = status === "ready" && urlKind !== "all" && !presentKinds.has(urlKind) ? "all" : urlKind;
 
   // Query / kind / actor are sub-filters applied over the loaded window. The
   // run_id filter is enforced server-side (above), so it is not re-applied here.
@@ -392,12 +431,7 @@ export function AuditScreen() {
 
   const noFiltersActive = !query && kindFilter === "all" && actorFilter === "all" && !runFilter;
 
-  const clearFilters = () => {
-    setQuery("");
-    setKindFilter("all");
-    setActorFilter("all");
-    setRunFilter("");
-  };
+  const clearFilters = () => setFilters({ q: "", kind: "", actor: "", run_id: "" });
 
   return (
     <PageContainer width="list">
@@ -429,7 +463,7 @@ export function AuditScreen() {
           <Input
             aria-label="Search events"
             placeholder="Search events, domains, run IDs…"
-            value={query}
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
           />
@@ -525,7 +559,7 @@ export function AuditScreen() {
         </div>
       ) : status === "error" ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         </div>
       ) : filtered.length === 0 ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
@@ -781,7 +815,7 @@ function EventRow({
   // Below sm the row is up to three lines: time, actor, icon and outcome, then the description, then the run reference (#3036).
   // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
-    <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 sm:flex-nowrap">
+    <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 xl:flex-nowrap">
       <span
         className="w-[84px] shrink-0 font-mono text-xs text-muted-foreground"
         title={absoluteTime(event.time)}
@@ -789,7 +823,7 @@ function EventRow({
         {clockTime(event.time)}
       </span>
       {/* Fixed-width cells so the description and the run chip start at the same x on every row (#2852). */}
-      <span data-testid="audit-actor-cell" className="w-[88px] shrink-0">
+      <span data-testid="audit-actor-cell" className="w-[96px] shrink-0">
         {hasNoCaller(event) ? <NoCaller /> : <ActorTypeChip type={event.actor_type} />}
       </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -831,7 +865,7 @@ function EventRow({
         </span>
       )}
       {event.run_id && plainRunRef && (
-        <span className="order-3 max-w-[14rem] shrink-0 text-sm text-muted-foreground sm:order-none">
+        <span className="order-3 max-w-[14rem] shrink-0 text-sm text-muted-foreground sm:order-none sm:min-w-0 sm:shrink">
           Run <Mono title={event.run_id}>{shortRunId(event.run_id)}</Mono>
         </span>
       )}
@@ -840,7 +874,7 @@ function EventRow({
           runId={event.run_id}
           title={runTitles.get(event.run_id)}
           onOpen={() => onDrill(event.run_id!)}
-          className="order-3 max-w-[14rem] shrink-0 sm:order-none"
+          className="order-3 max-w-[14rem] shrink-0 sm:order-none sm:shrink"
         />
       )}
       <div data-testid="audit-outcome-cell" className="order-1 ml-auto w-[72px] shrink-0 sm:order-none sm:ml-0">

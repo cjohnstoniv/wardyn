@@ -275,11 +275,11 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     const stored = page.getByTestId("provider-row-github");
     await stored.getByRole("button", { name: "Disconnect" }).click();
     const confirm = page.getByRole("alertdialog");
-    await expect(confirm.getByText(/git-pat-github-com/)).toBeVisible();
+    await expect(confirm.getByRole("heading", { name: "Disconnect Access token for github.com?" })).toBeVisible();
     await confirm.getByRole("button", { name: "Cancel" }).click();
     await expect(stored.getByText(/Stored as/)).toBeVisible();
     await stored.getByRole("button", { name: "Disconnect" }).click();
-    await page.getByRole("alertdialog").getByRole("button", { name: "Delete credential" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect" }).click();
     await expect(page.getByTestId("provider-row-github").getByLabel("Access token")).toBeVisible();
   });
 

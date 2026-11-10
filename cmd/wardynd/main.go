@@ -349,6 +349,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer closeRunner(run) // after the server drains, before the pool closes
 
 	// The gated AWS SSO endpoint test hatch — see resolveAWSSSOEndpointOverride.
 	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
@@ -418,6 +419,7 @@ func run() error {
 		GitHubRulesets: gh,
 		GitHubBranches: gh,
 		Audit:          maskedRec,
+		AuditStrict:    strictAuditRecorder(*f.auditStrict, pool, fan, maskReg, sealSrc, maskScopes),
 		RunnerAuditPrepare: func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 			return prepareRunnerAudit(ctx, ev, maskingRecorder{reg: maskReg, scope: maskScopes}, sealSrc)
 		},
@@ -889,6 +891,14 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 		slog.String("app_key_secret", secretGitHubAppKey),
 	)
 	return gh
+}
+
+// closeRunner stops the runner's background work, such as the k8s canary re-check loop, when the
+// runner holds any (an io.Closer: the orchestrator). A nil runner ("none") has none.
+func closeRunner(run runner.Runner) {
+	if c, ok := run.(io.Closer); ok {
+		_ = c.Close()
+	}
 }
 
 // buildRunner sets the runner's default sandbox and proxy limits and its request ratio from the flags,

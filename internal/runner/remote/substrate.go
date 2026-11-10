@@ -116,16 +116,17 @@ func New(runnerID string, t Transport, opts Options) *Substrate {
 }
 
 var (
-	_ substrate.Substrate    = (*Substrate)(nil)
-	_ runner.SandboxEnder    = (*Substrate)(nil)
-	_ runner.ProxyStopper    = (*Substrate)(nil)
-	_ runner.ProxyReviver    = (*Substrate)(nil)
-	_ runner.SandboxStarter  = (*Substrate)(nil)
-	_ runner.Selftester      = (*Substrate)(nil)
-	_ runner.LocalAttacher   = (*Substrate)(nil)
-	_ runner.SubstrateProber = (*Substrate)(nil)
-	_ runner.DriveProber     = (*Substrate)(nil)
-	_ runner.OutputRecoverer = (*Substrate)(nil)
+	_ substrate.Substrate       = (*Substrate)(nil)
+	_ runner.SandboxEnder       = (*Substrate)(nil)
+	_ runner.ProxyStopper       = (*Substrate)(nil)
+	_ runner.ProxyReviver       = (*Substrate)(nil)
+	_ runner.ProxyReviverHashed = (*Substrate)(nil)
+	_ runner.SandboxStarter     = (*Substrate)(nil)
+	_ runner.Selftester         = (*Substrate)(nil)
+	_ runner.LocalAttacher      = (*Substrate)(nil)
+	_ runner.SubstrateProber    = (*Substrate)(nil)
+	_ runner.DriveProber        = (*Substrate)(nil)
+	_ runner.OutputRecoverer    = (*Substrate)(nil)
 )
 
 // Name is "runner:<id>".
@@ -489,16 +490,37 @@ func (s *Substrate) macOSVMDisks(ctx context.Context, reports []runner.MacOSVMDi
 	}
 }
 
+// StopSandbox queued for an offline runner is an end, which keeps the stopped sandbox, or a kill on a
+// runner that said it cannot keep one: such a runner refuses an end, and on it a stop deletes anyway.
 func (s *Substrate) StopSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodStop, types.RunnerActionEnd, ref)
+	kind := types.RunnerActionEnd
+	if s.endsUnkept() {
+		kind = types.RunnerActionKill
+	}
+	return s.teardown(ctx, runnerwire.MethodStop, kind, ref)
 }
 
 func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 	return s.teardown(ctx, runnerwire.MethodKill, types.RunnerActionKill, ref)
 }
 
+// EndSandbox answers runner.ErrEndUnsupported for a runner that said it cannot keep an ended sandbox,
+// online or not, so no end is queued that the runner can only refuse.
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
+	if s.endsUnkept() {
+		if err := s.own(ref); err != nil {
+			return err
+		}
+		return runner.ErrEndUnsupported
+	}
 	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+}
+
+// endsUnkept is whether the runner's last caps, kept across a link drop, said its substrate cannot keep
+// an ended sandbox. Before any caps it is false, as for a runner older than 0.9.4.
+func (s *Substrate) endsUnkept() bool {
+	c, ok := s.Caps()
+	return ok && c.EndsUnkept
 }
 
 // vmKind is the machine kind ref was created with here, "" when this substrate did not create it.
@@ -530,13 +552,22 @@ func (s *Substrate) CanReplaceProxy(ctx context.Context, ref string) error {
 // ReplaceProxy hands the org's stored, already-stripped proxy config to the
 // runner, which re-applies its resident values from its keystore.
 func (s *Substrate) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
+	_, err := s.ReplaceProxyHashed(ctx, ref, cfgJSON)
+	return err
+}
+
+// ReplaceProxyHashed is ReplaceProxy, answering the runner's hash of the bytes its new proxy was
+// handed (runner.ProxyReviverHashed); empty from a runner that predates it.
+func (s *Substrate) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
 	if err := s.own(ref); err != nil {
-		return err
+		return "", err
 	}
 	if err := s.checkRevivedModelList(cfgJSON); err != nil {
-		return err
+		return "", err
 	}
-	return s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, nil)
+	var res runnerwire.ReplaceProxyResult
+	err := s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, &res)
+	return res.ConfigSHA256, err
 }
 
 // checkRevivedModelList refuses, before anything is sent, a revived config that limits the run's

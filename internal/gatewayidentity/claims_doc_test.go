@@ -55,7 +55,7 @@ func TestAIGatewayDocClaimTable(t *testing.T) {
 	if len(slices.Compact(slices.Clone(documented))) != len(documented) {
 		t.Errorf("the claim table names a claim twice: %v", documented)
 	}
-	for _, want := range []string{tokenFormat, "experimental until 0.11"} {
+	for _, want := range []string{"`" + tokenFormat + "`", "Compatibility"} {
 		if !strings.Contains(strings.ToLower(section), strings.ToLower(want)) {
 			t.Errorf("the claim section does not say %q", want)
 		}

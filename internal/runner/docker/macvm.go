@@ -466,7 +466,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	// The run's network and proxy are what the start hands the VM (MacOSStarting), so a failure here is
 	// the start's, said before any clone began.
 	failed = runner.MacOSStartFailed
-	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec)
 	if err != nil {
 		return fail(err)
 	}
@@ -572,7 +572,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	d.keepExecOutput(ref, spec.ExecOutput)
 	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
 		KeychainTrust: macKeychainTrust(res), DesktopForcedViewOnly: st.DesktopForcedViewOnly, KeptScrub: keptBootScrub(spec, res),
-		KeptBase: c.keptBootBase(spec)}, nil
+		KeptBase: c.keptBootBase(spec), ProxyConfigSHA256: proxySHA, ProxyAddr: proxyIP}, nil
 }
 
 // makeRunDir creates a run's directory, new: a directory already there (another run's whose id shares

@@ -43,6 +43,12 @@ const (
 	// whose slot the run token takes on the forwarded request; the organisation
 	// restores it before its checks, which strip it.
 	ViaOrgAuthorizationHeader = "X-Wardyn-Via-Org-Authorization"
+	// ViaOrgRelayedHeader marks a forwarded request that came in on a VM run's relay listener, so the
+	// organisation does not count its decisions as the run working. Only the runner's proxy sets it.
+	ViaOrgRelayedHeader = "X-Wardyn-Via-Org-Relayed"
+	// DecisionRelayedHeader marks a decision post whose row is Relayed (egress.Request.Relayed is not
+	// serialised); the organisation trusts it only on a via_org engine's post for a VM run.
+	DecisionRelayedHeader = "Wardyn-Decision-Relayed"
 )
 
 // viaOrgRouteFor is the via_org route a sandbox request is for, and the
@@ -149,6 +155,12 @@ func (p *Proxy) forwardViaOrg(w http.ResponseWriter, r *http.Request, route ViaO
 		out.Header.Add(ViaOrgAuthorizationHeader, v)
 	}
 	out.Header.Set(ViaOrgAuthorityHeader, authority)
+	// The guest's own copies of the marks never ride the hop; the proxy sets the relay mark itself.
+	out.Header.Del(ViaOrgRelayedHeader)
+	out.Header.Del(DecisionRelayedHeader)
+	if p.relayLane(r.Context()) {
+		out.Header.Set(ViaOrgRelayedHeader, "1")
+	}
 	out.Header.Set("Authorization", "Bearer "+p.runToken.Get())
 	resp, err := p.controlTransport.RoundTrip(out)
 	if err != nil {
