@@ -282,8 +282,10 @@ func refuseDNS(msg []byte) ([]byte, egress.DNSQuery, bool) {
 
 // ListenDNS opens the run's refusal-only DNS listener on addr, UDP and TCP,
 // and serves it until ctx ends. It answers every query REFUSED and writes its
-// row; it never resolves a name and never forwards a query. The error is the
-// bind's.
+// row; it never resolves a name and never forwards a query. With AllowedPeers
+// set it serves only callers inside them, as the main listener does: a datagram
+// from outside is dropped, and a connection from outside is closed. The error
+// is the bind's.
 func (s *Server) ListenDNS(ctx context.Context, addr string) error {
 	pc, err := net.ListenPacket("udp", addr)
 	if err != nil {
@@ -294,7 +296,15 @@ func (s *Server) ListenDNS(ctx context.Context, addr string) error {
 		_ = pc.Close()
 		return err
 	}
-	go func() { _ = serveDNS(ctx, pc, ln, newDNSLimiter(s.proxy.now, s.proxy.recordDNS)) }()
+	// Serve only AllowedPeers when they are set, as the main listener does: on Docker this port is also
+	// on the control network, where another container could otherwise write rows into the run.
+	var served net.PacketConn = pc
+	var lnServed net.Listener = ln
+	if len(s.allowedPeers) > 0 {
+		served = &peerPacketConn{PacketConn: pc, allowed: s.allowedPeers}
+		lnServed = &peerListener{Listener: ln, allowed: s.allowedPeers}
+	}
+	go func() { _ = serveDNS(ctx, served, lnServed, newDNSLimiter(s.proxy.now, s.proxy.recordDNS)) }()
 	return nil
 }
 
