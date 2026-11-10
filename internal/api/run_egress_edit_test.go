@@ -618,3 +618,49 @@ func TestEgressEdit_AnswerNamesTheRunsFate(t *testing.T) {
 		t.Errorf("a superseded edit stopped nothing, so it names no fate: %q", got)
 	}
 }
+
+// failMarkStore fails the run's lost mark while fail is set, as a database blip would.
+type failMarkStore struct {
+	*readbackStore
+	fail atomic.Bool
+}
+
+func (s *failMarkStore) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, at time.Time, life time.Duration) (bool, error) {
+	if s.fail.Load() {
+		return false, errors.New("injected lost-mark failure")
+	}
+	return s.readbackStore.MarkRunLost(ctx, id, reason, at, life)
+}
+
+// A failed replace whose proxy stop also fails is never answered as stopped, whether the lost mark is
+// written or not: neither by the plain revive nor by an edit.
+func TestRevive_FailedReplaceWithAFailedStopIsNotStopped(t *testing.T) {
+	for _, markFails := range []bool{false, true} {
+		for _, edit := range []bool{false, true} {
+			f := newReadbackFixture(t)
+			if edit {
+				f = newEgressEditFixture(t)
+			}
+			fs := &failMarkStore{readbackStore: f.rb}
+			fs.fail.Store(markFails)
+			f.srv.cfg.Store = fs
+			f.rr.replaceErr = runner.ErrProxyReplaceFailed
+			f.setProxyStopErr(errors.New("the runner did not answer the stop"))
+			var w *httptest.ResponseRecorder
+			want := reasonReviveProxyReplaceFailedLost
+			switch {
+			case edit:
+				w, want = f.editEgress(t, `{"deny_hosts":["evil.example"]}`), reasonEgressEditContainmentUnresolved
+			case markFails:
+				w, want = do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, ""), reasonReviveRecoveryUnresolved
+			default:
+				w = do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+			}
+			body := w.Body.String()
+			if errorReason(w) != want || !strings.Contains(body, "not confirmed") ||
+				strings.Contains(body, "was stopped") || strings.Contains(body, "has no egress") {
+				t.Errorf("mark fails=%v edit=%v: %d %s, want %s saying the stop is not confirmed", markFails, edit, w.Code, body, want)
+			}
+		}
+	}
+}
