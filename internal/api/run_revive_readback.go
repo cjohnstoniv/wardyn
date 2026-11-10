@@ -58,10 +58,27 @@ func (s *Server) replaceRevivedProxyHashed(ctx context.Context, rv runner.ProxyR
 	} else if err = s.renewRunnerLease(ctx, run, leaseWait); err == nil {
 		sha, err = h.ReplaceProxyHashed(ctx, run.SandboxRef, cfgJSON)
 	}
+	// A substrate that cannot hash refuses before anything changes; a start that need not confirm is
+	// replaced as before.
+	if errors.Is(err, runner.ErrReviveUnsupported) && start.mode != store.ProxyStartExpected {
+		sha, err = "", s.replaceRevivedProxy(ctx, rv, run, cfgJSON)
+	}
 	if err != nil {
 		s.abandonProxyStart(context.WithoutCancel(ctx), run.ID, start)
 	}
 	return sha, err
+}
+
+// reviveKeptCurrent is the refusal of a live run's revive whose old proxy was never touched: 409
+// revive_readback_unsupported when the substrate cannot hash the new proxy's config
+// (runner.ErrReviveUnsupported from ReplaceProxyHashed), else 502 revive_proxy_kept_current.
+func reviveKeptCurrent(ctx context.Context, err error) *reviveError {
+	if errors.Is(err, runner.ErrReviveUnsupported) {
+		return reviveRefused(http.StatusConflict, reasonReviveReadbackUnsupported,
+			"this run's substrate cannot confirm a new proxy's policy, so its proxy was not replaced, and the run keeps its current proxy")
+	}
+	return reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
+		loggedMsg(ctx, "the run's proxy was not replaced, and the run keeps its current proxy", err))
 }
 
 // settleRevivedProxy retires the replaced proxy's tokens and records the driver's answer for the new

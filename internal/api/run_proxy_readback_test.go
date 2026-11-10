@@ -507,6 +507,49 @@ func TestReadback_RenewedTokenLineageIsAccepted(t *testing.T) {
 	}
 }
 
+// The reporter posts with whichever run token is current: a first post on J0 is lost (503), the proxy
+// renews J0 to J1, and the retry on J1, now the run's current token, confirms.
+func TestReadback_RenewalBetweenReportRetriesIsAccepted(t *testing.T) {
+	f := newReadbackFixture(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	_, sha, j0 := f.lastHandover(t)
+	f.rb.failReports = 1
+	if code, _ := postLoaded(t, f.srv, f.run.ID, j0, sha); code != http.StatusServiceUnavailable {
+		t.Fatalf("first report: %d, want 503", code)
+	}
+	if ok, err := f.rb.StampRunTokenRenewed(context.Background(), f.run.ID, "J1", j0); !ok || err != nil {
+		t.Fatalf("renew J0->J1: %v %v", ok, err)
+	}
+	if code, state := postLoaded(t, f.srv, f.run.ID, "J1", sha); code != http.StatusOK || state != string(types.ProxyStartEnforced) {
+		t.Fatalf("retry on J1: %d %q, want 200 enforced", code, state)
+	}
+}
+
+// A live run's revive on a substrate whose ReplaceProxyHashed refuses (runner.ErrReviveUnsupported, as
+// the orchestrator answers for a substrate that cannot hash) is 409 revive_readback_unsupported, and
+// the run keeps its proxy; its start is abandoned.
+func TestReadback_SubstrateRefusingTheHashKeepsTheProxy(t *testing.T) {
+	f := newReadbackFixture(t)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("first revive: code %d, want 200", code)
+	}
+	kept := f.active(t).Generation
+	f.srv.liveRevived.Delete(f.run.ID)
+	f.rr.replaceErr = runner.ErrReviveUnsupported
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonReviveReadbackUnsupported) {
+		t.Fatalf("revive: %d %s, want 409 %s", w.Code, w.Body.String(), reasonReviveReadbackUnsupported)
+	}
+	if got := f.rb.get(f.run.ID, kept+1).State; got != types.ProxyStartAbandoned {
+		t.Errorf("the refused revive's start is %s, want abandoned", got)
+	}
+	if lostAt, _ := f.st.lost(); lostAt != nil {
+		t.Error("a refused revive must leave the live run as it was")
+	}
+}
+
 // Two revives in a row: a report on the first new proxy's token, sent while the second revive replaces
 // it (after its lineage is retired and its pending start published, before that token is revoked), is
 // stale and audited; only the second start confirms.
