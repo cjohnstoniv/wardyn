@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -185,14 +187,16 @@ func writeExecStartError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // auditRunExec writes the command's run.command.exec row: the command's first runExecAuditCommandCap
-// bytes and its exit code, or the error, never output. It outlives a caller who left before the command ended.
+// bytes and its exit code, or the error, never output. A cut command adds command_bytes and command_sha256,
+// its full length and hash, so padding cannot hide what ran. It outlives a caller who left before the command ended.
 func (s *Server) auditRunExec(ctx context.Context, run types.AgentRun, at types.ActorType, actor, outcome string, data map[string]any) {
 	if c, ok := data["command"].(string); ok && len(c) > runExecAuditCommandCap {
 		cut := runExecAuditCommandCap
 		for cut > 0 && !utf8.RuneStart(c[cut]) {
 			cut--
 		}
-		data["command"] = c[:cut] + store.AuditTargetTruncatedMarker
+		sum := sha256.Sum256([]byte(c))
+		data["command"], data["command_bytes"], data["command_sha256"] = c[:cut]+store.AuditTargetTruncatedMarker, len(c), hex.EncodeToString(sum[:])
 	}
 	s.recordStreamAudit(context.WithoutCancel(ctx), run.SandboxRef, s.auditEvent(&run.ID, at, actor, "run.command.exec",
 		run.ID.String(), outcome, mustJSON(data)))

@@ -6,6 +6,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -447,7 +449,7 @@ func TestRunExecCallerLeftIsAFailure(t *testing.T) {
 }
 
 // TestRunExecAuditsTheCommandCapped: a long command runs whole, and its audit row keeps the first
-// runExecAuditCommandCap bytes of it.
+// runExecAuditCommandCap bytes of it, with the whole command's length and SHA-256.
 func TestRunExecAuditsTheCommandCapped(t *testing.T) {
 	var got []string
 	e := newExecHarness(t, func(spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -464,10 +466,15 @@ func TestRunExecAuditsTheCommandCapped(t *testing.T) {
 		t.Fatalf("run.command.exec rows = %d, want one", len(rows))
 	}
 	var data struct {
-		Command string `json:"command"`
+		Command       string `json:"command"`
+		CommandBytes  int    `json:"command_bytes"`
+		CommandSHA256 string `json:"command_sha256"`
 	}
 	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
 		t.Fatal(err)
+	}
+	if sum := sha256.Sum256([]byte(long)); data.CommandBytes != len(long) || data.CommandSHA256 != hex.EncodeToString(sum[:]) {
+		t.Errorf("command_bytes %d, command_sha256 %q; want %d and the whole command's SHA-256", data.CommandBytes, data.CommandSHA256, len(long))
 	}
 	if len(data.Command) > runExecAuditCommandCap+len(store.AuditTargetTruncatedMarker) || !strings.HasPrefix(data.Command, "echo yyy") ||
 		!strings.HasSuffix(data.Command, store.AuditTargetTruncatedMarker) {
