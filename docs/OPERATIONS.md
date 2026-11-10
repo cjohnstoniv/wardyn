@@ -739,7 +739,8 @@ commands are the ones in "Back them up" and "Restore them", and in
     spool.
   - Configured sinks get an intent row only after the store has taken it; a store write that failed sends them nothing.
   - A sink that fails does not undo an intent row the store took, and the change goes ahead.
-  - That is the intent row only: the handler's own row reaches the sinks as every row does, spooled or not.
+  - That is the intent row only: the handler's own row reaches the sinks as every row does, even when the store
+    write failed and the row spooled.
 
 > [!IMPORTANT]
 > **Set the two server-side timeouts** on the database Wardyn uses.
