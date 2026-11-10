@@ -86,7 +86,7 @@ func kubeCallScopeKeysExact(scope json.RawMessage) bool {
 }
 
 // refuseBadCallScope is the raise's check of a held call's scope: a kubectl write's when a key folds to
-// cluster, a host rule hold's when keys fold to host and call_sha256 (approvals_host_call.go), else an MCP
+// cluster, a host rule hold's when keys fold to host, call_sha256 and method or path (approvals_host_call.go), else an MCP
 // call's (refuseBadMCPCallScope, which passes any other scope through).
 func (s *Server) refuseBadCallScope(w http.ResponseWriter, r *http.Request, kind types.ApprovalKind, scope json.RawMessage) (json.RawMessage, bool) {
 	if kubeCallKeyPresent(scope) {

@@ -33,15 +33,17 @@ func isHostCallRow(ap types.ApprovalRequest) bool {
 // so, and no other key may appear.
 var hostCallScopeKeys = []string{"host", "method", "path", "call_sha256", "hold_seconds"}
 
-// hostCallKeysPresent reports whether scope is an object with a top-level key that folds to host and one
-// that folds to call_sha256, read from the keys alone, as kubeCallKeyPresent reads its own: the pair picks
-// the strict host call path. A host alone is an egress_domain scope, and passes on.
+// hostCallKeysPresent reports whether scope is an object with a top-level key that folds to host, one
+// that folds to call_sha256 and one that folds to method or path, read from the keys alone, as
+// kubeCallKeyPresent reads its own: they pick the strict host call path. A host alone is an egress_domain
+// scope, and passes on; a host and a hash with neither method nor path is an MCP call's scope, whose own
+// check refuses the stray host (refuseBadMCPCallScope).
 func hostCallKeysPresent(scope json.RawMessage) bool {
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return false
 	}
-	var host, hash bool
+	var host, hash, call bool
 	for dec.More() {
 		tok, err := dec.Token()
 		k, isKey := tok.(string)
@@ -50,12 +52,13 @@ func hostCallKeysPresent(scope json.RawMessage) bool {
 		}
 		host = host || strings.EqualFold(k, "host")
 		hash = hash || strings.EqualFold(k, "call_sha256")
+		call = call || strings.EqualFold(k, "method") || strings.EqualFold(k, "path")
 		var skip json.RawMessage
 		if dec.Decode(&skip) != nil {
 			return false
 		}
 	}
-	return host && hash
+	return host && hash && call
 }
 
 // hostCallScopeKeysExact reports whether scope's top-level keys are each one of hostCallScopeKeys,
