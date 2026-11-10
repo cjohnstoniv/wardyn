@@ -560,8 +560,11 @@ func stallingAPI(t *testing.T, stall string) (kubernetes.Interface, *atomic.Int3
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
 		case r.Method == http.MethodPost:
+			// The created object is what was sent. Read it before answering: once the response has
+			// started, net/http may refuse further reads of the body, and the answer comes back empty.
+			body, _ := io.ReadAll(r.Body)
 			w.WriteHeader(http.StatusCreated)
-			_, _ = io.Copy(w, r.Body) // the created object is what was sent
+			_, _ = w.Write(body)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/pods/"):
 			_ = json.NewEncoder(w).Encode(&corev1.Pod{
 				TypeMeta:   metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
