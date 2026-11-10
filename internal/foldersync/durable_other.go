@@ -103,7 +103,7 @@ func syncDirPath(note *dirNote, dir string) error {
 // and is nil, and every other error stands.
 func dirSynced(note *dirNote, dir string, err error) error {
 	if dirSyncUnsupported(err) {
-		note.unsupported(dir, err)
+		note.unsupported(reasonDirSync, dir, err)
 		return nil
 	}
 	return err

@@ -42,6 +42,25 @@ func failFlush(t *testing.T, name string, flushed *int) {
 	}, nil)
 }
 
+// readOnlyAtRecord sets the read-only attribute on the laptop file name just before its first open
+// for writing, the record's: a pull installs a new file writable (0644), so a read-only one is
+// recorded only when the attribute is set between its install and its record.
+func readOnlyAtRecord(t *testing.T, name string) {
+	t.Helper()
+	old := openFileIn
+	t.Cleanup(func() { openFileIn = old })
+	set := false
+	openFileIn = func(root *os.Root, n string, flag int) (*os.File, error) {
+		if !set && path.Base(n) == name && flag&os.O_RDWR != 0 {
+			set = true
+			if err := os.Chmod(filepath.Join(root.Name(), filepath.FromSlash(n)), 0o444); err != nil {
+				t.Errorf("set read-only: %v", err)
+			}
+		}
+		return old(root, n, flag)
+	}
+}
+
 func readOnly(t *testing.T, p string) {
 	t.Helper()
 	if err := os.Chmod(p, 0o444); err != nil {
@@ -49,13 +68,14 @@ func readOnly(t *testing.T, p string) {
 	}
 }
 
-// A sandbox file without write permission is pulled read-only. Windows refuses a handle for
-// writing to it, so it is recorded without a flush, with the pass's durability warning in the
-// report (what `wardyn sync` prints) and logged once (the runner's log), and its attribute kept.
+// A pulled file made read-only before it is recorded: Windows refuses a handle for writing to it,
+// so it is recorded without a flush, with the pass's durability warning in the report (what
+// `wardyn sync` prints) and logged once with its reason (the runner's log), and its attribute kept.
 func TestPass_AReadOnlyPullIsRecordedWithAWarning(t *testing.T) {
 	buf := logged(t)
 	sy, box, root := runnerSyncer(t, true)
-	putSyncFile(t, filepath.Join(box, "new.txt"), "from the sandbox", 0o444)
+	putSyncFile(t, filepath.Join(box, "new.txt"), "from the sandbox", 0o644)
+	readOnlyAtRecord(t, "new.txt")
 	var flushed int
 	failFlush(t, "new.txt", &flushed)
 	rep := pass(t, sy)
@@ -67,7 +87,7 @@ func TestPass_AReadOnlyPullIsRecordedWithAWarning(t *testing.T) {
 	if !slices.Contains(rep.Pulled, "new.txt") || rep.NotPreserved != "" || sy.State.Files["new.txt"].Local != localSide(fi) || flushed != 0 {
 		t.Errorf("report = %+v, record = %+v, flushed %d times: want it pulled and recorded unflushed", rep, sy.State.Files["new.txt"], flushed)
 	}
-	if rep.DurabilityWarning != dirSyncWarning || strings.Count(buf.String(), dirSyncWarning) != 1 || !strings.Contains(buf.String(), "dir=new.txt") {
+	if rep.DurabilityWarning != durabilityWarning || strings.Count(buf.String(), durabilityWarning) != 1 || !strings.Contains(buf.String(), "path=new.txt") || !strings.Contains(buf.String(), reasonReadOnly) {
 		t.Errorf("report warning %q, log:\n%s", rep.DurabilityWarning, buf)
 	}
 }
@@ -113,7 +133,7 @@ func TestPass_OnlyAReadOnlyRefusalSkipsTheFlush(t *testing.T) {
 				if sy.State.Files["x.txt"].Local != localSide(fi) || rep.NotPreserved != "" || flushed != 0 {
 					t.Errorf("record = %+v, report = %+v, flushed %d times: want it recorded unflushed", sy.State.Files["x.txt"], rep, flushed)
 				}
-				if rep.DurabilityWarning != dirSyncWarning || strings.Count(buf.String(), dirSyncWarning) != 1 {
+				if rep.DurabilityWarning != durabilityWarning || strings.Count(buf.String(), durabilityWarning) != 1 || !strings.Contains(buf.String(), reasonReadOnly) {
 					t.Errorf("report warning %q, log:\n%s", rep.DurabilityWarning, buf)
 				}
 				return

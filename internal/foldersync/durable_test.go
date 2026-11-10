@@ -405,7 +405,7 @@ func TestInstall_AnUnsupportedDirSyncIsBestEffortAndWarnedOnce(t *testing.T) {
 			})
 			rep, err := sy.Pass(context.Background())
 			sandbox := getSyncFile(t, filepath.Join(box, "x.txt"))
-			warned := strings.Count(buf.String(), dirSyncWarning)
+			warned := strings.Count(buf.String(), durabilityWarning)
 			if !c.ok {
 				if err == nil || sandbox != "sandbox edit!" || warned != 0 {
 					t.Errorf("%s: err = %v, sandbox = %q, warned %d times: want the push refused and the save failed", c.name, err, sandbox, warned)
@@ -418,7 +418,7 @@ func TestInstall_AnUnsupportedDirSyncIsBestEffortAndWarnedOnce(t *testing.T) {
 			if sandbox != "laptop edit" || getSyncFile(t, filepath.Join(root, copyName(1))) != "sandbox edit!" || !slices.Contains(rep.Pulled, "a/b/new.txt") {
 				t.Errorf("%s: sandbox = %q, report = %+v", c.name, sandbox, rep)
 			}
-			if warned != 1 || !strings.Contains(buf.String(), "folder="+root) || rep.DurabilityWarning != dirSyncWarning || stateDirs == 0 {
+			if warned != 1 || !strings.Contains(buf.String(), "folder="+root) || rep.DurabilityWarning != durabilityWarning || stateDirs == 0 {
 				t.Errorf("%s: warned %d times, state dir synced %d times, report warning %q, log:\n%s", c.name, warned, stateDirs, rep.DurabilityWarning, buf)
 			}
 			if st, err := LoadState(sy.StateFile, root, box); err != nil || len(st.Files) == 0 {

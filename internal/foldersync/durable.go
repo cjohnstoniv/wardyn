@@ -55,9 +55,10 @@ func (e *InstallError) Unwrap() []error {
 	return []error{e.Err}
 }
 
-// dirNote is one pass's record of a directory sync its filesystem does not offer (dirSyncUnsupported):
-// best effort, so the install stands, but its folder entry may not survive a power loss. It is
-// logged once per pass; a nil note logs each one.
+// dirNote is one pass's record of a sync it could not make: a directory sync its filesystem does
+// not offer (dirSyncUnsupported), or on Windows the flush of a read-only file (readOnlyRefusal).
+// Best effort, so what the pass wrote stands, but it may not survive a power loss. It is logged
+// once per pass, with its reason; a nil note logs each one.
 // It also sets the pass's Report.DurabilityWarning.
 type dirNote struct {
 	folder string
@@ -65,21 +66,27 @@ type dirNote struct {
 	once   sync.Once
 }
 
-// dirSyncWarning is the warning of a dirNote.
-const dirSyncWarning = "this folder's filesystem can't guarantee the folder entry survives a power loss"
+// durabilityWarning is the warning of a dirNote, whichever sync it could not make.
+const durabilityWarning = "a just-written change in this folder may not survive a power loss"
 
-func (n *dirNote) unsupported(dir string, err error) {
+// The reasons a dirNote logs.
+const (
+	reasonDirSync  = "the filesystem does not offer a directory sync"
+	reasonReadOnly = "a read-only file is recorded without a flush, which needs write access"
+)
+
+func (n *dirNote) unsupported(reason, name string, err error) {
 	log := func(folder string) {
-		slog.Warn("foldersync: "+dirSyncWarning, slog.String("folder", folder), slog.String("dir", dir), slog.String("err", err.Error()))
+		slog.Warn("foldersync: "+durabilityWarning, slog.String("reason", reason), slog.String("folder", folder), slog.String("path", name), slog.String("err", err.Error()))
 	}
 	if n == nil {
-		log(dir)
+		log(name)
 		return
 	}
 	n.once.Do(func() {
 		log(n.folder)
 		if n.rep != nil {
-			n.rep.DurabilityWarning = dirSyncWarning
+			n.rep.DurabilityWarning = durabilityWarning
 		}
 	})
 }
@@ -191,9 +198,6 @@ func keptAlready(root *os.Root, tmpName, dst string) (bool, error) {
 	return true, fsyncFile(f)
 }
 
-// errReadOnlyNotFlushed is a read-only laptop file recorded without a flush (readOnlyRefusal).
-var errReadOnlyNotFlushed = errors.New("read-only file: recorded without a flush, which needs write access")
-
 // errNotKeptFile is a laptop path that is not one regular file from its check to its open.
 var errNotKeptFile = errors.New("not a regular file, or replaced while it was opened")
 
@@ -232,7 +236,7 @@ func sumOf(f *os.File, size int64) ([]byte, bool) {
 // (readOnlyRefusal).
 func (sy *Syncer) recordKept(rel string, remote Side, same func(f *os.File, fi os.FileInfo) bool) (bool, error) {
 	f, fi, err := openKept(sy.Root, rel, existingSyncFlag)
-	flush := true
+	refused := err
 	if err != nil && readOnlyRefusal(sy.Root, rel, err) {
 		// Windows flushes a file only through a handle open for writing, which a read-only file
 		// refuses, and its attributes are the user's to keep. So it is opened to read, checked the
@@ -240,7 +244,8 @@ func (sy *Syncer) recordKept(rel string, remote Side, same func(f *os.File, fi o
 		// just installed was flushed as its temp before the write-through move, so what a power
 		// loss can drop is small: an identical copy found on the laptop, or a later change to it.
 		f, fi, err = openKept(sy.Root, rel, os.O_RDONLY)
-		flush = false
+	} else {
+		refused = nil
 	}
 	if err != nil {
 		return false, err
@@ -249,8 +254,8 @@ func (sy *Syncer) recordKept(rel string, remote Side, same func(f *os.File, fi o
 	if !same(f, fi) {
 		return false, nil
 	}
-	if !flush {
-		sy.dirs.unsupported(rel, errReadOnlyNotFlushed)
+	if refused != nil {
+		sy.dirs.unsupported(reasonReadOnly, rel, refused)
 	} else if err := fsyncFile(f); err != nil {
 		return false, &InstallError{Step: "sync-file", Installed: true, Err: err}
 	}

@@ -60,8 +60,8 @@ type Report struct {
 	// NotPreserved, on a runner pass only, is the first reason a change the pass owed the laptop was
 	// not proven kept there: an install, a directory sync or the state save failed.
 	NotPreserved string `json:"not_preserved,omitempty"`
-	// DurabilityWarning is set when this folder's filesystem does not offer a directory sync: what
-	// the pass wrote stands, but a folder entry may not survive a power loss. It refuses nothing.
+	// DurabilityWarning is set when a pass could not make every sync (a directory sync the filesystem does not offer,
+	// or on Windows a read-only file's flush): what it wrote stands, but may not survive a power loss. It refuses nothing.
 	DurabilityWarning string `json:"durability_warning,omitempty"`
 	seenSet           map[string]bool
 }
