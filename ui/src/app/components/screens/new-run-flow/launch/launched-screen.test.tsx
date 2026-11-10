@@ -22,6 +22,8 @@ import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type LaunchedSt
 import { LaunchedScreen } from "./launched-screen";
 import type { RunQueue } from "../../../../lib/types/runs";
 import type { LaunchedRun } from "./launched-model";
+import { STATES } from "../../../wardyn/states";
+import { HttpError } from "../../../../lib/api/core";
 
 const ID = "b2222222-2222-4222-8222-222222222222";
 const HOUR = 3_600_000;
@@ -84,6 +86,13 @@ afterEach(() => {
 });
 
 describe("Launched: while the run loads (UXR-48)", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getRun.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    open();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("draws a placeholder for the badge and the title, then the run", async () => {
     let settle!: (r: unknown) => void;
     getRun.mockReturnValue(new Promise((r) => (settle = r)));

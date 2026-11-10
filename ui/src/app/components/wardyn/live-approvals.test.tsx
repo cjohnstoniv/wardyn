@@ -22,11 +22,13 @@ vi.mock("../../lib/api/approvals", () => ({
     deny: (...a: unknown[]) => denyMock(...a),
   },
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+const toastSuccess = vi.fn();
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: (...a: unknown[]) => toastSuccess(...a), info: vi.fn() } }));
 
 import { LiveApprovals } from "./live-approvals";
 import { HttpError } from "../../lib/api/core";
 import { toDatetimeLocalValue } from "../../lib/datetime-local";
+import { APPROVALS } from "../../lib/approvals-copy";
 
 function pending(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return makeApproval({
@@ -45,6 +47,7 @@ describe("LiveApprovals", () => {
     listApprovalsMock.mockReset().mockResolvedValue([]);
     approveMock.mockReset().mockResolvedValue({});
     denyMock.mockReset().mockResolvedValue({});
+    toastSuccess.mockReset();
   });
 
   it("shows the idle hint when nothing is pending", async () => {
@@ -249,6 +252,15 @@ describe("LiveApprovals", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(within(panel).getByRole("button", { name: /approve/i }));
     expect(approveMock).toHaveBeenCalledWith("held", expect.any(String));
+  });
+
+  it("confirms an inline approve with the same toast the Approvals screen gives", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example", mode: "wait_for_review" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(panel).getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(APPROVALS.TOAST_APPROVED));
   });
 
   // The FULL sentence, leading "Denying" included — a partial match on just

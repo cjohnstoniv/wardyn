@@ -40,7 +40,8 @@ import { Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip } from "../wardyn/primitives";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
@@ -136,7 +137,9 @@ export function WorkspacesScreen() {
   const caps = useMyCapabilities(!operator);
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [addOpen, setAddOpen] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
   // X3-F2: the confirm dialog's own gate follows the SELECTED row's owner, not
@@ -144,6 +147,7 @@ export function WorkspacesScreen() {
   // which useCanMutate reads as "not mine" for a member.
   const canDeleteSelected = useCanMutate(toDelete?.owned_by);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
     api
@@ -152,7 +156,10 @@ export function WorkspacesScreen() {
         setWorkspaces(ws);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -206,7 +213,7 @@ export function WorkspacesScreen() {
           <Input
             placeholder="Search by name or source…"
             aria-label="Search workspaces"
-            value={query}
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 max-w-sm"
           />
@@ -227,7 +234,7 @@ export function WorkspacesScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={4} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : workspaces.length === 0 ? (
           <EmptyState
             icon={FolderOpen}

@@ -61,7 +61,8 @@ import { PolicyPanel, egressSummary, lifecycleSummary, minimalSpec, parseSpec } 
 import { PolicyDocumentView } from "../wardyn/policy-document/policy-document";
 import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document/policy-source";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { CC_META } from "../wardyn/cc-meta";
@@ -95,7 +96,10 @@ export function PoliciesScreen() {
   const routed = useInRouterContext();
   const [policies, setPolicies] = React.useState<RunPolicy[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);
@@ -116,7 +120,10 @@ export function PoliciesScreen() {
         setPolicies(p);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -182,7 +189,7 @@ export function PoliciesScreen() {
           <Input
             placeholder="Search policies by name or id…"
             aria-label="Search policies"
-            value={query}
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="max-w-sm"
           />
@@ -202,7 +209,7 @@ export function PoliciesScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={7} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={UserCog}

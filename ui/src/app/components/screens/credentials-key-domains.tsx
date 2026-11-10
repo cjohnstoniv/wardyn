@@ -24,10 +24,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { cn } from "../ui/utils";
 import { Field } from "../wardyn/form-primitives";
 import { Chip, SectionCard } from "../wardyn/primitives";
-import { ErrorState, TableSkeleton } from "../wardyn/states";
+import { ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { ERASE, KEY_DOMAINS } from "../wardyn/copy/credentials";
 
-type Load = { kind: "loading" } | { kind: "error" } | { kind: "absent" } | { kind: "ready"; data: KeyDomains };
+type Load = { kind: "loading" } | { kind: "error"; message?: string } | { kind: "absent" } | { kind: "ready"; data: KeyDomains };
 
 // The sentence is a question and its consequence; the dialog titles itself with the question.
 function splitQuestion(s: string): [string, string] {
@@ -48,7 +48,7 @@ export function KeyDomainsSection() {
     keyDomainsApi
       .list()
       .then((data) => setLoad({ kind: "ready", data }))
-      .catch((e) => setLoad(e instanceof HttpError && (e.status === 501 || e.status === 403) ? { kind: "absent" } : { kind: "error" }));
+      .catch((e) => setLoad(e instanceof HttpError && (e.status === 501 || e.status === 403) ? { kind: "absent" } : { kind: "error", message: failureSentence(e) }));
   }, []);
   React.useEffect(reload, [reload]);
 
@@ -75,6 +75,7 @@ export function KeyDomainsSection() {
           <TableSkeleton rows={3} cols={3} />
         ) : load.kind === "error" ? (
           <ErrorState
+            message={load.message}
             onRetry={() => {
               setLoad({ kind: "loading" });
               reload();

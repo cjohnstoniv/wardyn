@@ -186,7 +186,7 @@ function ProfileBody({
         />
         <Summary label="Repo" value={<Mono className="text-foreground">{run.repo || "—"}</Mono>} />
         <Summary
-          label="Confinement"
+          label="Barrier floor"
           value={<ConfinementChip value={inline_policy.min_confinement_class} />}
         />
         <Summary

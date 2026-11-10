@@ -20,7 +20,8 @@ import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, StaleNote, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { EmptyState, ErrorState, StaleNote, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
@@ -99,7 +100,10 @@ export function CredentialsScreen() {
   const [inv, setInv] = React.useState<CredentialInventory | null>(null);
   const [screenStatus, setStatus] = React.useState<ScreenStatus | "no_meta">("loading");
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>(undefined);
-  const [filter, setFilter] = React.useState<string | null>(null);
+  const [loadSentence, setLoadSentence] = React.useState<string | undefined>(undefined);
+  const [filters, setFilters] = useUrlFilters();
+  const filterParam = filters.get("provider");
+  const setFilter = (id: string | null) => setFilters({ provider: id ?? "" });
   // A quiet re-read (after an erase) failed: the list on screen is the last one that loaded.
   const [stale, setStale] = React.useState(false);
   // The one erase dialog: opened for a row's person, or with no person (the header's search).
@@ -114,7 +118,6 @@ export function CredentialsScreen() {
       .then((d) => {
         setInv(d);
         // The erased person may have held the last credential of the filtered provider: its chip is gone, so "All" is the view.
-        setFilter((f) => (f && d.counts.by_provider[f] ? f : null));
         setStatus("ready");
         setStale(false);
       })
@@ -126,6 +129,7 @@ export function CredentialsScreen() {
         }
         const msg = getErrorMessage(e);
         setErrorMessage(msg);
+        setLoadSentence(failureSentence(e));
         setStatus(msg === NO_META_ERROR ? "no_meta" : loadFailStatus(e));
       });
   }, []);
@@ -139,6 +143,8 @@ export function CredentialsScreen() {
   }, [inv]);
   const byProvider = inv?.counts.by_provider ?? {};
   const noProvidersConfigured = Object.keys(byProvider).length === 0;
+  // A provider that has no credential left (the last one was erased) has no chip: "All" is the view.
+  const filter = filterParam && inv?.counts.by_provider[filterParam] ? filterParam : null;
   const filtered = filter ? rows.filter((r) => r.provider === filter) : rows;
   const stores = new Set(rows.map((r) => r.store));
   const mixedStores = stores.size > 1;
@@ -188,7 +194,7 @@ export function CredentialsScreen() {
           ) : screenStatus === "no_meta" ? (
             <EmptyState icon={KeyRound} title={INVENTORY.NO_META_TITLE} description={errorMessage} />
           ) : screenStatus === "error" ? (
-            <ErrorState onRetry={() => load()} />
+            <ErrorState message={loadSentence} onRetry={() => load()} />
           ) : noProvidersConfigured ? (
             <EmptyState
               icon={KeyRound}

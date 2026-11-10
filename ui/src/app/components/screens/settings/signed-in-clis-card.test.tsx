@@ -6,6 +6,7 @@
 // Your account > Signed-in CLIs (boards MATT3-*): one row per computer, a Sign out that asks first and ends that
 // one session, the file-store note, the admin step-up chip, the empty state with the command, and the card
 // absent where CLI sign-in is not served.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -121,6 +122,23 @@ describe("the card", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("a load the server worded shows its sentence, not the default line", async () => {
+    route = () => json({ error: "Your sentence from the server.", reason: "load_failed" }, 500);
+    render(<SignedInClisCard />);
+    await openCard();
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    route = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    render(<SignedInClisCard />);
+    await openCard();
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("offers a retry on any other failure", async () => {

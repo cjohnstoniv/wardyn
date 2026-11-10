@@ -61,7 +61,7 @@ import { SelfHostRunnerRow } from "./self-host-runner-row";
 import { INBOUND_VALUE, InboundAccessRow, serviceName } from "./inbound-access-row";
 import { Chip } from "../wardyn/primitives";
 import { Segmented } from "../wardyn/segmented";
-import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useUserTypeName, useUserTypes } from "../../lib/use-user-types";
@@ -223,6 +223,7 @@ export function PermissionsScreen() {
   // 403 that answers them is the daemon's verdict on their tier, not an outage
   // to retry.
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [presetKind, setPresetKind] = React.useState<CapabilityKind | undefined>(undefined);
   const [presetValue, setPresetValue] = React.useState<{ value: string } | undefined>(undefined);
@@ -241,6 +242,7 @@ export function PermissionsScreen() {
       })
       .catch((e) => {
         setSnap(null);
+        setLoadMessage(failureSentence(e));
         setStatus(loadFailStatus(e));
       });
   }, []);
@@ -324,7 +326,7 @@ export function PermissionsScreen() {
           ) : status === "forbidden" ? (
             <p className="px-6 pb-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
           ) : status === "error" || !snap ? (
-            <ErrorState onRetry={load} />
+            <ErrorState message={loadMessage} onRetry={load} />
           ) : (
             <>
               {CAPABILITY_KINDS.map((kind) => (
@@ -407,7 +409,7 @@ export function PermissionsScreen() {
           ) : status === "forbidden" ? (
             <p className="px-6 pb-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
           ) : status === "error" || !snap ? (
-            <ErrorState onRetry={load} />
+            <ErrorState message={loadMessage} onRetry={load} />
           ) : snap.grants.length === 0 ? (
             <EmptyState size="compact" icon={ShieldCheck} title={PERM.EMPTY_TITLE} description={PERM.EMPTY_BODY} />
           ) : (

@@ -29,7 +29,7 @@ import { Field, fieldHintId, OptionCard } from "../../wardyn/form-primitives";
 import { ApprovalStateBadge } from "../../wardyn/primitives";
 import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { cn } from "../../ui/utils";
-import { ErrorState } from "../../wardyn/states";
+import { ErrorState, failureSentence } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useThemeName } from "../../wardyn/theme-provider";
 import { BrandingContext } from "../../wardyn/branding-context";
@@ -166,6 +166,7 @@ export function BrandingCard() {
   // A failed read is not "Default branding": the form would start empty and a Save would replace the stored
   // document (support link, dark pair) the admin never saw. The card says it could not read, and offers Retry.
   const [loadFailed, setLoadFailed] = React.useState(false);
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     let live = true;
@@ -175,7 +176,11 @@ export function BrandingCard() {
         setLoadFailed(false);
         setBrand(b.org_name ? b : null);
       },
-      () => live && setLoadFailed(true),
+      (e) => {
+        if (!live) return;
+        setLoadMessage(failureSentence(e));
+        setLoadFailed(true);
+      },
     );
     return () => {
       live = false;
@@ -277,7 +282,7 @@ export function BrandingCard() {
       <p className="text-body leading-snug text-muted-foreground">{BRANDING.LEDE}</p>
       {loadFailed ? (
         <div className="mt-4">
-          <ErrorState size="compact" title={BRANDING_FORM.LOAD_FAILED_TITLE} onRetry={() => setAttempt((n) => n + 1)} />
+          <ErrorState size="compact" title={BRANDING_FORM.LOAD_FAILED_TITLE} message={loadMessage} onRetry={() => setAttempt((n) => n + 1)} />
         </div>
       ) : (
         <div className="mt-4 grid gap-6 md:grid-cols-2">

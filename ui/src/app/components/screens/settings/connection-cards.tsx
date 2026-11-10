@@ -153,8 +153,11 @@ export function SecretLane({
   summary,
   disabled,
   saveVariant = "default",
+  provider,
 }: {
   label: string;
+  /** The provider this value belongs to (a git host), so Disconnect names it rather than the stored secret's name. */
+  provider?: string;
   placeholder: string;
   hint?: React.ReactNode;
   secretName: string;
@@ -222,6 +225,7 @@ export function SecretLane({
         <DeleteConfirmDialog
           name={confirming ? secretName : null}
           entity="credential"
+          wording={{ verb: "Disconnect", past: "disconnected", subject: provider ? `${label} for ${provider}` : label }}
           allowed
           description={PROVIDERS_EXTRA.DISCONNECT_CREDENTIAL_BODY}
           onOpenChange={(o) => !o && setConfirming(false)}

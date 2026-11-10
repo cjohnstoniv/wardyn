@@ -5,6 +5,7 @@
 
 // The Settings card for the site config's `components` block. The wire is the
 // block types.ComponentSettings reads; an all-default choice is an empty block.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -166,6 +167,21 @@ describe("ComponentsSettingsCard", () => {
     expect(await screen.findByRole("heading", { name: "Couldn't load custom components.", level: 4 })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(document.querySelector('[data-size="compact"]')).not.toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    snapshotMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "site_config_failed"));
+    renderCard();
+    await userEvent.click(screen.getByRole("button", { name: TITLE }));
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    snapshotMock.mockRejectedValue(new Error("Failed to fetch"));
+    renderCard();
+    await userEvent.click(screen.getByRole("button", { name: TITLE }));
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   // UXA-80: the loading spinner has a name.
