@@ -65,7 +65,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Profile synthesis from a run's audit trail is limited to two at a time per replica and answers `429` `profile_synthesis_busy` beyond that. Finding a run's node for the kernel check now reads its newest kernel events, not the whole trail.
 - Saving a workspace's approved or denied egress list from a page read before an "always" decision was made dropped that decision. `PUT /workspaces/{id}/approved-egress` and `denied-egress` now answer `412` `workspace_update_conflict` when `If-Match` names an older `updated_at` than the workspace has; a request with no `If-Match` is unchanged.
 - On a Kubernetes cluster, a network-confinement check whose request timed out could leave its test pod or deny-all policy behind. The check now attempts cleanup even when a create request times out.
-- The setup page's "Not proven" row for network confinement no longer says the last 3 checks could not run when the checks did run. It now says the canary has not proved confinement and points to the API, pod permissions, the pod network and an ambient default-deny policy.
+- The setup page's "Not proven" row for network confinement no longer says the last 3 checks could not run when the checks did run. It now says the canary has not proved confinement and points to the API, pod permissions, the pod network and an existing default-deny NetworkPolicy.
 - After signing out, the sign-in page's browser tab keeps its plain Wardyn title instead of the last page's name and the Admin cue.
 - A failed SSH agent request from a sandbox no longer shows the sandbox the control plane's address or its response text.
 

@@ -362,7 +362,7 @@ func TestK8sEgressContainmentCheck_ReCheckedRows(t *testing.T) {
 		{"unenforced", "fail", "Not enforcing. The check at " + when + " showed that this cluster does not block egress with a deny-all NetworkPolicy. The operator accepted that risk with WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL), so new sandboxes are still created with egress unconfined. Agent-sandbox runs are refused.",
 			"Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL (helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL) and fix the cluster's CNI/NetworkPolicy support to restore real confinement."},
 		{"not_proven", "fail", "Not proven. The canary has not proved that this cluster blocks egress with a deny-all NetworkPolicy. New sandboxes are refused until a check passes.",
-			"Check that the cluster's API answers, that Wardyn can create pods and NetworkPolicies in the runs namespace, and that pods there have a pod network and no ambient default-deny NetworkPolicy ahead of Wardyn's checks. Wardyn checks again every 10 minutes."},
+			"Check that the cluster's API answers, that Wardyn can create pods and NetworkPolicies in the runs namespace, and that pods there have a pod network and no existing default-deny NetworkPolicy. Wardyn checks again every 10 minutes."},
 	} {
 		chk, ok := k8sEgressContainmentCheck("k8s", tc.verdict, false, at)
 		if !ok || chk.Status != tc.status || chk.Detail != tc.detail || chk.Fix != tc.fix {
