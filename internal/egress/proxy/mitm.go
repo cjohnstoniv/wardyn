@@ -492,6 +492,10 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
 		return
 	}
+	// Host rules judge each request inside, as allowed_methods does (host_rules.go).
+	if p.hostRuleRefused(w, r, host, port) {
+		return
+	}
 
 	// An API door's host is served by its door alone: judged, minted, forwarded.
 	if p.serveAPIDoor(w, r, host, port) {
