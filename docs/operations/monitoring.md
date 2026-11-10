@@ -74,8 +74,9 @@
 - The `otlp` audit sink sends each audit row to an OpenTelemetry collector as an OTLP/HTTP JSON log record; setup and the record shape are in [ENV.md](../ENV.md#opentelemetry-logs-otlp).
 - It is best-effort logs, not lossless: a full queue or a batch that fails every retry is dropped and shows in `wardyn_audit_sink_drops_total{sink="otlp"}`. Postgres keeps every row. A 2xx reply that reports rejected records in `partialSuccess` adds that count to the same counter; the accepted records are not resent and the collector's message is not logged.
 - Spans are opt-in. With `"traces": true` on the sink, each run-scoped audit row also goes to `<endpoint>/v1/traces` as one zero-length span named for its action, with `wardyn.run_id`, `wardyn.correlation_id` and `wardyn.outcome`. The row's log record then carries the same `traceId` and `spanId`.
-  - A run's correlation id that is a valid W3C `traceparent` (`00-<32 hex>-<16 hex>-<2 hex>`, lowercase, a trace id and parent id that are not all zeros) puts the span in the caller's trace, under the caller's span. Any other correlation id gives a trace id derived from it; a run with none uses its run id. Rows with no run have no span.
-  - Spans use the same batching, retries and drop counter as logs, counted per span. A row's ids are fixed by the row, so a retry sends the same ones.
+  - A correlation id that is a valid W3C `traceparent` puts the span in the caller's trace, under the caller's span. Valid means `00-<32 hex>-<16 hex>-<2 hex>`, lowercase, with a trace id and parent id that are not all zeros.
+  - Any other correlation id gives a trace id derived from it. A run with none uses its run id. A row with no run has no span.
+  - Spans use the logs' batching, retries and drop counter, counted per span. A row's ids are fixed by the row, so a retry sends the same ones.
 - The sink exports no metrics. `/metrics` is the Prometheus surface.
 
 ## Substrate and sweep health
