@@ -87,14 +87,71 @@ func TestPG_RunLocalFolder_AComputerFolderKeepsItsRunnerAndItsPasses(t *testing.
 		Seed: &types.FolderPassRecord{At: at, Files: 2, Bytes: 18, Refused: []types.FolderRefusal{{Path: "link", Reason: "symlink"}}},
 		Back: &types.FolderPassRecord{At: at, Files: 1, Bytes: 5, Refused: []types.FolderRefusal{}, Error: ""},
 	}
-	if ok, err := pg.SetRunLocalFolderStatus(ctx, r.ID, want); !ok || err != nil {
+	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, r.ID, store.FolderStatusGuard{}, want); !ok || err != nil {
 		t.Fatalf("set: %v %v", ok, err)
 	}
 	got, err := pg.RunLocalFolderStatus(ctx, r.ID)
 	if err != nil || got.Seed == nil || got.Back == nil || !got.Seed.At.Equal(at) || got.Seed.Files != 2 || len(got.Seed.Refused) != 1 || got.Back.Files != 1 {
 		t.Fatalf("read back %+v %+v %v", got.Seed, got.Back, err)
 	}
-	if ok, _ := pg.SetRunLocalFolderStatus(ctx, plain.ID, want); ok {
+	if ok, _ := pg.SetRunLocalFolderStatusIf(ctx, plain.ID, store.FolderStatusGuard{}, want); ok {
 		t.Error("a run with no local folder took a pass record")
+	}
+}
+
+// A record's generation is 0 when the column is NULL or its JSON has no gen: the bump moves either to 1 and
+// keeps every other field, a write at 0 lands on a gen-less record, and a write at a stale generation does not.
+func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runner := uuid.New()
+	newFolderRun := func() uuid.UUID {
+		r := newRun(types.RunRunning)
+		r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &runner, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
+		if _, err := pg.CreateRun(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id = $1`, r.ID) })
+		return r.ID
+	}
+
+	null := newFolderRun()
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = NULL WHERE id = $1`, null); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	if st, ok, err := pg.BumpRunLocalFolderGen(ctx, null, store.FolderStatusGuard{Gen: 0}, at); !ok || err != nil || st.Gen != 1 || !st.GenAt.Equal(at) || st.Back != nil {
+		t.Fatalf("bump of a NULL record = %+v %v %v, want gen 1 stamped %v and nothing else", st, ok, err, at)
+	}
+
+	legacy := newFolderRun()
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = jsonb_build_object('back', jsonb_build_object('at', now(), 'files', 4, 'bytes', 9, 'refused', '[]'::jsonb)) WHERE id = $1`, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := pg.RunLocalFolderStatus(ctx, legacy); err != nil || st.Gen != 0 || st.Back == nil {
+		t.Fatalf("a gen-less record reads %+v %v, want gen 0 with its back", st, err)
+	}
+	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, legacy, store.FolderStatusGuard{Gen: 1}, types.RunLocalFolderStatus{}); ok || err != nil {
+		t.Fatalf("a write at gen 1 on a gen-less record landed: %v %v", ok, err)
+	}
+	st, ok, err := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at)
+	if !ok || err != nil || st.Gen != 1 || st.Back == nil || st.Back.Files != 4 {
+		t.Fatalf("bump of a gen-less record = %+v %v %v, want gen 1 with its back kept", st, ok, err)
+	}
+	if _, ok, _ := pg.BumpRunLocalFolderGen(ctx, legacy, store.FolderStatusGuard{Gen: 0}, at); ok {
+		t.Error("a second bump from gen 0 landed")
+	}
+	st.Settled = 1
+	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, legacy, store.FolderStatusGuard{Gen: 1}, st); !ok || err != nil {
+		t.Fatalf("a write at the owned gen: %v %v", ok, err)
+	}
+	if got, err := pg.RunLocalFolderStatus(ctx, legacy); err != nil || got.Gen != 1 || got.Settled != 1 || got.Back == nil {
+		t.Errorf("read back %+v %v, want gen 1, settled 1, back kept", got, err)
+	}
+
+	gen0 := newFolderRun()
+	if ok, err := pg.SetRunLocalFolderStatusIf(ctx, gen0, store.FolderStatusGuard{Gen: 0}, types.RunLocalFolderStatus{Seed: &types.FolderPassRecord{Files: 1, Refused: []types.FolderRefusal{}}}); !ok || err != nil {
+		t.Fatalf("a write at gen 0 on a fresh run: %v %v", ok, err)
 	}
 }

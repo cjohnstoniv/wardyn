@@ -138,8 +138,12 @@ func (s *Server) tryLockRunOp(ctx context.Context, id uuid.UUID) (context.Contex
 // held from that write through the computer folder's pass back (finalizeRunEffects), it keeps every
 // sweep that only tries the lock off a sandbox whose pass is still running. Every writer whose tail
 // reaches finalizeRunEffects takes it; a caller already holding it on ctx re-enters. ok=false is
-// logged; the run is then left as it is for the next pass of whatever ends it.
+// logged; the run is then left as it is for the next pass of whatever ends it. A run proved to have no
+// pass back to run (endMayPass) takes no lock and ends at once, as any run does.
 func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func(), bool) {
+	if !s.endMayPass(ctx, id) {
+		return ctx, func() {}, true
+	}
 	lctx, unlock, err := s.lockRunOp(ctx, id)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not take the run's lock to end it; leaving it for the next pass",

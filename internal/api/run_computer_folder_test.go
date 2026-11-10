@@ -33,10 +33,43 @@ import (
 )
 
 // folderRunnerEndpoint serves a folder-only runner (internal/runner/folders) with roots over the
-// in-memory loopback and returns the org's endpoint for it, as a connected runner has one.
+// in-memory loopback and returns the org's endpoint for it, as a connected runner has one. One that
+// shares folders runs one pass per run at a time, as internal/runner/folders does.
 func folderRunnerEndpoint(t *testing.T, id uuid.UUID, shares bool, roots ...string) runnerEndpoint {
 	t.Helper()
-	fs, err := folderrunner.New(context.Background(), roots, t.TempDir())
+	return folderRunnerEndpointCaps(t, id, runnerwire.Caps{Folders: shares, FolderPassOnce: shares, MachineName: "alice-laptop"}, roots...)
+}
+
+// folderRunnerEndpointCaps is folderRunnerEndpoint advertising caps.
+func folderRunnerEndpointCaps(t *testing.T, id uuid.UUID, caps runnerwire.Caps, roots ...string) runnerEndpoint {
+	t.Helper()
+	ep, _ := folderRunnerEndpointPeer(t, id, caps, roots...)
+	return ep
+}
+
+// folderRunnerOpts is how folderRunnerEndpointWith's runner runs: the caps it advertises, the directory it
+// keeps its state in (a new one when empty), and answer, when set, rewriting each call's answer.
+type folderRunnerOpts struct {
+	caps     runnerwire.Caps
+	stateDir string
+	answer   func(method string, res json.RawMessage) json.RawMessage
+}
+
+// folderRunnerEndpointPeer is folderRunnerEndpointCaps and the server's side of its connection, which a
+// test closes to take the runner offline.
+func folderRunnerEndpointPeer(t *testing.T, id uuid.UUID, caps runnerwire.Caps, roots ...string) (runnerEndpoint, *runnerwire.Peer) {
+	t.Helper()
+	return folderRunnerEndpointWith(t, id, folderRunnerOpts{caps: caps}, roots...)
+}
+
+// folderRunnerEndpointWith is folderRunnerEndpointPeer run as o says.
+func folderRunnerEndpointWith(t *testing.T, id uuid.UUID, o folderRunnerOpts, roots ...string) (runnerEndpoint, *runnerwire.Peer) {
+	t.Helper()
+	if o.stateDir == "" {
+		o.stateDir = t.TempDir()
+	}
+	caps := o.caps
+	fs, err := folderrunner.New(context.Background(), roots, o.stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,17 +81,25 @@ func folderRunnerEndpoint(t *testing.T, id uuid.UUID, shares bool, roots ...stri
 	orgPeer := link.Attach(ctx, org)
 	var peer *runnerwire.Peer
 	peer = runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: func(ctx context.Context, cid uint32, method string, args json.RawMessage) (any, error) {
-		return fs.Call(ctx, peer, cid, method, args)
+		res, err := fs.Call(ctx, peer, cid, method, args)
+		if o.answer == nil || err != nil {
+			return res, err
+		}
+		raw, merr := json.Marshal(res)
+		if merr != nil {
+			return res, err
+		}
+		return o.answer(method, raw), nil
 	}})
 	go func() { _ = peer.Run(ctx) }()
 	t.Cleanup(func() { orgPeer.Close(); peer.Close() })
-	data, _ := json.Marshal(runnerwire.Caps{Folders: shares, MachineName: "alice-laptop"})
+	data, _ := json.Marshal(caps)
 	if err := peer.Event(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		if _, ok := sub.Caps(); ok {
-			return runnerEndpoint{sub: sub, link: link}
+			return runnerEndpoint{sub: sub, link: link}, orgPeer
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("the runner's caps never arrived")
@@ -177,14 +218,31 @@ func (s *computerFolderStore) RunLocalFolderStatus(ctx context.Context, _ uuid.U
 	return s.status, nil
 }
 
-func (s *computerFolderStore) SetRunLocalFolderStatus(ctx context.Context, _ uuid.UUID, st types.RunLocalFolderStatus) (bool, error) {
+func (s *computerFolderStore) SetRunLocalFolderStatusIf(ctx context.Context, _ uuid.UUID, guard store.FolderStatusGuard, st types.RunLocalFolderStatus) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	s.smu.Lock()
 	defer s.smu.Unlock()
+	if s.status.Gen != guard.Gen {
+		return false, nil
+	}
+	st.Gen = guard.Gen
 	s.status = st
 	return true, nil
+}
+
+func (s *computerFolderStore) BumpRunLocalFolderGen(ctx context.Context, _ uuid.UUID, guard store.FolderStatusGuard, at time.Time) (types.RunLocalFolderStatus, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return types.RunLocalFolderStatus{}, false, err
+	}
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	if s.status.Gen != guard.Gen {
+		return types.RunLocalFolderStatus{}, false, nil
+	}
+	s.status.Gen, s.status.GenAt = s.status.Gen+1, at
+	return s.status, true, nil
 }
 
 // folderSandboxRunner is execCountRunner whose ExecStream runs an in-memory sftp-server, the sandbox's.
@@ -210,8 +268,10 @@ type folderSandboxRunner struct {
 	proxyEnds bool
 	// verifyLeft makes the quiesce path's /proc check report a process the kill could not end.
 	verifyLeft bool
-	// onPass runs as a pass's sftp-server starts in the sandbox's folder.
+	// onPass runs as a pass's sftp-server starts in the sandbox's folder; onRead, as a pass reads a file,
+	// by its base name, before the read.
 	onPass func()
+	onRead func(name string)
 }
 
 // StopProxy removes the sandbox's proxy, its agent's only way out.
@@ -258,9 +318,13 @@ type blockingGet struct {
 	sftp.FileReader
 	block   string
 	release <-chan struct{}
+	onRead  func(name string)
 }
 
 func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	if b.onRead != nil {
+		b.onRead(path.Base(r.Filepath))
+	}
 	if path.Base(r.Filepath) == b.block {
 		<-b.release
 	}
@@ -313,7 +377,7 @@ func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runne
 	toServer, stdin := io.Pipe()
 	stdout, fromServer := io.Pipe()
 	files, release := r.files, make(chan struct{})
-	files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release}
+	files.FileGet = blockingGet{FileReader: r.files.FileGet, block: r.block, release: release, onRead: r.onRead}
 	srv := sftp.NewRequestServer(struct {
 		io.Reader
 		io.WriteCloser
@@ -585,7 +649,7 @@ func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *
 		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept", n)
 	}
 	st := cs.folderStatus()
-	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep resumes the sync") {
+	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep, about hourly, tries the sync again") {
 		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
 	}
 	// Kept past the run's end, the sandbox runs only the pass back: no agent, no egress.
