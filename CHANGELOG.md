@@ -33,6 +33,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run could not be revived when the person was under a restriction that sets push rules or tool rules and the run had a repository or more than one agent: the revive failed with a config error. The restriction's rules are now applied to each repository's push rules and each agent's tool rules, and the revive goes through. Affects 0.10.0 prereleases only.
 - A rule that sets who approves held `kubectl` writes and leaves the run's owner out now stops the owner from approving them when it does not also require a second person; the owner had been able to approve their own run's write.
 - The governance writes guide now says that a restriction a person gains after their run started applies when the next start or revive resolves it: a new group restriction needs the owner's own sign-in, and an admin's revive does not find it.
+- A run that waited an hour or more in a runner pool's queue failed at start on a self-hosted runner, and on your own executors could be cut off about a minute after starting: its token's renewal stamp still dated from when it joined the queue. The start now stamps it fresh.
+- After a host reboot, one failed read of a kept interactive run's record could end the run and remove its sandbox. The check now waits for the next tick.
 
 ### Security
 
