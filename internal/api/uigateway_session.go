@@ -140,6 +140,12 @@ type uiSession struct {
 	// run's owner: a Caller session skips the owner rule, its run's callers being fixed at create.
 	Inbound bool   `json:"n,omitempty"`
 	Caller  string `json:"k,omitempty"`
+	// CredToken is the personal API token the entry ticket was minted under, and CredSession the CLI session
+	// whose access token did (a CLI session wins over its token, as for a Mac window); both uuid.Nil for a
+	// console session's or the admin token's ticket. The re-check ends the session when that credential is
+	// revoked, expired or signed out, which no person-level cut records (uiSessionStillAuthorized).
+	CredToken   uuid.UUID `json:"ct,omitempty"`
+	CredSession uuid.UUID `json:"cs,omitempty"`
 	// tokenID and sponsor ride an inbound token's session only, never a cookie: the token its rows name,
 	// and the sponsor of the service identity that holds it.
 	tokenID uuid.UUID
@@ -189,6 +195,7 @@ func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, po
 		Run: run.ID, App: app, Port: port,
 		Principal: ta.principal, Role: ta.role, Email: ta.email,
 		Expires: ta.sessionExpiry(now, ttl).Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
+		CredToken: ta.tokenID, CredSession: ta.cliSessionID,
 	}
 }
 
@@ -358,6 +365,18 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 		case verdictDelegationUnavailable:
 			return s.uiDenyReassert(sess, uiDeniedReasonDelegationUnavailable,
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		}
+	}
+	if sess.CredToken != uuid.Nil || sess.CredSession != uuid.Nil {
+		gone, err := s.macWindowCredentialGone(ctx, macWindowAuthority{TokenID: sess.CredToken, CLISessionID: sess.CredSession})
+		if err != nil {
+			slog.ErrorContext(ctx, "wardynd: ui gateway credential lookup failed", "run_id", sess.Run, "err", err)
+			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable,
+				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		}
+		if gone {
+			return s.uiDenyReassert(sess, uiDeniedReasonRevoked,
+				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 		}
 	}
 	if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {

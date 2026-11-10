@@ -124,3 +124,57 @@ func TestAttachTicket_BoundToItsCredential(t *testing.T) {
 		t.Fatalf("CLI terminal after the session row went: %v, want %v", err, errAttachAuthorityEnded)
 	}
 }
+
+// TestUISession_BoundToItsCredential: a relay session opened from a ticket minted with a personal token or a CLI
+// sign-in carries that credential in its signed cookie, and its re-check refuses with 403 once the token is
+// revoked or the computer signed out; a session from a console login has nothing to check, and a CLI
+// refresh, which only replaces the access token, does not end the session.
+func TestUISession_BoundToItsCredential(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	cs := &credentialStore{Store: h.srv.cfg.Store, tokens: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]store.CLISessionRow{}}
+	h.srv.cfg.Store = cs
+	tokenID, sessionID := uuid.New(), uuid.New()
+	cs.tokens[tokenID] = true
+	cs.sessions[sessionID] = store.CLISessionRow{ID: sessionID, ExpiresAt: h.srv.cfg.Now().Add(24 * time.Hour)}
+	open := func(ta ticketActor) uiSession {
+		ta.actorType, ta.principal, ta.role, ta.authorizedAt = types.ActorHuman, h.owner, oidc.RoleUser, h.srv.cfg.Now()
+		sess := h.srv.newUISession(h.run, ta, "code", uiTestPort, time.Hour)
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.AddCookie(&http.Cookie{Name: uiCookieName, Value: h.srv.encodeUISession(sess)})
+		got, ok := h.srv.decodeUISession(r, h.srv.cfg.Now())
+		if !ok {
+			t.Fatal("the session cookie did not decode")
+		}
+		if got.CredToken != ta.tokenID || got.CredSession != ta.cliSessionID {
+			t.Fatalf("cookie credential = %v/%v, want %v/%v", got.CredToken, got.CredSession, ta.tokenID, ta.cliSessionID)
+		}
+		return got
+	}
+	refused := func(sess uiSession) *uiDialError {
+		return h.srv.uiSessionStillAuthorized(context.Background(), sess, h.run)
+	}
+
+	byToken := open(ticketActor{tokenID: tokenID})
+	byCLI := open(ticketActor{cliSessionID: sessionID})
+	console := open(ticketActor{})
+	for name, sess := range map[string]uiSession{"token": byToken, "CLI": byCLI, "console": console} {
+		if de := refused(sess); de != nil {
+			t.Fatalf("%s session with its credential live: refused %+v", name, de)
+		}
+	}
+	delete(cs.tokens, tokenID)
+	if de := refused(byToken); de == nil || de.status != http.StatusForbidden || de.reason != uiDeniedReasonRevoked {
+		t.Fatalf("token session after the token was revoked: %+v, want 403 %s", de, uiDeniedReasonRevoked)
+	}
+	if de := refused(byCLI); de != nil {
+		t.Fatalf("CLI session after a refresh replaced its access token: %+v", de)
+	}
+	now := h.srv.cfg.Now()
+	cs.sessions[sessionID] = store.CLISessionRow{ID: sessionID, ExpiresAt: now.Add(24 * time.Hour), EndedAt: &now}
+	if de := refused(byCLI); de == nil || de.status != http.StatusForbidden || de.reason != uiDeniedReasonRevoked {
+		t.Fatalf("CLI session after the computer signed out: %+v, want 403 %s", de, uiDeniedReasonRevoked)
+	}
+	if de := refused(console); de != nil {
+		t.Fatalf("console session refused by a credential check: %+v", de)
+	}
+}
