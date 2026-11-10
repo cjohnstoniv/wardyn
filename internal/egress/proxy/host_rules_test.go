@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -181,8 +182,7 @@ func TestHostRulesJudgeEachRequestInsideTheTunnel(t *testing.T) {
 
 // TestHostRulesRefuseAPathNotInNormalForm: beside an allow-all rule, a deny on /admin. An upstream that
 // resolves /admin//../users by RFC 3986 reads /admin/users, so on a rule host a path with an empty, "."
-// or ".." segment is refused rather than judged in a form the host does not read. ";" is part of the
-// segment, so /admin;x=1 is judged as written: not under /admin.
+// or ".." segment, or a ";", is refused rather than judged in a form the host does not read.
 func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
 	for _, tc := range []struct {
 		path  string
@@ -192,7 +192,7 @@ func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
 		{"/admin//../users", http.StatusForbidden, "not in normal form"},
 		{"/users/./x", http.StatusForbidden, "not in normal form"},
 		{"/admin", http.StatusForbidden, "rule 0 denies"},
-		{"/admin;x=1", http.StatusOK, ""},
+		{"/admin;x=1", http.StatusForbidden, "not in normal form"},
 		{"/users", http.StatusOK, ""},
 	} {
 		cu := captureUpstream(t, true, "ok")
@@ -215,6 +215,51 @@ func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
 			return d.RuleSource == ruleSourceHostRule && strings.Contains(d.Cause, tc.cause)
 		}) {
 			t.Errorf("GET %s: no policy:host-rule row with %q:\n%s", tc.path, tc.cause, buf.String())
+		}
+	}
+}
+
+// TestHostRulesRefuseAPathParameterAServletUpstreamDrops: a Servlet upstream drops ";" path parameters
+// before routing, so /admin;x=1 is its /admin. Beside an allow-all rule, a deny on /admin refuses every
+// spelling of a parameter on a rule host, and the upstream is never reached; a plain path still forwards.
+func TestHostRulesRefuseAPathParameterAServletUpstreamDrops(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/admin;x=1", http.StatusForbidden},
+		{"/admin;x=1/users", http.StatusForbidden},
+		{"/admin%3Bx=1", http.StatusForbidden},
+		{"/users;jsessionid=1", http.StatusForbidden},
+		{"/users", http.StatusOK},
+	} {
+		var reached atomic.Int32
+		up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached.Add(1)
+			segs := strings.Split(r.URL.EscapedPath(), "/")
+			for i, s := range segs {
+				segs[i], _, _ = strings.Cut(s, ";") // the container drops path parameters before routing
+			}
+			_, _ = io.WriteString(w, "served "+strings.Join(segs, "/"))
+		}))
+		t.Cleanup(up.Close)
+		p, buf, caPEM := hrProxy(t, hrOpts{}, up)
+		p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+			{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+			{Host: hrHost, Effect: types.HostRuleAllow},
+		}}}
+		srv := httptest.NewServer(p)
+		status, conn, _ := hrConnect(t, srv.URL, "443")
+		if status != http.StatusOK {
+			t.Fatalf("CONNECT = %d, want 200", status)
+		}
+		got := hrInner(t, conn, caPEM, http.MethodGet, tc.path)
+		srv.Close()
+		if got != tc.want || (tc.want == http.StatusForbidden) == (reached.Load() > 0) {
+			t.Errorf("GET %s = %d, upstream reached %d time(s), want %d", tc.path, got, reached.Load(), tc.want)
+		}
+		if tc.want == http.StatusForbidden && !strings.Contains(buf.String(), "not in normal form") {
+			t.Errorf("GET %s: no row naming the path parameter:\n%s", tc.path, buf.String())
 		}
 	}
 }
