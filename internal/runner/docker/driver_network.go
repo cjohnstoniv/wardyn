@@ -82,15 +82,26 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (1) Per-run internal network and (2) the wardyn-proxy sidecar on it.
-	intNetID, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	intNetID, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec, d.resolvConfMountSupported(info.ServerVersion))
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
-	// rollback collects teardown steps to run on any later failure.
-	rollback := []func(){undoNet}
+	// rollback collects teardown steps to run on any later failure. A resolver volume that cannot be removed
+	// keeps the proxy and the network: the proxy is the anchor the orphan sweep finds the run by, and its
+	// teardown removes the volume before the proxy, so dropping the proxy here would leave the volume with
+	// nothing to find it by.
+	var dnsCleanupErr error
+	rollback := []func(){func() {
+		if dnsCleanupErr == nil {
+			undoNet()
+		}
+	}}
 	fail := func(err error) (runner.Sandbox, error) {
 		for i := len(rollback) - 1; i >= 0; i-- {
 			rollback[i]()
+		}
+		if dnsCleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("the run's proxy is kept for the orphan sweep to retry: %w", dnsCleanupErr))
 		}
 		return runner.Sandbox{}, err
 	}
@@ -158,7 +169,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// agent carries the mount too.
 	undoDNS, err := d.mountProxyResolver(ctx, spec.RunID, proxyIP, info.ServerVersion, agentHost)
 	if undoDNS != nil {
-		rollback = append(rollback, undoDNS)
+		rollback = append(rollback, func() { dnsCleanupErr = undoDNS() })
 	}
 	if err != nil {
 		return fail(err)
@@ -246,8 +257,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 // runNetworkAndProxy brings up a run's per-run internal network and its wardyn-proxy sidecar, for a
 // container and a VM alike. It returns the network's id, the proxy's IP on it, and the undo that
-// removes both; on an error it has already undone them.
-func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP string, undo func(), err error) {
+// removes both; on an error it has already undone them. dnsListen has the proxy answer DNS on :53 (proxy.DNSListenEnv):
+// only for a container run whose agent resolver is mounted to point at it, since a proxy told to open the listener
+// exits when it cannot bind.
+func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec, dnsListen bool) (intNetID, proxyIP string, undo func(), err error) {
 	// (1) Per-run internal network. Internal=true takes away its route off the host, and the isolated
 	// gateway mode leaves no address on the host's side (run_network_shape.go): together these uphold
 	// L0 even though the agent is *connected* to it.
@@ -273,6 +286,9 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 	proxyEnvs, proxyCfg, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
 	if err != nil {
 		return fail(err)
+	}
+	if dnsListen {
+		proxyEnvs = withDNSListen(proxyEnvs)
 	}
 	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg, spec.MachineKind.IsVM())
 	var proxyID string

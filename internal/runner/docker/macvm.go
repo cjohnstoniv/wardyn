@@ -466,7 +466,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	// The run's network and proxy are what the start hands the VM (MacOSStarting), so a failure here is
 	// the start's, said before any clone began.
 	failed = runner.MacOSStartFailed
-	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec, false)
 	if err != nil {
 		return fail(err)
 	}

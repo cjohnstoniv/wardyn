@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -126,27 +128,68 @@ func (d *Driver) ensureDNSVolume(ctx context.Context, runID uuid.UUID) error {
 	return d.dnsVolumeOwned(created.Volume, runID)
 }
 
+// errDNSSeedNotOurs says a container answering to a run's DNS seed name is not that run's DNS seed. As with
+// the volume, a name proves nothing about who made the object.
+var errDNSSeedNotOurs = errors.New("docker: a container answers to this run's DNS seed name but is not Wardyn's DNS seed for it")
+
+// dnsSeedOwned says whether a container is runID's DNS seed as this driver creates it: the DNS seed component,
+// managed, this run's, this deployment's and this runner's labels.
+func (d *Driver) dnsSeedOwned(insp container.InspectResponse, runID uuid.UUID) error {
+	var l map[string]string
+	if insp.Config != nil {
+		l = insp.Config.Labels
+	}
+	deployment, hasDeployment := l[labelDeployment]
+	if l[labelManaged] != "true" || l[labelComponent] != componentDNSSeed || l[labelRun] != runID.String() ||
+		!hasDeployment || deployment != d.cfg.InternalNetwork || l[runner.LabelRunnerID] != d.cfg.RunnerID {
+		return fmt.Errorf("%w: %q", errDNSSeedNotOurs, dnsSeedName(runID))
+	}
+	return nil
+}
+
+// removeDNSSeed removes runID's DNS seed if one is there: inspected by name, judged by dnsSeedOwned, and removed
+// by the id that inspect returned, so a name taken between the two cannot redirect the removal. A seed that is
+// not Wardyn's is left in place and returned as errDNSSeedNotOurs; none there is success.
+func (d *Driver) removeDNSSeed(ctx context.Context, runID uuid.UUID) error {
+	res, err := d.cli.ContainerInspect(ctx, dnsSeedName(runID), client.ContainerInspectOptions{})
+	if isNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("docker: inspect the DNS seed: %w", err)
+	}
+	if err := d.dnsSeedOwned(res.Container, runID); err != nil {
+		return err
+	}
+	return d.removeSeedByID(ctx, res.Container.ID)
+}
+
+// removeSeedByID force-removes the seed container with this id, the one this driver created or inspected.
+func (d *Driver) removeSeedByID(ctx context.Context, id string) error {
+	if _, err := d.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: remove the DNS seed: %w", err)
+	}
+	return nil
+}
+
 // seedResolvConf makes runID's DNS volume and writes resolv.conf, naming
-// proxyIP as the only nameserver, into it.
+// proxyIP as the only nameserver, into it. A seed or volume under the run's
+// names that is not Wardyn's refuses the run. The seed this call creates is
+// kept by id for the copy and its removal.
 func (d *Driver) seedResolvConf(ctx context.Context, runID uuid.UUID, proxyIP string) error {
 	if err := d.ensureDNSVolume(ctx, runID); err != nil {
 		return err
 	}
-	volName, seedName := dnsVolumeName(runID), dnsSeedName(runID)
-	remove := func(ctx context.Context) error {
-		if _, err := d.cli.ContainerRemove(ctx, seedName, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
-			return fmt.Errorf("remove the seed: %w", err)
-		}
-		return nil
-	}
-	if err := remove(ctx); err != nil {
+	if err := d.removeDNSSeed(ctx, runID); err != nil {
 		return fmt.Errorf("docker: seed the DNS volume: %w", err)
 	}
-	err := d.fillResolvConf(ctx, runID, volName, seedName, proxyIP)
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
-	defer cancel()
-	if rerr := remove(rctx); err == nil {
-		err = rerr
+	seedID, err := d.fillResolvConf(ctx, runID, dnsVolumeName(runID), proxyIP)
+	if seedID != "" {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
+		defer cancel()
+		if rerr := d.removeSeedByID(rctx, seedID); err == nil {
+			err = rerr
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("docker: seed the DNS volume: %w", err)
@@ -157,10 +200,11 @@ func (d *Driver) seedResolvConf(ctx context.Context, runID uuid.UUID, proxyIP st
 // fillResolvConf creates the seed with the volume mounted (NoCopy, so nothing
 // from the image is copied in) and copies resolv.conf into it. The seed uses
 // the proxy's image, which every run has pulled by now, never starts, and has
-// no network.
-func (d *Driver) fillResolvConf(ctx context.Context, runID uuid.UUID, volName, seedName, proxyIP string) error {
-	if _, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: seedName,
+// no network. It returns the seed's id as soon as the create has made one, so
+// the caller removes that container whatever the copy does.
+func (d *Driver) fillResolvConf(ctx context.Context, runID uuid.UUID, volName, proxyIP string) (string, error) {
+	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: dnsSeedName(runID),
 		Config: &container.Config{Image: d.proxyImage(), Cmd: []string{"true"}, NetworkDisabled: true,
 			Labels: d.dnsLabels(runID, componentDNSSeed)},
 		HostConfig: &container.HostConfig{
@@ -168,8 +212,9 @@ func (d *Driver) fillResolvConf(ctx context.Context, runID uuid.UUID, volName, s
 			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volName, Target: dnsSeedTarget,
 				VolumeOptions: &mount.VolumeOptions{NoCopy: true}}},
 		},
-	}); err != nil {
-		return fmt.Errorf("create the seed: %w", err)
+	})
+	if err != nil {
+		return "", fmt.Errorf("create the seed: %w", err)
 	}
 	body := []byte("nameserver " + proxyIP + "\n")
 	var buf bytes.Buffer
@@ -178,19 +223,19 @@ func (d *Driver) fillResolvConf(ctx context.Context, runID uuid.UUID, volName, s
 		Name: dnsSeedTarget[1:] + "/" + resolvConfFile, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body)),
 		Uid: 0, Gid: 0, ModTime: time.Now(),
 	}); err != nil {
-		return err
+		return created.ID, err
 	}
 	if _, err := tw.Write(body); err != nil {
-		return err
+		return created.ID, err
 	}
 	if err := tw.Close(); err != nil {
-		return err
+		return created.ID, err
 	}
 	// CopyUIDGID false: the header's owner (root) is applied as written.
-	if _, err := d.cli.CopyToContainer(ctx, seedName, client.CopyToContainerOptions{DestinationPath: "/", Content: &buf}); err != nil {
-		return fmt.Errorf("write resolv.conf: %w", err)
+	if _, err := d.cli.CopyToContainer(ctx, created.ID, client.CopyToContainerOptions{DestinationPath: "/", Content: &buf}); err != nil {
+		return created.ID, fmt.Errorf("write resolv.conf: %w", err)
 	}
-	return nil
+	return created.ID, nil
 }
 
 // resolvConfMount is the agent's mount of runID's DNS volume: the volume's one
@@ -230,15 +275,16 @@ func (d *Driver) resolvConfMountSupported(engineVersion string) bool {
 // the run takes no mount and a warning: the agent keeps Docker's resolver, and
 // its lookups write no row. The undo is returned with the error, since a seed
 // that failed midway may have left the volume; it removes the volume only
-// after the same ownership check as any other removal.
-func (d *Driver) mountProxyResolver(ctx context.Context, runID uuid.UUID, proxyIP, engineVersion string, host *container.HostConfig) (func(), error) {
+// after the same ownership check as any other removal, and reports a removal
+// that failed.
+func (d *Driver) mountProxyResolver(ctx context.Context, runID uuid.UUID, proxyIP, engineVersion string, host *container.HostConfig) (func() error, error) {
 	if !d.resolvConfMountSupported(engineVersion) {
 		slog.Warn("docker: this Docker Engine or API version cannot mount a single file from a volume, so the run's lookups are not recorded as DNS rows",
 			"engine", engineVersion, "api", d.cli.ClientVersion(), "needs_engine", minResolvConfSubpathEngineMajor,
 			"needs_api", fmt.Sprintf("1.%d", minResolvConfSubpathAPIMinor))
 		return nil, nil
 	}
-	undo := func() { _ = d.removeDNSVolume(context.Background(), runID) }
+	undo := func() error { return d.removeDNSVolume(context.Background(), runID) }
 	if err := d.seedResolvConf(ctx, runID, proxyIP); err != nil {
 		return undo, err
 	}
@@ -254,8 +300,10 @@ func (d *Driver) mountProxyResolver(ctx context.Context, runID uuid.UUID, proxyI
 // warning, and the removal succeeds. A volume already gone is success; the
 // error is the first other one.
 func (d *Driver) removeDNSVolume(ctx context.Context, runID uuid.UUID) error {
-	if _, err := d.cli.ContainerRemove(ctx, dnsSeedName(runID), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("docker: remove the DNS seed: %w", err)
+	if err := d.removeDNSSeed(ctx, runID); errors.Is(err, errDNSSeedNotOurs) {
+		slog.Warn("docker: leaving a container that is not this run's DNS seed in place", "container", dnsSeedName(runID), "reason", err.Error())
+	} else if err != nil {
+		return err
 	}
 	name := dnsVolumeName(runID)
 	res, err := d.cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
@@ -273,4 +321,18 @@ func (d *Driver) removeDNSVolume(ctx context.Context, runID uuid.UUID) error {
 		return fmt.Errorf("docker: remove the DNS volume: %w", err)
 	}
 	return nil
+}
+
+// withDNSListen adds the proxy's DNS listener to its environment.
+func withDNSListen(env []string) []string { return append(env, proxy.DNSListenEnv+"=:53") }
+
+// agentMountsResolver says whether the agent's host config mounts runID's DNS volume over /etc/resolv.conf: the
+// agent's resolver is then its proxy, which is what a proxy's DNS listener is for.
+func agentMountsResolver(host *container.HostConfig, runID uuid.UUID) bool {
+	if host == nil {
+		return false
+	}
+	return slices.ContainsFunc(host.Mounts, func(m mount.Mount) bool {
+		return m.Type == mount.TypeVolume && m.Target == "/etc/resolv.conf" && m.Source == dnsVolumeName(runID)
+	})
 }
