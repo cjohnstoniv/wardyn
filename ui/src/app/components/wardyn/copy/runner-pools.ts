@@ -22,11 +22,11 @@ export const RES = {
   NOT_COUNTED: "Not counted",
   FULL: "Full",
   CPUS: (n: number) => `${n} ${n === 1 ? "CPU" : "CPUs"}`,
-  GB: (n: number) => `${n} GB`,
+  GB: (n: number) => `${n} GiB`,
   OF: (use: string | number, total: string) => `${use} of ${total}`,
   PCT_IN_USE: (pct: number) => `${pct}% in use`,
-  /** "8 CPUs · 16 GB memory · 500 GB disk" */
-  AMOUNTS: (cpus: number, memGB: number, diskGB: number) => `${cpus} ${cpus === 1 ? "CPU" : "CPUs"} · ${memGB} GB memory · ${diskGB} GB disk`,
+  /** "8 CPUs · 16 GiB memory · 500 GiB disk" */
+  AMOUNTS: (cpus: number, memGB: number, diskGB: number) => `${cpus} ${cpus === 1 ? "CPU" : "CPUs"} · ${memGB} GiB memory · ${diskGB} GiB disk`,
   OFFLINE_NOTE: "This runner is offline. Its capacity isn't counted as available until it reconnects.",
   // Board D2a (owner-approved 2026-10-20): a runner that registered but never connected. Every odd entry is
   // shown as code; joined, they are the board's sentence character for character.
@@ -136,11 +136,11 @@ export const LIMITS_DIALOG = {
   TOTAL: "Total across all its runs at once",
   PER_RUN: "Per run, the most one run may use",
   CPU: "CPU (CPUs)",
-  MEMORY: "Memory (GB)",
-  DISK: "Disk (GB)",
+  MEMORY: "Memory (GiB)",
+  DISK: "Disk (GiB)",
   REPORTED: (n: number) => `Reported: ${n}`,
   CALC: (tc: number, tm: number, td: number, n: number, pc: number, pm: number, pd: number) =>
-    `Total ÷ "Runs at once": ${tc} ÷ ${n} = ${pc} ${pc === 1 ? "CPU" : "CPUs"} · ${tm} ÷ ${n} = ${pm} GB memory · ${td} ÷ ${n} = ${pd} GB disk. At least 1 CPU and 1 GB.`,
+    `Total ÷ "Runs at once": ${tc} ÷ ${n} = ${pc} ${pc === 1 ? "CPU" : "CPUs"} · ${tm} ÷ ${n} = ${pm} GiB memory · ${td} ÷ ${n} = ${pd} GiB disk. At least 1 CPU and 1 GiB.`,
   CALC_PENDING: "Total ÷ \"Runs at once\" is worked out when the numbers above are set.",
   USE_SHARE: "Use total ÷ \"Runs at once\"",
   SAVE_SETUP: "Save limits",
@@ -150,7 +150,7 @@ export const LIMITS_DIALOG = {
   ERR_RUNS: "\"Runs at once\" is a whole number, 1 or more.",
   ERR_ABOVE_ZERO: "Set a number above 0.",
   ERR_PER_RUN: "Per run can't be more than the total.",
-  ERR_DISK_WHOLE: "Disk is a whole number of GB.",
+  ERR_DISK_WHOLE: "Disk is a whole number of GiB.",
   ERR_REPORTED: (amount: string) => `Not allowed: this computer reports ${amount}.`,
 } as const;
 
@@ -283,7 +283,7 @@ export const POOL_DRAWER = {
   MEMBER_RUNS: (max: number, active: number) => `Runs at once: ${max} · Running now: ${active} of ${max}`,
   MEMBER_PER_RUN: (amounts: string) => `Per run, up to ${amounts}`,
   MEMBER_AVAILABLE: (cpu: number, cpuTot: number, mem: number, memTot: number, disk: number, diskTot: number) =>
-    `${cpu} of ${cpuTot} CPUs · ${mem} of ${memTot} GB memory · ${disk} of ${diskTot} GB disk available`,
+    `${cpu} of ${cpuTot} CPUs · ${mem} of ${memTot} GiB memory · ${disk} of ${diskTot} GiB disk available`,
   MEMBER_OFFLINE: "(offline: not counted)",
   MEMBER_NAMESPACE: (ns: string) => `Runs in namespace ${ns}`,
   MEMBER_NAMESPACE_DEFAULT: "Runs in the runner's default namespace",
@@ -349,8 +349,8 @@ export const POOL_FORM = {
   MAX_RUNS_HINT_EDIT: (n: number) => `Its runners allow ${n} runs at once in total. A run launched past this waits for a free slot.`,
   MAX_RUNS_HINT_NEW: "Its runners' \"Runs at once\" limits add up to the most it can run. A run launched past this waits for a free slot.",
   CPU: "CPU (CPUs)",
-  MEMORY: "Memory (GB)",
-  DISK: "Disk (GB)",
+  MEMORY: "Memory (GiB)",
+  DISK: "Disk (GiB)",
   DEFAULT: "Default",
   MAX_PER_RUN: "Maximum per run",
   QUALIFIER: "Optional. Leave empty to follow its runners, and it can only narrow them.",
@@ -387,7 +387,7 @@ export const POOL_FORM = {
   ERR_DEFAULT_OVER_MAX: (section: string, resource: string, def: number, max: number) =>
     `${section}, ${resource}: the default (${def}) can't be more than the maximum (${max}).`,
   ERR_BOTH: (section: string, resource: string) => `${section}, ${resource}: set both a default and a maximum, or leave both empty.`,
-  ERR_DISK_WHOLE: (section: string) => `${section}, disk: set whole numbers of GB.`,
+  ERR_DISK_WHOLE: (section: string) => `${section}, disk: set whole numbers of GiB.`,
   ERR_DUR_DEFAULT: (section: string, what: string) => `${section}, ${what}: set a default of at least 1 minute.`,
   ERR_DUR_MAX: (section: string, what: string, never: string) => `${section}, ${what}: set a maximum, or choose ${never}.`,
   ERR_DUR_ORDER: (section: string, what: string, def: string, max: string) => `${section}, ${what}: the default (${def}) can't be longer than the maximum (${max}).`,

@@ -124,7 +124,7 @@ describe("organisation default pool", () => {
     expect(onSetDefault).toHaveBeenCalledWith(null);
   });
 
-  // Its runner takes 4 CPUs, 8 GB memory and 50 GB disk per run. The pool sets memory below that, disk equal
+  // Its runner takes 4 CPUs, 8 GiB memory and 50 GiB disk per run. The pool sets memory below that, disk equal
   // to it and CPU wider than it; a run that asks for nothing gets the pool's default in all three.
   const OWN = { background: { memory_mib: { default: 2048, cap: 4096 }, disk_mib: { default: 20480, cap: 51200 }, cpu_millis: { default: 1000, cap: 16000 } }, barriers: ["CC2" as const], max_concurrent_runs: 40 };
 
@@ -134,9 +134,9 @@ describe("organisation default pool", () => {
     const row = within(sheet).getByText("Background tasks", { selector: "strong" }).closest("tr") as HTMLElement;
     const cell = (label: string) => row.querySelector(`[data-l="${label}: "]`) as HTMLElement;
     // Lower: the pool bounds the run.
-    expect(cell("Memory")).toHaveTextContent(/^default 2 GB \(max 4 GB\)$/);
+    expect(cell("Memory")).toHaveTextContent(/^default 2 GiB \(max 4 GiB\)$/);
     // Equal: still the pool's own, and its default still applies.
-    expect(cell("Disk")).toHaveTextContent(/^default 20 GB \(max 50 GB\)$/);
+    expect(cell("Disk")).toHaveTextContent(/^default 20 GiB \(max 50 GiB\)$/);
     // Wider: shown as set, with what its runners allow, which is what bounds the run.
     expect(within(cell("CPU")).getByText("default 1 CPU (max 16 CPUs)")).toBeInTheDocument();
     expect(within(cell("CPU")).getByText("Up to 4 CPUs, from its runners")).toBeInTheDocument();
@@ -149,7 +149,7 @@ describe("organisation default pool", () => {
     renderDrawer(pool({ limits: { background: { memory_mib: { default: 2048, cap: 4096 } }, barriers: ["CC2"] } }), { members: [] });
     const sheet = await screen.findByRole("dialog");
     const row = within(sheet).getByText("Background tasks", { selector: "strong" }).closest("tr") as HTMLElement;
-    expect(row.querySelector('[data-l="Memory: "]')).toHaveTextContent(/^default 2 GB \(max 4 GB\)$/);
+    expect(row.querySelector('[data-l="Memory: "]')).toHaveTextContent(/^default 2 GiB \(max 4 GiB\)$/);
     expect(row.querySelector('[data-l="CPU: "]')).toHaveTextContent(/^—$/);
   });
 
@@ -157,7 +157,7 @@ describe("organisation default pool", () => {
     renderDrawer(pool({ limits: { background: {}, barriers: ["CC2"] } }));
     const sheet = await screen.findByRole("dialog");
     expect(within(sheet).getByText("This pool adds no limits of its own: it follows its runners' limits.")).toBeInTheDocument();
-    expect(within(sheet).getByText("Up to 8 GB, from its runners")).toBeInTheDocument();
+    expect(within(sheet).getByText("Up to 8 GiB, from its runners")).toBeInTheDocument();
   });
 
   it("with no runners says nothing can run there", async () => {

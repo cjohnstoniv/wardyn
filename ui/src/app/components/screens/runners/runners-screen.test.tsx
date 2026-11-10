@@ -283,7 +283,7 @@ describe("Admin -> Runners list", () => {
     expect(within(shared).getByText("Not applicable")).toBeInTheDocument();
     expect(within(shared).getByText("Organisation")).toBeInTheDocument();
     expect(shared).toHaveTextContent("General, Lab VM · cara");
-    expect(within(shared).getByRole("row", { name: /^Memory/ })).toHaveTextContent("16 GB of 96 GB");
+    expect(within(shared).getByRole("row", { name: /^Memory/ })).toHaveTextContent("16 GiB of 96 GiB");
     expect(rowNames()).toEqual(["mbp-ben", "laptop-7", "desk-2", "shared-docker"]);
   });
 
@@ -484,7 +484,7 @@ describe("Admin -> Runners drawer and revoke", () => {
     expect(within(drawer).getByText(/Running now: 2 of 2/)).toBeInTheDocument();
     expect(within(drawer).getByText("At its limit")).toBeInTheDocument();
     expect(within(drawer).getByText("Only its owner changes these, in Settings → My runner or with wardyn runner set. You can read them here.")).toBeInTheDocument();
-    expect(within(drawer).getByText(/This computer reports 8 CPUs · 16 GB memory · 500 GB disk\. Its limits can't be higher\./)).toBeInTheDocument();
+    expect(within(drawer).getByText(/This computer reports 8 CPUs · 16 GiB memory · 500 GiB disk\. Its limits can't be higher\./)).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: "Laptop" })).toBeInTheDocument();
     expect(within(drawer).queryByRole("button", { name: "Edit limits" })).toBeNull();
     expect(within(drawer).getByText("SHA256:3Jd1d8XqFULLFINGERPRINTVALUEk2Q9")).toBeInTheDocument();
@@ -623,8 +623,8 @@ describe("Admin -> Runners remote-hosted runner", () => {
     const dialog = await screen.findByRole("dialog", { name: "Limits for shared-docker" });
     expect(within(dialog).getByText("Remote-hosted runners need limits too. Every run on it stays within them.")).toBeInTheDocument();
     expect(within(dialog).getByText("Running now: 1. Lowering any limit never stops a run already going.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Total ÷ \"Runs at once\": 24 ÷ 6 = 4 CPUs · 96 ÷ 6 = 16 GB memory · 1000 ÷ 6 = 166 GB disk. At least 1 CPU and 1 GB.")).toBeInTheDocument();
-    const memory = within(dialog).getAllByRole("spinbutton", { name: "Memory (GB)" });
+    expect(within(dialog).getByText("Total ÷ \"Runs at once\": 24 ÷ 6 = 4 CPUs · 96 ÷ 6 = 16 GiB memory · 1000 ÷ 6 = 166 GiB disk. At least 1 CPU and 1 GiB.")).toBeInTheDocument();
+    const memory = within(dialog).getAllByRole("spinbutton", { name: "Memory (GiB)" });
     setField(memory[1], "128");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(within(dialog).getAllByText("Per run can't be more than the total.").length).toBeGreaterThan(0);

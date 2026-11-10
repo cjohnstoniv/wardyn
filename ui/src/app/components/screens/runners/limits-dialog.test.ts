@@ -17,13 +17,13 @@ describe("limits the dialog refuses", () => {
     expect(validateLimits(vals({ tm: "12.5", pc: "1.5" }), reported)).toEqual({});
   });
 
-  it("takes disk in whole GB only, in total and per run, because the server does", () => {
-    expect(validateLimits(vals({ td: "200.5" }), reported)).toEqual({ td: "Disk is a whole number of GB." });
-    expect(validateLimits(vals({ pd: "66.7" }), reported)).toEqual({ pd: "Disk is a whole number of GB." });
+  it("takes disk in whole GiB only, in total and per run, because the server does", () => {
+    expect(validateLimits(vals({ td: "200.5" }), reported)).toEqual({ td: "Disk is a whole number of GiB." });
+    expect(validateLimits(vals({ pd: "66.7" }), reported)).toEqual({ pd: "Disk is a whole number of GiB." });
   });
 
   it("refuses a total above what the computer reports, a per-run above the total, and a Runs at once that is not a whole number of 1 or more", () => {
-    expect(validateLimits(vals({ tm: "64" }), reported)).toEqual({ tm: "Not allowed: this computer reports 16 GB memory." });
+    expect(validateLimits(vals({ tm: "64" }), reported)).toEqual({ tm: "Not allowed: this computer reports 16 GiB memory." });
     expect(validateLimits(vals({ pm: "20" }), reported)).toEqual({ pm: "Per run can't be more than the total." });
     expect(validateLimits(vals({ rn: "0" }))).toEqual({ rn: "\"Runs at once\" is a whole number, 1 or more." });
     expect(validateLimits(vals({ rn: "2.5" }))).toEqual({ rn: "\"Runs at once\" is a whole number, 1 or more." });
@@ -33,7 +33,7 @@ describe("limits the dialog refuses", () => {
   });
 });
 
-// The dialog shows CPUs and GB to one decimal. A field still showing what it loaded is sent exactly as
+// The dialog shows CPUs and GiB to one decimal. A field still showing what it loaded is sent exactly as
 // loaded; only a field the person changed converts from what they typed.
 describe("what a save sends", () => {
   const LOADED = { runs_at_once: 3, total: { cpu_millis: 6000, memory_mib: 12288, disk_mib: 204800 }, per_run: { cpu_millis: 1250, memory_mib: 1700, disk_mib: 51200 } };
@@ -48,13 +48,13 @@ describe("what a save sends", () => {
   });
 });
 
-// An unchanged amount is checked at its exact loaded value, not the rounded display: 32 MiB shows as 0 GB.
+// An unchanged amount is checked at its exact loaded value, not the rounded display: 32 MiB shows as 0 GiB.
 describe("what a save validates", () => {
   const LOADED = { runs_at_once: 3, total: { cpu_millis: 6000, memory_mib: 32, disk_mib: 204800 }, per_run: { cpu_millis: 1250, memory_mib: 32, disk_mib: 51200 } };
   const shown = vals({ tm: "0", pm: "0", pc: "1.3" });
   const loaded = { vals: shown, limits: LOADED };
 
-  it("takes an unchanged 32 MiB shown as 0 GB, and still refuses a typed 0", () => {
+  it("takes an unchanged 32 MiB shown as 0 GiB, and still refuses a typed 0", () => {
     expect(validateLimits(shown, undefined, loaded)).toEqual({});
     expect(validateLimits({ ...shown, rn: "2" }, undefined, loaded)).toEqual({});
     expect(validateLimits({ ...shown, tm: "0", pm: "0.0" }, undefined, loaded)).toEqual({ pm: "Set a number above 0." });
@@ -71,6 +71,6 @@ describe("what a save checks against the reported amount", () => {
     const loaded = { vals: vals({ tm: "15.5", pm: "2" }), limits: { runs_at_once: 3, total: { cpu_millis: 6000, memory_mib: 15900, disk_mib: 204800 }, per_run: { cpu_millis: 2000, memory_mib: 2048, disk_mib: 51200 } } };
     const rep = { cpu_millis: 8000, memory_mib: 15900, disk_mib: 500 * 1024 };
     expect(validateLimits({ ...loaded.vals, rn: "2" }, rep, loaded)).toEqual({});
-    expect(validateLimits({ ...loaded.vals, rn: "2", tm: "15.6" }, rep, loaded)).toEqual({ tm: "Not allowed: this computer reports 15.5 GB memory." });
+    expect(validateLimits({ ...loaded.vals, rn: "2", tm: "15.6" }, rep, loaded)).toEqual({ tm: "Not allowed: this computer reports 15.5 GiB memory." });
   });
 });

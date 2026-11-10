@@ -101,10 +101,10 @@ describe("new user pool", () => {
     setField(screen.getByRole("spinbutton", { name: /Runs at once in this pool/ }), "3");
     setField(field("Background tasks, CPU (CPUs), Default"), "1");
     setField(field("Background tasks, CPU (CPUs), Maximum per run"), "4");
-    setField(field("Background tasks, Memory (GB), Default"), "2");
-    setField(field("Background tasks, Memory (GB), Maximum per run"), "8");
-    setField(field("Background tasks, Disk (GB), Default"), "20");
-    setField(field("Background tasks, Disk (GB), Maximum per run"), "100");
+    setField(field("Background tasks, Memory (GiB), Default"), "2");
+    setField(field("Background tasks, Memory (GiB), Maximum per run"), "8");
+    setField(field("Background tasks, Disk (GiB), Default"), "20");
+    setField(field("Background tasks, Disk (GiB), Maximum per run"), "100");
     await userEvent.click(screen.getByRole("button", { name: "Create pool" }));
     await waitFor(() => expect(createMineMock).toHaveBeenCalledTimes(1));
     expect(createMineMock).toHaveBeenCalledWith({
@@ -131,11 +131,11 @@ describe("new user pool", () => {
     expect(field("Name")).toHaveAttribute("aria-invalid", "true");
     setField(field("Name"), "Laptop");
     setField(field("Background tasks, CPU (CPUs), Default"), "2");
-    setField(field("Background tasks, Disk (GB), Default"), "10.5");
-    setField(field("Background tasks, Disk (GB), Maximum per run"), "20");
+    setField(field("Background tasks, Disk (GiB), Default"), "10.5");
+    setField(field("Background tasks, Disk (GiB), Maximum per run"), "20");
     await userEvent.click(screen.getByRole("button", { name: "Create pool" }));
     expect(screen.getByText("Background tasks, CPU: set both a default and a maximum, or leave both empty.", { selector: "p[id]" })).toBeInTheDocument();
-    expect(screen.getByText("Background tasks, disk: set whole numbers of GB.", { selector: "p[id]" })).toBeInTheDocument();
+    expect(screen.getByText("Background tasks, disk: set whole numbers of GiB.", { selector: "p[id]" })).toBeInTheDocument();
     expect(createMineMock).not.toHaveBeenCalled();
   });
 
