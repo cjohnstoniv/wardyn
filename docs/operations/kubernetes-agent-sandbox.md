@@ -89,7 +89,7 @@
 - Pod labels are refused: a label can match a NetworkPolicy that allows the pod more egress.
 - The template's own fields (`networkPolicy`, `service`, `volumeClaimTemplates`, and the four policy fields away from their defaults) are refused too. They are read only by the extensions controller, which is not installed.
 - An empty value (`""`, `[]`, `{}`) sets nothing and is accepted. `false` and `0` are settings, and are refused.
-- Resources stay set by Wardyn's policy, never by the template.
+- Resources stay set by Wardyn's policy, not by the template.
 - The boot canary runs with the chart placement, not the template. Keep the template's nodes inside the placement's nodes, so the NetworkPolicy check covers the nodes runs use.
 - A custom `schedulerName` is trusted to respect the scheduling gate. The default scheduler does.
 - Tested with fake clients only. CI installs no `SandboxTemplate` CRD.

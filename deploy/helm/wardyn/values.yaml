@@ -722,7 +722,7 @@ k8s:
     # only nodeSelector, tolerations, affinity, topologySpreadConstraints, priorityClassName, schedulerName,
     # runtimeClassName and annotations under sandbox-template.wardyn.dev/; a template that sets anything
     # else refuses the run (docs/operations/kubernetes-agent-sandbox.md). Install only the SandboxTemplate CRD
-    # from the v1.0.9 extensions.yaml, never its controller. Set adds `get` on that one sandboxtemplate to the
+    # from the v1.0.9 extensions.yaml, not its controller. Set adds `get` on that one sandboxtemplate to the
     # runner Role. Empty (default) uses none. Needs enabled=true.
     template: ""
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
