@@ -89,10 +89,13 @@ func proxyImageRelease(image string) string {
 
 // proxyStartMode is legacy only on positive evidence: a remote runner whose registered Version is a
 // release older than readbackRelease, or an in-process driver whose proxy image tag is. Anything else,
-// an unreadable runner row included, is expected.
+// an unreadable runner row included, is expected. It needs only the runner read, not all of
+// store.RunnerStore: a store that can read the row has the evidence.
 func (s *Server) proxyStartMode(ctx context.Context, run types.AgentRun) string {
 	if run.RunnerID != nil {
-		rs, ok := s.cfg.Store.(store.RunnerStore)
+		rs, ok := s.cfg.Store.(interface {
+			GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
+		})
 		if !ok {
 			return store.ProxyStartExpected
 		}
