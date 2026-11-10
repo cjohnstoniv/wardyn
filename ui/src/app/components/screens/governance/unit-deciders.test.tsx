@@ -253,6 +253,13 @@ describe("UnitDeciders: the rule editor", () => {
     expect(box.getByText(DECIDERS.COUNTER(2))).toBeInTheDocument();
   });
 
+  it("draws the keyboard focus ring inside the clipped scope choice", async () => {
+    mount();
+    await userEvent.click(screen.getAllByRole("button", { name: DECIDERS.EDIT })[0]);
+    const radio = within(editorBox(0)).getAllByRole("radio")[0];
+    expect(radio.closest("label")!.querySelector("span")!.className).toContain("peer-focus-visible:ring-inset");
+  });
+
   it("makes elevation its own rule, with its own limits and no owner or scope", async () => {
     mount({ deciders: [] });
     await userEvent.click(button(DECIDERS.ADD));

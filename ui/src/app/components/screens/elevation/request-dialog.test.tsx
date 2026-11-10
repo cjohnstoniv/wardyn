@@ -41,6 +41,12 @@ describe("RequestDialog: both kinds offered", () => {
     expect(kind("Elevation")).not.toBeChecked();
   });
 
+  it("draws the keyboard focus ring inside the clipped kind choice", () => {
+    setup({ initialKind: "image" });
+    const track = kind("Image").closest("label")!.querySelector("span")!;
+    expect(track.className).toContain("peer-focus-visible:ring-inset");
+  });
+
   it("opens on Elevation with the choice in the elevation dialog", () => {
     setup({ initialKind: "elevation" });
     expect(screen.getByText("New elevation request")).toBeInTheDocument();
