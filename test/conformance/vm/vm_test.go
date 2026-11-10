@@ -373,6 +373,7 @@ func TestLinuxVMSandbox(t *testing.T) {
 	t.Logf("the relay counted %d IPv6 frames dropped, %d of them before the IPv6 probe", ipv6Drops(decisions(t, cli, spec.RunID)), before)
 	// The proxy's rows: the port rule refused port 22 (the run's proxy is marked vm, as nothing else
 	// turns that rule on here), the relay reported what only it sees, and every allow is the origin.
+	// A DNS row (dns:answered, dns:refused) records what the relay told the guest, not traffic.
 	want := map[string]bool{"policy:port": false, "policy:default-deny": false, "vmnet:literal-ip": false, "vmnet:udp": false, "vmnet:dropped-frame": false}
 	var rows []map[string]any
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(time.Second) {
@@ -403,6 +404,7 @@ func TestLinuxVMSandbox(t *testing.T) {
 		flow, _ := r["flow"].(string)
 		t.Logf("%v %s host=%q port=%v flow=%q repeat=%v cause=%q", r["decision"], src, host, req["Port"], flow, r["repeat"], r["cause"])
 		switch {
+		case strings.HasPrefix(src, "dns:"):
 		case r["decision"] == "allow" && host != "origin.test":
 			t.Errorf("allow row for %q: only the origin is allowed", host)
 		case r["decision"] == "deny" && !strings.HasPrefix(src, "vmnet:") && flow == "":
