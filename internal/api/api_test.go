@@ -26,6 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -656,6 +657,34 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 		body := decode(t, srv)
 		if body["network_policy"] != "refused" || body["network_policy_checked_at"] != at.Format(time.RFC3339) {
 			t.Errorf("network_policy = %v checked %v, want refused checked %s", body["network_policy"], body["network_policy_checked_at"], at.Format(time.RFC3339))
+		}
+	})
+	// A connected Kubernetes runner's verdict counts: the worst of this daemon's and the runners' wins,
+	// with its own time; an offline runner's last verdict does not.
+	t.Run("connected runner's worse verdict wins", func(t *testing.T) {
+		at := time.Now().UTC().Truncate(time.Second)
+		local := runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at}
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: k8sRecheckRunner{k8sRunner: k8sRunner{networkPolicy: true}, check: local}})
+		remoteAt := at.Add(-time.Minute)
+		_, link := connectRunner(t, srv, uuid.New(), substrate.ClassSupport{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolRefused, At: remoteAt}})
+		connectRunner(t, srv, uuid.New(), substrate.ClassSupport{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: at.Add(-time.Hour)}})
+		body := decode(t, srv)
+		if body["network_policy"] != "refused" || body["network_policy_checked_at"] != remoteAt.Format(time.RFC3339) {
+			t.Errorf("network_policy = %v checked %v, want the runner's refused checked %s", body["network_policy"], body["network_policy_checked_at"], remoteAt.Format(time.RFC3339))
+		}
+		link.online = false
+		body = decode(t, srv)
+		if body["network_policy"] != "enforced" || body["network_policy_checked_at"] != at.Add(-time.Hour).Format(time.RFC3339) {
+			t.Errorf("runner offline: network_policy = %v checked %v, want enforced at the older check %s", body["network_policy"], body["network_policy_checked_at"], at.Add(-time.Hour).Format(time.RFC3339))
+		}
+	})
+	t.Run("docker daemon reports a connected k8s runner's verdict", func(t *testing.T) {
+		at := time.Now().UTC().Truncate(time.Second)
+		srv := New(Config{BaseCtx: testBaseCtx(t), Runner: &fakeRunner{}})
+		connectRunner(t, srv, uuid.New(), substrate.ClassSupport{NetworkPolicyCheck: runner.NetPolCheck{Verdict: runner.NetPolNotProven, At: at}})
+		body := decode(t, srv)
+		if body["network_policy"] != "not_proven" || body["network_policy_checked_at"] != at.Format(time.RFC3339) {
+			t.Errorf("network_policy = %v checked %v, want not_proven checked %s", body["network_policy"], body["network_policy_checked_at"], at.Format(time.RFC3339))
 		}
 	})
 	// Negative control: a non-k8s driver must OMIT the key entirely, never

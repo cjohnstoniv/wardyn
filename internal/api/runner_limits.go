@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -62,9 +63,31 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session
 		}
 	}
 	s.healthFromRunner(ctx, runnerID, caps)
+	s.auditRunnerNetpol(ctx, runnerID, caps)
 	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
 		s.writeOwedRunnerConnect(ctx, rs, runnerID, session, r.Version)
 	}
+}
+
+// auditRunnerNetpol writes "k8s.netpol.update" when a Kubernetes runner's caps carry a NetworkPolicy
+// verdict other than its last caps did: a canary re-check, sent mid-session, or a new session's boot
+// canary. The row names the runner. The last caps are still the substrate's here, since remote.Link keeps
+// a caps event only after this checked handler ran. A runner's first verdict on this replica is the
+// baseline, and a verdict this build does not know is no change (runner.NetPolVerdictChanged).
+func (s *Server) auditRunnerNetpol(ctx context.Context, runnerID uuid.UUID, next runnerwire.Caps) {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[runnerID]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return
+	}
+	prev, ok := ep.sub.Caps()
+	from, to := prev.Support.NetworkPolicyCheck.Verdict, next.Support.NetworkPolicyCheck
+	if !ok || !runner.NetPolVerdictChanged(from, to.Verdict) {
+		return
+	}
+	id := runnerID.String()
+	s.auditNetpolUpdate(ctx, "runner:"+id, id, to.Verdict, from, to.At, map[string]any{"driver": "k8s", "runner_id": id})
 }
 
 // handleUpdateMyRunner is PUT /api/v1/me/runners/{id}: a person declares their own runner's limits,

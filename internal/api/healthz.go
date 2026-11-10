@@ -47,6 +47,22 @@ import (
 // structurally impossible: the stream is "healthy" only while events arrive.
 const ebpfHeartbeatTTL = 2 * time.Minute
 
+// runnersNetPolCheck is the worst NetworkPolicy verdict, with its own time, across the connected runners
+// whose last caps carry one (Kubernetes runners); zero when none does. A runner sends its caps again after
+// each re-check that changes the verdict or its time, so this is as live as the runner's own.
+func (s *Server) runnersNetPolCheck(ctx context.Context) runner.NetPolCheck {
+	s.runnerStreams.subsMu.Lock()
+	eps := slices.Collect(maps.Values(s.runnerStreams.subs))
+	s.runnerStreams.subsMu.Unlock()
+	var out runner.NetPolCheck
+	for _, ep := range eps {
+		if cs, err := ep.sub.Classes(ctx); err == nil { // offline, or no caps yet: no verdict
+			out = runner.WorseNetPolCheck(out, cs.NetworkPolicyCheck)
+		}
+	}
+	return out
+}
+
 // healthzSSOProvider is "microsoft" when OIDC is configured and its issuer is Entra
 // ID (the one check the person-keying path already uses), "" otherwise.
 func healthzSSOProvider(a *oidc.Authenticator) string {
@@ -66,19 +82,21 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	runnerName := ""
 	caps := []types.ConfinementClass(nil)
 	var substrates map[types.ConfinementClass]string
-	netpolVerdict := ""
-	var netpolCheckedAt time.Time
+	var netpol runner.NetPolCheck
 	if s.cfg.Runner != nil {
 		runnerName = s.cfg.Runner.Name()
 		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
 			caps = c.ConfinementClasses
 			substrates = c.Resolved
-			netpolVerdict = k8sNetpolVerdict(runnerName, c)
+			netpol.Verdict = k8sNetpolVerdict(runnerName, c)
 			if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
-				netpolCheckedAt = c.NetworkPolicyCheck.At
+				netpol.At = c.NetworkPolicyCheck.At
 			}
 		}
 	}
+	// The worst of this daemon's verdict and its connected Kubernetes runners', with that one's time.
+	netpol = runner.WorseNetPolCheck(netpol, s.runnersNetPolCheck(r.Context()))
+	netpolVerdict, netpolCheckedAt := netpol.Verdict, netpol.At
 	gtStatus := s.ebpfGroundtruthStatus(r.Context())
 	gtPublic := ebpfGroundtruthPublic(gtStatus)
 	body := map[string]any{
@@ -193,7 +211,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// network_policy is k8sNetpolVerdict's "enforced"/"acknowledged"/"unenforced"/
 	// "refused"/"not_proven" grade, present ONLY on a k8s substrate — omitted from the map entirely
 	// (not even a JSON null) on Docker and every other driver, so a Docker
-	// deployment's /healthz shape never sprouts a k8s-only field.
+	// deployment's /healthz shape never sprouts a k8s-only field. A connected
+	// Kubernetes runner's verdict counts too: the worst of all wins.
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
 	}

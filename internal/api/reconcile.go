@@ -225,16 +225,23 @@ func (s *Server) auditK8sNetpolChange(ctx context.Context, last string) string {
 	if verdict == "" || verdict == last || last == "" {
 		return cmp.Or(verdict, last)
 	}
+	s.auditNetpolUpdate(ctx, "wardyn/reconcile", driver, verdict, last, caps.NetworkPolicyCheck.At, map[string]any{"driver": driver})
+	return verdict
+}
+
+// auditNetpolUpdate writes one "k8s.netpol.update" row: verdict replaced previous, from the check at at
+// (zero when the substrate reports no time). The outcome is "success" only when the new verdict is
+// "enforced". data holds the source's own fields (driver; runner_id for a runner's report).
+func (s *Server) auditNetpolUpdate(ctx context.Context, actorID, target, verdict, previous string, at time.Time, data map[string]any) {
 	outcome := "failure"
-	if verdict == "enforced" {
+	if verdict == runner.NetPolEnforced {
 		outcome = "success"
 	}
-	data := map[string]any{"verdict": verdict, "previous": last, "driver": driver}
-	if at := caps.NetworkPolicyCheck.At; !at.IsZero() {
+	data["verdict"], data["previous"] = verdict, previous
+	if !at.IsZero() {
 		data["checked_at"] = at.UTC().Format(time.RFC3339)
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile", "k8s.netpol.update", driver, outcome, mustJSON(data)))
-	return verdict
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, actorID, "k8s.netpol.update", target, outcome, mustJSON(data)))
 }
 
 // sweepOrphanedSandboxes tears down the per-run containers of runs whose row no
