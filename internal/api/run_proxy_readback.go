@@ -93,9 +93,7 @@ func proxyImageRelease(image string) string {
 // store.RunnerStore: a store that can read the row has the evidence.
 func (s *Server) proxyStartMode(ctx context.Context, run types.AgentRun) string {
 	if run.RunnerID != nil {
-		rs, ok := s.cfg.Store.(interface {
-			GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
-		})
+		rs, ok := s.cfg.Store.(runnerGetter)
 		if !ok {
 			return store.ProxyStartExpected
 		}
