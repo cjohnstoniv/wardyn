@@ -91,8 +91,14 @@ func (f *fakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (
 	if f.createErr != nil {
 		return runner.Sandbox{}, f.createErr
 	}
-	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: "fake", EnforcedClass: spec.ConfinementClass}, nil
+	// A hash, as every driver at the readback release answers; no proxy reports in these tests, so a start
+	// recorded against it only stays pending.
+	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: "fake", EnforcedClass: spec.ConfinementClass,
+		ProxyConfigSHA256: fakeProxyConfigSHA256}, nil
 }
+
+// fakeProxyConfigSHA256 is the hash fakeRunner's creates answer.
+const fakeProxyConfigSHA256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 
 func (f *fakeRunner) Exec(context.Context, string, []string) (string, error) {
 	f.mu.Lock()
