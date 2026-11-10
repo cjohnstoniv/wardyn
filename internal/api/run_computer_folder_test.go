@@ -631,7 +631,7 @@ func assertFolderBackKept(t *testing.T, err error, cs *computerFolderStore, sb *
 		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept", n)
 	}
 	st := cs.folderStatus()
-	if st.Resume == nil || *st.Resume != want || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep resumes the sync") {
+	if st.Resume == nil || st.Resume.Stalled != want.Stalled || st.Resume.Unsynced != want.Unsynced || st.Back == nil || !strings.Contains(st.Back.Error, "a later sweep resumes the sync") {
 		t.Errorf("resume = %+v, back = %+v; want %+v and the cut pass's error", st.Resume, st.Back, want)
 	}
 	// Kept past the run's end, the sandbox runs only the pass back: no agent, no egress.

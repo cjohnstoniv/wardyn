@@ -801,10 +801,13 @@ type RunLocalFolderStatus struct {
 
 // FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that
 // saved nothing, and Unsynced is the sandbox's changed files the latest pass that counted them
-// had not brought back. An Unsynced of 0, or no resume, is not counted: a cut pass always leaves one.
+// had not brought back. Counted is set when Unsynced came from a runner's report; Paths names at most
+// runnerwire.MaxFolderUnsyncedPaths of them (none from a runner that does not list them).
 type FolderResume struct {
-	Stalled  int `json:"stalled"`
-	Unsynced int `json:"unsynced,omitempty"`
+	Stalled  int      `json:"stalled"`
+	Unsynced int      `json:"unsynced,omitempty"`
+	Counted  bool     `json:"counted,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
 }
 
 // FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.

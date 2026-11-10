@@ -342,9 +342,9 @@ func folderBackVerdict(prev *types.FolderResume, res *runnerwire.FolderPass, pas
 // and saved it in the runner's state: bytes of a file it did not finish are lost with the cut.
 // res.Unsynced is set to the count the record names.
 func folderBackResume(prev *types.FolderResume, res *runnerwire.FolderPass, errText string) (*types.FolderResume, string) {
-	next := &types.FolderResume{Unsynced: res.Unsynced}
-	if prev != nil && next.Unsynced == 0 {
-		next.Unsynced = prev.Unsynced
+	next := &types.FolderResume{Unsynced: res.Unsynced, Counted: res.Unsynced > 0, Paths: folderUnsyncedPaths(res.UnsyncedPaths)}
+	if prev != nil && !next.Counted {
+		next.Unsynced, next.Counted, next.Paths = prev.Unsynced, prev.Counted, prev.Paths
 	}
 	if res.Pulled+res.Pushed == 0 {
 		next.Stalled = 1
@@ -357,6 +357,16 @@ func folderBackResume(prev *types.FolderResume, res *runnerwire.FolderPass, errT
 		return next, errText + "; the sandbox is kept with its agent stopped and no egress, and a later sweep resumes the sync"
 	}
 	return nil, folderBackGivenUp(errText, fmt.Sprintf("%d passes in a row brought nothing back", next.Stalled), next.Unsynced)
+}
+
+// folderUnsyncedPaths is a runner's list of the files a pass did not bring back, as stored: at most
+// runnerwire.MaxFolderUnsyncedPaths, each cleaned as a refused path is.
+func folderUnsyncedPaths(paths []string) []string {
+	var out []string
+	for _, p := range paths[:min(len(paths), runnerwire.MaxFolderUnsyncedPaths)] {
+		out = append(out, localFolderSeedError(p))
+	}
+	return out
 }
 
 // folderBackGivenUp is the record of a cut pass back whose sandbox is stopped for why, with the
@@ -641,9 +651,16 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 	if sess.Stderr != nil {
 		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	}
-	pass, err := sub.SyncFolder(ctx, runnerwire.SyncFolderArgs{
-		RunID: run.ID, Path: folder.Path, RemoteDir: folder.RemoteDir, Pull: pull, Deny: s.cfg.SyncDeny,
-	})
+	args := runnerwire.SyncFolderArgs{RunID: run.ID, Path: folder.Path, RemoteDir: folder.RemoteDir, Pull: pull, Deny: s.cfg.SyncDeny}
+	if dl, ok := ctx.Deadline(); ok {
+		// The runner ends the pass by the same time, read through its hello clock. One already past is
+		// not sent: nothing is, and the pass did not start.
+		if time.Until(dl) <= 0 {
+			return runnerwire.FolderPass{}, false, true, errors.New("no time was left for the sync")
+		}
+		args.DeadlineUnixMs = dl.UnixMilli()
+	}
+	pass, err := sub.SyncFolder(ctx, args)
 	if err != nil {
 		return runnerwire.FolderPass{}, false, runnerReplied(err), fmt.Errorf("the runner could not start the sync: %w", err)
 	}
@@ -691,6 +708,7 @@ type computerFolderRunView struct {
 	Error     string                  `json:"error,omitempty"`
 	Seed      *types.FolderPassRecord `json:"seed,omitempty"`
 	Back      *types.FolderPassRecord `json:"back,omitempty"`
+	folderFate
 }
 
 // computerFolderRunState values.
@@ -727,5 +745,6 @@ func (s *Server) computerFolderRunView(ctx context.Context, id uuid.UUID) *compu
 			v.Seed, v.Back = rec.Seed, rec.Back
 		}
 	}
+	v.folderFate = s.readFolderFate(ctx, id)
 	return v
 }
