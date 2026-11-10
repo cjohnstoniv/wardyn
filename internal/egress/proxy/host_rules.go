@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -192,13 +191,6 @@ func (p *Proxy) outboundHostRuleRefused(req *http.Request) error {
 		p.sink.emit(log)
 	}
 	return &hostRuleRefusal{log: log}
-}
-
-// hostRuleTransportProxy is the egress transport's Proxy hook. The transport calls it for every request,
-// a reused connection's included, so a route that sends on the transport itself (the kube door's clone of
-// it) is judged as roundTripUpstream's callers are. It names no proxy.
-func (p *Proxy) hostRuleTransportProxy(req *http.Request) (*url.URL, error) {
-	return nil, p.outboundHostRuleRefused(req)
 }
 
 // requestEscapedPath is the path as the request carried it, escapes kept, so an encoded "/" is seen and

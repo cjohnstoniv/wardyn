@@ -16,7 +16,7 @@ import (
 )
 
 // Every brokered route re-originates outside the CONNECT and plain lanes, so the forward itself is judged
-// (outboundHostRuleRefused, from roundTripUpstream and the egress transport's Proxy hook). Each test sends
+// (outboundHostRuleRefused, from roundTripUpstream and before an API door's own transport). Each test sends
 // one forward under four rule sets on the route's upstream host, set on the compiled policy so nothing else
 // about the fixture changes: an allow rule matching the method and path the host receives lets it through;
 // a deny rule matching it, an allow rule for another method, and one for another path each refuse it with a

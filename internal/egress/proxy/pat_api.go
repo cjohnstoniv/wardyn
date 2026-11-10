@@ -315,7 +315,10 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 
 	var resp *http.Response
 	if d.rt != nil {
-		resp, err = d.rt.RoundTrip(out)
+		// The door's own transport (the kube row's CA) is not roundTripUpstream, so the gate runs here.
+		if err = p.outboundHostRuleRefused(out); err == nil {
+			resp, err = d.rt.RoundTrip(out)
+		}
 	} else {
 		resp, err = p.roundTripUpstream(out)
 	}
