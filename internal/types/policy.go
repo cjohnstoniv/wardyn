@@ -136,6 +136,10 @@ type RunPolicySpec struct {
 	// STILL wins, the SSRF/private-IP guard is unaffected, and credential injection STILL requires
 	// an EXACT allowlist entry, so allow-all never widens where a secret may be injected.
 	AllowAllEgress bool `json:"allow_all_egress,omitempty"`
+	// RefuseIPLiterals refuses, under allow_all_egress, every request whose host is an IP address in
+	// any spelling (dotted, bare decimal, hex, octal, bracketed or zoned v6, v4-mapped). An address
+	// listed exactly in AllowedDomains is still allowed. True only ever narrows.
+	RefuseIPLiterals bool `json:"refuse_ip_literals,omitempty"`
 	// FirstUseApproval controls how an unknown domain is handled: always_deny,
 	// deny_with_review, or wait_for_review. Accepts the legacy boolean on the
 	// wire. Inert under allow-all.
@@ -151,6 +155,11 @@ type RunPolicySpec struct {
 	MaxHolds int `json:"max_holds,omitempty"`
 	// AllowedMethods optionally restricts HTTP methods (empty = all).
 	AllowedMethods []string `json:"allowed_methods,omitempty"`
+	// HostRules are per-host method and path rules, one set per layer (HostRuleSet): each set that names
+	// a host must allow a request on it, by first match inside that set. Composition appends each
+	// layer's sets and never merges them. The proxy inspects every rule host, refuses one it cannot
+	// inspect, and allowed_methods still applies on top. Empty imposes nothing.
+	HostRules []HostRuleSet `json:"host_rules,omitempty"`
 	// MinConfinementClass refuses to launch below this class.
 	MinConfinementClass ConfinementClass `json:"min_confinement_class"`
 	// EligibleGrants is the ceiling of credential scopes a run may request.
@@ -449,6 +458,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.AllowedDomains = append([]string(nil), s.AllowedDomains...)
 	out.DeniedDomains = append([]string(nil), s.DeniedDomains...)
 	out.AllowedMethods = append([]string(nil), s.AllowedMethods...)
+	out.HostRules = CloneHostRuleSets(s.HostRules)
 	out.EligibleGrants = append([]GrantSpec(nil), s.EligibleGrants...)
 	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)

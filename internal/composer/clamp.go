@@ -91,6 +91,8 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
 	warns = clampToolRules(&out, ceiling, warns)
+	// Host rules: the ceiling's sets appended to the proposal's, never merged (types.AppendHostRuleSets).
+	out.HostRules = types.AppendHostRuleSets(out.HostRules, ceiling.HostRules)
 
 	// Allowed domains: intersect to the ceiling's allowlist unless it allows all. An empty ceiling
 	// allowlist means default-deny — don't skip this block when empty, or the strictest posture leaks.
@@ -359,6 +361,7 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	out.AllowedDomains = slices.Clone(s.AllowedDomains)
 	out.DeniedDomains = slices.Clone(s.DeniedDomains)
 	out.AllowedMethods = slices.Clone(s.AllowedMethods)
+	out.HostRules = types.CloneHostRuleSets(s.HostRules)
 	out.UIApps = slices.Clone(s.UIApps)
 	for i := range out.UIApps {
 		out.UIApps[i].Callers = slices.Clone(s.UIApps[i].Callers)
@@ -857,13 +860,16 @@ func clampMethods(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns [
 }
 
 // clampOperatorSwitches forces off boolean controls only an operator may widen: allow-all egress and
-// git_push_any_branch. Without this a member could disable push confinement by posting the field.
+// git_push_any_branch. Without this a member could disable push confinement by posting the field. It
+// also keeps refuse_ip_literals on where the ceiling sets it.
 // Split out of Clamp to keep its branch count under the gocyclo gate.
 func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
 	if out.AllowAllEgress && !ceiling.AllowAllEgress {
 		warns = append(warns, "allow_all_egress disabled: operator policy does not permit allow-all egress")
 		out.AllowAllEgress = false
 	}
+	// refuse_ip_literals: a ceiling that sets it keeps it on; a proposal may set it itself.
+	out.RefuseIPLiterals = out.RefuseIPLiterals || ceiling.RefuseIPLiterals
 	if out.GitPushAnyBranch && !ceiling.GitPushAnyBranch {
 		warns = append(warns, "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on")
 		out.GitPushAnyBranch = false

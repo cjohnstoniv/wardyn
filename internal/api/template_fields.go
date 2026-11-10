@@ -257,6 +257,8 @@ var templatePolicyRules = []TemplateFieldRule{
 		"Managed denials still apply. A template that drops its own denial can widen access."),
 	carriedField("allow_all_egress", partEgress, templateOmitBaseline, templateEmptyValue,
 		"Egress follows the baseline. False is a choice of default-deny."),
+	carriedField("refuse_ip_literals", partEgress, templateOmitBaseline, templateEmptyValue,
+		"IP address hosts follow the baseline. False is a choice to leave them as allow_all_egress has them."),
 	carriedField("first_use_approval", partEgress, templateOmitBaseline, templateEmptySame,
 		"Unknown destinations are handled as the baseline says."),
 	carriedField("first_use_hold_seconds", partEgress, templateOmitBaseline, templateEmptySame,

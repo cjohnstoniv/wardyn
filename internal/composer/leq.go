@@ -54,7 +54,7 @@ func leqSize(a, b, def int) bool {
 }
 
 func leqEgress(a, b types.RunPolicySpec) bool {
-	if a.AllowAllEgress && !b.AllowAllEgress {
+	if a.AllowAllEgress && !b.AllowAllEgress || b.RefuseIPLiterals && !a.RefuseIPLiterals {
 		return false
 	}
 	if firstUseApprovalRank(a.FirstUseApproval) < firstUseApprovalRank(b.FirstUseApproval) ||
@@ -64,7 +64,8 @@ func leqEgress(a, b types.RunPolicySpec) bool {
 	}
 	return leqAllowedDomains(a.AllowedDomains, b.AllowedDomains) &&
 		leqDeniedDomains(a.DeniedDomains, b.DeniedDomains) &&
-		leqSubsetWhenSet(normMethods(a.AllowedMethods), normMethods(b.AllowedMethods))
+		leqSubsetWhenSet(normMethods(a.AllowedMethods), normMethods(b.AllowedMethods)) &&
+		types.HostRuleSetsWithin(a.HostRules, b.HostRules)
 }
 
 // leqSubsetWhenSet is allowed_methods' shape: an empty b is the unrestricted

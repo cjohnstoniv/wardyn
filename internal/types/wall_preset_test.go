@@ -5,6 +5,7 @@ package types
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
 
-// The built-ins are Open, Read-only and Sealed in that order, version 1, read-only by construction:
+// The built-ins are Open, Read-only, Sealed and No network in that order, version 1, read-only by construction:
 // Open names nothing, and every list Read-only and Sealed keep is a grantable read, so they remove
 // writes only. (internal/api's TestWallPresetBuiltinsPassTheWallsValidator holds them to the walls
 // validator too.)
@@ -25,18 +26,19 @@ func TestWallPresetBuiltins(t *testing.T) {
 		if p.Scope != WallPresetScopeBuiltin || p.Version != 1 || p.Name == "" || p.Description == "" {
 			t.Errorf("built-in %q = %+v", p.ID, p)
 		}
-		if strings.ToLower(p.Name) != p.ID || !IsBuiltinWallPresetName(strings.ToUpper(p.Name)) {
+		if strings.ReplaceAll(strings.ToLower(p.Name), " ", "-") != p.ID || !IsBuiltinWallPresetName(strings.ToUpper(p.Name)) ||
+			!IsBuiltinWallPresetName(p.ID) {
 			t.Errorf("built-in %q: the name %q is not its id in another case", p.ID, p.Name)
 		}
 		if p.Owner().Valid() {
 			t.Errorf("built-in %q has a valid template owner; TemplateAuthorize must never allow one", p.ID)
 		}
 	}
-	if !slices.Equal(ids, []string{WallPresetOpen, WallPresetReadOnly, WallPresetSealed}) {
+	if !slices.Equal(ids, []string{WallPresetOpen, WallPresetReadOnly, WallPresetSealed, WallPresetNoNetwork}) {
 		t.Fatalf("built-in ids = %v", ids)
 	}
-	if !got[0].Spec.Empty() || got[1].Spec.Empty() || got[2].Spec.Empty() {
-		t.Fatal("Open must name nothing, and Read-only and Sealed something")
+	if !got[0].Spec.Empty() || got[1].Spec.Empty() || got[2].Spec.Empty() || got[3].Spec.Empty() {
+		t.Fatal("Open must name nothing, and Read-only, Sealed and No network something")
 	}
 	for _, p := range got[1:] {
 		for _, c := range *p.Spec.GitHubCapabilities {
@@ -59,13 +61,21 @@ func TestWallPresetBuiltins(t *testing.T) {
 	if !slices.Contains(*got[1].Spec.AzureDevOpsCapabilities, adoscope.CapIdentityRead) {
 		t.Error("Read-only drops Azure DevOps identity_read")
 	}
-	// Read-only and Sealed refuse every push, and their overlays carry it to the run's push rules.
+	// Read-only, Sealed and No network refuse every push, and their overlays carry it to the run's push rules.
 	for _, p := range got[1:] {
 		if !p.Spec.DeniesAllPushes() {
 			t.Errorf("%s does not refuse every push", p.ID)
 		}
 		if ov := p.Spec.Overlay(); ov.PushRules == nil || ov.PushRules.DenyAll == nil || !*ov.PushRules.DenyAll {
 			t.Errorf("%s's overlay drops push_rules.deny_all: %+v", p.ID, ov.PushRules)
+		}
+		// No network's description names Sealed, which refuses every push, and a run with no network
+		// reaches no code host, so the note on secrets does not apply to it.
+		if p.ID == WallPresetNoNetwork {
+			if !strings.HasPrefix(p.Description, "Sealed, ") {
+				t.Errorf("%s's description %q does not start from Sealed", p.ID, p.Description)
+			}
+			continue
 		}
 		if !strings.Contains(p.Description, "push") {
 			t.Errorf("%s's description %q does not say it refuses pushes", p.ID, p.Description)
@@ -147,5 +157,22 @@ func TestWallPresetWireAndOwner(t *testing.T) {
 	}
 	if o := (WallPreset{Scope: WallPresetScopeOrg}).Owner(); !o.Valid() || o.Scope != TemplateScopeOrg {
 		t.Fatalf("org owner = %+v", o)
+	}
+}
+
+// No network's spec is Sealed's: what it adds is not a walls knob (the seal, the proxy switch, the
+// create refusal and the approval refusal key on its id).
+func TestWallPresetNoNetworkIsSealedsSpec(t *testing.T) {
+	sealed, _ := BuiltinWallPreset(WallPresetSealed)
+	nn, ok := BuiltinWallPreset(WallPresetNoNetwork)
+	if !ok || nn.Name != "No network" || !reflect.DeepEqual(nn.Spec, sealed.Spec) {
+		t.Fatalf("no-network = %+v, want Sealed's spec", nn)
+	}
+	*nn.Spec.AllowedDomains = append(*nn.Spec.AllowedDomains, "example.com")
+	if again, _ := BuiltinWallPreset(WallPresetSealed); len(*again.Spec.AllowedDomains) != 0 {
+		t.Fatal("No network shares Sealed's lists")
+	}
+	if !IsBuiltinWallPresetName("no network") || !IsBuiltinWallPresetName("NO-NETWORK") {
+		t.Error("a stored preset could take No network's name")
 	}
 }

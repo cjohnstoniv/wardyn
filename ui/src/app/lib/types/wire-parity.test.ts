@@ -908,6 +908,20 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(shapeGo).toContain("experience interactive with startup kind command and ui_apps");
   });
 
+  it("HostRuleSet and HostRule: the Go tags are the TS keys, and host_rules is on RunPolicySpec", () => {
+    const goSrc = readFileSync(join(root, "internal/types/host_rules.go"), "utf8");
+    const policyGo = readFileSync(join(root, "internal/types/policy.go"), "utf8");
+    const policyTs = readFileSync(join(root, "ui/src/app/lib/types/policy.ts"), "utf8");
+    expect(tsInterfaceTopKeys(policyTs, "HostRuleSet").sort()).toEqual(goJSONTags(goSrc, "HostRuleSet").sort());
+    expect(tsInterfaceTopKeys(policyTs, "HostRule").sort()).toEqual(goJSONTags(goSrc, "HostRule").sort());
+    expect(goJSONTags(policyGo, "RunPolicySpec")).toContain("host_rules");
+    expect(tsInterfaceTopKeys(policyTs, "RunPolicySpec")).toContain("host_rules");
+    // The effects validation accepts today; hold is refused until it lands.
+    const union = /export type HostRuleEffect =([^;]+);/.exec(policyTs)?.[1] ?? "";
+    expect(new Set([...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]))).toEqual(new Set(["allow", "deny"]));
+    expect(goSrc).toMatch(/case HostRuleAllow, HostRuleDeny:\n\t\treturn nil/);
+  });
+
   it("SetupItemResidency names every residency the setup checklist emits", () => {
     const goRaw = readFileSync(join(root, "internal/api/compose_setup.go"), "utf8");
     const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");

@@ -72,6 +72,13 @@ export const FIELD_HELP = {
     doc: "top-level",
     snippet: ["GET", "POST"],
   },
+  host_rules: {
+    what: "Per-host method and path rules, one rule set per layer. Every set that names a host must allow a request on it.",
+    values:
+      "rules: host (exact, lowercase) + methods + paths + effect: allow | deny. Inside a set the first matching rule decides, and no match is a deny. Empty imposes nothing.",
+    doc: "host_rules--hostruleset",
+    snippet: [{ rules: [{ host: "api.example.com", methods: ["GET"], paths: ["/public"], effect: "allow" }] }],
+  },
   min_confinement_class: {
     what: "The barrier floor — the run refuses to launch below it.",
     values: "CC1 (Fence) | CC2 (Wall) | CC3 (Vault). Required.",
@@ -125,6 +132,13 @@ export const FIELD_HELP = {
     what: "Switches egress to deny-list only: any non-denied PUBLIC host is allowed.",
     values:
       "true | false (default). The private-IP/SSRF guard is unaffected, and credential injection still needs an exact allowed_domains entry — allow-all never widens where a secret may go.",
+    doc: "top-level",
+    snippet: true,
+  },
+  refuse_ip_literals: {
+    what: "Under allow_all_egress, refuses every IP-address host, in any spelling.",
+    values:
+      "true | false (default). An IP address listed exactly in allowed_domains is still allowed. It only narrows: a default or ceiling that sets it holds every run under it.",
     doc: "top-level",
     snippet: true,
   },

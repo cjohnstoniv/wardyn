@@ -85,6 +85,9 @@ type Policy struct {
 	// unaffected, and AllowedExactHost (credential injection) still requires an
 	// explicit exact allowlist entry.
 	allowAll bool
+	// refuseIPLiterals mirrors RunPolicySpec.RefuseIPLiterals: under allowAll, literalIPGuard refuses
+	// every literal IP host, in any spelling, but one listed exactly in the allowlist.
+	refuseIPLiterals bool
 	// gitPushAnyBranch mirrors RunPolicySpec.GitPushAnyBranch: this run's
 	// brokered pushes skip branch-namespace confinement (handleGitBroker).
 	gitPushAnyBranch bool
@@ -107,6 +110,7 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		allowedMeth:         make(map[string]struct{}),
 		firstUse:            spec.FirstUseApproval.Normalize(),
 		allowAll:            spec.AllowAllEgress,
+		refuseIPLiterals:    spec.RefuseIPLiterals,
 		gitPushAnyBranch:    spec.GitPushAnyBranch,
 		pushRules:           compilePushRules(spec.PushRules),
 	}

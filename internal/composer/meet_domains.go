@@ -56,6 +56,9 @@ func (m *meeter) meetEgress(o types.CeilingOverlay) {
 		}
 		c.AllowAllEgress = c.AllowAllEgress && *o.AllowAllEgress
 	}
+	if o.RefuseIPLiterals != nil {
+		c.RefuseIPLiterals = c.RefuseIPLiterals || *o.RefuseIPLiterals // only ever adds a refusal
+	}
 	if o.FirstUseApproval != nil {
 		b, v := c.FirstUseApproval.Normalize(), o.FirstUseApproval.Normalize()
 		if firstUseApprovalRank(v) < firstUseApprovalRank(b) {

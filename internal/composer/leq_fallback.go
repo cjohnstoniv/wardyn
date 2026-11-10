@@ -31,9 +31,9 @@ func equalOutsideLimitRules(a, b types.GovernanceLimits) bool {
 
 // withoutCeilingRules clears every RunPolicySpec field Leq has a rule for.
 func withoutCeilingRules(s types.RunPolicySpec) types.RunPolicySpec {
-	s.AllowedDomains, s.DeniedDomains, s.AllowAllEgress = nil, nil, false
+	s.AllowedDomains, s.DeniedDomains, s.AllowAllEgress, s.RefuseIPLiterals = nil, nil, false, false
 	s.FirstUseApproval, s.FirstUseHoldSeconds, s.MaxHolds = "", 0, 0
-	s.AllowedMethods, s.MinConfinementClass, s.EligibleGrants = nil, "", nil
+	s.AllowedMethods, s.MinConfinementClass, s.EligibleGrants, s.HostRules = nil, "", nil, nil
 	s.AutoStopAfterSec, s.WorkspaceMounts, s.WorkspaceRepos = 0, nil, nil
 	s.LLMInspection, s.UIApps, s.Resources, s.ToolRules = nil, nil, nil, nil
 	s.GitPushAnyBranch, s.PushRules, s.AzureDevOpsCapabilities, s.GitHubCapabilities = false, nil, nil, nil
