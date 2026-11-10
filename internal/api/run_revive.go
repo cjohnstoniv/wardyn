@@ -468,9 +468,11 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
 			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it", err))
 	case fate == relostUnknown && unconfirmed:
-		msg = "the revive failed and this revive's lost mark did not land, so the run is being lost or ended by another operation; stopping its proxy is not confirmed yet, and a later sweep settles it"
+		msg = "the revive failed and its lost mark or end did not land, so the run is being lost or ended by another operation; stopping its proxy is not confirmed yet, and a later sweep settles it"
 	case fate == relostUnknown:
-		msg = "the revive failed and this revive's lost mark did not land, so the run is being lost or ended by another operation; a later sweep settles it"
+		msg = "the revive failed and its lost mark or end did not land, so the run is being lost or ended by another operation; a later sweep settles it"
+	case fate == relostEnded && unconfirmed:
+		msg = "the revive failed and the run cannot be kept, so it is being ended; stopping its sandbox is not confirmed yet, and a later sweep retries it"
 	case fate == relostEnded:
 		msg = "the revive failed and the run cannot be kept, so it is being ended"
 	case unconfirmed:
@@ -876,7 +878,7 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate relose
 			return relostUnwritten, nil
 		case loseApplied:
 			if errors.Is(err, runner.ErrEndUnsupported) {
-				return relostEnded, nil // the mark landed, but its substrate cannot keep a sandbox: loseRunStopped tore it down
+				return s.reloseEnded(ctx, run.ID) // the mark landed, but its substrate cannot keep a sandbox: loseRunStopped ended it
 			}
 			return relostLost, err
 		case loseNotApplied:
@@ -886,7 +888,7 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate relose
 	slog.WarnContext(ctx, "wardynd: a run whose proxy could not be replaced cannot be kept; tearing it down",
 		slog.String("run_id", run.ID.String()))
 	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "its proxy could not be replaced at revive")
-	return relostEnded, nil
+	return s.reloseEnded(ctx, run.ID)
 }
 
 // adminRestartRequest is POST /api/v1/admin/runs/restart's body.
