@@ -257,7 +257,9 @@ export function WorkspacesScreen() {
                 <TableHead>Source</TableHead>
                 <TableHead>Image</TableHead>
                 <TableHead>Model</TableHead>
-                <TableHead className="w-[44px]" />
+                <TableHead className="w-[44px]">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

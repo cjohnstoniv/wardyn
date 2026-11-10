@@ -185,6 +185,7 @@ describe("the inventory", () => {
     renderScreen();
     await screen.findByText("alice@corp.example");
     expect(screen.getByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
     const cell = (email: string) => screen.getByText(email).closest("tr")!;
     expect(cell("alice@corp.example")).toHaveTextContent(`finance · ${KEY_DOMAINS.SOURCE_GROUP("eng-finance")}`);
     expect(cell("bob@corp.example")).toHaveTextContent(`default · ${KEY_DOMAINS.SOURCE_DEFAULT}`);

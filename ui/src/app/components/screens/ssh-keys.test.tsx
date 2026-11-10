@@ -129,6 +129,12 @@ describe("SshKeysPane — list + remove", () => {
     expect(screen.getByText("SHA256:abc/def")).toBeInTheDocument();
   });
 
+  it("names the actions column for assistive tech", async () => {
+    renderScreen();
+    await screen.findByText("laptop");
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+  });
+
   it("removes a key after confirm, and toasts success", async () => {
     deleteKeyMock.mockResolvedValue(undefined);
     const user = userEvent.setup({ pointerEventsCheck: 0 });

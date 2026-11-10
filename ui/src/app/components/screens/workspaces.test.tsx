@@ -104,6 +104,13 @@ describe("WorkspacesScreen — list columns", () => {
     expect(screen.getByRole("button", { name: `Workspace actions: ${name}` })).toBeInTheDocument();
   });
 
+  it("names the actions column for assistive tech", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments" })]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+  });
+
   it("names the search box, not only by its placeholder", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments" })]);
     renderScreen();

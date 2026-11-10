@@ -242,7 +242,9 @@ export function CredentialsScreen() {
                       <TableHead>{INVENTORY.COL_ADDED}</TableHead>
                       <TableHead>{INVENTORY.COL_LAST_USED}</TableHead>
                       {hasKeyDomains && <TableHead>{INVENTORY.COL_DOMAIN}</TableHead>}
-                      <TableHead />
+                      <TableHead>
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
