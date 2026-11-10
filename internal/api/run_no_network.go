@@ -227,7 +227,7 @@ func shellCommands(script string) ([][]string, bool) {
 	for i := 0; i < len(script); i++ {
 		c := script[i]
 		switch {
-		case c == '`', c == '$' && i+1 < len(script) && script[i+1] == '(', c == '<' && strings.HasPrefix(script[i:], "<<"):
+		case shellSubstitutes(script[i:]) || strings.HasPrefix(script[i:], "<<"):
 			return nil, false
 		case c == '\\':
 			if i++; i == len(script) {
@@ -237,7 +237,7 @@ func shellCommands(script string) ([][]string, bool) {
 			inWord = true
 		case c == '\'' || c == '"':
 			end := shellQuoteEnd(script, i)
-			if end < 0 || c == '"' && strings.ContainsAny(script[i:end], "`") || c == '"' && strings.Contains(script[i:end], "$(") {
+			if end < 0 {
 				return nil, false
 			}
 			word.WriteString(script[i+1 : end])
@@ -268,19 +268,27 @@ func shellCommands(script string) ([][]string, bool) {
 	return cmds, true
 }
 
-// shellQuoteEnd is the index of the quote that closes the one at script[open], or -1. A double-quoted
-// backslash escapes the next byte; a single-quoted one is literal.
+// shellQuoteEnd is the index of the quote that closes the one at script[open], or -1 when none does or a
+// double-quoted run substitutes a command. A double-quoted backslash escapes the next byte; a single-quoted
+// one is literal.
 func shellQuoteEnd(script string, open int) int {
 	q := script[open]
 	for i := open + 1; i < len(script); i++ {
 		switch {
 		case script[i] == q:
 			return i
+		case q == '"' && shellSubstitutes(script[i:]):
+			return -1
 		case q == '"' && script[i] == '\\':
 			i++
 		}
 	}
 	return -1
+}
+
+// shellSubstitutes reports whether s starts a command substitution: a backtick or $( .
+func shellSubstitutes(s string) bool {
+	return strings.HasPrefix(s, "`") || strings.HasPrefix(s, "$(")
 }
 
 // denoRunValueFlags are the deno run options whose value is the next argument; every other option is a
