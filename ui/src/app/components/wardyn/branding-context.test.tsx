@@ -14,7 +14,7 @@ vi.mock("../../lib/api/health", () => ({
 
 import { ThemeProvider } from "./theme-provider";
 import { BrandingProvider } from "./branding-context";
-import { brandColourCSS, brandTitle } from "./branded";
+import { brandColourCSS, brandTitle, unbrandTitle } from "./branded";
 import { SignIn } from "../screens/sign-in";
 import { TopBar } from "../screens/top-bar";
 import type { ShellMeta } from "../screens/app-shell";
@@ -199,5 +199,15 @@ describe("branded console (#1125)", () => {
     expect(brandTitle("Wardyn", "Example Corp Wardyn")).toBe("Example Corp Wardyn");
     expect(brandTitle("Wardyn admin", "Wardyn for Example Corp")).toBe("Wardyn for Example Corp admin");
     expect(brandTitle("Something else", "Example Corp Wardyn")).toBe("Something else");
+  });
+
+  it("renames the console's name after a page's own title, and leaving puts it back", () => {
+    expect(brandTitle("Runs - Wardyn", "Example Corp Wardyn")).toBe("Runs - Example Corp Wardyn");
+    expect(brandTitle("Runs - Wardyn admin", "Example Corp Wardyn")).toBe("Runs - Example Corp Wardyn admin");
+    expect(brandTitle("Runs - Example Corp Wardyn", "Example Corp Wardyn")).toBe("Runs - Example Corp Wardyn");
+    expect(brandTitle("Runs-Wardyn", "Example Corp Wardyn")).toBe("Runs-Wardyn");
+    expect(unbrandTitle("Runs - Example Corp Wardyn admin", "Example Corp Wardyn")).toBe("Runs - Wardyn admin");
+    expect(unbrandTitle("Example Corp Wardyn", "Example Corp Wardyn")).toBe("Wardyn");
+    expect(unbrandTitle("Runs - Wardyn", "Example Corp Wardyn")).toBe("Runs - Wardyn");
   });
 });

@@ -67,13 +67,24 @@ export function brandColourCSS(b: Branding): string | null {
 
 /**
  * The tab title a brand shows for the console's own: "Wardyn" -> the product
- * name, "Wardyn admin" -> "<name> admin" (the Admin view cue stays). Any other
- * title is left alone.
+ * name, "Wardyn admin" -> "<name> admin" (the Admin view cue stays), alone or
+ * after a page's "<page> - ". Any other title is left alone. unbrandTitle undoes it.
  */
+function swapTitleName(title: string, from: string, to: string): string {
+  for (const cue of [" admin", ""]) {
+    const own = from + cue;
+    if (title === own) return to + cue;
+    if (title.endsWith(` - ${own}`)) return title.slice(0, -own.length) + to + cue;
+  }
+  return title;
+}
+
 export function brandTitle(title: string, name: string): string {
-  return title === CONSOLE_VIEW.TITLE_USER || title === CONSOLE_VIEW.TITLE_ADMIN
-    ? name + title.slice(CONSOLE_VIEW.TITLE_USER.length)
-    : title;
+  return swapTitleName(title, CONSOLE_VIEW.TITLE_USER, name);
+}
+
+export function unbrandTitle(title: string, name: string): string {
+  return swapTitleName(title, name, CONSOLE_VIEW.TITLE_USER);
 }
 
 // Colours, tab icon and tab title while a brand is set; leaving restores all
@@ -113,7 +124,7 @@ function BrandEffects({ brand }: { brand: Branding }) {
     watch.observe(document.head, { childList: true, characterData: true, subtree: true });
     return () => {
       watch.disconnect();
-      if (document.title.startsWith(name)) document.title = CONSOLE_VIEW.TITLE_USER + document.title.slice(name.length);
+      document.title = unbrandTitle(document.title, name);
     };
   }, [name]);
   return null;
