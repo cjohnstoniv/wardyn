@@ -32,7 +32,8 @@ import (
 // CLI and kubectl doors). A removed host is denied as well, so a later first-use approval in this run
 // cannot reopen it; widening the run again is a new run or an approval of another host.
 //
-// The edited config is stored before the new proxy's start is settled, so every later revive starts
+// Every 4xx refusal comes before the revive replaces anything. Past it, the edited
+// config is stored before the new proxy's start is settled, so every later revive starts
 // from it. The answer waits for the new proxy's own readback (run_proxy_readback.go) of the start the
 // edit recorded: 200 only once that start is enforced. Otherwise the answer names what is known:
 // egress_edit_unconfirmed once the new proxy's stop is confirmed (its containment recorded on the
