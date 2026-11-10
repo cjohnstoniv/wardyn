@@ -60,6 +60,10 @@ func TestNoNetwork_EveryTransportIsRefused(t *testing.T) {
 		if rec.Code != http.StatusForbidden || dials.Load() != 0 {
 			t.Fatalf("plain HTTP = %d with %d dials, want 403 and none", rec.Code, dials.Load())
 		}
+		// The conformance case tells this refusal from every other deny by this header.
+		if got := rec.Header().Get(egressHeaderReason); got != ruleSourceNoNetwork {
+			t.Errorf("plain HTTP %s = %q, want %q", egressHeaderReason, got, ruleSourceNoNetwork)
+		}
 		wantNoNetworkRow(t, "plain HTTP", buf.String())
 	})
 	t.Run("an IP literal", func(t *testing.T) {
