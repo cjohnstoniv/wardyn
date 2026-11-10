@@ -127,6 +127,8 @@ The proxy is stopped (`run.policy.unconfirmed`, outcome `failure`) when:
 
 A create that is still running has no readback deadline. A dispatch whose start fails fails the run. A revive's failed start puts the run back to lost.
 
+A failed start records whether its proxy stop was confirmed. Until it is, the start is unresolved, and the reconcile sweep retries the stop. The retry is for that start only: once a newer start exists, it stops nothing.
+
 A report counts only for the run's newest start. Its token must be that start's own token, or one renewed from it since the start: the run's current or previous token. Any other report is ignored and audited as `run.policy.report_stale`.
 
 A start is `legacy` only when a runner's registered version, or the proxy image tag, names a release older than 0.10.0-rc.18. A legacy start runs as before, unconfirmed (`run.policy.unconfirmed`, reason `legacy`). An empty or unparsable version is not legacy. A revive that must confirm, on a substrate that cannot answer the hash, is refused before anything changes (`409 revive_readback_unsupported`).

@@ -15,7 +15,8 @@ import (
 // TestPG_RunProxyStarts pins migration 0275 through the readback surface: a report is held until the
 // driver's hash is in, equal hashes enforce, a late answer for a superseded generation and a token
 // outside the active start's lineage change nothing, a renewed lineage (current and previous jti) is
-// accepted, and a passed deadline fails the start. The proxy address round-trips through the run read.
+// accepted, and a passed deadline fails the start. A failed start's stop is retried until it is
+// recorded contained. The proxy address round-trips through the run read.
 func TestPG_RunProxyStarts(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -79,6 +80,39 @@ func TestPG_RunProxyStarts(t *testing.T) {
 	}
 	if p, ok, err := pg.ActiveProxyStart(ctx, run.ID); err != nil || !ok || p.Generation != 3 {
 		t.Fatalf("active start = %+v %v %v; want generation 3", p, ok, err)
+	}
+
+	// Containment: only the active failed start is retried; a failed stop keeps it there, a confirmed
+	// one takes it out and stays.
+	overdue := func() []int {
+		starts, err := pg.OverdueProxyStarts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var gens []int
+		for _, p := range starts {
+			if p.RunID == run.ID {
+				gens = append(gens, p.Generation)
+			}
+		}
+		return gens
+	}
+	if gens := overdue(); len(gens) != 1 || gens[0] != 3 {
+		t.Fatalf("uncontained starts = %v, want [3] (generation 2 is no longer active)", gens)
+	}
+	if err := pg.RecordProxyContainment(ctx, run.ID, 3, "daemon down"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := pg.ActiveProxyStart(ctx, run.ID); p.ContainedAt != nil || p.ContainmentError != "daemon down" || len(overdue()) != 1 {
+		t.Fatalf("after a failed stop: %+v; want unresolved and still retried", p)
+	}
+	for _, e := range []string{"", "a later failure"} {
+		if err := pg.RecordProxyContainment(ctx, run.ID, 3, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p, _, _ := pg.ActiveProxyStart(ctx, run.ID); p.ContainedAt == nil || p.ContainmentError != "" || len(overdue()) != 0 {
+		t.Fatalf("after a confirmed stop: %+v; want contained, kept, and no longer retried", p)
 	}
 
 	if err := pg.SetRunProxyAddr(ctx, run.ID, "172.30.0.2"); err != nil {
