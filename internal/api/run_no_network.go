@@ -215,7 +215,8 @@ func shellScriptFetches(script string, depth int) bool {
 // shellCommands splits a shell script into its simple commands' words. Quotes and backslash escapes keep
 // their text in one word; ;, &, | and a newline end a command only outside them; # starts a comment. It
 // reports false for what it does not follow: an unclosed quote, a trailing backslash, $( or a backtick
-// (outside single quotes), or a here-document.
+// (outside single quotes), a here-document, and compound or function grammar (an unquoted ( or ), or a
+// shellCompoundWords keyword starting a command), where a command's words need not run.
 func shellCommands(script string) ([][]string, bool) {
 	var cmds [][]string
 	var cmd []string
@@ -230,7 +231,7 @@ func shellCommands(script string) ([][]string, bool) {
 	for i := 0; i < len(script); i++ {
 		c := script[i]
 		switch {
-		case shellSubstitutes(script[i:]) || strings.HasPrefix(script[i:], "<<"):
+		case shellSubstitutes(script[i:]) || strings.HasPrefix(script[i:], "<<") || c == '(' || c == ')':
 			return nil, false
 		case c == '\\':
 			if i++; i == len(script) {
@@ -268,8 +269,13 @@ func shellCommands(script string) ([][]string, bool) {
 	if len(cmd) > 0 {
 		cmds = append(cmds, cmd)
 	}
-	return cmds, true
+	compound := slices.ContainsFunc(cmds, func(words []string) bool { return slices.Contains(shellCompoundWords, words[0]) })
+	return cmds, !compound
 }
+
+// shellCompoundWords are the reserved words that open or close a shell compound command or function body.
+var shellCompoundWords = []string{"{", "}", "if", "then", "elif", "else", "fi", "for", "while", "until", "do",
+	"done", "case", "esac", "function", "select"}
 
 // shellQuoteEnd is the index of the quote that closes the one at script[open], or -1 when none does or a
 // double-quoted run substitutes a command. A double-quoted backslash escapes the next byte; a single-quoted
