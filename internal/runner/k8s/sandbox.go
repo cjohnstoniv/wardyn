@@ -277,7 +277,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
 		return fail(err)
 	}
-	proxySHA := proxy.ConfigSHA256(proxyJSON) // the Secret's bytes, staged unchanged for the proxy to load
 	d.warnOlderProxy()
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The agent's credential-bearing env rides this SAME Secret (see
@@ -504,15 +503,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
-	sb := podSandbox(spec, enforced, runtimeHandler)
-	sb.ProxyConfigSHA256, sb.ProxyAddr = proxySHA, proxyIP
-	return sb, nil
+	return podSandbox(spec, enforced, runtimeHandler, proxy.ConfigSHA256(proxyJSON), proxyIP), nil
 }
 
 // podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
-// a VM run, the machine its RuntimeClass boots.
-func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler string) runner.Sandbox {
-	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}
+// a VM run, the machine its RuntimeClass boots, the hash of the Secret's config (staged unchanged for the proxy to load) and the proxy's pinned address.
+func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler, proxySHA, proxyAddr string) runner.Sandbox {
+	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced, ProxyConfigSHA256: proxySHA, ProxyAddr: proxyAddr}
 	if spec.MachineKind == types.MachineLinuxVM {
 		m := vmMachine(runtimeHandler)
 		sb.Machine = &m

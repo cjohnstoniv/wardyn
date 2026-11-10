@@ -255,11 +255,7 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		if !ok {
 			return nil, runner.ErrReviveUnsupported
 		}
-		if hashed, ok := rv.(runner.ProxyReviverHashed); ok {
-			sum, err := hashed.ReplaceProxyHashed(ctx, ref, a.CfgJSON)
-			return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
-		}
-		return nil, rv.ReplaceProxy(ctx, ref, a.CfgJSON)
+		return replaceProxy(ctx, rv, ref, a.CfgJSON)
 	}
 	a, err := decode[runnerwire.RefArgs](args)
 	if err != nil {
@@ -555,3 +551,12 @@ type (
 
 func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
 func (f readerFunc) Read(b []byte) (int, error)  { return f(b) }
+
+// replaceProxy answers replace_proxy as a runner does: with the hash, from a substrate that hashes.
+func replaceProxy(ctx context.Context, rv runner.ProxyReviver, ref string, cfg []byte) (any, error) {
+	if hashed, ok := rv.(runner.ProxyReviverHashed); ok {
+		sum, err := hashed.ReplaceProxyHashed(ctx, ref, cfg)
+		return runnerwire.ReplaceProxyResult{ConfigSHA256: sum}, err
+	}
+	return nil, rv.ReplaceProxy(ctx, ref, cfg)
+}
