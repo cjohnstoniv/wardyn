@@ -244,3 +244,39 @@ func TestReadback_FailureRowStoppedFalseWhenTheLockIsBusy(t *testing.T) {
 		t.Errorf("failure row = %v, want stopped false with the busy lock", row)
 	}
 }
+
+// A run whose lock another operation holds is not contained now: containProxyStart answers
+// errRunOpBusy, stops nothing, and writes nothing on the start, for the sweep to retry.
+func TestReadback_BusyLockLeavesContainmentToTheSweep(t *testing.T) {
+	f := newReadbackFixture(t)
+	gen := f.failWithUnstoppableProxy(t)
+	f.setProxyStopErr(nil)
+	before, stops := f.active(t), f.lr.proxyStopCount()
+	_, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
+	if !ok {
+		t.Fatal("take the run's lock")
+	}
+	c := f.srv.containProxyStart(context.Background(), f.run.ID, gen)
+	unlock()
+	if !errors.Is(c.Err, errRunOpBusy) || c.Contained || c.Superseded {
+		t.Fatalf("containment under a busy lock = %+v, want errRunOpBusy", c)
+	}
+	if after := f.active(t); f.lr.proxyStopCount() != stops || after.ContainedAt != nil || after.ContainmentError != before.ContainmentError {
+		t.Errorf("a busy lock stopped or recorded something: stops %d -> %d, start %+v", stops, f.lr.proxyStopCount(), after)
+	}
+}
+
+// A plain revive whose new proxy sends no hash and whose stop fails answers 502
+// revive_policy_unconfirmed_lost without saying the proxy was stopped.
+func TestReadback_RevivePolicyUnconfirmedNeverClaimsAStopThatFailed(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.hr.hash = func([]byte) string { return "" }
+	f.setProxyStopErr(errors.New("daemon down"))
+	rec := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), reasonRevivePolicyUnconfirmedLost) {
+		t.Fatalf("revive = %d %s, want 502 %s", rec.Code, rec.Body.String(), reasonRevivePolicyUnconfirmedLost)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "so it was stopped") || !strings.Contains(body, "not confirmed") {
+		t.Errorf("the answer claims a stop that failed: %s", body)
+	}
+}
