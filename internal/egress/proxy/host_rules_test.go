@@ -362,10 +362,10 @@ func TestHostRulesImposeNothingOnOtherHosts(t *testing.T) {
 	}
 }
 
-// TestConfigRefusesHostRulesAViaOrgRouteServes: a via_org route is sent to the organisation, so a rule on a
-// host one serves is refused at load, as are rules on a VM run. A rule on a host a broker serves is judged
-// on each forward (host_rules_broker_test.go), so it loads.
-func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
+// TestConfigHostRulesLoadOnEveryRouteButAVM: rules on a VM run are refused at load. A rule on a host a
+// broker or a via_org route serves is judged on each request (host_rules_broker_test.go,
+// host_rules_via_org_test.go), so it loads.
+func TestConfigHostRulesLoadOnEveryRouteButAVM(t *testing.T) {
 	rule := func(h string) []types.HostRuleSet {
 		return []types.HostRuleSet{{Rules: []types.HostRule{{Host: h, Effect: types.HostRuleAllow}}}}
 	}
@@ -374,10 +374,6 @@ func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
 		c    Config
 		want string
 	}{
-		"via_org": {Config{Policy: types.RunPolicySpec{HostRules: rule("corp.example.com")}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
-			"config: policy.host_rules: host rules can't name corp.example.com: it is reached through an organisation relay route, which this release can't check per request"},
-		"via_org git": {Config{Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": gitGrant}, ViaOrgRoutes: []ViaOrgRoute{{GrantID: gitGrant}}},
-			"config: policy.host_rules: host rules can't name github.com: it is reached through an organisation relay route, which this release can't check per request"},
 		"vm":   {Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true}, "VM run"},
 		"hold": {Config{Policy: types.RunPolicySpec{HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: hrHost, Effect: types.HostRuleHold}}}}}}, "later release"},
 	} {
@@ -392,10 +388,11 @@ func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
 		"pat broker":  {Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}},
 		"mcp broker":  {Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}},
 		"local model": {Policy: types.RunPolicySpec{HostRules: rule("models.internal")}, LocalModels: map[string]types.LocalModelSettings{"models.internal:11434": {}}},
-		"other host":  {Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
+		"via_org":     {Policy: types.RunPolicySpec{HostRules: rule("corp.example.com")}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
+		"via_org git": {Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": gitGrant}, ViaOrgRoutes: []ViaOrgRoute{{GrantID: gitGrant, Host: "github.com"}}},
 	} {
 		if err := c.validateHostRules(); err != nil {
-			t.Errorf("%s: a rule on a host judged per forward was refused: %v", name, err)
+			t.Errorf("%s: a rule on a host judged per request was refused: %v", name, err)
 		}
 	}
 }

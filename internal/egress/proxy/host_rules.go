@@ -7,10 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/url"
-	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -22,7 +20,7 @@ import (
 //   - each request inside, and each plain-HTTP request, is judged by types.EvalHostRules (ruleSourceHostRule);
 //   - each forward a brokered route or API door sends is judged where it is sent (outboundHostRuleRefused).
 //
-// A via_org route is the exception, refused at load (viaOrgHosts).
+// A via_org engine judges a forwarded request the same way (ViaOrgEngine.ServeInjected, ServeBroker).
 const (
 	ruleSourceHostRule                = "policy:host-rule"
 	ruleSourceHostRuleNeedsInspection = "policy:host-rule-needs-inspection"
@@ -168,7 +166,7 @@ func (p *Policy) namesRuleHost(host string) bool {
 }
 
 // validateHostRules is the config's check of policy.host_rules: the shape (types.ValidateHostRuleSets),
-// no rules on a VM run, and no rule on a host a via_org route serves (viaOrgHosts).
+// and no rules on a VM run.
 func (c *Config) validateHostRules() error {
 	sets := c.Policy.HostRules
 	if len(sets) == 0 {
@@ -180,27 +178,5 @@ func (c *Config) validateHostRules() error {
 	if c.VM {
 		return fmt.Errorf("config: policy.host_rules: host rules are not judged on a VM run's guest flows")
 	}
-	viaOrg := c.viaOrgHosts()
-	for _, s := range sets {
-		for _, r := range s.Rules {
-			if viaOrg[r.Host] {
-				return fmt.Errorf("config: policy.host_rules: host rules can't name %s: it is reached through an organisation relay route, which this release can't check per request", r.Host)
-			}
-		}
-	}
 	return nil
-}
-
-// viaOrgHosts is every host a via_org route serves. Every other route's forward is judged where it is sent
-// (outboundHostRuleRefused), but a via_org request goes to the organisation, which reaches the host itself
-// (forwardViaOrg), and its git form names no host (viaOrgRouteFor), so a rule on such a host is refused.
-func (c *Config) viaOrgHosts() map[string]bool {
-	out := map[string]bool{}
-	for _, r := range c.ViaOrgRoutes {
-		out[hostKey(r.Host)] = true
-		if slices.Contains(slices.Collect(maps.Values(c.GitGrants)), r.GrantID) {
-			out["github.com"] = true
-		}
-	}
-	return out
 }
