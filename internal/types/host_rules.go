@@ -123,10 +123,11 @@ func isHTTPToken(s string) bool {
 }
 
 // NormalizeRequestPath is the one path form host rules match: the path without its query or fragment,
-// unreserved bytes percent-decoded once (other escapes kept, hex uppercased). Matching is case-sensitive,
-// and ";" and what follows it are part of the segment. It refuses what two readers could resolve
-// differently: an empty segment ("//"), a "." or ".." segment (encoded, or before a ";"), an encoded "/" or "\",
-// a backslash, "%00", any control byte and a malformed escape. raw is the request's escaped path.
+// unreserved bytes percent-decoded once (other escapes kept, hex uppercased). Matching is case-sensitive.
+// It refuses what two readers could resolve differently: an empty segment ("//"), a "." or ".." segment
+// (encoded or not), a ";" (encoded or not: a Servlet upstream drops ";" path parameters, so /admin;x=1
+// is served as /admin), an encoded "/" or "\", a backslash, "%00", any control byte and a malformed
+// escape. raw is the request's escaped path.
 func NormalizeRequestPath(raw string) (string, error) {
 	if i := strings.IndexAny(raw, "?#"); i >= 0 {
 		raw = raw[:i]
@@ -145,6 +146,8 @@ func NormalizeRequestPath(raw string) (string, error) {
 			return "", fmt.Errorf("path %q carries a control byte", raw)
 		case c == '\\':
 			return "", fmt.Errorf("path %q carries a backslash", raw)
+		case c == ';':
+			return "", errSemicolonPath(raw)
 		case c >= 0x80:
 			fmt.Fprintf(&b, "%%%02X", c)
 		case c != '%':
@@ -158,6 +161,8 @@ func NormalizeRequestPath(raw string) (string, error) {
 			switch {
 			case v == 0:
 				return "", fmt.Errorf("path %q carries %%00", raw)
+			case v == ';':
+				return "", errSemicolonPath(raw)
 			case v == '/' || v == '\\':
 				return "", fmt.Errorf("path %q carries an encoded %q", raw, string(rune(v)))
 			case v < 0x20 || v == 0x7f:
@@ -172,13 +177,17 @@ func NormalizeRequestPath(raw string) (string, error) {
 	n := b.String()
 	segs := strings.Split(n[1:], "/")
 	for i, seg := range segs {
-		// A layer that strips ";" parameters reads "..;x" as "..", so the part before ";" is checked too.
-		base, _, param := strings.Cut(seg, ";")
-		if base == "." || base == ".." || base == "" && (param || i < len(segs)-1) {
+		if seg == "." || seg == ".." || seg == "" && i < len(segs)-1 {
 			return "", fmt.Errorf("path %q is not in normal form: it has an empty, \".\" or \"..\" segment", raw)
 		}
 	}
 	return n, nil
+}
+
+// errSemicolonPath refuses a ";" in a path, literal or as %3B: an upstream that drops path parameters
+// reads a different path than the rules would judge.
+func errSemicolonPath(raw string) error {
+	return fmt.Errorf("path %q is not in normal form: it has a \";\" (a path parameter)", raw)
 }
 
 func isHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' }

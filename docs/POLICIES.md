@@ -1229,14 +1229,16 @@ How a request to a host is decided:
 - `allowed_methods` still applies on top.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
 
-Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. `;` and what follows it are part of the segment, so `/admin;x=1` is not under `/admin`. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` and `..;x` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character.
+Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` too), a `;` (`%3B` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character. Some servers drop a `;` parameter, so `/admin;x=1` would reach `/admin`.
+
+A path with an encoded slash is refused on a rule host. GitLab API project, file and branch paths use `%2F` (`/projects/team%2Fapp`, `/repository/files/src%2Fmain.go`), so they are refused there. Use numeric project ids, or put no rule on that host.
 
 What the proxy does for a rule host:
 
 - It intercepts TLS to a rule host on port 443, so it can read each request. A run with host rules gets a per-run interception certificate for this.
 - A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` on another port, without that certificate, and on the desktop sign-in lane.
 - Plain HTTP to a rule host is checked per request.
-- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. Rules on a `via_org` host are refused at start: the organisation sends those requests.
+- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. A rule host reached through an organisation relay route (`via_org`) is refused when the policy loads.
 - A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
 
 ## `recording`

@@ -18,7 +18,11 @@ func TestNormalizeRequestPath(t *testing.T) {
 		{"/a?x=1#f", "/a", ""},
 		{"/a/", "/a/", ""},
 		{"/", "/", ""},
-		{"/Admin;x=1/b", "/Admin;x=1/b", ""},
+		{"/Admin;x=1/b", "", "normal form"},
+		{"/admin;x=1", "", "normal form"},
+		{"/admin%3Bx=1", "", "normal form"},
+		{"/admin%3bx=1/users", "", "normal form"},
+		{"/a;", "", "normal form"},
 		{"/a/./b", "", "normal form"},
 		{"/a/../b", "", "normal form"},
 		{"/../../etc", "", "normal form"},
@@ -30,7 +34,7 @@ func TestNormalizeRequestPath(t *testing.T) {
 		{"/public/..;x/admin", "", "normal form"},
 		{"/a/.;x", "", "normal form"},
 		{"/;x/admin", "", "normal form"},
-		{"/a;x", "/a;x", ""},
+		{"/a;x", "", "normal form"},
 		{"/%41dmin", "/Admin", ""},
 		{"/%2e%2e/admin", "", "normal form"},
 		{"/x/%2E%2E/admin", "", "normal form"},
@@ -81,8 +85,9 @@ func TestEvalHostRules(t *testing.T) {
 		{"h.example", "GET", "/x/../repos", HostRuleDeny, true, -1, -1},
 		{"h.example", "GET", "/repos/..%2Fadmin", HostRuleDeny, true, -1, -1},
 		{"h.example", "GET", "/repos/../admin", HostRuleDeny, true, -1, -1},
-		{"h.example", "GET", "/repos;x=1", HostRuleDeny, true, 0, -1},
-		{"h.example", "GET", "/repos/a;x=1", HostRuleAllow, true, -1, -1},
+		{"h.example", "GET", "/repos;x=1", HostRuleDeny, true, -1, -1},
+		{"h.example", "GET", "/repos/a;x=1", HostRuleDeny, true, -1, -1},
+		{"other.example", "GET", "/repos;x=1", HostRuleAllow, false, -1, -1},
 	} {
 		d := EvalHostRules(sets, tc.host, tc.method, tc.path)
 		if d.Effect != tc.want || d.Named != tc.named || d.Set != tc.set || d.Rule != tc.rule {
