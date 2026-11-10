@@ -115,6 +115,12 @@ func routeOverrideCause(r *http.Request) string {
 			return "host rules: the request carries " + k + ", which a host may route by in place of the request line judged"
 		}
 	}
+	return declaredOverrideTrailerCause(r)
+}
+
+// declaredOverrideTrailerCause is routeOverrideCause's trailer half: a trailer the request declares under a
+// method or route override name, refused by the name alone.
+func declaredOverrideTrailerCause(r *http.Request) string {
 	for _, k := range slices.Sorted(maps.Keys(r.Trailer)) {
 		if armscope.MethodOverrideHeader(k) || armscope.RouteOverrideHeader(k) {
 			return "host rules: the request declares a " + k + " trailer, which a host may route by in place of the request line judged"
@@ -136,13 +142,18 @@ func (p *Proxy) hostRuleRefused(w http.ResponseWriter, r *http.Request, host str
 	if cause == "" {
 		return r, false
 	}
+	p.writeHostRuleRefusal(w, r, host, port, cause)
+	return r, true
+}
+
+// writeHostRuleRefusal writes the policy:host-rule row for cause and answers the 403 deny.
+func (p *Proxy) writeHostRuleRefusal(w http.ResponseWriter, r *http.Request, host string, port int, cause string) {
 	log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceHostRule)
 	log.Cause = cause
 	if p.sink != nil {
 		p.sink.emit(log)
 	}
 	p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
-	return r, true
 }
 
 // innerMethodRefused is allowed_methods on a request inside a terminated tunnel (serveAdmittedMITMRequest):

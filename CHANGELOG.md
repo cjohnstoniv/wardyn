@@ -40,6 +40,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Approving or denying on the run page shows the same confirmation toast as Approvals; Cancel on a run that has not started asks a plain question; Deny says it needs a reason.
 - The console calls the minimum barrier setting "Barrier floor", and more screens share one local-time format. A team drive's Mode reads Writable or Read only only when every allocation is listed and agrees, and Not shown otherwise.
 - The Secrets page and the Add and Rotate secret dialogs make no claim about Git token handling until the token broker setting is known, and say a run can deliver a stored value into its sandbox.
+- The GitHub API door (`github_capabilities`) refuses a request carrying any method override on the fixed list host rules use, in any case and with `-` or `_`. `X-Method`, `X-MS-HTTP-Method`, `X-Original-Method` and `X-Forwarded-Method` join `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override`.
 
 ### Fixed
 

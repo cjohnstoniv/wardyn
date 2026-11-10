@@ -307,7 +307,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 
 - `access: read` admits the read rows only.
 - Every field a request names is read from the query string and from a JSON, form-urlencoded or multipart body.
-- It is judged with the effective method (`X-HTTP-Method-Override` is refused unless it names the request line's own method).
+- It is judged with the effective method: a method override, one of the fixed list under [`host_rules`](#host_rules--hostruleset) in any case and with `-` or `_`, is refused unless it names the request line's own method.
 
 - What cannot be narrowed, and so is refused rather than passed:
   - merge and auto-merge (at creation or by update); writes to repository files and commits, which bypass the receive-pack content and branch checks (push through the git broker instead);

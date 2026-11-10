@@ -471,8 +471,8 @@ func (b *networkBodyReader) Close() error {
 }
 
 // trackNetworkBody records, at a handler's entry, whether r's network body is still unread, for
-// rearmBodyDeadlineAfter. Each entry starts afresh: an inner server's requests inherit the context of
-// the CONNECT that opened it.
+// rearmBodyDeadlineAfter. Each entry records its own: a request that passes a second entry
+// (ServeInjected's serveMITMRequest) is wrapped again, and the outer wrapper still sees every read.
 func trackNetworkBody(r *http.Request) *http.Request {
 	state := &networkBody{}
 	r = r.WithContext(context.WithValue(r.Context(), networkBodyKey{}, state))
@@ -506,6 +506,14 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// A via_org destination: the inner request's own Host goes to the
 	// organisation, which refuses one that is not the grant's destination.
 	if route, ok := p.viaOrgRouteForHost(host); ok {
+		// The organisation never sees a declared trailer (forwardViaOrg sends none), so its engine cannot
+		// judge one: a declared override is refused here, as on every other lane.
+		if p.policy.namesRuleHost(host) {
+			if cause := declaredOverrideTrailerCause(r); cause != "" {
+				p.writeHostRuleRefusal(w, r, host, port, cause)
+				return
+			}
+		}
 		// The run's allowed_models judges a via_org request to a model host too: the organisation
 		// forwards it on, and nothing after this branch would see it.
 		releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
