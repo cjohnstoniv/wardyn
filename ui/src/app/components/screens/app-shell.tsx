@@ -625,7 +625,7 @@ export function AppShell({
             )}
             {/* Measured for focus mode, so it starts above the reauth layer: that layer's z-50 bar
           must grow this box, or the overlay's offset goes stale when the bar comes and goes. */}
-            <div ref={bannerStackRef} className="shrink-0">
+            <div ref={bannerStackRef} className="scroll-thin max-h-[30dvh] shrink-0 overflow-y-auto overscroll-contain">
             {/* The lazy coordinator also reconciles auth changes while no dialog or watch is active. */}
             <React.Suspense fallback={null}>
               <ReauthLayer onResumed={adoptIdentity} />

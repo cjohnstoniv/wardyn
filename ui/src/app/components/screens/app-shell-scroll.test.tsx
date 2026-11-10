@@ -67,6 +67,15 @@ describe("AppShell scroll containment", () => {
     expect(root.classList.contains("relative")).toBe(true);
   });
 
+  it("caps the top bar and banner stack at 30dvh, as the notice stack under it is, so a tall stack scrolls instead of eating the page", async () => {
+    renderShell();
+    await screen.findByRole("main");
+    const stack = screen.getByRole("banner").parentElement!;
+    for (const cls of ["max-h-[30dvh]", "overflow-y-auto", "overscroll-contain"]) {
+      expect(stack.classList.contains(cls), `stack has ${cls}`).toBe(true);
+    }
+  });
+
   it("publishes where the row under every banner starts, and clears it on unmount", async () => {
     const { unmount } = renderShell();
     await screen.findByRole("main");
