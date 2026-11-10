@@ -307,7 +307,7 @@ func (p *Proxy) boundedEgressTarget(ctx context.Context, host string, port int) 
 }
 
 func (p *Proxy) revokeGitHubToken(ctx context.Context, target, tok string) error {
-	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target), http.MethodDelete, "https://"+ghscope.APIHost+"/installation/token", nil)
+	req, err := http.NewRequestWithContext(context.WithValue(withProxyOwnSend(ctx), vettedIPKey{}, target), http.MethodDelete, "https://"+ghscope.APIHost+"/installation/token", nil)
 	if err != nil {
 		return err
 	}

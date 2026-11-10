@@ -143,6 +143,16 @@ func (p *Proxy) innerMethodRefused(w http.ResponseWriter, r *http.Request, host 
 	return true
 }
 
+// proxyOwnSend marks a request the proxy sends for itself, not on the sandbox's behalf (withProxyOwnSend):
+// the GitHub token hand-back, the push comparison's forge reads, the AWS portal's role credentials. The
+// run's host rules govern what the sandbox may ask a host, so the outbound gate passes these. Only the proxy
+// sets it, in the context; no header or sandbox input can.
+type proxyOwnSend struct{}
+
+func withProxyOwnSend(ctx context.Context) context.Context {
+	return context.WithValue(ctx, proxyOwnSend{}, true)
+}
+
 // errHostRuleRefused is a forward the host rules refuse (outboundHostRuleRefused); the error returned is a
 // *hostRuleRefusal, which carries the row it wrote so the answer can be the same 403 the other lanes give.
 var errHostRuleRefused = errors.New("wardyn: refused by host rules")
@@ -168,7 +178,7 @@ func (p *Proxy) answerHostRuleRefusal(w http.ResponseWriter, shape errShape, err
 // and plain lanes, so this is where their requests are judged, on the method and path the host receives.
 // A refusal writes the policy:host-rule row and returns errHostRuleRefused.
 func (p *Proxy) outboundHostRuleRefused(req *http.Request) error {
-	if req.URL == nil {
+	if req.URL == nil || req.Context().Value(proxyOwnSend{}) != nil {
 		return nil
 	}
 	host, port := splitHostPort(req.URL.Host, defaultPortForScheme(req.URL.Scheme))
