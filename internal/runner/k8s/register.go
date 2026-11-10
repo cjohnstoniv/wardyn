@@ -41,6 +41,9 @@ func buildConfig(d substrate.Deps) Config {
 		// instead of silently staying off.
 		AllowUnenforcedNetPol: cliutil.EnvBool("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL", false),
 		AckAmbientDefaultDeny: cliutil.EnvBool("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY", false),
+
+		// Experimental: the SandboxTemplate the agent pod takes its scheduling fields from (agentsandbox_template.go).
+		AgentSandboxTemplate: os.Getenv("WARDYN_K8S_AGENT_SANDBOX_TEMPLATE"),
 	}
 }
 
@@ -52,6 +55,9 @@ func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
 		return nil, errors.New("k8s: a runner takes its runs namespace from --runs-namespace; unset WARDYN_K8S_NAMESPACE")
 	}
 	cfg := buildConfig(d)
+	if err := checkAgentSandboxTemplate(cfg); err != nil {
+		return nil, err
+	}
 	if cfg.AgentSandbox {
 		return nil, errAgentSandboxRunner
 	}
@@ -69,7 +75,11 @@ func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
 // code — mirrors docker/register.go exactly.
 func init() {
 	substrate.Register("k8s", func(d substrate.Deps) (substrate.Substrate, error) {
-		s, err := New(buildConfig(d))
+		cfg := buildConfig(d)
+		if err := checkAgentSandboxTemplate(cfg); err != nil {
+			return nil, err
+		}
+		s, err := New(cfg)
 		if err != nil {
 			return nil, err
 		}

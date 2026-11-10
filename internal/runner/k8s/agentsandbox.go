@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -52,6 +53,10 @@ const (
 
 var sandboxesGVR = schema.GroupVersionResource{Group: agentSandboxGroup, Version: "v1beta1", Resource: "sandboxes"}
 
+// sandboxTemplatesGVR is the SandboxTemplate CRD of agent-sandbox v1.0.9's extensions manifest. Wardyn
+// only reads it (WARDYN_K8S_AGENT_SANDBOX_TEMPLATE); no extensions controller is involved.
+var sandboxTemplatesGVR = schema.GroupVersionResource{Group: "extensions." + agentSandboxGroup, Version: "v1beta1", Resource: "sandboxtemplates"}
+
 // agentSandboxPodAppearWithin bounds the wait for the controller's pod. On kind with agent-sandbox
 // v1.0.9 the pod appeared in the Sandbox's own second. A var so tests can shorten it.
 var agentSandboxPodAppearWithin = 30 * time.Second
@@ -66,7 +71,8 @@ var (
 )
 
 // agentSandboxAccess is every verb the backend needs in a runs namespace: the Sandbox's create, read
-// and delete, the orphan sweep's list, and the pod patch that removes the gate.
+// and delete, the orphan sweep's list, and the pod patch that removes the gate. A named template adds
+// agentSandboxTemplateAccess.
 var agentSandboxAccess = []authzv1.ResourceAttributes{
 	{Group: agentSandboxGroup, Resource: "sandboxes", Verb: "create"},
 	{Group: agentSandboxGroup, Resource: "sandboxes", Verb: "get"},
@@ -75,11 +81,27 @@ var agentSandboxAccess = []authzv1.ResourceAttributes{
 	{Resource: "pods", Verb: "patch"},
 }
 
+var agentSandboxTemplateAccess = authzv1.ResourceAttributes{Group: sandboxTemplatesGVR.Group, Resource: sandboxTemplatesGVR.Resource, Verb: "get"}
+
+// checkAgentSandboxTemplate refuses a template named without the backend, or a name no object can have.
+func checkAgentSandboxTemplate(cfg Config) error {
+	switch {
+	case cfg.AgentSandboxTemplate == "":
+		return nil
+	case !cfg.AgentSandbox:
+		return errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE needs WARDYN_K8S_AGENT_SANDBOX on")
+	case len(validation.IsDNS1123Subdomain(cfg.AgentSandboxTemplate)) > 0:
+		return fmt.Errorf("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE %q is not a valid object name", cfg.AgentSandboxTemplate)
+	}
+	return nil
+}
+
 // bootAgentSandbox refuses to boot the backend under runnerd, beside either NetworkPolicy override
 // (before any API call), on a cluster that does not serve Sandboxes at the one API version Wardyn was
 // tested with, or for a service account missing any verb in agentSandboxAccess in a runs namespace. A
-// failed check refuses too. Otherwise it builds the dynamic client. New also requires the canary's
-// verdict to be enforced (errAgentSandboxNetPol).
+// named template must be readable and acceptable in every runs namespace. A failed check refuses too.
+// Otherwise it builds the dynamic client. New also requires the canary's verdict to be enforced
+// (errAgentSandboxNetPol).
 func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *rest.Config, cfg Config) (dynamic.Interface, error) {
 	switch {
 	case cfg.RunnerID != "":
@@ -89,6 +111,13 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 	case cfg.AckAmbientDefaultDeny:
 		return nil, errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX runs only where NetworkPolicy is proven enforced; unset WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY")
 	}
+	if err := checkAgentSandboxTemplate(cfg); err != nil {
+		return nil, err
+	}
+	access := agentSandboxAccess
+	if cfg.AgentSandboxTemplate != "" {
+		access = append(slices.Clone(access), agentSandboxTemplateAccess)
+	}
 	served, err := cs.Discovery().ServerResourcesForGroupVersion(agentSandboxAPIVersion)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX is on, but the cluster does not serve %s (install agent-sandbox, or unset it): %w", agentSandboxAPIVersion, err)
@@ -97,7 +126,7 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 		return nil, fmt.Errorf("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX is on, but %s serves no sandboxes resource", agentSandboxAPIVersion)
 	}
 	for _, ns := range cfg.Namespaces {
-		for _, ra := range agentSandboxAccess {
+		for _, ra := range access {
 			ra.Namespace = ns
 			review := &authzv1.SelfSubjectAccessReview{Spec: authzv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &ra}}
 			got, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
@@ -114,7 +143,44 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 	if err != nil {
 		return nil, fmt.Errorf("k8s: build dynamic client: %w", err)
 	}
+	if cfg.AgentSandboxTemplate != "" {
+		for _, ns := range cfg.Namespaces {
+			if _, err := readSandboxTemplate(ctx, dyn, ns, cfg.AgentSandboxTemplate); err != nil {
+				return nil, fmt.Errorf("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX_TEMPLATE: %w", err)
+			}
+		}
+	}
 	return dyn, nil
+}
+
+// readSandboxTemplate reads the named SandboxTemplate in ns and parses what Wardyn takes from it.
+func readSandboxTemplate(ctx context.Context, dyn dynamic.Interface, ns, name string) (sandboxTemplateBase, error) {
+	obj, err := dyn.Resource(sandboxTemplatesGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return sandboxTemplateBase{}, fmt.Errorf("SandboxTemplate %s/%s could not be read (the CRD is agent-sandbox v1.0.9's, from extensions.yaml): %w", ns, name, err)
+	}
+	base, err := parseSandboxTemplate(obj.Object)
+	if err != nil {
+		return sandboxTemplateBase{}, fmt.Errorf("SandboxTemplate %s/%s: %w", ns, name, err)
+	}
+	return base, nil
+}
+
+// templatedAgentPod is pod with the named template laid on, read afresh for each run so an edit after boot
+// is checked too. No template: pod itself.
+func (d *Driver) templatedAgentPod(ctx context.Context, pod *corev1.Pod) (*corev1.Pod, error) {
+	if d.cfg.AgentSandboxTemplate == "" {
+		return pod, nil
+	}
+	base, err := readSandboxTemplate(ctx, d.dynamic, pod.Namespace, d.cfg.AgentSandboxTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: agent sandbox: %w", err)
+	}
+	out := pod.DeepCopy()
+	if err := base.applyTo(out); err != nil {
+		return nil, fmt.Errorf("k8s: agent sandbox: SandboxTemplate %s/%s: %w", pod.Namespace, d.cfg.AgentSandboxTemplate, err)
+	}
+	return out, nil
 }
 
 // createAgentSandbox is CreateSandbox's agent step when the backend is on: create the Sandbox, wait
@@ -122,6 +188,10 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 // deletes the Sandbox at once, before the caller's teardown, so a controller retrying a pod the API
 // server refused stops (one was seen retrying thousands of times in five minutes).
 func (d *Driver) createAgentSandbox(ctx context.Context, clock *startClock, pod *corev1.Pod) error {
+	pod, err := d.templatedAgentPod(ctx, pod)
+	if err != nil {
+		return err
+	}
 	want, err := d.runtimeClassAdmitted(ctx, pod)
 	if err != nil {
 		return err

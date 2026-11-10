@@ -111,6 +111,10 @@ type Config struct {
 	// agents.x-k8s.io/v1beta1 Sandbox makes the agent pod, held by a scheduling gate until Wardyn has
 	// read it back (agentsandbox.go). Off builds no dynamic client and takes none of its branches.
 	AgentSandbox bool
+	// AgentSandboxTemplate is WARDYN_K8S_AGENT_SANDBOX_TEMPLATE (experimental, needs AgentSandbox): the
+	// SandboxTemplate in each runs namespace whose scheduling fields and annotations the agent pod takes
+	// (agentsandbox_template.go). Empty takes none.
+	AgentSandboxTemplate string
 	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the
 	// read-back passed and before the gate is removed, while the pod is still unscheduled. Nil in
 	// production; an error refuses the run.
