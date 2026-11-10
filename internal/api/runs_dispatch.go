@@ -555,6 +555,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
 			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
 			PortRule: s.cfg.EgressPortRule,
+			// A run launched with the No network preset: its proxy refuses every request. A revive
+			// replays it from the stored config. An older proxy refuses the key.
+			NoNetwork: noNetworkPreset(run.WallPreset),
 			// The person's sign-in listener; false, so no key is written,
 			// unless `signins` above.
 			DesktopSignins: signins,

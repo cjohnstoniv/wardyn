@@ -925,7 +925,7 @@ is not the deployment described above.**
 
 | Step | Check | Refused as |
 |---|---|---|
-| 1 | A literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `builtin:private-ip` |
+| 1 | A run with no network refuses everything first; then a literal IP address (`literalIPGuard`); an exact address the allowlist names passes | `policy:no-network`; `builtin:private-ip`, `policy:ip-literal` |
 | 2 | A host reached only by a brokered route: an MCP server, a local model server | `brokered:mcp:direct`, `brokered:local-model` |
 | 3 | Host, port and method (`gateConnect`), then a push to a code host under `deny_all` | `policy:denied`, `policy:port`, `policy:method`, `policy:evaluator-error`, `brokered:git:push-deny-all-forge` |
 | 4 | A private address refused before (`privateIPMemoHit`) | Refused again, with no new decision row |
@@ -938,6 +938,9 @@ is not the deployment described above.**
   - in every spelling that guard parses: the canonical one, the `inet_aton` non-canonical IPv4
     forms, and a zone-suffixed IPv6 literal (`fe80::1%eth0`).
   - The residual below states what that set does not cover.
+- **`no_network`** (the `no-network` wall preset) refuses every request at step 0, before a `via_org`
+  forward, and in both egress dials; the control-plane dial never reads it.
+- **`refuse_ip_literals`** refuses every IP literal under `allow_all_egress`, except one listed exactly.
 - Every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`,
   [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) against
   loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and NAT64-embedded-v4 ranges.

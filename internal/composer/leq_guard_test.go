@@ -21,6 +21,7 @@ var leqRules = map[string]string{
 	"allowed_domains":                  "every entry of a is covered by an entry of b under the proxy's matcher",
 	"denied_domains":                   "every denial of b is covered by a denial of a",
 	"allow_all_egress":                 "a implies b",
+	"refuse_ip_literals":               "b implies a",
 	"first_use_approval":               "rank of a >= rank of b",
 	"first_use_hold_seconds":           "a <= b after normalising",
 	"max_holds":                        "a <= b after normalising",

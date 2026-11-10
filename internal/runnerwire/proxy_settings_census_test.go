@@ -64,6 +64,7 @@ var proxySettingOfField = map[string]string{
 	// Dropped, the gateway gets the request without the headers its admin set to route it, and may
 	// route it somewhere the admin did not choose: an older remote executor must refuse the run.
 	"LLMHeaders": ProxySettingLLMHeaders,
+	"NoNetwork":  ProxySettingNoNetwork,
 }
 
 // proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.
@@ -71,6 +72,8 @@ var proxyNestedSettings = map[string]string{
 	// Dropped, a newer proxy serves the gateway through its generic forwarder with calls the sandbox
 	// signed with the placeholder: they fail at AWS rather than being refused when placed.
 	ProxySettingAWSSigV4Gateways: "AWSSigV4",
+	// Dropped, an older proxy allows a literal IP host under allow-all.
+	ProxySettingRefuseIPLiterals: "Policy",
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
@@ -199,5 +202,19 @@ func TestProxySettingAWSSigV4GatewaysNamed(t *testing.T) {
 	pc.AWSSigV4.Gateways = []proxy.AWSSigV4Gateway{{Host: "ai-gw.corp.example", Port: 443, SigningHost: "bedrock-runtime.us-east-1.amazonaws.com"}}
 	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingAWSSigV4, ProxySettingAWSSigV4Gateways}) {
 		t.Errorf("a gateway: %v", got)
+	}
+}
+
+// refuse_ip_literals acts only under allow_all_egress, so only such a run needs a runner that carries it:
+// on a default-deny run it is not named, and an older runner is not refused the run for it.
+func TestProxySettingsSet_RefuseIPLiteralsUnderAllowAllOnly(t *testing.T) {
+	pc := runner.ProxyConfig{}
+	pc.Policy.RefuseIPLiterals = true
+	if got := ProxySettingsSet(pc); len(got) != 0 {
+		t.Errorf("default-deny with refuse_ip_literals names %v, want none", got)
+	}
+	pc.Policy.AllowAllEgress = true
+	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingRefuseIPLiterals}) {
+		t.Errorf("allow-all with refuse_ip_literals names %v, want [%s]", got, ProxySettingRefuseIPLiterals)
 	}
 }

@@ -16,6 +16,36 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// A workspace attached for its folders alone (repos: []) clones none of its repositories, so no door adds
+// their clone hosts: not create, not the dry doors, not the autonomy posture. Its own approved egress is
+// still added. With the repository selected, every door adds the clone host.
+func TestDerivedEgress_CloneHostOnlyForACloneRepository(t *testing.T) {
+	ws := types.Workspace{ID: uuid.New(), Name: "app", ApprovedEgress: []string{"registry.example"}, Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeRepo, Source: "https://gitlab.example/team/app"},
+		{Type: types.WorkspaceSourceTypeLocalDir, Source: "/home/dev/app"},
+	}}
+	for _, selected := range []bool{false, true} {
+		base := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+		if selected {
+			base.WorkspaceRepos = []types.WorkspaceRepo{{Repo: "https://gitlab.example/team/app"}}
+		}
+		req := createRunRequest{Agent: "claude-code"}
+		f := runFold{spec: base.Clone(), wsRefs: []types.Workspace{ws}, req: &req}
+		(&Server{}).stepPreviewEgress(&f, &foldRecorder{})
+		dispatched := base.Clone()
+		newComponentFixture(t).srv.unionRunEgress(context.Background(), uuid.New(), &dispatched, grantWiring{}, []types.Workspace{ws}, "", types.SiteConfig{}, nil, runComponents{}, nil)
+		posture := autonomyPostureSpec(base, []types.Workspace{ws}, "", types.SiteConfig{}, adoEntraUngraded(), bedrockCredUngraded(), nil)
+		for door, allowed := range map[string][]string{"preview": f.spec.AllowedDomains, "create": dispatched.AllowedDomains, "posture": posture.AllowedDomains} {
+			if got := slices.Contains(allowed, "gitlab.example"); got != selected {
+				t.Errorf("selected %v, %s: gitlab.example added = %v, want %v: %v", selected, door, got, selected, allowed)
+			}
+			if !slices.Contains(allowed, "registry.example") {
+				t.Errorf("selected %v, %s: the workspace's approved egress went: %v", selected, door, allowed)
+			}
+		}
+	}
+}
+
 // The hosts the dry doors' fold adds are the hosts create dispatches, lane by
 // lane: a workspace's registries and denies, its clone host, an ssh_key's
 // endpoint and a git_pat's Azure DevOps bundle. The site-config SCM hosts are
@@ -46,6 +76,9 @@ func TestDerivedEgress_PreviewEqualsDispatch(t *testing.T) {
 				site.ScmHosts = []string{"ghes.corp.example"}
 			}
 			base := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, EligibleGrants: tc.grants}
+			if tc.wsRefs != nil {
+				base.WorkspaceRepos = []types.WorkspaceRepo{{Repo: ws.Sources[0].Source}}
+			}
 			req := createRunRequest{Agent: "claude-code", Repo: tc.repo}
 			// The dry doors: the fold's last step.
 			f := runFold{spec: base.Clone(), wsRefs: tc.wsRefs, req: &req, scmSite: site}

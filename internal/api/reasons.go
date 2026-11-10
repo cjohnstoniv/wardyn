@@ -385,6 +385,7 @@ const (
 	reasonWallPresetLimitReached    = "wall_preset_limit_reached"    // 409: the audience already holds the most presets it may
 	reasonWallPresetUnknown         = "wall_preset_unknown"          // 422: a launch names a preset that does not exist or the caller may not see
 	reasonWallPresetsUnavailable    = "wall_presets_unavailable"     // 501: the store keeps no wall presets (not the Postgres store)
+	reasonNoNetworkNeedsEgress      = "no_network_needs_egress"      // 422: a launch with the No network preset that needs a host; the message names each source
 
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset

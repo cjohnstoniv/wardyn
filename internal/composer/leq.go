@@ -54,7 +54,7 @@ func leqSize(a, b, def int) bool {
 }
 
 func leqEgress(a, b types.RunPolicySpec) bool {
-	if a.AllowAllEgress && !b.AllowAllEgress {
+	if a.AllowAllEgress && !b.AllowAllEgress || b.RefuseIPLiterals && !a.RefuseIPLiterals {
 		return false
 	}
 	if firstUseApprovalRank(a.FirstUseApproval) < firstUseApprovalRank(b.FirstUseApproval) ||

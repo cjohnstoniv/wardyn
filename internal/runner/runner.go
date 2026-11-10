@@ -261,6 +261,8 @@ type ProxyConfig struct {
 	// approve_each, so an older proxy refuses the config and the run does not start on it.
 	MCPApproveEach      *proxy.MCPApproveEachConfig `json:"mcp_approve_each,omitempty"`
 	ActivityIgnoreHosts []string                    `json:"activity_ignore_hosts,omitempty"` // proxy.Config.ActivityIgnoreHosts: hosts whose allowed requests are not activity
+	// NoNetwork is proxy.Config.NoNetwork: a run launched with the no-network wall preset.
+	NoNetwork bool `json:"no_network,omitempty"`
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -939,41 +941,4 @@ func (o ProxyObservation) Exited() bool {
 // every run's proxy pod (the k8s runner's 30 s pod list).
 type ProxyObserver interface {
 	ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uuid.UUID]ProxyObservation, error)
-}
-
-// NodeRecordAcceptor is an OPTIONAL capability: check an operator's node record against the run's
-// own record and accept it as an infrastructure fence, or refuse it with the reason.
-type NodeRecordAcceptor interface {
-	AcceptNodeRecord(ctx context.Context, ref string, rec NodeRecord) error
-}
-
-// Node-record attestations (design K1 §3.1 (b)).
-const (
-	AttestNodePoweredOff = "node_powered_off"
-	AttestNoPriorHolder  = "no_prior_holder"
-)
-
-// NodeRecordApprover is one approver of a node record as the org recorded it.
-type NodeRecordApprover struct {
-	Principal string `json:"principal"`
-	Email     string `json:"email,omitempty"`
-	// Human is false for an admin token, which can never make the record.
-	Human bool `json:"human"`
-}
-
-// ErrNodeRecordRefused marks a node record the runner refused for good: its reason is final for
-// that record, which a new record (with fresh approvals) can replace.
-var ErrNodeRecordRefused = errors.New("node record refused")
-
-// NodeRecord is a security operator's audited record that the machines which may have run a run's
-// pods are powered off, or that no other machine held the name.
-type NodeRecord struct {
-	ID          uuid.UUID            `json:"id"`
-	Attestation string               `json:"attestation"`
-	Tuple       NodeTuple            `json:"tuple"`
-	Approvers   []NodeRecordApprover `json:"approvers"`
-	// FourEyes is the org's four-eyes setting for security-operator writes when the record was made.
-	FourEyes bool   `json:"four_eyes"`
-	Source   string `json:"source"`
-	SourceID string `json:"source_id"`
 }

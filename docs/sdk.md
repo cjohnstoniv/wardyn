@@ -553,12 +553,12 @@ overrides:
 
 ## Wall presets
 
-A wall preset is a named set of walls that only narrows, picked for one run at launch. Open, Read-only and Sealed are built in; a person keeps their own, a group's template managers keep the group's, and an organisation administrator keeps the organisation's.
+A wall preset is a named set of walls that only narrows, picked for one run at launch. Open, Read-only, Sealed and No network are built in; a person keeps their own, a group's template managers keep the group's, and an organisation administrator keeps the organisation's.
 
 | Method | Route | Who |
 |---|---|---|
 | `ListWallPresets` | `GET /api/v1/wall-presets` | anyone signed in, the admin token and a service identity: the built-ins, then each preset they may read, and `publish` |
-| `GetWallPreset` | `GET /api/v1/wall-presets/{id}` | a reader of that preset; `{id}` is a uuid or a built-in's name (`open`, `read-only`, `sealed`) |
+| `GetWallPreset` | `GET /api/v1/wall-presets/{id}` | a reader of that preset; `{id}` is a uuid or a built-in's name (`open`, `read-only`, `sealed`, `no-network`) |
 | `SaveWallPreset` | `POST /api/v1/wall-presets`, `PUT /api/v1/wall-presets/{id}` | the owner (personal), an organisation administrator in the Admin view (organisation), the group's template managers (group) |
 | `DeleteWallPreset` | `DELETE /api/v1/wall-presets/{id}` | as `SaveWallPreset` |
 
@@ -1095,6 +1095,7 @@ start.
 | `wall_preset_invalid` / `wall_preset_scope_forbidden` / `wall_preset_builtin` / `wall_preset_not_found` | `/wall-presets` ([Wall presets](#wall-presets)): `422` a preset that names a wider value or no limit, or a launch whose preset no longer passes the walls check; `403` a save to the organisation or a group you may not save to; `403` an edit or delete of a built-in; `404` no such preset, or one you cannot see. |
 | `wall_preset_name_taken` / `wall_preset_version_conflict` / `wall_preset_limit_reached` | `409`: another preset of the same audience, or a built-in, has the name; the preset changed since the version you read; the audience holds the most presets it may. |
 | `wall_preset_unknown` / `wall_preset_host` / `wall_presets_unavailable` | `422` a launch names a preset that does not exist or is not open to you; `403` `POST /approvals/{id}/approve` of a host the run's wall preset denies; `501` this server's store keeps no wall presets. |
+| `no_network_needs_egress` | `422` a `no-network` launch would need a host; the message names each source. |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary or the run owner's walls now withhold the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile, the Wardyn boundary or the run owner's walls could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |

@@ -128,6 +128,13 @@ export const FIELD_HELP = {
     doc: "top-level",
     snippet: true,
   },
+  refuse_ip_literals: {
+    what: "Under allow_all_egress, refuses every IP-address host, in any spelling.",
+    values:
+      "true | false (default). An IP address listed exactly in allowed_domains is still allowed. It only narrows: a default or ceiling that sets it holds every run under it.",
+    doc: "top-level",
+    snippet: true,
+  },
   llm_inspection: {
     what: "Outbound content inspection on the brokered LLM routes — a guardrail and visibility layer, not exfiltration prevention.",
     values:
