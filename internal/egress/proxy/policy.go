@@ -85,8 +85,8 @@ type Policy struct {
 	// unaffected, and AllowedExactHost (credential injection) still requires an
 	// explicit exact allowlist entry.
 	allowAll bool
-	// refuseIPLiterals mirrors RunPolicySpec.RefuseIPLiterals: literalIPGuard refuses every literal IP
-	// host, in any spelling, but one listed exactly in the allowlist.
+	// refuseIPLiterals mirrors RunPolicySpec.RefuseIPLiterals: under allowAll, literalIPGuard refuses
+	// every literal IP host, in any spelling, but one listed exactly in the allowlist.
 	refuseIPLiterals bool
 	// gitPushAnyBranch mirrors RunPolicySpec.GitPushAnyBranch: this run's
 	// brokered pushes skip branch-namespace confinement (handleGitBroker).

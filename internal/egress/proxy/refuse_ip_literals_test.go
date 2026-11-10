@@ -91,4 +91,13 @@ func TestRefuseIPLiterals_ExactListedAndOff(t *testing.T) {
 	if d, src := eval(types.RunPolicySpec{AllowAllEgress: true}, "8.8.8.8"); d != egress.Allow {
 		t.Errorf("a literal with the switch off = %s %s, want allow", d, src)
 	}
+	// Under default-deny the switch does nothing: an unlisted literal is the allowlist's to deny (or
+	// first-use approval's to hold), and a listed one is allowed.
+	deny := types.RunPolicySpec{RefuseIPLiterals: true, AllowedDomains: []string{"8.8.8.8"}}
+	if d, src := eval(deny, "8.8.4.4"); src == ruleSourceIPLiteral {
+		t.Errorf("an unlisted literal under default-deny = %s %s, want the allowlist's deny", d, src)
+	}
+	if d, src := eval(deny, "8.8.8.8"); d != egress.Allow {
+		t.Errorf("a listed literal under default-deny = %s %s, want allow", d, src)
+	}
 }

@@ -42,8 +42,10 @@ import (
 // never inherit an allowed_domains grant.
 //
 // A run with no network (Config.NoNetwork) is refused here first, for every host. A policy with
-// refuse_ip_literals refuses every literal host, in any spelling, after the blocked-range checks; an
-// address listed exactly in the allowlist (Policy.AllowsLiteralIP) is still allowed.
+// refuse_ip_literals under allow_all_egress refuses every literal host, in any spelling, after the
+// blocked-range checks; an address listed exactly in the allowlist (Policy.AllowsLiteralIP) is still
+// allowed. Under default-deny the switch does nothing: an unlisted literal is the allowlist's to deny, or
+// first-use approval's to hold.
 func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.IP, *egress.DecisionLog) {
 	if p.noNetwork {
 		log := decisionLog(req, egress.Deny, ruleSourceNoNetwork)
@@ -54,7 +56,7 @@ func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.I
 		return nil, &log
 	}
 	trusted, denied := p.blockedLiteralIPGuard(deny, host, port)
-	if denied != nil || trusted != nil || p.policy == nil || !p.policy.refuseIPLiterals {
+	if denied != nil || trusted != nil || p.policy == nil || !p.policy.refuseIPLiterals || !p.policy.allowAll {
 		return trusted, denied
 	}
 	if ip := literalHostIP(host); ip != nil {
