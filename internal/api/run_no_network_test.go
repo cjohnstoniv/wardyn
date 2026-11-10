@@ -308,6 +308,12 @@ func TestNoNetwork_LaunchFetches(t *testing.T) {
 		{"/bin/sh", []string{"-c", "if false; then npx -y example; fi; exec /usr/local/bin/mcp-files"}, false},
 		{"/bin/sh", []string{"-c", "(: npx -y example); exec /usr/local/bin/mcp-files"}, false},
 		{"/bin/sh", []string{"-c", "{ echo start; }; exec /usr/local/bin/mcp-files"}, false},
+		// declined grammar: judged on the first command; a miss fails safe at launch
+		{"/bin/sh", []string{"-c", "export T=$(cat /run/s); exec npx -y @example/mcp-server@1.4.2"}, false},
+		// declined grammar: judged on the first command; a miss fails safe at launch
+		{"/bin/sh", []string{"-c", `cd "$(dirname "$0")" && npx -y @example/mcp-server@1.4.2`}, false},
+		// declined grammar: judged on the first command; a miss fails safe at launch
+		{"/bin/sh", []string{"-c", "if [ -f x ]; then :; fi; exec npx -y @example/mcp-server@1.4.2"}, false},
 		{"/bin/sh", []string{"-c", "true && npx -y @example/mcp-server@1.4.2"}, true},
 		{"/bin/sh", []string{"-c", "echo '(starting)'; exec npx -y @example/mcp-server@1.4.2"}, true},
 		{"/bin/sh", []string{"-c", "export A='x y'; exec npx -y @example/mcp-server@1.4.2"}, true},
