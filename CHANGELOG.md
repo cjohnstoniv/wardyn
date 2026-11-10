@@ -97,8 +97,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   - a periodic sandbox sweep stops the sandbox while its changes are still being copied back;
   - a run stopped for being idle or for reaching its maximum age;
   - two copies back running at once for the same folder;
-  - a crash during a copy back.
-  Copy changes off the sandbox before a run ends if you cannot lose them. Fixes are planned for the next release candidate.
+  - a crash during a copy back. After a crash, the laptop's older copy of a file can overwrite the agent's newer edit.
+  Copy changes off the sandbox before a run ends if you cannot lose them. The fixes are being prepared for a later release candidate.
+- After two copies back of the same folder run at once, or a crash during one, the folder's sync record on the laptop can become unreadable. Every later sync of that folder then fails with `sync state … is unreadable (delete it to start over)`. To recover, delete the file the message names: `folders/<run id>.json` in the laptop runner's state directory, which by default is `~/.config/wardyn/runner` on Linux, `~/Library/Application Support/wardyn/runner` on macOS and `%AppData%\wardyn\runner` on Windows, or the runner's `state_dir` setting. The next sync then starts over as a first sync.
 
 ### Before you upgrade
 
