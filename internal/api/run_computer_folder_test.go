@@ -33,8 +33,15 @@ import (
 )
 
 // folderRunnerEndpoint serves a folder-only runner (internal/runner/folders) with roots over the
-// in-memory loopback and returns the org's endpoint for it, as a connected runner has one.
+// in-memory loopback and returns the org's endpoint for it, as a connected runner has one. One that
+// shares folders runs one pass per run at a time, as internal/runner/folders does.
 func folderRunnerEndpoint(t *testing.T, id uuid.UUID, shares bool, roots ...string) runnerEndpoint {
+	t.Helper()
+	return folderRunnerEndpointCaps(t, id, runnerwire.Caps{Folders: shares, FolderPassOnce: shares, MachineName: "alice-laptop"}, roots...)
+}
+
+// folderRunnerEndpointCaps is folderRunnerEndpoint advertising caps.
+func folderRunnerEndpointCaps(t *testing.T, id uuid.UUID, caps runnerwire.Caps, roots ...string) runnerEndpoint {
 	t.Helper()
 	fs, err := folderrunner.New(context.Background(), roots, t.TempDir())
 	if err != nil {
@@ -52,7 +59,7 @@ func folderRunnerEndpoint(t *testing.T, id uuid.UUID, shares bool, roots ...stri
 	}})
 	go func() { _ = peer.Run(ctx) }()
 	t.Cleanup(func() { orgPeer.Close(); peer.Close() })
-	data, _ := json.Marshal(runnerwire.Caps{Folders: shares, MachineName: "alice-laptop"})
+	data, _ := json.Marshal(caps)
 	if err := peer.Event(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
 		t.Fatal(err)
 	}

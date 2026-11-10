@@ -316,11 +316,16 @@ func (s *Server) BringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 }
 
 // folderBackVerdict is the resume a pass back leaves (nil: stop the sandbox now) and the error to
-// record for it, read against the resume before it, prev (folderBackResume). Only a sandbox quiesced
-// before the pass (qerr nil) is kept; one that was not is stopped, and the record says why.
+// record for it, read against the resume before it, prev (folderBackResume). A pass that completed
+// with changed files it did not bring back (a file changed on both sides whose conflict copy could not
+// be kept) still owes them, as a cut one does. Only a sandbox quiesced before the pass (qerr nil) is
+// kept; one that was not is stopped, and the record says why.
 func folderBackVerdict(prev *types.FolderResume, res *runnerwire.FolderPass, passErr string, cut bool, qerr error) (*types.FolderResume, string) {
-	if !cut {
+	if !cut && (passErr != "" || res.Unsynced == 0) {
 		return nil, passErr
+	}
+	if !cut {
+		passErr = fmt.Sprintf("the pass back left %d changed files not brought back: a file changed on both sides could not be kept as a conflict copy", res.Unsynced)
 	}
 	next, errText := folderBackResume(prev, res, passErr)
 	if next == nil {
@@ -560,6 +565,10 @@ func (s *Server) auditComputerFolderPass(ctx context.Context, runID uuid.UUID, f
 		if by, ok := bringBackBy(ctx); ok {
 			data["direction"], actorType, actor = "bring_back", by.actorType, by.principal
 		}
+	}
+	if res.Recovered != "" {
+		// The runner moved an unreadable sync record aside and compared every file.
+		data["recovered"] = localFolderSeedError(res.Recovered)
 	}
 	outcome := "success"
 	if errText != "" {
