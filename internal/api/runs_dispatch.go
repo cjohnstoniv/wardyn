@@ -652,12 +652,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
-	// The pending proxy start is recorded before CreateSandbox, so a report the proxy sends while the
-	// create is still running is held against it (run_proxy_readback.go).
-	start, ok := s.beginDispatchProxyStart(ctx, run, p.RunToken, stopCreateLease)
-	if !ok {
-		return
-	}
 	// Recorded now, not at the snapshot: the file_secret placeholders and the placement
 	// classification are the last writers of the proxy config, and the host marks must describe
 	// the config the runner is sent. Nothing between the snapshot and here reads the envelope.
@@ -671,7 +665,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
-	execution, sb, ok := s.createRunSandbox(ctx, createCtx, run, spec, resident, kept, func() { endStartWait(); stopCreateLease() })
+	execution, sb, start, ok := s.createRunSandbox(ctx, createCtx, run, spec, resident, kept, p.RunToken, func() { endStartWait(); stopCreateLease() })
 	if !ok {
 		return
 	}
@@ -713,14 +707,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	if err := s.recordStartedSandbox(ctx, run, sb); err != nil {
-		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
-		return
-	}
-	// The driver's hash of the bytes its proxy was handed: a start that must confirm and cannot is
-	// stopped here, before the run goes RUNNING.
-	if ok, why := s.proxyStartAnswered(ctx, run.ID, start, sb.ProxyConfigSHA256); !ok {
-		s.abortUnconfirmedSandbox(ctx, run.ID, sb.Ref, why)
+	// The sandbox's ref, then the driver's hash of the bytes its proxy was handed: a start that must
+	// confirm and cannot is stopped here, before the run goes RUNNING (run_proxy_readback.go).
+	if !s.recordConfirmedSandbox(ctx, run, sb, start) {
 		return
 	}
 
@@ -823,17 +812,23 @@ func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.Eg
 // over. false when the run was failed and no sandbox was created: the mark could not be written, the
 // delivery refused the run (the mark is taken back: its Mac was never asked), or the create failed.
 func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.AgentRun, spec runner.SandboxSpec,
-	resident []residentValue, kept keptDispatch, done func()) (runnerExecution, runner.Sandbox, bool) {
+	resident []residentValue, kept keptDispatch, token string, done func()) (runnerExecution, runner.Sandbox, proxyStartRec, bool) {
+	// The pending proxy start is recorded before CreateSandbox, so a report the proxy sends while the
+	// create is still running is held against it (run_proxy_readback.go).
+	start, ok := s.beginDispatchProxyStart(ctx, run, token, done)
+	if !ok {
+		return runnerExecution{}, runner.Sandbox{}, start, false
+	}
 	if !s.keptMachineResetting(ctx, run, kept) {
 		done()
-		return runnerExecution{}, runner.Sandbox{}, false
+		return runnerExecution{}, runner.Sandbox{}, start, false
 	}
 	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
 	done()
 	if refused {
 		s.keptResetNotAsked(ctx, run, kept)
 		s.unoweAgentCast(ctx, run)
-		return execution, sb, false // deliverResident failed the run and recorded why; no create was asked for
+		return execution, sb, start, false // deliverResident failed the run and recorded why; no create was asked for
 	}
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
@@ -844,7 +839,7 @@ func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.Agen
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
 		s.unoweAgentCast(ctx, run)
-		return execution, sb, false
+		return execution, sb, start, false
 	}
-	return execution, sb, true
+	return execution, sb, start, true
 }

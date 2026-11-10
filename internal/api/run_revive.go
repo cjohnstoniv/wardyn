@@ -179,6 +179,9 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 		return nil, nil, nil, false, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
 			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
+	if rerr := s.reviveReadbackSupported(ctx, run, rv); rerr != nil {
+		return nil, nil, nil, false, rerr
+	}
 	return reviver, rv, starter, rebooted, nil
 }
 
@@ -192,9 +195,6 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool) (reviveResult, *reviveError) {
 	reviver, rv, starter, rebooted, rerr := s.reviveSupported(ctx, run, startAgent)
 	if rerr != nil {
-		return reviveResult{}, rerr
-	}
-	if rerr := s.reviveReadbackSupported(ctx, run, rv); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	if rerr := s.markReviving(run); rerr != nil {
@@ -320,20 +320,13 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
 	// it is refused, so it can mint no token this list misses, and the new one renews at once.
 	renewed := s.retireRunTokenLineage(ctx, run.ID, freshJTI)
-	gen, gerr := s.advanceRunPolicyGeneration(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI) // before the new proxy's first row
+	// Before the new proxy's first row, and its pending start only now that the old lineage is retired.
+	gen, start, gerr := s.advanceRevivePolicyAndStart(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI)
 	if gerr != nil {
 		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, gerr)
 	}
-	// The pending start, only now that the old lineage is retired: no report on it can land here.
-	start, berr := s.beginProxyStart(ctx, run, gen, freshJTI)
-	if berr != nil {
-		s.abandonRunPolicyGeneration(ctx, run, gen)
-		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, berr)
-	}
-	proxyHash, err := s.replaceRevivedProxyHashed(runnerCtx, rv, run, cfgJSON)
+	proxyHash, err := s.replaceRevivedProxyHashed(runnerCtx, rv, run, cfgJSON, start) // abandons start on an error
 	if err != nil {
-		// Abandoned before any lineage is restored, so the kept proxy's tokens never confirm it.
-		s.abandonProxyStart(ctx, run.ID, start)
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
@@ -361,12 +354,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// The new proxy is up behind the fresh token: the retiring one is no
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
 	// return above this point leaves the old proxy running unrevoked.
-	s.revokeRetiringToken(ctx, retiring, run.ID)
-	s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), freshJTI)
-	if ok, why := s.proxyStartAnswered(ctx, run.ID, start, proxyHash); !ok {
-		data["error"] = "policy readback: " + why
-		return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
-			"the run's new proxy did not confirm its policy, so it was stopped and the run is lost until revived", errors.New(why))
+	if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil {
+		return reviveResult{}, rerr
 	}
 	// The stored config becomes the one now running. A failed write keeps the
 	// previous one, from which the next revive re-derives the same result.
