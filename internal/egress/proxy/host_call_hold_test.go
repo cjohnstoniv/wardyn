@@ -5,7 +5,9 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -355,5 +357,142 @@ func TestHostCallHoldInsideTheTunnel(t *testing.T) {
 		if got != tc.want || cu.reached != (tc.want == http.StatusOK) {
 			t.Errorf("%s: inner POST /admin = %d reached=%v, want %d", tc.state, got, cu.reached, tc.want)
 		}
+	}
+}
+
+// hcResult is one held request's outcome, from a goroutine.
+type hcResult struct {
+	rec  *httptest.ResponseRecorder
+	sent bool
+}
+
+// hcGo sends one POST to path on its own context in a goroutine; cancel ends it as a client that went away.
+func hcGo(p *Proxy, path string) (done chan hcResult, cancel context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done = make(chan hcResult, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "http://"+hrHost+path, nil).WithContext(ctx)
+		done <- hcResult{rec, !p.hostRuleRefused(rec, r, hrHost, 80)}
+	}()
+	return done, cancel
+}
+
+func hcWait(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+func (c *hcCP) decidePath(path string, s types.ApprovalState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, row := range c.rows {
+		if row.scope.Path == path {
+			row.state = s
+		}
+	}
+}
+
+// hcBusy reports whether rec is the at-once refusal of a request past the bound.
+func hcBusy(res hcResult, buf *bytes.Buffer) bool {
+	return !res.sent && res.rec.Code == http.StatusForbidden && res.rec.Header().Get(egressHeaderStatus) == egressRefusalDenied &&
+		strings.Contains(buf.String(), `"rule_source":"`+ruleSourceHostRuleApprovalBusy+`"`)
+}
+
+// TestHostCallWaitsAreBounded: at most maxMCPCallsWaiting held requests wait at once. The next one, and a
+// retry of a call already waiting, is refused at once and recorded. A slot is given back on every way out
+// of the wait: an approval, a decline, the window ending and the client going away.
+func TestHostCallWaitsAreBounded(t *testing.T) {
+	for _, release := range []string{"approved", "declined", "timeout", "client gone"} {
+		t.Run(release, func(t *testing.T) {
+			p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{hcHoldSet()}})
+			cp := newHCCP(t, p)
+			hostCallSecond = time.Second // windows outlast the test
+			if release == "timeout" {
+				hostCallSecond = 20 * time.Millisecond
+			}
+			var cancels []context.CancelFunc
+			var waits []chan hcResult
+			t.Cleanup(func() {
+				for _, c := range cancels {
+					c()
+				}
+				for _, d := range waits {
+					<-d
+				}
+			})
+			for i := range maxMCPCallsWaiting {
+				d, c := hcGo(p, fmt.Sprintf("/admin/%d", i))
+				waits, cancels = append(waits, d), append(cancels, c)
+			}
+			hcWait(t, "every waiter to ask", func() bool { rows, _, _ := cp.counts(); return rows == maxMCPCallsWaiting })
+			for _, path := range []string{"/admin/next", "/admin/0"} {
+				d, c := hcGo(p, path)
+				cancels = append(cancels, c)
+				select {
+				case res := <-d:
+					if !hcBusy(res, buf) {
+						t.Fatalf("%s past the bound: sent=%v %d %v", path, res.sent, res.rec.Code, res.rec.Header())
+					}
+				case <-time.After(2 * time.Second):
+					waits = append(waits, d)
+					t.Fatalf("%s past the bound was held, not refused at once", path)
+				}
+			}
+			if rows, _, _ := cp.counts(); rows != maxMCPCallsWaiting {
+				t.Fatalf("a request past the bound asked a person: rows=%d", rows)
+			}
+			target := waits[0]
+			waits = waits[1:]
+			switch release {
+			case "approved":
+				cp.decidePath("/admin/0", types.ApprovalApproved)
+			case "declined":
+				cp.decidePath("/admin/0", types.ApprovalDenied)
+			case "client gone":
+				cancels[0]()
+			}
+			select {
+			case <-target:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("the waiter did not leave on %s", release)
+			}
+			if release == "timeout" {
+				for _, d := range waits {
+					<-d
+				}
+				waits = nil
+			}
+			d, c := hcGo(p, "/admin/after")
+			waits, cancels = append(waits, d), append(cancels, c)
+			hcWait(t, "a request after the release to ask", func() bool { rows, _, _ := cp.counts(); return rows == maxMCPCallsWaiting+1 })
+		})
+	}
+}
+
+// TestHostCallRememberedKeysAreBounded: at most maxMCPCallKeys distinct calls are remembered; a new one past
+// that is refused at once, while a call already approved still goes on for the run.
+func TestHostCallRememberedKeysAreBounded(t *testing.T) {
+	p, buf := hcProxy(t, types.RunPolicySpec{HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: hrHost, Effect: types.HostRuleHold}}}}})
+	cp := newHCCP(t, p)
+	cp.newState = types.ApprovalApproved
+	for i := range maxMCPCallKeys {
+		if rec, sent := hcSend(p, "POST", fmt.Sprintf("http://%s/k/%d", hrHost, i)); !sent {
+			t.Fatalf("call %d refused: %d %v", i, rec.Code, rec.Header())
+		}
+	}
+	rec, sent := hcSend(p, "POST", "http://"+hrHost+"/k/new")
+	if !hcBusy(hcResult{rec, sent}, buf) || !strings.Contains(rec.Header().Get(egressHeaderDetail), "too many different requests") {
+		t.Fatalf("a call past the key bound: sent=%v %d %v", sent, rec.Code, rec.Header())
+	}
+	if rows, _, _ := cp.counts(); rows != maxMCPCallKeys {
+		t.Errorf("a call past the key bound asked a person: rows=%d", rows)
+	}
+	if _, sent := hcSend(p, "POST", "http://"+hrHost+"/k/0"); !sent {
+		t.Error("an approved call was refused once the key bound was reached")
 	}
 }

@@ -13,6 +13,11 @@ package proxy
 // It fails closed, as the kubectl door's hold does (kube_api_hold.go): a request the run-wide
 // allowed_methods refuses never asks anyone, a raise the control plane refuses or cannot take is
 // refused, and an answer the proxy cannot read is still pending, so the request is never sent on it.
+//
+// It is bounded as the MCP broker's holds are, by the same table (mcpCalls, admitKept): at most
+// maxMCPCallsWaiting requests wait at once (a retry of the same call counts), and at most
+// maxMCPCallKeys distinct calls are remembered. A request past either bound is refused at once
+// (ruleSourceHostRuleApprovalBusy), never held.
 
 import (
 	"context"
@@ -21,7 +26,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,6 +42,7 @@ const (
 	ruleSourceHostRuleApprovalDenied  = "policy:host-rule:approval-denied"
 	ruleSourceHostRuleApprovalClosed  = "policy:host-rule:approval-closed"
 	ruleSourceHostRuleApprovalRefused = "policy:host-rule:approval-refused"
+	ruleSourceHostRuleApprovalBusy    = "policy:host-rule:approval-busy"
 
 	hostCallHeldPrefix   = "Wardyn did not send this request: "
 	hostCallWaitingText  = hostCallHeldPrefix + "a host rule holds %s %s on %s until a person decides (approval %s). Send it again once it is approved."
@@ -46,60 +51,13 @@ const (
 	hostCallNoAskText    = hostCallHeldPrefix + "Wardyn could not ask a person about it. Send it again to ask again."
 	hostCallRefusedText  = hostCallHeldPrefix + "the control plane refused the request for a person's approval (%d)."
 	hostCallMethodText   = hostCallHeldPrefix + "the run's allowed methods refuse %s, so no one is asked."
+	hostCallBusyText     = hostCallHeldPrefix + "too many requests are already waiting for a person in this run. Try again later."
+	hostCallKeysText     = hostCallHeldPrefix + "this run has asked about too many different requests; no more are asked about."
 )
 
 // hostCallSecond is what one second of the window lasts. A var only so a test of the window need not
 // wait real seconds.
 var hostCallSecond = time.Second
-
-// hostCalls is this proxy's table of host rule holds, by call key: the approval asked and its answer.
-// The zero value is ready.
-type hostCalls struct {
-	mu sync.Mutex
-	m  map[string]hostCallEntry
-}
-
-type hostCallEntry struct {
-	id    uuid.UUID
-	state approvalState // apPending, apApproved or apDenied
-}
-
-func (c *hostCalls) get(key string) hostCallEntry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.m[key]
-}
-
-// ask records id as the pending approval for key unless the table already holds one, and returns what
-// the table holds: the first raise wins, and a decided answer is never overwritten by a pending one.
-func (c *hostCalls) ask(key string, id uuid.UUID) hostCallEntry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.m[key]; ok && e.id != uuid.Nil {
-		return e
-	}
-	if c.m == nil {
-		c.m = map[string]hostCallEntry{}
-	}
-	e := hostCallEntry{id: id, state: apPending}
-	c.m[key] = e
-	return e
-}
-
-// settle records the answer to approval id for key; apNone forgets it (closed without a decision), so
-// the next request asks again. An answer for an approval the table no longer names is dropped.
-func (c *hostCalls) settle(key string, id uuid.UUID, state approvalState) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.m[key]; !ok || e.id != id {
-		return
-	}
-	if state == apNone {
-		delete(c.m, key)
-		return
-	}
-	c.m[key] = hostCallEntry{id: id, state: state}
-}
 
 // holdHostCall is hostRuleRefused's arm for a request the rules hold: true when a person approved its
 // host, method and path (now or earlier in the run), so the request goes on to the rest of the lane.
@@ -135,21 +93,29 @@ func (p *Proxy) awaitHostCall(w http.ResponseWriter, r *http.Request, host strin
 		p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRuleApprovalRefused, uuid.Nil, cause, text)
 		return false
 	}
-	e := p.hostCalls.get(key)
-	switch e.state {
-	case apApproved:
+	id, state, why := p.hostCalls.admitKept(key)
+	switch {
+	case state == apApproved: // kept for the run, and no waiting slot taken
 		return true
-	case apDenied:
-		return declined(e.id, "a declined host call, refused for the run")
+	case state == apDenied:
+		return declined(id, "a declined host call, refused for the run")
+	case why != "":
+		text, cause := hostCallBusyText, "too many host calls are waiting for a person"
+		if why == mcpCallKeysText {
+			text, cause = hostCallKeysText, "too many distinct host calls were asked about"
+		}
+		p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRuleApprovalBusy, uuid.Nil, cause, text)
+		return false
 	}
+	defer p.hostCalls.leave(key)
 	if p.approval == nil {
 		return refused("this proxy has no way to ask", hostCallNoAskText)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), hostCallWindow*hostCallSecond)
 	defer cancel()
-	if e.id != uuid.Nil {
+	if id != uuid.Nil {
 		// A retry rejoining the pending request: the console reads it as held for this window too.
-		_, _ = p.raiseHostCall(ctx, scope, e.id)
+		_, _ = p.raiseHostCall(ctx, scope, id)
 	} else {
 		got, err := p.raiseHostCall(ctx, scope, uuid.Nil)
 		var refusal *raiseRefusedError
@@ -159,13 +125,11 @@ func (p *Proxy) awaitHostCall(w http.ResponseWriter, r *http.Request, host strin
 		case err != nil:
 			return refused("the request for an approval could not be raised", hostCallNoAskText)
 		}
-		if e = p.hostCalls.ask(key, got); e.state == apApproved {
-			return true
-		} else if e.state == apDenied {
-			return declined(e.id, "a declined host call, refused for the run")
+		if id = p.hostCalls.install(key, got); id == uuid.Nil {
+			return refused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
 		}
 	}
-	return p.pollHostCall(ctx, w, r, host, port, scope, e.id, declined)
+	return p.pollHostCall(ctx, w, r, host, port, scope, id, declined)
 }
 
 // pollHostCall waits on approval id for the scope's key: true once a person approved it.
@@ -180,13 +144,13 @@ func (p *Proxy) pollHostCall(ctx context.Context, w http.ResponseWriter, r *http
 		if ar, ok := p.approval.fetch(ctx, id); ok {
 			switch ar.State {
 			case types.ApprovalApproved:
-				p.hostCalls.settle(key, id, apApproved)
+				p.hostCalls.update(key, id, apApproved)
 				return true
 			case types.ApprovalDenied:
-				p.hostCalls.settle(key, id, apDenied)
+				p.hostCalls.update(key, id, apDenied)
 				return declined(id, "declined by a person")
 			case types.ApprovalExpired, types.ApprovalCancelled:
-				p.hostCalls.settle(key, id, apNone)
+				p.hostCalls.update(key, id, apNone)
 				p.answerHostHold(w, r, host, port, egress.Deny, ruleSourceHostRuleApprovalClosed, id, "closed without a decision", hostCallClosedText)
 				return false
 			}
