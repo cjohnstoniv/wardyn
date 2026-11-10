@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- On a macOS or Linux VM run, a guest program's direct requests to a host whose credential your organisation supplies through Wardyn (a `via_org` credential) no longer count as idle activity, so they no longer keep the run from stopping when idle. The runner marks such a request when it forwards it to your organisation, and the server only trusts the mark on a VM run's forwarded request from that run's own runner; a mark the guest sets itself is removed. The runner and the server both need the upgrade. This was a Known issue in rc.17.
+- On a macOS or Linux VM run, a guest program's direct requests to a host whose credential your organisation supplies through Wardyn (a `via_org` credential) no longer count as idle activity, so they no longer keep the run from stopping when idle. The runner marks such a request when it forwards it to your organisation, and the server only trusts the mark on a VM run's forwarded request from that run's own runner; a mark the guest sets itself is removed. The record a proxy writes when it starts with an upstream proxy no longer counts as activity either, so the server rebuilding its side of the forward after 10 idle minutes does not restart the idle clock. The runner and the server both need the upgrade. This was a Known issue in rc.17.
 
 ## [0.10.0-rc.17] — 2026-11-09
 
