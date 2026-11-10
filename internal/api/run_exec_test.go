@@ -300,6 +300,10 @@ func TestRunExecBackgroundRunIsRefused(t *testing.T) {
 	if n := e.execs.Load(); n != 0 {
 		t.Errorf("ExecStream was called %d times for a background run", n)
 	}
+	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "failure" ||
+		!strings.Contains(string(rows[0].Data), `"error":`) || strings.Contains(string(rows[0].Data), `"command":`) {
+		t.Errorf("run.command.exec rows = %v, want one failure carrying the refusal and no command", rows)
+	}
 }
 
 // TestRunExecForeignRunIsMissing: a member who does not own the run gets the missing run's 404 and the

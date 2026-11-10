@@ -85,6 +85,8 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	at, actor := actorFromRequest(r)
 	fresh, msg := s.sshFreshRun(ctx, run.ID, actor)
 	if msg != "" {
+		// Nothing ran, as at the channel cap below; an SSH exec's refusal is audited too (ssh.authenticate).
+		s.auditRunExec(ctx, run, at, actor, "failure", map[string]any{"error": msg})
 		writeErrorReason(w, http.StatusConflict, reasonRunExecUnavailable, msg)
 		return
 	}
