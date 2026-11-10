@@ -58,7 +58,7 @@ func TestNoNetwork_CreateRefusesNamingEachSource(t *testing.T) {
 		if w.Code != http.StatusUnprocessableEntity || body.Reason != reasonNoNetworkNeedsEgress {
 			t.Fatalf("mode %d: %d %s, want 422 %s", mode, w.Code, w.Body, reasonNoNetworkNeedsEgress)
 		}
-		for _, src := range []string{derivedWorkspace, derivedSiteConfig, derivedSSH, derivedGitPAT, "github_direct", "component linear", "model provider Corp gateway"} {
+		for _, src := range []string{"repository", derivedWorkspace, derivedSiteConfig, derivedSSH, derivedGitPAT, "github_direct", "component linear", "model provider Corp gateway"} {
 			if !strings.Contains(body.Error, src) {
 				t.Errorf("mode %d: the refusal does not name %q: %s", mode, src, body.Error)
 			}
@@ -132,6 +132,22 @@ func TestNoNetwork_GitGrantsCountOnlyWithARepository(t *testing.T) {
 				t.Errorf("mode %d: the refusal does not name %q: %s", mode, src, body.Error)
 			}
 		}
+	}
+}
+
+// TestNoNetwork_BrokeredRepositoryRefused: a GitHub repository cloned through the broker adds no host,
+// in a deployment whose site config names no SCM host; it is still refused at create, naming the
+// repository, rather than launching a run that loses its clone at dispatch.
+func TestNoNetwork_BrokeredRepositoryRefused(t *testing.T) {
+	f, w := noNetworkRepoFold(t, "acme/app")
+	f.spec.EligibleGrants = f.spec.EligibleGrants[:1]
+	if (&Server{}).stepNoNetwork(&f, &foldRecorder{}) {
+		t.Fatal("a brokered GitHub repository passed No network")
+	}
+	var body errorBody
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(body.Error, "repository") {
+		t.Fatalf("%d %s, want 422 naming the repository", w.Code, w.Body)
 	}
 }
 

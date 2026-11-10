@@ -26,7 +26,7 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 // stepNoNetwork refuses a No network launch that would need a host (422 no_network_needs_egress), naming
 // each source, sorted and once each: the kinds deriveRunEgress adds after the mint (from a copy with an
 // empty allowlist, so each kind reports every host it would add; its git grants only when the run clones a
-// repository, noNetworkClonesRepo), a direct GitHub clone, each component,
+// repository, noNetworkClonesRepo), the repository itself, a direct GitHub clone, each component,
 // the Azure DevOps sign-in, the harness's model and each chosen model provider, and whatever is still on
 // the spec's allowlist, by the source the fold recorded for it. It runs after the tool policy, the last
 // step that adds a host to the spec, in every door, so create, Review and the preview answer the same.
@@ -43,7 +43,11 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	probe := f.spec.Clone()
 	probe.AllowedDomains = nil
 	grants := f.spec.EligibleGrants
-	if !noNetworkClonesRepo(f) {
+	if noNetworkClonesRepo(f) {
+		// A clone needs the network wherever it comes from, a brokered GitHub one included, which adds no
+		// host to the allowlist.
+		add("repository")
+	} else {
 		grants = slices.DeleteFunc(slices.Clone(grants), gitLaneGrant)
 	}
 	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), grants)
