@@ -717,8 +717,12 @@ func TestEgressEdit_AFailedRetryReadKeepsTheConfirmedStop(t *testing.T) {
 	bs := &blindAfterEndStore{readbackStore: f.rb}
 	f.srv.cfg.Store = bs
 	f.rr.replaceErr = runner.ErrProxyReplaceFailed
+	stops := f.lr.proxyStopCount()
 	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
 	body := w.Body.String()
+	if n := f.lr.proxyStopCount(); n <= stops {
+		t.Errorf("StopProxy = %d, want more than %d: the edit's own stop", n, stops)
+	}
 	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditUnconfirmed ||
 		!strings.Contains(body, "so it was stopped and the run has no egress") || !strings.Contains(body, "end could not be recorded yet") ||
 		strings.Contains(body, "not confirmed yet") || strings.Contains(body, "will be ended") || strings.Contains(body, "is ended") {
