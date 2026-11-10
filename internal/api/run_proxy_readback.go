@@ -404,11 +404,6 @@ func (s *Server) loseUnconfirmedRun(ctx context.Context, run types.AgentRun) (ha
 	case loseNotKeepable:
 		return false, nil
 	case loseApplied:
-		if errors.Is(stopErr, runner.ErrEndUnsupported) {
-			// loseRunStopped asked to tear the run down: contained once that end and its sandbox stop landed.
-			_, err := s.reloseEnded(ctx, run.ID)
-			return true, err
-		}
 		return true, stopErr
 	case loseWriteFailed:
 		s.revokeRunBroker(ctx, run.ID)
