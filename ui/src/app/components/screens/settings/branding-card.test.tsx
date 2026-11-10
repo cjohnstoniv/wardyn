@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { STATES } from "../../wardyn/states";
+import { HttpError } from "../../../lib/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -71,6 +73,23 @@ describe("Branding card — the logo input's hint", () => {
   it("the file input is described by the logo hint", async () => {
     await validDraft();
     expect(screen.getByLabelText(BRANDING.LOGO_LABEL)).toHaveAccessibleDescription(BRANDING.LOGO_HINT);
+  });
+});
+
+describe("Branding card: a failed read, worded", () => {
+  it("shows the server's sentence, not the default line", async () => {
+    getSettings.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "branding_failed"));
+    renderCard();
+    await expandCard(BRANDING.TITLE);
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line", async () => {
+    getSettings.mockRejectedValueOnce(new Error("Failed to fetch"));
+    renderCard();
+    await expandCard(BRANDING.TITLE);
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 });
 

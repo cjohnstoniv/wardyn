@@ -5,6 +5,7 @@
 
 // Your account > Service identities I sponsor (#1508, mock M-SVC v2): the identities the person sponsors, a
 // mint through the shared dialog that shows the token once, and listing and revoking the identity's tokens.
+import { STATES } from "../../wardyn/states";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -252,6 +253,36 @@ describe("ServiceIdentitiesCard", () => {
     await openCard();
     expect(await screen.findByText(T.UNAVAILABLE_TITLE)).toBeInTheDocument();
     expect(screen.getByText(T.UNAVAILABLE_BODY)).toBeInTheDocument();
+  });
+
+  it("a list the server worded shows its sentence, not the default line", async () => {
+    route = () => json({ error: "Your sentence from the server.", reason: "load_failed" }, 500);
+    render(<ServiceIdentitiesCard />);
+    await openCard();
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("tokens the server worded show its sentence in the panel", async () => {
+    const base = route;
+    route = (m, p, b) => (p.endsWith("/ci-nightly/tokens") ? json({ error: "Your sentence from the server.", reason: "load_failed" }, 500) : base(m, p, b));
+    render(<ServiceIdentitiesCard />);
+    await openCard();
+    await user.click(row("ci-nightly").getByRole("button", { name: T.SHOW_TOKENS_LABEL("ci-nightly") }));
+    expect(await screen.findByText("Your sentence from the server.")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("a plain network error still shows the default line in the panel", async () => {
+    const base = route;
+    route = (m, p, b) => {
+      if (p.endsWith("/ci-nightly/tokens")) throw new TypeError("Failed to fetch");
+      return base(m, p, b);
+    };
+    render(<ServiceIdentitiesCard />);
+    await openCard();
+    await user.click(row("ci-nightly").getByRole("button", { name: T.SHOW_TOKENS_LABEL("ci-nightly") }));
+    expect(await screen.findByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
   });
 
   it("offers Retry when the tokens cannot be read", async () => {
