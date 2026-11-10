@@ -62,7 +62,7 @@ import { PolicyDocumentView } from "../wardyn/policy-document/policy-document";
 import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document/policy-source";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { useUrlFilters } from "../../lib/use-url-filters";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { CC_META } from "../wardyn/cc-meta";
@@ -99,7 +99,7 @@ export function PoliciesScreen() {
   const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [filters, setFilters] = useUrlFilters();
   const query = filters.get("q") ?? "";
-  const setQuery = (q: string) => setFilters({ q });
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);
@@ -188,7 +188,7 @@ export function PoliciesScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search policies by name or id…"
-            value={query}
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="max-w-sm"
           />

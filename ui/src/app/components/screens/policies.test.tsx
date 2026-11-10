@@ -53,6 +53,7 @@ import { PoliciesScreen } from "./policies";
 import { toYaml } from "../wardyn/yaml-block";
 import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { BOUNDARY } from "../../lib/boundary-copy";
 import { STATES } from "../wardyn/states";
@@ -148,6 +149,22 @@ describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () 
     expect(await screen.findByText("two")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/search policies/i)).toHaveValue("two");
     expect(screen.queryByText("one")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ id: "a", name: "one" })]);
+    render(
+      <LaggingRouter>
+        <PoliciesScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("one");
+    const box = screen.getByPlaceholderText(/search policies/i);
+    const user = userEvent.setup({ delay: null });
+    await user.type(box, "abc");
+    expect(box).toHaveValue("abc");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
   });
 
   it("hides the toolbar (and its duplicate Refresh) on error, leaving only ErrorState's retry", async () => {

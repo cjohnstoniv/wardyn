@@ -41,7 +41,7 @@ import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip } from "../wardyn/primitives";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { useUrlFilters } from "../../lib/use-url-filters";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
@@ -139,7 +139,7 @@ export function WorkspacesScreen() {
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [filters, setFilters] = useUrlFilters();
   const query = filters.get("q") ?? "";
-  const setQuery = (q: string) => setFilters({ q });
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [addOpen, setAddOpen] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
   // X3-F2: the confirm dialog's own gate follows the SELECTED row's owner, not
@@ -212,7 +212,7 @@ export function WorkspacesScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search by name or source…"
-            value={query}
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 max-w-sm"
           />

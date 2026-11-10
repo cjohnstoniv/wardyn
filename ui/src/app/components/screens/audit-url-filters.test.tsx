@@ -8,6 +8,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { LaggingRouter } from "../../../test/lagging-router";
 import type { AuditEvent } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
 
@@ -74,6 +76,22 @@ describe("AuditScreen URL filters", () => {
     expect(screen.getByTestId("search")).toHaveTextContent("q=egress");
     fireEvent.click(screen.getByRole("button", { name: "history back" }));
     await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^\?q=egress$/));
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111" })]);
+    render(
+      <LaggingRouter>
+        <AuditScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByLabelText("Search events");
+    const box = screen.getByLabelText("Search events");
+    const user = userEvent.setup({ delay: null });
+    await user.type(box, "abc");
+    expect(box).toHaveValue("abc");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
   });
 
 });

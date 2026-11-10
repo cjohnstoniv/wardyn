@@ -49,6 +49,7 @@ import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
 import { STATES } from "../wardyn/states";
 import { HttpError } from "../../lib/api/core";
 import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -89,6 +90,22 @@ describe("SecretsScreen — delete error handling", () => {
     expect(await screen.findByText("openai-api-key")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Search secrets by name…")).toHaveValue("openai");
     expect(screen.queryByText("anthropic-api-key")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key", "openai-api-key"]);
+    render(
+      <LaggingRouter>
+        <SecretsScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("openai-api-key");
+    const box = screen.getByPlaceholderText("Search secrets by name…");
+    const user = userEvent.setup({ delay: null });
+    await user.type(box, "abc");
+    expect(box).toHaveValue("abc");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
   });
 
   it("names each row's actions menu after the secret", async () => {

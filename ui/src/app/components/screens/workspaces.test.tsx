@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { LaggingRouter } from "../../../test/lagging-router";
 import type { SetupModelProvider, Workspace, WorkspaceProfile } from "../../lib/types";
 import { baseStatus } from "../../lib/test-fixtures";
 
@@ -105,6 +106,22 @@ describe("WorkspacesScreen — list columns", () => {
     expect(await screen.findByText("payments")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Search by name or source…")).toHaveValue("pay");
     expect(screen.queryByText("search")).toBeNull();
+  });
+
+  it("typing several characters quickly keeps them all while the URL answers late", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments", kind: "repo", source: "acme/payments" })]);
+    render(
+      <LaggingRouter>
+        <WorkspacesScreen />
+      </LaggingRouter>,
+    );
+    await screen.findByText("payments");
+    const box = screen.getByPlaceholderText("Search by name or source…");
+    const user = userEvent.setup({ delay: null });
+    await user.type(box, "abc");
+    expect(box).toHaveValue("abc");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(box).toHaveValue("abc");
   });
 
   it("Workspace + Source columns: the kind icon and name in one cell, the mono sub-line in another", async () => {

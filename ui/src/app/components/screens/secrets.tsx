@@ -40,7 +40,7 @@ import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
-import { useUrlFilters } from "../../lib/use-url-filters";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
@@ -91,7 +91,7 @@ export function SecretsScreen() {
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [filters, setFilters] = useUrlFilters();
   const query = filters.get("q") ?? "";
-  const setQuery = (q: string) => setFilters({ q });
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   const [addOpen, setAddOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<string | null>(null);
@@ -175,7 +175,7 @@ export function SecretsScreen() {
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search secrets by name…"
-            value={query}
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 max-w-sm"
           />

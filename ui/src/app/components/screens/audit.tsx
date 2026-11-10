@@ -51,7 +51,7 @@ import {
 import { Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { useUrlFilters } from "../../lib/use-url-filters";
+import { useSearchDraft, useUrlFilters } from "../../lib/use-url-filters";
 import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
@@ -224,7 +224,7 @@ export function AuditScreen() {
     [setFilters],
   );
   const query = searchParams.get("q") ?? "";
-  const setQuery = (q: string) => setFilters({ q });
+  const [draft, setQuery] = useSearchDraft(query, (q) => setFilters({ q }));
   // The Retention tab (mock packet M4) is the security tier's; everyone else
   // has the feed alone.
   const [tab, setTab] = React.useState<"events" | "retention">("events");
@@ -439,7 +439,7 @@ export function AuditScreen() {
           <Input
             aria-label="Search events"
             placeholder="Search events, domains, run IDs…"
-            value={query}
+            value={draft}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
           />
