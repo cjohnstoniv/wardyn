@@ -379,7 +379,7 @@ func TestSetEgressList_StaleVersionIs412(t *testing.T) {
 				r.Header.Set("If-Match", ifMatch)
 			}
 			w := httptest.NewRecorder()
-			srv.Handler().ServeHTTP(w, r)
+			panicFails(t, srv.Handler()).ServeHTTP(deadlineRecorder{w}, r)
 			return w
 		}
 		fake.writes = 0
