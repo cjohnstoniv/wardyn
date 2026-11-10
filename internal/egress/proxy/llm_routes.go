@@ -142,6 +142,9 @@ func llm404Detail(configured string) string {
 // over the vetted IP. Shared by the /wardyn/llm/* local routes and the
 // TLS-MITM CONNECT interception (serveMITM).
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
+	if p.llmHostDenied(w, r, host, port) {
+		return
+	}
 	// A local model server's gate runs before anything else (local_model.go);
 	// one with no auth configured is served with no credential at all.
 	lm := p.localModelAt(host, port)
