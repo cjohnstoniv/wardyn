@@ -347,7 +347,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		// retiring token, so revoking it here is safe (F4).
 		s.revokeRetiringToken(ctx, retiring, run.ID)
 		s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), freshJTI)
-		return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
+		return reviveResult{generation: gen}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
 			"the run's proxy could not be replaced, so the run has no egress and is lost until revived", err)
 	}
 	// The new proxy is up behind the fresh token: the retiring one is no

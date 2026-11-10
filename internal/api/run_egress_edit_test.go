@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -562,5 +563,23 @@ func TestEgressEdit_ConfigWriteFailureWithAFailedStopIsRetried(t *testing.T) {
 	}
 	if p := f.active(t); p.ContainedAt == nil {
 		t.Error("the sweep's retry must record the start contained once the stop lands")
+	}
+}
+
+// A replace that fails puts the run back to lost; the edit answers from its own confirmed stop, never
+// from the lost mark's wording, and unresolved when that stop does not land.
+func TestEgressEdit_ReplaceFailureAnswersFromTheConfirmedStop(t *testing.T) {
+	for _, stopErr := range []error{nil, errors.New("the runner did not answer the stop")} {
+		f := newEgressEditFixture(t)
+		f.rr.replaceErr = runner.ErrProxyReplaceFailed
+		f.setProxyStopErr(stopErr)
+		w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+		want := reasonEgressEditUnconfirmed
+		if stopErr != nil {
+			want = reasonEgressEditContainmentUnresolved
+		}
+		if w.Code != http.StatusServiceUnavailable || errorReason(w) != want {
+			t.Fatalf("stop error %v: %d %s, want 503 %s", stopErr, w.Code, w.Body.String(), want)
+		}
 	}
 }

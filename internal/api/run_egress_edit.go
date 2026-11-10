@@ -227,15 +227,20 @@ func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liv
 	}
 	defer s.reviving.Delete(egressEditMark(run.ID))
 	res, rerr := s.reviveFromRequest(r, run, false, edit)
+	// A revive that put the run back to lost words its own stop from a lost mark that may only have
+	// logged a failed stop; an edit answers from the stop's confirmation instead.
+	lost := rerr != nil && (rerr.lost || rerr.reason == reasonReviveRecoveryUnresolved)
 	switch {
-	case rerr != nil && rerr.reason != reasonRevivePolicyUnconfirmedLost:
+	case rerr != nil && !lost:
 		return egressEditResult{}, egressEditRefusal(rerr)
+	case lost && res.generation < 1: // lost before a start was recorded: no start to fence a stop on
+		return egressEditResult{}, egressEditUnresolved(rerr.reason, nil)
 	}
 	// The wait outlives a caller who stops waiting: its end decides whether the proxy keeps running.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), egressEditWait)
 	defer cancel()
-	// A revive that failed its own start (settleRevivedProxy) is answered by that start's containment
-	// too: stopped only once it is recorded contained.
+	// A revive that failed after its start was recorded is answered by that start: a failed one once
+	// its containment is recorded, an abandoned one (the replace failed) once its stop is confirmed.
 	wait := s.awaitEgressEditReadback(ctx, run.ID, res.generation)
 	switch {
 	case wait != nil:
@@ -281,7 +286,9 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 		p, found, err := st.ActiveProxyStart(ctx, runID)
 		switch {
 		case err != nil: // read again until the wait runs out
-		case !found || p.Generation != gen || p.State == types.ProxyStartSuperseded:
+		case !found || p.Generation < gen: // gen was abandoned (its replace failed), and no newer start began
+			return s.stopEditStart(ctx, runID, gen, "start_abandoned")
+		case p.Generation > gen || p.State == types.ProxyStartSuperseded:
 			return egressEditSuperseded()
 		case p.State == types.ProxyStartEnforced:
 			return nil
@@ -329,9 +336,10 @@ func (s *Server) containEditStart(ctx context.Context, runID uuid.UUID, gen int)
 	}
 }
 
-// stopEditStart stops the proxy of an edit's start that no readback contains, under the run's lock
-// (which a revive holds from its claim to its settle), and only while gen is still the run's active
-// start (gen 0: no start table to fence on). It claims the stop only once stopUnconfirmedProxy confirms it.
+// stopEditStart stops the proxy of an edit's start that no readback contains (one that ran
+// unconfirmed, or one abandoned when its replace failed), under the run's lock, which a revive holds
+// from its claim to its settle, and only while no start newer than gen began (gen 0: no start table
+// to fence on). It claims the stop only once stopUnconfirmedProxy confirms it.
 func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, why string) *reviveError {
 	ctx, cancel := stopCtx(ctx)
 	defer cancel()
@@ -345,7 +353,7 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, wh
 		switch {
 		case err != nil:
 			return egressEditUnresolved(why, err)
-		case !found || p.Generation != gen:
+		case found && p.Generation > gen:
 			return egressEditSuperseded()
 		}
 	}
