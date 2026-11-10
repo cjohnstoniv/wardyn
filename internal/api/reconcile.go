@@ -292,7 +292,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // audits it with teardown_error) for the NEXT boot to retry. A runner run's
 // teardown follows the runner's last answer: an end it refused is retried as a
 // kill, an end or a kill it applied clears the ref, and a kill it refused is not
-// queued again. A direct stop an online runner refuses is followed by one kill.
+// queued again. With no answer yet it is a kill.
 //
 // It also re-runs revokeRunCascade: a run that
 // reaches this pass may have had its ORIGINAL finalize/kill/idle-stop
@@ -324,18 +324,10 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 			// a kill, which stops its agent.
 			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
 		case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
-			// The same record refuses a direct stop from an online runner, which leaves no answer to
-			// follow next boot, so a refused stop is followed by one kill. One audit row covers both.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(func(ctx context.Context, ref string) error {
-				err := s.cfg.Runner.StopSandbox(ctx, ref)
-				if err == nil || errors.Is(err, runner.ErrPendingOnRunner) {
-					return err // stopped, or an end queued for an offline runner, whose answer the next boot follows
-				}
-				if kerr := s.cfg.Runner.KillSandbox(ctx, ref); kerr != nil {
-					return errors.Join(err, kerr)
-				}
-				return nil
-			}))
+			// A kill, never a stop: a stop is queued for an offline runner (at boot, every runner) as an
+			// end, which a runner that cannot keep an ended sandbox refuses and a containment-only record
+			// refuses too. Every runner takes a kill, and a terminal run's sandbox has nothing to keep.
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
 		default:
 			torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.StopSandbox))
 		}

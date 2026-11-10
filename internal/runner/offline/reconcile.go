@@ -154,6 +154,12 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if a.Recovery != nil {
 		return runnerwire.ActionResult{}, errors.New("unexpected mutation recovery proof")
 	}
+	ender, keeps := m.sub.(runner.SandboxEnder)
+	if a.Kind == types.RunnerActionEnd && !keeps {
+		// Refused, not failed, and before containment begins: a plain error would fail Pending on
+		// every fresh session and keep the runner from READY. The org follows a refused end with a kill.
+		return m.refuseAction(ctx, a, refusal(runner.ErrEndUnsupported))
+	}
 	if err := m.beginContainment(a, r); err != nil {
 		return runnerwire.ActionResult{}, err
 	}
@@ -170,12 +176,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		}
 		err = m.stopper.StopProxy(ctx, local)
 	case types.RunnerActionEnd:
-		end, ok := m.sub.(runner.SandboxEnder)
-		if !ok {
-			m.mu.Lock()
-			return runnerwire.ActionResult{}, runner.ErrEndUnsupported
-		}
-		err = runner.KeptDespiteAWSCacheWipe(ctx, local, end.EndSandbox(ctx, local))
+		err = runner.KeptDespiteAWSCacheWipe(ctx, local, ender.EndSandbox(ctx, local))
 	default:
 		m.mu.Lock()
 		return runnerwire.ActionResult{}, errors.New("unknown pending action")
