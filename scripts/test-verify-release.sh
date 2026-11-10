@@ -157,12 +157,12 @@ pass "verify-release binds the signer to the requested tag (images, bundle blob,
 for tamper in wardyn-darwin-arm64 wardyn-runnerd.pkg; do
   TAMPER="${tamper}" run 0.10.0 v0.10.0 bundle
   [ "${rc}" != 0 ] || fail "a swapped ${tamper} still exited 0"
-  printf '%s' "${out}" | grep -q "^${tamper}: FAILED" || fail "a swapped ${tamper} was not named as a checksum failure: $(printf '%s' "${out}" | grep -i 'checksum\|FAILED' | head -3)"
-  printf '%s' "${out}" | grep -q '^FAIL checksum$' || fail "a swapped ${tamper} did not print FAIL checksum"
+  grep -q "^${tamper}: FAILED" <<<"${out}" || fail "a swapped ${tamper} was not named as a checksum failure: $(printf '%s' "${out}" | grep -i 'checksum\|FAILED' | head -3)"
+  grep -q '^FAIL checksum$' <<<"${out}" || fail "a swapped ${tamper} did not print FAIL checksum"
 done
 UNLISTED=wardyn-extra.bin run 0.10.0 v0.10.0 bundle
 [ "${rc}" != 0 ] || fail "an asset missing from SHA256SUMS still exited 0"
-printf '%s' "${out}" | grep -q 'wardyn-extra.bin is a release asset that SHA256SUMS does not list' || fail "the unlisted asset was not named"
+grep -q 'wardyn-extra.bin is a release asset that SHA256SUMS does not list' <<<"${out}" || fail "the unlisted asset was not named"
 run 0.10.0 v0.10.0 bundle
 [ "${rc}" = 0 ] || fail "an untouched 0.10.0 release exited ${rc}: $(printf '%s' "${out}" | tail -5)"
 ! grep -q -- '--ignore-missing' "${VERIFY}" || fail "verify-release still passes --ignore-missing to sha256sum"
