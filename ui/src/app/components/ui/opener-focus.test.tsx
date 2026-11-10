@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "./alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./dialog";
@@ -365,5 +365,23 @@ describe("a dialog whose opener is disabled while its request is in flight", () 
     await new Promise((r) => setTimeout(r, 250));
     expect(document.activeElement).not.toBe(document.body);
     expect(screen.getByRole("heading", { name: "Hosts" })).toHaveFocus();
+  });
+
+  // jsdom keeps activeElement on a button that becomes disabled, which a browser does not (focus falls to the
+  // body). So the browser's state is set up by hand: the focused opener is blurred, then disabled, inside the
+  // watch window that restoreOpenerFocus opened.
+  it("recovers focus when the opener is disabled after the dialog closed and focus is on the body", async () => {
+    const user = userEvent.setup();
+    render(<BusyHarness />);
+    await user.click(screen.getByRole("button", { name: "Remove a" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    const opener = screen.getByRole("button", { name: "Remove a" });
+    await waitFor(() => expect(opener).toHaveFocus());
+    opener.blur();
+    expect(document.activeElement).toBe(document.body);
+    // A bare click: unlike user.click it does not move focus, which would end the watch.
+    act(() => screen.getByRole("button", { name: "Start a request" }).click());
+    expect(opener).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toHaveFocus(), { timeout: 2000 });
   });
 });
