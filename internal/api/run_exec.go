@@ -13,8 +13,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -24,13 +26,20 @@ import (
 // checks, in order, who may enter the run (getRunForEntry), the profile's deny_interactive (as SSH
 // authentication does), the run's data_out rule (as an SSH exec channel does), the run's state
 // (sshFreshRun) and the run's SSH channel cap, which a command shares with SSH (sshAcquireSession). The command runs as an SSH exec runs it (sshExecArgv), with no TTY and no added
-// environment, and is never recorded: its run.command.exec row names the command and its exit code, never
-// its output.
+// environment, and is never recorded: its run.command.exec row names the command (its first
+// runExecAuditCommandCap bytes) and its exit code, never its output.
 
 const (
 	// runExecDefaultTimeout is a request's timeout when it names none; runExecMaxTimeoutSec the most it may name.
 	runExecDefaultTimeout = 60 * time.Second
 	runExecMaxTimeoutSec  = 300
+	// runExecMaxCommand is the longest command taken: Linux execs no single argument longer
+	// (MAX_ARG_STRLEN), and /bin/sh -c takes the command as one.
+	runExecMaxCommand = 128 << 10
+	// runExecAuditCommandCap is how much of the command its audit row keeps.
+	runExecAuditCommandCap = 4 << 10
+	// runExecCallerLeft is the run.command.exec error for a caller who left before the command ended.
+	runExecCallerLeft = "the caller left before the command ended"
 	// runExecStreamCap is how much of each stream the reply keeps. Reading never stops there: a stream
 	// nobody reads blocks the command (runner.ExecSession's streaming contract).
 	runExecStreamCap = 1 << 20
@@ -80,7 +89,8 @@ func (s *Server) handleRunExec(w http.ResponseWriter, r *http.Request) {
 	// One of the run's SSH channel slots, the same per-run cap an SSH exec draws from.
 	if !s.sshAcquireSession(run.ID) {
 		limit := s.cfg.SSHMaxSessionsPerRun
-		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"command": req.Command, "error": fmt.Sprintf("%s (max %d)", sshCapReasonChannels, limit)})
+		// Nothing ran, so the row names the refusal and not the command.
+		s.auditRunExec(ctx, fresh, at, actor, "failure", map[string]any{"error": fmt.Sprintf("%s (max %d)", sshCapReasonChannels, limit)})
 		writeErrorReason(w, http.StatusTooManyRequests, reasonRunExecBusy, fmt.Sprintf(runExecBusyMsg, limit))
 		return
 	}
@@ -114,9 +124,13 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 		writeExecStartError(w, r, err)
 		return
 	}
+	// collectExec answers exit code -1 only when execCtx ended first: the timeout, or a caller who left.
 	data, outcome := map[string]any{"command": command, "exit": res.ExitCode}, "success"
-	if res.TimedOut {
+	switch {
+	case res.TimedOut:
 		data["error"], outcome = fmt.Sprintf("timed out after %s", timeout), "failure"
+	case res.ExitCode == -1:
+		data["error"], outcome = runExecCallerLeft, "failure"
 	}
 	s.auditRunExec(ctx, fresh, at, actor, outcome, data)
 	writeJSON(w, http.StatusOK, res)
@@ -126,6 +140,9 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, fresh types.Age
 func runExecTimeout(req client.ExecRequest) (time.Duration, string) {
 	if strings.TrimSpace(req.Command) == "" {
 		return 0, "command is required"
+	}
+	if len(req.Command) > runExecMaxCommand {
+		return 0, fmt.Sprintf("command is longer than %d KiB, the most one argument may be", runExecMaxCommand>>10)
 	}
 	switch {
 	case req.TimeoutSec == 0:
@@ -167,9 +184,16 @@ func writeExecStartError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// auditRunExec writes the command's run.command.exec row: the command and its exit code, or the error, never
-// output. It outlives a caller who left before the command ended.
+// auditRunExec writes the command's run.command.exec row: the command's first runExecAuditCommandCap
+// bytes and its exit code, or the error, never output. It outlives a caller who left before the command ended.
 func (s *Server) auditRunExec(ctx context.Context, run types.AgentRun, at types.ActorType, actor, outcome string, data map[string]any) {
+	if c, ok := data["command"].(string); ok && len(c) > runExecAuditCommandCap {
+		cut := runExecAuditCommandCap
+		for cut > 0 && !utf8.RuneStart(c[cut]) {
+			cut--
+		}
+		data["command"] = c[:cut] + store.AuditTargetTruncatedMarker
+	}
 	s.recordStreamAudit(context.WithoutCancel(ctx), run.SandboxRef, s.auditEvent(&run.ID, at, actor, "run.command.exec",
 		run.ID.String(), outcome, mustJSON(data)))
 }

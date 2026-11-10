@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -249,10 +251,15 @@ func TestRunExecRefusals(t *testing.T) {
 		`{"command":"true","timeout_sec":301}`: reasonRunExecInvalid,
 		`{"command":"true","timeout_sec":-1}`:  reasonRunExecInvalid,
 		`{"command":"true","tty":true}`:        reasonInvalidRequestBody,
+		// Past the most one exec argument may be: refused before anything is audited or run.
+		`{"command":"` + strings.Repeat("x", 200<<10) + `"}`: reasonRunExecInvalid,
 	} {
 		if w := e.exec(t, body); w.Code != http.StatusBadRequest || wireReason(t, w) != want {
-			t.Errorf("%s = %d %s, want 400 %s", body, w.Code, w.Body, want)
+			t.Errorf("%.60s = %d %.200s, want 400 %s", body, w.Code, w.Body, want)
 		}
+	}
+	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 0 {
+		t.Errorf("refused bodies wrote run.command.exec rows: %d", len(rows))
 	}
 	e.ast.mu.Lock()
 	run := e.ast.runs[e.id]
@@ -307,6 +314,8 @@ func TestRunExecSharesTheSSHChannelCap(t *testing.T) {
 	if rows := execRows(e.h.audit.snapshot(), "run.command.exec"); len(rows) != 1 || rows[0].Outcome != "failure" ||
 		!strings.Contains(string(rows[0].Data), sshCapReasonChannels) {
 		t.Errorf("run.command.exec rows = %v, want one failure naming the channel cap", rows)
+	} else if strings.Contains(string(rows[0].Data), `"command"`) {
+		t.Errorf("the refusal row names the command though nothing ran: %s", rows[0].Data)
 	}
 	e.srv.sshReleaseSession(e.id)
 	execResult(t, e.execWithin(t, `{"command":"true"}`, 10*time.Second))
@@ -402,4 +411,66 @@ func TestRunExecLostCommandIsAFailure(t *testing.T) {
 			t.Errorf("run.command.exec rows = %v, want one success row with exit 1", rows)
 		}
 	})
+}
+
+// TestRunExecCallerLeftIsAFailure: a caller who leaves while the command runs gets no success row with a
+// made-up exit code: the row is a failure saying the caller left, and the runner's stream is closed.
+func TestRunExecCallerLeftIsAFailure(t *testing.T) {
+	closed := &atomic.Bool{}
+	e := newExecHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(closed), nil })
+	owner := ssoSession(t, execOwner, "owner@corp.example", oidc.RoleUser)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		doSSOCtx(t, e.srv, ctx, http.MethodPost, "/api/v1/runs/"+e.id.String()+"/exec", owner, `{"command":"sleep 3600","timeout_sec":300}`)
+	}()
+	for deadline := time.Now().Add(10 * time.Second); e.execs.Load() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the command never reached the runner")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("POST /exec did not end after its caller left")
+	}
+	if !closed.Load() {
+		t.Error("the runner's exec stream was not closed when the caller left")
+	}
+	rows := execRows(e.h.audit.snapshot(), "run.command.exec")
+	if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), runExecCallerLeft) {
+		t.Errorf("run.command.exec rows = %v, want one failure saying the caller left", rows)
+	}
+}
+
+// TestRunExecAuditsTheCommandCapped: a long command runs whole, and its audit row keeps the first
+// runExecAuditCommandCap bytes of it.
+func TestRunExecAuditsTheCommandCapped(t *testing.T) {
+	var got []string
+	e := newExecHarness(t, func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+		got = spec.Argv
+		return fakeExecSession("", "", 0), nil
+	})
+	long := "echo " + strings.Repeat("y", 100<<10)
+	execResult(t, e.execWithin(t, `{"command":"`+long+`"}`, 10*time.Second))
+	if len(got) == 0 || got[len(got)-1] != long {
+		t.Fatal("the runner did not get the whole command")
+	}
+	rows := execRows(e.h.audit.snapshot(), "run.command.exec")
+	if len(rows) != 1 {
+		t.Fatalf("run.command.exec rows = %d, want one", len(rows))
+	}
+	var data struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Command) > runExecAuditCommandCap+len(store.AuditTargetTruncatedMarker) || !strings.HasPrefix(data.Command, "echo yyy") ||
+		!strings.HasSuffix(data.Command, store.AuditTargetTruncatedMarker) {
+		t.Errorf("audited command is %d bytes (%.20q…), want at most %d and marked cut", len(data.Command), data.Command, runExecAuditCommandCap)
+	}
 }

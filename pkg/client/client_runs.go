@@ -108,6 +108,7 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 // ExecRequest is the body of POST /api/v1/runs/{id}/exec: one command, run
 // through /bin/sh -c from the sandbox user's home directory, as an SSH exec
 // runs it. TimeoutSec 0 is the server's default of 60 seconds; the most is 300.
+// The command may be up to 128 KiB.
 type ExecRequest struct {
 	Command    string `json:"command"`
 	TimeoutSec int    `json:"timeout_sec,omitempty"`
@@ -115,7 +116,8 @@ type ExecRequest struct {
 
 // ExecResult is POST /api/v1/runs/{id}/exec's reply. Each stream keeps its
 // first 1 MiB, and Truncated says a stream had more. TimedOut says the timeout
-// ended the command; ExitCode is then -1.
+// passed and the command's stream was closed; ExitCode is then -1. The command
+// itself may keep running in the sandbox until it ends or the run ends.
 type ExecResult struct {
 	ExitCode  int    `json:"exit_code"`
 	Stdout    string `json:"stdout"`
