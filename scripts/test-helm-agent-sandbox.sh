@@ -99,7 +99,7 @@ ok "on: pods patch, one sandboxes rule (create,get,list,delete), WARDYN_K8S_AGEN
 
 # A template adds get on that one SandboxTemplate and its env; no other extensions rule.
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.template=platform >"$TMP/tmpl.out"
-[[ "$(y -o=json -I=0 "$role | [.rules[] | select(.apiGroups[0] == \"extensions.agents.x-k8s.io\")]" "$TMP/tmpl.out")" == '[{"apiGroups":["extensions.agents.x-k8s.io"],"resources":["sandboxtemplates"],"resourceNames":["platform"],"verbs":["get"]}]' ]] \
+[[ "$(y -o=json -I=0 "$role | [.rules[] | select(.apiGroups[0] == \"extensions.agents.x-k8s.io\")]" "$TMP/tmpl.out" | grep -vx '\[\]' || true)" == '[{"apiGroups":["extensions.agents.x-k8s.io"],"resources":["sandboxtemplates"],"resourceNames":["platform"],"verbs":["get"]}]' ]] \
   || die "template: the runner Role has no, or a wider, sandboxtemplates rule"
 [[ "$(y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_TEMPLATE") | .value' "$TMP/tmpl.out")" == "platform" ]] \
   || die "template: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_TEMPLATE=platform"
