@@ -12,6 +12,7 @@ import { RUNNER_POOL_REASONS } from "../../../../lib/runner-pool-refusals";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS } from "../../../../lib/template-fields";
 import { TEMPLATE_REASON } from "../../../../lib/template-refusals";
 import { FIELD_HOME, FIELD_HOME_OVERRIDES, HOME_OF_REASON, homeOfPath, homeOfReason, homeOfRefusal, REVIEW_GROUP_OF_FIELD } from "./field-homes";
+import { docOnlyRows } from "../review/review-model";
 
 const REGISTRY = [
   ...TEMPLATE_REQUEST_FIELDS.map((r) => r.name),
@@ -51,6 +52,13 @@ describe("field homes (U7)", () => {
     expect([...policyHomes].sort()).toEqual(["document", "review"]);
     expect(FIELD_HOME.overrides).toBe("tools");
     expect(FIELD_HOME.components).toBe("tools");
+  });
+
+  it("show the IP-address switch on Review as a read-only Access row, on or off", () => {
+    expect(FIELD_HOME["inline_policy.refuse_ip_literals"]).toBe("document");
+    for (const on of [true, false]) {
+      expect(docOnlyRows({ inline_policy: { refuse_ip_literals: on } }).access).toEqual([{ path: "inline_policy.refuse_ip_literals", value: String(on) }]);
+    }
   });
 
   it("keep the launch-only and origin fields out of every step", () => {
