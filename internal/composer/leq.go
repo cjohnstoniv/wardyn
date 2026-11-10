@@ -64,7 +64,8 @@ func leqEgress(a, b types.RunPolicySpec) bool {
 	}
 	return leqAllowedDomains(a.AllowedDomains, b.AllowedDomains) &&
 		leqDeniedDomains(a.DeniedDomains, b.DeniedDomains) &&
-		leqSubsetWhenSet(normMethods(a.AllowedMethods), normMethods(b.AllowedMethods))
+		leqSubsetWhenSet(normMethods(a.AllowedMethods), normMethods(b.AllowedMethods)) &&
+		types.HostRuleSetsWithin(a.HostRules, b.HostRules)
 }
 
 // leqSubsetWhenSet is allowed_methods' shape: an empty b is the unrestricted

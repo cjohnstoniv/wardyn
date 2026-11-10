@@ -160,6 +160,22 @@ export interface ToolRule {
   effect: ToolEffect;
 }
 
+// Per-host method and path rules (mirrors types.HostRuleSet / types.HostRule). host_rules is a list of
+// sets, one per layer: every set that names a host must allow a request on it, by first match inside
+// that set. Empty methods or paths match all. "hold" is refused by the server until a later release.
+export type HostRuleEffect = "allow" | "deny";
+
+export interface HostRule {
+  host: string;
+  methods?: string[];
+  paths?: string[];
+  effect: HostRuleEffect;
+}
+
+export interface HostRuleSet {
+  rules: HostRule[];
+}
+
 // Server-side ceilings, mirrored from internal/api/policy.go so the editor can
 // refuse what the API would refuse instead of round-tripping a 400.
 export const MAX_TOOL_RULES = 32;
@@ -277,6 +293,7 @@ export interface RunPolicySpec {
   // unbounded goroutine. Mirrors RunPolicySpec.MaxHolds.
   max_holds?: number;
   allowed_methods?: string[];
+  host_rules?: HostRuleSet[];
   min_confinement_class: ConfinementClass;
   eligible_grants?: GrantSpec[];
   auto_stop_after_sec?: number;

@@ -72,6 +72,13 @@ export const FIELD_HELP = {
     doc: "top-level",
     snippet: ["GET", "POST"],
   },
+  host_rules: {
+    what: "Per-host method and path rules, one rule set per layer. Every set that names a host must allow a request on it.",
+    values:
+      "rules: host (exact, lowercase) + methods + paths + effect: allow | deny. Inside a set the first matching rule decides, and no match is a deny. Empty imposes nothing.",
+    doc: "host_rules--hostruleset",
+    snippet: [{ rules: [{ host: "api.example.com", methods: ["GET"], paths: ["/public"], effect: "allow" }] }],
+  },
   min_confinement_class: {
     what: "The barrier floor — the run refuses to launch below it.",
     values: "CC1 (Fence) | CC2 (Wall) | CC3 (Vault). Required.",

@@ -163,6 +163,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 			return fmt.Errorf("denied_domains[%d]: %w", i, err)
 		}
 	}
+	if err := types.ValidateHostRuleSets(spec.HostRules); err != nil {
+		return err
+	}
 	if err := validateAllowedMethods(spec.AllowedMethods); err != nil {
 		return err
 	}

@@ -91,6 +91,8 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
 	warns = clampToolRules(&out, ceiling, warns)
+	// Host rules: the ceiling's sets appended to the proposal's, never merged (types.AppendHostRuleSets).
+	out.HostRules = types.AppendHostRuleSets(out.HostRules, ceiling.HostRules)
 
 	// Allowed domains: intersect to the ceiling's allowlist unless it allows all. An empty ceiling
 	// allowlist means default-deny — don't skip this block when empty, or the strictest posture leaks.
@@ -359,6 +361,7 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	out.AllowedDomains = slices.Clone(s.AllowedDomains)
 	out.DeniedDomains = slices.Clone(s.DeniedDomains)
 	out.AllowedMethods = slices.Clone(s.AllowedMethods)
+	out.HostRules = types.CloneHostRuleSets(s.HostRules)
 	out.UIApps = slices.Clone(s.UIApps)
 	for i := range out.UIApps {
 		out.UIApps[i].Callers = slices.Clone(s.UIApps[i].Callers)

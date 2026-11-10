@@ -63,6 +63,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "same doors, same reason, and lowered to the ceiling's own value by composer.Clamp (normMaxHolds). max_holds is a channel capacity in the proxy, so the cap is a resource bound as well as a ceiling"},
 	"AllowedMethods": {validated: true, clamped: true,
 		why: "a blank entry is refused; intersected down to the ceiling's method list. An unrecognised method matches no request and so denies rather than widens — it can only ever narrow this run"},
+	"HostRules": {validated: true, clamped: true,
+		why: "host exact and lowercase, methods uppercase tokens, paths in normal form, at most 16 sets of 64 rules, effect allow or deny (types.ValidateHostRuleSets); the ceiling's sets are appended, never merged, so a proposal only ever adds sets"},
 	"MinConfinementClass": {validated: true, clamped: true,
 		why: "required and must be a known class; raised to the ceiling's floor"},
 	"EligibleGrants": {validated: true, clamped: true,
