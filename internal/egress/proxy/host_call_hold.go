@@ -10,13 +10,15 @@ package proxy
 // asks again. The answer never outranks the rules: each request is judged afresh, so a deny in any set
 // still refuses it, and only a request the rules hold reads the table.
 //
-// It fails closed, as the kubectl door's hold does (kube_api_hold.go): a request the run-wide
-// allowed_methods refuses never asks anyone, a raise the control plane refuses or cannot take is
-// refused, and an answer the proxy cannot read is still pending, so the request is never sent on it.
+// It fails closed, as the kubectl door's hold does (kube_api_hold.go): a raise the control plane refuses
+// or cannot take is refused, and an answer the proxy cannot read is still pending, so the request is never
+// sent on it. On the lanes the run-wide allowed_methods covers, a request it refuses never asks anyone
+// (holdHostCall). The outbound gate does not check it (outboundHostCall): the git routes ignore it.
 //
 // It is bounded as the MCP broker's holds are, by the same table (mcpCalls, admitKept): at most
 // maxMCPCallsWaiting requests wait at once (a retry of the same call counts), and at most
-// maxMCPCallKeys distinct calls are remembered. A request past either bound is refused at once
+// maxMCPCallKeys distinct calls are remembered at once; a key whose approval closed undecided is freed
+// (mcpCalls.tidy). A request past either bound is refused at once
 // (ruleSourceHostRuleApprovalBusy), never held.
 
 import (

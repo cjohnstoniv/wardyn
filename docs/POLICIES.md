@@ -800,9 +800,10 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - An approval lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline refuses them all for the run. The answer lives in the run's proxy, so a new proxy asks again.
 - The approval names no port or scheme. It covers that host, method and path on any port, over HTTP or HTTPS.
 - A hold never outranks a deny. Each request is judged afresh: if any rule set denies it, or names the host and matches nothing, it is refused, approved or not. An approval answers only the hold.
-- Every other set must still allow the request, and the run-wide `allowed_methods` still applies. A method `allowed_methods` refuses is refused without asking anyone. So is a plain-HTTP request to a host the policy does not allow.
+- Every other set must still allow the request. A plain-HTTP request to a host the policy does not allow is refused without asking anyone.
+- On the lanes the run-wide [`allowed_methods`](#allowed_methods) covers, a method it refuses is refused without asking anyone. The git routes `/wardyn/gh/` and `/wardyn/git/` ignore `allowed_methods`, so a held request there is asked about whatever its method.
 - It fails closed. If the control plane refuses or cannot take the request for an approval, or the proxy cannot read the answer, the request is not sent.
-- At most 16 held requests wait at once, and a retry of a waiting call counts. At most 1024 different calls are asked about per run. A request past either limit is refused at once (`policy:host-rule:approval-busy`).
+- At most 16 held requests wait at once, and a retry of a waiting call counts. The proxy remembers at most 1024 different calls at once: those waiting or pending, and those approved or declined. A call whose approval expired or was cancelled is forgotten, which frees its place. A request past either limit is refused at once (`policy:host-rule:approval-busy`).
 - The decision takes no `decision_scope`, or `"run"`. The row records `run`, since the answer holds for the rest of the run. A unit's deciders rule whose `max_scope` is below `run` refuses the decision (`decision_scope_above_rule`).
 - The run's owner or a security operator decides it, as for a kubectl write. A unit's `egress_domain` deciders rule governs it, and an approval rule never decides one.
 - `WARDYN_EGRESS_SECOND_HUMAN` or `WARDYN_CAPABILITY_SECOND_HUMAN` makes it four-eyes. Either one is enough, and then someone other than the run's own people decides it.
