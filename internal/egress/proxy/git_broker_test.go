@@ -912,7 +912,7 @@ func TestGitBrokerForwardsOnlyTheServiceQueryAndNoMethodOverride(t *testing.T) {
 
 	req := mustLocalReq(t, http.MethodPost,
 		"/wardyn/gh/octocat/hello-world.git/git-upload-pack?x=1", strings.NewReader("0011command=fetch"))
-	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+	for _, h := range routeOverrideHeaders {
 		req.Header.Set(h, http.MethodDelete)
 	}
 	rec = httptest.NewRecorder()
@@ -923,7 +923,7 @@ func TestGitBrokerForwardsOnlyTheServiceQueryAndNoMethodOverride(t *testing.T) {
 	if up.gitQuery != "" {
 		t.Fatalf("forwarded query = %q, want none on a pack POST", up.gitQuery)
 	}
-	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+	for _, h := range routeOverrideHeaders {
 		if v := up.gitHeaders.Values(h); len(v) != 0 {
 			t.Errorf("github saw %s: %q, want it stripped", h, v)
 		}

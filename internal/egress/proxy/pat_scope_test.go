@@ -305,6 +305,11 @@ func TestUnnarrowedPATGrantRendersNoScopeKeys(t *testing.T) {
 	}
 }
 
+// routeOverrideHeaders are the method- and path-override headers neither git
+// broker lane forwards.
+var routeOverrideHeaders = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override",
+	"X-Original-URL", "X-Rewrite-URL", "X-Forwarded-Prefix", "X-Script-Name", "X-Forwarded-Host"}
+
 // patGitRepoForges is the column order of TestPATGitRepoPerForge's verdicts.
 var patGitRepoForges = []string{"generic", "gitlab", "gitea", "bitbucket_server"}
 
@@ -334,6 +339,13 @@ func TestPATGitRepoPerForge(t *testing.T) {
 		{"only: case fold on _apis", "org/_APIS/x/git-upload-pack", "RRRR"},
 		{"only: case fold on the version", "gitlab/API/V4/user/git-upload-pack", "RRRR"},
 		{"only: Unicode fold (U+017F)", "org/_api\u017f/x/git-upload-pack", "RRRR"},
+		{"only: ASCII case mapping (U+0131)", "org/_ap\u0131s/x/git-upload-pack", "RRRR"},
+		{"only: ASCII case mapping (U+0130)", "org/_ap\u0130s/x/git-upload-pack", "RRRR"},
+		{"only: empty segment before the mount", "/api/2.0/repositories/ws/git-upload-pack", "RRRR"},
+		{"only: segment read as empty before the mount", ";x/api/2.0/repositories/ws/git-upload-pack", "RRRR"},
+		{"empty segment inside", "team//app/git-upload-pack", "RRRR"},
+		{"trailing slash before the verb", "team/app//git-upload-pack", "RRRR"},
+		{"segment of dots", "team/.../app/git-upload-pack", "RRRR"},
 		{"only: ; cut", "api;v=1/v1/user/git-upload-pack", "RRRR"},
 		{"only: ; cut on -", "team/-;x/y/git-upload-pack", "RRRR"},
 		{"only: trailing dot", "api./v1/user/git-upload-pack", "RRRR"},
@@ -349,7 +361,7 @@ func TestPATGitRepoPerForge(t *testing.T) {
 		{"scm with a route after the repository", "scm/P/r/raw/x/git-upload-pack", "AAAR"},
 		{"scm under an API mount", "api/scm/P/r/git-upload-pack", "RRRR"},
 		{"only: case fold in the context path", "bitbucket/REST/scm/P/r.git/info/refs", "AAAR"},
-		{"scm under a doubled slash", "bitbucket//scm/P/r.git/info/refs", "AAAR"},
+		{"scm under a doubled slash", "bitbucket//scm/P/r.git/info/refs", "RRRR"},
 		// generic only: Azure DevOps _api and Gerrit's REST.
 		{"Azure DevOps _api", "org/_api/x/git-upload-pack", "RAAR"},
 		{"Gerrit REST", "a/projects/p/branches/git-upload-pack", "RAAR"},
@@ -363,7 +375,11 @@ func TestPATGitRepoPerForge(t *testing.T) {
 		{"Azure DevOps project API", "org/API/_git/repo/info/refs", "AARR"},
 		{"a repository named api", "team/api/git-upload-pack", "AAAR"},
 		{"Gerrit authenticated clone", "a/project.git/info/refs", "AAAR"},
-		{"Gerrit project named projects", "a/projects/info/refs", "AAAR"},
+		{"only: Gerrit collection as the last segment", "a/projects/git-upload-pack", "RAAR"},
+		{"Gerrit project named projects, through a/", "a/projects/info/refs", "RAAR"},
+		{"Gerrit project under a collection name, through a/", "a/plugins/replication/info/refs", "RAAR"},
+		{"Gerrit project named projects, without a/", "projects/info/refs", "AAAR"},
+		{"GitLab subgroups api and v4 (refused: no deployment root is configured)", "group/api/v4/project.git/info/refs", "RRRR"},
 		{"Bitbucket Server", "scm/PROJ/repo.git/git-upload-pack", "AAAA"},
 		{"Bitbucket Server project API", "scm/API/repo.git/git-upload-pack", "AARA"},
 		{"Bitbucket Server personal", "scm/~user/repo.git/info/refs", "AAAA"},
@@ -493,7 +509,7 @@ func TestPATBrokerForwardsEachForgesGitPaths(t *testing.T) {
 func TestPATBrokerForwardsNoMethodOverrideAndOnlyTheServiceQuery(t *testing.T) {
 	p, upstream, _ := patScopeProxy(t, "git.corp", PATGrant{})
 	req := mustLocalReq(t, http.MethodPost, "/wardyn/git/git.corp/team/app/git-upload-pack?x=1", strings.NewReader("0000"))
-	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+	for _, h := range routeOverrideHeaders {
 		req.Header.Set(h, http.MethodPut)
 	}
 	rec := httptest.NewRecorder()
@@ -501,7 +517,7 @@ func TestPATBrokerForwardsNoMethodOverrideAndOnlyTheServiceQuery(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%q, want 200", rec.Code, rec.Body.String())
 	}
-	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+	for _, h := range routeOverrideHeaders {
 		if v := upstream.gitHeaders.Values(h); len(v) != 0 {
 			t.Errorf("forge saw %s: %q, want it stripped", h, v)
 		}

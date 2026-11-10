@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -119,11 +121,13 @@ func patGitRepo(forge, rest, verb string) (string, bool) {
 	if !ok || patDoublyEncoded(forge, repo) {
 		return "", false
 	}
-	repo = strings.TrimPrefix(repo, "/")
-	if strings.Trim(repo, "/") == "" {
+	segs := strings.Split(strings.TrimPrefix(repo, "/"), "/")
+	// No clone URL has an empty segment, and one would move a mount off its
+	// anchor ("//api/..."): refused, as is one a server reads as empty (";x").
+	if slices.ContainsFunc(segs, func(s string) bool { return patSegRead(s) == "" }) {
 		return "", false
 	}
-	segs := strings.Split(repo, "/")
+	repo = strings.Join(segs, "/")
 	if forge == types.PATForgeBitbucketServer {
 		return patBitbucketServerRepo(segs)
 	}
@@ -177,11 +181,12 @@ func patAPIMount(segs []string, i int) bool {
 }
 
 // patGerritREST reports whether segs[i] is Gerrit's authenticated prefix "a"
-// followed by one of its REST collections. Gerrit serves git under the same
-// prefix (a/<project>), so a project whose name starts with a collection name
-// is refused too.
+// followed by one of its REST collections, the collection being the last
+// segment too ("a/projects/git-upload-pack" would be its create view). Gerrit
+// serves git under the same prefix (a/<project>), so a project whose name is,
+// or starts with, a collection name is refused through a/ too.
 func patGerritREST(segs []string, i int) bool {
-	if !patSegIs(segs[i], "a") || i+1 >= len(segs)-1 {
+	if !patSegIs(segs[i], "a") || i+1 >= len(segs) {
 		return false
 	}
 	return slices.ContainsFunc([]string{"access", "accounts", "changes", "config", "groups", "plugins", "projects"},
@@ -210,10 +215,26 @@ func patBitbucketServerRepo(segs []string) (string, bool) {
 
 // patSegIs reports whether a decoded path segment reads as word to a server
 // that drops ";" path parameters, trims trailing dots and spaces, and matches
-// routes case-insensitively: strings.EqualFold is Unicode case folding, so
-// "ſ" (U+017F) reads as "s" and "K" (U+212A) as "k".
+// routes case-insensitively, under any case mapping that lands on ASCII:
+// "ſ" (U+017F) reads as "s", "K" (U+212A) as "k", "ı" (U+0131) and "İ"
+// (U+0130) as "i".
 func patSegIs(seg, word string) bool {
-	return strings.EqualFold(patSegRead(seg), word)
+	return strings.EqualFold(strings.Map(patASCIICase, patSegRead(seg)), word)
+}
+
+// patASCIICase maps a non-ASCII rune to the ASCII letter its upper or lower
+// case is, if either is one.
+func patASCIICase(r rune) rune {
+	if r < utf8.RuneSelf {
+		return r
+	}
+	if u := unicode.ToUpper(r); u < utf8.RuneSelf {
+		return u
+	}
+	if l := unicode.ToLower(r); l < utf8.RuneSelf {
+		return l
+	}
+	return r
 }
 
 func patSegRead(seg string) string {

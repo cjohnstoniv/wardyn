@@ -224,7 +224,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
 	p.stripGatewayHeaders(outReq.Header)
-	stripMethodOverrides(outReq.Header)
+	stripRouteOverrides(outReq.Header)
 	// Defensive: strip any sandbox-supplied credential before injecting ours
 	// (stripSandboxCredentials, inject.go) so a rogue client can't smuggle its own.
 	stripSandboxCredentials(outReq.Header, "")

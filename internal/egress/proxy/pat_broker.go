@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -260,7 +261,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
 	p.stripGatewayHeaders(outReq.Header)
-	stripMethodOverrides(outReq.Header)
+	stripRouteOverrides(outReq.Header)
 	// Strip any sandbox-supplied credential BEFORE injecting ours, through
 	// stripSandboxCredentials (inject.go, the ONE definition) — a local
 	// Header.Del("Authorization") would leave Private-Token, X-Api-Key,
@@ -281,11 +282,15 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	return resp, true
 }
 
-// stripMethodOverrides drops the method-override headers (patAPIMethodOverrides)
-// from a brokered git request: the verb check judged the request line's method,
-// and a forge that honoured an override would run another.
-func stripMethodOverrides(h http.Header) {
-	for _, k := range patAPIMethodOverrides {
+// gitPathOverrides are the headers a server or framework may read a request
+// path or path prefix from instead of the request line.
+var gitPathOverrides = []string{"X-Original-URL", "X-Rewrite-URL", "X-Forwarded-Prefix", "X-Script-Name", "X-Forwarded-Host"}
+
+// stripRouteOverrides drops the method- and path-override headers from a
+// brokered git request: the checks judged the request line's method and path,
+// and a forge that honoured an override would run another route.
+func stripRouteOverrides(h http.Header) {
+	for _, k := range slices.Concat(patAPIMethodOverrides, gitPathOverrides) {
 		h.Del(k)
 	}
 }
