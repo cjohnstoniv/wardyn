@@ -57,7 +57,10 @@ type Report struct {
 	Unsynced int `json:"unsynced,omitempty"`
 	// UnsyncedPaths names them, in order, with each conflict a runner pass could not keep.
 	UnsyncedPaths []string `json:"unsynced_paths,omitempty"`
-	seenSet       map[string]bool
+	// DurabilityWarning is set when this folder's filesystem does not offer a directory sync: what
+	// the pass wrote stands, but a folder entry may not survive a power loss. It refuses nothing.
+	DurabilityWarning string `json:"durability_warning,omitempty"`
+	seenSet           map[string]bool
 }
 
 type Rename struct {
@@ -123,8 +126,16 @@ type Syncer struct {
 	Opts      Options
 	State     *State
 	StateFile string
+	// StateRoot is the existing directory StateFile's directories are made under (StateRoot for
+	// `wardyn sync`, the runner's state directory for a runner): each save syncs every directory from
+	// the state's up to it. A save without one fails.
+	StateRoot string
 	ig        *syncIgnore // this pass's ignore rules, read by walkLocal
+	dirs      *dirNote    // this pass's directory syncs the filesystem does not offer
 }
+
+// saveState saves the state to StateFile, under StateRoot.
+func (sy *Syncer) saveState() error { return sy.State.saveUnder(sy.StateFile, sy.StateRoot, sy.dirs) }
 
 // ListMeter counts the bytes the sftp client reads while a directory listing
 // is armed, and cancels the listing once it passes maxSyncListBytes.
@@ -275,6 +286,7 @@ type passView struct {
 func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 	rep := NewReport()
 	sy.ig = newSyncIgnore(sy.Opts.OrgDeny)
+	sy.dirs = &dirNote{folder: sy.Root.Name(), rep: rep}
 	local, localDirs, localTree, err := sy.walkLocal(rep)
 	if err != nil {
 		return nil, err
@@ -331,7 +343,7 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 			delete(sy.State.Files, rel)
 		}
 	}
-	if err := sy.State.Save(sy.StateFile); err != nil {
+	if err := sy.saveState(); err != nil {
 		return nil, fmt.Errorf("save sync state: %w", err)
 	}
 	return rep, nil
@@ -342,7 +354,7 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 // sides hold it, so State is saved and the report says what was done. Under
 // --pull it also counts the sandbox's changes among left.
 func (sy *Syncer) cut(rep *Report, left []string, v *passView, err error) (*Report, error) {
-	if serr := sy.State.Save(sy.StateFile); serr != nil {
+	if serr := sy.saveState(); serr != nil {
 		return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
 	}
 	if sy.Opts.Pull {
@@ -849,7 +861,7 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 		rep.Conflicts = append(rep.Conflicts, rel)
 		return nil
 	}
-	if _, err := installSynced(sy.Root, tmp, tmpName, InstallReplace, rel); err != nil {
+	if _, err := installSynced(sy.Root, sy.dirs, tmp, tmpName, InstallReplace, rel); err != nil {
 		return sy.pathFailed(ctx, rep, rel, "replace the local file", err)
 	}
 	fi, err := sy.Root.Lstat(rel)
@@ -884,7 +896,7 @@ func (sy *Syncer) fetch(ctx context.Context, rel, dst string, r os.FileInfo, mod
 		rep.refuse(rel, "over --max-pull-bytes for this pass")
 		return "", nil, nil
 	}
-	if err := mkdirAllDurable(sy.Root, path.Dir(dst)); err != nil {
+	if err := sy.Root.MkdirAll(path.Dir(dst), 0o755); err != nil { // the install syncs every directory above dst
 		return "", nil, sy.pathFailed(ctx, rep, rel, "create the local directory", err)
 	}
 	src, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))

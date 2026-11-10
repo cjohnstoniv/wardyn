@@ -388,7 +388,7 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 		return failed(err)
 	}
 	defer root.Close()
-	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, Opts: foldersync.Options{
+	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, StateRoot: filepath.Dir(s.stateDir), Opts: foldersync.Options{
 		Remote: remote, Pull: args.Pull, MaxPullBytes: foldersync.DefaultMaxPullBytes, OrgDeny: args.Deny,
 		Credential: credentialPath, RunnerPass: true, RunTag: args.RunID.String()[:8],
 	}}

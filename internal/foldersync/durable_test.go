@@ -4,9 +4,11 @@
 package foldersync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -127,7 +129,7 @@ func TestInstall_PreInstallFailureLeavesDst(t *testing.T) {
 	for _, mode := range []InstallMode{InstallReplace, InstallNew} {
 		dir, root, name, f := tempBeside(t)
 		onSync(t, func(*os.File) error { return errFault }, nil)
-		_, err := installDurable(root, f, name, mode, "dst")
+		_, err := installDurable(root, nil, f, name, mode, "dst")
 		var ie *InstallError
 		if !errors.As(err, &ie) || ie.Installed || ie.Step != "sync-file" || errors.Is(err, ErrNotDurable) {
 			t.Errorf("mode %d: err = %v", mode, err)
@@ -144,7 +146,7 @@ func TestInstall_PreInstallFailureLeavesDst(t *testing.T) {
 func TestInstall_PostInstallDirSyncFailureIsInstalledNotDurable(t *testing.T) {
 	dir, root, name, f := tempBeside(t)
 	onSync(t, func(*os.File) error { return nil }, func(*os.File) error { return errFault })
-	_, err := installDurable(root, f, name, InstallReplace, "dst")
+	_, err := installDurable(root, nil, f, name, InstallReplace, "dst")
 	var ie *InstallError
 	if !errors.As(err, &ie) || !ie.Installed || ie.Step != "sync-dir" || !errors.Is(err, ErrNotDurable) {
 		t.Errorf("err = %v", err)
@@ -161,7 +163,7 @@ func TestInstall_StateSaveFailureKeepsThePreviousState(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "run.json")
 	save := func(n int) error {
 		st := &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{fmt.Sprint(n): {}}}
-		return st.Save(file)
+		return st.SaveUnder(file, filepath.Dir(file))
 	}
 	saved := func() string {
 		st, err := LoadState(file, "/l", "/r")
@@ -193,7 +195,7 @@ func TestSave_ConcurrentSavesLeaveALoadableState(t *testing.T) {
 		wg.Go(func() {
 			st := &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{fmt.Sprint(i): {Local: Side{Size: int64(i)}}}}
 			for range 20 {
-				_ = st.Save(file)
+				_ = st.SaveUnder(file, filepath.Dir(file))
 			}
 		})
 	}
@@ -226,9 +228,9 @@ func TestLoadState_RemovesTheTempFilesOfAStoppedSave(t *testing.T) {
 	}
 }
 
-// A pulled file in new directories: the parent of each new directory is synced, up to the first
-// that existed, and the file's own directory once it is installed.
-func TestInstall_NewDirectoriesSyncTheirParents(t *testing.T) {
+// A pulled file in new directories: once it is installed, its directory and every one above it are
+// synced, the root last.
+func TestInstall_NewDirectoriesSyncEveryDirectoryUpToTheRoot(t *testing.T) {
 	sy, box, root := pipeSyncer(t, true)
 	putSyncFile(t, filepath.Join(box, "a", "b", "c", "new.txt"), "from the sandbox", 0o644)
 	var synced []string
@@ -243,7 +245,162 @@ func TestInstall_NewDirectoriesSyncTheirParents(t *testing.T) {
 	if _, err := sy.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"a/b", "a", ".", "a/b/c"}; !slices.Equal(synced, want) {
+	if want := []string{"a/b/c", "a/b", "a", "."}; !slices.Equal(synced, want) {
 		t.Errorf("synced %v, want %v", synced, want)
+	}
+}
+
+// A state save whose root sync fails is not durable. A retry finds the state's directory already
+// made and still syncs every directory up to the root; a failure that repeats fails it again.
+func TestSaveUnder_ARetrySyncsEveryDirectoryUpToTheRoot(t *testing.T) {
+	top := t.TempDir()
+	file := filepath.Join(top, "folders", "run.json")
+	st := &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{}}
+	var synced []string
+	failTop := true
+	onSync(t, nil, func(d *os.File) error {
+		switch {
+		case isDir(d, filepath.Join(top, "folders")):
+			synced = append(synced, "folders")
+		case isDir(d, top):
+			synced = append(synced, "top")
+			if failTop {
+				return errFault
+			}
+		}
+		return nil
+	})
+	for i, fail := range []bool{true, true, false} {
+		failTop, synced = fail, nil
+		err := st.SaveUnder(file, top)
+		if fail != errors.Is(err, ErrNotDurable) || (!fail && err != nil) {
+			t.Errorf("save %d: err = %v", i+1, err)
+		}
+		if want := []string{"folders", "top"}; !slices.Equal(synced, want) {
+			t.Errorf("save %d: synced %v, want %v", i+1, synced, want)
+		}
+	}
+	if err := st.SaveUnder(file, filepath.Join(top, "other")); err == nil {
+		t.Error("a state outside its root was saved")
+	}
+}
+
+// The `wardyn sync` state path: its first save makes .local/state/wardyn/sync under the home. A save
+// that cannot sync the home fails; a retry finds every directory made and still syncs each one up
+// to the home, and a failure that repeats keeps failing. A syncer with no state root never saves.
+func TestSaveState_TheCLIStatePathSyncsUpToTheHomeOnEverySave(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	file, err := StatePath("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := StateRoot()
+	if err != nil || root != home {
+		t.Fatalf("StateRoot = %q, %v, want %q", root, err, home)
+	}
+	sy := &Syncer{State: &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{}}, StateFile: file, StateRoot: root}
+	dirs := []string{".local/state/wardyn/sync", ".local/state/wardyn", ".local/state", ".local", "."}
+	var synced []string
+	failHome := false
+	onSync(t, nil, func(d *os.File) error {
+		for _, p := range dirs {
+			if isDir(d, filepath.Join(home, p)) {
+				synced = append(synced, p)
+				if p == "." && failHome {
+					return errFault
+				}
+			}
+		}
+		return nil
+	})
+	for i, fail := range []bool{true, true, false} {
+		failHome, synced = fail, nil
+		err := sy.saveState()
+		if fail != errors.Is(err, ErrNotDurable) || (!fail && err != nil) {
+			t.Errorf("save %d: err = %v", i+1, err)
+		}
+		if !slices.Equal(synced, dirs) {
+			t.Errorf("save %d: synced %v, want %v", i+1, synced, dirs)
+		}
+	}
+	sy.StateRoot = ""
+	if err := sy.saveState(); err == nil {
+		t.Error("a state with no root was saved")
+	}
+}
+
+// logged sends the default logger to a buffer for one test.
+func logged(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return &buf
+}
+
+// A directory sync the filesystem does not offer (EINVAL, ENOTSUP or EOPNOTSUPP, however wrapped) is
+// best effort: the conflict copy is kept, the push goes ahead, the new file is pulled and the state
+// is saved. However many directories hit it, the state's own included, the pass warns once, naming
+// the folder, and its report says so. The same errno from a file sync, or EIO from a directory
+// sync, still refuses the push and fails the save.
+func TestInstall_AnUnsupportedDirSyncIsBestEffortAndWarnedOnce(t *testing.T) {
+	wrap := func(e error) error { return fmt.Errorf("sync: %w", &os.PathError{Op: "sync", Path: "d", Err: e}) }
+	cases := []struct {
+		name      string
+		file, dir error
+		ok        bool
+	}{
+		{"dir EINVAL", nil, syscall.EINVAL, true},
+		{"dir ENOTSUP", nil, syscall.ENOTSUP, true},
+		{"dir EOPNOTSUPP", nil, syscall.EOPNOTSUPP, true},
+		{"file EINVAL", syscall.EINVAL, nil, false},
+		{"dir EIO", nil, syscall.EIO, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sy, box, root := runnerSyncer(t, true)
+			bothChanged(t, sy, box, root)
+			putSyncFile(t, filepath.Join(box, "a", "b", "new.txt"), "from the sandbox", 0o644)
+			buf := logged(t)
+			stateDirs := 0
+			onSync(t, func(*os.File) error {
+				if c.file != nil {
+					return wrap(c.file)
+				}
+				return nil
+			}, func(d *os.File) error {
+				if isDir(d, filepath.Dir(sy.StateFile)) {
+					stateDirs++
+				}
+				if c.dir != nil {
+					return wrap(c.dir)
+				}
+				return nil
+			})
+			rep, err := sy.Pass(context.Background())
+			sandbox := getSyncFile(t, filepath.Join(box, "x.txt"))
+			warned := strings.Count(buf.String(), dirSyncWarning)
+			if !c.ok {
+				if err == nil || sandbox != "sandbox edit!" || warned != 0 {
+					t.Errorf("%s: err = %v, sandbox = %q, warned %d times: want the push refused and the save failed", c.name, err, sandbox, warned)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if sandbox != "laptop edit" || getSyncFile(t, filepath.Join(root, copyName(1))) != "sandbox edit!" || !slices.Contains(rep.Pulled, "a/b/new.txt") {
+				t.Errorf("%s: sandbox = %q, report = %+v", c.name, sandbox, rep)
+			}
+			if warned != 1 || !strings.Contains(buf.String(), "folder="+root) || rep.DurabilityWarning != dirSyncWarning || stateDirs == 0 {
+				t.Errorf("%s: warned %d times, state dir synced %d times, report warning %q, log:\n%s", c.name, warned, stateDirs, rep.DurabilityWarning, buf)
+			}
+			if st, err := LoadState(sy.StateFile, root, box); err != nil || len(st.Files) == 0 {
+				t.Errorf("%s: saved state = %+v, %v", c.name, st, err)
+			}
+		})
 	}
 }

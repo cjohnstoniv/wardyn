@@ -73,6 +73,6 @@ func nativePaths(root *os.Root, from, to string) (src, dst *uint16, err error) {
 
 // Windows has no directory sync through os.File; the write-through move stands for it, and its
 // absence never fails an install.
-func syncDirIn(*os.Root, string) error { return nil }
+func syncDirIn(*os.Root, *dirNote, string) error { return nil }
 
-func syncDirPath(string) error { return nil }
+func syncDirPath(*dirNote, string) error { return nil }

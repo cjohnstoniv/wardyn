@@ -198,11 +198,20 @@ type FileSeen struct {
 }
 
 func StatePath(runID string) (string, error) {
+	home, err := StateRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "state", "wardyn", "sync", runID+".json"), nil
+}
+
+// StateRoot is the existing directory StatePath's directories are made under: the user's home.
+func StateRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve ~: %w", err)
 	}
-	return filepath.Join(home, ".local", "state", "wardyn", "sync", runID+".json"), nil
+	return home, nil
 }
 
 // LoadState reads the state for one run and one local/remote pairing; a
@@ -273,14 +282,41 @@ func isStateTempID(s string) bool {
 	return len(s) == 16 && err == nil
 }
 
-// Save writes the state through a new random temp file beside it, synced,
-// renamed over the old record, and the directory synced. On an error before
-// the rename the old record is kept.
-func (st *State) Save(file string) error {
-	dir, base := filepath.Dir(file), filepath.Base(file)
-	if err := mkdirAllDurableOS(dir, 0o700); err != nil {
+// SaveUnder writes the state for file, under the existing directory top, through a new random temp
+// file beside it, synced and renamed over the old record. It then syncs every directory from the
+// state's up to top, on every save, so a directory an earlier save made but could not prove is
+// proven now. On an error before the rename the old record is kept; a failed sync after it is an
+// InstallError with Installed set.
+func (st *State) SaveUnder(file, top string) error { return st.saveUnder(file, top, nil) }
+
+// saveUnder is SaveUnder that notes, in note, a directory sync the filesystem does not offer.
+func (st *State) saveUnder(file, top string, note *dirNote) error {
+	if top == "" {
+		return fmt.Errorf("sync state %s has no root directory", file)
+	}
+	dir, top := filepath.Dir(file), filepath.Clean(top)
+	rel, err := filepath.Rel(top, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("sync state %s is not under %s", file, top)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if err := st.install(file, note); err != nil {
+		return err
+	}
+	for p := dir; p != top && filepath.Dir(p) != p; {
+		p = filepath.Dir(p)
+		if err := syncDirPath(note, p); err != nil {
+			return &InstallError{Step: "sync-dir", Installed: true, Err: err}
+		}
+	}
+	return nil
+}
+
+// install writes the state through a temp file in file's directory and installs it durably.
+func (st *State) install(file string, note *dirNote) error {
+	dir, base := filepath.Dir(file), filepath.Base(file)
 	b, err := json.Marshal(st)
 	if err != nil {
 		return err
@@ -299,7 +335,7 @@ func (st *State) Save(file string) error {
 		_ = root.Remove(name)
 		return err
 	}
-	_, err = installDurable(root, f, name, InstallReplace, base)
+	_, err = installDurable(root, note, f, name, InstallReplace, base)
 	return err
 }
 
