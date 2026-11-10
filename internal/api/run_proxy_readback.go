@@ -557,7 +557,7 @@ func (s *Server) handleInternalProxyLoaded(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	ch, err := st.ReportProxyStart(ctx, claims.RunID, claims.JTI, body.ConfigSHA256)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, loggedMsg(ctx, "record the proxy's report", err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonProxyReportUnrecorded, loggedMsg(ctx, "record the proxy's report", err))
 		return
 	}
 	data := map[string]any{"proxy_version": body.ProxyVersion}

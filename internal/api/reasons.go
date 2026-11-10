@@ -285,10 +285,11 @@ const (
 	// Policy readback (run_proxy_readback.go). POST /runs/{id}/revive: a start that must confirm its
 	// policy on a substrate that cannot answer the new proxy's config hash (409, nothing changed); a
 	// new proxy that did not confirm it, so the run is lost again (502). POST /internal/proxy/loaded:
-	// a report whose body is not a config hash (400).
+	// a report whose body is not a config hash (400), or one the store could not record (503).
 	reasonReviveReadbackUnsupported   = "revive_readback_unsupported"
 	reasonRevivePolicyUnconfirmedLost = "revive_policy_unconfirmed_lost"
 	reasonProxyReportInvalid          = "proxy_report_invalid"
+	reasonProxyReportUnrecorded       = "proxy_report_unrecorded" // the report could not be stored (503); the proxy retries
 
 	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history paging (runs_policy.go): one
 	// reason per rejected query parameter.
