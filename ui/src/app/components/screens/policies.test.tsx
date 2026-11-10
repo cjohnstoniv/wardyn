@@ -138,6 +138,18 @@ describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () 
     expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
+  it("reads the search text from the URL, so Back from a policy lands on the same filtered list", async () => {
+    listPoliciesMock.mockResolvedValue([policy({ id: "a", name: "one" }), policy({ id: "b", name: "two" })]);
+    render(
+      <MemoryRouter initialEntries={["/?q=two"]}>
+        <PoliciesScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("two")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/search policies/i)).toHaveValue("two");
+    expect(screen.queryByText("one")).toBeNull();
+  });
+
   it("hides the toolbar (and its duplicate Refresh) on error, leaving only ErrorState's retry", async () => {
     listPoliciesMock.mockRejectedValue(new Error("boom"));
     render(<PoliciesScreen />);

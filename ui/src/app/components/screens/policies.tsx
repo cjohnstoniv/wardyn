@@ -62,6 +62,7 @@ import { PolicyDocumentView } from "../wardyn/policy-document/policy-document";
 import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document/policy-source";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { CC_META } from "../wardyn/cc-meta";
@@ -96,7 +97,9 @@ export function PoliciesScreen() {
   const [policies, setPolicies] = React.useState<RunPolicy[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
-  const [query, setQuery] = React.useState("");
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const setQuery = (q: string) => setFilters({ q });
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);

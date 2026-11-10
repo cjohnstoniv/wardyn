@@ -40,6 +40,7 @@ import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
+import { useUrlFilters } from "../../lib/use-url-filters";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
@@ -88,7 +89,9 @@ export function SecretsScreen() {
   const [names, setNames] = React.useState<string[]>([]);
   const [mine, setMine] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
+  const [filters, setFilters] = useUrlFilters();
+  const query = filters.get("q") ?? "";
+  const setQuery = (q: string) => setFilters({ q });
   const [addOpen, setAddOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<string | null>(null);

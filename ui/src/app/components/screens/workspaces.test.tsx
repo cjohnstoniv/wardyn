@@ -96,6 +96,17 @@ describe("WorkspacesScreen — list columns", () => {
     expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
+  it("reads the search text from the URL, so Back from a workspace lands on the same filtered list", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      ws({}, { id: "ws-1", name: "payments", kind: "repo", source: "acme/payments" }),
+      ws({}, { id: "ws-2", name: "search", kind: "repo", source: "acme/search" }),
+    ]);
+    renderScreen("/?q=pay");
+    expect(await screen.findByText("payments")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search by name or source…")).toHaveValue("pay");
+    expect(screen.queryByText("search")).toBeNull();
+  });
+
   it("Workspace + Source columns: the kind icon and name in one cell, the mono sub-line in another", async () => {
     listWorkspacesMock.mockResolvedValue([ws({}, { name: "payments", kind: "repo", source: "acme/payments", ref: "main", status: "scanned" })]);
     renderScreen();

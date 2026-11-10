@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   ScrollText,
   Search,
@@ -51,6 +51,7 @@ import {
 import { Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { useUrlFilters } from "../../lib/use-url-filters";
 import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
@@ -104,6 +105,7 @@ const KIND_META: Record<EventKind, { label: string; Icon: React.ElementType }> =
 
 // Display order for the Event facet — matches how an operator scans severity:
 // network -> execution -> credentials -> human review -> everything else -> kill.
+const ACTOR_TYPES: ActorType[] = ["human", "agent", "system", "service"];
 const KIND_ORDER: EventKind[] = ["egress", "tool", "credentials", "approvals", "lifecycle", "enforcement"];
 
 function eventKind(e: AuditEvent): EventKind {
@@ -208,24 +210,31 @@ export function AuditScreen() {
   const view = useConsoleMode();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [query, setQuery] = React.useState("");
   // W25-W25.2-3: the run filter lives in the URL (?run_id=), not component
   // state. A member's ONLY reachable trail is a run they own (the server 200s
   // an empty list for any unfiltered /audit query), so the filter has to be
   // reachable from outside this screen — run-detail's "open full Audit" link
   // carries the run into it. Deep-linkable and survives a reload for free.
-  const [searchParams, setSearchParams] = useSearchParams();
+  // The search text and the Event/Actor facets live there too (q, kind, actor), so Back from a row lands on the
+  // same filtered list. Opening a run is a drill-in: it pushes an entry, and Back removes it.
+  const [searchParams, setFilters] = useUrlFilters();
   const runFilter = searchParams.get("run_id") ?? "";
   const setRunFilter = React.useCallback(
-    (id: string) => setSearchParams(id ? { run_id: id } : {}, { replace: true }),
-    [setSearchParams],
+    (id: string) => setFilters({ run_id: id }, { push: id !== "" }),
+    [setFilters],
   );
+  const query = searchParams.get("q") ?? "";
+  const setQuery = (q: string) => setFilters({ q });
   // The Retention tab (mock packet M4) is the security tier's; everyone else
   // has the feed alone.
   const [tab, setTab] = React.useState<"events" | "retention">("events");
   const showRetention = securityOperator && tab === "retention";
-  const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
-  const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
+  const kindParam = searchParams.get("kind") ?? "";
+  const kindFilter: EventKind | "all" = (KIND_ORDER as string[]).includes(kindParam) ? (kindParam as EventKind) : "all";
+  const setKindFilter = (k: EventKind | "all") => setFilters({ kind: k === "all" ? "" : k });
+  const actorParam = searchParams.get("actor") ?? "";
+  const actorFilter: ActorType | "all" = ACTOR_TYPES.includes(actorParam as ActorType) ? (actorParam as ActorType) : "all";
+  const setActorFilter = (a: ActorType | "all") => setFilters({ actor: a === "all" ? "" : a });
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
 
   // #3036: run titles for the rows' run references, read once from the runs list. A failed or partial read only
@@ -370,8 +379,10 @@ export function AuditScreen() {
   // selected kind is no longer present; an append-only poll tick only ever
   // GROWS presentKinds, so this never fires on one.
   React.useEffect(() => {
-    if (kindFilter !== "all" && !presentKinds.has(kindFilter)) setKindFilter("all");
-  }, [presentKinds, kindFilter]);
+    // Not before the first answer: a kind from the URL is not absent from a window that has not loaded.
+    if (status === "ready" && kindFilter !== "all" && !presentKinds.has(kindFilter)) setKindFilter("all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setKindFilter only writes the URL
+  }, [presentKinds, kindFilter, status]);
 
   // Query / kind / actor are sub-filters applied over the loaded window. The
   // run_id filter is enforced server-side (above), so it is not re-applied here.
@@ -396,12 +407,7 @@ export function AuditScreen() {
 
   const noFiltersActive = !query && kindFilter === "all" && actorFilter === "all" && !runFilter;
 
-  const clearFilters = () => {
-    setQuery("");
-    setKindFilter("all");
-    setActorFilter("all");
-    setRunFilter("");
-  };
+  const clearFilters = () => setFilters({ q: "", kind: "", actor: "", run_id: "" });
 
   return (
     <PageContainer width="list">

@@ -48,6 +48,7 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
 import { STATES } from "../wardyn/states";
 import { HttpError } from "../../lib/api/core";
+import { MemoryRouter } from "react-router-dom";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -76,6 +77,18 @@ describe("SecretsScreen — delete error handling", () => {
     render(<SecretsScreen />);
     expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
     expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
+  it("reads the search text from the URL, so Back from a row lands on the same filtered list", async () => {
+    listSecretsMock.mockResolvedValue(["anthropic-api-key", "openai-api-key"]);
+    render(
+      <MemoryRouter initialEntries={["/?q=openai"]}>
+        <SecretsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("openai-api-key")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search secrets by name…")).toHaveValue("openai");
+    expect(screen.queryByText("anthropic-api-key")).toBeNull();
   });
 
   it("names each row's actions menu after the secret", async () => {

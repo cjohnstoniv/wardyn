@@ -51,10 +51,10 @@ import { CredentialsScreen } from "./credentials";
 import { aheadByHours } from "../../lib/test-clock";
 import { STATES } from "../wardyn/states";
 
-function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean } = {}) {
-  const { status = null, operator = true, securityOperator = true } = opts;
+function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean; path?: string } = {}) {
+  const { status = null, operator = true, securityOperator = true, path = "/" } = opts;
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <ModelAccessProvider status={status} onRefresh={() => {}}>
         <OperatorProvider operator={operator} securityOperator={securityOperator} operatorResolved principal="admin@corp.example">
           <CredentialsScreen />
@@ -138,6 +138,14 @@ describe("the inventory", () => {
     expect(screen.getByText(INVENTORY.NO_META_TITLE)).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("reads the provider filter from the URL, so Back from a row lands on the same filtered list", async () => {
+    const bob = { ...aliceRow, person: "sub-bob", email: "bob@corp.example", provider: "bedrock-prod", provider_name: "Bedrock (prod)" };
+    listInventoryMock.mockResolvedValue(inventory([aliceRow, bob], { "corp-gw": 1, "bedrock-prod": 1 }));
+    renderScreen({ path: "/?provider=bedrock-prod" });
+    expect(await screen.findByText("bob@corp.example")).toBeInTheDocument();
+    expect(screen.queryByText("alice@corp.example")).toBeNull();
   });
 
   it("a read the server worded shows its sentence, not the default line", async () => {
