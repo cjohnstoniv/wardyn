@@ -25,7 +25,8 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 
 // stepNoNetwork refuses a No network launch that would need a host (422 no_network_needs_egress), naming
 // each source, sorted and once each: the kinds deriveRunEgress adds after the mint (from a copy with an
-// empty allowlist, so each kind reports every host it would add), a direct GitHub clone, each component,
+// empty allowlist, so each kind reports every host it would add; its git grants only when the run clones a
+// repository, noNetworkClonesRepo), a direct GitHub clone, each component,
 // the Azure DevOps sign-in, the harness's model and each chosen model provider, and whatever is still on
 // the spec's allowlist, by the source the fold recorded for it. It runs after the tool policy, the last
 // step that adds a host to the spec, in every door, so create, Review and the preview answer the same.
@@ -41,7 +42,11 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	}
 	probe := f.spec.Clone()
 	probe.AllowedDomains = nil
-	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), f.spec.EligibleGrants)
+	grants := f.spec.EligibleGrants
+	if !noNetworkClonesRepo(f) {
+		grants = slices.DeleteFunc(slices.Clone(grants), gitLaneGrant)
+	}
+	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), grants)
 	for _, d := range deriveRunEgress(&probe, f.wsRefs, f.req.Repo, f.scmSite, wired, f.ceiling.Spec.AllowedDomains) {
 		if len(d.added) > 0 {
 			add(noNetworkKind(d.kind))
@@ -75,6 +80,27 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	return !runError(http.StatusUnprocessableEntity, reasonNoNetworkNeedsEgress,
 		"This run uses the No network wall preset, and these need a network host: "+strings.Join(out, ", ")+
 			". Remove them, or launch without No network.").write(s, f.w, f.r)
+}
+
+// noNetworkClonesRepo reports whether the run names a repository to clone: the legacy repo field, a
+// repository on the spec, or a repository source of a workspace it attaches. Without one, a git grant the
+// policy carries is a source of nothing: the launcher cannot remove it, and dispatch withholds its lane and
+// credential from a No network run.
+func noNetworkClonesRepo(f *runFold) bool {
+	return strings.TrimSpace(f.req.Repo) != "" || len(f.spec.WorkspaceRepos) > 0 ||
+		slices.ContainsFunc(f.wsRefs, func(ws types.Workspace) bool {
+			return len(workspaceSourcesOfType(ws, types.WorkspaceSourceTypeRepo)) > 0
+		})
+}
+
+// gitLaneGrant reports whether g opens a git credential lane, the kinds deriveRunEgress counts as
+// declaring a repository.
+func gitLaneGrant(g types.GrantSpec) bool {
+	switch g.Kind {
+	case types.GrantGitHubToken, types.GrantGitPAT, types.GrantSSHKey:
+		return true
+	}
+	return false
 }
 
 // noNetworkSpecSources adds the source of each host still on spec's allowlist, and allow_all_egress.

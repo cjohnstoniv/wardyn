@@ -90,6 +90,51 @@ func TestNoNetwork_SpecHostsAndPasses(t *testing.T) {
 	}
 }
 
+// noNetworkRepoFold is a custom-image No network launch on a default-shaped policy: a github_token grant
+// whose repositories are the empty template, a git_pat and an ssh_key, in a deployment whose site config
+// names an SCM host. The resolved allowlist is empty, as No network's walls leave it.
+func noNetworkRepoFold(t *testing.T, repo string, scmHosts ...string) (runFold, *httptest.ResponseRecorder) {
+	t.Helper()
+	grants := []types.GrantSpec{
+		{Kind: types.GrantGitHubToken, Scope: mustJSON(map[string]any{"repos": []string{}})},
+		gitPATGrant("dev.azure.com", "ado-pat"),
+		{Kind: types.GrantSSHKey, Scope: mustJSON(map[string]string{"host": "github.com", "key_secret_ref": "deploy-key"})},
+	}
+	req := createRunRequest{Agent: "custom-image", Repo: repo}
+	w := httptest.NewRecorder()
+	return runFold{
+		mode: foldCreate, w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), req: &req,
+		spec:    types.RunPolicySpec{EligibleGrants: grants},
+		scmSite: types.SiteConfig{ScmHosts: scmHosts},
+		source:  policySourceRecord{wallPreset: builtinFrozen(t, types.WallPresetNoNetwork)},
+	}, w
+}
+
+// TestNoNetwork_GitGrantsCountOnlyWithARepository: the policy's git grants and the site's SCM hosts are not
+// a source for a run that clones no repository, since the launcher can remove neither, so a default policy
+// launches. With a repository they are, and the refusal names them.
+func TestNoNetwork_GitGrantsCountOnlyWithARepository(t *testing.T) {
+	for _, mode := range []foldMode{foldCreate, foldPreflight, foldPreview} {
+		f, w := noNetworkRepoFold(t, "", "ghes.corp.example")
+		f.mode = mode
+		if !(&Server{}).stepNoNetwork(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: a default policy with no repository was refused: %s", mode, w.Body)
+		}
+		f, w = noNetworkRepoFold(t, "https://ghes.corp.example/team/app", "ghes.corp.example")
+		f.mode = mode
+		if (&Server{}).stepNoNetwork(&f, &foldRecorder{}) {
+			t.Fatalf("mode %d: a repository with git grants passed", mode)
+		}
+		var body errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		for _, src := range []string{derivedSiteConfig, derivedSSH, derivedGitPAT} {
+			if !strings.Contains(body.Error, src) {
+				t.Errorf("mode %d: the refusal does not name %q: %s", mode, src, body.Error)
+			}
+		}
+	}
+}
+
 // TestNoNetwork_SealEmptiesEgress: whatever a step after resolve added, the No network preset's seal
 // layer leaves no host and no open egress, and withholds every credential by host. Sealed's own
 // layer keeps the allowlist.
