@@ -100,18 +100,19 @@ func (s *Server) refuseBadHostCallScope(w http.ResponseWriter, r *http.Request, 
 	return nil, true
 }
 
-// hostCallDecisionRule is decide's scope rule for a host rule hold: the decision answers that one hold, so a
-// bodyless decision or "once" stores "once" and any wider scope is refused. The proxy keeps the answer for
-// the rest of the run (internal/egress/proxy/host_call_hold.go). isHost reports whether the row is one;
-// ok=false means the refusal is written.
+// hostCallDecisionRule is decide's scope rule for a host rule hold. The proxy keeps the answer for the rest
+// of the run (internal/egress/proxy/host_call_hold.go), so the row says so: a bodyless decision or "run"
+// stores "run", and any other scope is refused. It runs before the deciders cap (capScopeToRule), so a
+// unit rule whose max_scope is below run refuses the decision (decision_scope_above_rule). isHost reports
+// whether the row is one; ok=false means the refusal is written.
 func hostCallDecisionRule(w http.ResponseWriter, ap types.ApprovalRequest, scope types.ApprovalScope) (types.ApprovalScope, bool, bool) {
 	if !isHostCallRow(ap) {
 		return scope, false, true
 	}
-	if scope == "" || scope == types.ScopeOnce {
-		return types.ScopeOnce, true, true
+	if scope == "" || scope == types.ScopeRun {
+		return types.ScopeRun, true, true
 	}
 	writeErrorReason(w, http.StatusBadRequest, reasonDecisionScopeInvalidForKind,
-		`A host request approval answers that host, method and path for the run: send no decision_scope, or "once"`)
+		`A host request approval answers that host, method and path for the rest of the run: send no decision_scope, or "run"`)
 	return scope, true, false
 }

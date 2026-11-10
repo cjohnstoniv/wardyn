@@ -346,7 +346,7 @@ func (s *Server) decisionScopeForKind(w http.ResponseWriter, r *http.Request, ap
 	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok { // one kubectl write is decided once (approvals_kube_call.go)
 		return scope, false
 	}
-	if scope, isHost, ok = hostCallDecisionRule(w, ap, scope); !ok { // one host rule hold is decided once (approvals_host_call.go)
+	if scope, isHost, ok = hostCallDecisionRule(w, ap, scope); !ok { // a host rule hold is decided for the run (approvals_host_call.go)
 		return scope, false
 	}
 	if !isADO && !isMCP && !isKube && !isHost && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {

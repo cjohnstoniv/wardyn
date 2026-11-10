@@ -799,7 +799,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - A hold never outranks a deny. Each request is judged afresh: if any rule set denies it, or names the host and matches nothing, it is refused, approved or not. An approval answers only the hold. Every other set must still allow the request, and the run-wide `allowed_methods` still applies. A method `allowed_methods` refuses is refused without asking anyone.
 - It fails closed. If the control plane refuses or cannot take the request for an approval, or the proxy cannot read the answer, the request is not sent.
 - At most 16 held requests wait at once, and a retry of a waiting call counts. At most 1024 different calls are asked about per run. A request past either limit is refused at once (`policy:host-rule:approval-busy`).
-- The decision takes no `decision_scope`, or `"once"`; the row records `once`. The run's owner or a security operator decides it, as for a kubectl write. `WARDYN_CAPABILITY_SECOND_HUMAN` makes it four-eyes. A unit's `egress_domain` deciders rule governs it, and an approval rule never decides one.
+- The decision takes no `decision_scope`, or `"run"`; the row records `run`, since the answer holds for the rest of the run. A unit's deciders rule whose `max_scope` is below `run` refuses the decision (`decision_scope_above_rule`). The run's owner or a security operator decides it, as for a kubectl write. `WARDYN_CAPABILITY_SECOND_HUMAN` makes it four-eyes. A unit's `egress_domain` deciders rule governs it, and an approval rule never decides one.
 - The decision rows are `policy:host-rule:approval-wait`, `-approval-denied`, `-approval-closed`, `-approval-refused` and `-approval-busy`.
 
 ## `eligible_grants[]` — `GrantSpec`

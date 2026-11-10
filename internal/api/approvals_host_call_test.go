@@ -68,15 +68,16 @@ func TestHostCallRowIsItsOwnRow(t *testing.T) {
 	}
 }
 
-// A host rule hold is decided once: a bodyless decision or "once" stores once, anything wider is refused.
-func TestHostCallDecisionAlwaysOnce(t *testing.T) {
+// A host rule hold is decided for the run, as the proxy keeps it: a bodyless decision or "run" stores run,
+// any other scope is refused.
+func TestHostCallDecisionIsForTheRun(t *testing.T) {
 	for _, tc := range []struct {
 		scope types.ApprovalScope
 		want  int
 	}{
 		{"", http.StatusOK},
-		{types.ScopeOnce, http.StatusOK},
-		{types.ScopeRun, http.StatusBadRequest},
+		{types.ScopeRun, http.StatusOK},
+		{types.ScopeOnce, http.StatusBadRequest},
 		{types.ScopeUntil, http.StatusBadRequest},
 		{types.ScopeAlways, http.StatusBadRequest},
 	} {
@@ -91,8 +92,8 @@ func TestHostCallDecisionAlwaysOnce(t *testing.T) {
 			got := f.approval.byID[id]
 			f.approval.mu.Unlock()
 			if tc.want == http.StatusOK {
-				if got.State != types.ApprovalApproved || got.DecisionScope != types.ScopeOnce {
-					t.Fatalf("row = %s/%q, want APPROVED/once", got.State, got.DecisionScope)
+				if got.State != types.ApprovalApproved || got.DecisionScope != types.ScopeRun {
+					t.Fatalf("row = %s/%q, want APPROVED/run", got.State, got.DecisionScope)
 				}
 				return
 			}
@@ -262,8 +263,8 @@ func TestHostCallDecidersEgressRule(t *testing.T) {
 		t.Fatalf("state %s, want PENDING", f.row(ap).State)
 	}
 	f.wantStatus("unit admin", f.decide(dcMember(t, dcAdmin), ap, "approve", ""), http.StatusOK, "", ap)
-	if got := f.row(ap).DecisionScope; got != types.ScopeOnce {
-		t.Errorf("decision_scope = %q, want once", got)
+	if got := f.row(ap).DecisionScope; got != types.ScopeRun {
+		t.Errorf("decision_scope = %q, want run", got)
 	}
 
 	g := newDCFix(t)
@@ -271,4 +272,18 @@ func TestHostCallDecidersEgressRule(t *testing.T) {
 	held := g.hostHold()
 	g.wantStatus("a kube_call rule's unit admin", g.decide(dcMember(t, dcAdmin), held, "deny", ""), http.StatusNotFound, reasonApprovalNotFound, held)
 	g.wantStatus("owner under a kube_call rule", g.decide(dcMember(t, dcOwner), held, "deny", ""), http.StatusOK, "", held)
+}
+
+// A unit's egress_domain rule capped at max_scope once refuses a host rule hold's decision, which reaches the
+// rest of the run (decision_scope_above_rule), and the row stays pending.
+func TestHostCallDecidersOnceCapRefuses(t *testing.T) {
+	f := newDCFix(t)
+	rule := dcRule(types.DeciderKindEgressDomain, types.DeciderUnitAdmins)
+	rule.MaxScope = types.ScopeOnce
+	f.st.setRules(f.root.ID, rule)
+	ap := f.hostHold()
+	f.wantStatus("unit admin under a once cap", f.decide(dcMember(t, dcAdmin), ap, "approve", ""), http.StatusForbidden, "decision_scope_above_rule", ap)
+	if f.row(ap).State != types.ApprovalPending {
+		t.Fatalf("state %s, want PENDING", f.row(ap).State)
+	}
 }
