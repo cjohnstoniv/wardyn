@@ -104,13 +104,13 @@ type Options struct {
 	Credential func(rel string) bool
 	// Notify gets the list of laptop deletes before they are applied; nil drops it.
 	Notify io.Writer
-	// Runner turns on the folder runner's rules; `wardyn sync` leaves it off and keeps its documented
-	// ones. A file both sides changed is pulled beside the laptop's as a conflict copy, named with
-	// RunTag, before the laptop's is pushed; a pass that does not pull, or cannot keep the copy,
-	// touches neither side. After LoadRunnerState recovered an unreadable record, a file on both sides
-	// is compared: equal is recorded, different is a conflict.
-	Runner bool
-	RunTag string
+	// RunnerPass turns on the folder runner's rules; `wardyn sync` leaves it off and keeps its
+	// documented ones. A file both sides changed is pulled beside the laptop's as a conflict copy,
+	// named with RunTag, before the laptop's is pushed; a pass that does not pull, or cannot keep the
+	// copy, touches neither side. After LoadStateRecover moved an unreadable record aside, a file on
+	// both sides is compared: equal is recorded, different is a conflict.
+	RunnerPass bool
+	RunTag     string
 }
 
 // Syncer holds one sync's connections. Every read and write on the laptop goes
@@ -385,7 +385,7 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 			return err
 		}
 	}
-	if sy.Opts.Runner && sy.State.Recovered != "" && !known && hasL && hasR {
+	if sy.Opts.RunnerPass && sy.State.Recovered != "" && !known && hasL && hasR {
 		if sy.sameBytes(rel, l.side.Size, path.Join(sy.Opts.Remote, rel), r.Size()) {
 			sy.State.Files[rel] = FileSeen{Local: l.side, Remote: rSide}
 			return nil
@@ -394,7 +394,7 @@ func (sy *Syncer) decide(ctx context.Context, rel string, v *passView, rep *Repo
 	}
 	switch {
 	case hasL && hasR && lChanged && rChanged && (known || sy.Opts.Pull):
-		if sy.Opts.Runner {
+		if sy.Opts.RunnerPass {
 			return sy.conflict(ctx, rel, l, r, rep, pulled)
 		}
 		rep.Conflicts = append(rep.Conflicts, rel)

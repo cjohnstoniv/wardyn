@@ -105,36 +105,52 @@ func TestInstall_PullDirSyncFailureIsRefusedAndNotRecorded(t *testing.T) {
 	}
 }
 
-func TestInstall_ErrorsTellAnUnprovenInstallFromAnUntouchedOne(t *testing.T) {
+// tempBeside is a root on a new directory holding dst ("old") and an open temp file ("new").
+func tempBeside(t *testing.T) (string, *os.Root, string, *os.File) {
+	t.Helper()
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
-	put := func() (string, *os.File) {
-		name, f, err := createTemp(root, ".", "t.", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _ = f.WriteString("new")
-		return name, f
-	}
+	t.Cleanup(func() { _ = root.Close() })
 	putSyncFile(t, filepath.Join(dir, "dst"), "old", 0o644)
-
-	onSync(t, func(*os.File) error { return errFault }, nil)
-	name, f := put()
-	_, err = installDurable(root, f, name, InstallReplace, "dst")
-	var ie *InstallError
-	if !errors.As(err, &ie) || ie.Installed || errors.Is(err, ErrNotDurable) || getSyncFile(t, filepath.Join(dir, "dst")) != "old" {
-		t.Errorf("file sync failure: err = %v, dst = %q", err, getSyncFile(t, filepath.Join(dir, "dst")))
+	name, f, err := createTemp(root, ".", "t.", "")
+	if err != nil {
+		t.Fatal(err)
 	}
+	_, _ = f.WriteString("new")
+	return dir, root, name, f
+}
 
+func TestInstall_PreInstallFailureLeavesDst(t *testing.T) {
+	for _, mode := range []InstallMode{InstallReplace, InstallNew} {
+		dir, root, name, f := tempBeside(t)
+		onSync(t, func(*os.File) error { return errFault }, nil)
+		_, err := installDurable(root, f, name, mode, "dst")
+		var ie *InstallError
+		if !errors.As(err, &ie) || ie.Installed || ie.Step != "sync-file" || errors.Is(err, ErrNotDurable) {
+			t.Errorf("mode %d: err = %v", mode, err)
+		}
+		if got := getSyncFile(t, filepath.Join(dir, "dst")); got != "old" {
+			t.Errorf("mode %d: dst = %q", mode, got)
+		}
+		if ents, _ := os.ReadDir(dir); len(ents) != 1 {
+			t.Errorf("mode %d: %d entries left, want dst alone", mode, len(ents))
+		}
+	}
+}
+
+func TestInstall_PostInstallDirSyncFailureIsInstalledNotDurable(t *testing.T) {
+	dir, root, name, f := tempBeside(t)
 	onSync(t, func(*os.File) error { return nil }, func(*os.File) error { return errFault })
-	name, f = put()
-	_, err = installDurable(root, f, name, InstallReplace, "dst")
-	if !errors.As(err, &ie) || !ie.Installed || !errors.Is(err, ErrNotDurable) || getSyncFile(t, filepath.Join(dir, "dst")) != "new" {
-		t.Errorf("directory sync failure: err = %v, dst = %q", err, getSyncFile(t, filepath.Join(dir, "dst")))
+	_, err := installDurable(root, f, name, InstallReplace, "dst")
+	var ie *InstallError
+	if !errors.As(err, &ie) || !ie.Installed || ie.Step != "sync-dir" || !errors.Is(err, ErrNotDurable) {
+		t.Errorf("err = %v", err)
+	}
+	if got := getSyncFile(t, filepath.Join(dir, "dst")); got != "new" {
+		t.Errorf("dst = %q, want the new content visible", got)
 	}
 	if ents, _ := os.ReadDir(dir); len(ents) != 1 {
 		t.Errorf("%d entries left, want dst alone", len(ents))

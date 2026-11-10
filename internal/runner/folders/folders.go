@@ -279,7 +279,11 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	if err := foldersync.StateOutside(dir, stateFile); err != nil {
 		return nil, runnerwire.Refuse("%s", err.Error())
 	}
-	st, err := foldersync.LoadRunnerState(stateFile, dir, remote)
+	end, err := s.passEnd(args)
+	if err != nil {
+		return nil, err
+	}
+	st, err := foldersync.LoadStateRecover(stateFile, dir, remote)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +312,7 @@ func (s *Server) start(ctx context.Context, peer *runnerwire.Peer, id uint32, ar
 	s.mu.Unlock()
 	started = true
 	go func() {
-		p.res = s.run(stream, dir, remote, st, stateFile, args)
+		p.res = s.run(stream, dir, remote, st, stateFile, args, end)
 		_ = stream.Close()
 		release()
 		s.endRun(args.RunID)
@@ -331,27 +335,39 @@ func (s *Server) endRun(id uuid.UUID) {
 	s.mu.Unlock()
 }
 
-// passContext bounds one pass: by the organisation's deadline, read through Clock, when it names
-// one; otherwise a pass back by backPassLimit and a seed pass by nothing but s.ctx.
-func (s *Server) passContext(args runnerwire.SyncFolderArgs) (context.Context, context.CancelFunc) {
+// passEnd is when one pass must end, on this runner's monotonic clock: the organisation's deadline,
+// read through Clock, when it names one; otherwise backPassLimit from now for a pass back, and none
+// (zero) for a seed pass. A deadline already passed is refused.
+func (s *Server) passEnd(args runnerwire.SyncFolderArgs) (time.Time, error) {
 	if args.DeadlineUnixMs > 0 && s.Clock != nil {
 		if left, err := s.Clock.Remaining(time.UnixMilli(args.DeadlineUnixMs)); err == nil {
-			return context.WithTimeout(s.ctx, left)
+			if left <= 0 {
+				return time.Time{}, errors.New("the pass deadline has passed")
+			}
+			return time.Now().Add(left), nil
 		}
 	}
 	if args.Pull {
-		return context.WithTimeout(s.ctx, backPassLimit)
+		return time.Now().Add(backPassLimit), nil
 	}
-	return context.WithCancel(s.ctx)
+	return time.Time{}, nil
+}
+
+// passContext is s.ctx, ended at end when it is set.
+func (s *Server) passContext(end time.Time) (context.Context, context.CancelFunc) {
+	if end.IsZero() {
+		return context.WithCancel(s.ctx)
+	}
+	return context.WithDeadline(s.ctx, end)
 }
 
 // run is one pass over stream, which the organisation joins to the sandbox's
 // sftp-server started in remote.
-func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, stateFile string, args runnerwire.SyncFolderArgs) runnerwire.FolderPass {
+func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, stateFile string, args runnerwire.SyncFolderArgs, end time.Time) runnerwire.FolderPass {
 	failed := func(err error) runnerwire.FolderPass {
 		return runnerwire.FolderPass{Refused: []runnerwire.FolderRefusal{}, Recovered: st.Recovered, Error: foldersync.Shown(err.Error())}
 	}
-	ctx, cancel := s.passContext(args)
+	ctx, cancel := s.passContext(end)
 	defer cancel()
 	// Closing the stream unblocks an sftp call stuck on a sandbox that stalls.
 	defer context.AfterFunc(ctx, func() { _ = stream.Close() })()
@@ -374,7 +390,7 @@ func (s *Server) run(stream duplex, dir, remote string, st *foldersync.State, st
 	defer root.Close()
 	sy := &foldersync.Syncer{Client: c, Meter: meter, Root: root, State: st, StateFile: stateFile, Opts: foldersync.Options{
 		Remote: remote, Pull: args.Pull, MaxPullBytes: foldersync.DefaultMaxPullBytes, OrgDeny: args.Deny,
-		Credential: credentialPath, Runner: true, RunTag: args.RunID.String()[:8],
+		Credential: credentialPath, RunnerPass: true, RunTag: args.RunID.String()[:8],
 	}}
 	// A pass cut short (its stream closed) still reports what it finished and saved in its state.
 	rep, err := sy.Pass(ctx)
