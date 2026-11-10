@@ -849,3 +849,41 @@ func TestHostCallAPIDoorHoldIsBounded(t *testing.T) {
 		t.Fatalf("approved: err=%v sent=%d, want it sent once", err, rt.sent)
 	}
 }
+
+// The AWS portal's role credentials are the proxy's own send (getRoleCredentials): a run whose host rules
+// deny that GET on the portal still fetches them, while the sandbox's own GET there is refused.
+func TestSigV4RoleCredentialsNotJudgedByHostRules(t *testing.T) {
+	h := newSigV4Harness(t)
+	h.p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: sigv4Portal, Methods: []string{http.MethodGet}, Paths: []string{awsSSOFederationPath}, Effect: types.HostRuleDeny},
+		{Host: sigv4Portal, Effect: types.HostRuleAllow},
+	}}}
+	if _, err := h.p.getRoleCredentials(t.Context(), "x-amz-sso_bearer_token", sigv4Bearer); err != nil || h.portalCalls.Load() != 1 {
+		t.Fatalf("own send: err=%v portal calls=%d, want the credentials fetched", err, h.portalCalls.Load())
+	}
+	sandbox := httptest.NewRequest(http.MethodGet, "https://"+sigv4Portal+awsSSOFederationPath, nil)
+	if _, err := h.p.outboundHostRuleRefused(sandbox); !errors.Is(err, errHostRuleRefused) {
+		t.Fatalf("the sandbox's GET %s on %s: err=%v, want it refused by host rules", awsSSOFederationPath, sigv4Portal, err)
+	}
+}
+
+// The push comparison's forge reads are the proxy's own send (forgeRepo.read): a run whose host rules deny
+// that GET on the forge still reads it, while the sandbox's own GET there is refused.
+func TestForgeReadNotJudgedByHostRules(t *testing.T) {
+	cu := captureUpstream(t, true, `{}`)
+	p, _, _ := hrProxy(t, hrOpts{}, cu.srv)
+	p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+		{Host: hrHost, Methods: []string{http.MethodGet}, Paths: []string{"/repos"}, Effect: types.HostRuleDeny},
+		{Host: hrHost, Effect: types.HostRuleAllow},
+	}}}
+	var v map[string]any
+	f := &forgeRepo{p: p}
+	status, _, err := f.read(t.Context(), hrHost, "/repos/acme/app", func(context.Context, *http.Request) error { return nil }, &v)
+	if err != nil || status != http.StatusOK || !cu.reached {
+		t.Fatalf("own send: status %d err=%v reached=%v, want the forge read", status, err, cu.reached)
+	}
+	sandbox := httptest.NewRequest(http.MethodGet, "https://"+hrHost+"/repos/acme/app", nil)
+	if _, err := p.outboundHostRuleRefused(sandbox); !errors.Is(err, errHostRuleRefused) {
+		t.Fatalf("the sandbox's GET /repos/acme/app: err=%v, want it refused by host rules", err)
+	}
+}

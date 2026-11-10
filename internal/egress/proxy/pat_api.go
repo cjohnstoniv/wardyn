@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -45,16 +46,16 @@ const (
 	patAPIPort = 443
 )
 
-// patAPIMethodOverrides are the headers a framework reads a method override from.
-var patAPIMethodOverrides = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"}
-
 // patAPIMethodMismatch reports a method override that names another method than
 // the request line. The tables judge the wire method, and a framework that
 // honoured the override would run another: so an override that turns a read into
 // a write is not a read, and none of the admitted rows needs one.
 func patAPIMethodMismatch(r *http.Request) bool {
-	for _, h := range patAPIMethodOverrides {
-		for _, v := range r.Header.Values(h) {
+	for h, vs := range r.Header {
+		if !armscope.MethodOverrideHeader(h) { // any case, '-' or '_'
+			continue
+		}
+		for _, v := range vs {
 			if !strings.EqualFold(strings.TrimSpace(v), r.Method) {
 				return true
 			}

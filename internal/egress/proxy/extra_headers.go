@@ -68,6 +68,8 @@ func ReservedExtraHeader(name string, own ...string) error {
 		return fmt.Errorf("%q is a Wardyn header", name)
 	case isListed(own):
 		return fmt.Errorf("%q is this provider's own credential header", name)
+	case armscope.MethodOverrideHeader(name):
+		return fmt.Errorf("%q can make a host run another method than the request line's, so host rules refuse it", name)
 	case armscope.RouteOverrideHeader(name):
 		return fmt.Errorf("%q can make a host serve another path or host than the request line's, so host rules refuse it", name)
 	}

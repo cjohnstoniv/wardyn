@@ -428,8 +428,12 @@ var mitmReadTimeout = 5 * time.Minute
 // sign-in hold would have its body cut short by time already spent waiting. Called after each point
 // that can hold, before the body is read. A writer without deadline support (a test recorder) has
 // none to re-arm.
-func rearmBodyDeadline(w http.ResponseWriter) {
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(mitmReadTimeout))
+func rearmBodyDeadline(w http.ResponseWriter) { rearmBodyDeadlineAfter(w, 0) }
+
+// rearmBodyDeadlineAfter is rearmBodyDeadline for a body read only after a wait of up to wait somewhere
+// this proxy does not see: a via_org request the organisation's engine holds (host_call_hold.go).
+func rearmBodyDeadlineAfter(w http.ResponseWriter, wait time.Duration) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(wait + mitmReadTimeout))
 }
 
 // serveMITMRequest serves a MITM-terminated request: inspects the plaintext and forwards it, and —
@@ -450,6 +454,11 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		defer releaseModels()
 		if modelRefused {
 			return
+		}
+		// The organisation's engine judges the host rules. A request they hold waits there, up to the hold
+		// window, before its body is read, so the body's own read time starts after that wait.
+		if _, held := p.hostRuleVerdict(r, host, requestEscapedPath(r)); held {
+			rearmBodyDeadlineAfter(w, hostCallWindow*hostCallSecond)
 		}
 		authority := r.Host
 		if authority == "" {

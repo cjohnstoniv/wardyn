@@ -297,6 +297,10 @@ func TestHostRulesRefuseRouteOverrideHeaders(t *testing.T) {
 		{"POST", "X-HTTP-Method: DELETE", true},
 		{"POST", "X-Method-Override: delete", true},
 		{"POST", "X-HTTP-Method-Override: post", false}, // names the request's own method
+		{"POST", "X_HTTP_Method_Override: DELETE", true},
+		{"POST", "x-http-METHOD-override: DELETE", true},
+		{"POST", "X_Method_Override: delete", true},
+		{"POST", "x_http_method: post", false},
 		{"GET", "X-Original-URL: /admin", true},
 		{"GET", "X-Rewrite-URL: /admin", true},
 		{"GET", "X-Override-URL: /admin", true},
@@ -477,7 +481,7 @@ func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
 		}
 	})
 	for _, h := range []string{"X-Script-Name", "X-Forwarded-Prefix", "X-Forwarded-Host",
-		"X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri"} {
+		"X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Original-Host", "Forwarded"} {
 		t.Run("plain "+h, func(t *testing.T) {
 			cu := captureUpstream(t, false, "ok")
 			buf := &bytes.Buffer{}

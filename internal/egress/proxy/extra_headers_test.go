@@ -307,4 +307,9 @@ func TestExtraHeaders_RouteOverridesReserved(t *testing.T) {
 			t.Errorf("ReservedExtraHeader(%q) = %v, want the route override refusal", name, err)
 		}
 	}
+	for _, name := range []string{"X-HTTP-Method-Override", "X_HTTP_Method_Override", "x-http-method", "X_Method_Override"} {
+		if err := ReservedExtraHeader(name); err == nil || !strings.Contains(err.Error(), "another method") {
+			t.Errorf("ReservedExtraHeader(%q) = %v, want the method override refusal", name, err)
+		}
+	}
 }
