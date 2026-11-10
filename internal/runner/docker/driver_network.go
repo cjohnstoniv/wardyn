@@ -637,6 +637,11 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	}
 
 	d.drainSink(ctx, id)
+	// The run's resolver volume, which the agent mounted and is gone by now. Before the proxy, so that a crash
+	// or a failure here leaves the proxy for the orphan sweep to key a retry on.
+	if err := d.removeDNSVolume(ctx, id); err != nil {
+		return err
+	}
 	if err := d.removeProxy(ctx, id); err != nil {
 		return err
 	}
@@ -654,8 +659,7 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	if _, err := d.cli.ContainerRemove(ctx, driveSeedName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
-	// The run's resolver volume, which the agent mounted and is gone by now.
-	return d.removeDNSVolume(ctx, id)
+	return nil
 }
 
 // removedElsewhere reports whether err is Docker refusing to remove the container name because another call
@@ -675,32 +679,37 @@ func (d *Driver) removedElsewhere(ctx context.Context, name string, err error) b
 	}
 }
 
-// sweepDriveSeeds removes drive seed containers (seedDriveVolume) older than
-// minAge. A seed lives for one create and remove, never started, so one that
-// old outlived a crash between the two; it holds its drive's volume, so a
-// reclaim would answer "in use" until it is gone. Keyed on the component label
-// the seed carries, never on a run's state: no live run owns a seed that long.
+// sweepDriveSeeds removes drive seed containers (seedDriveVolume) and DNS seed
+// containers (seedResolvConf) older than minAge. A seed lives for one create and
+// remove, never started, so one that old outlived a crash between the two; it
+// holds its volume, so a reclaim would answer "in use" until it is gone. Keyed
+// on the component label the seed carries, never on a run's state: no live run
+// owns a seed that long. Only this runner's and this deployment's are removed.
+// The DNS volume itself is removed by the run's teardown, never swept by age.
 func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI, minAge time.Duration) (int, error) {
-	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
-		All:     true,
-		Filters: client.Filters{}.Add("label", labelComponent+"="+componentDriveSeed),
-	})
-	if err != nil {
-		return 0, fmt.Errorf("docker: list drive seeds for orphan sweep: %w", err)
-	}
 	cutoff := time.Now().Add(-minAge)
 	var swept int
 	var errs []error
-	for _, c := range res.Items {
-		if c.Labels[labelComponent] != componentDriveSeed || c.Labels[labelManaged] != "true" || c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID ||
-			d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
+	for _, component := range []string{componentDriveSeed, componentDNSSeed} {
+		res, err := lister.ContainerList(ctx, client.ContainerListOptions{
+			All:     true,
+			Filters: client.Filters{}.Add("label", labelComponent+"="+component),
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("docker: list %s containers for orphan sweep: %w", component, err))
 			continue
 		}
-		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
-			errs = append(errs, fmt.Errorf("docker: remove leftover drive seed %s: %w", c.ID, err))
-			continue
+		for _, c := range res.Items {
+			if c.Labels[labelComponent] != component || c.Labels[labelManaged] != "true" || c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID ||
+				d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
+				continue
+			}
+			if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+				errs = append(errs, fmt.Errorf("docker: remove leftover %s %s: %w", component, c.ID, err))
+				continue
+			}
+			swept++
 		}
-		swept++
 	}
 	return swept, errors.Join(errs...)
 }

@@ -9,15 +9,21 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // The agent's resolver on Docker. Each run gets one Docker named volume that
@@ -42,6 +48,8 @@ const (
 	// Engine 28 unless the operator opts out (runNetworkIsolation), so only an
 	// opted-out run on an older engine is without it.
 	minResolvConfSubpathEngineMajor = 26
+	// minResolvConfSubpathAPIMinor is the minor of API 1.45, the first with a volume mount Subpath.
+	minResolvConfSubpathAPIMinor = 45
 
 	// componentDNSVolume and componentDNSSeed label the volume and its seed.
 	componentDNSVolume = "dns-volume"
@@ -51,18 +59,80 @@ const (
 func dnsVolumeName(runID uuid.UUID) string { return dnsVolumePrefix + runID.String() }
 func dnsSeedName(runID uuid.UUID) string   { return dnsSeedPrefix + runID.String() }
 
-// seedResolvConf creates runID's DNS volume and writes resolv.conf, naming
-// proxyIP as the only nameserver, into it. The volume is the local driver with
-// no driver options, as every volume this package creates is (driveVolumeDriver).
-func (d *Driver) seedResolvConf(ctx context.Context, runID uuid.UUID, proxyIP string) error {
-	volName, seedName := dnsVolumeName(runID), dnsSeedName(runID)
-	if _, err := d.cli.VolumeCreate(ctx, client.VolumeCreateOptions{
-		Name:   volName,
+// errDNSVolumeNotOurs says a volume answering to a run's DNS volume name is not
+// that run's DNS volume. A name proves nothing about who made the object, so
+// the driver neither seeds, mounts nor removes such a volume.
+var errDNSVolumeNotOurs = errors.New("docker: a volume answers to this run's DNS volume name but is not Wardyn's DNS volume for it")
+
+// dnsLabels is the label set on a run's DNS volume and its seed: the run's
+// labels for the component, plus this runner's id when it has one.
+func (d *Driver) dnsLabels(runID uuid.UUID, component string) map[string]string {
+	var extra map[string]string
+	if d.cfg.RunnerID != "" {
+		extra = map[string]string{runner.LabelRunnerID: d.cfg.RunnerID}
+	}
+	return d.labels(runID, component, extra)
+}
+
+// dnsVolumeOwned says whether v is runID's DNS volume as this driver creates it:
+// the exact name, the local driver with no driver options, this run's, this
+// runner's and this deployment's labels for the DNS component, and none of a
+// drive's labels. Anything else is somebody else's storage (the same predicate
+// shape as driveVolumeAdoptable).
+func (d *Driver) dnsVolumeOwned(v volume.Volume, runID uuid.UUID) error {
+	name := dnsVolumeName(runID)
+	l := v.Labels
+	deployment, hasDeployment := l[labelDeployment]
+	switch {
+	case v.Name != name:
+		return fmt.Errorf("%w: it is named %q", errDNSVolumeNotOurs, v.Name)
+	case v.Driver != driveVolumeDriver || len(v.Options) != 0:
+		return fmt.Errorf("%w: %q has driver %q and %d driver option(s)", errDNSVolumeNotOurs, name, v.Driver, len(v.Options))
+	case l[labelManaged] != "true" || l[labelComponent] != componentDNSVolume || l[labelRun] != runID.String():
+		return fmt.Errorf("%w: %q is not labelled as this run's DNS volume", errDNSVolumeNotOurs, name)
+	case !hasDeployment || deployment != d.cfg.InternalNetwork || l[runner.LabelRunnerID] != d.cfg.RunnerID:
+		return fmt.Errorf("%w: %q belongs to another runner or deployment", errDNSVolumeNotOurs, name)
+	}
+	for _, k := range []string{labelDrive, labelDriveHome, labelDriveSubject} {
+		if _, has := l[k]; has {
+			return fmt.Errorf("%w: %q carries the drive label %s", errDNSVolumeNotOurs, name, k)
+		}
+	}
+	return nil
+}
+
+// ensureDNSVolume makes sure runID's DNS volume exists and is Wardyn's:
+// inspect first, then create, then verify what the create returned. A create
+// against a name the daemon already holds succeeds and returns the EXISTING
+// volume with its own labels and driver, so a mismatch found at either step
+// refuses the run before anything is written to it. The volume is the local
+// driver with no driver options, as every volume this package creates is
+// (driveVolumeDriver).
+func (d *Driver) ensureDNSVolume(ctx context.Context, runID uuid.UUID) error {
+	name := dnsVolumeName(runID)
+	if res, err := d.cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); err == nil {
+		return d.dnsVolumeOwned(res.Volume, runID)
+	} else if !isNotFound(err) {
+		return fmt.Errorf("docker: inspect the DNS volume: %w", err)
+	}
+	created, err := d.cli.VolumeCreate(ctx, client.VolumeCreateOptions{
+		Name:   name,
 		Driver: driveVolumeDriver,
-		Labels: d.labels(runID, componentDNSVolume, nil),
-	}); err != nil {
+		Labels: d.dnsLabels(runID, componentDNSVolume),
+	})
+	if err != nil {
 		return fmt.Errorf("docker: create the DNS volume: %w", err)
 	}
+	return d.dnsVolumeOwned(created.Volume, runID)
+}
+
+// seedResolvConf makes runID's DNS volume and writes resolv.conf, naming
+// proxyIP as the only nameserver, into it.
+func (d *Driver) seedResolvConf(ctx context.Context, runID uuid.UUID, proxyIP string) error {
+	if err := d.ensureDNSVolume(ctx, runID); err != nil {
+		return err
+	}
+	volName, seedName := dnsVolumeName(runID), dnsSeedName(runID)
 	remove := func(ctx context.Context) error {
 		if _, err := d.cli.ContainerRemove(ctx, seedName, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("remove the seed: %w", err)
@@ -92,7 +162,7 @@ func (d *Driver) fillResolvConf(ctx context.Context, runID uuid.UUID, volName, s
 	if _, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: seedName,
 		Config: &container.Config{Image: d.proxyImage(), Cmd: []string{"true"}, NetworkDisabled: true,
-			Labels: d.labels(runID, componentDNSSeed, nil)},
+			Labels: d.dnsLabels(runID, componentDNSSeed)},
 		HostConfig: &container.HostConfig{
 			NetworkMode: "none",
 			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volName, Target: dnsSeedTarget,
@@ -133,20 +203,42 @@ func resolvConfMount(runID uuid.UUID) mount.Mount {
 	}
 }
 
+// apiAtLeast says whether the Docker API version v ("1.45", "v1.45") is major.minor or later. An empty or
+// unreadable version is not.
+func apiAtLeast(v string, major, minor int) bool {
+	maj, mnr, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(v), "v"), ".")
+	a, aerr := strconv.Atoi(maj)
+	b, berr := strconv.Atoi(mnr)
+	if !ok || aerr != nil || berr != nil {
+		return false
+	}
+	return a > major || a == major && b >= minor
+}
+
+// resolvConfMountSupported says whether this daemon and this client can mount a single file from a volume: the
+// Engine is 26 or later AND the API version the client talks is 1.45 or later. The second matters on its own
+// because the client takes DOCKER_API_VERSION from the environment and then does not negotiate, so a new
+// Engine can be spoken to over an older API that has no volume Subpath.
+func (d *Driver) resolvConfMountSupported(engineVersion string) bool {
+	return engineMajor(engineVersion) >= minResolvConfSubpathEngineMajor && apiAtLeast(d.cli.ClientVersion(), 1, minResolvConfSubpathAPIMinor)
+}
+
 // mountProxyResolver seeds runID's DNS volume and adds its mount to host, and
-// returns the step that undoes it for a failed create. An engine older than
-// minResolvConfSubpathEngineMajor (reachable only under
-// WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK) takes no mount and a warning: the
-// agent keeps Docker's resolver, and its lookups write no row. The undo is
-// returned with the error, since a seed that failed midway may have left the
-// volume.
+// returns the step that undoes it for a failed create. Where
+// resolvConfMountSupported is false (an Engine older than 26, reachable only
+// under WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK, or an API pinned below 1.45)
+// the run takes no mount and a warning: the agent keeps Docker's resolver, and
+// its lookups write no row. The undo is returned with the error, since a seed
+// that failed midway may have left the volume; it removes the volume only
+// after the same ownership check as any other removal.
 func (d *Driver) mountProxyResolver(ctx context.Context, runID uuid.UUID, proxyIP, engineVersion string, host *container.HostConfig) (func(), error) {
-	if engineMajor(engineVersion) < minResolvConfSubpathEngineMajor {
-		slog.Warn("docker: this Docker Engine cannot mount a single file from a volume, so the run's lookups are not recorded as DNS rows",
-			"engine", engineVersion, "needs", minResolvConfSubpathEngineMajor)
+	if !d.resolvConfMountSupported(engineVersion) {
+		slog.Warn("docker: this Docker Engine or API version cannot mount a single file from a volume, so the run's lookups are not recorded as DNS rows",
+			"engine", engineVersion, "api", d.cli.ClientVersion(), "needs_engine", minResolvConfSubpathEngineMajor,
+			"needs_api", fmt.Sprintf("1.%d", minResolvConfSubpathAPIMinor))
 		return nil, nil
 	}
-	undo := func() { d.removeDNSVolume(context.Background(), runID) }
+	undo := func() { _ = d.removeDNSVolume(context.Background(), runID) }
 	if err := d.seedResolvConf(ctx, runID, proxyIP); err != nil {
 		return undo, err
 	}
@@ -156,13 +248,28 @@ func (d *Driver) mountProxyResolver(ctx context.Context, runID uuid.UUID, proxyI
 
 // removeDNSVolume removes runID's DNS seed, if a crash left one, and then its
 // DNS volume, by the exact name and never forced. The agent that mounted it
-// must be gone first. A volume already gone is success; the error is the first
-// other one.
+// must be gone first. The volume is inspected first and removed only when
+// dnsVolumeOwned says it is Wardyn's: a volume that answers to the name but is
+// not (including on a run that never mounted one) is left untouched with a
+// warning, and the removal succeeds. A volume already gone is success; the
+// error is the first other one.
 func (d *Driver) removeDNSVolume(ctx context.Context, runID uuid.UUID) error {
 	if _, err := d.cli.ContainerRemove(ctx, dnsSeedName(runID), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove the DNS seed: %w", err)
 	}
-	if _, err := d.cli.VolumeRemove(ctx, dnsVolumeName(runID), client.VolumeRemoveOptions{}); err != nil && !isNotFound(err) {
+	name := dnsVolumeName(runID)
+	res, err := d.cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	if isNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("docker: inspect the DNS volume: %w", err)
+	}
+	if oerr := d.dnsVolumeOwned(res.Volume, runID); oerr != nil {
+		slog.Warn("docker: leaving a volume that is not this run's DNS volume in place", "volume", name, "reason", oerr.Error())
+		return nil
+	}
+	if _, err := d.cli.VolumeRemove(ctx, name, client.VolumeRemoveOptions{}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove the DNS volume: %w", err)
 	}
 	return nil

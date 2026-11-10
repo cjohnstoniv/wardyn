@@ -25,6 +25,7 @@ import (
 type dockerAPI interface {
 	Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
 	Ping(ctx context.Context, options client.PingOptions) (client.PingResult, error) // backs ProbeSubstrate: the daemon answers, nothing listed or created
+	ClientVersion() string                                                           // the API version this client talks (after Info), which DOCKER_API_VERSION can pin; gates a volume Subpath
 
 	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
 	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
