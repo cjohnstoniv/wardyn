@@ -399,6 +399,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 // max_runs, pool lock first, then the cap's lock, then the runner's, and at any of
 // them is refused as a create is, the run left kept.
 func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool, actorType types.ActorType, actor string) *reviveError {
+	if rerr := s.reviveExpiryDue(ctx, run.ID); rerr != nil {
+		return rerr
+	}
 	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
 	if errors.Is(err, store.ErrRunCapReached) {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)

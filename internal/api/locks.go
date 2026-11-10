@@ -119,9 +119,9 @@ const lockUnavailableMsg = "Another operation on this resource is in progress, o
 // run, never global, so two runs never wait on each other. The revive
 // (reviveRunProxy), the end edit's write (handleSetRunEndAndWait) and the two
 // sweeps that re-assert a destructive stop (leaseRun, keepRebootedRun) take
-// it, among others. It is NOT taken inside loseRun,
-// stopLostSandbox, endSandbox, reconcileFinalize or stopKeptRun: they run under
-// it. The sweep side only ever tries: a run whose lock is held, or that the
+// it, among others. It is NOT taken inside loseRun, stopLostSandbox or
+// endSandbox: they run under it. reconcileFinalize and stopKeptRun take it
+// themselves, re-entering when their caller holds it. The sweep side only ever tries: a run whose lock is held, or that the
 // lock pool cannot take now, is skipped and retried next pass.
 
 // lockRunOp takes run id's lock, waiting for it.
@@ -147,16 +147,6 @@ func (s *Server) lockRunEnd(ctx context.Context, id uuid.UUID) (context.Context,
 		return ctx, nil, false
 	}
 	return lctx, unlock, true
-}
-
-// tryLockRunEnd is lockRunEnd for a kept run's end (stopKeptRun), which must neither wait on the lock nor be
-// held off by it: an expiry is never dodged by a run revived again and again (leaseRun). It takes the lock
-// when it is free, or already held on ctx, and otherwise goes on without it, as the end did before.
-func (s *Server) tryLockRunEnd(ctx context.Context, id uuid.UUID) (context.Context, func()) {
-	if lctx, unlock, ok := s.tryLockRunOp(ctx, id); ok {
-		return lctx, unlock
-	}
-	return ctx, func() {}
 }
 
 // LockRunEnd is lockRunEnd for cmd/wardynd's idle and max-age stop, the one end of a run outside this
