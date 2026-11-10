@@ -61,7 +61,7 @@ import type { ExplainRow } from "../../../lib/api/permissions";
 import { aheadByHours } from "../../../lib/test-clock";
 import { KIND, PERM } from "../../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../../lib/types";
-import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
+import { EXPLAIN, EXPLAIN_GRANTS, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { STALE_NOTE } from "../../wardyn/states";
 import { ExplainGrid } from "./explain-grid";
@@ -307,13 +307,13 @@ describe("ExplainGrid — the grant details cannot be read", () => {
     getPermissionsMock.mockRejectedValueOnce(new Error("HTTP 500"));
     renderGrid();
     await row("agent", "codex");
-    expect(await screen.findByText(UT.EXPLAIN_GRANTS_FAILED)).toBeInTheDocument();
+    expect(await screen.findByText(EXPLAIN_GRANTS.FAILED)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: `${EXPLAIN.REMOVE} Codex` })).toBeNull();
 
     getPermissionsMock.mockResolvedValue({ grants: [grant({ id: "own-deny" })], enforcement: {} });
-    await userEvent.click(screen.getByRole("button", { name: EXPLAIN.RETRY }));
+    await userEvent.click(screen.getByRole("button", { name: EXPLAIN_GRANTS.RETRY }));
     expect(await screen.findByRole("button", { name: `${EXPLAIN.REMOVE} Codex` })).toBeInTheDocument();
-    expect(screen.queryByText(UT.EXPLAIN_GRANTS_FAILED)).toBeNull();
+    expect(screen.queryByText(EXPLAIN_GRANTS.FAILED)).toBeNull();
     expect(explainMock).toHaveBeenCalledTimes(1); // Try again re-reads only the grants
   });
 
@@ -327,7 +327,7 @@ describe("ExplainGrid — the grant details cannot be read", () => {
     await userEvent.click(screen.getByRole("button", { name: PERM.REMOVE }));
     expect(await screen.findByText(STALE_NOTE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `${EXPLAIN.REMOVE} Codex` })).toBeInTheDocument();
-    expect(screen.queryByText(UT.EXPLAIN_GRANTS_FAILED)).toBeNull();
+    expect(screen.queryByText(EXPLAIN_GRANTS.FAILED)).toBeNull();
   });
 });
 

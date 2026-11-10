@@ -46,7 +46,7 @@ import {
 } from "../../../lib/api/drives";
 import { providers as providersApi } from "../../../lib/api/providers";
 import { getErrorMessage } from "../../../lib/format";
-import { ACCESS_STATE, DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
+import { ACCESS_STATE, DRIVES, DRIVES_TEAM_UNKNOWN, PEOPLE } from "../../../lib/user-drives-copy";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -269,9 +269,9 @@ export function DrivesScreen() {
                 <>
                   {teamFailed && teamUnknown && snap.drives.some((d) => d.team) && (
                     <p role="status" className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3 text-meta text-muted-foreground">
-                      {DRIVES.TEAM_UNCHECKED}
+                      {DRIVES_TEAM_UNKNOWN.NOTE}
                       <Button variant="outline" size="sm" onClick={loadTeamSetting}>
-                        {DRIVES.TEAM_UNCHECKED_RETRY}
+                        {DRIVES_TEAM_UNKNOWN.RETRY}
                       </Button>
                     </p>
                   )}
@@ -330,7 +330,7 @@ export function DrivesScreen() {
                           <TableCell>
                             {/* A team drive is writable only where its allocations say so too. */}
                             {unknownTeam ? (
-                              <span className="text-muted-foreground">{DRIVES.TEAM_UNKNOWN_CELL}</span>
+                              <span className="text-muted-foreground">{DRIVES_TEAM_UNKNOWN.CELL}</span>
                             ) : (
                               <Chip tone={modeTone(team ? teamWritable(d, snap.grants) : d.writable)}>
                                 {modeText(team ? teamWritable(d, snap.grants) : d.writable)}
@@ -339,14 +339,14 @@ export function DrivesScreen() {
                           </TableCell>
                           <TableCell className={team || unknownTeam ? "text-muted-foreground" : undefined}>
                             {unknownTeam
-                              ? DRIVES.TEAM_UNKNOWN_CELL
+                              ? DRIVES_TEAM_UNKNOWN.CELL
                               : team
                                 ? DRIVES.TEAM_RECLAIM_CELL
                                 : d.reclaim === "delete" ? DRIVES.RECLAIM_DELETE : DRIVES.RECLAIM_RETAIN}
                           </TableCell>
                           <TableCell className={unknownTeam ? "text-muted-foreground" : undefined}>
                             {unknownTeam
-                              ? DRIVES.TEAM_UNKNOWN_CELL
+                              ? DRIVES_TEAM_UNKNOWN.CELL
                               : team
                               ? allocatedText(d, snap.grants)
                               : d.grant_count === 0

@@ -70,8 +70,6 @@ export const USER_TYPES = {
 
   // ---- What this type gets: its load failure (the rest is EXPLAIN below) ----
   EXPLAIN_LOAD_FAILED: "Couldn't load what this type gets.",
-  // The grant rows (Remove and "only …") are a second read; the grid still answers without them.
-  EXPLAIN_GRANTS_FAILED: "Couldn't load grant details, so Remove and who a restricted value is for are not shown.",
 };
 
 // "What this type gets" (design §2.6), from packet A. The audience after ONLY
@@ -98,7 +96,6 @@ export const EXPLAIN = {
   WALL_HEAD: "A block here is a wall.",
   WALL_BODY: "It blocks everyone of this type, and an allow for a person or a group does not override it.",
   REMOVE: "Remove",
-  RETRY: "Try again",
   // G-7: opens Permissions' own "Add a grant" dialog, Who and Capability fixed.
   ADD: "Add",
   // G-6: the grid's one true legend line. Packet A's own second footer
@@ -126,3 +123,10 @@ export const EXPLAIN = {
   ALL_MODEL_PROVIDERS: "All model providers",
   ALL_POLICIES: "All stored policies",
 };
+
+// Not in the packet docs (user-types-copy.test.ts holds USER_TYPES and EXPLAIN to them): the grant rows are a second
+// read; the grid still answers without them.
+export const EXPLAIN_GRANTS = {
+  FAILED: "Couldn't load grant details, so Remove and who a restricted value is for are not shown.",
+  RETRY: "Try again",
+} as const;

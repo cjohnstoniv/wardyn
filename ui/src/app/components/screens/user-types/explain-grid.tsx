@@ -18,7 +18,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { CAPABILITY_KINDS, KIND, PERM, type CapabilityKind } from "../../../lib/permissions-copy";
 import type { CapabilityGrant, GovernanceChange } from "../../../lib/types";
 import { useUserTypeName } from "../../../lib/use-user-types";
-import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
+import { EXPLAIN, EXPLAIN_GRANTS, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -179,9 +179,9 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
       {grantsFailed && grants !== null && <StaleNote onRetry={() => loadGrants()} />}
       {grantsFailed && grants === null && (
         <p role="status" className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          {UT.EXPLAIN_GRANTS_FAILED}
+          {EXPLAIN_GRANTS.FAILED}
           <Button variant="outline" size="sm" onClick={() => loadGrants()}>
-            {EXPLAIN.RETRY}
+            {EXPLAIN_GRANTS.RETRY}
           </Button>
         </p>
       )}
