@@ -14,6 +14,7 @@ import { OperatorProvider } from "./operator-context";
 import {
   POSTURE_ACKNOWLEDGED_BANNER,
   POSTURE_CHIP_SUFFIX_ACKNOWLEDGED,
+  POSTURE_CHIP_SUFFIX_NOT_PROVEN,
   POSTURE_CHIP_SUFFIX_UNENFORCED,
   POSTURE_NOT_PROVEN_BANNER,
   POSTURE_REFUSED_BANNER,
@@ -148,6 +149,39 @@ describe("ConfinementChip posture treatment", () => {
     const acknowledged = renderChip("acknowledged");
     const acknowledgedTitle = acknowledged.container.querySelector("[title]")?.getAttribute("title") ?? "";
     expect(acknowledgedTitle.endsWith(POSTURE_CHIP_SUFFIX_ACKNOWLEDGED)).toBe(true);
+  });
+});
+
+// A failed re-check never reads as confined on a chip, for members too (the
+// band is Admin-view only): "refused" proved egress gets through, so runs
+// already going carry the unenforced ring, glyph and suffix; "not_proven"
+// carries the softer ring and its own suffix.
+describe("ConfinementChip after a failed re-check", () => {
+  const titleOf = (container: HTMLElement) => container.querySelector("[title]")?.getAttribute("title") ?? "";
+
+  it("a refused posture marks the chip as unenforced: ring, glyph and suffix", () => {
+    const { container } = renderChip("refused");
+    expect(screen.getByText("Wall")).toBeInTheDocument();
+    expect(container.querySelectorAll("svg").length).toBe(2);
+    expect(titleOf(container).endsWith(POSTURE_CHIP_SUFFIX_UNENFORCED)).toBe(true);
+    expect(container.querySelector("[title]")?.className).toContain("var(--warning)_55%");
+  });
+
+  it("a not-proven posture adds the softer ring and the not-proven suffix", () => {
+    const { container } = renderChip("not_proven");
+    expect(container.querySelectorAll("svg").length).toBe(1);
+    expect(titleOf(container).endsWith(POSTURE_CHIP_SUFFIX_NOT_PROVEN)).toBe(true);
+    expect(container.querySelector("[title]")?.className).toContain("var(--warning)_28%");
+  });
+
+  it("a member gets the same mark: the chip reads the posture whatever the role", () => {
+    const { container } = render(
+      <OperatorProvider operator={false} securityOperator={false} confinementPosture="refused">
+        <ConfinementChip value="CC2" />
+      </OperatorProvider>,
+    );
+    expect(container.querySelectorAll("svg").length).toBe(2);
+    expect(titleOf(container).endsWith(POSTURE_CHIP_SUFFIX_UNENFORCED)).toBe(true);
   });
 });
 

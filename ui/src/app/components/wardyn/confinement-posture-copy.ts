@@ -57,3 +57,4 @@ export const POSTURE_NOT_PROVEN_BANNER = {
 // accessible name, which stay Fence/Wall/Vault (D4, primitives.tsx#ConfinementChip).
 export const POSTURE_CHIP_SUFFIX_UNENFORCED = " · network confinement is not enforced on this cluster";
 export const POSTURE_CHIP_SUFFIX_ACKNOWLEDGED = " · network confinement is acknowledged, not proven";
+export const POSTURE_CHIP_SUFFIX_NOT_PROVEN = " · network confinement is not proven on this cluster";
