@@ -125,9 +125,8 @@ func (c OTLPConfig) validate() (target string, interval, base, timeout time.Dura
 	if timeout > WebhookTimeout {
 		return "", 0, 0, 0, fmt.Errorf("sinks.otlp: timeout %q exceeds %s, the final flush wardynd's shutdown grace waits for", c.Timeout, WebhookTimeout)
 	}
-	if !strings.HasSuffix(u.Path, otlpLogsPath) {
-		u.Path = strings.TrimRight(u.Path, "/") + otlpLogsPath
-		u.RawPath = ""
+	if ep := u.EscapedPath(); !strings.HasSuffix(ep, otlpLogsPath) {
+		setEscapedPath(u, strings.TrimRight(ep, "/")+otlpLogsPath)
 	}
 	return u.String(), interval, base, timeout, nil
 }
@@ -209,7 +208,12 @@ func (o *OTLPSink) Emit(_ context.Context, ev types.AuditEvent) error {
 	select {
 	case o.queue <- ev:
 	default:
-		o.drops.Add(1)
+		// A shed row loses its log record and, with traces on, its span too.
+		lost := int64(1)
+		if o.traces != "" && hasTrace(ev) {
+			lost = 2
+		}
+		o.drops.Add(lost)
 		slog.Warn("sinks.otlp: queue overflow", slog.Int64("drops", o.drops.Load()))
 	}
 	return nil

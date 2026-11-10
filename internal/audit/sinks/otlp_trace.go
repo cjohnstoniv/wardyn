@@ -27,9 +27,18 @@ func tracesTarget(logsTarget string) string {
 	if err != nil {
 		return logsTarget
 	}
-	u.Path = strings.TrimSuffix(u.Path, otlpLogsPath) + otlpTracesPath
-	u.RawPath = ""
+	setEscapedPath(u, strings.TrimSuffix(u.EscapedPath(), otlpLogsPath)+otlpTracesPath)
 	return u.String()
+}
+
+// setEscapedPath sets u's path from its escaped form, so an encoded slash in a
+// path prefix stays encoded: Path and RawPath are set together.
+func setEscapedPath(u *url.URL, escaped string) {
+	path, err := url.PathUnescape(escaped)
+	if err != nil {
+		return
+	}
+	u.Path, u.RawPath = path, escaped
 }
 
 // traceparent is a parsed W3C traceparent.
@@ -79,6 +88,9 @@ type traceIDs struct {
 	parent string // 16 lowercase hex, or "" when the correlation id is not a traceparent
 }
 
+// hasTrace reports whether a row has a trace: it is run-scoped.
+func hasTrace(ev types.AuditEvent) bool { return ev.RunID != nil && *ev.RunID != uuid.Nil }
+
 // idsFor derives a row's ids from the row alone, so a retry and both deliveries
 // (logs and spans) agree. ok is false for a row with no run, which has no trace.
 //
@@ -87,7 +99,7 @@ type traceIDs struct {
 // span id is the first 8 bytes of SHA-256(event id); a row with no event id hashes
 // its run id, action and time instead, so rows do not all share one span id.
 func idsFor(ev types.AuditEvent) (traceIDs, bool) {
-	if ev.RunID == nil || *ev.RunID == uuid.Nil {
+	if !hasTrace(ev) {
 		return traceIDs{}, false
 	}
 	var ids traceIDs

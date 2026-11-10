@@ -8,7 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -278,21 +281,74 @@ func TestOTLPTraces_RejectedSpansAreCounted(t *testing.T) {
 	}
 }
 
+// Both requests keep the endpoint's escaped path prefix and its query, whether or
+// not the endpoint already ends in /v1/logs.
 func TestOTLPTraces_ConfigAndPath(t *testing.T) {
 	t.Parallel()
 	got, err := sinks.ParseSinks([]byte(`{"otlp":{"endpoint":"https://o.example.com:4318/prefix/v1/logs?k=v","traces":true}}`))
 	if err != nil || len(got) != 1 {
 		t.Fatalf("ParseSinks: %v, %d sinks", err, len(got))
 	}
-	rcv := newOTLPReceiver(t, nil)
-	sink, cancel, done := startOTLP(t, sinks.OTLPConfig{Endpoint: rcv.srv.URL + "/prefix", BatchSize: 1, FlushInterval: "20ms", Traces: true})
-	if err := sink.Emit(context.Background(), traceEvent(validTP)); err != nil {
-		t.Fatal(err)
+	for name, suffix := range map[string]string{"bare prefix": "", "ends in /v1/logs": "/v1/logs"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var uris []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				uris = append(uris, r.RequestURI)
+				mu.Unlock()
+			}))
+			t.Cleanup(srv.Close)
+			sink, cancel, done := startOTLP(t, sinks.OTLPConfig{
+				Endpoint: srv.URL + "/tenant%2Fblue" + suffix + "?route=1", BatchSize: 1, FlushInterval: "20ms", Traces: true,
+			})
+			if err := sink.Emit(context.Background(), traceEvent(validTP)); err != nil {
+				t.Fatal(err)
+			}
+			waitThenSettle(t, 60*time.Millisecond, func() bool { mu.Lock(); defer mu.Unlock(); return len(uris) >= 2 })
+			cancel()
+			<-done
+			mu.Lock()
+			defer mu.Unlock()
+			want := []string{"/tenant%2Fblue/v1/logs?route=1", "/tenant%2Fblue/v1/traces?route=1"}
+			if len(uris) != 2 || uris[0] != want[0] || uris[1] != want[1] {
+				t.Errorf("request URIs = %v, want %v", uris, want)
+			}
+		})
 	}
-	waitThenSettle(t, 60*time.Millisecond, func() bool { return rcv.count() >= 2 })
-	cancel()
-	<-done
-	if rcv.count() != 2 || rcv.get(0).path != "/prefix/v1/logs" || rcv.get(1).path != "/prefix/v1/traces" {
-		t.Errorf("paths = %v / %v, want /prefix/v1/logs then /prefix/v1/traces", rcv.get(0).path, rcv.get(1).path)
+}
+
+// A row shed on a full queue loses its log record and, with traces on and a run on
+// the row, its span too; the delivery-loss accounting counts the same two.
+func TestOTLPTraces_QueueOverflowDropAccounting(t *testing.T) {
+	t.Parallel()
+	noRun := traceEvent("")
+	noRun.RunID = nil
+	for name, tc := range map[string]struct {
+		traces bool
+		second types.AuditEvent
+		want   int64
+	}{
+		"traces on, run-scoped":  {true, traceEvent(validTP), 2},
+		"traces on, no run":      {true, noRun, 1},
+		"traces off, run-scoped": {false, traceEvent(validTP), 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// The flusher is never started, so the one-slot queue stays full.
+			sink, err := sinks.NewOTLPSink(sinks.OTLPConfig{Endpoint: "http://127.0.0.1:1", BufferSize: 1, Traces: tc.traces})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ev := range []types.AuditEvent{traceEvent(validTP), tc.second} {
+				if err := sink.Emit(context.Background(), ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := sink.Drops(); got != tc.want {
+				t.Errorf("drops = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
