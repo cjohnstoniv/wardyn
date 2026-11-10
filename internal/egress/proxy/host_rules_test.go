@@ -601,3 +601,31 @@ func TestHostRulesRefuseDeclaredOverrideTrailers(t *testing.T) {
 		}
 	}
 }
+
+// On a via_org rule host the organisation never sees a declared trailer, so the run's proxy refuses a
+// declared override itself, with the same row, before anything reaches the organisation.
+func TestViaOrgRefusesDeclaredOverrideTrailers(t *testing.T) {
+	for _, trailer := range []string{"X-Original-URL", "X-Checksum"} {
+		var reached atomic.Bool
+		org := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached.Store(true)
+			_, _ = io.Copy(io.Discard, r.Body)
+		}))
+		t.Cleanup(org.Close)
+		p := viaOrgRunProxy(t, org, viaOrgHost, types.HostRule{Host: viaOrgHost, Effect: types.HostRuleAllow})
+		rows := &lockedBuilder{b: &strings.Builder{}}
+		p.sink = &decisionSink{out: rows, ch: make(chan egress.DecisionLog, 64)}
+		k := newKeptAlive(t, p, viaOrgHost)
+		k.write(t, "POST /v1/messages HTTP/1.1\r\nHost: "+viaOrgHost+"\r\nTransfer-Encoding: chunked\r\nTrailer: "+trailer+"\r\n\r\n2\r\nhi\r\n0\r\n\r\n")
+		status, _, err := k.answer()
+		refusal := trailer != "X-Checksum"
+		rows.mu.Lock()
+		logged := rows.b.String()
+		rows.mu.Unlock()
+		refused := err == nil && status == http.StatusForbidden && !reached.Load() &&
+			strings.Contains(logged, `"rule_source":"`+ruleSourceHostRule+`"`) && strings.Contains(logged, "trailer")
+		if refused != refusal || (!refusal && (status != http.StatusOK || !reached.Load())) {
+			t.Errorf("via_org POST declaring a %s trailer: status %d err %v organisation reached %v, want refused=%v:\n%s", trailer, status, err, reached.Load(), refusal, logged)
+		}
+	}
+}

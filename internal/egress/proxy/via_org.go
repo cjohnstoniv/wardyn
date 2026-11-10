@@ -289,7 +289,7 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 // allowlist, branch namespace and push-content rules, its approval hold and its
 // mint, exactly as a sandbox's own proxy serves it.
 func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
-	r = trackNetworkBody(r)
+	r = trackNetworkBody(r) // redundant today, as nothing reads the body before the re-arm below; kept for a later gate
 	if e.refuseClosed(w) {
 		return
 	}

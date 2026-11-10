@@ -186,12 +186,13 @@ func TestHeldViaOrgRequestWithABufferedBodyKeepsItsConnection(t *testing.T) {
 // request is answered too.
 func TestHeldViaOrgRequestWithAnUnreadChunkedBodyGetsItsReadTime(t *testing.T) {
 	shortReadTime(t)
-	shortHostCallWindow(t) // the window adds 90 ms to the re-armed read time
+	shortHostCallWindow(t)
+	hostCallSecond = 10 * time.Millisecond // the window adds 900 ms to the re-armed read time
 	org := slowUpstream(t)
 	p := viaOrgRunProxy(t, org, viaOrgHost, viaOrgHoldRules()...)
 	k := newKeptAlive(t, p, viaOrgHost)
 	k.write(t, "POST /v1/messages?slow=1 HTTP/1.1\r\nHost: "+viaOrgHost+"\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n")
-	time.Sleep(mitmReadTimeout + 40*time.Millisecond)
+	time.Sleep(mitmReadTimeout + 100*time.Millisecond) // past the headers' 200 ms, well inside the re-armed 1.1 s
 	k.write(t, "4\r\nlast\r\n0\r\n\r\n")
 	if status, body, err := k.answer(); err != nil || status != http.StatusOK || body != "answer POST /v1/messages firstlast" {
 		t.Fatalf("held chunked POST: status %d body %q err %v, want the whole body to arrive", status, body, err)
@@ -263,6 +264,18 @@ func TestBodyDeadlineRearmCallers(t *testing.T) {
 		"kube_api_door.go:serveKubeAPI", "mitm.go:rearmBodyDeadline", "mitm.go:serveAdmittedMITMRequest",
 		"mitm.go:serveMITMRequest", "via_org.go:ServeBroker",
 	}
+	// rc holds a ResponseController when it is NewResponseController's result, chained or kept in a
+	// variable; a deadline set through either is the handler's own.
+	isController := func(e ast.Expr, held map[string]bool) bool {
+		switch x := e.(type) {
+		case *ast.CallExpr:
+			s, ok := x.Fun.(*ast.SelectorExpr)
+			return ok && s.Sel.Name == "NewResponseController"
+		case *ast.Ident:
+			return held[x.Name]
+		}
+		return false
+	}
 	files, _ := filepath.Glob("*.go")
 	fset := token.NewFileSet()
 	var got []string
@@ -283,7 +296,25 @@ func TestBodyDeadlineRearmCallers(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
+			held := map[string]bool{}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if as, ok := n.(*ast.AssignStmt); ok {
+					for i, rhs := range as.Rhs {
+						if i >= len(as.Lhs) {
+							break
+						}
+						if id, ok := as.Lhs[i].(*ast.Ident); ok && isController(rhs, held) {
+							held[id.Name] = true
+						}
+					}
+				}
+				if vs, ok := n.(*ast.ValueSpec); ok {
+					for i, v := range vs.Values {
+						if i < len(vs.Names) && isController(v, held) {
+							held[vs.Names[i].Name] = true
+						}
+					}
+				}
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
 					return true
@@ -294,12 +325,8 @@ func TestBodyDeadlineRearmCallers(t *testing.T) {
 						got = append(got, name+":"+fn.Name.Name)
 					}
 				case *ast.SelectorExpr:
-					if c.Sel.Name == "SetReadDeadline" {
-						if inner, ok := c.X.(*ast.CallExpr); ok {
-							if s, ok := inner.Fun.(*ast.SelectorExpr); ok && s.Sel.Name == "NewResponseController" && fn.Name.Name != "rearmBodyDeadlineAfter" {
-								t.Errorf("%s: %s sets a handler's read deadline itself, not through rearmBodyDeadlineAfter", fset.Position(call.Pos()), fn.Name.Name)
-							}
-						}
+					if c.Sel.Name == "SetReadDeadline" && isController(c.X, held) && fn.Name.Name != "rearmBodyDeadlineAfter" {
+						t.Errorf("%s: %s sets a handler's read deadline itself, not through rearmBodyDeadlineAfter", fset.Position(call.Pos()), fn.Name.Name)
 					}
 				}
 				return true
@@ -310,5 +337,36 @@ func TestBodyDeadlineRearmCallers(t *testing.T) {
 	got = slices.Compact(got)
 	if !slices.Equal(got, want) {
 		t.Errorf("rearm callers:\n got %v\nwant %v", got, want)
+	}
+}
+
+// A model call through Proxy.ServeHTTP whose body the route read before the gateway identity mint is past
+// its last read: the gateway's answer, slower than the read time, arrives, and so does the next call's.
+// The listener sets no read time of its own, as the proxy's agent-facing one does not.
+func TestGatewayIdentityModelCallWithABufferedBodyKeepsItsConnection(t *testing.T) {
+	shortReadTime(t)
+	g := newGwidRig(t, gwidRoutes(), false)
+	var calls atomic.Int64
+	g.gw.mu.Lock()
+	g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			time.Sleep(slowAnswer)
+		}
+		_, _ = io.WriteString(w, "gateway answer")
+	}
+	g.gw.mu.Unlock()
+	g.p.allowedModels = modelSet([]string{"claude-sonnet-5"}) // the route reads the body to check the model
+	srv := httptest.NewServer(g.p)
+	t.Cleanup(srv.Close)
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	k := &keptAlive{conn: conn, br: bufio.NewReader(conn)}
+	call := rawRequest(http.MethodPost, "example.com", llmAnthropicPrefix+"messages", "", `{"model":"claude-sonnet-5"}`)
+	k.wantAnswers(t, call, "gateway answer", call, "gateway answer")
+	if g.mint.hits.Load() == 0 {
+		t.Fatal("no gateway identity was minted, so the call never passed the re-arm after the mint")
 	}
 }
