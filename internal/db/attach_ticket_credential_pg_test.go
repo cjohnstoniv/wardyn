@@ -48,8 +48,8 @@ func TestMigrate_AttachTicketCredentialPurgesOnlyRefreshLeftovers(t *testing.T) 
 	// audited writes an audit row naming id by action, as the revoke door does for a token revoked on purpose.
 	audited := func(action string, id uuid.UUID) uuid.UUID {
 		t.Helper()
-		if _, err := pool.Exec(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, target, outcome)
-			VALUES (gen_random_uuid(), 'human', 'sub-a', $1, $2, 'success')`, action, id.String()); err != nil {
+		if _, err := pool.Exec(ctx, `SELECT audit_append(gen_random_uuid(), now(), NULL, 'human', 'sub-a', $1::text, $2::text, 'success', '', NULL)`,
+			action, id.String()); err != nil {
 			t.Fatalf("seed audit row: %v", err)
 		}
 		return id
