@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 )
 
 // InstallMode says whether an install may replace what is at its destination.
@@ -189,25 +188,4 @@ func createTemp(root *os.Root, dir, prefix, suffix string) (string, *os.File, er
 	name := path.Join(dir, prefix+hex.EncodeToString(b[:])+suffix)
 	f, err := root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	return name, f, err
-}
-
-// mkdirAllDurableOS is os.MkdirAll that also syncs the parent of every directory it creates. It
-// knows only the directories it made itself; SaveUnder, which knows the state's root, syncs them all.
-func mkdirAllDurableOS(dir string, perm fs.FileMode) error {
-	var made []string
-	for p := dir; filepath.Dir(p) != p; p = filepath.Dir(p) {
-		if _, err := os.Lstat(p); err == nil {
-			break
-		}
-		made = append(made, p)
-	}
-	if err := os.MkdirAll(dir, perm); err != nil {
-		return err
-	}
-	for _, p := range made {
-		if err := syncDirPath(filepath.Dir(p)); err != nil {
-			return err
-		}
-	}
-	return nil
 }

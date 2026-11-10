@@ -147,6 +147,10 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return err
 	}
+	stateRoot, err := foldersync.StateRoot()
+	if err != nil {
+		return err
+	}
 	if err := foldersync.StateOutside(root, stateFile); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
@@ -201,7 +205,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return fmt.Errorf("sync: %w", err)
 	}
 	defer lroot.Close()
-	sy := &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, State: st, StateFile: stateFile, Opts: foldersync.Options{
+	sy := &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, State: st, StateFile: stateFile, StateRoot: stateRoot, Opts: foldersync.Options{
 		Remote: remote, Pull: f.pull, MaxPullBytes: f.maxPullBytes, OrgDeny: rules.Deny,
 		PullDeletes: f.pullDeletes, MaxPullDeletes: f.maxPullDeletes, Notify: cmd.ErrOrStderr(),
 		Trash: filepath.Join(filepath.Dir(stateFile), runID+"-deleted", time.Now().UTC().Format("20060102T150405.000000000Z")),

@@ -161,7 +161,7 @@ func TestInstall_StateSaveFailureKeepsThePreviousState(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "run.json")
 	save := func(n int) error {
 		st := &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{fmt.Sprint(n): {}}}
-		return st.Save(file)
+		return st.SaveUnder(file, filepath.Dir(file))
 	}
 	saved := func() string {
 		st, err := LoadState(file, "/l", "/r")
@@ -193,7 +193,7 @@ func TestSave_ConcurrentSavesLeaveALoadableState(t *testing.T) {
 		wg.Go(func() {
 			st := &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{fmt.Sprint(i): {Local: Side{Size: int64(i)}}}}
 			for range 20 {
-				_ = st.Save(file)
+				_ = st.SaveUnder(file, filepath.Dir(file))
 			}
 		})
 	}
@@ -280,5 +280,51 @@ func TestSaveUnder_ARetrySyncsEveryDirectoryUpToTheRoot(t *testing.T) {
 	}
 	if err := st.SaveUnder(file, filepath.Join(top, "other")); err == nil {
 		t.Error("a state outside its root was saved")
+	}
+}
+
+// The `wardyn sync` state path: its first save makes .local/state/wardyn/sync under the home. A save
+// that cannot sync the home fails; a retry finds every directory made and still syncs each one up
+// to the home, and a failure that repeats keeps failing. A syncer with no state root never saves.
+func TestSaveState_TheCLIStatePathSyncsUpToTheHomeOnEverySave(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	file, err := StatePath("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := StateRoot()
+	if err != nil || root != home {
+		t.Fatalf("StateRoot = %q, %v, want %q", root, err, home)
+	}
+	sy := &Syncer{State: &State{Local: "/l", Remote: "/r", Files: map[string]FileSeen{}}, StateFile: file, StateRoot: root}
+	dirs := []string{".local/state/wardyn/sync", ".local/state/wardyn", ".local/state", ".local", "."}
+	var synced []string
+	failHome := false
+	onSync(t, nil, func(d *os.File) error {
+		for _, p := range dirs {
+			if isDir(d, filepath.Join(home, p)) {
+				synced = append(synced, p)
+				if p == "." && failHome {
+					return errFault
+				}
+			}
+		}
+		return nil
+	})
+	for i, fail := range []bool{true, true, false} {
+		failHome, synced = fail, nil
+		err := sy.saveState()
+		if fail != errors.Is(err, ErrNotDurable) || (!fail && err != nil) {
+			t.Errorf("save %d: err = %v", i+1, err)
+		}
+		if !slices.Equal(synced, dirs) {
+			t.Errorf("save %d: synced %v, want %v", i+1, synced, dirs)
+		}
+	}
+	sy.StateRoot = ""
+	if err := sy.saveState(); err == nil {
+		t.Error("a state with no root was saved")
 	}
 }

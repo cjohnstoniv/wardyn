@@ -198,11 +198,20 @@ type FileSeen struct {
 }
 
 func StatePath(runID string) (string, error) {
+	home, err := StateRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "state", "wardyn", "sync", runID+".json"), nil
+}
+
+// StateRoot is the existing directory StatePath's directories are made under: the user's home.
+func StateRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve ~: %w", err)
 	}
-	return filepath.Join(home, ".local", "state", "wardyn", "sync", runID+".json"), nil
+	return home, nil
 }
 
 // LoadState reads the state for one run and one local/remote pairing; a
@@ -273,20 +282,15 @@ func isStateTempID(s string) bool {
 	return len(s) == 16 && err == nil
 }
 
-// Save writes the state through a new random temp file beside it, synced,
-// renamed over the old record, and the directory synced. On an error before
-// the rename the old record is kept.
-func (st *State) Save(file string) error {
-	if err := mkdirAllDurableOS(filepath.Dir(file), 0o700); err != nil {
-		return err
-	}
-	return st.install(file)
-}
-
-// SaveUnder is Save for a state file under the existing directory top: after the install it syncs
-// every directory from the state's up to top, on every save, so a directory an earlier save made
-// but could not prove is proven now. A failed sync is an InstallError with Installed set.
+// SaveUnder writes the state for file, under the existing directory top, through a new random temp
+// file beside it, synced and renamed over the old record. It then syncs every directory from the
+// state's up to top, on every save, so a directory an earlier save made but could not prove is
+// proven now. On an error before the rename the old record is kept; a failed sync after it is an
+// InstallError with Installed set.
 func (st *State) SaveUnder(file, top string) error {
+	if top == "" {
+		return fmt.Errorf("sync state %s has no root directory", file)
+	}
 	dir, top := filepath.Dir(file), filepath.Clean(top)
 	rel, err := filepath.Rel(top, dir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {

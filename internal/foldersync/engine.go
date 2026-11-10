@@ -123,20 +123,15 @@ type Syncer struct {
 	Opts      Options
 	State     *State
 	StateFile string
-	// StateRoot, when set, is the existing directory StateFile's directories are made under: each
-	// save syncs every directory from the state's up to it (SaveUnder). Unset, a save syncs only the
-	// directories it made itself (Save).
+	// StateRoot is the existing directory StateFile's directories are made under (StateRoot for
+	// `wardyn sync`, the runner's state directory for a runner): each save syncs every directory from
+	// the state's up to it. A save without one fails.
 	StateRoot string
 	ig        *syncIgnore // this pass's ignore rules, read by walkLocal
 }
 
-// saveState saves the state to StateFile, under StateRoot when it is set.
-func (sy *Syncer) saveState() error {
-	if sy.StateRoot == "" {
-		return sy.State.Save(sy.StateFile)
-	}
-	return sy.State.SaveUnder(sy.StateFile, sy.StateRoot)
-}
+// saveState saves the state to StateFile, under StateRoot.
+func (sy *Syncer) saveState() error { return sy.State.SaveUnder(sy.StateFile, sy.StateRoot) }
 
 // ListMeter counts the bytes the sftp client reads while a directory listing
 // is armed, and cancels the listing once it passes maxSyncListBytes.

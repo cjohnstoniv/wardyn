@@ -223,7 +223,7 @@ func TestLoadState_MovesAnUnreadableRecordAsideAndCompares(t *testing.T) {
 	if got := getSyncFile(t, filepath.Join(filepath.Dir(file), st.Recovered)); got != `{"local":` {
 		t.Errorf("moved-aside record = %q", got)
 	}
-	sy.State, sy.StateFile = st, file
+	sy.State, sy.StateFile, sy.StateRoot = st, file, filepath.Dir(file)
 	for p, body := range map[string]string{"same.txt": "equal", "diff.txt": "laptop"} {
 		putSyncFile(t, filepath.Join(root, p), body, 0o644)
 	}
