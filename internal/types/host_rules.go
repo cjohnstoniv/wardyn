@@ -243,6 +243,10 @@ func EvalHostRules(sets []HostRuleSet, host, method, rawPath string) HostRuleDec
 		return HostRuleDecision{Named: true, Effect: HostRuleDeny, Set: -1, Rule: -1, Cause: err.Error()}
 	}
 	method = strings.ToUpper(method)
+	if denied := caseOnlyDeniedPath(sets, host, method, path); denied != "" {
+		return HostRuleDecision{Named: true, Effect: HostRuleDeny, Set: -1, Rule: -1,
+			Cause: fmt.Sprintf("path %q is not in normal form: it differs only in case from the denied path %q, and a host may ignore case", path, denied)}
+	}
 	out := HostRuleDecision{Named: true, Effect: HostRuleAllow, Set: -1, Rule: -1}
 	for i, s := range sets {
 		if !s.names(host) {
@@ -280,6 +284,26 @@ func (s HostRuleSet) decide(host, method, path string) (HostRuleEffect, int) {
 // hostRulePathCovers reports whether rule path p matches request path q on a segment boundary.
 func hostRulePathCovers(p, q string) bool {
 	return p == "/" || q == p || strings.HasPrefix(q, strings.TrimSuffix(p, "/")+"/")
+}
+
+// caseOnlyDeniedPath is a deny rule's path that covers path when case is ignored but not as written, for
+// a deny rule naming host and method, or "". Matching is case-sensitive, and a case-insensitive host
+// (IIS, ASP.NET, Express by default) would serve /Admin as /admin: so such a request is refused.
+func caseOnlyDeniedPath(sets []HostRuleSet, host, method, path string) string {
+	lower := strings.ToLower(path)
+	for _, s := range sets {
+		for _, r := range s.Rules {
+			if r.Effect != HostRuleDeny || r.Host != host || len(r.Methods) > 0 && !slices.Contains(r.Methods, method) {
+				continue
+			}
+			for _, p := range r.Paths {
+				if !hostRulePathCovers(p, path) && hostRulePathCovers(strings.ToLower(p), lower) {
+					return p
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // HostRuleSetKey is a set's normal form as a comparable key: each rule's methods and paths sorted and

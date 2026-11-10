@@ -198,6 +198,7 @@ func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
 		{"/admin//../users", http.StatusForbidden, "not in normal form"},
 		{"/users/./x", http.StatusForbidden, "not in normal form"},
 		{"/admin", http.StatusForbidden, "rule 0 denies"},
+		{"/Admin", http.StatusForbidden, "differs only in case"},
 		{"/admin;x=1", http.StatusForbidden, "not in normal form"},
 		{"/users", http.StatusOK, ""},
 	} {
