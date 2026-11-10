@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit, never kills it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. Retest on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.
+- An SSH key's private key could reach the sandbox when the control plane's answer to a credential request arrived cut short or over the size limit, instead of being withheld; the sandbox only ever gets signatures. Such answers are now refused, and so is any credential answer that does not name its kind. Affects 0.10.0 prereleases only.
 
 ## [0.10.0-rc.17] — 2026-11-09
 
