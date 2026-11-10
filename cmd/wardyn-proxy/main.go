@@ -27,6 +27,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // egressCanaryTimeout bounds the TCP dial the -egress-canary flag performs.
@@ -103,21 +104,26 @@ func main() {
 
 	var (
 		cfg *proxy.Config
+		raw []byte // the exact bytes loaded, which the proxy reports the hash of
 		err error
 	)
 	switch {
 	case *configPath != "":
-		cfg, err = proxy.LoadConfig(*configPath)
+		if raw, err = os.ReadFile(*configPath); err != nil {
+			err = fmt.Errorf("read config: %w", err) // proxy.LoadConfig's wording
+		} else {
+			cfg, err = proxy.LoadConfigBytes(raw)
+		}
 	case os.Getenv(configStdinEnv) == "1":
 		// Docker sidecar path: the driver writes the full config (incl. the
 		// run's egress policy) to stdin once at start.
-		var raw []byte
 		if raw, err = readStdinConfig(os.Stdin, stdinConfigTimeout); err == nil {
 			cfg, err = proxy.LoadConfigBytes(raw)
 		}
 	case os.Getenv("WARDYN_PROXY_CONFIG_JSON") != "":
 		// A host-run or hand-started proxy: the whole config in one env var.
-		cfg, err = proxy.LoadConfigBytes([]byte(os.Getenv("WARDYN_PROXY_CONFIG_JSON")))
+		raw = []byte(os.Getenv("WARDYN_PROXY_CONFIG_JSON"))
+		cfg, err = proxy.LoadConfigBytes(raw)
 	default:
 		slog.Error("wardyn-proxy: -config, " + configStdinEnv + "=1 or WARDYN_PROXY_CONFIG_JSON is required")
 		os.Exit(1)
@@ -168,6 +174,7 @@ func main() {
 			slog.String("run_id", cfg.RunID.String()),
 		)
 		fmt.Fprintln(os.Stdout, proxy.ReadyMarker)
+		go srv.ReportLoaded(ctx, loadedReport(raw))
 	})
 
 	errCh := make(chan error, 1)
@@ -347,4 +354,16 @@ func freeDiskMiB(path string) (int64, error) {
 		return 0, err
 	}
 	return int64(st.Bavail) * int64(st.Bsize) >> 20, nil
+}
+
+// loadedReport is what this proxy reports once it serves: the hash of the exact config bytes it
+// loaded, its version, and the deployment switches set in its environment, applied after the load.
+func loadedReport(raw []byte) proxy.LoadedReport {
+	switches := map[string]string{}
+	for _, k := range []string{"WARDYN_LLM_SCAN", "WARDYN_MODEL_USAGE"} {
+		if v, ok := os.LookupEnv(k); ok {
+			switches[k] = v
+		}
+	}
+	return proxy.LoadedReport{ConfigSHA256: proxy.ConfigSHA256(raw), ProxyVersion: version.String(), Switches: switches}
 }

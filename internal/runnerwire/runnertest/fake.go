@@ -5,6 +5,7 @@ package runnertest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"maps"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -63,6 +65,7 @@ var (
 	_ runner.SandboxEnder          = (*Fake)(nil)
 	_ runner.ProxyStopper          = (*Fake)(nil)
 	_ runner.ProxyReviver          = (*Fake)(nil)
+	_ runner.ProxyReviverHashed    = (*Fake)(nil)
 	_ runner.SandboxStarter        = (*Fake)(nil)
 	_ runner.DriveProber           = (*Fake)(nil)
 	_ runner.DriveLifecycleChecker = (*Fake)(nil)
@@ -144,7 +147,18 @@ func (f *Fake) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner
 			end(err)
 		}()
 	}
-	return runner.Sandbox{Ref: ref, Driver: "docker", EnforcedClass: spec.ConfinementClass}, nil
+	return runner.Sandbox{Ref: ref, Driver: "docker", EnforcedClass: spec.ConfinementClass,
+		ProxyConfigSHA256: FakeProxyConfigSHA256(spec), ProxyAddr: FakeProxyAddr}, nil
+}
+
+// FakeProxyAddr is the proxy address every Fake create answers.
+const FakeProxyAddr = "192.0.2.10"
+
+// FakeProxyConfigSHA256 is the hash a Fake create answers for spec: proxy.ConfigSHA256 of its
+// ProxyConfig as JSON, standing in for the bytes a driver would hand the proxy.
+func FakeProxyConfigSHA256(spec runner.SandboxSpec) string {
+	b, _ := json.Marshal(spec.ProxyConfig)
+	return proxy.ConfigSHA256(b)
 }
 
 func (f *Fake) exists(ref string) error {
@@ -247,9 +261,15 @@ func (f *Fake) CanReplaceProxy(_ context.Context, ref string) error {
 	f.note("can_replace", ref)
 	return nil
 }
-func (f *Fake) ReplaceProxy(_ context.Context, ref string, cfg []byte) error {
+func (f *Fake) ReplaceProxy(ctx context.Context, ref string, cfg []byte) error {
+	_, err := f.ReplaceProxyHashed(ctx, ref, cfg)
+	return err
+}
+
+// ReplaceProxyHashed answers proxy.ConfigSHA256 of cfg, the bytes a driver would hand the new proxy.
+func (f *Fake) ReplaceProxyHashed(_ context.Context, ref string, cfg []byte) (string, error) {
 	f.note("replace_proxy "+string(cfg), ref)
-	return nil
+	return proxy.ConfigSHA256(cfg), nil
 }
 func (f *Fake) EnsureProxyImage(context.Context) error { f.note("ensure_proxy_image", ""); return nil }
 

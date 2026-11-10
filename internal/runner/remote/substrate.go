@@ -116,16 +116,17 @@ func New(runnerID string, t Transport, opts Options) *Substrate {
 }
 
 var (
-	_ substrate.Substrate    = (*Substrate)(nil)
-	_ runner.SandboxEnder    = (*Substrate)(nil)
-	_ runner.ProxyStopper    = (*Substrate)(nil)
-	_ runner.ProxyReviver    = (*Substrate)(nil)
-	_ runner.SandboxStarter  = (*Substrate)(nil)
-	_ runner.Selftester      = (*Substrate)(nil)
-	_ runner.LocalAttacher   = (*Substrate)(nil)
-	_ runner.SubstrateProber = (*Substrate)(nil)
-	_ runner.DriveProber     = (*Substrate)(nil)
-	_ runner.OutputRecoverer = (*Substrate)(nil)
+	_ substrate.Substrate       = (*Substrate)(nil)
+	_ runner.SandboxEnder       = (*Substrate)(nil)
+	_ runner.ProxyStopper       = (*Substrate)(nil)
+	_ runner.ProxyReviver       = (*Substrate)(nil)
+	_ runner.ProxyReviverHashed = (*Substrate)(nil)
+	_ runner.SandboxStarter     = (*Substrate)(nil)
+	_ runner.Selftester         = (*Substrate)(nil)
+	_ runner.LocalAttacher      = (*Substrate)(nil)
+	_ runner.SubstrateProber    = (*Substrate)(nil)
+	_ runner.DriveProber        = (*Substrate)(nil)
+	_ runner.OutputRecoverer    = (*Substrate)(nil)
 )
 
 // Name is "runner:<id>".
@@ -530,13 +531,22 @@ func (s *Substrate) CanReplaceProxy(ctx context.Context, ref string) error {
 // ReplaceProxy hands the org's stored, already-stripped proxy config to the
 // runner, which re-applies its resident values from its keystore.
 func (s *Substrate) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
+	_, err := s.ReplaceProxyHashed(ctx, ref, cfgJSON)
+	return err
+}
+
+// ReplaceProxyHashed is ReplaceProxy, answering the runner's hash of the bytes its new proxy was
+// handed (runner.ProxyReviverHashed); empty from a runner that predates it.
+func (s *Substrate) ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error) {
 	if err := s.own(ref); err != nil {
-		return err
+		return "", err
 	}
 	if err := s.checkRevivedModelList(cfgJSON); err != nil {
-		return err
+		return "", err
 	}
-	return s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, nil)
+	var res runnerwire.ReplaceProxyResult
+	err := s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, &res)
+	return res.ConfigSHA256, err
 }
 
 // checkRevivedModelList refuses, before anything is sent, a revived config that limits the run's
