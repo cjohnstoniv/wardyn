@@ -463,7 +463,7 @@ export function AddSecretDialog({
       onOpenChange(false);
       onSaved?.(n);
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to store secret.");
+      setError(getErrorMessage(e, "Failed to store secret."));
       setSaving(false);
     }
   };

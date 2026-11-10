@@ -612,7 +612,7 @@ function PolicyEditor({
       onSaved();
     } catch (e) {
       // Surface the server's validation message (HttpError carries the body).
-      setError(getErrorMessage(e) || "Failed to save policy.");
+      setError(getErrorMessage(e, "Failed to save policy."));
       setSaving(false);
     }
   };

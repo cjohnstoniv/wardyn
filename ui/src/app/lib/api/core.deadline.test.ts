@@ -57,6 +57,22 @@ describe("wfetch — a request that is never answered still ends", () => {
   });
 });
 
+describe("wfetch — a network failure is the unreachable-daemon case, not a raw TypeError", () => {
+  it("turns fetch's TypeError into the no-status HttpError with a readable sentence", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    const err = await wfetch("/runs", { method: "GET" }, 1000).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(0);
+    expect((err as HttpError).message).toBe("Could not reach the control plane.");
+  });
+
+  it("still rethrows anything else unchanged", async () => {
+    const boom = new RangeError("not a transport failure");
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(boom)));
+    await expect(wfetch("/runs", { method: "GET" }, 1000)).rejects.toBe(boom);
+  });
+});
+
 describe("health() — /healthz is the one call that bypasses wfetch, so it carries its own deadline", () => {
   it("hands the raw fetch an abort signal", () => {
     const seen = stubHangingFetch();

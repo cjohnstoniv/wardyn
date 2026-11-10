@@ -47,7 +47,7 @@ it.each(["/auth/logout", "/me/view"])("publishes %s settlement for success, fail
     await wfetch(path, init);
   }
   fetchMock.mockRejectedValueOnce(new TypeError("offline"));
-  await expect(wfetch(path, init)).rejects.toThrow("offline");
+  await expect(wfetch(path, init)).rejects.toMatchObject({ status: 0 });
   expect(changed).toHaveBeenCalledTimes(3);
   expect(fetchMock).toHaveBeenCalledTimes(3);
 });

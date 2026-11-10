@@ -299,7 +299,7 @@ export function AddSSHKeyDialog({
       onAdded();
       toast.success("SSH key added");
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to add key.");
+      setError(getErrorMessage(e, "Failed to add key."));
     } finally {
       setSaving(false);
     }

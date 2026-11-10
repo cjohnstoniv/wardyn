@@ -419,7 +419,8 @@ export async function wfetch(
     // rejects with a DOMException, which is not an Error in every runtime the
     // console and its jsdom test env run in.
     const name = (e as { name?: unknown } | null)?.name;
-    if (name === "TimeoutError" || name === "AbortError") {
+    // fetch rejects with a TypeError when the network fails ("Failed to fetch"): no response, so the same case.
+    if (name === "TimeoutError" || name === "AbortError" || e instanceof TypeError) {
       throw new HttpError(TIMEOUT_STATUS, TIMEOUT_MESSAGE);
     }
     throw e;

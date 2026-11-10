@@ -471,7 +471,7 @@ function SavePolicyDialog({
       toast.success(`Saved policy “${name.trim()}”`);
       onSaved();
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to save policy.");
+      setError(getErrorMessage(e, "Failed to save policy."));
       setSaving(false);
     }
   };
