@@ -795,7 +795,7 @@ func TestRestart_FailureAfterTheClaimAnswersThePersistedFate(t *testing.T) {
 			{"unknown", false, "being lost or ended by another operation", true, false},
 			{"ended", false, "being ended", false, true},
 			{"ended, stop fails", false, "being ended", true, true},
-			{"torn down", false, "being ended", true, true}, // the readback's retry still asks a substrate that cannot stop a proxy
+			{"torn down", false, "being ended", false, true},
 		} {
 			f := newReadbackFixture(t)
 			f.failedAfterClaim(c.fate)
@@ -842,5 +842,32 @@ func TestEgressEdit_FailedReplaceAwaitsContainmentForEveryFate(t *testing.T) {
 		if w.Code != http.StatusServiceUnavailable || errorReason(w) != c.reason || !strings.Contains(w.Body.String(), c.say) {
 			t.Errorf("%s: %d %s, want 503 %s saying %q", c.fate, w.Code, w.Body.String(), c.reason, c.say)
 		}
+	}
+}
+
+// A failed start of a run torn down with its lost_at kept is contained by a sandbox stop, never retried through a
+// proxy stop its substrate refuses, so it leaves the overdue sweep's list.
+func TestReadback_TornDownRunWithLostAtIsContained(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.failedAfterClaim("torn down")
+	f.hr.hash = func([]byte) string { return "" }
+	if res := f.restart(t); res.OK || res.LostAgain || strings.Contains(res.Error, "not confirmed") {
+		t.Fatalf("restart: %+v, want refused, not lost again, with its stop confirmed", res)
+	}
+	if lostAt, _ := f.st.lost(); lostAt == nil || !isTerminalRunState(f.st.State()) {
+		t.Fatalf("lost_at %v, state %s: want the run torn down with its lost_at kept", lostAt, f.st.State())
+	}
+	if p := f.active(t); p.State != types.ProxyStartFailed || p.ContainedAt == nil {
+		t.Errorf("start = %s contained_at = %v, want failed and contained", p.State, p.ContainedAt)
+	}
+	stops := f.lr.proxyStopCount()
+	if err := f.srv.sweepOverdueProxyStarts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if overdue, err := f.rb.OverdueProxyStarts(context.Background()); err != nil || len(overdue) != 0 {
+		t.Errorf("overdue starts = %+v (%v), want none: a contained start is not retried", overdue, err)
+	}
+	if n := f.lr.proxyStopCount() - stops; n != 0 {
+		t.Errorf("the sweep asked for %d more proxy stops, want none", n)
 	}
 }
