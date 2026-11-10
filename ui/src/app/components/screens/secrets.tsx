@@ -135,10 +135,12 @@ export function SecretsScreen() {
         // resident posture really is an exception to gitPatLine's claim); on
         // (the default), gitPatLine's own text just elaborates on the same
         // claim, so the word is dropped rather than reading as a contradiction.
-        description={`Write-only: values go in and never come out. ${CAPABILITY.storedSecretLine}${
+        // storedSecretLine says a value "stays in Wardyn, unless a run delivers it": false for a Git token
+        // with the broker off (the git helper hands over the token itself), so it waits for the switch too.
+        description={`Write-only: values go in and never come out. ${
           patBroker === null
-            ? ""
-            : ` ${patBroker ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`}`
+            ? SECRETS_BROKER_UNCHECKED.VALUE_DELIVERABLE
+            : `${CAPABILITY.storedSecretLine} ${patBroker ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`}`
         }`}
         actions={
           <>
