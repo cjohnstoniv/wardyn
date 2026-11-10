@@ -781,7 +781,7 @@ function EventRow({
   // Below sm the row is up to three lines: time, actor, icon and outcome, then the description, then the run reference (#3036).
   // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
-    <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 sm:flex-nowrap">
+    <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 xl:flex-nowrap">
       <span
         className="w-[84px] shrink-0 font-mono text-xs text-muted-foreground"
         title={absoluteTime(event.time)}
@@ -789,7 +789,7 @@ function EventRow({
         {clockTime(event.time)}
       </span>
       {/* Fixed-width cells so the description and the run chip start at the same x on every row (#2852). */}
-      <span data-testid="audit-actor-cell" className="w-[88px] shrink-0">
+      <span data-testid="audit-actor-cell" className="w-[96px] shrink-0">
         {hasNoCaller(event) ? <NoCaller /> : <ActorTypeChip type={event.actor_type} />}
       </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -798,7 +798,7 @@ function EventRow({
       ) : (
         <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
           {detail || callId ? (
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:min-w-[10rem]">
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="truncate text-sm text-foreground" title={`${describeEvent(event)}\n${event.action}`}>
                 {describeEvent(event)}
               </span>
@@ -831,7 +831,7 @@ function EventRow({
         </span>
       )}
       {event.run_id && plainRunRef && (
-        <span className="order-3 max-w-[14rem] shrink-0 text-sm text-muted-foreground sm:order-none">
+        <span className="order-3 max-w-[14rem] shrink-0 text-sm text-muted-foreground sm:order-none sm:min-w-0 sm:shrink">
           Run <Mono title={event.run_id}>{shortRunId(event.run_id)}</Mono>
         </span>
       )}
@@ -840,7 +840,7 @@ function EventRow({
           runId={event.run_id}
           title={runTitles.get(event.run_id)}
           onOpen={() => onDrill(event.run_id!)}
-          className="order-3 max-w-[14rem] shrink-0 sm:order-none"
+          className="order-3 max-w-[14rem] shrink-0 sm:order-none sm:shrink"
         />
       )}
       <div data-testid="audit-outcome-cell" className="order-1 ml-auto w-[72px] shrink-0 sm:order-none sm:ml-0">

@@ -209,8 +209,11 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(chip).toHaveTextContent(/^3f2a91c0$/);
     const ref = chip.closest('[data-testid="run-ref"]')!;
     const row = ref.parentElement!;
-    expect(row).toHaveClass("flex-wrap", "sm:flex-nowrap");
+    expect(row).toHaveClass("flex-wrap", "xl:flex-nowrap");
+    expect(row).not.toHaveClass("sm:flex-nowrap");
+    // The sentence keeps its floor (#1878); the run reference may shrink beside the sidebar (1024px).
     expect(screen.getByText(/^Created the run/)).toHaveClass("sm:min-w-[10rem]");
+    expect(ref).toHaveClass("sm:shrink");
     // Two lines on a phone: the outcome is lifted onto the first, the description and chip share the second.
     expect(ref).toHaveClass("order-3", "sm:order-none");
     expect(ref.parentElement!.querySelector(":scope > div.order-1")).not.toBeNull();
@@ -277,7 +280,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const outcomes = screen.getAllByTestId("audit-outcome-cell");
     expect(actors).toHaveLength(2);
     expect(outcomes).toHaveLength(2);
-    for (const cell of actors) expect(cell.className).toContain("w-[88px]");
+    for (const cell of actors) expect(cell.className).toContain("w-[96px]");
     for (const cell of outcomes) expect(cell.className).toContain("w-[72px]");
     expect(actors[0]).toHaveTextContent(/human/i);
     expect(actors[1]).toHaveTextContent(/system/i);
@@ -622,6 +625,17 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await user.click(await screen.findByRole("option", { name: /^Egress$/i }));
     await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
     expect(screen.getByText("Allowed inbound to api")).toBeInTheDocument();
+  });
+
+  it("lets the sentence-and-detail column shrink instead of holding its own minimum width", async () => {
+    const id = "3f2a1c70-8e4b-4d19-a6f2-5b0c7de19a44";
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "egress.allow", target: "gateway.example.com", data: { gateway_call_id: id } }),
+    ]);
+    renderScreen();
+    const column = (await screen.findByText("Allowed egress to gateway.example.com")).parentElement!;
+    expect(column).toHaveClass("min-w-0", "flex-1");
+    expect(column.className).not.toContain("min-w-[10rem]");
   });
 
   // The call id a row went to a gateway under. Untrusted text: shown only as a UUID, only as text, and copied whole.
