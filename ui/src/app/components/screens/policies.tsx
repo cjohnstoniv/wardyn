@@ -394,8 +394,10 @@ function PolicyDetail({
       <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto sm:max-w-[560px]">
         <SheetHeader className="border-b border-border pb-4">
           <SheetTitle className="flex min-w-0 items-center gap-2 break-words">
-            <ShieldCheck className="size-4 text-primary" />
-            {policy?.name}
+            <ShieldCheck className="size-4 shrink-0 text-primary" />
+            {/* A flex item of its own: min-width:0 on the title does not reach an anonymous text item, so a long
+                unbroken name would run under Close. */}
+            <span className="min-w-0 [overflow-wrap:anywhere]">{policy?.name}</span>
           </SheetTitle>
         </SheetHeader>
         {policy && (

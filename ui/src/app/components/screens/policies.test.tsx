@@ -103,6 +103,19 @@ describe("PoliciesScreen — table row semantics (ui-secretsPolicies-1)", () => 
     fireEvent.keyDown(row, { key: "Enter" });
     expect(await screen.findByRole("heading", { name: "payments-strict" })).toBeInTheDocument();
   });
+
+  // jsdom measures no layout, so this pins the structure that keeps a 128-character unbroken name off the Close
+  // button: the name is a flex item of its own that may shrink and break anywhere, and the icon never shrinks.
+  it("puts the policy name in its own shrinkable, breakable span in the drawer title", async () => {
+    render(<PoliciesScreen />);
+    fireEvent.keyDown((await screen.findByText("payments-strict")).closest("tr")!, { key: "Enter" });
+    const title = await screen.findByRole("heading", { name: "payments-strict" });
+    const name = within(title).getByText("payments-strict");
+    expect(name.tagName).toBe("SPAN");
+    expect(name.className).toContain("min-w-0");
+    expect(name.className).toContain("[overflow-wrap:anywhere]");
+    expect(title.querySelector("svg")!.getAttribute("class")).toContain("shrink-0");
+  });
 });
 
 describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () => {

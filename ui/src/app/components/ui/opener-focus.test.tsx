@@ -311,3 +311,59 @@ describe("the opener focus watch leaves no timer behind", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+// Connected is not focusable. A remove button is disabled while its request is in flight, so a dialog that closed
+// at once (its confirm sent the request) could hand focus to a disabled opener, which takes none, and leave it on
+// the body for good, including when the request then fails and the row stays.
+function BusyHarness({ failMs = 150 }: { failMs?: number }) {
+  const [busy, setBusy] = React.useState(false);
+  const [target, setTarget] = React.useState<string | null>(null);
+  const names = ["a", "b"];
+  return (
+    <main id="main-content" tabIndex={-1}>
+      <h1>Hosts</h1>
+      <button type="button" onClick={() => setBusy(true)}>Start a request</button>
+      <ul>
+        {names.map((n) => (
+          <li key={n}>
+            {n} <button type="button" disabled={busy} onClick={() => setTarget(n)}>Remove {n}</button>
+          </li>
+        ))}
+      </ul>
+      <AlertDialog open={!!target} onOpenChange={(o) => !o && setTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogTitle>Remove {target}?</AlertDialogTitle>
+          <AlertDialogDescription>Body</AlertDialogDescription>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <button
+            type="button"
+            onClick={() => {
+              setBusy(true);
+              setTarget(null);
+              // The request fails: every button comes back, no row is removed.
+              setTimeout(() => setBusy(false), failMs);
+            }}
+          >
+            Confirm
+          </button>
+        </AlertDialogContent>
+      </AlertDialog>
+    </main>
+  );
+}
+
+describe("a dialog whose opener is disabled while its request is in flight", () => {
+  it("leaves focus on a usable element, never the body, while the request runs and after it fails", async () => {
+    const user = userEvent.setup();
+    render(<BusyHarness />);
+    await user.click(screen.getByRole("button", { name: "Remove a" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toHaveFocus());
+    expect(screen.getByRole("button", { name: "Remove a" })).toBeDisabled();
+    // The failure re-enables the buttons; focus is still on something, not the body.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove a" })).toBeEnabled(), { timeout: 2000 });
+    await new Promise((r) => setTimeout(r, 250));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getByRole("heading", { name: "Hosts" })).toHaveFocus();
+  });
+});

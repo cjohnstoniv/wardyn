@@ -427,8 +427,8 @@ export function ChangeDrawer({
           <>
             <SheetHeader className="border-b border-border p-5 pr-10">
               <SheetTitle className="flex min-w-0 flex-wrap items-baseline gap-x-2 break-words">
-                {changeLabel(change)}
-                <Mono className="text-foreground">
+                <span className="min-w-0 [overflow-wrap:anywhere]">{changeLabel(change)}</span>
+                <Mono className="min-w-0 text-foreground [overflow-wrap:anywhere]">
                   {elevation
                     ? CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
                     : img
