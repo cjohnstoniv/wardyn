@@ -72,7 +72,7 @@ var (
 
 // agentSandboxAccess is every verb the backend needs in a runs namespace: the Sandbox's create, read
 // and delete, the orphan sweep's list, and the pod patch that removes the gate. A named template adds
-// agentSandboxTemplateAccess.
+// agentSandboxTemplateAccess on that one name.
 var agentSandboxAccess = []authzv1.ResourceAttributes{
 	{Group: agentSandboxGroup, Resource: "sandboxes", Verb: "create"},
 	{Group: agentSandboxGroup, Resource: "sandboxes", Verb: "get"},
@@ -116,7 +116,10 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 	}
 	access := agentSandboxAccess
 	if cfg.AgentSandboxTemplate != "" {
-		access = append(slices.Clone(access), agentSandboxTemplateAccess)
+		// Named, as the chart's Role grants it (resourceNames: the one template).
+		named := agentSandboxTemplateAccess
+		named.Name = cfg.AgentSandboxTemplate
+		access = append(slices.Clone(access), named)
 	}
 	served, err := cs.Discovery().ServerResourcesForGroupVersion(agentSandboxAPIVersion)
 	if err != nil {

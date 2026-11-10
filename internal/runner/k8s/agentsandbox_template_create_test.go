@@ -10,12 +10,13 @@ import (
 	"strings"
 	"testing"
 
+	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
-	nodev1 "k8s.io/api/node/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
@@ -54,20 +55,6 @@ func TestAgentSandboxTemplate_RefusedFieldCreatesNoSandbox(t *testing.T) {
 	}
 }
 
-// A template whose value would change one Wardyn set (here the placement's node selector) is refused the
-// same way.
-func TestAgentSandboxTemplate_ConflictWithPlacementCreatesNoSandbox(t *testing.T) {
-	obj := sandboxTemplateObj(map[string]any{"nodeSelector": map[string]any{"pool": "general"}}, nil, nil)
-	d, cs, dyn := newTemplateRig(t, obj, controllerMaking(t, nil))
-	if _, err := d.CreateSandbox(context.Background(), asSpec()); err == nil || !strings.Contains(err.Error(), `"pool"`) {
-		t.Fatalf("CreateSandbox err = %v, want the nodeSelector conflict", err)
-	}
-	if n := sandboxActions(dyn, "create"); n != 0 {
-		t.Errorf("Sandbox creates = %d, want 0", n)
-	}
-	assertRunObjectsGone(t, cs, asRunID)
-}
-
 // A template deleted after boot refuses the run, again before any Sandbox.
 func TestAgentSandboxTemplate_MissingAtRunCreatesNoSandbox(t *testing.T) {
 	d, _, dyn := newTemplateRig(t, allowedTemplate(), controllerMaking(t, nil))
@@ -82,15 +69,10 @@ func TestAgentSandboxTemplate_MissingAtRunCreatesNoSandbox(t *testing.T) {
 	}
 }
 
-// The allowlisted fields reach the Sandbox's pod template, the read-back holds the pod to them, and the
-// gate comes off once. Wardyn's own fields are unchanged.
-func TestAgentSandboxTemplate_AllowedFieldsReachThePodAndPassReadBack(t *testing.T) {
-	// A real API server keeps a schedulerName that is set; the fake controller's defaults overwrite it.
-	keepScheduler := func(p *corev1.Pod) { p.Spec.SchedulerName = "platform-scheduler" }
-	d, cs, dyn := newTemplateRig(t, allowedTemplate(), controllerMaking(t, keepScheduler))
-	if _, err := cs.NodeV1().RuntimeClasses().Create(context.Background(), &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: "gvisor"}, Handler: "runsc"}, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create RuntimeClass: %v", err)
-	}
+// The template's annotation reaches the Sandbox's pod template, the read-back holds the pod to it, and the
+// gate comes off once. Placement and every Wardyn-owned field are Wardyn's alone.
+func TestAgentSandboxTemplate_AnnotationReachesThePodAndPassesReadBack(t *testing.T) {
+	d, cs, dyn := newTemplateRig(t, allowedTemplate(), controllerMaking(t, nil))
 	sb, err := d.CreateSandbox(context.Background(), asSpec())
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -101,12 +83,12 @@ func TestAgentSandboxTemplate_AllowedFieldsReachThePodAndPassReadBack(t *testing
 	}
 	pod := podTemplateOf(t, obj.(*unstructured.Unstructured))
 	s := pod.Spec
-	if s.NodeSelector["zone"] != "a" || s.NodeSelector["pool"] != "sandbox" || s.Affinity == nil || len(s.TopologySpreadConstraints) != 1 ||
-		s.PriorityClassName != "agents" || s.SchedulerName != "platform-scheduler" || s.RuntimeClassName == nil || *s.RuntimeClassName != "gvisor" {
-		t.Errorf("Sandbox pod spec missed a template field: %+v", s)
-	}
 	if pod.Annotations[sandboxTemplateAnnotationPrefix+"cost-center"] != "ml" || pod.Annotations["example.com/note"] != "kept" {
 		t.Errorf("Sandbox pod annotations = %v", pod.Annotations)
+	}
+	if len(s.NodeSelector) != 1 || s.NodeSelector["pool"] != "sandbox" || s.Affinity != nil || len(s.TopologySpreadConstraints) != 0 ||
+		s.PriorityClassName != "" || s.SchedulerName != "" || s.RuntimeClassName != nil {
+		t.Errorf("placement is not exactly Wardyn's placement: %+v", s)
 	}
 	if s.AutomountServiceAccountToken == nil || *s.AutomountServiceAccountToken || s.DNSPolicy != corev1.DNSNone || len(s.HostAliases) == 0 || len(s.SchedulingGates) != 1 {
 		t.Errorf("a Wardyn-owned field changed under the template: %+v", s)
@@ -116,68 +98,85 @@ func TestAgentSandboxTemplate_AllowedFieldsReachThePodAndPassReadBack(t *testing
 	}
 }
 
-// The controller dropping a template field is a changed pod, refused like any other read-back miss.
-func TestAgentSandboxTemplate_ReadBackHoldsTheTemplateFields(t *testing.T) {
-	dropZone := func(p *corev1.Pod) {
-		p.Spec.SchedulerName = "platform-scheduler"
-		delete(p.Spec.NodeSelector, "zone")
-	}
-	d, cs, dyn := newTemplateRig(t, allowedTemplate(), controllerMaking(t, dropZone))
-	if _, err := cs.NodeV1().RuntimeClasses().Create(context.Background(), &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: "gvisor"}, Handler: "runsc"}, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create RuntimeClass: %v", err)
-	}
-	if _, err := d.CreateSandbox(context.Background(), asSpec()); err == nil || !strings.Contains(err.Error(), "nodeSelector") {
-		t.Fatalf("CreateSandbox err = %v, want the read-back to refuse the dropped nodeSelector key", err)
+// The controller dropping the template's annotation is a changed pod, refused like any other read-back miss.
+func TestAgentSandboxTemplate_ReadBackHoldsTheTemplateAnnotation(t *testing.T) {
+	drop := func(p *corev1.Pod) { delete(p.Annotations, sandboxTemplateAnnotationPrefix+"cost-center") }
+	d, cs, dyn := newTemplateRig(t, allowedTemplate(), controllerMaking(t, drop))
+	if _, err := d.CreateSandbox(context.Background(), asSpec()); err == nil || !strings.Contains(err.Error(), "cost-center") {
+		t.Fatalf("CreateSandbox err = %v, want the read-back to refuse the dropped annotation", err)
 	}
 	assertRefusedAndTornDown(t, cs, dyn)
 }
 
+// installNamedTemplateAccess answers every SelfSubjectAccessReview allowed, except sandboxtemplates, which
+// is allowed only for get on allowName in testNamespace, as the chart's Role (resourceNames) grants it. An
+// unnamed sandboxtemplates review is refused.
+func installNamedTemplateAccess(cs *fake.Clientset, allowName string) {
+	cs.PrependReactor("create", "selfsubjectaccessreviews", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		in := a.(clienttesting.CreateAction).GetObject().(*authzv1.SelfSubjectAccessReview).DeepCopy()
+		ra := in.Spec.ResourceAttributes
+		in.Status.Allowed = ra.Resource != "sandboxtemplates" ||
+			(ra.Group == sandboxTemplatesGVR.Group && ra.Verb == "get" && ra.Name == allowName && ra.Name != "" && ra.Namespace == testNamespace)
+		return true, in, nil
+	})
+}
+
+// bootWithTemplate boots the backend with WARDYN_K8S_AGENT_SANDBOX_TEMPLATE=asTemplate against stored (nil:
+// none) and an authorizer that holds sandboxtemplates to allowName.
+func bootWithTemplate(t *testing.T, stored map[string]any, allowName string) error {
+	t.Helper()
+	cs := fake.NewClientset()
+	installCanaryReactor(t, cs, false)
+	cs.Resources = servedSandboxes()
+	installNamedTemplateAccess(cs, allowName)
+	dyn := newFakeDynamic()
+	if stored != nil {
+		if err := dyn.Tracker().Create(sandboxTemplatesGVR, &unstructured.Unstructured{Object: stored}, testNamespace); err != nil {
+			t.Fatalf("store the template: %v", err)
+		}
+	}
+	useDynamicClient(t, dyn)
+	cfg := Config{AgentSandbox: true, AgentSandboxTemplate: asTemplate, Namespaces: []string{testNamespace}, ProxyImage: "p"}
+	_, err := newWithClient(context.Background(), cs, testRestConfig(), cfg)
+	return err
+}
+
 func TestAgentSandboxTemplateBoot_Refusals(t *testing.T) {
 	cases := []struct {
-		name   string
-		stored map[string]any // nil: no template stored
-		deny   string
-		want   string
+		name      string
+		stored    map[string]any // nil: no template stored
+		allowName string
+		want      string
 	}{
-		{"get sandboxtemplates denied", allowedTemplate(), "get sandboxtemplates", "needs get on sandboxtemplates.extensions.agents.x-k8s.io"},
-		{"template missing", nil, "", "could not be read"},
-		{"refused field", sandboxTemplateObj(map[string]any{"nodeName": "node-1"}, nil, nil), "", "spec.podTemplate.spec.nodeName"},
+		{"get on another template only", allowedTemplate(), "other", "needs get on sandboxtemplates.extensions.agents.x-k8s.io"},
+		{"template missing", nil, asTemplate, "could not be read"},
+		{"refused field", sandboxTemplateObj(map[string]any{"nodeName": "node-1"}, nil, nil), asTemplate, "spec.podTemplate.spec.nodeName"},
+		{"refused placement", sandboxTemplateObj(map[string]any{"nodeSelector": map[string]any{"zone": "a"}}, nil, nil), asTemplate, "spec.podTemplate.spec.nodeSelector"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cs := fake.NewClientset()
-			installCanaryReactor(t, cs, false)
-			cs.Resources = servedSandboxes()
-			installAccessReactor(cs, tc.deny, nil)
-			dyn := newFakeDynamic()
-			if tc.stored != nil {
-				if err := dyn.Tracker().Create(sandboxTemplatesGVR, &unstructured.Unstructured{Object: tc.stored}, testNamespace); err != nil {
-					t.Fatalf("store the template: %v", err)
-				}
-			}
-			useDynamicClient(t, dyn)
-			cfg := Config{AgentSandbox: true, AgentSandboxTemplate: asTemplate, Namespaces: []string{testNamespace}, ProxyImage: "p"}
-			d, err := newWithClient(context.Background(), cs, testRestConfig(), cfg)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("newWithClient = %v, %v; want a refusal containing %q", d, err, tc.want)
+			if err := bootWithTemplate(t, tc.stored, tc.allowName); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("boot err = %v; want a refusal containing %q", err, tc.want)
 			}
 		})
 	}
 }
 
-func TestAgentSandboxTemplateBoot_AcceptsAnAllowedTemplate(t *testing.T) {
-	cs := fake.NewClientset()
-	installCanaryReactor(t, cs, false)
-	cs.Resources = servedSandboxes()
-	installAccessReactor(cs, "", nil)
-	dyn := newFakeDynamic()
-	if err := dyn.Tracker().Create(sandboxTemplatesGVR, &unstructured.Unstructured{Object: allowedTemplate()}, testNamespace); err != nil {
-		t.Fatalf("store the template: %v", err)
+// Every refused field refuses boot too, naming the field: nothing is silently dropped.
+func TestAgentSandboxTemplateBoot_RefusesEveryRefusedField(t *testing.T) {
+	for _, tc := range refusedTemplates() {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := bootWithTemplate(t, tc.obj, asTemplate); err == nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("boot err = %v; want a refusal naming %s", err, tc.field)
+			}
+		})
 	}
-	useDynamicClient(t, dyn)
-	cfg := Config{AgentSandbox: true, AgentSandboxTemplate: asTemplate, Namespaces: []string{testNamespace}, ProxyImage: "p"}
-	if _, err := newWithClient(context.Background(), cs, testRestConfig(), cfg); err != nil {
-		t.Fatalf("newWithClient: %v", err)
+}
+
+// Boot passes under the chart's least-privilege Role: get on the one named template, no unnamed get.
+func TestAgentSandboxTemplateBoot_AcceptsTheNamedGrant(t *testing.T) {
+	if err := bootWithTemplate(t, allowedTemplate(), asTemplate); err != nil {
+		t.Fatalf("boot: %v", err)
 	}
 }
 

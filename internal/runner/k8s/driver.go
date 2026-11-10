@@ -112,7 +112,7 @@ type Config struct {
 	// read it back (agentsandbox.go). Off builds no dynamic client and takes none of its branches.
 	AgentSandbox bool
 	// AgentSandboxTemplate is WARDYN_K8S_AGENT_SANDBOX_TEMPLATE (experimental, needs AgentSandbox): the
-	// SandboxTemplate in each runs namespace whose scheduling fields and annotations the agent pod takes
+	// SandboxTemplate in each runs namespace whose prefixed annotations the agent pod takes; placement stays Wardyn's
 	// (agentsandbox_template.go). Empty takes none.
 	AgentSandboxTemplate string
 	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the

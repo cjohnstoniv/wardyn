@@ -42,7 +42,7 @@ func buildConfig(d substrate.Deps) Config {
 		AllowUnenforcedNetPol: cliutil.EnvBool("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL", false),
 		AckAmbientDefaultDeny: cliutil.EnvBool("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY", false),
 
-		// Experimental: the SandboxTemplate the agent pod takes its scheduling fields from (agentsandbox_template.go).
+		// Experimental: the SandboxTemplate the agent pod takes its annotations from (agentsandbox_template.go).
 		AgentSandboxTemplate: os.Getenv("WARDYN_K8S_AGENT_SANDBOX_TEMPLATE"),
 	}
 }

@@ -5,11 +5,13 @@ package k8s
 
 import (
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // sandboxTemplateCRDPodSpecKeys is every PodSpec field the agent-sandbox v1.0.9 SandboxTemplate CRD
@@ -29,7 +31,7 @@ func templateContainers(name string) []any {
 	return []any{map[string]any{"name": name, "image": "example.com/x"}}
 }
 
-// refusedTemplatePodSpec is one non-empty value per PodSpec field a template may not set. false and 0
+// refusedTemplatePodSpec is one non-empty value per PodSpec field: a template may set none. false and 0
 // are settings (hostUsers: false asks for a user namespace), so they are refused too.
 var refusedTemplatePodSpec = map[string]any{
 	"activeDeadlineSeconds":         int64(60),
@@ -68,6 +70,16 @@ var refusedTemplatePodSpec = map[string]any{
 	"subdomain":                     "agents",
 	"terminationGracePeriodSeconds": int64(0),
 	"volumes":                       []any{map[string]any{"name": "host", "hostPath": map[string]any{"path": "/"}}},
+	// Placement and runtime: the boot canary proves NetworkPolicy enforcement on Wardyn's placement only.
+	"nodeSelector":              map[string]any{"zone": "a"},
+	"tolerations":               []any{map[string]any{"key": "agents", "operator": "Exists", "effect": "NoSchedule"}},
+	"topologySpreadConstraints": []any{map[string]any{"maxSkew": int64(1), "topologyKey": "zone", "whenUnsatisfiable": "ScheduleAnyway"}},
+	"priorityClassName":         "agents",
+	"schedulerName":             "platform-scheduler",
+	"runtimeClassName":          "gvisor",
+	"affinity": map[string]any{"nodeAffinity": map[string]any{"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+		"nodeSelectorTerms": []any{map[string]any{"matchExpressions": []any{map[string]any{"key": "tier", "operator": "In", "values": []any{"agents"}}}}},
+	}}},
 }
 
 // sandboxTemplateObj is a SandboxTemplate as the API server returns it (defaults set, containers: [] as
@@ -128,11 +140,10 @@ func refusedTemplates() []refusedTemplate {
 	return out
 }
 
-func TestSandboxTemplate_EveryCRDPodSpecFieldIsTakenOrRefused(t *testing.T) {
-	covered := slices.Concat(sandboxTemplateTakes, slices.Collect(maps.Keys(refusedTemplatePodSpec)))
-	slices.Sort(covered)
-	if !slices.Equal(covered, sandboxTemplateCRDPodSpecKeys) {
-		t.Errorf("allowlist + refused cases = %v\nCRD PodSpec keys      = %v", covered, sandboxTemplateCRDPodSpecKeys)
+func TestSandboxTemplate_EveryCRDPodSpecFieldIsRefused(t *testing.T) {
+	refused := slices.Sorted(maps.Keys(refusedTemplatePodSpec))
+	if !slices.Equal(refused, sandboxTemplateCRDPodSpecKeys) {
+		t.Errorf("refused cases    = %v\nCRD PodSpec keys = %v", refused, sandboxTemplateCRDPodSpecKeys)
 	}
 }
 
@@ -147,43 +158,24 @@ func TestSandboxTemplate_RefusesEveryFieldOutsideTheAllowlist(t *testing.T) {
 	}
 }
 
-// allowedTemplate sets every field Wardyn takes.
+// allowedTemplate sets the one thing Wardyn takes: an annotation under the prefix.
 func allowedTemplate() map[string]any {
-	return sandboxTemplateObj(map[string]any{
-		"nodeSelector":              map[string]any{"pool": "sandbox", "zone": "a"},
-		"tolerations":               []any{map[string]any{"key": "agents", "operator": "Exists", "effect": "NoSchedule"}},
-		"topologySpreadConstraints": []any{map[string]any{"maxSkew": int64(1), "topologyKey": "zone", "whenUnsatisfiable": "ScheduleAnyway"}},
-		"priorityClassName":         "agents",
-		"schedulerName":             "platform-scheduler",
-		"runtimeClassName":          "gvisor",
-		"affinity": map[string]any{"nodeAffinity": map[string]any{"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
-			"nodeSelectorTerms": []any{map[string]any{"matchExpressions": []any{map[string]any{"key": "tier", "operator": "In", "values": []any{"agents"}}}}},
-		}}},
-	}, map[string]any{"annotations": map[string]any{sandboxTemplateAnnotationPrefix + "cost-center": "ml"}, "labels": map[string]any{}}, nil)
+	return sandboxTemplateObj(nil, map[string]any{"annotations": map[string]any{sandboxTemplateAnnotationPrefix + "cost-center": "ml"}, "labels": map[string]any{}}, nil)
 }
 
-func TestSandboxTemplate_TakesTheAllowlistOnly(t *testing.T) {
+func TestSandboxTemplate_TakesTheAnnotationsOnly(t *testing.T) {
 	base, err := parseSandboxTemplate(allowedTemplate())
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	pod := &corev1.Pod{Spec: corev1.PodSpec{
-		NodeSelector:       map[string]string{"pool": "sandbox"},
-		Tolerations:        []corev1.Toleration{{Key: "sandbox", Operator: corev1.TolerationOpExists}},
-		ServiceAccountName: "wardyn-agent",
-	}}
+	spec := corev1.PodSpec{NodeSelector: map[string]string{"pool": "sandbox"}, ServiceAccountName: "wardyn-agent"}
+	pod := &corev1.Pod{Spec: *spec.DeepCopy()}
 	pod.Annotations = map[string]string{"example.com/note": "kept"}
 	if err := base.applyTo(pod); err != nil {
 		t.Fatalf("applyTo: %v", err)
 	}
-	s := pod.Spec
-	if s.NodeSelector["zone"] != "a" || s.NodeSelector["pool"] != "sandbox" || len(s.Tolerations) != 2 ||
-		s.Affinity == nil || len(s.TopologySpreadConstraints) != 1 || s.PriorityClassName != "agents" ||
-		s.SchedulerName != "platform-scheduler" || s.RuntimeClassName == nil || *s.RuntimeClassName != "gvisor" {
-		t.Errorf("pod spec after the template = %+v", s)
-	}
-	if s.ServiceAccountName != "wardyn-agent" || len(s.Containers) != 0 {
-		t.Errorf("the template changed a field it does not own: %+v", s)
+	if !reflect.DeepEqual(pod.Spec, spec) {
+		t.Errorf("the template changed the pod spec: %+v, want %+v", pod.Spec, spec)
 	}
 	if pod.Annotations[sandboxTemplateAnnotationPrefix+"cost-center"] != "ml" || pod.Annotations["example.com/note"] != "kept" {
 		t.Errorf("annotations = %v", pod.Annotations)
@@ -193,38 +185,22 @@ func TestSandboxTemplate_TakesTheAllowlistOnly(t *testing.T) {
 	}
 }
 
-func TestSandboxTemplate_NeverChangesWhatWardynSet(t *testing.T) {
-	strp := func(s string) *string { return &s }
-	cases := map[string]func(p *corev1.Pod){
-		"nodeSelector":      func(p *corev1.Pod) { p.Spec.NodeSelector = map[string]string{"zone": "b"} },
-		"affinity":          func(p *corev1.Pod) { p.Spec.Affinity = &corev1.Affinity{PodAffinity: &corev1.PodAffinity{}} },
-		"priorityClassName": func(p *corev1.Pod) { p.Spec.PriorityClassName = "wardyn" },
-		"runtimeClassName":  func(p *corev1.Pod) { p.Spec.RuntimeClassName = strp("kata-qemu") },
-		"annotation": func(p *corev1.Pod) {
-			p.Annotations = map[string]string{sandboxTemplateAnnotationPrefix + "cost-center": "ops"}
-		},
-	}
+func TestSandboxTemplate_NeverChangesAnAnnotationWardynSet(t *testing.T) {
 	base, err := parseSandboxTemplate(allowedTemplate())
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	for name, set := range cases {
-		t.Run(name, func(t *testing.T) {
-			pod := &corev1.Pod{}
-			set(pod)
-			if err := base.applyTo(pod); err == nil {
-				t.Fatalf("applyTo over Wardyn's own %s succeeded, want a refusal", name)
-			}
-		})
+	key := sandboxTemplateAnnotationPrefix + "cost-center"
+	if err := base.applyTo(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{key: "ops"}}}); err == nil {
+		t.Error("applyTo over Wardyn's own annotation succeeded, want a refusal")
 	}
-	same := &corev1.Pod{Spec: corev1.PodSpec{RuntimeClassName: strp("gvisor")}}
-	if err := base.applyTo(same); err != nil {
-		t.Errorf("a template repeating the confinement class's RuntimeClass was refused: %v", err)
+	if err := base.applyTo(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{key: "ml"}}}); err != nil {
+		t.Errorf("a template repeating Wardyn's annotation was refused: %v", err)
 	}
 }
 
 func TestSandboxTemplate_EmptyValuesSetNothing(t *testing.T) {
-	obj := sandboxTemplateObj(map[string]any{"nodeName": "", "volumes": []any{}, "securityContext": map[string]any{}, "dnsConfig": nil}, nil, func(s map[string]any) {
+	obj := sandboxTemplateObj(map[string]any{"nodeName": "", "nodeSelector": map[string]any{}, "volumes": []any{}, "securityContext": map[string]any{}, "dnsConfig": nil}, nil, func(s map[string]any) {
 		s["volumeClaimTemplates"] = []any{}
 	})
 	if _, err := parseSandboxTemplate(obj); err != nil {

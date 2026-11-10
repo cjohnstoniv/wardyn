@@ -6,26 +6,22 @@ package k8s
 import (
 	"fmt"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// A platform-owned agent-sandbox SandboxTemplate (WARDYN_K8S_AGENT_SANDBOX_TEMPLATE, experimental) as the
-// base of the agent pod. Wardyn still builds the whole pod; from the template it takes only where the pod
-// is scheduled and a set of annotations. Anything else the template sets refuses the run before any
-// Sandbox exists, so a template field never silently fails to apply. No build tag: the parse and the
-// merge are plain data and are tested without a cluster.
+// A platform-owned agent-sandbox SandboxTemplate (WARDYN_K8S_AGENT_SANDBOX_TEMPLATE, experimental) read for
+// the agent pod. Wardyn still builds the whole pod, and from the template takes only annotations under one
+// prefix. Placement and runtime come only from Wardyn's own settings, because the boot canary proves
+// NetworkPolicy enforcement on that placement and no other. Anything else the template sets refuses the run
+// before any Sandbox exists, so a template field never silently fails to apply. No build tag: the parse and
+// the merge are plain data and are tested without a cluster.
 
 // sandboxTemplateAnnotationPrefix is the one annotation namespace a template may set on the agent pod.
 const sandboxTemplateAnnotationPrefix = "sandbox-template.wardyn.dev/"
-
-// sandboxTemplateTakes is the template's pod spec fields Wardyn copies, in the order its refusals name them.
-var sandboxTemplateTakes = []string{"nodeSelector", "tolerations", "affinity", "topologySpreadConstraints", "priorityClassName", "schedulerName", "runtimeClassName"}
 
 // sandboxTemplateSpecDefaults are the template spec fields read only by the extensions controller, which
 // Wardyn does not run, at the values the API server defaults them to. Any other value is refused.
@@ -37,9 +33,8 @@ var sandboxTemplateSpecDefaults = map[string]any{
 	"service":                    false,
 }
 
-// sandboxTemplateBase is what a template contributes to the agent pod.
+// sandboxTemplateBase is what a template contributes to the agent pod: annotations only.
 type sandboxTemplateBase struct {
-	spec        corev1.PodSpec // only the sandboxTemplateTakes fields are ever set
 	annotations map[string]string
 }
 
@@ -80,20 +75,12 @@ func parseSandboxTemplate(obj map[string]any) (sandboxTemplateBase, error) {
 		}
 	}
 	podSpec, _ := tmpl["spec"].(map[string]any)
-	taken := map[string]any{}
 	for _, k := range slices.Sorted(maps.Keys(podSpec)) {
-		v := podSpec[k]
-		switch {
-		case slices.Contains(sandboxTemplateTakes, k):
-			taken[k] = v
-		case !templateValueEmpty(v):
-			return sandboxTemplateBase{}, fmt.Errorf("spec.podTemplate.spec.%s is refused: Wardyn builds the agent pod itself and takes only %s from a template", k, strings.Join(sandboxTemplateTakes, ", "))
+		if !templateValueEmpty(podSpec[k]) {
+			return sandboxTemplateBase{}, fmt.Errorf("spec.podTemplate.spec.%s is refused: Wardyn builds the whole agent pod and takes its placement and runtime only from its own settings, where the boot canary proves NetworkPolicy enforcement; a template sets only annotations under %s", k, sandboxTemplateAnnotationPrefix)
 		}
 	}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(taken, &base.spec); err != nil {
-		return sandboxTemplateBase{}, fmt.Errorf("spec.podTemplate.spec: %w", err)
-	}
-	return base, base.validate()
+	return base, nil
 }
 
 // templateAnnotations is the template's pod annotations, all under sandboxTemplateAnnotationPrefix. Pod
@@ -125,71 +112,9 @@ func templateAnnotations(meta any) (map[string]string, error) {
 	return out, nil
 }
 
-// validate refuses a malformed name or node-selector entry here, before a Sandbox exists, rather than at
-// the controller's pod create.
-func (b sandboxTemplateBase) validate() error {
-	for k, v := range b.spec.NodeSelector {
-		if len(validation.IsQualifiedName(k)) > 0 || len(validation.IsValidLabelValue(v)) > 0 {
-			return fmt.Errorf("spec.podTemplate.spec.nodeSelector %q=%q is not a valid label", k, v)
-		}
-	}
-	names := map[string]string{"priorityClassName": b.spec.PriorityClassName, "schedulerName": b.spec.SchedulerName}
-	if b.spec.RuntimeClassName != nil {
-		names["runtimeClassName"] = *b.spec.RuntimeClassName
-	}
-	for _, field := range slices.Sorted(maps.Keys(names)) {
-		if v := names[field]; v != "" && len(validation.IsDNS1123Subdomain(v)) > 0 {
-			return fmt.Errorf("spec.podTemplate.spec.%s %q is not a valid name", field, v)
-		}
-	}
-	return nil
-}
-
-// applyTo lays the template onto Wardyn's agent pod. A field Wardyn already set (placement, the confinement
-// class's RuntimeClass) stands: the template may repeat it but never change it, and a different value
-// refuses the run. Tolerations are added; a node-selector key or annotation is set when Wardyn has none.
+// applyTo lays the template's annotations onto Wardyn's agent pod. An annotation Wardyn already set stands:
+// the template may repeat it, and a different value refuses the run.
 func (b sandboxTemplateBase) applyTo(pod *corev1.Pod) error {
-	s := &pod.Spec
-	for _, k := range slices.Sorted(maps.Keys(b.spec.NodeSelector)) {
-		v := b.spec.NodeSelector[k]
-		if have, set := s.NodeSelector[k]; set && have != v {
-			return fmt.Errorf("nodeSelector %q=%q conflicts with Wardyn's %q", k, v, have)
-		}
-		if s.NodeSelector == nil {
-			s.NodeSelector = map[string]string{}
-		}
-		s.NodeSelector[k] = v
-	}
-	for _, tol := range b.spec.Tolerations {
-		if !slices.ContainsFunc(s.Tolerations, func(t corev1.Toleration) bool { return reflect.DeepEqual(t, tol) }) {
-			s.Tolerations = append(s.Tolerations, *tol.DeepCopy())
-		}
-	}
-	if b.spec.Affinity != nil {
-		if s.Affinity != nil && !reflect.DeepEqual(s.Affinity, b.spec.Affinity) {
-			return fmt.Errorf("affinity conflicts with the affinity Wardyn's placement sets")
-		}
-		s.Affinity = b.spec.Affinity.DeepCopy()
-	}
-	if len(b.spec.TopologySpreadConstraints) > 0 {
-		if len(s.TopologySpreadConstraints) > 0 && !reflect.DeepEqual(s.TopologySpreadConstraints, b.spec.TopologySpreadConstraints) {
-			return fmt.Errorf("topologySpreadConstraints conflict with Wardyn's")
-		}
-		s.TopologySpreadConstraints = slices.Clone(b.spec.TopologySpreadConstraints)
-	}
-	if err := takeName("priorityClassName", &s.PriorityClassName, b.spec.PriorityClassName); err != nil {
-		return err
-	}
-	if err := takeName("schedulerName", &s.SchedulerName, b.spec.SchedulerName); err != nil {
-		return err
-	}
-	if rc := b.spec.RuntimeClassName; rc != nil && *rc != "" {
-		if s.RuntimeClassName != nil && *s.RuntimeClassName != "" && *s.RuntimeClassName != *rc {
-			return fmt.Errorf("runtimeClassName %q differs from %q, the RuntimeClass this run's confinement class sets", *rc, *s.RuntimeClassName)
-		}
-		name := *rc
-		s.RuntimeClassName = &name
-	}
 	for _, k := range slices.Sorted(maps.Keys(b.annotations)) {
 		v := b.annotations[k]
 		if have, set := pod.Annotations[k]; set && have != v {
@@ -200,18 +125,6 @@ func (b sandboxTemplateBase) applyTo(pod *corev1.Pod) error {
 		}
 		pod.Annotations[k] = v
 	}
-	return nil
-}
-
-// takeName sets *have to the template's name unless Wardyn set a different one, which refuses the run.
-func takeName(field string, have *string, template string) error {
-	if template == "" {
-		return nil
-	}
-	if *have != "" && *have != template {
-		return fmt.Errorf("%s %q conflicts with Wardyn's %q", field, template, *have)
-	}
-	*have = template
 	return nil
 }
 
