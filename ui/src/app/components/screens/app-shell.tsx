@@ -625,7 +625,7 @@ export function AppShell({
             )}
             {/* Measured for focus mode, so it starts above the reauth layer: that layer's z-50 bar
           must grow this box, or the overlay's offset goes stale when the bar comes and goes. */}
-            <div ref={bannerStackRef} className="scroll-thin max-h-[30dvh] shrink-0 overflow-y-auto overscroll-contain">
+            <div ref={bannerStackRef} className="shrink-0">
             {/* The lazy coordinator also reconciles auth changes while no dialog or watch is active. */}
             <React.Suspense fallback={null}>
               <ReauthLayer onResumed={adoptIdentity} />
@@ -646,6 +646,8 @@ export function AppShell({
                 tier={tier}
               />
             )}
+            {/* The banners alone scroll when they pile up; the top bar above stays put. */}
+            <div className="scroll-thin max-h-[30dvh] overflow-y-auto overscroll-contain">
             {/* The no-credential preview's band, and its way out. FIRST of the
           banners and not hidden in focus mode: it explains the refusals the
           others might be mistaken for. The plain User view has no band. */}
@@ -722,6 +724,7 @@ export function AppShell({
             )}
             {/* While a renewal waits, its strip (the reauth layer's) stands here instead. */}
             <SessionRenewSlot />
+            </div>
             </div>
             {/* LAST in the stack, and not hidden in focus mode: a dead control
           plane, an unknown identity and a dying session are each the better
