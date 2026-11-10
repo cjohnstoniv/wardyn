@@ -159,7 +159,7 @@ func launchFetches(cmd string, args []string, depth int) bool {
 		i := slices.IndexFunc(args, func(a string) bool { // -c, or a flag group that holds it (-lc, -ec)
 			return strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "c")
 		})
-		return i >= 0 && i+1 < len(args) && shellScriptFetches(strings.Fields(args[i+1]), depth)
+		return i >= 0 && i+1 < len(args) && shellScriptFetches(args[i+1], depth)
 	}
 	return false
 }
@@ -187,26 +187,100 @@ func shellAssignment(w string) bool {
 	return i > 0 && !strings.ContainsAny(w[:i], "-/.$")
 }
 
-// shellScriptFetches reports whether any simple command in a shell -c script's words fetches what it runs:
-// each command after &&, ||, | or ;, past a leading exec and NAME=value words.
-func shellScriptFetches(words []string, depth int) bool {
-	start := true
-	for i, w := range words {
-		if w == "&&" || w == "||" || w == "|" || w == ";" {
-			start = true
-			continue
+// shellScriptFetches reports whether any simple command in a shell -c script fetches what it runs, past a
+// leading exec and NAME=value words. It is not a shell parser: when shellCommands cannot split the script,
+// only its first command, read by spaces, is judged.
+func shellScriptFetches(script string, depth int) bool {
+	cmds, ok := shellCommands(script)
+	if !ok {
+		cmds = [][]string{strings.Fields(script)}
+	}
+	for _, words := range cmds {
+		for len(words) > 0 && (words[0] == "exec" || shellAssignment(words[0])) {
+			words = words[1:]
 		}
-		ends := strings.HasSuffix(w, ";")
-		w = strings.TrimSuffix(w, ";")
-		if start && w != "exec" && !shellAssignment(w) {
-			start = false
-			if launchFetches(w, words[i+1:], depth+1) {
-				return true
-			}
+		if len(words) > 0 && launchFetches(words[0], words[1:], depth+1) {
+			return true
 		}
-		start = start || ends
+		if !ok {
+			break
+		}
 	}
 	return false
+}
+
+// shellCommands splits a shell script into its simple commands' words. Quotes and backslash escapes keep
+// their text in one word; ;, &, | and a newline end a command only outside them; # starts a comment. It
+// reports false for what it does not follow: an unclosed quote, a trailing backslash, $( or a backtick
+// (outside single quotes), or a here-document.
+func shellCommands(script string) ([][]string, bool) {
+	var cmds [][]string
+	var cmd []string
+	var word strings.Builder
+	inWord := false
+	endWord := func() {
+		if inWord {
+			cmd, inWord = append(cmd, word.String()), false
+			word.Reset()
+		}
+	}
+	for i := 0; i < len(script); i++ {
+		c := script[i]
+		switch {
+		case c == '`', c == '$' && i+1 < len(script) && script[i+1] == '(', c == '<' && strings.HasPrefix(script[i:], "<<"):
+			return nil, false
+		case c == '\\':
+			if i++; i == len(script) {
+				return nil, false
+			}
+			word.WriteByte(script[i])
+			inWord = true
+		case c == '\'' || c == '"':
+			end := shellQuoteEnd(script, i)
+			if end < 0 || c == '"' && strings.ContainsAny(script[i:end], "`") || c == '"' && strings.Contains(script[i:end], "$(") {
+				return nil, false
+			}
+			word.WriteString(script[i+1 : end])
+			i, inWord = end, true
+		case c == '#' && !inWord:
+			for i < len(script) && script[i] != '\n' {
+				i++
+			}
+			i--
+		case c == ' ' || c == '\t':
+			endWord()
+		case c == '&' && inWord && strings.HasSuffix(word.String(), ">"): // 2>&1 is a redirection
+			word.WriteByte(c)
+		case c == ';' || c == '&' || c == '|' || c == '\n':
+			endWord()
+			if len(cmd) > 0 {
+				cmds, cmd = append(cmds, cmd), nil
+			}
+		default:
+			word.WriteByte(c)
+			inWord = true
+		}
+	}
+	endWord()
+	if len(cmd) > 0 {
+		cmds = append(cmds, cmd)
+	}
+	return cmds, true
+}
+
+// shellQuoteEnd is the index of the quote that closes the one at script[open], or -1. A double-quoted
+// backslash escapes the next byte; a single-quoted one is literal.
+func shellQuoteEnd(script string, open int) int {
+	q := script[open]
+	for i := open + 1; i < len(script); i++ {
+		switch {
+		case script[i] == q:
+			return i
+		case q == '"' && script[i] == '\\':
+			i++
+		}
+	}
+	return -1
 }
 
 // denoRunValueFlags are the deno run options whose value is the next argument; every other option is a
