@@ -133,6 +133,7 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/profile":            "synthesise a profile from audit",
 	"POST /runs/{id}/profile/synthesize": "synthesise a profile from audit",
 	"POST /runs/{id}/resume":             "lifecycle: resume a paused run",
+	"PATCH /runs/{id}/egress":            "narrows a live run's egress by replacing its proxy, as revive does; opens no shell, terminal or relay",
 	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
 
 	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",
