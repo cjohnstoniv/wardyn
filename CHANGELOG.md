@@ -64,6 +64,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Rotating through more address keys than a per-address rate limit's table holds gave each visit a full burst, so the sustained limit stopped applying (anonymous sign-in and enrolment routes, and the admin token's failed-attempt limit). A full table now keeps its spent entries and charges new addresses to one shared bucket.
 - Profile synthesis from a run's audit trail is limited to two at a time per replica and answers `429` `profile_synthesis_busy` beyond that. Finding a run's node for the kernel check now reads its newest kernel events, not the whole trail.
 - Saving a workspace's approved or denied egress list from a page read before an "always" decision was made dropped that decision. `PUT /workspaces/{id}/approved-egress` and `denied-egress` now answer `412` `workspace_update_conflict` when `If-Match` names an older `updated_at` than the workspace has; a request with no `If-Match` is unchanged.
+- An SSH key's private key could reach the sandbox when the control plane's answer to a credential request arrived cut short or over the size limit, instead of being withheld; the sandbox only ever gets signatures. Such answers are now refused, and so is any credential answer that does not name its kind. Affects 0.10.0 prereleases only.
+- On a Kubernetes cluster, a network-confinement check whose request timed out could leave its test pod or deny-all policy behind. The check now deletes the object it tried to create, so slow API servers no longer leave stray objects that count against quotas.
+- The setup page's "Not proven" row for network confinement no longer says the last 3 checks could not run when the checks did run. It now says the canary has not proved confinement and points to the API, pod permissions, the pod network and an ambient default-deny policy.
+- After signing out, the sign-in page's browser tab keeps its plain Wardyn title instead of the last page's name and the Admin cue.
+- A failed SSH agent request from a sandbox no longer shows the sandbox the control plane's address or its response text.
 
 ### Security
 
