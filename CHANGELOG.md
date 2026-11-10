@@ -54,6 +54,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Revoking a CLI sign-in's access token, or demoting a person on the People page, now ends their CLI sign-ins, so the next refresh can no longer mint a token with the old user type and groups. They sign in again from the browser.
 - A CLI refresh no longer leaves a revoked access-token row behind, so the token lists and the role-mapping edit no longer read one dead row per CLI user per hour.
 - Anyone who knew a CLI session id could use up that computer's hourly refresh allowance by sending bad requests; only a request with the right device proof now counts against it.
+- `install.sh` with no `WARDYN_VERSION` now installs the release it was downloaded from (the release job stamps it, as it does the CLI installers), and a raw checkout installs the highest version not marked pre-release instead of the first row of the releases list, which could be an older line published later. The Helm install snippets in the README and in `docs/VERIFY.md` follow the same rule.
+- `scripts/verify-release.sh` now downloads every release asset and checks each against the signed `SHA256SUMS`; before, it checked two of them, so a swapped binary, package or installer script passed. It also fails on a failed download and on any release asset the list does not name.
+- The `:latest` tag of the `wardynd` image no longer moves back to an older commit when an earlier push's checks finish after a newer one's, and the manual image-publish workflow now writes only the old 0.0.x to 0.4.x backfill tags, so it can no longer overwrite a release image tag or `latest` by hand.
+- The release build no longer runs a binary built from the source tree in the step that holds the release signing identity or the Apple signing and notary credentials, and builds the vscode, novnc and novnc-signin images on the exact digest of the base image, checked to be signed by this release workflow at this tag.
 
 ### Security
 

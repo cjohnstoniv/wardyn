@@ -671,6 +671,9 @@ jobs:
   # daemon), and not agent-base's own `:latest` float there, because pinning
   # the exact tag means a real vscode/novnc pull can never silently resolve
   # an OLDER agent-base than the one this release actually cut.
+  # The "Compute the base-image ref" step then resolves that tag to its digest,
+  # cosign-verifies the digest against this workflow's identity, and builds on
+  # the digest, so a tag moved after `images` pushed it cannot change the base.
   #
   # Under `workflow_dispatch -f dry_run=true`, though, `images` above pushes
   # nothing (`push: false`), so the exact-tag ref never exists to pull — a
@@ -752,12 +755,23 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
           BASE_NAME: ${{ matrix.base }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
+          set -euo pipefail
           if [ "$DRY_RUN" = "true" ]; then
             echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # Build on the digest, not the tag: a tag can move between the job that pushed the base and this one.
+          # The digest must also carry this release workflow's signature, as the nightly's staging lane does.
+          digest="$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/${BASE_NAME}:${RELEASE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          ref="ghcr.io/cjohnstoniv/${BASE_NAME}@${digest}"
+          printf '%s' "$ref" | grep -Eq '@sha256:[0-9a-f]{64}$' \
+            || { echo "not a digest ref: $ref" >&2; exit 1; }
+          cosign verify "$ref" \
+            --certificate-identity "https://github.com/${WORKFLOW_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - name: Build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -1349,13 +1363,21 @@ jobs:
           [ -x "$agent" ]
           codesign --verify --strict "$agent"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
-          # Nothing at run time compares the agent's version, so this proves provenance: the helper reports the
-          # bare release version, and the pair were built from the same commit.
-          [ "$("$helper" version)" = "$version" ]
+          # Nothing at run time compares the agent's version, so this proves provenance: the pair were built
+          # from the same commit. (That the helper reports the release version is checked in the next step,
+          # which holds no secrets: this step's env carries the signing and notary credentials.)
           stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
           want="$(stamp "$helper")"
           grep -q 'vcs.revision=' <<<"$want"
           [ "$(stamp "$agent")" = "$want" ]
+      # Runs the tree-built helper, so it must not share a step with the Apple signing and notary secrets.
+      - name: The packaged helper reports the release version
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          helper="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-macvm' -type f)"
+          [ -n "$helper" ] && [ "$(wc -l <<<"$helper")" -eq 1 ]
+          [ "$("$helper" version)" = "$version" ]
       # The check above cannot see the agent's own stamp (-trimpath drops -ldflags from the build info, and the
       # agent has no version command), so this reads the stamped variable out of the packaged binary (#3636).
       - name: The packaged guest agent carries the release stamp
@@ -1476,11 +1498,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
-          # The CLI installers carry their own release version (they never ask
+          cp THIRD-PARTY-NOTICES.md LICENSE NOTICE assets/
+          # install.sh and the CLI installers carry their own release version (they never ask
           # releases/latest, which skips pre-releases). Each stamp rewrites exactly
           # one line; the grep fails the job if that line did not change.
           ver="${TAG#v}"
+          sed "s|^RELEASE_VERSION=\"@WARDYN_VERSION@\"\$|RELEASE_VERSION=\"${ver}\"|" install.sh > assets/install.sh
+          grep -qx "RELEASE_VERSION=\"${ver}\"" assets/install.sh
+          chmod +x assets/install.sh
           sed "s|^RELEASE_VERSION=\"@WARDYN_VERSION@\"\$|RELEASE_VERSION=\"${ver}\"|" scripts/install-cli.sh > assets/install-cli.sh
           sed "s|^\$ReleaseVersion = '@WARDYN_VERSION@'\$|\$ReleaseVersion = '${ver}'|" scripts/install-cli.ps1 > assets/install-cli.ps1
           grep -qx "RELEASE_VERSION=\"${ver}\"" assets/install-cli.sh
@@ -1504,15 +1529,14 @@ jobs:
           test "$have" -eq "$want" || { echo "expected $want image SBOMs, found $have"; ls -1; exit 1; }
           sha256sum ./* > SHA256SUMS
           # Each CLI must carry the SHA-256 that this very SHA256SUMS lists for its
-          # platform's runner. -a: the CLI is a binary. The linux/amd64 CLI also
-          # runs, so `version --json` is checked as the person will see it.
+          # platform's runner. -a: the CLI is a binary. This job holds the release
+          # signing identity and write access, so it never executes a binary built
+          # from the tree; the `binaries` job (read-only token) runs the linux/amd64 CLI.
           for p in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
             want=$(awk -v n="wardyn-runnerd-$p" '{x=$2; sub(/^\.\//,"",x); if (x==n) print $1}' SHA256SUMS)
             test -n "$want" || { echo "SHA256SUMS lists no wardyn-runnerd-$p"; exit 1; }
             grep -aqF "$want" "wardyn-$p" || { echo "wardyn-$p does not carry the SHA-256 of wardyn-runnerd-$p ($want)"; exit 1; }
           done
-          want=$(awk '{x=$2; sub(/^\.\//,"",x); if (x=="wardyn-runnerd-linux-amd64") print $1}' SHA256SUMS)
-          test "$(./wardyn-linux-amd64 version --json | jq -r .runnerd_sha256)" = "$want"
       - name: Sign the checksums (keyless)
         working-directory: assets
         run: |

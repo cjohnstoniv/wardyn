@@ -28,7 +28,7 @@
 curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.17/install.sh | sh
 ```
 
-- Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
+- Cosign-signed, not tip-of-`main` — the script installs its own release (`WARDYN_VERSION` overrides).
 - Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
 - Set the runner's limits before the first run: the server runs in a container and cannot measure host disk. Pass what `wardyn runner remote propose <id> --free-disk <GB>` prints to `wardyn runner set <id>`, or use the console (Runners, the runner, **Set limits**). `make setup` does this for you.
 - **Only the CLI**, for an organisation's console: `install-cli.sh` (Windows: `install-cli.ps1`), a release asset ([install paths](docs/runner-registration.md#install-the-cli)).
@@ -42,9 +42,9 @@ curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.17
 - **Managed laptops under org governance** — desktop profile m′: [`docs/DESKTOP.md`](docs/DESKTOP.md#the-member-mode-profile-topology-m).
 
 ```sh
-# NOT releases/latest — it excludes pre-releases, and a Wardyn release may be
-# one, so that endpoint can skip the newest release or 404.
-WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
+# The release GitHub marks Latest (a pre-release is never marked; set WARDYN_VERSION by hand for one).
+# If there is none the lookup fails and the guard below refuses to install unpinned.
+WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 
 kubectl create namespace wardyn

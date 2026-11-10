@@ -36,9 +36,9 @@
 - A stale literal in a doc is how `cosign verify` ends up answering `MANIFEST_UNKNOWN` for a tag that was never published — which reads like a verification failure and is not one:
 
 ```sh
-# The newest release. NOT releases/latest — that endpoint excludes pre-releases,
-# and a Wardyn release may be one, so it can skip the newest release or 404.
-WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
+# The newest release not marked pre-release (a pre-release is not picked; set WARDYN_VERSION by hand to verify one).
+# If there is none the lookup fails and the guard below refuses to install unpinned.
+WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases/latest" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 : "${WARDYN_VERSION:?could not resolve a version — set it by hand to the version you are checking}"
 ```
