@@ -7,12 +7,14 @@ import (
 	"context"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -115,8 +117,8 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
 	priv, pub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
-	// One person holds all 64 here, so lift the per-person share (its own test is below).
-	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnectionsPerPrincipal = DefaultSSHMaxConnections })
+	// No SSO is configured, so the one principal's share is the whole ceiling: all 64 are served.
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
 	served := func(c *ssh.Client) bool {
 		_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
@@ -278,5 +280,86 @@ func TestSSHGateway_DeletedKeyClosesIdleConnectionsAndFreesSlots(t *testing.T) {
 			t.Fatal("the closed connections never gave their slots back")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// The share a person gets: the configured value; else, with no SSO, the global ceiling (every key is
+// one person); else the default of 8.
+func TestSSHGateway_PerPrincipalCapValues(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		sso          bool
+		perPrincipal int
+		global       int
+		want         int
+	}{
+		{"no SSO, nothing set", false, 0, 0, DefaultSSHMaxConnections},
+		{"no SSO, global 20", false, 0, 20, 20},
+		{"no SSO, variable 3", false, 3, 20, 3},
+		{"SSO, nothing set", true, 0, 0, DefaultSSHMaxConnectionsPerPrincipal},
+		{"SSO, global 20", true, 0, 20, DefaultSSHMaxConnectionsPerPrincipal},
+		{"SSO, variable 12", true, 12, 0, 12},
+	} {
+		s := &Server{cfg: Config{SSHMaxConnections: tc.global, SSHMaxConnectionsPerPrincipal: tc.perPrincipal}}
+		if tc.sso {
+			s.cfg.OIDC = &oidc.Authenticator{}
+		}
+		if got := s.sshPerPrincipalCap(); got != tc.want {
+			t.Errorf("%s: cap = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// With no SSO and nothing set, a ninth connection from the one principal is served (it was refused
+// by the first version of the per-person cap).
+func TestSSHGateway_NoSSONinthConnectionServed(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "admin-token", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "admin-token", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+	for i := range DefaultSSHMaxConnectionsPerPrincipal + 1 {
+		c, err := sshDial(t, h, runID.String(), priv)
+		if err != nil {
+			t.Fatalf("connection %d: %v", i+1, err)
+		}
+		defer c.Close()
+		if _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+			t.Fatalf("connection %d was not served: %v", i+1, err)
+		}
+	}
+}
+
+// A connection refused over its person's share is told why on its first channel and an
+// ssh.connection.reject row names the key.
+func TestSSHGateway_OverPrincipalCapIsToldAndAudited(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	fp := ssh.FingerprintSHA256(pub)
+	st.putKey(types.SSHPublicKey{Fingerprint: fp, Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnectionsPerPrincipal = 1 })
+	first, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if _, _, err := first.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	over, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatalf("second dial: %v", err)
+	}
+	defer over.Close()
+	_, err = over.NewSession()
+	if err == nil || !strings.Contains(err.Error(), "too many SSH connections for this person (max 1)") {
+		t.Fatalf("session on the refused connection: %v, want the cap named", err)
+	}
+	ev := waitForAudit(t, h.audit, runID, "ssh.connection.reject", "failure")
+	if ev == nil || ev.Target != fp || ev.Actor != "alice@example.com" || !strings.Contains(string(ev.Data), sshCapReasonPrincipal) {
+		t.Fatalf("ssh.connection.reject row = %+v", ev)
 	}
 }

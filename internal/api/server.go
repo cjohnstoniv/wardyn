@@ -675,7 +675,7 @@ type Config struct {
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
 	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
-	// one address's handshakes and SSHMaxConnectionsPerPrincipal (no variable) one person's connections; 0 is the default.
+	// one address's handshakes and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
 	SSHMaxConnections, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int
 	// SyncDeny is WARDYN_SYNC_DENY: the organisation's ignore patterns, served
 	// on GET /runs/{id} as sync.deny for `wardyn sync` to apply above every

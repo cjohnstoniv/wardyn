@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -83,8 +82,8 @@ func setSSHKeepaliveEvery(d time.Duration) (prev time.Duration) {
 //
 // recheck, when set, runs first on every tick and returns why the connection may no longer stand ("" if
 // it may): an idle connection opens no channel, so without it a deleted key or a revoked session would
-// keep the connection, and its slots, until the client left. A failed lookup is not a reason: a store
-// blip must not drop every idle connection at once.
+// keep the connection, and its slots, until the client left. A reason for which sshReasonTransient is
+// true (a failed store read) does not close it: a store blip must not drop every idle connection at once.
 func sshProbeConn(ctx context.Context, conn ssh.Conn, recheck func() string) {
 	every := sshKeepaliveEvery()
 	tick := time.NewTicker(every)
@@ -96,7 +95,7 @@ func sshProbeConn(ctx context.Context, conn ssh.Conn, recheck func() string) {
 		case <-tick.C:
 		}
 		if recheck != nil {
-			if reason := recheck(); reason != "" && !strings.HasSuffix(reason, "lookup failed") {
+			if reason := recheck(); reason != "" && !sshReasonTransient(reason) {
 				slog.Info("ssh gateway: closing an idle connection whose key is no longer authorized", slog.String("reason", reason))
 				_ = conn.Close()
 				return
@@ -144,7 +143,8 @@ const (
 	DefaultSSHMaxConnections = 64
 	// DefaultSSHMaxConnectionsPerPrincipal is Config.SSHMaxConnectionsPerPrincipal's default: how many of
 	// those authenticated connections one person may hold, so one person cannot take every slot. Counted
-	// by the principal the key is registered to; a connection authenticated over it is closed.
+	// by the principal the key is registered to; a connection authenticated over it is told why and closed.
+	// With no SSO every key is one principal, so there the share is the global ceiling unless set.
 	DefaultSSHMaxConnectionsPerPrincipal = 8
 	// defaultSSHSessionsPerRun is Config.SSHMaxSessionsPerRun's fallback
 	// (WARDYN_SSH_MAX_SESSIONS_PER_RUN). It bounds concurrent SSH channels —
@@ -267,7 +267,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 
 	lim := &sshConnLimits{handshakes: make(chan struct{}, maxSSHHandshakes), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
 		perSource: cmp.Or(s.cfg.SSHMaxHandshakesPerSource, DefaultSSHMaxHandshakesPerSource), sources: map[string]int{},
-		perPrincipal: cmp.Or(s.cfg.SSHMaxConnectionsPerPrincipal, DefaultSSHMaxConnectionsPerPrincipal), principals: map[string]int{}, metrics: &s.metrics}
+		perPrincipal: s.sshPerPrincipalCap(), principals: map[string]int{}, metrics: &s.metrics}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -294,6 +294,39 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 			_ = conn.Close()
 		}
 	}
+}
+
+// sshPerPrincipalCap is one person's share of the established connections: the configured value,
+// else the global ceiling when no SSO is configured (every key is then registered under the one
+// admin-token or local principal, so the whole install is one person), else
+// DefaultSSHMaxConnectionsPerPrincipal.
+func (s *Server) sshPerPrincipalCap() int {
+	if n := s.cfg.SSHMaxConnectionsPerPrincipal; n > 0 {
+		return n
+	}
+	if s.cfg.OIDC == nil {
+		return cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)
+	}
+	return DefaultSSHMaxConnectionsPerPrincipal
+}
+
+// sshRefuseOverPrincipalCap ends a connection that authenticated over its person's share. It writes
+// an ssh.connection.reject row, then gives the client a reason: the first channel it opens is
+// rejected with a message (an interactive ssh opens one at once), and the connection closes after
+// that or after sshRefusalGrace, so a client that opens none is not held.
+func (s *Server) sshRefuseOverPrincipalCap(ctx context.Context, sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, limit int) {
+	ext := sconn.Permissions.Extensions
+	if runID, err := uuid.Parse(ext["run_id"]); err == nil {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, ext["principal"], "ssh.connection.reject",
+			ext["key_fingerprint"], "failure", mustJSON(map[string]any{"reason": sshCapReasonPrincipal, "max": limit})))
+	}
+	go ssh.DiscardRequests(reqs)
+	t := time.AfterFunc(sshRefusalGrace, func() { _ = sconn.Close() })
+	defer t.Stop()
+	if newCh, ok := <-chans; ok {
+		_ = newCh.Reject(ssh.ResourceShortage, fmt.Sprintf("too many SSH connections for this person (max %d); close one and try again", limit))
+	}
+	_ = sconn.Close()
 }
 
 // sshServerConfig builds the gateway's auth posture: registered public keys
@@ -606,7 +639,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		principal := sconn.Permissions.Extensions["principal"]
 		if !lim.enterPrincipal(principal) {
 			lim.refused(sshBoundPrincipal, lim.perPrincipal)
-			_ = sconn.Close()
+			s.sshRefuseOverPrincipalCap(ctx, sconn, chans, globalReqs, lim.perPrincipal)
 			return
 		}
 		defer lim.leavePrincipal(principal)
@@ -702,6 +735,23 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	}
 }
 
+// The reasons sshCurrentKey gives when a store read failed, so the key's standing is unknown, not gone.
+const (
+	sshReasonKeyLookup    = "SSH key lookup failed"
+	sshReasonRunLookup    = "SSH run lookup failed"
+	sshReasonCutoffLookup = "SSH session cutoff lookup failed"
+)
+
+// sshReasonTransient reports whether reason says a store read failed rather than that the key is gone.
+// A new channel is refused on either; the keepalive recheck closes an idle connection only on the latter.
+func sshReasonTransient(reason string) bool {
+	switch reason {
+	case sshReasonKeyLookup, sshReasonRunLookup, sshReasonCutoffLookup:
+		return true
+	}
+	return false
+}
+
 func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions) string {
 	ctx, cancel := context.WithTimeout(ctx, sshAuthTimeout)
 	defer cancel()
@@ -711,7 +761,7 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 		return "SSH key registration changed" // deleted; the keepalive recheck closes the connection on this
 	}
 	if err != nil {
-		return "SSH key lookup failed"
+		return sshReasonKeyLookup
 	}
 	// Bind this connection to the original registration as well as its key:
 	// deleting and registering the same public key must not revive an old connection.
@@ -734,11 +784,11 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 		// from the run: an open connection must not outlive that.
 		runID, err := uuid.Parse(permissions.Extensions["run_id"])
 		if err != nil {
-			return "SSH run lookup failed"
+			return sshReasonRunLookup
 		}
 		run, err := s.cfg.Store.GetRun(ctx, runID)
 		if err != nil {
-			return "SSH run lookup failed"
+			return sshReasonRunLookup
 		}
 		if !run.OperatorOwned {
 			return runOwnerOnlyReason
@@ -760,7 +810,7 @@ func (s *Server) sshKeyRevocationRefusal(ctx context.Context, key types.SSHPubli
 	// SSH rows carry the subject, so email revocation also stamps its resolved subject.
 	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, key.Principal, "", oidc.Issue{At: key.CreatedAt, Seq: key.RevSeq}, -1)
 	if err != nil {
-		return "SSH session cutoff lookup failed"
+		return sshReasonCutoffLookup
 	}
 	switch status {
 	case oidc.SessionRevoked:
@@ -795,8 +845,9 @@ func (s *Server) sshAuditChannelRejected(ctx context.Context, runID uuid.UUID, p
 }
 
 const (
-	sshCapReasonChannels = "per-run concurrent channel cap"
-	sshCapReasonSync     = "per-run concurrent sync channel cap"
+	sshCapReasonChannels  = "per-run concurrent channel cap"
+	sshCapReasonSync      = "per-run concurrent sync channel cap"
+	sshCapReasonPrincipal = "per-person connection cap"
 )
 
 // sshAcquireCount increments counts[runID] unless it is already at limit.

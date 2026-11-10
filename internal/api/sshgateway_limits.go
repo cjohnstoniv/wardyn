@@ -90,3 +90,7 @@ func (l *sshConnLimits) refused(bound string, limit int) {
 // sshCapWarnEvery spaces the cap-refusal warnings, so a flood writes a line a
 // minute rather than a line a connection.
 const sshCapWarnEvery = time.Minute
+
+// sshRefusalGrace is how long a connection refused over its person's share is kept for the client's
+// first channel to carry the reason; a client that opens none is closed after it.
+const sshRefusalGrace = 5 * time.Second
