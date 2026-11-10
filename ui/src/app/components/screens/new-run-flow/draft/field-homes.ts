@@ -24,7 +24,7 @@ const groups = (group: ReviewGroupId, names: string): Record<string, ReviewGroup
   Object.fromEntries(names.split(" ").map((n) => [n, group]));
 const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n}`).join(" ");
 
-const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
+const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress refuse_ip_literals first_use_approval first_use_hold_seconds max_holds " +
   "allowed_methods host_rules eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
 const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection recording data_out min_confinement_class workspace_mounts workspace_repos resources";
 
