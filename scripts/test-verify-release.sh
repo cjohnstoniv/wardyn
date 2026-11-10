@@ -89,8 +89,11 @@ case "$1 $2" in
     echo "releases/download/v${VER}/install.sh" > "${out}/install.sh"
     ( cd "${out}" && sha256sum -- * > SHA256SUMS )
     # A published asset that differs from the listed digest, and one the list does not name.
+    # A partial download: OMIT is on the release and not in SHA256SUMS, and was not downloaded.
+    [ -z "${OMIT:-}" ] || { rm -f "${out}/${OMIT}"; ( cd "${out}" && sha256sum -- * > SHA256SUMS ); }
+    [ -z "${DL_FAIL:-}" ] || { echo "HTTP 502" >&2; exit 1; }
     [ -z "${TAMPER:-}" ] || echo "swapped bytes" > "${out}/${TAMPER}"
-    [ -z "${UNLISTED:-}" ] || echo "extra" > "${out}/${UNLISTED}"
+    if [ -n "${UNLISTED:-}" ]; then grep -v " ${UNLISTED}\$" "${out}/SHA256SUMS" > "${out}/.sums"; mv "${out}/.sums" "${out}/SHA256SUMS"; fi
     if [ "${SIGFORM}" = bundle ]; then echo b > "${out}/SHA256SUMS.sigstore.json"
     else echo s > "${out}/SHA256SUMS.sig"; echo p > "${out}/SHA256SUMS.pem"; fi
     # Like gh: with --pattern, only the files that match one are downloaded.
@@ -119,7 +122,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" TAMPER="${TAMPER:-}" UNLISTED="${UNLISTED:-}" RELEASE_TITLE="${RELEASE_TITLE-Wardyn v$1}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" OMIT="${OMIT:-}" DL_FAIL="${DL_FAIL:-}" TAMPER="${TAMPER:-}" UNLISTED="${UNLISTED:-}" RELEASE_TITLE="${RELEASE_TITLE-Wardyn v$1}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -160,9 +163,15 @@ for tamper in wardyn-darwin-arm64 wardyn-runnerd.pkg; do
   grep -q "^${tamper}: FAILED" <<<"${out}" || fail "a swapped ${tamper} was not named as a checksum failure: $(printf '%s' "${out}" | grep -i 'checksum\|FAILED' | head -3)"
   grep -q '^FAIL checksum$' <<<"${out}" || fail "a swapped ${tamper} did not print FAIL checksum"
 done
-UNLISTED=wardyn-extra.bin run 0.10.0 v0.10.0 bundle
+UNLISTED=wardyn-linux-arm64 run 0.10.0 v0.10.0 bundle
 [ "${rc}" != 0 ] || fail "an asset missing from SHA256SUMS still exited 0"
-grep -q 'wardyn-extra.bin is a release asset that SHA256SUMS does not list' <<<"${out}" || fail "the unlisted asset was not named"
+grep -q 'wardyn-linux-arm64 is a release asset that SHA256SUMS does not list' <<<"${out}" || fail "the unlisted asset was not named"
+OMIT=wardyn-darwin-arm64 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] || fail "an asset left out of SHA256SUMS and of the download still exited 0"
+grep -q 'wardyn-darwin-arm64 is a release asset that SHA256SUMS does not list' <<<"${out}" || fail "the omitted asset was not named: $(grep FAIL <<<"${out}" | head -3)"
+DL_FAIL=1 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] || fail "a failed release download still exited 0"
+grep -q '^FAIL release download' <<<"${out}" || fail "a failed download was not reported"
 run 0.10.0 v0.10.0 bundle
 [ "${rc}" = 0 ] || fail "an untouched 0.10.0 release exited ${rc}: $(printf '%s' "${out}" | tail -5)"
 ! grep -q -- '--ignore-missing' "${VERIFY}" || fail "verify-release still passes --ignore-missing to sha256sum"

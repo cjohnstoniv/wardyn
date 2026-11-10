@@ -76,7 +76,8 @@ for name in $(comm -13 <(echo "$expected") <(echo "$have")); do echo "FAIL unexp
 echo "--- SHA256SUMS"
 rm -rf "$OUT/dl"; mkdir -p "$OUT/dl"
 # Every asset, not a sample: the checksum pass below is only as strong as the set of files it can see.
-gh release download "$TAG" --repo cjohnstoniv/wardyn --dir "$OUT/dl" >/dev/null 2>&1
+gh release download "$TAG" --repo cjohnstoniv/wardyn --dir "$OUT/dl" >"$OUT/download.log" 2>&1 \
+  || { echo "FAIL release download (exit $?)"; tail -3 "$OUT/download.log"; fails=$((fails+1)); }
 ls "$OUT/dl"
 if [[ -f "$OUT/dl/SHA256SUMS" ]]; then
   bundle=$(ls "$OUT/dl"/SHA256SUMS.* 2>/dev/null | head -5 | tr '\n' ' ')
@@ -89,10 +90,11 @@ if [[ -f "$OUT/dl/SHA256SUMS" ]]; then
     cosign verify-blob "$OUT/dl/SHA256SUMS" --signature "$OUT/dl/SHA256SUMS.sig" --certificate "$OUT/dl/SHA256SUMS.pem" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" && echo "OK   SHA256SUMS verify-blob (sig+pem)" || { echo "FAIL verify-blob"; fails=$((fails+1)); }
   else echo "FAIL no signature material for SHA256SUMS"; fails=$((fails+1)); fi
   # No ignore-missing flag: a file SHA256SUMS lists that was not downloaded is a failure, and so is a
-  # downloaded asset (other than the signature material) that SHA256SUMS does not list.
+  # release asset (other than the signature material) that SHA256SUMS does not list.
   (cd "$OUT/dl" && sha256sum -c SHA256SUMS) || { echo "FAIL checksum"; fails=$((fails+1)); }
   listed=$(awk '{x=$2; sub(/^\*/,"",x); sub(/^\.\//,"",x); print x}' "$OUT/dl/SHA256SUMS" | sort -u)
-  for f in $(cd "$OUT/dl" && ls -1 | grep -v '^SHA256SUMS'); do
+  # Walk the release's own asset list ($have), not the download folder: a partial download must not hide an asset.
+  for f in $(grep -v '^SHA256SUMS' <<<"$have"); do
     grep -qxF "$f" <<<"$listed" || { echo "FAIL checksum: $f is a release asset that SHA256SUMS does not list"; fails=$((fails+1)); }
   done
 else echo "FAIL SHA256SUMS missing"; fails=$((fails+1)); fi

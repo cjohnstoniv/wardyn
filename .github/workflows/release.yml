@@ -1498,11 +1498,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
-          # The CLI installers carry their own release version (they never ask
+          cp THIRD-PARTY-NOTICES.md LICENSE NOTICE assets/
+          # install.sh and the CLI installers carry their own release version (they never ask
           # releases/latest, which skips pre-releases). Each stamp rewrites exactly
           # one line; the grep fails the job if that line did not change.
           ver="${TAG#v}"
+          sed "s|^RELEASE_VERSION=\"@WARDYN_VERSION@\"\$|RELEASE_VERSION=\"${ver}\"|" install.sh > assets/install.sh
+          grep -qx "RELEASE_VERSION=\"${ver}\"" assets/install.sh
+          chmod +x assets/install.sh
           sed "s|^RELEASE_VERSION=\"@WARDYN_VERSION@\"\$|RELEASE_VERSION=\"${ver}\"|" scripts/install-cli.sh > assets/install-cli.sh
           sed "s|^\$ReleaseVersion = '@WARDYN_VERSION@'\$|\$ReleaseVersion = '${ver}'|" scripts/install-cli.ps1 > assets/install-cli.ps1
           grep -qx "RELEASE_VERSION=\"${ver}\"" assets/install-cli.sh

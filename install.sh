@@ -32,6 +32,9 @@
 set -eu
 
 REPO=cjohnstoniv/wardyn
+# The release job rewrites this one line (and only this line) with the tag the asset was published under,
+# so install.sh downloaded from a release installs that release. A raw checkout keeps the placeholder.
+RELEASE_VERSION="@WARDYN_VERSION@"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -198,6 +201,8 @@ pick_release() {
 }
 
 VERSION="${WARDYN_VERSION:-}"
+# A stamped asset installs its own release; WARDYN_VERSION still overrides it.
+case "$RELEASE_VERSION" in @*) ;; *) [ -n "$VERSION" ] || VERSION="$RELEASE_VERSION" ;; esac
 if [ -z "$VERSION" ]; then
   say "Resolving the latest release"
   PICK=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null | pick_release)
