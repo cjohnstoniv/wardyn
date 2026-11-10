@@ -1221,7 +1221,7 @@ Rules for what a run may send to one host: which methods, on which paths. `host_
 How a request to a host is decided:
 
 - Each set that names the host decides by its first matching rule. A set that names the host and matches no rule denies.
-- Across sets, any deny wins; otherwise the request is allowed. A set that does not name the host has no say.
+- Across sets, any deny wins. Otherwise any hold asks a person ([A host rule hold](#a-host-rule-hold-effect-hold)). Otherwise the request is allowed. A set that does not name the host has no say.
 - `allowed_methods` still applies on top.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
 
