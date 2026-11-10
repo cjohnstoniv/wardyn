@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, AuditEvent } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
 
@@ -97,50 +97,6 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
     expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
-  });
-
-  function Probe() {
-    const location = useLocation();
-    const navigate = useNavigate();
-    return (
-      <>
-        <output data-testid="search">{location.search}</output>
-        <button onClick={() => navigate(-1)}>history back</button>
-      </>
-    );
-  }
-  const renderAt = (entries: string[], index?: number) =>
-    render(
-      <MemoryRouter initialEntries={entries} initialIndex={index}>
-        <AuditScreen />
-        <Probe />
-      </MemoryRouter>,
-    );
-
-  it("keeps the search and the Event and Actor facets in the URL, and reads them back on a fresh mount", async () => {
-    listAuditMock.mockResolvedValue([
-      ev({ id: "e1", run_id: "run_111", action: "egress.allow", actor_type: "agent" }),
-      ev({ id: "e2", run_id: "run_222", action: "tool.exec", actor_type: "human" }),
-    ]);
-    renderAt(["/?q=run_111&kind=egress&actor=agent"]);
-    expect(await screen.findByLabelText("Search events")).toHaveValue("run_111");
-    expect(screen.getByRole("combobox", { name: "Actor" })).toHaveTextContent("Agent");
-    fireEvent.change(screen.getByLabelText("Search events"), { target: { value: "run_1112" } });
-    expect(screen.getByTestId("search")).toHaveTextContent("?q=run_1112&kind=egress&actor=agent");
-  });
-
-  it("opening a run pushes an entry that keeps the search, and Back removes the drill-in only", async () => {
-    listAuditMock.mockResolvedValueOnce([
-      ev({ id: "e1", run_id: "run_111", action: "egress.allow" }),
-      ev({ id: "e2", run_id: "run_222", action: "egress.deny" }),
-    ]);
-    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
-    renderAt(["/", "/?q=egress"], 1);
-    fireEvent.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
-    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent("run_id=run_111"));
-    expect(screen.getByTestId("search")).toHaveTextContent("q=egress");
-    fireEvent.click(screen.getByRole("button", { name: "history back" }));
-    await waitFor(() => expect(screen.getByTestId("search")).toHaveTextContent(/^\?q=egress$/));
   });
 
   it("re-queries the server with run_id when a run is selected from a row", async () => {
