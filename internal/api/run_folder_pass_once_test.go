@@ -137,3 +137,22 @@ func TestPassBack_ADelayedOwnerNeitherWritesNorStops(t *testing.T) {
 		t.Errorf("record %+v, want owner B's settled pass at gen 2 and nothing from A", st)
 	}
 }
+
+// Only caps read from the runner that name one pass per run make it a new runner; unread caps are an
+// older runner's.
+func TestRunsOnePassPerRun_UnreadCapsAreAnOlderRunner(t *testing.T) {
+	for _, tc := range []struct {
+		caps runnerwire.Caps
+		read bool
+		want bool
+	}{
+		{runnerwire.Caps{FolderPassOnce: true}, true, true},
+		{runnerwire.Caps{}, true, false},
+		{runnerwire.Caps{FolderPassOnce: true}, false, false},
+		{runnerwire.Caps{}, false, false},
+	} {
+		if got := runsOnePassPerRun(tc.caps, tc.read); got != tc.want {
+			t.Errorf("runsOnePassPerRun(%+v, read %v) = %v, want %v", tc.caps, tc.read, got, tc.want)
+		}
+	}
+}

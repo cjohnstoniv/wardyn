@@ -23,9 +23,9 @@ import (
 // folderPassBusyMsg is the record of a pass a runner refused while it runs another for the run.
 const folderPassBusyMsg = "The runner is still running this run's last pass back; a later sweep tries again"
 
-// folderPassUnconfirmed reports a pass back that must not be sent: the run's folder runner does not run
-// one pass per run at a time, and the last pass is not settled. A runner that cannot be asked sends
-// nothing anyway, and is left to the pass's own refusal.
+// folderPassUnconfirmed reports a pass back that must not be sent: the run's folder runner is not known
+// to run one pass per run at a time (runsOnePassPerRun), and the last pass is not settled. A runner that
+// cannot be asked sends nothing anyway, and is left to the pass's own refusal.
 func (s *Server) folderPassUnconfirmed(ctx context.Context, run types.AgentRun, folder types.RunLocalFolder, rec types.RunLocalFolderStatus) bool {
 	if folder.RunnerID == nil || rec.Gen == rec.Settled {
 		return false
@@ -34,8 +34,13 @@ func (s *Server) folderPassUnconfirmed(ctx context.Context, run types.AgentRun, 
 	if refusal != nil {
 		return false
 	}
-	caps, ok := sub.Caps()
-	return ok && !caps.FolderPassOnce
+	return !runsOnePassPerRun(sub.Caps())
+}
+
+// runsOnePassPerRun is a runner whose caps say it runs one pass per run at a time. Caps not read yet count
+// as an older runner's.
+func runsOnePassPerRun(caps runnerwire.Caps, read bool) bool {
+	return read && caps.FolderPassOnce
 }
 
 // bumpComputerFolderGen moves run id's record from gen to the next, and answers the generation the pass
