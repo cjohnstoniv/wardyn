@@ -422,13 +422,13 @@ export function ChangeDrawer({
 
   return (
     <Sheet open={!!change} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]" style={{ maxWidth: "98vw" }}>
+      <SheetContent className="scroll-thin w-full gap-0 overflow-y-auto p-0 sm:max-w-[680px]">
         {change && (
           <>
-            <SheetHeader className="border-b border-border p-5">
-              <SheetTitle className="flex flex-wrap items-baseline gap-x-2">
-                {changeLabel(change)}
-                <Mono className="text-foreground">
+            <SheetHeader className="border-b border-border p-5 pr-10">
+              <SheetTitle className="flex min-w-0 flex-wrap items-baseline gap-x-2 break-words">
+                <span className="min-w-0 [overflow-wrap:anywhere]">{changeLabel(change)}</span>
+                <Mono className="min-w-0 text-foreground [overflow-wrap:anywhere]">
                   {elevation
                     ? CHANGE_NOTE.ELEVATION_TARGET(elevation.person, elevation.unit)
                     : img

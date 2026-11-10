@@ -154,6 +154,13 @@ describe("ProfileReview", () => {
     expect(screen.getByText("0 allowed")).toBeInTheDocument();
   });
 
+  it("is capped at 680px by its class, with no inline max-width widening it", async () => {
+    render(<ProfileReview runId="run-1" onClose={() => {}} />);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.style.maxWidth).toBe("");
+    expect(dialog.className).toContain("sm:max-w-[680px]");
+  });
+
   it("renders a retryable error when synthesis fails", async () => {
     profileRunMock.mockReset();
     profileRunMock.mockRejectedValue(new Error("boom"));

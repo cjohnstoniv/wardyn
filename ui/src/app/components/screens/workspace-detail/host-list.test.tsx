@@ -7,19 +7,20 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { HostList, type HostRow } from "./host-list";
 
+const confirm = { title: (h: string) => `Remove ${h}?`, body: "Body." };
 const row = (host: string): HostRow => ({ host, provenance: "approved for this workspace", removable: true });
 
 // Each removal PUTs the whole list built from the render-time workspace, so a second removal
 // started before the first returns would write the first host back (#2581).
 describe("HostList — one removal at a time", () => {
   it("disables every row's remove button while any removal is in flight", () => {
-    render(<HostList rows={[row("a.example"), row("b.example")]} emptyText="none" canRemove removing="a.example" onRemove={vi.fn()} />);
+    render(<HostList rows={[row("a.example"), row("b.example")]} emptyText="none" canRemove removing="a.example" onRemove={vi.fn()} confirm={confirm} />);
     expect(screen.getByRole("button", { name: "Remove a.example" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove b.example" })).toBeDisabled();
   });
 
   it("leaves them live when nothing is being removed", () => {
-    render(<HostList rows={[row("a.example"), row("b.example")]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} />);
+    render(<HostList rows={[row("a.example"), row("b.example")]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} confirm={confirm} />);
     expect(screen.getByRole("button", { name: "Remove b.example" })).toBeEnabled();
   });
 });
@@ -28,7 +29,7 @@ describe("HostList — one removal at a time", () => {
 describe("HostList — a blocked removal says why", () => {
   it("shows the reason as text in the row and as the button's description, and sets no title", () => {
     const blocked: HostRow = { ...row("a.example"), removeBlockedReason: "Only a security admin can remove this." };
-    render(<HostList rows={[blocked, row("b.example")]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} />);
+    render(<HostList rows={[blocked, row("b.example")]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} confirm={confirm} />);
     expect(screen.getByText("Only a security admin can remove this.")).toBeVisible();
     const button = screen.getByRole("button", { name: "Remove a.example" });
     expect(button).toBeDisabled();
@@ -42,8 +43,8 @@ describe("HostList — a blocked removal says why", () => {
     const blocked: HostRow = { ...row("a.example"), removeBlockedReason: "Only a security admin can remove this." };
     render(
       <>
-        <HostList rows={[blocked]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} />
-        <HostList rows={[blocked]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} />
+        <HostList rows={[blocked]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} confirm={confirm} />
+        <HostList rows={[blocked]} emptyText="none" canRemove removing={null} onRemove={vi.fn()} confirm={confirm} />
       </>,
     );
     const ids = screen.getAllByText("Only a security admin can remove this.").map((el) => el.id);

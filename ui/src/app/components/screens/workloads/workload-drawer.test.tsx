@@ -60,6 +60,17 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("WorkloadDrawer title", () => {
+  // jsdom measures no layout; this pins the structure (name shrinks and breaks, badge does not shrink).
+  it("lets a long workload name shrink and break in its own span", async () => {
+    open(workload({ name: "w".repeat(120) }));
+    await screen.findByText(/started/);
+    const name = within(screen.getByRole("heading", { name: new RegExp("w{120}") })).getByText("w".repeat(120));
+    expect(name.className).toContain("min-w-0");
+    expect(name.className).toContain("[overflow-wrap:anywhere]");
+  });
+});
+
 describe("WorkloadDrawer digest", () => {
   it("shows the digest short, with the full value on hover", async () => {
     open(workload({ digest: DIGEST }));

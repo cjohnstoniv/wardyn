@@ -96,7 +96,7 @@ describe("DesktopFilesPanel", () => {
     await waitFor(() => expect(within(panel).getAllByTestId("desktop-upload")).toHaveLength(2));
     const [ok, big] = within(panel).getAllByTestId("desktop-upload");
     await waitFor(() => expect(ok.textContent).toContain(C.delivered));
-    expect(ok.textContent).toMatch(/sha256 c3a1…0e9d · \d\d:\d\d/);
+    expect(ok.textContent).toMatch(/sha256 c3a1…0e9d · [^·]*\d{1,2}:\d\d[^·]*/);
     await waitFor(() => expect(big.textContent).toContain(C.tooLarge));
     expect(big.textContent).toContain(C.tooLargeSub);
   });
@@ -391,5 +391,42 @@ describe("DesktopFilesPanel on a run that keeps its content in", () => {
     render(<DesktopFilesPanel runId="r1" noDesktop />);
     expect(await screen.findByText(unavailable)).toBeTruthy();
     expect(screen.queryByRole("button", { name: DATA_OUT_RUN.RETRY })).toBeNull();
+  });
+  it("a dropped connection says so in a sentence and Try again reads the folder again", async () => {
+    listMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    render(<DesktopFilesPanel runId="r1" />);
+    expect(await screen.findByText(C.loadFailed)).toBeTruthy();
+    expect(screen.queryByText("Failed to fetch")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: C.retry }));
+    const panel = await screen.findByRole("region", { name: C.title });
+    expect(within(panel).queryByText(C.loadFailed)).toBeNull();
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a server error gets the same sentence and Try again, not the server's raw text", async () => {
+    listMock.mockRejectedValue(new HttpError(500, "Internal Server Error", "internal"));
+    render(<DesktopFilesPanel runId="r1" />);
+    expect(await screen.findByText(C.loadFailed)).toBeTruthy();
+    expect(screen.queryByText("Internal Server Error")).toBeNull();
+    expect(screen.getByRole("button", { name: C.retry })).toBeTruthy();
+  });
+
+  it("a Download in flight is disabled, so a second click starts no second transfer", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: { ...defaults, download: "allowed" }, files: [{ name: "a.csv", bytes: 12 }] });
+    let finish: (v: { blob: Blob; sha256: string }) => void = () => {};
+    downloadMock.mockReturnValue(new Promise((r) => (finish = r)));
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    render(<DesktopFilesPanel runId="r1" />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    await userEvent.click(within(panel).getByRole("tab", { name: C.fromTab }));
+    const button = await within(panel).findByRole("button", { name: `${C.download} a.csv` });
+    await userEvent.click(button);
+    expect(button).toBeDisabled();
+    await userEvent.click(button);
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+    finish({ blob: new Blob(["x"]), sha256: "abcd".repeat(16) });
+    await waitFor(() => expect(button).toBeEnabled());
   });
 });

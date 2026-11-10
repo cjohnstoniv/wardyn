@@ -169,7 +169,7 @@ export function OutputTab({
         role="region"
         aria-label={sourceLabel}
         aria-describedby={describedBy}
-        className="scroll-thin max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[#0d1117] p-3 font-mono text-xs text-[#e6edf3]"
+        className="scroll-thin overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-[#0d1117] p-3 font-mono text-xs text-[#e6edf3]"
       >
         {cleanEmpty ? (
           <span className="text-muted-foreground">{o.complete ? RUN_OUTPUT.emptyFinal : RUN_OUTPUT.emptyLive}</span>

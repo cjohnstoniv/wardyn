@@ -52,7 +52,7 @@ import {
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
-import { PageTabs } from "../../wardyn/page-tabs";
+import { PageTabs, pageTabPanelProps } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
 import { useSecurityOperator, useUnitAdminOf } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
@@ -234,6 +234,7 @@ export function GovernanceScreen() {
       {status !== "forbidden" && status !== "error" && (
         <PageTabs
           className="mt-6"
+          idPrefix="governance"
           value={tab}
           onValueChange={(v) => setSearchParams(v === "profiles" ? {} : { tab: v }, { replace: true })}
           tabs={[
@@ -249,6 +250,8 @@ export function GovernanceScreen() {
         />
       )}
 
+      {/* One panel for whichever tab is selected; the sections below stay as they were, so the editors keep their state. */}
+      <div {...(status !== "forbidden" && status !== "error" ? pageTabPanelProps("governance", tab) : {})}>
       {status !== "forbidden" && status !== "error" && deliveryVisited && securityOperator && (
         <div hidden={tab !== "runner-credentials"}>
           <RunnerCredentials onSubmitted={load} />
@@ -532,6 +535,7 @@ export function GovernanceScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </div>
     </PageContainer>
   );
 }

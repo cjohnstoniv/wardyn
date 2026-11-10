@@ -123,3 +123,10 @@ export const EXPLAIN = {
   ALL_MODEL_PROVIDERS: "All model providers",
   ALL_POLICIES: "All stored policies",
 };
+
+// Not in the packet docs (user-types-copy.test.ts holds USER_TYPES and EXPLAIN to them): the grant rows are a second
+// read; the grid still answers without them.
+export const EXPLAIN_GRANTS = {
+  FAILED: "Couldn't load grant details, so Remove and who a restricted value is for are not shown.",
+  RETRY: "Try again",
+} as const;

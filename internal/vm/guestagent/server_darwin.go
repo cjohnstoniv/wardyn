@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -176,6 +177,15 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad init: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// A run with a desktop starts only once the agent account is at the console. Auto-login runs once per
+	// boot, so a guest still at the login window when the wait ends stays there: the run fails with that
+	// reason instead of running with a desktop nobody can sign in to. Nothing is written before.
+	if s.Desktop != nil && s.Cred != nil && in.DesktopPassword != "" && !in.SignInsOff {
+		if err := s.Desktop.awaitAgentConsole(r.Context(), s.Cred.Uid, bootTime()); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping {
@@ -310,6 +320,15 @@ func (s *Server) initDesktop(ctx context.Context, env, secret map[string]string,
 	s.Desktop.StartSessionEnv(s.sessionCtx(), SessionEnvPaths{}, uid, env, secret, ca)
 	go s.Desktop.endSetupAssistant(s.sessionCtx(), uid, ExecRunner{})
 	return set
+}
+
+// bootTime is when the guest booted (kern.boottime), or now when it cannot be read.
+func bootTime() time.Time {
+	tv, err := unix.SysctlTimeval("kern.boottime")
+	if err != nil {
+		return time.Now()
+	}
+	return time.Unix(tv.Unix())
 }
 
 // sessionCtx is the context of the GUI settings step, ended by the stop scrub.

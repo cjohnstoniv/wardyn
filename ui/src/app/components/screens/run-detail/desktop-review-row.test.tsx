@@ -9,6 +9,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
+import { absoluteTime, shortTime } from "../../../lib/format";
 import { makeApproval } from "../../../../test/factories";
 import { DESKTOP_FILES as C } from "../../wardyn/copy";
 import { DECIDERS_INBOX } from "../../wardyn/copy/deciders-inbox";
@@ -59,7 +60,7 @@ describe("DesktopReviewRow", () => {
   it("waiting shows the chip, the asked line and the deciders, and no button", () => {
     renderRow(row({ deciders: ["owner", "group:finance"] }));
     expect(screen.getByText(C.stateWaiting)).toBeTruthy();
-    expect(screen.getByText(/Asked \d\d:\d\d · sha256 9f2c…41ab/)).toBeTruthy();
+    expect(screen.getByText(/Asked [^·]*\d{1,2}:\d\d[^·]* · sha256 9f2c…41ab/)).toBeTruthy();
     expect(screen.getByText(DECIDERS_INBOX.DECIDED_BY_LABEL)).toBeTruthy();
     expect(screen.getByTestId("desktop-download").textContent).toContain(
       `${DECIDERS_INBOX.OWNER_SELF} or ${DECIDERS_INBOX.GROUP("finance")}`,
@@ -76,31 +77,43 @@ describe("DesktopReviewRow", () => {
     downloadMock.mockResolvedValue({ blob: new Blob(["x"]), sha256: SHA });
     const { onRefused } = renderRow(row({ state: "APPROVED", decided_by: "lee.chen@acme.example", decided_at: aheadByHours(-0.5) }));
     expect(screen.getByText(C.stateApproved)).toBeTruthy();
-    expect(screen.getByText(/Approved by lee\.chen@acme\.example · \d\d:\d\d/)).toBeTruthy();
+    expect(screen.getByText(/Approved by lee\.chen@acme\.example · [^·]*\d{1,2}:\d\d[^·]*/)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: C.downloadApproved }));
     expect(downloadMock).toHaveBeenCalledWith("r1", file.name, "ap_1");
-    expect(await screen.findByText(/Downloaded \d\d:\d\d · sha256 9f2c…41ab/)).toBeTruthy();
+    expect(await screen.findByText(/Downloaded [^·]*\d{1,2}:\d\d[^·]* · sha256 9f2c…41ab/)).toBeTruthy();
     expect(onRefused).toHaveBeenCalled();
   });
 
   it("denied shows the decider's reason and offers Request download again", () => {
     renderRow(row({ state: "DENIED", decided_by: "sam.okafor@acme.example", reason: "Customer records leave through the data team.", decided_at: aheadByHours(-1) }));
     expect(screen.getByText(C.stateDenied)).toBeTruthy();
-    expect(screen.getByText(/sam\.okafor@acme\.example: “Customer records leave through the data team\.” · \d\d:\d\d/)).toBeTruthy();
+    expect(screen.getByText(/sam\.okafor@acme\.example: “Customer records leave through the data team\.” · [^·]*\d{1,2}:\d\d[^·]*/)).toBeTruthy();
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
   });
 
   it("a released approval reads as downloaded and offers Request download again", () => {
     renderRow(row({ state: "APPROVED", minted_jti: "jti-1", decided_at: aheadByHours(-1) }));
-    expect(screen.getByText(/Downloaded \d\d:\d\d · sha256 9f2c…41ab/)).toBeTruthy();
+    expect(screen.getByText(/Downloaded [^·]*\d{1,2}:\d\d[^·]* · sha256 9f2c…41ab/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: C.downloadApproved })).toBeNull();
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
+  });
+
+  it("a decision from an earlier day names the day, in the console's own format, never a bare clock", () => {
+    const decided = aheadByHours(-30);
+    renderRow(row({ state: "APPROVED", decided_by: "lee.chen@acme.example", decided_at: decided }));
+    expect(screen.getByText(C.approvedLine("lee.chen@acme.example", absoluteTime(decided)))).toBeTruthy();
+  });
+
+  it("a decision from today shows the console's short clock", () => {
+    const decided = new Date().toISOString();
+    renderRow(row({ state: "APPROVED", decided_by: "lee.chen@acme.example", decided_at: decided }));
+    expect(screen.getByText(C.approvedLine("lee.chen@acme.example", shortTime(decided)))).toBeTruthy();
   });
 
   it("expired says nobody decided it and offers Request download again", () => {
     renderRow(row({ state: "EXPIRED", decided_at: aheadByHours(-2) }));
     expect(screen.getByText(C.stateExpired)).toBeTruthy();
-    expect(screen.getByText(/Nobody decided it in time · \d\d:\d\d/)).toBeTruthy();
+    expect(screen.getByText(/Nobody decided it in time · [^·]*\d{1,2}:\d\d[^·]*/)).toBeTruthy();
     expect(screen.getByRole("button", { name: C.requestDownload })).toBeTruthy();
   });
 

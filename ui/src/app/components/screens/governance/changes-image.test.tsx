@@ -75,6 +75,30 @@ beforeEach(() => {
   approveMock.mockReset();
 });
 
+describe("the change drawer's size", () => {
+  // An inline max-width of 98vw beat the 680px cap, so the drawer filled the screen at every width.
+  it("is capped by its class, not widened by an inline max-width, and keeps the title clear of Close", async () => {
+    renderTab([image()]);
+    const dialog = await open();
+    expect(dialog.style.maxWidth).toBe("");
+    expect(dialog.className).toContain("sm:max-w-[680px]");
+    expect(dialog.querySelector('[data-slot="sheet-header"]')!.className).toContain("pr-10");
+  });
+
+  // jsdom measures no layout; this pins the structure. Each part of the title is a flex item of its own that may
+  // shrink and break anywhere, since min-w-0 on the title does not reach an anonymous text item.
+  it("makes every part of the drawer title shrinkable and breakable", async () => {
+    renderTab([image()]);
+    const dialog = await open();
+    const title = dialog.querySelector('[data-slot="sheet-title"]')!;
+    expect(title.children.length).toBeGreaterThanOrEqual(2);
+    for (const part of Array.from(title.children)) {
+      expect(part.className).toContain("min-w-0");
+      expect(part.className).toContain("[overflow-wrap:anywhere]");
+    }
+  });
+});
+
 describe("an image request in the list", () => {
   it("reads as an image request: label, its line with the ticket, and the person → image target in mono", () => {
     renderTab([image()]);

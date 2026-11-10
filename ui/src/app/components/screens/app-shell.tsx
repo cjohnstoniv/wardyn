@@ -9,6 +9,7 @@ import {
   Outlet,
   useLocation,
   useNavigate,
+  useNavigationType,
 } from "react-router-dom";
 import {
   Activity,
@@ -385,8 +386,8 @@ function SidebarNav({
         {isCustomTrustDomain(meta.trustDomain) && (
           <div className="rounded-lg border border-sidebar-border bg-card/50 p-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Fingerprint className="size-3.5 text-muted-foreground" />
-              <span className="font-mono">{meta.trustDomain}</span>
+              <Fingerprint className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 break-all font-mono">{meta.trustDomain}</span>
             </div>
             <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
               All agent identities anchored to this trust domain.
@@ -481,6 +482,12 @@ export function AppShell({
   const confinementPosture = resolveConfinementPosture(meta.runner, meta.networkPolicy);
   const location = useLocation();
   const navigate = useNavigate();
+  // <main> outlives every route, so its scrollTop would otherwise carry into the next screen.
+  // Keyed on pathname only: a search-param change on a list must not jump to the top.
+  const mainRef = React.useRef<HTMLElement>(null);
+  React.useLayoutEffect(() => {
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+  }, [location.pathname]);
   const { access, view } = useShellView(meta);
   useViewResync(
     access,
@@ -502,9 +509,41 @@ export function AppShell({
   // route for them to open.
   const canReachEnvironmentStep =
     meta.operator || (access === "session-user" && meta.userViewSuperAdmin);
+  // Each route names itself in the tab title ("<page> - <console>") and, after a navigation, takes focus on its
+  // heading, so a screen reader hears the page change and a keyboard user starts at the new content. A screen
+  // that already placed focus inside the page (the New Run steps do) keeps it. Most screens draw the heading only
+  // once their first read has landed, and some remount it (the cockpit's focus mode), so one observer on <main>
+  // re-reads the title for as long as the route is open. Observers only: nothing here schedules a timer.
+  // A replace is a redirect (the console landing on its home screen, a guard sending you elsewhere), not a page
+  // the person chose, so it is titled but does not take focus. A re-auth that replaces the page announces itself.
+  const navigationType = useNavigationType();
+  const arrived = React.useRef(location.pathname);
   React.useEffect(() => {
-    document.title = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
-  }, [view]);
+    const base = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
+    const main = mainRef.current;
+    const heading = () => main?.querySelector<HTMLElement>("h1") ?? null;
+    const sync = () => {
+      const text = heading()?.textContent?.trim();
+      const title = text ? `${text} - ${base}` : base;
+      if (document.title !== title) document.title = title;
+    };
+    sync();
+    if (!main) return;
+    if (arrived.current !== location.pathname) {
+      arrived.current = location.pathname;
+      if (navigationType !== "REPLACE" && !main.contains(document.activeElement)) {
+        const target = heading() ?? main;
+        if (!target.hasAttribute("tabindex")) {
+          target.tabIndex = -1;
+          target.classList.add("outline-none");
+        }
+        target.focus({ preventScroll: true });
+      }
+    }
+    const observer = new MutationObserver(sync);
+    observer.observe(main, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [view, location.pathname, navigationType]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
@@ -516,20 +555,29 @@ export function AppShell({
 
   // The z-50 banners stay above focus mode's overlay, so the overlay starts below them: their bottom edge, published
   // as --shell-banner-h (focus-mode.tsx and the run page's expanded widget read it).
+  // --shell-main-top is where the row under EVERY banner starts, including the second group the stack above does not
+  // wrap; a screen that bounds itself to <main>'s visible height (the setup phase rail) reads it.
   const bannerStackRef = React.useRef<HTMLDivElement>(null);
+  const rowRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const el = bannerStackRef.current;
     if (!el) return;
+    const row = rowRef.current;
     const root = document.documentElement;
-    const sync = () => root.style.setProperty("--shell-banner-h", `${Math.round(el.getBoundingClientRect().bottom)}px`);
+    const sync = () => {
+      root.style.setProperty("--shell-banner-h", `${Math.round(el.getBoundingClientRect().bottom)}px`);
+      if (row) root.style.setProperty("--shell-main-top", `${Math.round(row.getBoundingClientRect().top)}px`);
+    };
     sync();
     const ro = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
     ro?.observe(el);
+    if (row) ro?.observe(row);
     window.addEventListener("resize", sync);
     return () => {
       ro?.disconnect();
       window.removeEventListener("resize", sync);
       root.style.removeProperty("--shell-banner-h");
+      root.style.removeProperty("--shell-main-top");
     };
   }, [focus]);
 
@@ -563,7 +611,7 @@ export function AppShell({
         {/* #217 — above BOTH the sidebar that can navigate away and every
           screen below it that can register a dirty form (lib/use-unsaved-guard.tsx). */}
         <UnsavedGuardProvider>
-          <div className="flex h-screen flex-col bg-background text-foreground">
+          <div className="relative flex h-dvh flex-col overflow-clip bg-background text-foreground">
             {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
             {/* Hidden in focus mode: its target is inert then, and the focus overlay is what is on screen. */}
@@ -685,7 +733,7 @@ export function AppShell({
           `role="status"` region announces CHANGES to its content, so a region
           that arrives WITH its first sentence (as a lazy chunk does) announces
           nothing. The wrapper is here from the first paint; the chunk fills it. */}
-            <div role="status">
+            <div role="status" className="scroll-thin max-h-[30dvh] shrink-0 overflow-y-auto overscroll-contain">
               {/* #659 Q2 — first in the stack: a one-time answer to a redirect
               the person is actively watching for, not a standing deployment
               condition like the bands below it. */}
@@ -726,9 +774,9 @@ export function AppShell({
                 <ConfinementPostureBanner view={view} />
               </React.Suspense>
             </div>
-            <div className="flex min-h-0 flex-1">
+            <div ref={rowRef} className="flex min-h-0 flex-1">
               {!focus && (
-                <aside className="hidden w-[228px] shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+                <aside className="scroll-thin relative hidden w-[228px] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
                   <SidebarNav
                     pendingApprovals={pendingApprovals}
                     attentionCount={attentionCount}
@@ -744,7 +792,8 @@ export function AppShell({
                 // beneath it, so they must leave the tab order and the accessibility tree while it is on. The
                 // overlay, the terminal and the banners all live outside this element and stay reachable.
                 inert={focus}
-                className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none"
+                ref={mainRef}
+                className="scroll-thin relative min-w-0 flex-1 overflow-y-auto overscroll-contain focus:outline-none"
               >
                 {/* Keyed by pathname so navigating away from a screen that threw
               clears the caught error instead of wedging the console. */}

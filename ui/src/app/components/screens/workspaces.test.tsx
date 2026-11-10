@@ -94,6 +94,23 @@ describe("WorkspacesScreen — list columns", () => {
     expect(screen.getByText("acme/payments @main")).toBeInTheDocument();
   });
 
+  it("bounds a long workspace name with a tooltip instead of widening the table past its actions menu", async () => {
+    const name = "payments-platform-service-account-rotation-with-a-very-long-name-12345";
+    listWorkspacesMock.mockResolvedValue([ws({}, { name })]);
+    renderScreen();
+    const label = await screen.findByText(name);
+    expect(label).toHaveAttribute("title", name);
+    expect(label.className).toContain("truncate");
+    expect(screen.getByRole("button", { name: `Workspace actions: ${name}` })).toBeInTheDocument();
+  });
+
+  it("each row's actions menu is named after the workspace", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { id: "ws-1", name: "payments" }), ws({}, { id: "ws-2", name: "billing" })]);
+    renderScreen();
+    expect(await screen.findByRole("button", { name: "Workspace actions: payments" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace actions: billing" })).toBeInTheDocument();
+  });
+
   it("Source column: a multi-source workspace shows the composition summary instead", async () => {
     const w = ws({}, {
       status: "scanned",
@@ -601,6 +618,29 @@ describe("WorkspaceLLMCredDialog", () => {
     const workspace = ws({}, { llm_cred: { provider_ref: "provider-gone" } });
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
     expect(await screen.findByRole("radio", { name: /provider-gone \(not in the Model providers list\)/i })).toBeChecked();
+  });
+
+  it("a failed providers read says so with Try again, never that the stored provider is gone", async () => {
+    getModelProvidersMock.mockReset().mockRejectedValueOnce(new Error("HTTP 500"));
+    const workspace = ws({}, { llm_cred: { provider_ref: "anthropic-key" } });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    expect(await screen.findByText(/Couldn't load the model providers/)).toBeInTheDocument();
+    expect(screen.queryByText(/Loading model providers/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not in the Model providers list/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /anthropic-key \(current\)/ })).toBeChecked();
+    getModelProvidersMock.mockResolvedValue(providersList([{ id: "anthropic-key", name: "Anthropic API", kind: "anthropic_api_key" }]));
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("radio", { name: /anthropic api/i })).toBeChecked();
+    expect(screen.queryByText(/Couldn't load the model providers/)).not.toBeInTheDocument();
+  });
+
+  it("a successful empty list is not an error: no failure note, only None", async () => {
+    const workspace = ws({}, { llm_cred: {} });
+    render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText(/Loading model providers/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/Couldn't load the model providers/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /none — each run chooses/i })).toBeChecked();
   });
 });
 

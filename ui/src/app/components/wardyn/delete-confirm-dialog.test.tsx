@@ -199,3 +199,17 @@ describe("DeleteConfirmDialog — one delete per confirm", () => {
     expect(button).toBeDisabled();
   });
 });
+
+// A name made only of letters, dots and underscores has no line-break opportunity, so a 96-character secret
+// name widened the dialog's auto column and pushed Cancel and Delete out of sight. jsdom has no layout, so
+// this pins the two classes that keep the column at the dialog's width and let the title wrap.
+describe("DeleteConfirmDialog — a very long name", () => {
+  it("keeps the content to one width-bound column and lets the title break inside the name", () => {
+    const name = "prod.payments.eu_west_1.stripe_api_key.service_account.rotating.primary.2026_q4_backup_copy_final";
+    render(
+      <DeleteConfirmDialog name={name} entity="secret" description="test" onOpenChange={() => {}} onDelete={vi.fn()} onDeleted={() => {}} />,
+    );
+    expect(screen.getByRole("alertdialog").className).toContain("grid-cols-[minmax(0,1fr)]");
+    expect(screen.getByRole("heading", { name: new RegExp(name.replace(/\./g, "\\.")) }).className).toContain("break-words");
+  });
+});

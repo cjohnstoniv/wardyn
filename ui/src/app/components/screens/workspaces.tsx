@@ -301,11 +301,11 @@ export function WorkspacesScreen() {
                     className={notAdmitted ? "cursor-pointer opacity-70" : "cursor-pointer"}
                   >
                     <TableCell>
-                      <span className="inline-flex items-center gap-2.5">
+                      <span className="inline-flex max-w-full items-center gap-2.5">
                         <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground">
                           <kindMeta.Icon className="size-3.5" />
                         </span>
-                        <span className="text-foreground">{w.name}</span>
+                        <span className="min-w-0 max-w-[16rem] truncate text-foreground" title={w.name}>{w.name}</span>
                       </span>
                       {workspaceUngranted && (
                         <p className="mt-1 max-w-[220px] text-meta text-muted-foreground">
@@ -348,7 +348,7 @@ export function WorkspacesScreen() {
                     <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-8" aria-label="Workspace actions">
+                          <Button variant="ghost" size="icon" className="size-8" aria-label={`Workspace actions: ${w.name}`}>
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>

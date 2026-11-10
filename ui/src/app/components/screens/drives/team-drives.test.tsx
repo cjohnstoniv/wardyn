@@ -48,7 +48,7 @@ vi.mock("../../../lib/api/directory", async () => {
 
 import { HttpError } from "../../../lib/api/core";
 import type { UserDriveGrant, UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
-import { DRIVES, PERM } from "../../../lib/user-drives-copy";
+import { DRIVES, DRIVES_TEAM_UNKNOWN, PERM } from "../../../lib/user-drives-copy";
 import { aheadByHours } from "../../../lib/test-clock";
 import { DrivesScreen } from "./drives-screen";
 
@@ -147,6 +147,37 @@ describe("Drives list, team drive rows", () => {
     await openEdit("platform-ref");
     expect(screen.queryByRole("switch", { name: DRIVES.FIELD_TEAM })).toBeNull();
     expect(screen.getByRole("switch", { name: DRIVES.FIELD_WRITABLE })).toBeInTheDocument();
+  });
+});
+
+describe("Drives list, the team-drive switch cannot be read", () => {
+  async function renderUnread() {
+    getDrivesMock.mockResolvedValue(snapshot({ drives: [drive({ writable: true, single_host: true }), drive({ id: "p1", name: "plain", team: false })], grants: [grant()] }));
+    getProvidersMock.mockRejectedValueOnce(new Error("HTTP 403"));
+    render(<DrivesScreen />);
+    await screen.findAllByRole("table");
+    return screen.findByText(DRIVES_TEAM_UNKNOWN.NOTE);
+  }
+
+  it("a team drive claims no access, cleanup or allocation, and the note offers Try again", async () => {
+    await renderUnread();
+    const row = within(table().getByRole("row", { name: /platform-ref/ }));
+    expect(row.getAllByText(DRIVES_TEAM_UNKNOWN.CELL)).toHaveLength(3);
+    for (const t of [DRIVES.TEAM_CHIP, DRIVES.TEAM_RECLAIM_CELL, DRIVES.RECLAIM_RETAIN, DRIVES.MODE_RW, DRIVES.MODE_RO, DRIVES.ALLOCATED_COUNT(1)]) {
+      expect(row.queryByText(t)).toBeNull();
+    }
+    expect(screen.getByRole("button", { name: `${DRIVES.EDIT} platform-ref` })).toBeDisabled();
+    // An ordinary drive is unaffected: the switch only changes what a team drive says.
+    expect(within(table().getByRole("row", { name: /plain/ })).getByText(DRIVES.RECLAIM_RETAIN)).toBeInTheDocument();
+  });
+
+  it("Try again reads the switch and then shows the team row", async () => {
+    await renderUnread();
+    getProvidersMock.mockResolvedValue({ providers: { storage: { user_drive: { team_drives: true } } }, etag: null });
+    await userEvent.click(screen.getByRole("button", { name: DRIVES_TEAM_UNKNOWN.RETRY }));
+    expect(await screen.findByText(DRIVES.TEAM_CHIP)).toBeInTheDocument();
+    expect(screen.queryByText(DRIVES_TEAM_UNKNOWN.NOTE)).toBeNull();
+    expect(screen.getByText(DRIVES.TEAM_RECLAIM_CELL)).toBeInTheDocument();
   });
 });
 

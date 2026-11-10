@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Kubernetes: the NetworkPolicy egress canary now re-runs every 10 minutes in each runs namespace, not only at boot. The first check that shows egress through a deny-all policy refuses new sandboxes in that namespace, and three checks in a row that cannot tell refuse them as not proven; running ones keep running. `/healthz` adds `network_policy_checked_at`, the time of the check that produced the verdict, and reports `network_policy` as `refused` or `not_proven` after a failed re-check. The setup page's egress-containment row shows the verdict and that time. The prewrapped image check follows the same live verdict. Each change of the verdict, either way, writes a `k8s.netpol.update` audit row.
 
+### Fixed
+
+- macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit, never kills it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. Retest on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.
+
 ## [0.10.0-rc.17] — 2026-11-09
 
 ### Before you upgrade

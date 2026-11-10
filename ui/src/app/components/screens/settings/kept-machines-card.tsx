@@ -13,7 +13,7 @@ import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { deleteMyMachine, myMachines } from "../../../lib/api/me-machines";
-import { shortDate } from "../../../lib/format";
+import { mediumDate } from "../../../lib/format";
 import type { KeptMachine, MyMachines } from "../../../lib/types";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
@@ -98,7 +98,7 @@ export function KeptMachinesCard() {
                         <Chip tone={row.tone}>{row.chip}</Chip>
                       </span>
                       <span className="block text-xs text-muted-foreground">{T.META(macOf(m), m.base, gbOf(m.disk_bytes))}</span>
-                      <span className="block text-xs text-muted-foreground">{T.DATES(shortDate(m.last_used_at), shortDate(m.expires_at))}</span>
+                      <span className="block text-xs text-muted-foreground">{T.DATES(mediumDate(m.last_used_at), mediumDate(m.expires_at))}</span>
                       {row.line && <span className="block text-xs text-muted-foreground">{row.line}</span>}
                     </span>
                     <Button type="button" variant="ghost" size="sm" disabled={!row.canDelete || busy} aria-label={`${T.DELETE} ${m.name}`} onClick={() => setToDelete(m)}>

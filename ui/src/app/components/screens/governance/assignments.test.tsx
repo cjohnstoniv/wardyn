@@ -72,10 +72,11 @@ beforeEach(() => {
 
 describe("AssignmentsBlock — the add-a-grant row", () => {
   // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line.
-  it("sizes the Who column to its content at lg", async () => {
+  it("sizes the Who column to its content at xl, not lg (the sidebar takes 228px of the viewport)", async () => {
     const { container } = renderBlock();
     await screen.findByLabelText(PREVIEW.FIELD_CLAIMS);
-    expect(container.querySelector('[class~="lg:grid-cols-[auto_1fr_1fr]"]')).not.toBeNull();
+    expect(container.querySelector('[class~="xl:grid-cols-[auto_1fr_1fr]"]')).not.toBeNull();
+    expect(container.querySelector('[class*="lg:grid-cols-"]')).toBeNull();
   });
 });
 

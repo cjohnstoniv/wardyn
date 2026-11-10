@@ -8,17 +8,15 @@
 // Every function says nothing rather than inventing a fact the wire did not
 // carry, the rule scm-access-display.ts follows for the sign-in lane.
 import { ADO_PAT } from "./ado-pat-copy";
+import { shortTime } from "./format";
 import { ADO_PAT_REASON } from "./api/ado-pat";
 import { adoCapName } from "./ado-access-copy";
 import type { ADOEntraConfig, GitProvider } from "./api/providers";
 import type { ADOOrgCheck, ADORunToken, SCMAccessPAT } from "./types/ado-pat";
 
-// en-GB on purpose: the copy is written in British English, and the clock is
-// 24-hour, as the mock draws it.
+// The clock follows the reader's locale like every other time in the console (lib/format.ts shortTime).
 export function formatClock(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  return Number.isNaN(new Date(iso).getTime()) ? iso : shortTime(iso);
 }
 
 // A date-only string (the wire's expires_on) is a calendar day in the reader's
@@ -28,6 +26,7 @@ function parseDay(iso: string): Date {
   return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso);
 }
 
+// en-GB on purpose: the copy is written in British English, so a day reads "9 November".
 export function formatDay(iso: string): string {
   const d = parseDay(iso);
   if (Number.isNaN(d.getTime())) return iso;

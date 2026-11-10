@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
+import { MODEL_PROVIDERS_UNAVAILABLE } from "../wardyn/copy/lookup-failures";
 import { useOperator } from "../wardyn/operator-context";
 
 // Human label for the current model-provider binding (list/detail display).
@@ -41,9 +42,10 @@ export function llmCredTone(cred?: WorkspaceLLMCred): "neutral" | "success" {
 
 // The binding picker: "None" + every model provider the server knows.
 // Uncontrolled data lives in the caller — this renders `value` and reports
-// edits via `onChange`. Providers are fetched once on mount; a fetch failure
-// renders the None-only honest floor (the binding can still be cleared, never
-// invented).
+// edits via `onChange`. Providers are fetched on mount. A failed fetch is not
+// an empty list: it says the list could not be loaded, offers Try again, and
+// keeps the stored binding selectable and clearable without claiming that its
+// provider is gone.
 export function LLMCredFields({
   value,
   onChange,
@@ -52,16 +54,19 @@ export function LLMCredFields({
   onChange: (next: WorkspaceLLMCred) => void;
 }) {
   const [providers, setProviders] = React.useState<ModelProvider[] | null>(null);
+  const [failed, setFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     let live = true;
+    setFailed(false);
     modelProvidersApi
       .getModelProviders()
       .then((d) => live && setProviders(d.providers.providers ?? []))
-      .catch(() => live && setProviders([]));
+      .catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
-  }, []);
+  }, [attempt]);
 
   const ref = value.provider_ref ?? "";
   return (
@@ -87,6 +92,14 @@ export function LLMCredFields({
           </label>
         ))}
         {/* A stored ref whose provider no longer lists: still selectable/clearable, named honestly. */}
+        {ref && providers === null && failed && (
+          <label className="flex items-center gap-1.5 text-xs">
+            <RadioGroupItem value={ref} id="cred-ref-current" />
+            <Label htmlFor="cred-ref-current" className="cursor-pointer font-mono font-normal">
+              {ref} (current)
+            </Label>
+          </label>
+        )}
         {ref && providers !== null && !providers.some((p) => p.id === ref) && (
           <label className="flex items-center gap-1.5 text-xs">
             <RadioGroupItem value={ref} id="cred-ref-current" />
@@ -96,7 +109,15 @@ export function LLMCredFields({
           </label>
         )}
       </RadioGroup>
-      {providers === null && <p className="text-meta leading-snug text-muted-foreground">Loading model providers…</p>}
+      {providers === null && !failed && <p className="text-meta leading-snug text-muted-foreground">Loading model providers…</p>}
+      {providers === null && failed && (
+        <p role="alert" className="flex flex-wrap items-center gap-2 text-meta leading-snug text-danger">
+          {MODEL_PROVIDERS_UNAVAILABLE.NOTE}
+          <Button type="button" variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>
+            {MODEL_PROVIDERS_UNAVAILABLE.RETRY}
+          </Button>
+        </p>
+      )}
       <p className="text-meta leading-snug text-muted-foreground">
         A run that picks this workspace/container uses this model provider unless it chooses one itself — with
         its launcher&apos;s own credential for it.

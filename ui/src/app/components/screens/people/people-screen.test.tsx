@@ -116,6 +116,17 @@ describe("the people table", () => {
     expect(within(left).getByText("3 credentials")).toBeInTheDocument();
   });
 
+  it("bounds a long identity with a tooltip and lets the Holds sentence wrap, so the table stays in its column", async () => {
+    const long = "firstname.lastname.contractor@subsidiary.contoso.com";
+    listMock.mockResolvedValue({ people: [person({ principal: "sub-long", email: long })] });
+    renderScreen();
+    const button = await screen.findByRole("button", { name: long });
+    expect(button).toHaveAttribute("title", long);
+    expect(button.className).toContain("truncate");
+    const holds = within(button.closest("tr")!).getByText(/session|token|key|credential/);
+    expect(holds.closest("td")!.className).toContain("whitespace-normal");
+  });
+
   it("labels a role the server could not derive from truncated groups as Unknown", async () => {
     listMock.mockResolvedValue({ people: [person({ role: "unknown" })] });
     renderScreen();
@@ -195,6 +206,36 @@ describe("the people table", () => {
     expect(await screen.findByText("new@example.com")).toBeInTheDocument();
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
     expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "c1" }));
+  });
+
+  it("a failed Load more keeps the pages already read and retries from the same cursor", async () => {
+    listMock
+      .mockResolvedValueOnce({ people: [ROWS[0]], next_cursor: "c1" })
+      .mockRejectedValueOnce(new Error("HTTP 500"))
+      .mockResolvedValueOnce({ people: [ROWS[1]] });
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByText(P.MORE_FAILED)).toBeInTheDocument();
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: P.MORE_RETRY }));
+    expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    expect(screen.queryByText(P.MORE_FAILED)).not.toBeInTheDocument();
+    expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "c1" }));
+  });
+
+  it("disables Load more while the next page is on its way", async () => {
+    let finish: (v: unknown) => void = () => {};
+    listMock.mockResolvedValueOnce({ people: [ROWS[0]], next_cursor: "c1" }).mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("ana@example.com");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("button", { name: P.LOADING_MORE })).toBeDisabled();
+    finish({ people: [ROWS[1]] });
+    expect(await screen.findByText("new@example.com")).toBeInTheDocument();
   });
 });
 

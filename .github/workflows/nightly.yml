@@ -710,6 +710,9 @@ jobs:
           WARDYN_TEST_DOCKER: "1"
           # the relay test runs the proxy image built above (cmd/wardyn-runnerd/relay_docker_live_test.go)
           WARDYN_TEST_PROXY_IMAGE: wardyn/wardyn-proxy:local
+          # The coverage compile of internal/api peaked near 13 GB on the rc.17 candidate and the runner
+          # was shut down mid-suite; collecting twice as often lowers that peak (the MON lines measure it).
+          GOGC: "50"
         shell: bash
         run: |
           set -euo pipefail

@@ -43,7 +43,7 @@ describe("formatDuration", () => {
 
 // One home for dates, times and durations (#3085): a screen that formats a
 // timestamp calls lib/format.ts, so the next date fix is one edit. The ADO PAT
-// clock is British 24-hour copy on purpose and is the one exception.
+// day is British "9 November" copy on purpose and is the one exception.
 describe("date and duration formatting lives in lib/format.ts", () => {
   const root = join(__dirname, "..");
   const sources = (dir: string): string[] =>

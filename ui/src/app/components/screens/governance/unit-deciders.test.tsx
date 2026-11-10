@@ -266,7 +266,8 @@ describe("UnitDeciders: the rule editor", () => {
     expect(box.getByRole("checkbox", { name: new RegExp(DECIDER_KIND_LABEL.egress_domain) })).toBeDisabled();
     expect(box.getAllByText(DECIDERS.NOT_WITH).length).toBeGreaterThan(0);
     // Nothing is chosen yet, so the two required fields say so and Done is off.
-    expect(box.getByText(DECIDERS.ELEV_MAX_ERROR)).toBeInTheDocument();
+    expect(box.getByText(DECIDERS.ELEV_MAX_ERROR)).toHaveAttribute("role", "alert");
+    expect(box.getByLabelText(DECIDERS.ELEV_MAX_LABEL)).toHaveAccessibleDescription(new RegExp(DECIDERS.ELEV_MAX_ERROR.slice(0, 20)));
     expect(box.getByText(DECIDERS.ASK_REQUIRED)).toBeInTheDocument();
     expect(box.getByRole("button", { name: DECIDERS.DONE })).toBeDisabled();
     // Ten minutes is under the floor.

@@ -6,7 +6,18 @@
 // The one removable-host row both egress cards (allowed, denied) render.
 import * as React from "react";
 import { X } from "lucide-react";
-import { Button } from "../../ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
+import { Button, buttonVariants } from "../../ui/button";
+import { WORKSPACE_HOSTS as H } from "../../wardyn/copy/workspace-hosts";
 import { Mono } from "../../wardyn/code-block";
 
 export interface HostRow {
@@ -24,46 +35,71 @@ export interface HostRow {
   removeBlockedReason?: string;
 }
 
-export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
+export function HostList({ rows, emptyText, canRemove, removing, onRemove, confirm }: {
   rows: HostRow[];
   emptyText: string;
   canRemove: boolean;
   removing: string | null;
   onRemove: (host: string) => void;
+  /** What the confirm names: a removal changes what new runs on the workspace can reach, so it asks first. */
+  confirm: { title: (host: string) => string; body: string };
 }) {
+  const [target, setTarget] = React.useState<string | null>(null);
   // Per list: the allowed and denied cards can both hold a host.
   const listId = React.useId();
   const reasonId = (host: string) => `${listId}-reason-${host}`;
   if (rows.length === 0) return <p className="text-xs text-muted-foreground">{emptyText}</p>;
   return (
-    <ul className="space-y-2">
-      {rows.map((r) => (
-        <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-          <Mono className="flex-1 text-foreground">{r.host}</Mono>
-          <span className="text-meta text-muted-foreground">{r.provenance}</span>
-          {/* A disabled control says why in visible text beside it, never in a title alone (CONSOLE-RULES). */}
-          {r.removable && r.removeBlockedReason && (
-            <span id={reasonId(r.host)} className="max-w-[32ch] text-meta text-muted-foreground">
-              {r.removeBlockedReason}
-            </span>
-          )}
-          {r.removable ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-7 shrink-0"
-              disabled={!canRemove || !!r.removeBlockedReason || removing !== null}
-              onClick={() => onRemove(r.host)}
-              aria-label={`Remove ${r.host}`}
-              aria-describedby={r.removeBlockedReason ? reasonId(r.host) : undefined}
+    <>
+      <ul className="space-y-2">
+        {rows.map((r) => (
+          <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
+            <Mono className="flex-1 text-foreground">{r.host}</Mono>
+            <span className="text-meta text-muted-foreground">{r.provenance}</span>
+            {/* A disabled control says why in visible text beside it, never in a title alone (CONSOLE-RULES). */}
+            {r.removable && r.removeBlockedReason && (
+              <span id={reasonId(r.host)} className="max-w-[32ch] text-meta text-muted-foreground">
+                {r.removeBlockedReason}
+              </span>
+            )}
+            {r.removable ? (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-7 shrink-0"
+                disabled={!canRemove || !!r.removeBlockedReason || removing !== null}
+                onClick={() => setTarget(r.host)}
+                aria-label={`Remove ${r.host}`}
+                aria-describedby={r.removeBlockedReason ? reasonId(r.host) : undefined}
+              >
+                <X className="size-3.5" />
+              </Button>
+            ) : (
+              <span className="w-7 shrink-0 text-center text-muted-foreground">—</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <AlertDialog open={target !== null} onOpenChange={(o) => !o && setTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{target ? confirm.title(target) : ""}</AlertDialogTitle>
+            <AlertDialogDescription>{confirm.body}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{H.CANCEL}</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => {
+                if (target) onRemove(target);
+                setTarget(null);
+              }}
             >
-              <X className="size-3.5" />
-            </Button>
-          ) : (
-            <span className="w-7 shrink-0 text-center text-muted-foreground">—</span>
-          )}
-        </li>
-      ))}
-    </ul>
+              {H.CONFIRM}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
