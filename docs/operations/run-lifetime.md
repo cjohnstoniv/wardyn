@@ -111,6 +111,28 @@ A live run, one lost to an `outage` or a `reboot`, or a kept run that's interact
 - A revived run keeps its ORIGINAL agent image: a reboot revive restarts the same, already-created agent container rather than recreating it from an agent image an operator may have since patched.
 - The only way onto a newer image is to end the run and start a new one.
 
+### Policy readback
+
+Each proxy start, at dispatch or revive, is recorded as pending before the proxy starts. The record holds the run's policy generation and the start's fresh run token.
+
+1. The driver answers with the SHA-256 of the exact config bytes it handed the proxy.
+2. The proxy posts the SHA-256 of the bytes it loaded to `POST /internal/proxy/loaded`, on its run token, and retries until it gets a 2xx.
+3. A report that arrives before the driver answers is held. The start is `enforced` only when both hashes are in and equal (`run.policy.enforced`).
+
+The proxy is stopped (`run.policy.unconfirmed`, outcome `failure`) when:
+
+- the driver answers without a hash (`hash_missing`), at once;
+- the two hashes differ (`hash_mismatch`);
+- no matching report arrives within 60 seconds of the driver's answer (`deadline`).
+
+A create that is still running has no readback deadline. A dispatch whose start fails fails the run. A revive's failed start puts the run back to lost.
+
+A report counts only for the run's newest start. Its token must be that start's own token, or one renewed from it since the start: the run's current or previous token. Any other report is ignored and audited as `run.policy.report_stale`.
+
+A start is `legacy` only when a runner's registered version, or the proxy image tag, names a release older than 0.10.0-rc.18. A legacy start runs as before, unconfirmed (`run.policy.unconfirmed`, reason `legacy`). An empty or unparsable version is not legacy. A revive that must confirm, on a substrate that cannot answer the hash, is refused before anything changes (`409 revive_readback_unsupported`).
+
+`GET /runs/{id}` shows the newest start as `policy_readback`: its `state`, `generation` and `confirmed_at`, without either hash. The address the agent reaches its proxy on is stored with the run for the audit and is not on the run's JSON.
+
 ## Rename
 
 `PATCH /runs/{id}/title` lets the run's OWNER change its title. It's a display field, not part of the lease above, so it needs no captured limit and is allowed in ANY run state, including a terminal or kept one.

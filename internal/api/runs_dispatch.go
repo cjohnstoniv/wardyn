@@ -652,6 +652,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
+	// The pending proxy start is recorded before CreateSandbox, so a report the proxy sends while the
+	// create is still running is held against it (run_proxy_readback.go).
+	start, ok := s.beginDispatchProxyStart(ctx, run, p.RunToken, stopCreateLease)
+	if !ok {
+		return
+	}
 	// Recorded now, not at the snapshot: the file_secret placeholders and the placement
 	// classification are the last writers of the proxy config, and the host marks must describe
 	// the config the runner is sent. Nothing between the snapshot and here reads the envelope.
@@ -709,6 +715,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	if err := s.recordStartedSandbox(ctx, run, sb); err != nil {
 		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
+		return
+	}
+	// The driver's hash of the bytes its proxy was handed: a start that must confirm and cannot is
+	// stopped here, before the run goes RUNNING.
+	if ok, why := s.proxyStartAnswered(ctx, run.ID, start, sb.ProxyConfigSHA256); !ok {
+		s.abortUnconfirmedSandbox(ctx, run.ID, sb.Ref, why)
 		return
 	}
 

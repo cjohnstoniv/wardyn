@@ -190,6 +190,8 @@ if v.State == client.RunPolicyViewRecorded {
 
 The CLI is `wardyn run policy <run-id> [--json]`.
 
+`GET /api/v1/runs/{id}` also returns `policy_readback`, the run's newest proxy start as its policy readback stands: `state` (`pending`, `enforced`, `unconfirmed`, `failed`, `abandoned` or `superseded`), `generation` and `confirmed_at`. There is no key for a run with no recorded start. See [run lifetime](operations/run-lifetime.md#policy-readback).
+
 `GET /api/v1/runs/{id}` also returns `policy_digest`: the SHA-256 of the run's effective policy as `run.policy.resolve` records it, or no key before the policy is recorded. It identifies the policy and enforces nothing. Audit rows of the run carry the same value; see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
 #### Reusing the spec
@@ -991,6 +993,9 @@ start.
 | `run_queued` | `PATCH /runs/{id}`: the run is waiting for a slot in its runner pool (state `QUEUED`), so its end is set when it starts and cannot be changed yet. The `201` that stored a run `QUEUED` reports `resources_applied` as of the launch: the start sizes the run again against the limits as they stand then. |
 | `run_kill_already_terminal` / `run_kill_state_changed` | `POST /runs/{id}/kill`: the run was already terminal, or ended or kept moving between the read and the write. |
 | `revive_unsupported` | `POST /runs/{id}/revive` (409), and the same value in each refused run's `reason` in `POST /admin/runs/restart`'s `results`: the run's runner substrate cannot replace its proxy in place (`runner.ErrReviveUnsupported`; on Kubernetes the agent pod pins the proxy pod's IP, so the substrate implements no `runner.ProxyReviver`). Nothing changed. Stop the run and start a new one. |
+| `revive_readback_unsupported` | `POST /runs/{id}/revive` (409), and in each refused run's `reason` in `POST /admin/runs/restart`'s `results`: the new proxy must confirm its policy, and the run's substrate cannot answer the hash of the config it hands that proxy. Nothing changed. |
+| `revive_policy_unconfirmed_lost` | `POST /runs/{id}/revive` (502): the new proxy started but did not confirm its policy (no hash from the driver, or a report of different bytes), so it was stopped and the run is lost until revived. |
+| `proxy_report_invalid` | `POST /internal/proxy/loaded` (400): the report's `config_sha256` is not a lowercase hex SHA-256. |
 | `workspace_repo_not_admitted` | The repository is not on this deployment's admitted list (`workspace_admission.go`), at create/update and at launch. |
 | `repo_url_credentials` | `400`: an http(s) repository URL carries a user name, password or token before its host, or an `ssh://` URL a password, wherever a repository is entered or a stored one is launched or scanned. Give the plain URL and the token as a `git_pat` grant. `git@host:path`, `ssh://user@` and the Azure DevOps Clone-button form `https://<org>@dev.azure.com/<org>/...` are accepted. Stored runs, workspaces, sources, policies, presets, templates, governance profiles and launch intents are served without it. |
 | `workspace_envcode_no_local_dir` / `workspace_envcode_no_profile` | `POST /workspaces/{id}/env-as-code/write` only: no `local_dir` source. That route and `GET /workspaces/{id}/env-as-code`: no scanned profile. |

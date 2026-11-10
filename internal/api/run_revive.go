@@ -195,6 +195,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveReadbackSupported(ctx, run, rv); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.markReviving(run); rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -325,7 +328,16 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if gerr != nil {
 		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, gerr)
 	}
-	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
+	// The pending start, only now that the old lineage is retired: no report on it can land here.
+	start, berr := s.beginProxyStart(ctx, run, gen, freshJTI)
+	if berr != nil {
+		s.abandonRunPolicyGeneration(ctx, run, gen)
+		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, berr)
+	}
+	proxyHash, err := s.replaceRevivedProxyHashed(runnerCtx, rv, run, cfgJSON)
+	if err != nil {
+		// Abandoned before any lineage is restored, so the kept proxy's tokens never confirm it.
+		s.abandonProxyStart(ctx, run.ID, start)
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
@@ -355,6 +367,11 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// return above this point leaves the old proxy running unrevoked.
 	s.revokeRetiringToken(ctx, retiring, run.ID)
 	s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), freshJTI)
+	if ok, why := s.proxyStartAnswered(ctx, run.ID, start, proxyHash); !ok {
+		data["error"] = "policy readback: " + why
+		return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonRevivePolicyUnconfirmedLost,
+			"the run's new proxy did not confirm its policy, so it was stopped and the run is lost until revived", errors.New(why))
+	}
 	// The stored config becomes the one now running. A failed write keeps the
 	// previous one, from which the next revive re-derives the same result.
 	if err := s.storeRunProxyConfig(ctx, run.ID, storedJSON); err != nil {

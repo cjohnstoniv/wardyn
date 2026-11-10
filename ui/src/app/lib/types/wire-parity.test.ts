@@ -412,6 +412,19 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(runsTs, "VMMachine"))).toEqual(new Set(goTags));
   });
 
+  // internal/types/policy_readback.go: AgentRun.policy_readback.
+  it("RunPolicyReadback: full parity with the TS mirror, and the TS states are exactly Go's", () => {
+    const go = readFileSync(join(root, "internal/types/policy_readback.go"), "utf8");
+    const goTags = goJSONTags(go, "RunPolicyReadback");
+    expect(goTags).toContain("confirmed_at");
+    const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(runsTs, "RunPolicyReadback"))).toEqual(new Set(goTags));
+    const goStates = [...go.matchAll(/^\s*ProxyStart\w+\s+ProxyStartState\s*=\s*"([a-z]+)"/gm)].map((m) => m[1]);
+    const tsStates = [...(/export type ProxyStartState = ([^;]+);/.exec(runsTs)?.[1] ?? "").matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+    expect(goStates.length).toBe(6);
+    expect(new Set(tsStates)).toEqual(new Set(goStates));
+  });
+
   it("MachineKind: the TS VMKind is exactly Go's non-container kinds", () => {
     const machineGo = readFileSync(join(root, "internal/types/machine.go"), "utf8");
     const consts = new Map([...machineGo.matchAll(/^\s*(Machine\w+)\s+MachineKind\s*=\s*"([a-z_]+)"/gm)].map((m) => [m[1], m[2]] as const));

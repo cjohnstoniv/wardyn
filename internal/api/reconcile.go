@@ -710,6 +710,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	pass("ended desktop recording pause sweep", s.sweepEndedDesktopRecordingPauses(ctx))
 	// A run whose token lapsed loses its proxy within a tick.
 	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
+	// A proxy start whose report did not arrive by its deadline loses its proxy within a tick.
+	pass("proxy start deadline sweep", s.sweepOverdueProxyStarts(ctx))
 	// Azure DevOps personal access tokens, on their own slower clock.
 	pass("run personal access token sweep", s.sweepRunPATs(ctx))
 	// Unclaimed runners that outlived their 24h wait.

@@ -414,6 +414,11 @@ type Sandbox struct {
 	// KeptScrub and KeptBase are a kept create's boot scrub and cloned base; nil otherwise or from older runners.
 	KeptScrub *KeptScrub `json:",omitempty"`
 	KeptBase  *KeptBase  `json:",omitempty"`
+	// ProxyConfigSHA256 is the hex SHA-256 of the exact config bytes the driver handed to this sandbox's
+	// proxy; empty from a driver or runner that predates the readback.
+	ProxyConfigSHA256 string `json:",omitempty"`
+	// ProxyAddr is the address the agent is pinned to for its proxy; empty from an older driver or runner.
+	ProxyAddr string `json:",omitempty"`
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
@@ -596,6 +601,12 @@ type ProxyReviver interface {
 	// Called BEFORE the revive claim so a slow pull doesn't widen the window
 	// a watcher sweep must leave the run alone in.
 	EnsureProxyImage(ctx context.Context) error
+}
+
+// ProxyReviverHashed is an OPTIONAL ProxyReviver capability: ReplaceProxy that also answers the hex
+// SHA-256 of the exact config bytes the new proxy was handed.
+type ProxyReviverHashed interface {
+	ReplaceProxyHashed(ctx context.Context, ref string, cfgJSON []byte) (string, error)
 }
 
 // ErrReviveUnsupported is ProxyReviver's answer from a router whose substrate

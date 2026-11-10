@@ -943,6 +943,8 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	r.Post("/internal/decisions", s.handlePostDecision)
 	// The proxy's "bytes moved" presence signal (#572), run from the token.
 	r.Post("/internal/activity", s.handleInternalActivity)
+	// The proxy's policy readback: the SHA-256 of the config bytes it loaded (run_proxy_readback.go).
+	r.Post("/internal/proxy/loaded", s.handleInternalProxyLoaded)
 	r.Post("/internal/approvals", s.handleInternalRequestApproval)
 	r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
 	// wardyn-toolgate's own give-up signal (#811): closes the row it

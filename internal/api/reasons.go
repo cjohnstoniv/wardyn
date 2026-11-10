@@ -282,6 +282,14 @@ const (
 	// agent pod). Nothing changed; stop the run and start a new one.
 	reasonReviveUnsupported = "revive_unsupported"
 
+	// Policy readback (run_proxy_readback.go). POST /runs/{id}/revive: a start that must confirm its
+	// policy on a substrate that cannot answer the new proxy's config hash (409, nothing changed); a
+	// new proxy that did not confirm it, so the run is lost again (502). POST /internal/proxy/loaded:
+	// a report whose body is not a config hash (400).
+	reasonReviveReadbackUnsupported   = "revive_readback_unsupported"
+	reasonRevivePolicyUnconfirmedLost = "revive_policy_unconfirmed_lost"
+	reasonProxyReportInvalid          = "proxy_report_invalid"
+
 	// GET /runs list filters (runs_list_filter.go) and GET /runs/policy-history paging (runs_policy.go): one
 	// reason per rejected query parameter.
 	reasonInvalidOwnerParam         = "invalid_owner_param"          // ?owner= is not "", "me", or "all"

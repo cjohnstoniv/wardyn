@@ -226,6 +226,12 @@ type AgentRun struct {
 	// records. The run's later audit rows carry their own policy's digest as data.policy_digest. Empty for a run not yet
 	// dispatched, one dispatched before the field, or one whose write failed.
 	PolicyDigest string `json:"policy_digest,omitempty"`
+	// PolicyReadback is the run's current proxy start, as its policy readback stands (RunPolicyReadback);
+	// filled on the single-run read only, nil elsewhere and for a run with no recorded start.
+	PolicyReadback *RunPolicyReadback `json:"policy_readback,omitempty"`
+	// ProxyAddr is the address the run's agent is pinned to for its proxy, from the driver's create
+	// answer (runner.Sandbox.ProxyAddr); empty for an older driver or runner. Never on the wire.
+	ProxyAddr string `json:"-"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
