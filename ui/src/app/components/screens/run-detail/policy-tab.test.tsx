@@ -23,7 +23,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
-import { CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
+import { CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB } from "./policy-tab-copy";
 import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 
 const RUN = {
@@ -265,6 +265,28 @@ describe("PolicyTab — changes grouped by cause", () => {
     const mirror = screen.getByRole("heading", { name: "Switched to your organization's package mirror" }).parentElement!;
     expect(within(mirror).getByText("npm.mirror.acme.example:443").parentElement).toHaveTextContent("Added at start");
     expect(within(mirror).getByText("registry.npmjs.org").parentElement).toHaveTextContent("Removed at start");
+  });
+
+  it("reads the IP-address switch in words, labelled, for an addition and a removal", async () => {
+    show(
+      view({
+        changes: [
+          change({ cause: "overlay", field: "refuse_ip_literals", added: ["true"] }),
+          change({ cause: "launch", field: "refuse_ip_literals", removed: ["true"] }),
+        ],
+      }),
+    );
+    await ready();
+    const set = screen.getByRole("heading", { name: CHANGE_HEADING.overlay }).parentElement!;
+    const added = within(set).getByText(IP_LITERALS.refused).parentElement!;
+    expect(added).toHaveTextContent("Added at start");
+    expect(added).toHaveTextContent(FIELD_LABEL.refuse_ip_literals);
+    expect(within(set).getByText(IP_LITERALS.refused)).not.toHaveClass("font-mono");
+    const launch = screen.getByRole("heading", { name: CHANGE_HEADING.launch }).parentElement!;
+    const removed = within(launch).getByText(IP_LITERALS.refused).parentElement!;
+    expect(removed).toHaveTextContent("Removed at start");
+    expect(removed).toHaveTextContent("Refuse IP addresses");
+    expect(screen.queryByText("true")).not.toBeInTheDocument();
   });
 
   it("an unrecognised cause falls under the generic heading", async () => {

@@ -86,6 +86,7 @@ export const FIELD_LABEL: Record<string, string> = {
   allowed_domains: "Allowed hosts",
   denied_domains: "Blocked hosts",
   allow_all_egress: "Network",
+  refuse_ip_literals: "Refuse IP addresses",
   first_use_approval: "Any other host",
   first_use_hold_seconds: "Any other host",
   allowed_methods: "Request types",
@@ -105,6 +106,12 @@ export const FIELD_LABEL: Record<string, string> = {
   "resources.pids_limit": "Limits",
   "resources.disk_mib": "Limits",
 };
+
+// The refuse_ip_literals switch as a change row's value: whether a connection made to a bare IP address is refused.
+export const IP_LITERALS = {
+  refused: "Connections to a bare IP address are refused.",
+  allowed: "Connections to a bare IP address are allowed.",
+} as const;
 
 export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls" | "wall_preset">;
 
