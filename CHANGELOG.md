@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Each proxy now reports, once it serves, the SHA-256 of the exact config bytes it loaded, its version and the deployment switches set in its environment (`WARDYN_LLM_SCAN`, `WARDYN_MODEL_USAGE`), and retries until the control plane accepts the report. The Docker and Kubernetes drivers, runners included, return the SHA-256 of the final bytes they handed the proxy on every create and revive, and each create also returns the address the agent's proxy is pinned to.
+
 ### Fixed
 
 - macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit, never kills it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. Retest on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.
