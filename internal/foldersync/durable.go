@@ -171,27 +171,72 @@ func place(root *os.Root, tmpName string, mode InstallMode, dsts []string) (dst,
 
 // keptAlready reports whether the regular file dst holds tmpName's bytes, and when it does, syncs
 // that same file: bytes only visible, from a write not yet on the disk, are not yet kept. dst is
-// never written.
+// never written. Its directories are synced by the install that asked.
 func keptAlready(root *os.Root, tmpName, dst string) (bool, error) {
 	want, ok := fileSum(root, tmpName)
 	if !ok {
 		return false, nil
 	}
-	f, err := root.OpenFile(dst, existingSyncFlag, 0)
+	f, fi, err := openKept(root, dst)
 	if err != nil {
 		return false, nil
 	}
 	defer f.Close()
-	fi, ferr := f.Stat()
-	li, lerr := root.Lstat(dst)
-	if ferr != nil || lerr != nil || !fi.Mode().IsRegular() || !os.SameFile(fi, li) {
-		return false, nil
-	}
-	h := sha256.New()
-	if n, err := io.Copy(h, io.NewSectionReader(f, 0, fi.Size())); err != nil || n != fi.Size() || !bytes.Equal(h.Sum(nil), want) {
+	if sum, ok := sumOf(f, fi.Size()); !ok || !bytes.Equal(sum, want) {
 		return false, nil
 	}
 	return true, fsyncFile(f)
+}
+
+// errNotKeptFile is a laptop path that is not one regular file from its check to its open.
+var errNotKeptFile = errors.New("not a regular file, or replaced while it was opened")
+
+// openKept opens the laptop's regular file name in root, never through a link at its name: what
+// is compared, synced and recorded is this one file, not one swapped in at its name.
+func openKept(root *os.Root, name string) (*os.File, os.FileInfo, error) {
+	f, err := root.OpenFile(name, existingSyncFlag, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, ferr := f.Stat()
+	li, lerr := root.Lstat(name)
+	if ferr != nil || lerr != nil || !fi.Mode().IsRegular() || !os.SameFile(fi, li) {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("%s: %w", name, errNotKeptFile)
+	}
+	return f, fi, nil
+}
+
+// sumOf is the sha256 of f's first size bytes, read from its start.
+func sumOf(f *os.File, size int64) ([]byte, bool) {
+	h := sha256.New()
+	n, err := io.Copy(h, io.NewSectionReader(f, 0, size))
+	return h.Sum(nil), err == nil && n == size
+}
+
+// recordKept is the one place a laptop file is recorded as in step with the sandbox's side remote.
+// It opens rel (openKept) and asks same whether this is the file the caller means; then it syncs
+// that file, then its directory and every one above it, and only then records the side of the file
+// it synced. A file that is not the one meant is (false, nil), with nothing recorded. A failed sync
+// is an InstallError with Installed set, whatever its errno: only a directory sync the filesystem
+// does not offer is passed over (syncDirIn).
+func (sy *Syncer) recordKept(rel string, remote Side, same func(f *os.File, fi os.FileInfo) bool) (bool, error) {
+	f, fi, err := openKept(sy.Root, rel)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	if !same(f, fi) {
+		return false, nil
+	}
+	if err := fsyncFile(f); err != nil {
+		return false, &InstallError{Step: "sync-file", Installed: true, Err: err}
+	}
+	if err := syncDirsUp(sy.Root, sy.dirs, path.Dir(rel)); err != nil {
+		return false, &InstallError{Step: "sync-dir", Installed: true, Err: err}
+	}
+	sy.State.Files[rel] = FileSeen{Local: localSide(fi), Remote: remote}
+	return true, nil
 }
 
 // fileSum is the sha256 of the regular file name.

@@ -4,9 +4,12 @@
 package foldersync
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
@@ -66,18 +69,24 @@ func conflictNames(rel, tag string) []string {
 }
 
 // conflict is a runner pass's file that both sides changed, or that a pass after a recovered
-// record finds on both. Two copies holding the same bytes are in step: once the laptop's directory
-// is proven synced they are recorded, and nothing is copied or pushed. Otherwise the laptop's copy wins, but only once the sandbox's is
-// kept on the laptop as a conflict copy. A pass that does not pull touches neither side; a pass
+// record finds on both. Two copies holding the same bytes are in step: once the laptop's file and
+// its directories are synced they are recorded (recordKept), and nothing is copied or pushed.
+// Otherwise the laptop's copy wins, but only once the sandbox's is kept on the laptop as a conflict
+// copy. A pass that does not pull touches neither side; a pass
 // back that cannot keep the copy touches neither side and counts the file as not brought back.
 func (sy *Syncer) conflict(ctx context.Context, rel string, l syncFile, r os.FileInfo, rep *Report, pulled *int64) error {
-	if sy.sameBytes(rel, l.side.Size, path.Join(sy.Opts.Remote, rel), r.Size()) {
-		// An earlier pass may have installed this file and failed to sync its directory.
-		if err := syncDirsUp(sy.Root, sy.dirs, path.Dir(rel)); err != nil {
-			return sy.keptFailed(ctx, rep, rel, "sync the local directory", &InstallError{Step: "sync-dir", Installed: true, Err: err})
+	if rsum, ok := sy.remoteSum(rel, l.side.Size, r.Size()); ok {
+		// The bytes compared are the bytes synced: an earlier write may be visible but not on the disk.
+		kept, err := sy.recordKept(rel, remoteSide(r), func(f *os.File, fi os.FileInfo) bool {
+			sum, ok := sumOf(f, fi.Size())
+			return ok && fi.Size() == r.Size() && bytes.Equal(sum, rsum)
+		})
+		if err != nil {
+			return sy.keptFailed(ctx, rep, rel, "keep the local file", err)
 		}
-		sy.State.Files[rel] = FileSeen{Local: l.side, Remote: remoteSide(r)}
-		return nil
+		if kept {
+			return nil
+		}
 	}
 	rep.Conflicts = append(rep.Conflicts, rel)
 	if !sy.Opts.Pull {
@@ -107,6 +116,21 @@ func (sy *Syncer) listedConflict(ctx context.Context, rel string, r os.FileInfo,
 		rep.notPreserved("keep the sandbox copy of " + rel + ": not kept")
 	}
 	return err
+}
+
+// remoteSum is the sha256 of the sandbox's rel, read only when both sides list the same size.
+func (sy *Syncer) remoteSum(rel string, lsize, rsize int64) ([]byte, bool) {
+	if lsize != rsize {
+		return nil, false
+	}
+	f, err := sy.Client.Open(path.Join(sy.Opts.Remote, rel))
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, rsize))
+	return h.Sum(nil), err == nil && n == rsize
 }
 
 // keepConflict pulls the sandbox's rel to the first free conflict copy name, durably, never

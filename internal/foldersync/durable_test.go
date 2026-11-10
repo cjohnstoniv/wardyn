@@ -244,7 +244,7 @@ func TestLoadState_RemovesTheTempFilesOfAStoppedSave(t *testing.T) {
 }
 
 // A pulled file in new directories: once it is installed, its directory and every one above it are
-// synced, the root last.
+// synced, the root last; then, as the file is recorded, the file and the same directories again.
 func TestInstall_NewDirectoriesSyncEveryDirectoryUpToTheRoot(t *testing.T) {
 	unixDirSync(t)
 	sy, box, root := pipeSyncer(t, true)
@@ -261,7 +261,7 @@ func TestInstall_NewDirectoriesSyncEveryDirectoryUpToTheRoot(t *testing.T) {
 	if _, err := sy.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"a/b/c", "a/b", "a", "."}; !slices.Equal(synced, want) {
+	if want := []string{"a/b/c", "a/b", "a", ".", "a/b/c", "a/b", "a", "."}; !slices.Equal(synced, want) {
 		t.Errorf("synced %v, want %v", synced, want)
 	}
 }

@@ -65,7 +65,7 @@ func TestPass_APullWhoseDirectorySyncFailsIsNotPreserved(t *testing.T) {
 		notKept(t, "first pass", sy, pass(t, sy), "input/output error")
 		if retryFails {
 			rep := pass(t, sy)
-			notKept(t, "retry, still failing", sy, rep, "sync the local directory new.txt")
+			notKept(t, "retry, still failing", sy, rep, "keep the local file new.txt")
 			continue
 		}
 		onSync(t, nil, func(*os.File) error { return nil })

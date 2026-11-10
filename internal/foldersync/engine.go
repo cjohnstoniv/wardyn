@@ -875,14 +875,21 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 	if !sy.unchangedLocally(rel, walked) {
 		return sy.listedConflict(ctx, rel, r, rep, pulled)
 	}
+	tfi, err := tmp.Stat()
+	if err != nil {
+		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
+	}
 	if _, err := installSynced(sy.Root, sy.dirs, tmp, tmpName, InstallReplace, rel); err != nil {
 		return sy.keptFailed(ctx, rep, rel, "replace the local file", err)
 	}
-	fi, err := sy.Root.Lstat(rel)
+	// Recorded only if the file in place is still the one installed: a save just after it wins.
+	kept, err := sy.recordKept(rel, remoteSide(r), func(_ *os.File, fi os.FileInfo) bool { return localSide(fi) == localSide(tfi) })
 	if err != nil {
-		return sy.keptFailed(ctx, rep, rel, "stat the local file", err)
+		return sy.keptFailed(ctx, rep, rel, "keep the local file", err)
 	}
-	sy.State.Files[rel] = FileSeen{Local: localSide(fi), Remote: remoteSide(r)}
+	if !kept {
+		return sy.listedConflict(ctx, rel, r, rep, pulled)
+	}
 	rep.Pulled = append(rep.Pulled, rel)
 	return nil
 }
