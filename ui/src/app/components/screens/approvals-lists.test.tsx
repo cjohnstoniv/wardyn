@@ -24,6 +24,7 @@ vi.mock("../../lib/api/runs", () => ({
   runs: { getRun: () => Promise.reject(new Error("unused")), listRuns: () => listRunsMock() },
 }));
 
+import { aheadByHours } from "../../lib/test-clock";
 import { ApprovalsScreen } from "./approvals";
 
 const DECIDED = ["APPROVED", "DENIED", "EXPIRED", "CANCELLED"];
@@ -125,8 +126,8 @@ describe("ApprovalsScreen lists", () => {
       kind: "egress_domain",
       requested_scope: { host: "example.com" },
       state: "APPROVED",
-      requested_at: "2026-10-20T10:00:00Z",
-      decided_at: "2026-10-20T10:01:00Z",
+      requested_at: aheadByHours(-2),
+      decided_at: aheadByHours(-1),
       decided_by: "alice",
     };
     const retry = () => screen.queryByRole("button", { name: /retry/i });
