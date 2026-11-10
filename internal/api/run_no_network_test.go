@@ -75,7 +75,9 @@ func TestNoNetwork_SpecHostsAndPasses(t *testing.T) {
 		source: policySourceRecord{wallPreset: builtinFrozen(t, types.WallPresetNoNetwork)}}
 	rec := &foldRecorder{}
 	rec.add(fieldAllowed, "pypi.org", provSource{Kind: provKindWorkspace, Name: "app"}, provEffectAdded)
-	if got := noNetworkSources(&f, rec); len(got) != 1 || got[0] != derivedWorkspace {
+	var got []string
+	noNetworkSpecSources(f.spec, rec, func(src string) { got = append(got, src) })
+	if len(got) != 1 || got[0] != derivedWorkspace {
 		t.Errorf("sources = %v, want [workspace]", got)
 	}
 	f.spec.AllowedDomains = nil

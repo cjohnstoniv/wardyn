@@ -24,31 +24,19 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 }
 
 // stepNoNetwork refuses a No network launch that would need a host (422 no_network_needs_egress), naming
-// each source. It runs after the tool policy, the last step that adds a host to the spec, in every door,
-// so create, Review and the preview give the same answer.
+// each source, sorted and once each: the kinds deriveRunEgress adds after the mint (from a copy with an
+// empty allowlist, so each kind reports every host it would add), a direct GitHub clone, each component,
+// the Azure DevOps sign-in, the harness's model and each chosen model provider, and whatever is still on
+// the spec's allowlist, by the source the fold recorded for it. It runs after the tool policy, the last
+// step that adds a host to the spec, in every door, so create, Review and the preview answer the same.
 func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 	if !noNetworkPreset(f.source.wallPreset) {
 		return true
 	}
-	sources := noNetworkSources(f, rec)
-	if len(sources) == 0 {
-		return true
-	}
-	return !runError(http.StatusUnprocessableEntity, reasonNoNetworkNeedsEgress,
-		"This run uses the No network wall preset, and these need a network host: "+strings.Join(sources, ", ")+
-			". Remove them, or launch without No network.").write(s, f.w, f.r)
-}
-
-// noNetworkSources names, sorted and once each, every source the fold can see that would give the run a
-// host: the kinds deriveRunEgress adds after the mint (from a copy with an empty allowlist, so each kind
-// reports every host it would add), a direct GitHub clone, each component, the Azure DevOps sign-in,
-// the harness's model and each chosen model provider, and whatever is still on the spec's
-// allowlist, by the source the fold recorded for it.
-func noNetworkSources(f *runFold, rec *foldRecorder) []string {
 	var out []string
-	add := func(s string) {
-		if !slices.Contains(out, s) {
-			out = append(out, s)
+	add := func(src string) {
+		if !slices.Contains(out, src) {
+			out = append(out, src)
 		}
 	}
 	probe := f.spec.Clone()
@@ -79,14 +67,24 @@ func noNetworkSources(f *runFold, rec *foldRecorder) []string {
 			add("model provider " + noNetworkProvider(hc.choice.provider))
 		}
 	}
-	for _, h := range f.spec.AllowedDomains {
-		add(noNetworkHostSource(rec, h))
-	}
-	if f.spec.AllowAllEgress {
-		add("allow_all_egress")
+	noNetworkSpecSources(f.spec, rec, add)
+	if len(out) == 0 {
+		return true
 	}
 	slices.Sort(out)
-	return out
+	return !runError(http.StatusUnprocessableEntity, reasonNoNetworkNeedsEgress,
+		"This run uses the No network wall preset, and these need a network host: "+strings.Join(out, ", ")+
+			". Remove them, or launch without No network.").write(s, f.w, f.r)
+}
+
+// noNetworkSpecSources adds the source of each host still on spec's allowlist, and allow_all_egress.
+func noNetworkSpecSources(spec types.RunPolicySpec, rec *foldRecorder, add func(string)) {
+	for _, h := range spec.AllowedDomains {
+		add(noNetworkHostSource(rec, h))
+	}
+	if spec.AllowAllEgress {
+		add("allow_all_egress")
+	}
 }
 
 // noNetworkKind is a derived kind as the refusal names it: a workspace's own hosts and its clone hosts
