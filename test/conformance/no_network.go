@@ -50,6 +50,9 @@ func testNoNetwork(t *testing.T, r runner.Runner, opts Options) {
 	})
 	got := ExecKeyValues(t, ctx, r, sb.Ref, noNetworkProbeScript)
 	if got["wget"] == "missing" {
+		if opts.RealProxy { // the suite owns its agent image, as with nc below
+			t.Fatalf("sandbox image %q has no wget; the no-network case needs one", opts.image())
+		}
 		t.Skipf("sandbox image %q has no wget; the no-network case needs one: an image contract, not a substrate verdict", opts.image())
 	}
 	if got["proxied_rc"] == "" || got["proxied_rc"] == "0" {
