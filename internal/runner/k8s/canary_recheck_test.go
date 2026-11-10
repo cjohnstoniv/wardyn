@@ -95,7 +95,7 @@ func (c *recheckCluster) boot(t *testing.T, cfg Config) (*Driver, *time.Time) {
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
-	clock := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	clock := time.Now().UTC().Truncate(time.Second)
 	d.now = func() time.Time { return clock }
 	return d, &clock
 }
