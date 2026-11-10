@@ -40,7 +40,7 @@ func ipLiteralRefused(rows string) bool {
 		strings.Contains(rows, `"rule_source":"builtin:private-ip"`)
 }
 
-func TestRefuseIPLiterals_EverySpellingOnBothLanes(t *testing.T) {
+func TestRefuseIPLiterals_EverySpellingOnBothPaths(t *testing.T) {
 	spec := types.RunPolicySpec{AllowAllEgress: true, RefuseIPLiterals: true}
 	for _, tc := range ipLiteralSpellings {
 		t.Run(tc.name+" CONNECT", func(t *testing.T) {
