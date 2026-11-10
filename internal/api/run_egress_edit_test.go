@@ -245,7 +245,7 @@ func TestEgressEdit_RefusedBeforeAnyChange(t *testing.T) {
 func TestApplyEgressEdits_NarrowsOnly(t *testing.T) {
 	policy := types.RunPolicySpec{AllowedDomains: []string{"a.example", "B.example", "*.c.example"}}
 	c := ownerCeiling{deny: []string{"profile.example"}}
-	if rerr := applyEgressEdits(&c, &policy, []egressEdit{{remove: []string{"b.example"}, deny: []string{"d.example"}}}); rerr != nil {
+	if rerr := applyEgressEdits(&c, &policy, []liveEgressEdit{{remove: []string{"b.example"}, deny: []string{"d.example"}}}); rerr != nil {
 		t.Fatal(rerr)
 	}
 	if !slices.Equal(policy.AllowedDomains, []string{"a.example", "*.c.example"}) {

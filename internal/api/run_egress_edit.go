@@ -58,8 +58,8 @@ type egressEditResult struct {
 	PolicyGeneration int `json:"policy_generation"`
 }
 
-// egressEdit is a validated edit: lower-case entries, each list without duplicates.
-type egressEdit struct {
+// liveEgressEdit is a validated edit: lower-case entries, each list without duplicates.
+type liveEgressEdit struct {
 	remove []string
 	deny   []string
 }
@@ -106,19 +106,19 @@ func (s *Server) handleEditRunEgress(w http.ResponseWriter, r *http.Request) {
 
 // validate checks each entry as a policy's own domain entries are checked, so the edit never carries
 // one the proxy cannot match.
-func (req egressEditRequest) validate() (egressEdit, string) {
+func (req egressEditRequest) validate() (liveEgressEdit, string) {
 	if len(req.RemoveHosts) == 0 && len(req.DenyHosts) == 0 {
-		return egressEdit{}, "the edit names no host: give remove_hosts, deny_hosts or both"
+		return liveEgressEdit{}, "the edit names no host: give remove_hosts, deny_hosts or both"
 	}
 	remove, msg := egressEditHosts("remove_hosts", req.RemoveHosts)
 	if msg != "" {
-		return egressEdit{}, msg
+		return liveEgressEdit{}, msg
 	}
 	deny, msg := egressEditHosts("deny_hosts", req.DenyHosts)
 	if msg != "" {
-		return egressEdit{}, msg
+		return liveEgressEdit{}, msg
 	}
-	return egressEdit{remove: remove, deny: deny}, ""
+	return liveEgressEdit{remove: remove, deny: deny}, ""
 }
 
 func egressEditHosts(field string, hosts []string) ([]string, string) {
@@ -142,7 +142,7 @@ func egressEditHosts(field string, hosts []string) ([]string, string) {
 // removed entry must be on the run's allowlist and leaves it, and every removed and denied host joins
 // the owner ceiling's denies, so the re-assertion denies it and drops its credential lanes. The seal
 // after this only intersects the allowlist and merges denies, so nothing brings a removed host back.
-func applyEgressEdits(c *ownerCeiling, policy *types.RunPolicySpec, edits []egressEdit) *reviveError {
+func applyEgressEdits(c *ownerCeiling, policy *types.RunPolicySpec, edits []liveEgressEdit) *reviveError {
 	for _, e := range edits {
 		for _, h := range e.remove {
 			if !slices.ContainsFunc(policy.AllowedDomains, func(d string) bool { return strings.EqualFold(strings.TrimSpace(d), h) }) {
@@ -161,7 +161,7 @@ func applyEgressEdits(c *ownerCeiling, policy *types.RunPolicySpec, edits []egre
 // editRunEgress refuses an edit the run cannot take before anything changes, holds the edit's mark,
 // and replaces the run's proxy through the live revive path with the edit applied. Every outcome
 // past the body check writes one run.egress.edit row.
-func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit egressEdit) (egressEditResult, *reviveError) {
+func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	res, rerr := s.editRunEgressOnce(r, run, edit)
 	data := map[string]any{"subject": run.CreatedBy, "removed_hosts": nonNilStrings(edit.remove), "denied_hosts": nonNilStrings(edit.deny)}
@@ -179,7 +179,7 @@ func (s *Server) editRunEgress(r *http.Request, run types.AgentRun, edit egressE
 	return res, rerr
 }
 
-func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit egressEdit) (egressEditResult, *reviveError) {
+func (s *Server) editRunEgressOnce(r *http.Request, run types.AgentRun, edit liveEgressEdit) (egressEditResult, *reviveError) {
 	if run.State != types.RunRunning || run.SandboxRef == "" || run.LostAt != nil {
 		return egressEditResult{}, reviveRefused(http.StatusConflict, reasonEgressEditRunNotLive,
 			"the run is not live (state="+string(run.State)+"), so its egress cannot be edited; revive it first")
