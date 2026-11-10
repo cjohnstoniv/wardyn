@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -36,9 +37,10 @@ func noNetworkFold(t *testing.T, preset string) (runFold, *httptest.ResponseReco
 		spec: types.RunPolicySpec{EligibleGrants: grants}, wsRefs: []types.Workspace{ws},
 		scmSite:           types.SiteConfig{ScmHosts: []string{"ghes.corp.example"}},
 		directGitHubAdded: []string{"github.com"},
-		comps:             runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{Name: "linear"}}}},
-		mpChoice:          runProviderChoice{provider: types.ModelProvider{ID: "corp", Name: "Corp gateway"}, chosen: true},
-		source:            policySourceRecord{wallPreset: builtinFrozen(t, preset)},
+		comps: runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{Name: "linear",
+			Definition: types.ComponentDefinition{Hosts: []string{"api.linear.app"}}}}}},
+		mpChoice: runProviderChoice{provider: types.ModelProvider{ID: "corp", Name: "Corp gateway"}, chosen: true},
+		source:   policySourceRecord{wallPreset: builtinFrozen(t, preset)},
 	}
 	return f, w
 }
@@ -148,6 +150,39 @@ func TestNoNetwork_BrokeredRepositoryRefused(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(body.Error, "repository") {
 		t.Fatalf("%d %s, want 422 naming the repository", w.Code, w.Body)
+	}
+}
+
+// TestNoNetwork_ComponentsByWhatTheyNeed: a component that needs no host (config only, an env secret, or a
+// local MCP server run from the image) does not refuse a No network launch; a remote MCP server does, though
+// its host is never on the allowlist.
+func TestNoNetwork_ComponentsByWhatTheyNeed(t *testing.T) {
+	attach := func(defs ...types.ComponentDefinition) (bool, string) {
+		f, w := noNetworkRepoFold(t, "")
+		for i, d := range defs {
+			f.comps.attached = append(f.comps.attached, attachedComponent{snapshot: types.RunComponent{Name: "c" + strconv.Itoa(i), Definition: d}})
+		}
+		return (&Server{}).stepNoNetwork(&f, &foldRecorder{}), w.Body.String()
+	}
+	offline := []types.ComponentDefinition{
+		{Config: map[string]string{"REGION": "eu"}},
+		{Secrets: []types.ComponentSecret{{SecretName: "token", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryEnv, Var: "TOKEN"}}}},
+		{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio, Launch: &types.ComponentMCPLaunch{Command: "/usr/local/bin/mcp-files"}}},
+	}
+	if ok, body := attach(offline...); !ok {
+		t.Fatalf("components that need no host refused the launch: %s", body)
+	}
+	remote := types.ComponentDefinition{Hosts: []string{"mcp.example"},
+		MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportHTTP, URL: "https://mcp.example/mcp"}}
+	if raw := rawEgressHosts(remote); len(raw) != 0 {
+		t.Fatalf("rawEgressHosts(remote MCP) = %v, want none", raw)
+	}
+	npx := types.ComponentDefinition{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio,
+		Launch: &types.ComponentMCPLaunch{Command: "npx", Args: []string{"-y", "@example/mcp-server@1.4.2"}}}}
+	for name, d := range map[string]types.ComponentDefinition{"remote MCP": remote, "npx MCP": npx} {
+		if ok, body := attach(d); ok || !strings.Contains(body, "component c0") {
+			t.Errorf("%s: passed %v, %s; want a refusal naming component c0", name, ok, body)
+		}
 	}
 }
 

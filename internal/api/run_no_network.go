@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,7 +27,7 @@ func noNetworkPreset(p *types.WallPresetOnRun) bool {
 // stepNoNetwork refuses a No network launch that would need a host (422 no_network_needs_egress), naming
 // each source, sorted and once each: the kinds deriveRunEgress adds after the mint (from a copy with an
 // empty allowlist, so each kind reports every host it would add; its git grants only when the run clones a
-// repository, noNetworkClonesRepo), the repository itself, a direct GitHub clone, each component,
+// repository, noNetworkClonesRepo), the repository itself, a direct GitHub clone, each component that needs a host,
 // the Azure DevOps sign-in, the harness's model and each chosen model provider, and whatever is still on
 // the spec's allowlist, by the source the fold recorded for it. It runs after the tool policy, the last
 // step that adds a host to the spec, in every door, so create, Review and the preview answer the same.
@@ -60,7 +61,9 @@ func (s *Server) stepNoNetwork(f *runFold, rec *foldRecorder) bool {
 		add("github_direct")
 	}
 	for i, c := range f.comps.attached {
-		add(noNetworkComponent(c.snapshot.Name, i))
+		if noNetworkComponentNeedsHost(c) {
+			add(noNetworkComponent(c.snapshot.Name, i))
+		}
 	}
 	if f.adoGrade.org != "" {
 		add("azure_devops_sign_in")
@@ -125,6 +128,26 @@ func noNetworkKind(kind string) string {
 		return derivedWorkspace
 	}
 	return kind
+}
+
+// noNetworkComponentNeedsHost reports whether an attached component needs the network: a built-in Git
+// provider, a CLI credential, a remote MCP server (whose host only the broker reaches, so it is never on
+// the allowlist), a local MCP server npx fetches, a header secret, or any host on its definition. One
+// with only config, env or file secrets, or a local server run from a program in the image, needs none.
+func noNetworkComponentNeedsHost(c attachedComponent) bool {
+	if c.builtin != nil {
+		return true
+	}
+	d := c.snapshot.Definition
+	if len(d.Hosts) > 0 || d.CLI != nil || d.RemoteMCP() {
+		return true
+	}
+	if d.LocalMCP() && d.MCP.Launch != nil && path.Base(d.MCP.Launch.Command) == "npx" {
+		return true
+	}
+	return slices.ContainsFunc(d.Secrets, func(sec types.ComponentSecret) bool {
+		return sec.Delivery.Mode == types.ComponentDeliveryHeader
+	})
 }
 
 func noNetworkComponent(name string, ordinal int) string {
