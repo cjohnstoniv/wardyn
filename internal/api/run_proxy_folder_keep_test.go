@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -191,38 +192,120 @@ func TestReadback_UnkeepableRunningRunStopsItsProxyBeforeItsEnd(t *testing.T) {
 	}
 }
 
-// The terminal-sandbox sweep leaves a sandbox kept for its computer folder's pass back, and still stops one that
-// is not.
-func TestSweepTerminalSandboxes_LeavesAKeptFolderSandbox(t *testing.T) {
-	h := newHarness(t)
-	kept, orphan := sweepRun(types.RunFailed, "sbx-kept"), sweepRun(types.RunFailed, "sbx-orphan")
-	fake := &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept, orphan}}, kept: kept.ID}
-	rr := &sweepAliveRunner{fakeRunner: &fakeRunner{}}
-	cfg := baseTestConfig(h, fake)
-	cfg.Runner = rr
-	cfg.Broker = h.broker
-	srv := New(cfg)
-	if _, err := srv.SweepTerminalSandboxes(context.Background()); err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
-	if len(rr.stopped) != 1 || rr.stopped[0] != "sbx-orphan" {
-		t.Errorf("StopSandbox calls = %v, want exactly [sbx-orphan]", rr.stopped)
-	}
+// sweepProxyRunner is sweepAliveRunner that can also stop a proxy alone, failing with proxyErr.
+type sweepProxyRunner struct {
+	*sweepAliveRunner
+	proxyErr error
+	proxied  []string
 }
 
-// keptSweepStore is sweepStore whose run kept has a computer folder's pass back that keeps its sandbox.
+func (r *sweepProxyRunner) StopProxy(_ context.Context, ref string) error {
+	r.proxied = append(r.proxied, ref)
+	return r.proxyErr
+}
+
+// keptSweepStore is sweepStore whose run kept has a computer folder's pass back that keeps its sandbox, and whose
+// run unreadable has a folder record that cannot be read.
 type keptSweepStore struct {
 	*sweepStore
-	kept uuid.UUID
+	kept, unreadable uuid.UUID
 }
 
 func (s *keptSweepStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
-	if id == s.kept {
+	switch id {
+	case s.kept:
 		return types.RunLocalFolderStatus{Resume: &types.FolderResume{Stalled: 1}}, nil
+	case s.unreadable:
+		return types.RunLocalFolderStatus{}, errors.New("injected folder record read failure")
 	}
 	return types.RunLocalFolderStatus{}, nil
 }
 
 func (s *keptSweepStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
 	return true, nil
+}
+
+// newKeptSweep is a terminal-sandbox sweep over runs, every sandbox probed live, with the folder records fake answers.
+func newKeptSweep(t *testing.T, fake *keptSweepStore) (*Server, *sweepProxyRunner, *harness) {
+	t.Helper()
+	h := newHarness(t)
+	fake.written = h.audit
+	rr := &sweepProxyRunner{sweepAliveRunner: &sweepAliveRunner{fakeRunner: &fakeRunner{}}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = rr
+	cfg.Broker = h.broker
+	return New(cfg), rr, h
+}
+
+// runRows is the audit rows for runID.
+func runRows(events []types.AuditEvent, runID uuid.UUID) []types.AuditEvent {
+	var out []types.AuditEvent
+	for _, ev := range events {
+		if ev.RunID != nil && *ev.RunID == runID {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// The terminal-sandbox sweep leaves a sandbox kept for its computer folder's pass back with only its proxy stopped,
+// and still stops one that is not kept.
+func TestSweepTerminalSandboxes_LeavesAKeptFolderSandbox(t *testing.T) {
+	kept, orphan := sweepRun(types.RunFailed, "sbx-kept"), sweepRun(types.RunFailed, "sbx-orphan")
+	srv, rr, _ := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept, orphan}}, kept: kept.ID})
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(rr.stopped) != 1 || rr.stopped[0] != "sbx-orphan" || len(rr.proxied) != 1 || rr.proxied[0] != "sbx-kept" || swept != 1 {
+		t.Errorf("StopSandbox %v, StopProxy %v, swept %d; want [sbx-orphan], [sbx-kept], 1", rr.stopped, rr.proxied, swept)
+	}
+}
+
+// Two passes over a kept sandbox stop its proxy once each and leave the sandbox: a stop that lands writes no row,
+// and the sandbox is never counted as swept, on either pass.
+func TestSweepTerminalSandboxes_KeptFolderSandboxIsNotReapedEachPass(t *testing.T) {
+	kept := sweepRun(types.RunFailed, "sbx-kept")
+	srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept}}, kept: kept.ID})
+	for pass := 1; pass <= 2; pass++ {
+		swept, err := srv.SweepTerminalSandboxes(context.Background())
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if swept != 0 || len(rr.proxied) != pass || len(rr.stopped) != 0 {
+			t.Errorf("pass %d: swept %d, StopProxy %v, StopSandbox %v; want 0, %d proxy stops, no sandbox stop",
+				pass, swept, rr.proxied, rr.stopped, pass)
+		}
+		if rows := runRows(h.audit.snapshot(), kept.ID); len(rows) != 0 {
+			t.Errorf("pass %d: rows %+v, want none for a proxy stop that landed", pass, rows)
+		}
+	}
+}
+
+// A folder record the sweep cannot read keeps the sandbox too, with its proxy stopped, and is not counted as swept.
+func TestSweepTerminalSandboxes_UnreadableFolderRecordKeepsTheSandbox(t *testing.T) {
+	run := sweepRun(types.RunFailed, "sbx-unread")
+	srv, rr, _ := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{run}}, unreadable: run.ID})
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 || len(rr.proxied) != 1 || len(rr.stopped) != 0 {
+		t.Errorf("swept %d, StopProxy %v, StopSandbox %v; want 0, one proxy stop, no sandbox stop", swept, rr.proxied, rr.stopped)
+	}
+}
+
+// A kept sandbox whose proxy stop fails is the sweep's sandbox.sweep failure row, never silent.
+func TestSweepTerminalSandboxes_KeptFolderProxyStopFailureIsAudited(t *testing.T) {
+	kept := sweepRun(types.RunFailed, "sbx-kept")
+	srv, rr, h := newKeptSweep(t, &keptSweepStore{sweepStore: &sweepStore{runs: []types.AgentRun{kept}}, kept: kept.ID})
+	rr.proxyErr = errors.New("the daemon did not answer the proxy stop")
+	if _, err := srv.SweepTerminalSandboxes(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	rows := runRows(h.audit.snapshot(), kept.ID)
+	if len(rows) != 1 || rows[0].Action != "sandbox.sweep" || rows[0].Outcome != "failure" ||
+		!strings.Contains(string(rows[0].Data), "proxy_stop_error") || len(rr.stopped) != 0 {
+		t.Errorf("rows %+v, StopSandbox %v; want one sandbox.sweep failure with proxy_stop_error and no sandbox stop", rows, rr.stopped)
+	}
 }

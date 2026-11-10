@@ -372,7 +372,8 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 		}
 		return s.endUnconfirmedRun(ctx, run)
 	}
-	return s.stopTerminalSandbox(ctx, run, "run.reconcile")
+	_, err := s.stopTerminalSandbox(ctx, run, "run.reconcile")
+	return err
 }
 
 // endUnconfirmedRun ends a running run that cannot be kept through the finalize that owns its computer
@@ -398,32 +399,46 @@ func (s *Server) endUnconfirmedRun(ctx context.Context, run types.AgentRun) erro
 	case !isTerminalRunState(cur.State):
 		return errors.New("the run's proxy was stopped, but its end did not land")
 	}
-	return s.stopTerminalSandbox(ctx, cur, "run.reconcile")
+	_, err = s.stopTerminalSandbox(ctx, cur, "run.reconcile")
+	return err
 }
 
 // stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
-// (computerFolderKept). A sandbox kept for its pass back stays, and only its proxy is stopped: nil once
-// that stop is confirmed. A record that cannot be read leaves the sandbox too, with its proxy stopped
-// where it can be, and stays unresolved so a later pass reads it again. Any other sandbox is stopped.
-func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) error {
+// (computerFolderKept); left reports a sandbox left in place. A sandbox kept for its pass back stays, and
+// only its proxy is stopped: nil once that stop is confirmed. A record that cannot be read leaves the
+// sandbox too, with its proxy stopped where it can be, and stays unresolved so a later pass reads it
+// again. Any other sandbox is stopped. A failed stop of either kind is action's failure row.
+func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) (left bool, err error) {
 	if run.SandboxRef == "" {
-		return nil
+		return false, nil
 	}
 	kept, ferr := s.computerFolderKeptRead(ctx, run.ID)
 	if !kept && ferr == nil {
 		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, action) {
-			return errProxyStopUnconfirmed
+			return false, errProxyStopUnconfirmed
 		}
-		return nil
+		return false, nil
 	}
-	stopErr := errProxyStopUnconfirmed
-	if stopper, ok := s.cfg.Runner.(runner.ProxyStopper); ok {
-		stopErr = stopper.StopProxy(ctx, run.SandboxRef)
-	}
+	stopErr := s.stopProxyOrAudit(ctx, run.ID, run.SandboxRef, action)
 	if ferr != nil {
-		return errors.Join(fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept: %w", ferr), stopErr)
+		return true, errors.Join(fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept: %w", ferr), stopErr)
 	}
-	return stopErr
+	return true, stopErr
+}
+
+// stopProxyOrAudit stops a sandbox's proxy alone, recording a stop that failed as action's failure row
+// (sandbox_ref, proxy_stop_error). A stop that lands writes nothing, so a sweep that asks again each pass
+// adds no row while the proxy stays stopped (Docker's StopProxy answers nil for a proxy already gone).
+func (s *Server) stopProxyOrAudit(ctx context.Context, runID uuid.UUID, ref, action string) error {
+	err := error(runner.ErrEndUnsupported)
+	if stopper, ok := s.cfg.Runner.(runner.ProxyStopper); ok {
+		err = stopper.StopProxy(ctx, ref)
+	}
+	if err != nil {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action, ref, "failure",
+			mustJSON(map[string]any{"sandbox_ref": ref, "proxy_stop_error": err.Error()})))
+	}
+	return err
 }
 
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).
