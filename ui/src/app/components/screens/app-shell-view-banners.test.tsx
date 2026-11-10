@@ -180,12 +180,15 @@ describe("the confinement posture band is absent in the User view (§4.2, M-3)",
 describe("the confinement posture band follows the live health poll", () => {
   it("enforced, then refused, then enforced again, and a new check of the same verdict", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Check times minutes past a fixed past hour, as /healthz sends them and as the band shows them.
+    const checkedAt = (minute: number) => new Date(Date.UTC(2020, 0, 1, 1, minute)).toISOString();
+    const shown = (minute: number) => `2020-01-01 01:${String(minute).padStart(2, "0")} UTC`;
     const health: Record<string, unknown> = {
       status: "ok",
       trust_domain: "live.corp.example",
       runner: "k8s",
       network_policy: "enforced",
-      network_policy_checked_at: "2026-11-10T01:00:00Z",
+      network_policy_checked_at: checkedAt(0),
     };
     renderShellAt("/admin/runs", ADMIN_ME, health);
     const poll = async (verdict: string, at: string) => {
@@ -199,13 +202,13 @@ describe("the confinement posture band follows the live health poll", () => {
     expect((await screen.findAllByText("live.corp.example")).length).toBeGreaterThan(0);
     expect(screen.queryByText(POSTURE_REFUSED_BANNER.TITLE)).toBeNull();
 
-    await poll("refused", "2026-11-10T01:10:00Z");
-    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY("2026-11-10 01:10 UTC"))).toBeInTheDocument();
+    await poll("refused", checkedAt(10));
+    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY(shown(10)))).toBeInTheDocument();
 
-    await poll("refused", "2026-11-10T01:20:00Z");
-    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY("2026-11-10 01:20 UTC"))).toBeInTheDocument();
+    await poll("refused", checkedAt(20));
+    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY(shown(20)))).toBeInTheDocument();
 
-    await poll("enforced", "2026-11-10T01:30:00Z");
+    await poll("enforced", checkedAt(30));
     await waitFor(() => expect(screen.queryByText(POSTURE_REFUSED_BANNER.TITLE)).toBeNull());
   });
 });

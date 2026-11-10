@@ -99,6 +99,8 @@ it("a /me body never moves the deadline back past an expiry a header already nam
 });
 
 type Health = Awaited<ReturnType<typeof health.health>>;
+// A check time as /healthz sends it (RFC 3339, UTC), minutes past a fixed past hour: display data only.
+const checkedAt = (minute: number) => new Date(Date.UTC(2020, 0, 1, 1, minute)).toISOString();
 
 afterEach(() => {
   vi.useRealTimers();
@@ -110,17 +112,17 @@ it("follows the confinement posture through the health poll, verdict and check t
   vi.useFakeTimers({ shouldAdvanceTime: true });
   const answer = (network_policy: Health["network_policy"], network_policy_checked_at: string): Health =>
     ({ status: "ok", runner: "k8s", network_policy, network_policy_checked_at }) as Health;
-  vi.mocked(health.health).mockResolvedValue(answer("enforced", "2026-11-10T01:00:00Z"));
+  vi.mocked(health.health).mockResolvedValue(answer("enforced", checkedAt(0)));
   const { result } = renderHook(useMeta);
   await waitFor(() => expect(result.current[0].networkPolicy).toBe("enforced"));
-  expect(result.current[0].networkPolicyCheckedAt).toBe("2026-11-10T01:00:00Z");
+  expect(result.current[0].networkPolicyCheckedAt).toBe(checkedAt(0));
 
   const steps: [Health, string, string][] = [
-    [answer("refused", "2026-11-10T01:10:00Z"), "refused", "2026-11-10T01:10:00Z"],
-    [answer("enforced", "2026-11-10T01:20:00Z"), "enforced", "2026-11-10T01:20:00Z"],
-    [answer("enforced", "2026-11-10T01:30:00Z"), "enforced", "2026-11-10T01:30:00Z"],
+    [answer("refused", checkedAt(10)), "refused", checkedAt(10)],
+    [answer("enforced", checkedAt(20)), "enforced", checkedAt(20)],
+    [answer("enforced", checkedAt(30)), "enforced", checkedAt(30)],
     // An outage answers {}: the last posture stays, the unreachable banner says why.
-    [{} as Health, "enforced", "2026-11-10T01:30:00Z"],
+    [{} as Health, "enforced", checkedAt(30)],
   ];
   for (const [h, verdict, at] of steps) {
     vi.mocked(health.health).mockResolvedValue(h);
