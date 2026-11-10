@@ -117,24 +117,28 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// two pack endpoints, nothing else, or this broker becomes a credentialed
 	// proxy to the whole forge. The forge path is arbitrarily deep (gitlab
 	// subgroups, ADO's "o/p/_git/r"), so the verb is the last segment, and
-	// patGitPath judges the repository path before it: a forge API route that
-	// ends in a verb is refused.
+	// patGitPath, below, judges the repository path before it: a forge API
+	// route that ends in a verb is refused.
 	verb := rest[strings.LastIndex(rest, "/")+1:]
 	if strings.HasSuffix(rest, "/info/refs") {
 		verb = "info/refs"
 	}
 	// patForwardSafe first: it must run before the verb check can be bypassed
 	// by a rest that re-splits the rebuilt URL differently.
-	if !patForwardSafe(rest, r.URL.RawQuery) || !validGitRest(r.Method, verb, r.URL.Query().Get("service")) ||
-		!patGitPath(grant.scope().Forge, rest, verb) {
+	if !patForwardSafe(rest, r.URL.RawQuery) || !validGitRest(r.Method, verb, r.URL.Query().Get("service")) {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
 	}
 	// A host the run's Azure DevOps Entra grant covers takes that lane instead
-	// (pat_broker_entra.go).
+	// (pat_broker_entra.go), which admits only Azure DevOps' own _git paths.
 	if adoLane {
 		p.serveADOGit(w, r, host, rest, verb, ado)
+		return
+	}
+	if !patGitPath(grant.scope().Forge, rest, verb) {
+		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
+		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
 	}
 	// The grant's own narrowing, past the hand-off (an Azure DevOps host may have

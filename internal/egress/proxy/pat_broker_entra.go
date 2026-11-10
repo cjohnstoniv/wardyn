@@ -79,6 +79,11 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			strings.Trim(grant.Organization, "/")), true)
 		return
 	}
+	if adoHostedHost(host) && (strings.Contains(strings.Trim(rest, "/"), "//") || !adoHostedGitPath(host, keys)) {
+		p.refuseADOGit(w, r, host, nil, nil,
+			"Wardyn refused this git request: on Azure DevOps this run reaches git only at <project>/_git/<repository> under the organisation.", true)
+		return
+	}
 
 	var body io.Reader = r.Body
 	need := adoscope.CapCodeRead
@@ -304,7 +309,27 @@ func adoServerGitPath(keys []string, collection string) bool {
 	if !adoServerCollection(keys, coll) {
 		return false
 	}
-	tail := keys[len(strings.Split(strings.Trim(coll, "/"), "/")):]
+	return adoGitTail(keys[len(strings.Split(strings.Trim(coll, "/"), "/")):])
+}
+
+// adoHostedGitPath is adoServerGitPath for Azure DevOps Services: on dev.azure.com
+// the collection is the organisation (the first segment, which adoOrgMatches
+// pins); on <org>.visualstudio.com it is the host, with an optional
+// DefaultCollection segment.
+func adoHostedGitPath(host string, keys []string) bool {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".visualstudio.com") {
+		if len(keys) > 0 && keys[0] == "defaultcollection" {
+			keys = keys[1:]
+		}
+		return adoGitTail(keys)
+	}
+	return len(keys) > 0 && adoGitTail(keys[1:])
+}
+
+// adoGitTail reports whether tail, the keys under the collection, is
+// [<project>/]_git/<repository>/ followed by exactly info/refs, git-upload-pack
+// or git-receive-pack.
+func adoGitTail(tail []string) bool {
 	i := slices.Index(tail, "_git")
 	if (i != 0 && i != 1) || i+2 > len(tail) {
 		return false

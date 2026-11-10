@@ -71,17 +71,17 @@ func validPATGrants(grants map[string]PATGrant) error {
 
 // patRequestRepoKey reads the repository a smart-HTTP request names out of the
 // upstream path rest ("/<repo path>/<tail>", tail being info/refs or the verb),
-// with the forge's path table, and returns its key through types.PATRepoKey, the
-// one repository-identity function. rest is the DECODED path, which is also the
+// with patGitRepo, and returns its key through types.PATRepoKey, the one
+// repository-identity function. rest is the DECODED path, which is also the
 // value forwardBrokeredGit rebuilds the upstream URL from, so the key compared
 // here and the path forwarded are one string.
 //
-// No forge canonicalises: a form the table does not list (an empty repository,
-// a Bitbucket Server path outside /scm/) is refused, never guessed at. Bitbucket
-// Server serves its repositories under /scm/<project>/<repo>, so that prefix is
-// part of the request form and not of the key.
+// No forge canonicalises: a form patGitRepo does not admit is refused, never
+// guessed at. Bitbucket Server serves its repositories under
+// [<context path>/]scm/<project>/<repo>, so what precedes <project> is part of
+// the request form and not of the key.
 func patRequestRepoKey(forge, rest, verb string) (string, bool) {
-	repo, ok := patRepoPath(forge, rest, verb)
+	repo, ok := patGitRepo(forge, rest, verb)
 	if !ok {
 		return "", false
 	}
@@ -93,48 +93,151 @@ func patRequestRepoKey(forge, rest, verb string) (string, bool) {
 	return key, true
 }
 
-// patRepoPath cuts the repository path out of rest ("/<repo path>/<tail>") in
-// the form the forge serves git on: Bitbucket Server under scm/.
-func patRepoPath(forge, rest, verb string) (string, bool) {
+// patGitRepo judges rest ("/<repo path>/<tail>", tail the verb the caller
+// validated) against the forge's git URL form and returns the repository path
+// it names. Each forge mounts its API at a known place on the git host, so a
+// path is refused when its repository part reaches one of those mounts, under
+// any deployment prefix: whatever its last segment spells, it is a forge route
+// the PAT must not reach. The repository's own name, the last segment, is never
+// read as a mount. A doubly encoded path is refused, since a front end that
+// decodes again would read another path: any decoded "%" on the named forges,
+// whose names never hold one, and on generic a "%" before two hex digits
+// (Azure DevOps names may hold a "%", as in "100% Done").
+//
+//   - every forge but bitbucket_server: patAPIMount;
+//   - gitea also: "api" anywhere before the repository name (Gitea reserves
+//     it as an owner, so there it is the API mount under a sub-path);
+//   - generic also: "_api" (Azure DevOps) and Gerrit's "a/<collection>/";
+//   - bitbucket_server: exactly [<context path>/]scm/<project>/<repo>, the
+//     context path free of the server's own routes, and the repository is
+//     <project>/<repo>.
+func patGitRepo(forge, rest, verb string) (string, bool) {
 	repo, ok := strings.CutSuffix(rest, "/"+verb)
-	if !ok {
+	if forge == "" {
+		forge = types.PATForgeGeneric
+	}
+	if !ok || patDoublyEncoded(forge, repo) {
 		return "", false
 	}
 	repo = strings.TrimPrefix(repo, "/")
+	if strings.Trim(repo, "/") == "" {
+		return "", false
+	}
+	segs := strings.Split(repo, "/")
 	if forge == types.PATForgeBitbucketServer {
-		return strings.CutPrefix(repo, "scm/")
+		return patBitbucketServerRepo(segs)
+	}
+	for i := range segs[:len(segs)-1] {
+		if patAPIMount(segs, i) ||
+			(forge == types.PATForgeGitea && patSegIs(segs[i], "api")) ||
+			(forge == types.PATForgeGeneric && (patSegIs(segs[i], "_api") || patGerritREST(segs, i))) {
+			return "", false
+		}
 	}
 	return repo, true
 }
 
-// patAPISegments name where a forge serves its REST or web routes on the git
-// host: /api/v1 (Gitea, Forgejo), /api/v3 (GitHub Enterprise), /api/v4
-// (GitLab), /rest/ (Bitbucket Server), _apis (Azure DevOps), GitLab's "/-/"
-// route scope and Gitea's contents route. _apis and "-" never name a
-// repository; the others may only as the repository's own name.
-var patAPISegments = []string{"api", "rest", "contents", "_apis", "-"}
+// patDoublyEncoded reports whether a decoded repository path still holds a
+// percent escape (patGitRepo).
+func patDoublyEncoded(forge, repo string) bool {
+	if forge != types.PATForgeGeneric {
+		return strings.ContainsRune(repo, '%')
+	}
+	for i := strings.IndexByte(repo, '%'); i >= 0; i = strings.IndexByte(repo, '%') {
+		if len(repo) > i+2 && strings.Trim(repo[i+1:i+3], "0123456789abcdefABCDEF") == "" {
+			return true
+		}
+		repo = repo[i+1:]
+	}
+	return false
+}
 
-// patGitPath reports whether rest is a git smart-HTTP path for the forge,
-// "/<repo path>/<tail>", tail being the verb the caller validated: the
-// repository path is non-empty, in the forge's form, and holds no segment
-// patAPISegments lists, compared case-folded and up to a ";" or trailing dots
-// or spaces, as servers read them. Every forge serves git at such a path, so
-// anything else on this route is a forge route the PAT must not reach,
-// whatever its last segment spells.
+// patGitPath reports whether patGitRepo admits rest.
 func patGitPath(forge, rest, verb string) bool {
-	repo, ok := patRepoPath(forge, rest, verb)
-	if !ok || strings.Trim(repo, "/") == "" {
+	_, ok := patGitRepo(forge, rest, verb)
+	return ok
+}
+
+// patAPIMount reports whether segs[i], which is not the repository's own name,
+// starts a forge API mount:
+//   - "api" first, or followed by a version (/api/v1 Gitea and Forgejo, /api/v3
+//     and /api/graphql GitHub Enterprise, /api/v4 GitLab, under a sub-path too);
+//   - "rest/<name>/<version>" (Bitbucket Server, /rest/api/1.0, /rest/git/latest);
+//   - "!api" (Bitbucket Cloud), "_apis" (Azure DevOps), "-" (GitLab's route
+//     scope; GitLab refuses it as a name at every level).
+func patAPIMount(segs []string, i int) bool {
+	s := segs[i]
+	switch {
+	case patSegIs(s, "api"):
+		return i == 0 || (i+1 < len(segs)-1 && patAPIVersion(segs[i+1]))
+	case patSegIs(s, "rest"):
+		return i+2 < len(segs)-1 && patBitbucketVersion(segs[i+2])
+	}
+	return patSegIs(s, "!api") || patSegIs(s, "_apis") || patSegIs(s, "-")
+}
+
+// patGerritREST reports whether segs[i] is Gerrit's authenticated prefix "a"
+// followed by one of its REST collections. Gerrit serves git under the same
+// prefix (a/<project>), so a project whose name starts with a collection name
+// is refused too.
+func patGerritREST(segs []string, i int) bool {
+	if !patSegIs(segs[i], "a") || i+1 >= len(segs)-1 {
 		return false
 	}
-	segs := strings.Split(repo, "/")
-	for i, seg := range segs {
-		seg, _, _ = strings.Cut(seg, ";")
-		seg = strings.ToLower(strings.TrimRight(seg, ". "))
-		if seg == "_apis" || seg == "-" || (i < len(segs)-1 && slices.Contains(patAPISegments, seg)) {
-			return false
+	return slices.ContainsFunc([]string{"access", "accounts", "changes", "config", "groups", "plugins", "projects"},
+		func(c string) bool { return patSegIs(segs[i+1], c) })
+}
+
+// patBitbucketServerRoutes are the Bitbucket Server routes that take a free
+// path after them; a context path holding one is not a context path.
+var patBitbucketServerRoutes = []string{"scm", "rest", "plugins", "projects", "users"}
+
+// patBitbucketServerRepo admits [<context path>/]scm/<project>/<repo> and returns
+// <project>/<repo>.
+func patBitbucketServerRepo(segs []string) (string, bool) {
+	n := len(segs)
+	if n < 3 || segs[n-3] != "scm" || segs[n-2] == "" || segs[n-1] == "" {
+		return "", false
+	}
+	for i, s := range segs[:n-3] {
+		if s == "" || patAPIMount(segs[:n-3], i) ||
+			slices.ContainsFunc(patBitbucketServerRoutes, func(r string) bool { return patSegIs(s, r) }) {
+			return "", false
 		}
 	}
-	return true
+	return segs[n-2] + "/" + segs[n-1], true
+}
+
+// patSegIs reports whether a decoded path segment reads as word to a server
+// that drops ";" path parameters, trims trailing dots and spaces, and matches
+// routes case-insensitively: strings.EqualFold is Unicode case folding, so
+// "ſ" (U+017F) reads as "s" and "K" (U+212A) as "k".
+func patSegIs(seg, word string) bool {
+	return strings.EqualFold(patSegRead(seg), word)
+}
+
+func patSegRead(seg string) string {
+	seg, _, _ = strings.Cut(seg, ";")
+	return strings.TrimRight(seg, ". ")
+}
+
+// patAPIVersion: v<digits> or graphql, as patSegIs reads a segment.
+func patAPIVersion(seg string) bool {
+	s := patSegRead(seg)
+	if strings.EqualFold(s, "graphql") {
+		return true
+	}
+	return len(s) > 1 && (s[0] == 'v' || s[0] == 'V') && strings.Trim(s[1:], "0123456789") == ""
+}
+
+// patBitbucketVersion: <digits>.<digits> or latest, as patSegIs reads a segment.
+func patBitbucketVersion(seg string) bool {
+	s := patSegRead(seg)
+	if strings.EqualFold(s, "latest") {
+		return true
+	}
+	major, minor, ok := strings.Cut(s, ".")
+	return ok && major != "" && minor != "" && strings.Trim(major+minor, "0123456789") == ""
 }
 
 // patRepoAllowed reports whether the grant's repos cover the repository the

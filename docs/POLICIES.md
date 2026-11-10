@@ -256,7 +256,7 @@
   - The request's repository path is read with the grant's `forge` path table and compared through the same function that checks an entry, so the string compared is the string the proxy forwards upstream.
   - Nothing is case-folded and no `.git` is stripped, on any forge: `Team/App.git`, `team/app.git`, `team/app` and `team/app-x` are four different repositories, and `team/app` does not cover `team/app/sub`.
   - One trailing `/*` covers exactly one further segment, so `group/*` covers `group/app` and not `group/sub/app` (a subgroup needs its own entry).
-  - A request form the table does not list is refused, never guessed at: Bitbucket Server serves repositories under `/scm/<project>/<repo>` and a path outside `/scm/` is refused.
+  - A request form the table does not list is refused, never guessed at: Bitbucket Server serves repositories under `[<context path>/]scm/<project>/<repo>`, keyed `<project>/<repo>`.
   - Decision-log `rule_source` `brokered:git-pat:repo`.
 - **`access: read`.**
   - Both doors of a push are shut: `POST git-receive-pack`, and the ref advertisement a push starts with (`GET info/refs?service=git-receive-pack`); refusing only the POST would still advertise refs.
@@ -315,7 +315,8 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - A `repos` entry is compared exactly as the request path spells it, on every forge (Bitbucket Server writes a project key upper-case in its REST paths and lower-case in clone URLs).
 - So list the spelling each door uses.
 - The PAT stays exactly as broad as its issuer made it everywhere outside Wardyn, and a request to the plain forward lane for the host is refused whatever its path.
-- The broker admits the same smart-HTTP surface the GitHub lane does — refs discovery and the two pack endpoints, nothing else.
+- The broker admits the same smart-HTTP surface the GitHub lane does — refs discovery and the two pack endpoints, outside the forge's API mounts.
+- On `generic` only the mounts Wardyn knows are refused, so set `forge` or `repos`.
 - A broker that forwarded arbitrary paths would be a credentialed proxy to the whole forge, REST API included.
 - `WARDYN_GIT_PAT_BROKER=off` restores the pre-0.7 resident lane.
 - It exists because the broker changes the git transport for those hosts, and a forge that behaves unexpectedly under the rewrite must not leave a fleet unable to clone.
@@ -1269,7 +1270,7 @@ Strictness runs `allow`, `hold`, `approve_each`, `deny`, and every layer keeps t
 | Lane | Git door | REST doors that write repository content |
 |---|---|---|
 | GitHub App (`github_token`) | `/wardyn/gh/` | **None reachable.** The broker route admits only the three smart-HTTP endpoints and the installation token never leaves the proxy. `api.github.com` is denied to the run's egress, a GitHub CLI door aside; the broker's own GitHub API calls are reads (`GET`). |
-| `git_pat` | `/wardyn/git/<host>/` | **None reachable.** The route admits only the three smart-HTTP endpoints and the PAT never leaves the proxy. |
+| `git_pat` | `/wardyn/git/<host>/` | **None Wardyn knows of.** The route admits only the three smart-HTTP endpoints and the PAT never leaves the proxy. |
 | Azure DevOps Entra | `/wardyn/git/<host>/` | The REST gate on `dev.azure.com` / `<org>.visualstudio.com`: pushes are read path by path and routes that name no paths are refused. See [Azure DevOps Entra](#azure-devops-entra). |
 
 - `git_pat`: with the broker `off` the token is in the sandbox; on the `ssh_key` lane the key stays in the proxy, but no rule reads an SSH push. Both are the risk-grade item below.
