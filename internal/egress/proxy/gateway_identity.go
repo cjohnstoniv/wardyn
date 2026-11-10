@@ -240,7 +240,7 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 	}
 	h.Set(gatewayIdentityHeader, token)
 	h.Del("Accept-Encoding")
-	rearmBodyDeadline(w) // the mint may have held the request
+	rearmBodyDeadline(w, r) // the mint may have held the request
 	return true
 }
 

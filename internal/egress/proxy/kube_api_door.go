@@ -259,7 +259,7 @@ func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string
 		p.refuseKubeAPI(w, r, host, port, kubeAPICredentialUnavailable, kubeAPINoCredential)
 		return
 	}
-	rearmBodyDeadline(w)
+	rearmBodyDeadline(w, r)
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceKubeAPI, denied: ruleSourceKubeAPIRefused,
 		mintFailed: "cluster credential", upstream: "kubernetes", rt: p.kube.rt, approvalID: approvalID,
 		credential: func(context.Context) (string, string, error) { return hdr.name, hdr.value, nil }})

@@ -311,12 +311,14 @@ func TestUnnarrowedPATGrantRendersNoScopeKeys(t *testing.T) {
 // canonical and folded; TestRoutePathOverrideProbes keeps them in its set.
 var routePathOverrideProbes = []string{"X-Original-URL", "X-Rewrite-URL", "X-Override-URL", "X-Forwarded-Prefix",
 	"X-Script-Name", "X-Forwarded-Host", "X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Forwarded-Path",
-	"X-Original-Host", "X-HTTP-Host-Override", "Forwarded", "X-Matched-Path", "X-Invoke-Path", "X_Replaced_Path"}
+	"X-Original-Host", "X-HTTP-Host-Override", "Forwarded", "X-Matched-Path", "X-Invoke-Path", "X_Replaced_Path",
+	"X-Host", "x_host", "X-Forwarded-Server", "x-forwarded-server"}
 
 // methodOverrideProbes are spellings of the method overrides (armscope.MethodOverrideHeader), canonical
 // and folded.
 var methodOverrideProbes = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override",
-	"X_HTTP_Method_Override", "x-http-method", "X_Method_Override"}
+	"X_HTTP_Method_Override", "x-http-method", "X_Method_Override",
+	"X-Method", "x-method", "X-METHOD", "X-Ms-Http-Method", "x_ms_http_method", "X-Original-Method", "X-Forwarded-Method"}
 
 // routeOverrideHeaders are the method- and path-override headers neither git
 // broker lane forwards.
@@ -333,14 +335,36 @@ func TestRoutePathOverrideProbes(t *testing.T) {
 			t.Errorf("%s is no method override to armscope.MethodOverrideHeader", h)
 		}
 	}
-	for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Port", "Host", "X-Host-Hint", "X-Portkey-Custom-Host"} {
+	for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Port", "Host", "X-Host-Hint", "X-Hosted-By",
+		"X-Portkey-Custom-Host", "X-Portkey-Provider", "Authorization", "Content-Type", "Content-Length", "anthropic-version", "openai-organization"} {
 		if armscope.RouteOverrideHeader(h) {
 			t.Errorf("%s is a route override to armscope.RouteOverrideHeader, want it left alone", h)
 		}
 	}
-	for _, h := range []string{"X-HTTP-Method-Hint", "X-Method", "Method"} {
+	for _, h := range []string{"X-HTTP-Method-Hint", "X-Methods", "Method", "Allow", "Access-Control-Request-Method"} {
 		if armscope.MethodOverrideHeader(h) {
-			t.Errorf("%s is a method override to armscope.MethodOverrideHeader, want only the three names", h)
+			t.Errorf("%s is a method override to armscope.MethodOverrideHeader, want only the listed names", h)
+		}
+	}
+}
+
+// A method override is judged by every key that spells one and every value it carries: two keys in
+// different spellings, or one key with several values, are a mismatch when any names another method.
+func TestPATAPIMethodMismatchReadsEveryKeyAndValue(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		header   http.Header
+		mismatch bool
+	}{
+		{"two spellings, one names another method", http.Header{"X-Http-Method-Override": {"GET"}, "x_http_method": {"DELETE"}}, true},
+		{"two spellings, both the request's", http.Header{"X-Http-Method-Override": {"GET"}, "x_http_method": {"get"}}, false},
+		{"one key, a second value names another method", http.Header{"X-Method": {"GET", "DELETE"}}, true},
+		{"one key, every value the request's", http.Header{"X-Method": {"GET", " get "}}, false},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "https://"+hrHost+"/repos/a/b", nil)
+		r.Header = tc.header
+		if got := patAPIMethodMismatch(r); got != tc.mismatch {
+			t.Errorf("%s: mismatch %v, want %v", tc.name, got, tc.mismatch)
 		}
 	}
 }
