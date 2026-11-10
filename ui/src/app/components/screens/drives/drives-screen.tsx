@@ -39,12 +39,11 @@ import {
   drives as api,
   enforcementFor,
   isManagedBackend,
-  teamWritable,
+  teamMode,
   type UserDriveGrant,
   type UserDriveListItem,
   type UserDrivesSnapshot,
 } from "../../../lib/api/drives";
-import { providers as providersApi } from "../../../lib/api/providers";
 import { getErrorMessage } from "../../../lib/format";
 import { ACCESS_STATE, DRIVES, DRIVES_TEAM_UNKNOWN, PEOPLE } from "../../../lib/user-drives-copy";
 import {
@@ -100,20 +99,11 @@ export function DrivesScreen() {
   const [toDelete, setToDelete] = React.useState<UserDriveListItem | null>(null);
   const [deleteError, setDeleteError] = React.useState<{ title?: string; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
-  // storage.user_drive.team_drives, read from the same site config the Storage
-  // tab edits. null = not known (loading or the read failed): a failed read is
-  // not "off", so a drive the server marks as team claims nothing until it is
-  // read. Off (read) is today's screen.
-  const [teamSetting, setTeamSetting] = React.useState<boolean | null>(null);
-  const [teamFailed, setTeamFailed] = React.useState(false);
-  const loadTeamSetting = React.useCallback(() => {
-    setTeamFailed(false);
-    providersApi
-      .getWorkspaceProviders()
-      .then((s) => setTeamSetting(!!s.providers.storage?.user_drive?.team_drives))
-      .catch(() => setTeamFailed(true));
-  }, []);
-  React.useEffect(loadTeamSetting, [loadTeamSetting]);
+  // storage.user_drive.team_drives, carried by GET /drives for every reader, a
+  // security admin included. null = the answer does not say (a daemon older than
+  // that field): not "off", so a drive the server marks as team claims nothing
+  // until a read says. Off (read) is today's screen.
+  const teamSetting: boolean | null = snap.team_drives ?? null;
   const teamDrives = teamSetting === true;
   const teamUnknown = teamSetting === null;
 
@@ -267,10 +257,10 @@ export function DrivesScreen() {
                 />
               ) : (
                 <>
-                  {teamFailed && teamUnknown && snap.drives.some((d) => d.team) && (
+                  {teamUnknown && snap.drives.some((d) => d.team) && (
                     <p role="status" className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3 text-meta text-muted-foreground">
                       {DRIVES_TEAM_UNKNOWN.NOTE}
-                      <Button variant="outline" size="sm" onClick={loadTeamSetting}>
+                      <Button variant="outline" size="sm" onClick={load}>
                         {DRIVES_TEAM_UNKNOWN.RETRY}
                       </Button>
                     </p>
@@ -293,11 +283,15 @@ export function DrivesScreen() {
                         const team = teamDrives && !!d.team;
                         // A team drive whose setting is unknown claims nothing about access, cleanup or allocation.
                         const unknownTeam = teamUnknown && !!d.team;
+                        const mode = team ? teamMode(d, snap.grants) : d.writable;
                         return (
                         <TableRow key={d.id}>
                           {/* A drive name is a human-chosen label, never mono. */}
                           <TableCell className="font-medium">
-                            {team ? (
+                            {/* d.team is the server's fact about the drive, so the chip shows
+                                while the switch is unknown too; only the claims that depend on
+                                the switch (mode, cleanup, allocation) are held back. */}
+                            {team || unknownTeam ? (
                               <span className="flex flex-col items-start gap-1.5">
                                 {d.name}
                                 <Chip tone="neutral">{DRIVES.TEAM_CHIP}</Chip>
@@ -328,13 +322,12 @@ export function DrivesScreen() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            {/* A team drive is writable only where its allocations say so too. */}
-                            {unknownTeam ? (
+                            {/* A team drive's mode resolves per allocation; it is claimed only when the page lists
+                                every allocation and they all agree (teamMode), else it is not shown. */}
+                            {unknownTeam || (team && mode === null) ? (
                               <span className="text-muted-foreground">{DRIVES_TEAM_UNKNOWN.CELL}</span>
                             ) : (
-                              <Chip tone={modeTone(team ? teamWritable(d, snap.grants) : d.writable)}>
-                                {modeText(team ? teamWritable(d, snap.grants) : d.writable)}
-                              </Chip>
+                              <Chip tone={modeTone(mode ?? undefined)}>{modeText(mode ?? undefined)}</Chip>
                             )}
                           </TableCell>
                           <TableCell className={team || unknownTeam ? "text-muted-foreground" : undefined}>

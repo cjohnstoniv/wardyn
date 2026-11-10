@@ -11,8 +11,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- The AI gateway identity token's `wardyn_format` claim is now `1`, where it was `experimental-1`. A gateway rule that checks `wardyn_format` = `experimental-1` must accept `1`.
+
+### Added
+
+- `wardyn record save <run-id> --name <n> --template` saves a synthesized sandbox profile as your own template, which a member may do. Without it, a member's save is refused with a line that names the flag, because stored policies are an administrator's. The template is bounded by your own ceiling when a run uses it.
+
+### Changed
+
+- The AI gateway token format is stable as format `1`: within it claims are only added, never removed, renamed or re-typed; tokens stay ES256 with the key's `kid`; the key set's address is stable through 0.11; a format 2 is announced a minor release ahead. See [the claims](docs/operations/ai-gateway.md#the-claims-a-gateway-receives).
+
 ### Fixed
 
+- A security admin's Drives page now shows a team drive as one (the Team badge, One host only, and whether members can write), and every reader of `GET /drives` gets the deployment's `team_drives` switch in the answer. Before, the console had to read the switch from a page only an administrator may open, and showed a team drive as a plain one when that read was refused.
+- The docs said the gateway gets no person or run identity and that a service has no check from outside the sandbox. Both are corrected: a gateway can receive a signed person and run token, and `health.probe: control_plane` is Wardyn's own check.
 - macOS VM runs could stop at the login window, a regression in rc.17. The rc.17 step that ended Setup Assistant at run start killed it while `agent` could still be signing in, most likely ending the sign-in, and auto-login runs once per boot. The step is now off by default, so the Apple Account pane can stay up in the window. A base can turn it on with the file `/Library/Wardyn/setup-assistant-quit`: the step then waits until the desktop is up (Dock and Finder running as `agent`) and asks Setup Assistant to quit, never kills it. A run with a desktop whose guest is not signed in as `agent` 5 minutes after boot now fails with "the Mac guest never reached the agent's desktop: still at the login window" instead of running. Run the tools update once to get the new guest agent. Not yet tried on a real Mac. Retest on your Mac: after boot, `stat -f%Su /dev/console` prints `agent`, and the desktop window appears.
 - On a macOS or Linux VM run, a guest program's direct requests to a host whose credential your organisation supplies through Wardyn (a `via_org` credential) no longer count as idle activity, so they no longer keep the run from stopping when idle. The runner marks such a request when it forwards it to your organisation, and the server only trusts the mark on a VM run's forwarded request from that run's own runner; a mark the guest sets itself is removed. The record a proxy writes when it starts with an upstream proxy no longer counts as activity either, so the server rebuilding its side of the forward after 10 idle minutes does not restart the idle clock. The runner and the server both need the upgrade. This was a Known issue in rc.17.
 
