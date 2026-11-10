@@ -183,7 +183,9 @@ func (s *Server) proxyStartAnswered(ctx context.Context, runID uuid.UUID, rec pr
 // start, never inferred: the write may have committed. An answer that committed stands (enforced,
 // legacy unconfirmed, or pending on its deadline). One that did not is answered again with a
 // deadline already passed, and read back failed, so the sweep lists it until its stop is confirmed.
-// read is false when neither can be read back: the start stays pending, and nothing retries it.
+// read is false when neither can be read back. Only an answer refused twice (the start read back
+// still pending with no deadline) leaves it pending, with nothing retrying it. A read that errors,
+// finds no start, or finds another generation leaves its state unknown to this answer.
 func (s *Server) recoverProxyAnswer(ctx context.Context, st store.RunProxyStarts, runID uuid.UUID, rec proxyStartRec, sha string) (ch store.ProxyStartChange, read bool) {
 	reread := func() (store.ProxyStart, bool) {
 		p, found, err := st.ActiveProxyStart(ctx, runID)
