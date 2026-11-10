@@ -57,7 +57,7 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 		s.leaseRun(ctx, leaser, run)
 	}
 	// A run the sweep no longer lists (torn down, killed) needs no entry.
-	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending, &s.renewalRefused, &s.keptEndHeldOff, &s.keptEndForced} {
+	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending, &s.renewalRefused, &s.keptEndForced} {
 		m.Range(func(id, _ any) bool {
 			if !listed[id.(uuid.UUID)] {
 				m.Delete(id)
@@ -454,7 +454,6 @@ func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run ty
 	}
 	defer unlock()
 	ctx = lctx
-	s.keptEndHeldOff.Delete(run.ID)
 	s.keptEndForced.Delete(run.ID)
 	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
 	if err != nil {
