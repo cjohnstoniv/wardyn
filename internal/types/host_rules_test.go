@@ -100,8 +100,7 @@ func TestValidateHostRuleSets(t *testing.T) {
 		sets []HostRuleSet
 		want string
 	}{
-		"hold":            {with(func(r *HostRule) { r.Effect = HostRuleHold }), "available in a later release of this train"},
-		"unknown effect":  {with(func(r *HostRule) { r.Effect = "maybe" }), "effects: allow, deny"},
+		"unknown effect":  {with(func(r *HostRule) { r.Effect = "maybe" }), "effects: allow, deny, hold"},
 		"uppercase host":  {with(func(r *HostRule) { r.Host = "API.example.com" }), "lowercase"},
 		"wildcard host":   {with(func(r *HostRule) { r.Host = "*.example.com" }), "wildcard"},
 		"host with port":  {with(func(r *HostRule) { r.Host = "api.example.com:443" }), "no port"},

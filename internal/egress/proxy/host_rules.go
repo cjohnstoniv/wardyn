@@ -45,14 +45,18 @@ func (p *Proxy) hostRuleUninspected(ctx context.Context, host string, port int) 
 }
 
 // hostRuleRefused judges one request to host (inside a terminated tunnel or on the plain lane), writes
-// the refusal when the rules do not allow it, and reports whether it did. hold is refused until holds land.
+// the refusal when the rules do not allow it, and reports whether it did. A request the rules hold waits
+// for a person's answer to its host, method and path (host_call_hold.go).
 func (p *Proxy) hostRuleRefused(w http.ResponseWriter, r *http.Request, host string, port int) bool {
 	if !p.policy.namesRuleHost(host) {
 		return false
 	}
 	d := types.EvalHostRules(p.policy.hostRules, host, r.Method, requestEscapedPath(r))
-	if d.Effect == types.HostRuleAllow {
+	switch d.Effect {
+	case types.HostRuleAllow:
 		return false
+	case types.HostRuleHold:
+		return !p.holdHostCall(w, r, host, port)
 	}
 	log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceHostRule)
 	log.Cause = hostRuleCause(d)
@@ -79,8 +83,6 @@ func hostRuleCause(d types.HostRuleDecision) string {
 		return "host rules: the request path cannot be judged: " + d.Cause
 	case d.Rule < 0:
 		return "host rules: " + d.Cause
-	case d.Effect == types.HostRuleHold:
-		return fmt.Sprintf("host rules: rule set %d, rule %d holds this request, and holds are not available yet", d.Set, d.Rule)
 	}
 	return fmt.Sprintf("host rules: rule set %d, rule %d denies this request", d.Set, d.Rule)
 }

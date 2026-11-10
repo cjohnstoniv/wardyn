@@ -34,7 +34,7 @@ type HostRuleEffect string
 const (
 	HostRuleAllow HostRuleEffect = "allow"
 	HostRuleDeny  HostRuleEffect = "deny"
-	// HostRuleHold is refused by validation until the hold lands (a later release of this train).
+	// HostRuleHold holds the request until a person decides its host, method and path (HostCallScope).
 	HostRuleHold HostRuleEffect = "hold"
 )
 
@@ -104,12 +104,10 @@ func validHostRule(r HostRule) error {
 		}
 	}
 	switch r.Effect {
-	case HostRuleAllow, HostRuleDeny:
+	case HostRuleAllow, HostRuleDeny, HostRuleHold:
 		return nil
-	case HostRuleHold:
-		return fmt.Errorf("effect: %q is available in a later release of this train", r.Effect)
 	}
-	return fmt.Errorf("effect: %q (effects: allow, deny)", r.Effect)
+	return fmt.Errorf("effect: %q (effects: allow, deny, hold)", r.Effect)
 }
 
 // isHTTPToken reports whether s is an RFC 9110 token.
@@ -224,7 +222,7 @@ func isUnreserved(c byte) bool {
 type HostRuleDecision struct {
 	// Named reports whether any set names the host; false means the rules impose nothing.
 	Named bool
-	// Effect is allow or deny (hold once holds land).
+	// Effect is allow, deny or hold.
 	Effect HostRuleEffect
 	// Set and Rule index the deciding set and rule. Rule is -1 when the set matched no rule (a deny), or
 	// when the path could not be read (Set is -1 too).

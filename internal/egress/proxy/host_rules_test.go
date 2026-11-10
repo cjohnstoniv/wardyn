@@ -273,7 +273,6 @@ func TestConfigRefusesHostRulesABrokerServes(t *testing.T) {
 		"pat broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}}, "git credential broker"},
 		"mcp broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}}, "MCP broker"},
 		"vm":          {Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true}, "VM run"},
-		"hold":        {Config{Policy: types.RunPolicySpec{HostRules: []types.HostRuleSet{{Rules: []types.HostRule{{Host: hrHost, Effect: types.HostRuleHold}}}}}}, "later release"},
 	} {
 		err := tc.c.validateHostRules()
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

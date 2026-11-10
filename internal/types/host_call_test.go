@@ -77,3 +77,11 @@ func TestHostCallScopeIsItsOwnKind(t *testing.T) {
 		}
 	}
 }
+
+// TestHostCallHoldRuleValidates: effect hold is a rule a policy may carry.
+func TestHostCallHoldRuleValidates(t *testing.T) {
+	sets := []HostRuleSet{{Rules: []HostRule{{Host: "api.example.com", Methods: []string{"POST"}, Paths: []string{"/admin"}, Effect: HostRuleHold}}}}
+	if err := ValidateHostRuleSets(sets); err != nil {
+		t.Fatalf("a hold rule was refused: %v", err)
+	}
+}
