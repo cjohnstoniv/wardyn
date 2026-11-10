@@ -51,6 +51,11 @@ func (p *Proxy) servePlainJudged(w http.ResponseWriter, r *http.Request) {
 	p.servePlain(w, r)
 }
 
+// engineHeldRequest marks the destination check a via_org engine runs for a request it already holds in
+// the clear (ViaOrgEngine.ServeInjected): there is no tunnel to open, so the check needs no interception
+// certificate. Only that call sets it, and only an engine's proxy reads it; a sandbox's CONNECT never has it.
+type engineHeldRequest struct{}
+
 // hostRuleUninspected says why a CONNECT to a rule host cannot be opened here, or "" when it can (or the
 // host is no rule host).
 func (p *Proxy) hostRuleUninspected(ctx context.Context, host string, port int) string {
@@ -58,6 +63,8 @@ func (p *Proxy) hostRuleUninspected(ctx context.Context, host string, port int) 
 		return ""
 	}
 	switch {
+	case p.engine && ctx.Value(engineHeldRequest{}) != nil:
+		return "" // the request itself is judged next, in serveMITMRequest (ServeInjected)
 	case p.vm:
 		return "host rules are not judged on a VM run's guest flows"
 	case onSigninLane(ctx):
