@@ -246,6 +246,6 @@ export const NR_FILES = {
 
 // Not in the canon doc (new-run-copy.test.ts holds NR_FILES to it): the note when the computer-folders setting could not be read.
 export const NR_FILES_LOOKUP = {
-  COMPUTER_UNCHECKED: "Couldn't check whether your organisation allows folders from personal computers. You can still choose it; launch checks again.",
+  COMPUTER_UNCHECKED: "Couldn't check whether your organisation allows folders from personal computers. You can still choose it. Wardyn checks again when the run starts.",
   RETRY: "Try again",
 } as const;
