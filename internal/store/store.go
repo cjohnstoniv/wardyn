@@ -473,7 +473,8 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // so a CTE that RETURNs runCols (promoteQueuedRun's moved) still has the column its SELECT names.
 const runInsertOnlyCols = `local_folder, vm_machine, wall_preset, image_admission`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status, wall_preset, policy_digest, image_admission, COALESCE(proxy_addr, '') AS proxy_addr`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status, wall_preset, policy_digest, image_admission, ` +
+	`COALESCE(proxy_addr, '') AS proxy_addr`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
