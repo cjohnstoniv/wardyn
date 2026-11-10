@@ -4,9 +4,11 @@
 package foldersync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -127,7 +129,7 @@ func TestInstall_PreInstallFailureLeavesDst(t *testing.T) {
 	for _, mode := range []InstallMode{InstallReplace, InstallNew} {
 		dir, root, name, f := tempBeside(t)
 		onSync(t, func(*os.File) error { return errFault }, nil)
-		_, err := installDurable(root, f, name, mode, "dst")
+		_, err := installDurable(root, nil, f, name, mode, "dst")
 		var ie *InstallError
 		if !errors.As(err, &ie) || ie.Installed || ie.Step != "sync-file" || errors.Is(err, ErrNotDurable) {
 			t.Errorf("mode %d: err = %v", mode, err)
@@ -144,7 +146,7 @@ func TestInstall_PreInstallFailureLeavesDst(t *testing.T) {
 func TestInstall_PostInstallDirSyncFailureIsInstalledNotDurable(t *testing.T) {
 	dir, root, name, f := tempBeside(t)
 	onSync(t, func(*os.File) error { return nil }, func(*os.File) error { return errFault })
-	_, err := installDurable(root, f, name, InstallReplace, "dst")
+	_, err := installDurable(root, nil, f, name, InstallReplace, "dst")
 	var ie *InstallError
 	if !errors.As(err, &ie) || !ie.Installed || ie.Step != "sync-dir" || !errors.Is(err, ErrNotDurable) {
 		t.Errorf("err = %v", err)
@@ -326,5 +328,79 @@ func TestSaveState_TheCLIStatePathSyncsUpToTheHomeOnEverySave(t *testing.T) {
 	sy.StateRoot = ""
 	if err := sy.saveState(); err == nil {
 		t.Error("a state with no root was saved")
+	}
+}
+
+// logged sends the default logger to a buffer for one test.
+func logged(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return &buf
+}
+
+// A directory sync the filesystem does not offer (EINVAL, ENOTSUP or EOPNOTSUPP, however wrapped) is
+// best effort: the conflict copy is kept, the push goes ahead, the new file is pulled and the state
+// is saved. However many directories hit it, the state's own included, the pass warns once, naming
+// the folder, and its report says so. The same errno from a file sync, or EIO from a directory
+// sync, still refuses the push and fails the save.
+func TestInstall_AnUnsupportedDirSyncIsBestEffortAndWarnedOnce(t *testing.T) {
+	wrap := func(e error) error { return fmt.Errorf("sync: %w", &os.PathError{Op: "sync", Path: "d", Err: e}) }
+	cases := []struct {
+		name      string
+		file, dir error
+		ok        bool
+	}{
+		{"dir EINVAL", nil, syscall.EINVAL, true},
+		{"dir ENOTSUP", nil, syscall.ENOTSUP, true},
+		{"dir EOPNOTSUPP", nil, syscall.EOPNOTSUPP, true},
+		{"file EINVAL", syscall.EINVAL, nil, false},
+		{"dir EIO", nil, syscall.EIO, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sy, box, root := runnerSyncer(t, true)
+			bothChanged(t, sy, box, root)
+			putSyncFile(t, filepath.Join(box, "a", "b", "new.txt"), "from the sandbox", 0o644)
+			buf := logged(t)
+			stateDirs := 0
+			onSync(t, func(*os.File) error {
+				if c.file != nil {
+					return wrap(c.file)
+				}
+				return nil
+			}, func(d *os.File) error {
+				if isDir(d, filepath.Dir(sy.StateFile)) {
+					stateDirs++
+				}
+				if c.dir != nil {
+					return wrap(c.dir)
+				}
+				return nil
+			})
+			rep, err := sy.Pass(context.Background())
+			sandbox := getSyncFile(t, filepath.Join(box, "x.txt"))
+			warned := strings.Count(buf.String(), dirSyncWarning)
+			if !c.ok {
+				if err == nil || sandbox != "sandbox edit!" || warned != 0 {
+					t.Errorf("%s: err = %v, sandbox = %q, warned %d times: want the push refused and the save failed", c.name, err, sandbox, warned)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if sandbox != "laptop edit" || getSyncFile(t, filepath.Join(root, copyName(1))) != "sandbox edit!" || !slices.Contains(rep.Pulled, "a/b/new.txt") {
+				t.Errorf("%s: sandbox = %q, report = %+v", c.name, sandbox, rep)
+			}
+			if warned != 1 || !strings.Contains(buf.String(), "folder="+root) || rep.DurabilityWarning != dirSyncWarning || stateDirs == 0 {
+				t.Errorf("%s: warned %d times, state dir synced %d times, report warning %q, log:\n%s", c.name, warned, stateDirs, rep.DurabilityWarning, buf)
+			}
+			if st, err := LoadState(sy.StateFile, root, box); err != nil || len(st.Files) == 0 {
+				t.Errorf("%s: saved state = %+v, %v", c.name, st, err)
+			}
+		})
 	}
 }

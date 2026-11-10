@@ -82,7 +82,7 @@ func (sy *Syncer) keepConflict(ctx context.Context, rel string, r os.FileInfo, r
 	if tmp == nil {
 		return false, err
 	}
-	if _, err := installDurable(sy.Root, tmp, tmpName, InstallNew, names...); err != nil {
+	if _, err := installDurable(sy.Root, sy.dirs, tmp, tmpName, InstallNew, names...); err != nil {
 		if errors.Is(err, errNamesTaken) {
 			rep.refuse(rel, fmt.Sprintf("all %d conflict copy names are taken", maxConflictCopies))
 			return false, nil

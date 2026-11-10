@@ -287,7 +287,10 @@ func isStateTempID(s string) bool {
 // state's up to top, on every save, so a directory an earlier save made but could not prove is
 // proven now. On an error before the rename the old record is kept; a failed sync after it is an
 // InstallError with Installed set.
-func (st *State) SaveUnder(file, top string) error {
+func (st *State) SaveUnder(file, top string) error { return st.saveUnder(file, top, nil) }
+
+// saveUnder is SaveUnder that notes, in note, a directory sync the filesystem does not offer.
+func (st *State) saveUnder(file, top string, note *dirNote) error {
 	if top == "" {
 		return fmt.Errorf("sync state %s has no root directory", file)
 	}
@@ -299,12 +302,12 @@ func (st *State) SaveUnder(file, top string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := st.install(file); err != nil {
+	if err := st.install(file, note); err != nil {
 		return err
 	}
 	for p := dir; p != top && filepath.Dir(p) != p; {
 		p = filepath.Dir(p)
-		if err := syncDirPath(p); err != nil {
+		if err := syncDirPath(note, p); err != nil {
 			return &InstallError{Step: "sync-dir", Installed: true, Err: err}
 		}
 	}
@@ -312,7 +315,7 @@ func (st *State) SaveUnder(file, top string) error {
 }
 
 // install writes the state through a temp file in file's directory and installs it durably.
-func (st *State) install(file string) error {
+func (st *State) install(file string, note *dirNote) error {
 	dir, base := filepath.Dir(file), filepath.Base(file)
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -332,7 +335,7 @@ func (st *State) install(file string) error {
 		_ = root.Remove(name)
 		return err
 	}
-	_, err = installDurable(root, f, name, InstallReplace, base)
+	_, err = installDurable(root, note, f, name, InstallReplace, base)
 	return err
 }
 

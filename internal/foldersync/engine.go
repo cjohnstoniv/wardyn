@@ -57,7 +57,10 @@ type Report struct {
 	Unsynced int `json:"unsynced,omitempty"`
 	// UnsyncedPaths names them, in order, with each conflict a runner pass could not keep.
 	UnsyncedPaths []string `json:"unsynced_paths,omitempty"`
-	seenSet       map[string]bool
+	// DurabilityWarning is set when this folder's filesystem does not offer a directory sync: what
+	// the pass wrote stands, but a folder entry may not survive a power loss. It refuses nothing.
+	DurabilityWarning string `json:"durability_warning,omitempty"`
+	seenSet           map[string]bool
 }
 
 type Rename struct {
@@ -128,10 +131,11 @@ type Syncer struct {
 	// the state's up to it. A save without one fails.
 	StateRoot string
 	ig        *syncIgnore // this pass's ignore rules, read by walkLocal
+	dirs      *dirNote    // this pass's directory syncs the filesystem does not offer
 }
 
 // saveState saves the state to StateFile, under StateRoot.
-func (sy *Syncer) saveState() error { return sy.State.SaveUnder(sy.StateFile, sy.StateRoot) }
+func (sy *Syncer) saveState() error { return sy.State.saveUnder(sy.StateFile, sy.StateRoot, sy.dirs) }
 
 // ListMeter counts the bytes the sftp client reads while a directory listing
 // is armed, and cancels the listing once it passes maxSyncListBytes.
@@ -282,6 +286,7 @@ type passView struct {
 func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 	rep := NewReport()
 	sy.ig = newSyncIgnore(sy.Opts.OrgDeny)
+	sy.dirs = &dirNote{folder: sy.Root.Name(), rep: rep}
 	local, localDirs, localTree, err := sy.walkLocal(rep)
 	if err != nil {
 		return nil, err
@@ -856,7 +861,7 @@ func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *s
 		rep.Conflicts = append(rep.Conflicts, rel)
 		return nil
 	}
-	if _, err := installSynced(sy.Root, tmp, tmpName, InstallReplace, rel); err != nil {
+	if _, err := installSynced(sy.Root, sy.dirs, tmp, tmpName, InstallReplace, rel); err != nil {
 		return sy.pathFailed(ctx, rep, rel, "replace the local file", err)
 	}
 	fi, err := sy.Root.Lstat(rel)

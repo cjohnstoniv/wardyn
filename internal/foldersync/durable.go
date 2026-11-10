@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
+	"sync"
 )
 
 // InstallMode says whether an install may replace what is at its destination.
@@ -53,6 +55,35 @@ func (e *InstallError) Unwrap() []error {
 	return []error{e.Err}
 }
 
+// dirNote is one pass's record of a directory sync its filesystem does not offer (dirSyncUnsupported):
+// best effort, so the install stands, but its folder entry may not survive a power loss. It is
+// logged once per pass; a nil note logs each one.
+// It also sets the pass's Report.DurabilityWarning.
+type dirNote struct {
+	folder string
+	rep    *Report
+	once   sync.Once
+}
+
+// dirSyncWarning is the warning of a dirNote.
+const dirSyncWarning = "this folder's filesystem can't guarantee the folder entry survives a power loss"
+
+func (n *dirNote) unsupported(dir string, err error) {
+	log := func(folder string) {
+		slog.Warn("foldersync: "+dirSyncWarning, slog.String("folder", folder), slog.String("dir", dir), slog.String("err", err.Error()))
+	}
+	if n == nil {
+		log(dir)
+		return
+	}
+	n.once.Do(func() {
+		log(n.folder)
+		if n.rep != nil {
+			n.rep.DurabilityWarning = dirSyncWarning
+		}
+	})
+}
+
 // The sync calls, replaced by tests to fail or record one.
 var (
 	fsyncFile = func(f *os.File) error { return f.Sync() }
@@ -70,13 +101,13 @@ func syncTemp(tmp *os.File) error {
 // installDurable syncs tmp (named tmpName in root, in the directory of every destination), installs
 // it and syncs that directory and every one above it in root. It returns the destination used. tmp is closed and removed in every
 // case.
-func installDurable(root *os.Root, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
+func installDurable(root *os.Root, note *dirNote, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
 	if err := syncTemp(tmp); err != nil {
 		_ = tmp.Close()
 		_ = root.Remove(tmpName)
 		return "", err
 	}
-	return installSynced(root, tmp, tmpName, mode, dsts...)
+	return installSynced(root, note, tmp, tmpName, mode, dsts...)
 }
 
 // installSynced is installDurable after syncTemp: it closes tmp, then with InstallReplace renames it
@@ -85,7 +116,7 @@ func installDurable(root *os.Root, tmp *os.File, tmpName string, mode InstallMod
 // installed. It then syncs the destination's directory and every one above it, through root, on
 // every install: a retry, or a copy already in place, included. The temp is removed after success
 // or after the last name failed.
-func installSynced(root *os.Root, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
+func installSynced(root *os.Root, note *dirNote, tmp *os.File, tmpName string, mode InstallMode, dsts ...string) (string, error) {
 	defer func() { _ = root.Remove(tmpName) }() // after a rename or move it names nothing
 	if err := tmp.Close(); err != nil {
 		return "", &InstallError{Step: "close", Err: err}
@@ -94,7 +125,7 @@ func installSynced(root *os.Root, tmp *os.File, tmpName string, mode InstallMode
 	if err != nil {
 		return "", &InstallError{Step: step, Err: err}
 	}
-	if err := syncDirsUp(root, path.Dir(dst)); err != nil {
+	if err := syncDirsUp(root, note, path.Dir(dst)); err != nil {
 		return dst, &InstallError{Step: "sync-dir", Installed: true, Err: err}
 	}
 	return dst, nil
@@ -103,9 +134,9 @@ func installSynced(root *os.Root, tmp *os.File, tmpName string, mode InstallMode
 // syncDirsUp syncs dir and every directory above it in root, root itself last. An entry is durable
 // only once every directory naming it is synced, and that a directory exists never says its own
 // entry reached the disk: an earlier attempt may have made it and failed to sync its parent.
-func syncDirsUp(root *os.Root, dir string) error {
+func syncDirsUp(root *os.Root, note *dirNote, dir string) error {
 	for p := dir; ; p = path.Dir(p) {
-		if err := syncDirIn(root, p); err != nil {
+		if err := syncDirIn(root, note, p); err != nil {
 			return err
 		}
 		if p == "." {
