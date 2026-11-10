@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -70,6 +71,8 @@ type metrics struct {
 	// sshRefused counts SSH gateway connections closed at a connection bound,
 	// by the bound's name (sshConnLimits.refused).
 	sshRefused map[string]int64
+	// sshLimits is the running SSH gateway's connection bounds, kept so a test can read its accounting.
+	sshLimits atomic.Pointer[sshConnLimits]
 	// deviceIngestSuppressed is authFailedSuppressed's twin for
 	// device.audit.ingest: a refusal whose row was folded into its device's
 	// streak or dropped by the per-device bucket (device_audit_bounds.go).

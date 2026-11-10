@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -416,7 +418,10 @@ func TestSSHGateway_ExcessConnectionsDoNotStarveAnotherPerson(t *testing.T) {
 		}
 		defer c.Close()
 	}
-	time.Sleep(200 * time.Millisecond) // let the gateway finish admitting alice's excess connections
+	// Both excess connections have reached the refusal path once both rows are written.
+	if !waitUntil(5*time.Second, func() bool { return rejectRows(h.audit) >= 2 }) {
+		t.Fatalf("only %d ssh.connection.reject rows for alice's two excess connections", rejectRows(h.audit))
+	}
 	bob, err := sshDial(t, h, bobRun.String(), bobPriv)
 	if err != nil {
 		t.Fatalf("bob: %v", err)
@@ -430,8 +435,7 @@ func TestSSHGateway_ExcessConnectionsDoNotStarveAnotherPerson(t *testing.T) {
 // The refusal wait gives its slot back on timeout and on the first channel's rejection: with one
 // slot per person, every excess connection in turn must still be admitted to the wait and told why.
 func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
-	prev := setSSHRefusalGrace(200 * time.Millisecond)
-	t.Cleanup(func() { setSSHRefusalGrace(prev) })
+	t.Cleanup(func() { setSSHRefusalGrace(sshRefusalGrace) })
 	st := newSSHMemStore()
 	runID := uuid.New()
 	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
@@ -471,10 +475,15 @@ func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
 			t.Fatalf("excess %d was not told why: the wait slot was not released", i+1)
 		}
 		_ = c.Close()
+		// The next excess connection must find the slot free: wait for the gateway's own count.
+		if !waitUntil(5*time.Second, func() bool { return refusalWaiting(h) == 0 }) {
+			t.Fatalf("after excess %d the refusal slot was never released", i+1)
+		}
 	}
 
 	// Timeout releases: a connection that opens no channel is closed after the grace, and the person's
 	// slot is free again for the next.
+	setSSHRefusalGrace(200 * time.Millisecond)
 	waiting, err := sshDial(t, h, runID.String(), priv)
 	if err != nil {
 		t.Fatal(err)
@@ -483,6 +492,10 @@ func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
 	if !closedWithin(waiting, 3*time.Second) {
 		t.Fatal("a refused connection that opened no channel was not closed after the grace")
 	}
+	if !waitUntil(5*time.Second, func() bool { return refusalWaiting(h) == 0 }) {
+		t.Fatal("the grace timed out but the refusal slot was never released")
+	}
+	setSSHRefusalGrace(sshRefusalGrace) // the next one is judged on being told, not on the clock
 	after, err := sshDial(t, h, runID.String(), priv)
 	if err != nil {
 		t.Fatal(err)
@@ -490,5 +503,97 @@ func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
 	defer after.Close()
 	if !told(after) {
 		t.Fatal("after the grace timed out the person's wait slot was not free")
+	}
+}
+
+// rejectRows counts the recorded ssh.connection.reject rows.
+func rejectRows(a *sshTestRecorder) int {
+	n := 0
+	for _, ev := range a.snapshot() {
+		if ev.Action == "ssh.connection.reject" {
+			n++
+		}
+	}
+	return n
+}
+
+// waitUntil polls cond until it holds or the deadline passes.
+func waitUntil(d time.Duration, cond func() bool) bool {
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if cond() {
+			return true
+		}
+	}
+	return cond()
+}
+
+// refusalWaiting is the gateway's refusal-pool occupancy.
+func refusalWaiting(h *sshTestHarness) int {
+	l := h.srv.metrics.sshLimits.Load()
+	l.principalsMu.Lock()
+	defer l.principalsMu.Unlock()
+	return l.refusing
+}
+
+// blockOnReject is a recorder that records everything except ssh.connection.reject, which it blocks
+// on until the caller's context ends (as a stalled audit store would), counting how many are in
+// flight at once.
+type blockOnReject struct {
+	audit.Recorder
+	inflight, peak atomic.Int32
+}
+
+func (b *blockOnReject) Record(ctx context.Context, ev types.AuditEvent) error {
+	if ev.Action != "ssh.connection.reject" {
+		return b.Recorder.Record(ctx, ev)
+	}
+	n := b.inflight.Add(1)
+	defer b.inflight.Add(-1)
+	for {
+		p := b.peak.Load()
+		if n <= p || b.peak.CompareAndSwap(p, n) {
+			break
+		}
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A stalled audit store must not let refused connections pile up: the reject row is written under
+// the refusal grace, the work stays under the handshake bounds the connection still holds, and the
+// deadline cleans every handler up.
+func TestSSHGateway_StalledRejectAuditStaysBounded(t *testing.T) {
+	prev := setSSHRefusalGrace(300 * time.Millisecond)
+	t.Cleanup(func() { setSSHRefusalGrace(prev) })
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	blocker := &blockOnReject{}
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) {
+		c.SSHMaxConnectionsPerPrincipal = 1
+		blocker.Recorder = c.Audit
+		c.Audit = blocker
+	})
+	held, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if _, _, err := held.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Far more valid over-share handshakes than the per-source handshake bound allows at once.
+	for range 3 * DefaultSSHMaxHandshakesPerSource {
+		if c, err := sshDial(t, h, runID.String(), priv); err == nil {
+			defer c.Close()
+		}
+	}
+	if peak := int(blocker.peak.Load()); peak == 0 || peak > DefaultSSHMaxHandshakesPerSource {
+		t.Fatalf("peak in-flight reject handlers = %d, want 1 to %d (the per-source handshake bound)", peak, DefaultSSHMaxHandshakesPerSource)
+	}
+	if !waitUntil(5*time.Second, func() bool { return blocker.inflight.Load() == 0 && refusalWaiting(h) == 0 }) {
+		t.Fatalf("after the deadline %d reject handlers and %d refusal slots are still held", blocker.inflight.Load(), refusalWaiting(h))
 	}
 }
