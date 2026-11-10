@@ -450,3 +450,37 @@ func TestInstall_ARetryAfterAFailedRootSyncSyncsTheRootBeforeThePush(t *testing.
 		}
 	}
 }
+
+// Copies that both changed, or that have no record, but hold the same bytes are in step: no
+// conflict copy is made (a lost save must not make copies that use up the pull budget), nothing is
+// pushed, and the record is brought up to date.
+func TestPass_IdenticalCopiesAreRecordedNotConflicts(t *testing.T) {
+	for _, recorded := range []bool{true, false} {
+		sy, box, root := runnerSyncer(t, true)
+		if recorded {
+			bothChanged(t, sy, box, root)
+		}
+		at := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+		for i, p := range []string{filepath.Join(root, "x.txt"), filepath.Join(box, "x.txt")} {
+			putSyncFile(t, p, "the same edit", 0o644)
+			if err := os.Chtimes(p, at.Add(time.Duration(i)*time.Hour), at.Add(time.Duration(i)*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rep, err := sy.Pass(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(root, copyName(1))); err == nil || len(rep.Conflicts) != 0 || len(rep.Pushed) != 0 || len(rep.Pulled) != 0 {
+			t.Errorf("recorded=%v: a conflict copy or a transfer for identical copies: copy stat err = %v, report = %+v", recorded, err, rep)
+		}
+		lfi, _ := os.Stat(filepath.Join(root, "x.txt"))
+		seen, ok := sy.State.Files["x.txt"]
+		if !ok || seen.Local.Size != lfi.Size() || seen.Local.MTime != lfi.ModTime().UnixNano() {
+			t.Errorf("recorded=%v: record = %+v, %v", recorded, seen, ok)
+		}
+		if again, err := sy.Pass(context.Background()); err != nil || len(again.Conflicts) != 0 || len(again.Pushed) != 0 {
+			t.Errorf("recorded=%v: the next pass = %+v, %v", recorded, again, err)
+		}
+	}
+}

@@ -46,11 +46,16 @@ func conflictNames(rel, tag string) []string {
 	return names
 }
 
-// conflict is a runner pass's file that both sides changed (or that differs after a recovered
-// record). The laptop's copy wins, but only once the sandbox's is kept on the laptop as a conflict
-// copy. A pass that does not pull touches neither side; a pass back that cannot keep the copy
-// touches neither side and counts the file as not brought back.
+// conflict is a runner pass's file that both sides changed, or that a pass after a recovered
+// record finds on both. Two copies holding the same bytes are in step: they are recorded, and
+// nothing is copied or pushed. Otherwise the laptop's copy wins, but only once the sandbox's is
+// kept on the laptop as a conflict copy. A pass that does not pull touches neither side; a pass
+// back that cannot keep the copy touches neither side and counts the file as not brought back.
 func (sy *Syncer) conflict(ctx context.Context, rel string, l syncFile, r os.FileInfo, rep *Report, pulled *int64) error {
+	if sy.sameBytes(rel, l.side.Size, path.Join(sy.Opts.Remote, rel), r.Size()) {
+		sy.State.Files[rel] = FileSeen{Local: l.side, Remote: remoteSide(r)}
+		return nil
+	}
 	rep.Conflicts = append(rep.Conflicts, rel)
 	if !sy.Opts.Pull {
 		return nil
