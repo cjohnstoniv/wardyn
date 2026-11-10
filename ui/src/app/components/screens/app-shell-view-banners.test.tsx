@@ -68,7 +68,7 @@ function renderShellAt(
       if (u.endsWith("/healthz"))
         return Promise.resolve({
           ok: true,
-          json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded", ...healthExtra }),
+          json: async () => ({ status: "ok", trust_domain: "wardyn.local", identity_provider: "embedded", ...healthExtra }),
         });
       if (u.endsWith("/api/v1/me")) return Promise.resolve({ ok: true, json: async () => me });
       return Promise.resolve({ ok: true, json: async () => ({}) });
@@ -209,6 +209,37 @@ describe("the confinement posture band follows the live health poll", () => {
     expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY(shown(20)))).toBeInTheDocument();
 
     await poll("enforced", checkedAt(30));
+    await waitFor(() => expect(screen.queryByText(POSTURE_REFUSED_BANNER.TITLE)).toBeNull());
+  });
+});
+
+// A posture is the runner, the verdict and its time from one answer: a console
+// whose first /healthz read failed still learns it from the poll, and a read
+// that fails later keeps the last one.
+describe("the confinement posture band survives a failed health read", () => {
+  it("a failed first read, then refused: the band shows; an outage keeps it; enforced clears it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const checkedAt = (minute: number) => new Date(Date.UTC(2020, 0, 1, 1, minute)).toISOString();
+    const shown = (minute: number) => `2020-01-01 01:${String(minute).padStart(2, "0")} UTC`;
+    // No status "ok": the daemon did not answer this read.
+    const health: Record<string, unknown> = { status: "unavailable", trust_domain: "live.corp.example" };
+    renderShellAt("/admin/runs", ADMIN_ME, health);
+    const poll = async (answer: Record<string, unknown>) => {
+      Object.assign(health, answer);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POSTURE_POLL_MS);
+      });
+    };
+    expect((await screen.findAllByText("live.corp.example")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(POSTURE_REFUSED_BANNER.TITLE)).toBeNull();
+
+    await poll({ status: "ok", runner: "k8s", network_policy: "refused", network_policy_checked_at: checkedAt(10) });
+    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY(shown(10)))).toBeInTheDocument();
+
+    await poll({ status: "unavailable" });
+    expect(screen.getByText(POSTURE_REFUSED_BANNER.BODY(shown(10)))).toBeInTheDocument();
+
+    await poll({ status: "ok", network_policy: "enforced", network_policy_checked_at: checkedAt(20) });
     await waitFor(() => expect(screen.queryByText(POSTURE_REFUSED_BANNER.TITLE)).toBeNull());
   });
 });

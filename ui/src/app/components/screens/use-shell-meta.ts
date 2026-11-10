@@ -173,6 +173,19 @@ function identityFromMe(me: Me | null) {
   } satisfies Partial<ShellMeta>;
 }
 
+type Posture = Pick<ShellMeta, "runner" | "networkPolicy" | "networkPolicyCheckedAt">;
+
+/** The confinement posture one /healthz answer carries, or null for an outage: health() answers {}
+ *  for a failed read, and every answer the daemon gives carries status "ok". */
+function postureOf(h: Awaited<ReturnType<typeof api.health>>): Posture | null {
+  if (h.status !== "ok") return null;
+  return { runner: h.runner ?? "", networkPolicy: h.network_policy ?? "", networkPolicyCheckedAt: h.network_policy_checked_at ?? "" };
+}
+
+function postureFields(m: ShellMeta): Posture {
+  return { runner: m.runner, networkPolicy: m.networkPolicy, networkPolicyCheckedAt: m.networkPolicyCheckedAt };
+}
+
 /** How often the shell re-reads the confinement posture from /healthz. */
 export const POSTURE_POLL_MS = 30_000;
 
@@ -232,9 +245,8 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
           identityRevision: previous.identityRevision + 1,
           authGeneration,
           resolved: true,
-          runner: h.runner ?? "",
-          networkPolicy: h.network_policy ?? "",
-          networkPolicyCheckedAt: h.network_policy_checked_at ?? "",
+          // An outage keeps the last posture rather than clearing it.
+          ...(postureOf(h) ?? postureFields(previous)),
           // "" (unset) reads the same as absent: both mean "no mirror".
           demoVideoBaseUrl: h.demo_video_base_url || undefined,
           sso: h.sso ?? false,
@@ -251,19 +263,20 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
     };
   }, [attempt]);
   // The canary re-checks the cluster every 10 minutes, so the posture is live, not a fact of the mount:
-  // re-read it, verdict and check time together from one answer, so the band and the chips follow a
-  // change in an open console. An answer without status "ok" (an outage) keeps the last one; the
-  // unreachable banner covers that.
+  // re-read it, runner, verdict and check time together from one answer, so the band and the chips
+  // follow a change in an open console, and a console whose first read failed still learns it. An
+  // outage keeps the last one; the unreachable banner covers that.
   usePoll(
     () =>
       api.health().then((h) => {
-        if (h.status !== "ok") return;
-        const networkPolicy = h.network_policy ?? "";
-        const networkPolicyCheckedAt = h.network_policy_checked_at ?? "";
+        const next = postureOf(h);
+        if (!next) return;
         setMeta((m) =>
-          m.networkPolicy === networkPolicy && m.networkPolicyCheckedAt === networkPolicyCheckedAt
+          m.runner === next.runner &&
+          m.networkPolicy === next.networkPolicy &&
+          m.networkPolicyCheckedAt === next.networkPolicyCheckedAt
             ? m
-            : { ...m, networkPolicy, networkPolicyCheckedAt },
+            : { ...m, ...next },
         );
       }),
     POSTURE_POLL_MS,
