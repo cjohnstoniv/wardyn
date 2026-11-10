@@ -109,7 +109,7 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 		fate = s.storedRunFate(ctx, run.ID)
 		rerr.msg += fate
 	}
-	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) {
+	if c.Contained || errors.Is(c.Err, errLostMarkUnwritten) || errors.Is(c.Err, errRunEndUnwritten) {
 		return rerr
 	}
 	// The sweep retries only a failed start that is still the run's newest.

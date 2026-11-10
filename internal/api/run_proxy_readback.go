@@ -380,7 +380,7 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 		if !ok {
 			return errProxyStopUnconfirmed
 		}
-		return nil
+		return s.runEndRecorded(ctx, run.ID)
 	}
 	if isTerminalRunState(run.State) && s.computerFolderKept(ctx, run.ID) {
 		// Kept for its computer folder's copy back to resume (bringComputerFolderBack): stopping the
@@ -433,6 +433,24 @@ func (keptProxyStopError) Error() string {
 }
 
 func (keptProxyStopError) Unwrap() error { return errProxyStopUnconfirmed }
+
+// runEndRecorded answers errRunEndUnwritten while the store still holds the run live, neither ended,
+// lost nor kept, or cannot be read: an end whose write failed left its sandbox, and its computer
+// folder decision, undone, so the containment stays unresolved and the start's sweep retries it.
+// Its read is bound apart from ctx, which the end's copy back may have used up.
+func (s *Server) runEndRecorded(ctx context.Context, runID uuid.UUID) error {
+	ctx, cancel := stopCtx(ctx)
+	defer cancel()
+	cur, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || (!isTerminalRunState(cur.State) && cur.LostAt == nil && !runIsKept(cur)) {
+		return errRunEndUnwritten
+	}
+	return nil
+}
+
+// errRunEndUnwritten is a containment whose proxy stop succeeded but whose run end could not be
+// written: still unresolved, so a retry ends the run.
+var errRunEndUnwritten = errors.New("the run's proxy was stopped, but its end could not be written")
 
 // errLostMarkUnwritten is a containment whose proxy stop succeeded but whose lost mark could not be
 // written: still unresolved, so a retry writes the mark.

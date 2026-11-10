@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -172,5 +173,48 @@ func TestReadbackContainment_ARunningRunsEndDecidesItsSandboxAfterTheProxyStop(t
 	}
 	if got := cs.State(); got != types.RunFailed {
 		t.Errorf("state = %s, want FAILED", got)
+	}
+}
+
+// failEndOnceStore fails the next write ending the run, as a database blip would.
+type failEndOnceStore struct {
+	*computerFolderStore
+	fail atomic.Bool
+}
+
+func (s *failEndOnceStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	if to.IsTerminal() && s.fail.CompareAndSwap(true, false) {
+		return false, errors.New("injected end-write failure")
+	}
+	return s.computerFolderStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+// A running run's end that could not be written leaves the containment unresolved, the run live and
+// its sandbox standing; the retry ends it and makes the computer folder decision.
+func TestReadbackContainment_AnUnwrittenEndStaysUnresolvedUntilARetryEndsTheRun(t *testing.T) {
+	s, cs, _, run, sb := hangingFolderBack(t)
+	fs := &failEndOnceStore{computerFolderStore: cs}
+	fs.fail.Store(true)
+	s.cfg.Store = fs
+	run.State, run.SandboxRef = types.RunRunning, "sbx"
+	if err := s.stopUnconfirmedProxy(context.Background(), run); !errors.Is(err, errRunEndUnwritten) {
+		t.Fatalf("stopUnconfirmedProxy = %v, want errRunEndUnwritten", err)
+	}
+	if got, n := cs.State(), sb.stopCount(); got != types.RunRunning || n != 0 {
+		t.Fatalf("state %s, StopSandbox %d; want the run still RUNNING with its sandbox standing", got, n)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runTeardownBudget+computerFolderAccountTime+300*time.Millisecond)
+	defer cancel()
+	if err := s.stopUnconfirmedProxy(ctx, run); err != nil {
+		t.Fatalf("the retry = %v, want the end recorded", err)
+	}
+	if got := cs.State(); got != types.RunFailed {
+		t.Errorf("state = %s, want FAILED", got)
+	}
+	if n := sb.stopCount(); n != 0 {
+		t.Errorf("StopSandbox succeeded %d times, want the sandbox kept for its copy back", n)
+	}
+	if st := cs.folderStatus(); st.Resume == nil {
+		t.Errorf("resume = %+v, want the cut pass's", st.Resume)
 	}
 }
