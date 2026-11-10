@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -265,10 +266,10 @@ func (s *Server) withRunFate(ctx context.Context, run types.AgentRun, rerr *revi
 		return rerr
 	}
 	out := *rerr
-	switch fate := s.storedRunFate(ctx, run.ID); {
+	switch fate, read := s.readRunFate(ctx, run.ID); {
 	case fate != "":
 		out.msg += fate
-	case rerr.reason != reasonEgressEditContainmentUnresolved:
+	case !read, rerr.reason != reasonEgressEditContainmentUnresolved: // an unread run is promised nothing
 	case s.lostRunKeepable(run, s.cfg.Now()):
 		out.msg += "; once that is done, the run will be lost until revived"
 	default:
@@ -387,22 +388,25 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, pe
 	if err != nil {
 		return egressEditUnresolved(why, err)
 	}
-	// An end whose write failed (errRunEndUnwritten) is this edit's to retry: an abandoned start is in
-	// no sweep. Both stops are idempotent.
+	// An end whose write failed (errRunEndUnwritten) after a confirmed proxy stop: an abandoned start
+	// is in no start sweep, so the edit retries it (both stops are idempotent), and only a retry that
+	// lands replaces the known stop. One that never lands is the lapsed-token sweep's
+	// (sweepLapsedRunTokens): with the proxy stopped, nothing renews the run's token.
 	err = s.stopUnconfirmedProxy(lctx, run)
-	for try := 1; try < egressEditEndTries && errors.Is(err, errRunEndUnwritten); try++ {
+	for try := 1; try < egressEditEndTries && errors.Is(err, errRunEndUnwritten) && lctx.Err() == nil; try++ {
 		select {
 		case <-lctx.Done():
 		case <-time.After(egressEditPoll):
 		}
-		if run, err = s.cfg.Store.GetRun(lctx, runID); err == nil {
-			err = s.stopUnconfirmedProxy(lctx, run)
+		if cur, gerr := s.cfg.Store.GetRun(lctx, runID); gerr == nil && s.stopUnconfirmedProxy(lctx, cur) == nil {
+			err = nil
 		}
 	}
 	switch {
 	case errors.Is(err, errRunEndUnwritten):
 		out := egressEditUnconfirmed(why)
-		out.msg += "; its end could not be recorded"
+		out.msg += "; its end could not be recorded yet, so the lapsed-token sweep ends the run once its token lapses, " +
+			strconv.Itoa(int(runTokenLapseAfter/time.Minute)) + " minutes after its last renewal"
 		return out
 	case err != nil:
 		return egressEditUnresolved(why, err)

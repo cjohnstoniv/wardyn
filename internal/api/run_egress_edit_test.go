@@ -678,8 +678,44 @@ func TestEgressEdit_AnUnwrittenEndClaimsNoFate(t *testing.T) {
 	f.rr.replaceErr = runner.ErrProxyReplaceFailed
 	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
 	body := w.Body.String()
-	if errorReason(w) != reasonEgressEditUnconfirmed || !strings.Contains(body, "end could not be recorded") || strings.Contains(body, "ended") || strings.Contains(body, "lost until revived") {
-		t.Errorf("%d %s: want %s saying the end could not be recorded and naming no fate", w.Code, body, reasonEgressEditUnconfirmed)
+	if errorReason(w) != reasonEgressEditUnconfirmed || !strings.Contains(body, "end could not be recorded yet") || !strings.Contains(body, "once its token lapses") ||
+		strings.Contains(body, "is ended") || strings.Contains(body, "will be ended") || strings.Contains(body, "lost until revived") {
+		t.Errorf("%d %s: want %s saying the end could not be recorded and when the lapsed-token sweep ends the run", w.Code, body, reasonEgressEditUnconfirmed)
+	}
+}
+
+// blindAfterEndStore fails the write ending the run and, from then on, every read of it.
+type blindAfterEndStore struct {
+	*readbackStore
+	blind atomic.Bool
+}
+
+func (s *blindAfterEndStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	if to.IsTerminal() {
+		s.blind.Store(true)
+		return false, errors.New("injected end-write failure")
+	}
+	return s.readbackStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+func (s *blindAfterEndStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.blind.Load() {
+		return types.AgentRun{}, errors.New("injected read failure")
+	}
+	return s.readbackStore.GetRun(ctx, id)
+}
+
+// An edit's retry whose read of the run fails never loses the proxy stop already confirmed, and
+// never promises an end.
+func TestEgressEdit_AFailedRetryReadKeepsTheConfirmedStop(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.st.run.Interactive, f.run.Interactive = false, false
+	bs := &blindAfterEndStore{readbackStore: f.rb}
+	f.srv.cfg.Store = bs
+	f.rr.replaceErr = runner.ErrProxyReplaceFailed
+	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
+	if body := w.Body.String(); strings.Contains(body, "will be ended") || strings.Contains(body, "is ended") {
+		t.Errorf("%d %s: a failed read names no end", w.Code, body)
 	}
 }
 

@@ -132,12 +132,24 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 // "; the run is lost until revived", or "" when it holds neither or cannot be read. Its read is bound
 // apart from the request's, which a readback wait may have run out.
 func (s *Server) storedRunFate(ctx context.Context, id uuid.UUID) string {
+	fate, _ := s.readRunFate(ctx, id)
+	return fate
+}
+
+// readRunFate is storedRunFate, also answering whether the run could be read.
+func (s *Server) readRunFate(ctx context.Context, id uuid.UUID) (string, bool) {
 	ctx, cancel := stopCtx(ctx)
 	defer cancel()
 	run, err := s.cfg.Store.GetRun(ctx, id)
+	if err != nil {
+		return "", false
+	}
+	return fateOf(run), true
+}
+
+// fateOf is a stored run's fate as storedRunFate says it.
+func fateOf(run types.AgentRun) string {
 	switch {
-	case err != nil:
-		return ""
 	case run.State.IsTerminal(), run.LostReason == types.LostEnded:
 		return "; the run is ended"
 	case run.LostAt != nil:
