@@ -61,6 +61,24 @@ type vmnetDNS struct {
 	Repeat  int    `json:"repeat,omitempty"`
 }
 
+// routeVMNetPrefix holds the relay's report routes, which count only on a VM
+// run's relay lane; anywhere else they are not found.
+const routeVMNetPrefix = "/wardyn/v1/vmnet/"
+
+// handleVMNetReport dispatches the relay's reports: a refusal or a DNS record.
+func (p *Proxy) handleVMNetReport(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case !p.relayLane(r.Context()) || r.Method != http.MethodPost:
+		http.Error(w, "unknown brokered route", http.StatusNotFound)
+	case r.URL.Path == routeVMNetRefusals:
+		p.handleVMNetRefusal(w, r)
+	case r.URL.Path == routeVMNetDNS:
+		p.handleVMNetDNS(w, r)
+	default:
+		http.Error(w, "unknown brokered route", http.StatusNotFound)
+	}
+}
+
 // handleVMNetDNS takes one relay DNS record and writes its row. Every field is
 // checked: the relay is the guest's peer, and the guest chose the name.
 func (p *Proxy) handleVMNetDNS(w http.ResponseWriter, r *http.Request) {

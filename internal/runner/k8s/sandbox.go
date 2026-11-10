@@ -226,15 +226,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			PodSelector: metav1.LabelSelector{MatchLabels: agentLabels},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 			Ingress:     []networkingv1.NetworkPolicyIngressRule{}, // empty => deny all ingress
-			// The proxy and its DNS listener, which refuses every query and
-			// records it (proxy.DNSListenEnv): 53 reaches only the proxy pod.
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				Ports: []networkingv1.NetworkPolicyPort{
-					{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(runner.ProxyListenPort))},
-					{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
-					{Protocol: protoPtr(corev1.ProtocolUDP), Port: intOrStrPtr(intstr.FromInt32(53))},
-				},
-				To: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: proxyLabels}}},
+				Ports: agentToProxyPorts(),
+				To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: proxyLabels}}},
 			}},
 		},
 	}
@@ -1002,12 +996,4 @@ func (d *Driver) runnerPodSpec(pod *corev1.Pod, component, controlPlaneURL strin
 	}
 	pod.Spec.HostAliases = append(pod.Spec.HostAliases, corev1.HostAlias{IP: ip, Hostnames: []string{u.Hostname()}})
 	return nil
-}
-
-// proxyDNSSysctls lets the proxy's non-root, capability-less container bind
-// its DNS listener on 53. net.ipv4.ip_unprivileged_port_start is namespaced and
-// on Kubernetes' safe-sysctl list, so it changes only the proxy pod's own
-// network namespace and needs no capability or kubelet allow-list.
-func proxyDNSSysctls() []corev1.Sysctl {
-	return []corev1.Sysctl{{Name: "net.ipv4.ip_unprivileged_port_start", Value: "53"}}
 }
