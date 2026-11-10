@@ -35,9 +35,9 @@ const (
 	reasonReviveClaimFailed                 = "revive_claim_failed"                   // the claim that marks the run revived failed
 	reasonReviveRunChanged                  = "revive_run_changed"                    // the run ended, was lost again, or was revived elsewhere mid-request
 	reasonReviveProxyKeptCurrent            = "revive_proxy_kept_current"             // the old proxy was never touched; a still-live run keeps it after a failed replace
-	reasonReviveProxyReplaceFailedLost      = "revive_proxy_replace_failed_lost"      // the proxy could not be replaced, so the run has no egress and is lost again
+	reasonReviveProxyReplaceFailedLost      = "revive_proxy_replace_failed_lost"      // the proxy could not be replaced, so the run is lost again; the message says whether its stop is confirmed
 	reasonReviveAgentStartFailedLost        = "revive_agent_start_failed_lost"        // the agent could not be started behind the new proxy, so the run is lost again
-	reasonReviveRecoveryUnresolved          = "revive_recovery_unresolved"            // the revive failed and the run could not be recorded as lost; its proxy is stopped and a sweep recovers it
+	reasonReviveRecoveryUnresolved          = "revive_recovery_unresolved"            // the revive failed and the run could not be recorded as lost; a sweep recovers it (the message says whether its proxy stop is confirmed)
 	reasonReviveSubstrateUnreadable         = "revive_substrate_unreadable"           // the run's substrate could not answer whether it can replace a proxy
 	reasonReviveConfigNotStored             = "revive_config_not_stored"              // no proxy config is stored for this run (it predates this release, or none is kept)
 	reasonReviveConfigUnreadable            = "revive_config_unreadable"              // the stored proxy config could not be read
@@ -62,3 +62,18 @@ const (
 
 // Image admission at revive (run_revive_image.go).
 const reasonReviveImageNotAdmitted = "revive_image_not_admitted" // the image is held (images.admission enforce, or a profile's required_image_signers) and the run's create pinned no checked digest: started before admission was enforced, or in audit mode
+
+// PATCH /runs/{id}/egress, the live egress edit (run_egress_edit.go). A refusal from the revive path
+// it runs through keeps that path's own reason.
+const (
+	reasonEgressEditInvalid       = "egress_edit_invalid"         // the body names no host, too many, or an entry the proxy cannot match
+	reasonEgressEditRunNotLive    = "egress_edit_run_not_live"    // the run is not running, has no sandbox, or is lost
+	reasonEgressEditInProgress    = "egress_edit_in_progress"     // another egress edit of this run has not answered yet
+	reasonEgressEditHostNotListed = "egress_edit_host_not_listed" // a remove_hosts entry is not an entry on the run's allowlist
+	reasonEgressEditUnsupported   = "egress_edit_unsupported"     // the store keeps no readback, or the substrate cannot hash what it hands a proxy
+	reasonEgressEditLegacyProxy   = "egress_edit_legacy_proxy"    // the run's runner or proxy image predates the readback
+	reasonEgressEditUnconfirmed   = "egress_edit_unconfirmed"     // the new proxy did not confirm the edit; its stop is confirmed
+	reasonEgressEditSuperseded    = "egress_edit_superseded"      // another revive replaced the edit's proxy start before it confirmed
+	// reasonEgressEditContainmentUnresolved: the new proxy did not confirm the edit, and its stop is not confirmed yet.
+	reasonEgressEditContainmentUnresolved = "egress_edit_containment_unresolved"
+)

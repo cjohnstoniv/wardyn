@@ -242,6 +242,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	s.projectRunnerFacts(r, runs)
 	redactRunRepos(runs)
 	run = runs[0]
+	run.PolicyReadback = s.runPolicyReadback(r.Context(), run.ID)
 	// A local run's runner was named by projectRunnerFacts; a remote-hosted runner's name is read here.
 	if run.RunnerName == "" {
 		run.RunnerName = s.runnerNameOf(r.Context(), run)

@@ -43,9 +43,12 @@ type reasserted struct {
 // so emptying the map would hand the sandbox a GitHub installation token on
 // request. A revive that withholds a broker-managed host is refused, and so is
 // one that withholds the host of the run's Azure CLI door.
-func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling, layers []sealLayer) (reasserted, *reviveError) {
+func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling, layers []sealLayer, edits ...liveEgressEdit) (reasserted, *reviveError) {
 	if cfg.RunID != run.ID {
 		return reasserted{}, reviveRefused(http.StatusConflict, reasonReviveConfigRunMismatch, "the run's proxy config names another run")
+	}
+	if rerr := applyEgressEdits(&c, cfg, edits); rerr != nil { // a live egress edit's hosts, withheld as the ceiling's are
+		return reasserted{}, rerr
 	}
 	var re reasserted
 	w := withholding{deny: c.deny, layers: layers}

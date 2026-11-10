@@ -130,3 +130,35 @@ func TestLoadedReport_StopsWithTheProxy(t *testing.T) {
 		t.Fatal("the reporter kept going after its proxy stopped")
 	}
 }
+
+// An older wardynd answers 404 or 405 for the route: the reporter stops after one POST instead of
+// retrying for the run's life.
+func TestLoadedReport_StopsOnAnOlderControlPlane(t *testing.T) {
+	shortReportBackoff(t)
+	for _, code := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
+		var mu sync.Mutex
+		posts := 0
+		cp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			posts++
+			mu.Unlock()
+			w.WriteHeader(code)
+		}))
+		done := make(chan struct{})
+		go func() {
+			reportProxy(t, cp).reportLoaded(context.Background(), LoadedReport{ConfigSHA256: "x"})
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("status %d: the reporter kept retrying", code)
+		}
+		cp.Close()
+		mu.Lock()
+		if posts != 1 {
+			t.Fatalf("status %d: %d posts, want 1", code, posts)
+		}
+		mu.Unlock()
+	}
+}

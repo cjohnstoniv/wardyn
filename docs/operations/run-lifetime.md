@@ -111,6 +111,52 @@ A live run, one lost to an `outage` or a `reboot`, or a kept run that's interact
 - A revived run keeps its ORIGINAL agent image: a reboot revive restarts the same, already-created agent container rather than recreating it from an agent image an operator may have since patched.
 - The only way onto a newer image is to end the run and start a new one.
 
+### Policy readback
+
+Each proxy start, at dispatch or revive, is recorded as pending before the proxy starts. The record holds the run's policy generation and the start's fresh run token.
+
+1. The driver answers with the SHA-256 of the exact config bytes it handed the proxy.
+2. The proxy posts the SHA-256 of the bytes it loaded to `POST /internal/proxy/loaded`, on its run token, and retries until it gets a 2xx.
+3. A report that arrives before the driver answers is held. The start is `enforced` only when both hashes are in and equal (`run.policy.enforced`).
+
+The proxy is stopped (`run.policy.unconfirmed`, outcome `failure`) when:
+
+- the driver answers without a hash (`hash_missing`), at once;
+- the two hashes differ (`hash_mismatch`);
+- no matching report arrives within 60 seconds of the driver's answer (`deadline`).
+
+A create that is still running has no readback deadline. A dispatch whose start fails fails the run. A revive's failed start puts the run back to lost.
+
+A failed start records whether its proxy stop was confirmed. Until it is, the start is unresolved, and the reconcile sweep retries the stop. The retry is for that start only: once a newer start exists, it stops nothing. The stop runs under the run's operation lock, so a revive cannot start a newer proxy between the check and the stop. While another operation holds that lock, the start waits for the next sweep.
+
+A report counts only for the run's newest start. Its token must be that start's own token, or one renewed from it since the start: the run's current or previous token. Any other report is ignored and audited as `run.policy.report_stale`.
+
+A start is `legacy` only when a runner's registered version, or the proxy image tag, names a release older than 0.10.0-rc.18. A legacy start runs as before, unconfirmed (`run.policy.unconfirmed`, reason `legacy`). An empty or unparsable version is not legacy. A revive that must confirm, on a substrate that cannot answer the hash, is refused before anything changes (`409 revive_readback_unsupported`).
+
+`GET /runs/{id}` shows the newest start as `policy_readback`: its `state`, `generation` and `confirmed_at`, without either hash. The address the agent reaches its proxy on is stored with the run for the audit and is not on the run's JSON.
+
+### Live egress edit
+
+`PATCH /runs/{id}/egress` narrows a live run's egress at once, by the run's owner or a super admin, with the owner's authority as for revive. The body is `{"remove_hosts": [...], "deny_hosts": [...]}`.
+
+| Field | What it does |
+| --- | --- |
+| `remove_hosts` | Each entry must be on the run's allowlist. It leaves the allowlist and is denied for the rest of the run, so a later approval cannot reopen it |
+| `deny_hosts` | Each host is denied for the rest of the run |
+
+The edit never adds a host: any other field is a `400`. Adding a host to a running run stays an approval.
+
+1. The edit is refused, nothing changed, when the run is not live (`409 egress_edit_run_not_live`), another edit of it has not answered (`409 egress_edit_in_progress`), or a remove names a host not on the allowlist (`422 egress_edit_host_not_listed`).
+2. It is also refused when the new proxy could not confirm what it loaded: a deployment or substrate without the readback (`409 egress_edit_unsupported`), or a runner or proxy image older than 0.10.0-rc.18 (`409 egress_edit_legacy_proxy`).
+3. Otherwise the run's proxy is replaced through the revive path, rate-bounded as a live revive is. Each edited host is withheld as a profile deny is: its credential lanes go, and a host the git broker, Azure CLI or kubectl door needs refuses the edit.
+4. Its `via_org` routes go too. The edited config is stored first, so every later revive starts from it, and the organisation's cached engine for the run is retired. The answer then waits for the new proxy's policy readback: `200 {"policy_generation": N}` once that start is `enforced`.
+5. Any other end, a config that could not be stored included, stops the new proxy, and the run is lost until revived. The answer is `503 egress_edit_unconfirmed` once that stop is confirmed. A report from the pre-edit proxy is stale for the new start and never confirms the edit.
+6. While that stop is not confirmed the answer is `503 egress_edit_containment_unresolved`, and a sweep retries the stop. The one case nothing retries: both writes of the start's answer were refused, so it stays pending with no deadline and the answer names `readback_wait_timeout`. An operator must stop or end that run.
+7. A headless run that is not on your own machine cannot be kept, so it is ended instead of lost.
+8. When another revive replaced the edit's start, nothing is stopped for the edit, and the answer is `503 egress_edit_superseded`. That revive started from the edited config if the edit stored it; if the edit's replace or config write failed first, the edit was not applied and must be sent again.
+
+Each edit past the body check writes one `run.egress.edit` row. Open connections drop when the proxy is replaced.
+
 ## Rename
 
 `PATCH /runs/{id}/title` lets the run's OWNER change its title. It's a display field, not part of the lease above, so it needs no captured limit and is allowed in ANY run state, including a terminal or kept one.

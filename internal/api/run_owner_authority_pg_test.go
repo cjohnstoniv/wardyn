@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"sync"
@@ -37,6 +39,12 @@ func (r *pgReviveRunner) ReplaceProxy(_ context.Context, _ string, cfg []byte) e
 	defer r.mu.Unlock()
 	r.cfg, r.replaced = cfg, r.replaced+1
 	return nil
+}
+
+// ReplaceProxyHashed is ReplaceProxy answering the hash of the bytes, as a readback-release driver does.
+func (r *pgReviveRunner) ReplaceProxyHashed(ctx context.Context, ref string, cfg []byte) (string, error) {
+	sum := sha256.Sum256(cfg)
+	return hex.EncodeToString(sum[:]), r.ReplaceProxy(ctx, ref, cfg)
 }
 
 // TestPG_ReviveAndExtendRecheckOwnerAuthority walks the owner re-check over

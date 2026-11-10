@@ -10,6 +10,7 @@
 import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { RunPolicyWallPreset } from "./run-policy-wall-preset";
+import type { RunPolicyReadback } from "./policy-readback";
 import type { PolicyContact } from "./site";
 import type { RunWallPreset } from "./wall-presets";
 import type { Experience, RunOverrides } from "./new-run-contract";
@@ -184,6 +185,8 @@ export interface AgentRun {
   shape?: RunShape;
   // SHA-256 of the run's effective policy, written once at dispatch (Go: types.AgentRun.PolicyDigest); the run's later audit rows carry it as data.policy_digest. Absent before dispatch.
   policy_digest?: string;
+  // The run's current proxy start, as its policy readback stands (Go: types.AgentRun.PolicyReadback); on the single-run read only. Never a hash.
+  policy_readback?: RunPolicyReadback;
   correlation_id?: string; // The caller's own reference for the run, given at create (Go: types.AgentRun.CorrelationID); absent when none was.
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.

@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -116,6 +115,8 @@ type reviveResult struct {
 	DeniedAdded  []string  `json:"denied_added"`
 	ProxyRelease string    `json:"proxy_release"`
 	AgentStarted bool      `json:"agent_started,omitempty"`
+	generation   int       // the policy generation the new proxy enforces, for an egress edit's answer
+	stored       bool      // a failed revive stored its edited config before it failed
 }
 
 // handleReviveRun is POST /api/v1/runs/{id}/revive: the owner (or a super
@@ -139,8 +140,8 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // reviveFromRequest applies the local-mode rule, then revives run. startAgent
-// allows a run lost to a reboot, whose agent must be started again.
-func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAgent bool) (reviveResult, *reviveError) {
+// allows a run lost to a reboot, whose agent must be started again. edits are an egress edit's (run_egress_edit.go).
+func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAgent bool, edits ...liveEgressEdit) (reviveResult, *reviveError) {
 	actorType, actor := actorFromRequest(r)
 	// Local mode mints for the host operator (runIdentitySubject), not for the
 	// run's owner, so only the principal that created the run may revive it.
@@ -150,7 +151,7 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 			"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonReviveLocalModeNotOwner})))
 		return reviveResult{}, reviveRefused(http.StatusForbidden, reasonReviveLocalModeNotOwner, "in local mode only the run's owner can revive it")
 	}
-	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent)
+	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent, edits...)
 }
 
 // reviveSupported is what reviveRunProxy needs from this deployment, and whether run's agent must be
@@ -179,6 +180,9 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 		return nil, nil, nil, false, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
 			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
+	if rerr := s.reviveReadbackSupported(ctx, run, rv); rerr != nil {
+		return nil, nil, nil, false, rerr
+	}
 	return reviver, rv, starter, rebooted, nil
 }
 
@@ -188,8 +192,8 @@ func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startA
 // a failure before a live run's old proxy is touched. Otherwise a proxy that
 // cannot be replaced, or an agent that cannot be started, puts the run back to
 // lost with its proxy and agent stopped, so it never runs without the proxy it
-// was promised.
-func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool) (reviveResult, *reviveError) {
+// was promised. edits, from a live egress edit only, narrow the config at the ceiling's re-assertion.
+func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool, edits ...liveEgressEdit) (reviveResult, *reviveError) {
 	reviver, rv, starter, rebooted, rerr := s.reviveSupported(ctx, run, startAgent)
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -233,7 +237,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
 	sealPerEntryRules(cfg, layers)     // the restriction's push and tool rules, in the form the config carries
 	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
-	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
+	re, rerr := reassertProxyCeiling(run, cfg, c, layers, edits...)
 	if rerr != nil {
 		s.auditReviveCeilingRefusal(ctx, run, rerr, actorType, actor)
 		return reviveResult{}, rerr
@@ -318,11 +322,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
 	// it is refused, so it can mint no token this list misses, and the new one renews at once.
 	renewed := s.retireRunTokenLineage(ctx, run.ID, freshJTI)
-	gen, gerr := s.advanceRunPolicyGeneration(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI) // before the new proxy's first row
+	gen, start, gerr := s.advanceRevivePolicyAndStart(ctx, run, corpus.restoredOn(cfg.Policy), retiring, renewed, freshJTI) // before the new proxy's first row
 	if gerr != nil {
 		return reviveResult{}, s.reviveGenerationFailed(ctx, run, data, actorType, actor, retiring, freshJTI, renewed, gerr)
 	}
-	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
+	proxyHash, err := s.replaceRevivedProxyHashed(runnerCtx, rv, run, cfgJSON, start) // abandons start on an error
+	if err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
@@ -337,26 +342,22 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 			s.liveRevived.Delete(run.ID) // nothing was replaced, so nothing to bound
 			s.restoreRunTokenLineage(ctx, run.ID, freshJTI, renewed)
-			return reviveResult{}, reviveRefused(http.StatusBadGateway, reasonReviveProxyKeptCurrent,
-				loggedMsg(ctx, "the run's proxy was not replaced, and the run keeps its current proxy", err))
+			return reviveResult{}, reviveKeptCurrent(ctx, err)
 		}
 		// The old proxy is, or may be, gone: nothing is left to serve on the
 		// retiring token, so revoking it here is safe (F4).
 		s.revokeRetiringToken(ctx, retiring, run.ID)
 		s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), freshJTI)
-		return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
+		return reviveResult{generation: gen}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
 			"the run's proxy could not be replaced, so the run has no egress and is lost until revived", err)
 	}
 	// The new proxy is up behind the fresh token: the retiring one is no
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
 	// return above this point leaves the old proxy running unrevoked.
-	s.revokeRetiringToken(ctx, retiring, run.ID)
-	s.revokeRenewedTokens(ctx, run.ID, renewed.ids(), freshJTI)
-	// The stored config becomes the one now running. A failed write keeps the
-	// previous one, from which the next revive re-derives the same result.
-	if err := s.storeRunProxyConfig(ctx, run.ID, storedJSON); err != nil {
-		slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	// The stored config becomes the one now running (storeAndSettleRevived): an edit's before the settle.
+	stored, rerr := s.storeAndSettleRevived(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI, storedJSON, edits)
+	if rerr != nil {
+		return reviveResult{generation: gen, stored: stored}, rerr // the start an edit waits on for its containment
 	}
 	if rebooted {
 		// F2: refresh the watcher lease right before starting the agent — on a
@@ -388,7 +389,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
-	return reviveResult{RunID: run.ID, DeniedAdded: nonNilStrings(re.added), ProxyRelease: version.Version, AgentStarted: rebooted}, nil
+	return reviveResult{RunID: run.ID, DeniedAdded: nonNilStrings(re.added), ProxyRelease: version.Version, AgentStarted: rebooted, generation: gen}, nil
 }
 
 // claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A
@@ -450,12 +451,27 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 // anyway (reloseRun), and the answer says the recovery is unresolved, for a
 // later sweep to settle. data carries the failure; err is the cause, logged and in the audit row, never in the answer.
 func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun, data map[string]any, actorType types.ActorType, actor, reason, msg string, err error) *reviveError {
-	unresolved := s.reloseRun(ctx, run)
-	data["lost_again"] = !unresolved
+	fate, stopErr := s.reloseRun(ctx, run)
+	data["lost_again"] = fate == relostLost
+	// A readback failure's stop wording is settleRevivedProxy's, from its own containment result.
+	unconfirmed := stopErr != nil && reason != reasonRevivePolicyUnconfirmedLost
+	if unconfirmed {
+		data["containment"] = "unresolved"
+	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
-	if unresolved {
+	switch {
+	case fate == relostUnwritten && unconfirmed:
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
+			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its credentials were revoked, but stopping its proxy is not confirmed yet, and a later sweep recovers it", err))
+	case fate == relostUnwritten:
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveRecoveryUnresolved,
 			loggedMsg(ctx, "the revive failed and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it", err))
+	case fate == relostUnknown:
+		msg = "the revive failed and this revive's lost mark did not land, so the run is being lost or ended by another operation; a later sweep settles it"
+	case fate == relostEnded:
+		msg = "the revive failed and the run cannot be kept, so it is being ended"
+	case unconfirmed:
+		msg = "the revive failed and the run is lost until revived; stopping its proxy is not confirmed yet, and a later sweep retries it"
 	}
 	return &reviveError{status: http.StatusBadGateway, reason: reason, lost: true, msg: loggedMsg(ctx, msg, err)}
 }
@@ -830,8 +846,10 @@ func reviveFrom(run types.AgentRun) string {
 // It reports whether the recovery is unresolved: the lost mark could not be
 // written, so nothing says the run is lost. The run is contained anyway, its
 // proxy stopped and its broker credentials revoked, and a sweep settles the
-// rest; the caller must not tell anyone the run is lost.
-func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (unresolved bool) {
+// rest; the caller must not tell anyone the run is lost. fate is what was
+// persisted (reloseFate), and stopErr is non-nil when the proxy stop is not
+// confirmed, so the caller says "stopped" or "lost" only for what landed.
+func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (fate reloseFate, stopErr error) {
 	reason, at := types.LostOutage, s.cfg.Now()
 	switch run.LostReason {
 	case types.LostReboot:
@@ -843,24 +861,39 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) (unresolved 
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
 	if ok && lok {
-		switch s.loseRun(ctx, loser, leaser, run, reason, types.RunFailed, 0, at) {
+		switch o, err := s.loseRunStopped(ctx, loser, leaser, run, reason, types.RunFailed, 0, at); o {
 		case loseWriteFailed:
 			s.revokeRunBroker(ctx, run.ID)
 			run.LostAt, run.LostReason = &at, reason
 			if err := s.stopLostSandbox(ctx, run, s.cfg.Now()); err != nil {
 				slog.WarnContext(ctx, "wardynd: stopping a run's proxy after its lost mark could not be written failed",
 					slog.String("run_id", run.ID.String()), slog.Any("err", err))
+				return relostUnwritten, err
 			}
-			return true
-		case loseApplied, loseNotApplied:
-			return false
+			return relostUnwritten, nil
+		case loseApplied:
+			return relostLost, err
+		case loseNotApplied:
+			return relostUnknown, errors.New("the run's lost mark did not land, so this revive did not stop its proxy")
 		}
 	}
 	slog.WarnContext(ctx, "wardynd: a run whose proxy could not be replaced cannot be kept; tearing it down",
 		slog.String("run_id", run.ID.String()))
 	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "its proxy could not be replaced at revive")
-	return false
+	return relostEnded, nil
 }
+
+// reloseFate is what reloseRun persisted for a run: lost again (the mark written), the mark not
+// written (unresolved), the mark not applied (another writer moved the run first), or the run ended
+// because it cannot be kept.
+type reloseFate int
+
+const (
+	relostLost reloseFate = iota
+	relostUnwritten
+	relostUnknown
+	relostEnded
+)
 
 // adminRestartRequest is POST /api/v1/admin/runs/restart's body.
 type adminRestartRequest struct {
@@ -945,37 +978,6 @@ func (s *Server) handleAdminProxyWindow(w http.ResponseWriter, r *http.Request) 
 		"window":  proxyWindow(version.Version),
 		"outside": outside,
 	})
-}
-
-// inProxyWindow: release is the current minor or the one before it. An
-// unparseable release ("" before migration 0084) is outside.
-func inProxyWindow(current, release string) bool {
-	cm, cn, ok := majorMinor(current)
-	rm, rn, rok := majorMinor(release)
-	return ok && rok && cm == rm && (rn == cn || rn == cn-1)
-}
-
-// proxyWindow names the supported minors, newest first.
-func proxyWindow(current string) []string {
-	m, n, ok := majorMinor(current)
-	if !ok {
-		return nil
-	}
-	w := []string{fmt.Sprintf("%d.%d", m, n)}
-	if n > 0 {
-		w = append(w, fmt.Sprintf("%d.%d", m, n-1))
-	}
-	return w
-}
-
-func majorMinor(v string) (int, int, bool) {
-	parts := strings.SplitN(strings.TrimPrefix(v, "v"), ".", 3)
-	if len(parts) < 2 {
-		return 0, 0, false
-	}
-	m, err1 := strconv.Atoi(parts[0])
-	n, err2 := strconv.Atoi(parts[1])
-	return m, n, err1 == nil && err2 == nil
 }
 
 // reviveMintIdentity mints the revived run's new identity. A service run's sponsor is read from the identity's
