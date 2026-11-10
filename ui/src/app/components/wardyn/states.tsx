@@ -17,16 +17,20 @@ import { HttpError } from "../../lib/api/core";
 export const STATES = {
   ERROR_TITLE: "Something went wrong",
   ERROR_DEFAULT: "Wardyn isn't answering. Try again.",
+  // Wardyn answered, but with a failure it gave no sentence for.
+  ERROR_ANSWERED: "Couldn't load this. Try again.",
   RETRY: "Retry",
 } as const;
 
 // A refresh that failed after the list had loaded: the rows stay, and this says they may be old.
 export const STALE_NOTE = "Couldn't refresh. Showing the last list that loaded.";
 
-/** The server's own sentence when it worded this failure (it gave a reason); otherwise undefined, so the caller shows the
- *  default line rather than "Failed to fetch" or "Internal Server Error". */
+/** The sentence for a load that failed. The server's own when it named a reason (internal_error is its catch-all label,
+ *  a handler name like "list", so it does not count); the neutral ERROR_ANSWERED for any other answered HTTP failure;
+ *  undefined for no answer at all (network, timeout), so the caller shows the "isn't answering" default. */
 export function failureSentence(e: unknown): string | undefined {
-  return e instanceof HttpError && e.reason ? e.message : undefined;
+  if (!(e instanceof HttpError)) return undefined;
+  return e.reason && e.reason !== "internal_error" ? e.message : STATES.ERROR_ANSWERED;
 }
 
 export function StaleNote({ onRetry }: { onRetry: () => void }) {
