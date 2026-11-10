@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -74,7 +75,15 @@ func r3bAuditDetail(t *testing.T, ev types.AuditEvent) string {
 // both directions.
 func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 	// ticket: R3B
-	t.Run("GetRun failure audits the miss", func(t *testing.T) {
+	// The two give-ups are driven on the write-back itself. Through the handler neither is reached any
+	// more: an approve whose run cannot be read, or on a server with no run store, is refused before
+	// any decision (the network-preset check reads the run, 503 run_unreadable), which the third arm
+	// pins. The write-back still owes its audited miss to any caller that reaches it with a decision.
+	decided := func(runID uuid.UUID) types.ApprovalRequest {
+		return types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalApproved,
+			RequestedScope: mustJSON(map[string]string{"host": "registry.npmjs.org", "mode": "wait_for_review"})}
+	}
+	unreadable := func(t *testing.T) (*harness, *r3bGetRunErrStore, *Server, uuid.UUID) {
 		h := newHarness(t)
 		runID, wsID := uuid.New(), uuid.New()
 		fake := &r3bGetRunErrStore{
@@ -86,15 +95,12 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		}
 		cfg := baseTestConfig(h, fake)
 		cfg.Approvals = h.approvals
-		srv := New(cfg)
+		return h, fake, New(cfg), runID
+	}
 
-		apID := seedEgressApproval(h, runID, "registry.npmjs.org")
-		w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
-		// The decision itself must still stand: this write-back may never fail
-		// the request, which is exactly why it owes an audit row.
-		if w.Code != http.StatusOK {
-			t.Fatalf("approve: code = %d, body=%s", w.Code, w.Body.String())
-		}
+	t.Run("GetRun failure audits the miss", func(t *testing.T) {
+		h, fake, srv, runID := unreadable(t)
+		srv.learnVerifyEgress(context.Background(), decided(runID), types.ActorHuman, "admin@corp.example")
 		if len(fake.ws.Requirements) != 0 {
 			t.Fatalf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
 		}
@@ -112,16 +118,11 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 
 	t.Run("nil store audits the miss", func(t *testing.T) {
 		h := newHarness(t)
-		runID := uuid.New()
 		cfg := baseTestConfig(h, nil) // no store at all
 		cfg.Approvals = h.approvals
 		srv := New(cfg)
 
-		apID := seedEgressApproval(h, runID, "registry.npmjs.org")
-		w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("approve: code = %d, body=%s", w.Code, w.Body.String())
-		}
+		srv.learnVerifyEgress(context.Background(), decided(uuid.New()), types.ActorHuman, "admin@corp.example")
 		fails := r3bRequirementWriteFailures(h.audit.events)
 		if len(fails) != 1 {
 			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the missing store", len(fails))
@@ -131,6 +132,27 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		// across both write-backs.
 		if detail := r3bAuditDetail(t, fails[0]); detail != "no store configured" {
 			t.Errorf("failure row detail = %q, want %q", detail, "no store configured")
+		}
+	})
+
+	t.Run("an approve of a run that cannot be read decides nothing", func(t *testing.T) {
+		h, fake, srv, runID := unreadable(t)
+		apID := seedEgressApproval(h, runID, "registry.npmjs.org")
+		w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"reason":"run_unreadable"`) {
+			t.Fatalf("approve: code = %d, body=%s, want 503 run_unreadable", w.Code, w.Body.String())
+		}
+		h.approvals.mu.Lock()
+		state := h.approvals.byID[apID].State
+		h.approvals.mu.Unlock()
+		if state == types.ApprovalApproved {
+			t.Errorf("approval state = %s, want it still undecided", state)
+		}
+		if len(fake.ws.Requirements) != 0 {
+			t.Errorf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
+		}
+		if fails := r3bRequirementWriteFailures(h.audit.events); len(fails) != 0 {
+			t.Errorf("workspace.requirement.write failure rows = %d, want 0: no decision, so no write-back", len(fails))
 		}
 	})
 
