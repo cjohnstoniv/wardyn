@@ -55,16 +55,13 @@ func testNoNetwork(t *testing.T, r runner.Runner, opts Options) {
 	if got["proxied_rc"] == "" || got["proxied_rc"] == "0" {
 		t.Errorf("through the proxy: rc %q, want it to fail", got["proxied_rc"])
 	}
-	if opts.RealProxy {
-		switch got["proxied_reason"] {
-		case "no-network":
-		case "nc-missing":
-			t.Skipf("sandbox image %q has no nc; the no-network case reads the proxy's reason with it: an image contract, not a substrate verdict", opts.image())
-		default:
-			t.Errorf("through the real proxy: reason %q, want the refusal's X-Wardyn-Egress-Reason to be policy:no-network", got["proxied_reason"])
-		}
-	}
 	if got["direct_rc"] == "" || got["direct_rc"] == "0" {
 		t.Errorf("a direct connect: rc %q, want it to fail", got["direct_rc"])
+	}
+	// A real-proxy suite owns its agent image, which ships nc (AgentCannotReachAPIServer needs it too), so a
+	// missing nc fails the case rather than skipping what it proves.
+	if opts.RealProxy && got["proxied_reason"] != "no-network" {
+		t.Errorf("through the real proxy: reason %q, want the refusal's X-Wardyn-Egress-Reason to be policy:no-network "+
+			"(nc-missing: the image %q has no nc to read it with)", got["proxied_reason"], opts.image())
 	}
 }
