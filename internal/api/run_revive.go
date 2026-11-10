@@ -355,11 +355,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.settleRevivedProxy(ctx, run, data, actorType, actor, start, proxyHash, retiring, renewed, freshJTI); rerr != nil {
 		return reviveResult{}, rerr
 	}
-	// The stored config becomes the one now running. A failed write keeps the
-	// previous one, from which the next revive re-derives the same result.
-	if err := s.storeRunProxyConfig(ctx, run.ID, storedJSON); err != nil {
-		slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	// The stored config becomes the one now running: best-effort for a revive, fail closed for an edit.
+	if rerr := s.storeRevivedConfig(ctx, run, storedJSON, data, actorType, actor, edits); rerr != nil {
+		return reviveResult{}, rerr
 	}
 	if rebooted {
 		// F2: refresh the watcher lease right before starting the agent — on a

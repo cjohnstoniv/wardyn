@@ -6,12 +6,17 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -253,5 +258,83 @@ func TestApplyEgressEdits_NarrowsOnly(t *testing.T) {
 	}
 	if !slices.Equal(c.deny, []string{"profile.example", "b.example", "d.example"}) {
 		t.Errorf("ceiling denies = %v", c.deny)
+	}
+}
+
+// failPutStore fails the run's proxy-config write while fail is set, as a database blip would.
+type failPutStore struct {
+	*readbackStore
+	fail atomic.Bool
+}
+
+func (s *failPutStore) PutRunProxyConfig(ctx context.Context, id uuid.UUID, sealed []byte) error {
+	if s.fail.Load() {
+		return errors.New("injected config write failure")
+	}
+	return s.readbackStore.PutRunProxyConfig(ctx, id, sealed)
+}
+
+// handedPolicy is the policy in the newest config a proxy was handed.
+func (f *readbackFixture) handedPolicy(t *testing.T) types.RunPolicySpec {
+	t.Helper()
+	raw, _, _ := f.lastHandover(t)
+	cfg, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
+		t.Fatalf("the handed-over config does not load: %v", err)
+	}
+	return cfg.Policy
+}
+
+// An edit whose config cannot be stored never answers 200: a later revive starts from the stored
+// config, so the edit fails closed (503, the new proxy stopped, the run lost). The ordinary revive
+// after it then starts from the pre-edit config, which is right only because no edit was confirmed.
+func TestEgressEdit_ConfigWriteFailureFailsClosed(t *testing.T) {
+	f := newEgressEditFixture(t)
+	fs := &failPutStore{readbackStore: f.rb}
+	fs.fail.Store(true)
+	f.srv.cfg.Store = fs
+	f.confirmEachReplace(t)
+	stops := f.lr.proxyStopCount()
+	w := f.editEgress(t, `{"remove_hosts":["api.anthropic.com"],"deny_hosts":["evil.example"]}`)
+	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonEgressEditUnconfirmed {
+		t.Fatalf("edit with a failed config write: %d %s, want 503 %s", w.Code, w.Body.String(), reasonEgressEditUnconfirmed)
+	}
+	if lostAt, _ := f.st.lost(); lostAt == nil || f.lr.proxyStopCount() <= stops {
+		t.Fatal("the edit's new proxy must be stopped and the run lost")
+	}
+	fs.fail.Store(false)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("ordinary revive after the failed edit: %d, want 200", code)
+	}
+	if !slices.Contains(f.handedPolicy(t).AllowedDomains, "api.anthropic.com") {
+		t.Error("the ordinary revive must start from the stored, pre-edit config")
+	}
+	for _, ev := range f.audit.eventsFor(f.run.ID, "run.egress.edit") {
+		if ev.Outcome == "success" {
+			t.Fatal("an edit whose config was never stored must not answer success")
+		}
+	}
+}
+
+// An edit that answered 200 is in the stored config, so an ordinary revive after it keeps the removed
+// host off the allowlist and both hosts denied.
+func TestEgressEdit_ConfirmedEditSurvivesAnOrdinaryRevive(t *testing.T) {
+	f := newEgressEditFixture(t)
+	f.confirmEachReplace(t)
+	if w := f.editEgress(t, `{"remove_hosts":["api.anthropic.com"],"deny_hosts":["evil.example"]}`); w.Code != http.StatusOK {
+		t.Fatalf("edit: %d %s, want 200", w.Code, w.Body.String())
+	}
+	f.now = f.now.Add(reviveLiveEvery) // past the live-revive bound
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("ordinary revive after the edit: %d, want 200", code)
+	}
+	p := f.handedPolicy(t)
+	if slices.Contains(p.AllowedDomains, "api.anthropic.com") {
+		t.Errorf("allowed_domains = %v: a confirmed removal must survive a later revive", p.AllowedDomains)
+	}
+	for _, h := range []string{"api.anthropic.com", "evil.example"} {
+		if !slices.Contains(p.DeniedDomains, h) {
+			t.Errorf("denied_domains = %v: want %s still denied after a later revive", p.DeniedDomains, h)
+		}
 	}
 }

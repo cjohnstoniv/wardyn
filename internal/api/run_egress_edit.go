@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -31,8 +32,9 @@ import (
 //
 // The answer waits for the new proxy's own readback (run_proxy_readback.go) of the start the edit
 // recorded: 200 only once that start is enforced. Any other end (no report by the start's deadline,
-// a hash that differs or is missing, a start another revive superseded, or one that ran unconfirmed)
-// leaves the run with no proxy and answers 503 egress_edit_unconfirmed. A report under the pre-edit
+// a hash that differs or is missing, a start another revive superseded, one that ran unconfirmed, or
+// an edited config that could not be stored) leaves the run with no proxy and answers 503
+// egress_edit_unconfirmed. A report under the pre-edit
 // proxy's token is stale for that start, so it can never confirm the edit. An edit is never a legacy
 // start: a run whose runner or proxy image predates the readback is refused before anything changes.
 
@@ -263,6 +265,27 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 	return why
 }
 
+// storeRevivedConfig makes a revive's config the run's stored one, the one every later revive starts
+// from. For an ordinary revive a failed write is logged and the previous config kept, from which the
+// next revive re-derives the same result. An edit's write fails closed: a later revive would start
+// from the pre-edit config and reopen the removed or denied hosts, so the new proxy is stopped and the
+// run is lost (reviveFailedAfterClaim), and the edit answers egress_edit_unconfirmed, never 200.
+func (s *Server) storeRevivedConfig(ctx context.Context, run types.AgentRun, storedJSON []byte, data map[string]any,
+	actorType types.ActorType, actor string, edits []liveEgressEdit) *reviveError {
+	err := s.storeRunProxyConfig(ctx, run.ID, storedJSON)
+	switch {
+	case err == nil:
+		return nil
+	case len(edits) == 0:
+		slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return nil
+	}
+	data["error"] = "store the edited proxy config: " + err.Error()
+	return s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonEgressEditUnconfirmed,
+		"the edited proxy config could not be stored, so the new proxy was stopped and the run has no egress until revived", err)
+}
+
 // egressEditUnconfirmed is the 503 of an edit whose new proxy did not confirm it.
 func egressEditUnconfirmed(why string) *reviveError {
 	return &reviveError{status: http.StatusServiceUnavailable, reason: reasonEgressEditUnconfirmed, lost: true,
@@ -273,8 +296,11 @@ func egressEditUnconfirmed(why string) *reviveError {
 // policy is egress_edit_unconfirmed, and where the revive's own words name only the owner's profile
 // they also name the edit, whose denies are checked as that profile's are.
 func egressEditRefusal(rerr *reviveError) *reviveError {
-	if rerr.reason == reasonRevivePolicyUnconfirmedLost {
+	switch rerr.reason {
+	case reasonRevivePolicyUnconfirmedLost:
 		return egressEditUnconfirmed("readback failed")
+	case reasonEgressEditUnconfirmed: // storeRevivedConfig
+		return egressEditUnconfirmed("the edited config could not be stored")
 	}
 	door := map[string]string{
 		reasonReviveCeilingDeniesGitBroker:  "GitHub, which this run's git broker needs",
