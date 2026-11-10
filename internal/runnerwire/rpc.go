@@ -89,9 +89,6 @@ const (
 	// MethodKeptMachine acts on one kept machine's folder on the Mac (KeptMachineArgs), answered with
 	// KeptMachineResult. It is sent only to a runner whose caps carry MacVMCaps.KeptMachines.
 	MethodKeptMachine = "kept_machine"
-	// MethodFenceProxy stops a run's proxy and leaves a placeholder that no proxy replace can take
-	// (RefArgs, an empty reply). Sent only to a runner whose caps carry ProxyFence.
-	MethodFenceProxy = "fence_proxy"
 )
 
 // KeptMachineOpDelete is kept_machine's one op.
