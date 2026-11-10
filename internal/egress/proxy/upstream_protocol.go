@@ -286,6 +286,9 @@ func peerTextClass(err error) (string, bool) {
 // incomplete request returns as an error, so an allow decision always
 // follows a successful round trip.
 func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
+	if err := p.outboundHostRuleRefused(req); err != nil { // every brokered route sends here (host_rules.go)
+		return nil, err
+	}
 	key := memoKey(req.URL.Hostname(), cmp.Or(req.URL.Port(), "443"))
 	tlsLane := req.URL.Scheme == "https"
 	if v, seen := p.h2.hosts.Load(key); seen && v.(bool) && tlsLane {
@@ -471,6 +474,10 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, shape errShape, err erro
 // lane's allow row is only ever emitted after a successful round trip, so a
 // failed dial never over-reports an allow. seen may be nil.
 func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.DecisionLog, host, msg string) {
+	if errors.Is(err, errHostRuleRefused) { // its policy:host-rule row is written
+		p.httpError(w, "refused by host rules", err, http.StatusForbidden)
+		return
+	}
 	if p.refuseH2Mismatch(w, p.shapeOfHost(host), err, ruleSourceUpstreamProtocolMismatch, seen, host, msg) {
 		return
 	}

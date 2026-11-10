@@ -116,6 +116,15 @@
       "sandbox_mode",
       "approvals"
     ],
+    "HostRule": [
+      "host",
+      "methods",
+      "paths",
+      "effect"
+    ],
+    "HostRuleSet": [
+      "rules"
+    ],
     "IncludedTool": [
       "id",
       "kind",
@@ -373,6 +382,14 @@
       "omitted": "baseline",
       "empty": "all",
       "meaning": "Methods follow the baseline. An empty list allows every method.",
+      "section": "run_wide"
+    },
+    {
+      "name": "host_rules",
+      "part": "egress",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No host rules are added. A template's rule sets apply beside the sets of every other layer.",
       "section": "run_wide"
     },
     {

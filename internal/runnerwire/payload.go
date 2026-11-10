@@ -212,6 +212,10 @@ const (
 	// predates it decodes the policy without it, and its proxy then allows a literal under allow-all,
 	// so such a runner is refused a run that sets it under allow_all_egress, the only place it acts.
 	ProxySettingRefuseIPLiterals = "refuse_ip_literals"
+	// ProxySettingHostRules is policy.host_rules, a field inside policy: a runner that predates it
+	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
+	// such a runner is refused a run that has rules.
+	ProxySettingHostRules = "host_rules"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -237,7 +241,7 @@ var ProxySettings = []string{
 	ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels,
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
-	ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
+	ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals, ProxySettingHostRules,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -249,7 +253,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		pc.MCPApproveEach != nil,
 		len(pc.LLMHeaders) != 0,
 		pc.NoNetwork,
-		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress} {
+		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
+		len(pc.Policy.HostRules) != 0} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

@@ -1229,14 +1229,14 @@ How a request to a host is decided:
 - `allowed_methods` still applies on top.
 - A refusal is `403` with `rule_source` `policy:host-rule`, and the decision row names the set and rule that refused.
 
-Paths are matched in one normal form: the query and fragment dropped, escaped unreserved characters (`%41`, `%2e`) decoded once, `.` and `..` segments resolved and repeated slashes collapsed. A request path with an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character is refused when its host has rules.
+Paths are matched case-sensitively in one normal form: the query and fragment dropped and escaped unreserved characters (`%41`) decoded once. `;` and what follows it are part of the segment, so `/admin;x=1` is not under `/admin`. On a host with rules, a path not already in that form is refused. That is an empty segment (`//`), a `.` or `..` segment (`%2e` and `..;x` too), an encoded `/` or `\` (`%2F`, `%5C`), a backslash, `%00` or a control character.
 
 What the proxy does for a rule host:
 
 - It intercepts TLS to a rule host on port 443, so it can read each request. A run with host rules gets a per-run interception certificate for this.
 - A `CONNECT` to a rule host is refused with `policy:host-rule-needs-inspection` on another port, without that certificate, and on the desktop sign-in lane.
 - Plain HTTP to a rule host is checked per request.
-- A brokered route (the model routes, the git and git credential brokers, the MCP broker) sends its requests outside the lanes these rules read. A run whose rules name a host one of those routes serves is refused at start.
+- Each request a brokered route sends (model, git, git credential, MCP, Kubernetes or forge API) is checked on the method and path its host receives. Rules on a `via_org` host are refused at start: the organisation sends those requests.
 - A VM run (`linux_vm`, `macos_vm`) with host rules is refused at create with `422` `host_rules_need_inspected_vm`.
 
 ## `recording`

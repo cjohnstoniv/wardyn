@@ -5,9 +5,12 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -16,10 +19,10 @@ import (
 // Host rules (types.HostRuleSet) are judged per request, so a rule host is never an opaque tunnel:
 //   - a CONNECT to one is refused in evaluate (ruleSourceHostRuleNeedsInspection) unless this proxy can
 //     open it, and handleConnect then always terminates it (mitmConnect);
-//   - each request inside, and each plain-HTTP request, is judged by types.EvalHostRules (ruleSourceHostRule).
+//   - each request inside, and each plain-HTTP request, is judged by types.EvalHostRules (ruleSourceHostRule);
+//   - each forward a brokered route or API door sends is judged where it is sent (outboundHostRuleRefused).
 //
-// A brokered route re-originates to its host without either lane, so validateHostRules refuses a config
-// whose rules name a host a broker serves.
+// A via_org route is the exception, refused at load (viaOrgHosts).
 const (
 	ruleSourceHostRule                = "policy:host-rule"
 	ruleSourceHostRuleNeedsInspection = "policy:host-rule-needs-inspection"
@@ -108,6 +111,40 @@ func (p *Proxy) innerMethodRefused(w http.ResponseWriter, r *http.Request, host 
 	return true
 }
 
+// errHostRuleRefused is a forward the host rules refuse (outboundHostRuleRefused).
+var errHostRuleRefused = errors.New("wardyn: refused by host rules")
+
+// outboundHostRuleRefused judges a request the proxy is about to send upstream, whichever route built it.
+// The brokered routes (model, git, git credential, MCP) and the API doors re-originate outside the CONNECT
+// and plain lanes, so this is where their requests are judged, on the method and path the host receives.
+// A refusal writes the policy:host-rule row and returns errHostRuleRefused.
+func (p *Proxy) outboundHostRuleRefused(req *http.Request) error {
+	if req.URL == nil {
+		return nil
+	}
+	host, port := splitHostPort(req.URL.Host, defaultPortForScheme(req.URL.Scheme))
+	if !p.policy.namesRuleHost(host) {
+		return nil
+	}
+	d := types.EvalHostRules(p.policy.hostRules, host, req.Method, req.URL.EscapedPath())
+	if d.Effect == types.HostRuleAllow {
+		return nil
+	}
+	log := decisionLog(p.reqOf(req, host, port), egress.Deny, ruleSourceHostRule)
+	log.Cause = hostRuleCause(d)
+	if p.sink != nil {
+		p.sink.emit(log)
+	}
+	return errHostRuleRefused
+}
+
+// hostRuleTransportProxy is the egress transport's Proxy hook. The transport calls it for every request,
+// a reused connection's included, so a route that sends on the transport itself (the kube door's clone of
+// it) is judged as roundTripUpstream's callers are. It names no proxy.
+func (p *Proxy) hostRuleTransportProxy(req *http.Request) (*url.URL, error) {
+	return nil, p.outboundHostRuleRefused(req)
+}
+
 // requestEscapedPath is the path as the request carried it, escapes kept, so an encoded "/" is seen and
 // refused rather than decoded into a segment boundary.
 func requestEscapedPath(r *http.Request) string {
@@ -134,8 +171,7 @@ func (p *Policy) namesRuleHost(host string) bool {
 }
 
 // validateHostRules is the config's check of policy.host_rules: the shape (types.ValidateHostRuleSets),
-// no rules on a VM run, and no rule host that a brokered route re-originates to, since a broker forwards
-// outside the lanes the rules are judged on.
+// no rules on a VM run, and no rule on a host a via_org route serves (viaOrgHosts).
 func (c *Config) validateHostRules() error {
 	sets := c.Policy.HostRules
 	if len(sets) == 0 {
@@ -147,47 +183,27 @@ func (c *Config) validateHostRules() error {
 	if c.VM {
 		return fmt.Errorf("config: policy.host_rules: host rules are not judged on a VM run's guest flows")
 	}
-	brokered := c.brokeredHosts()
+	viaOrg := c.viaOrgHosts()
 	for _, s := range sets {
 		for _, r := range s.Rules {
-			if lane, ok := brokered[r.Host]; ok {
-				return fmt.Errorf("config: policy.host_rules: %s is reached through the %s, which host rules do not judge", r.Host, lane)
+			if viaOrg[r.Host] {
+				return fmt.Errorf("config: policy.host_rules: %s is reached through a via_org route, which host rules do not judge", r.Host)
 			}
 		}
 	}
 	return nil
 }
 
-// brokeredHosts is every host a brokered local route re-originates to, with the route's name.
-func (c *Config) brokeredHosts() map[string]string {
-	out := map[string]string{anthropicHost: "brokered model route", openaiHost: "brokered model route"}
-	addURL := func(raw, lane string) {
-		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
-			out[hostKey(u.Hostname())] = lane
-		}
-	}
-	for vendor, up := range c.LLMUpstreams {
-		out[hostKey(vendor)] = "brokered model route"
-		addURL(up, "brokered model route")
-	}
-	if len(c.GitGrants) > 0 {
-		out["github.com"] = "git broker"
-	}
-	for h := range c.PATGrants {
-		out[hostKey(h)] = "git credential broker"
-	}
-	for _, s := range c.MCPServers {
-		addURL(s.URL, "MCP broker")
-	}
-	for k := range c.LocalModels {
-		h, _ := splitHostPort(k, 0)
-		out[h] = "brokered model route"
-	}
-	for _, r := range c.GatewayIdentity {
-		out[hostKey(r.Host)] = "brokered model route"
-	}
+// viaOrgHosts is every host a via_org route serves. Every other route's forward is judged where it is sent
+// (outboundHostRuleRefused), but a via_org request goes to the organisation, which reaches the host itself
+// (forwardViaOrg), and its git form names no host (viaOrgRouteFor), so a rule on such a host is refused.
+func (c *Config) viaOrgHosts() map[string]bool {
+	out := map[string]bool{}
 	for _, r := range c.ViaOrgRoutes {
-		out[hostKey(r.Host)] = "via_org route"
+		out[hostKey(r.Host)] = true
+		if slices.Contains(slices.Collect(maps.Values(c.GitGrants)), r.GrantID) {
+			out["github.com"] = true
+		}
 	}
 	return out
 }

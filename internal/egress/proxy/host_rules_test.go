@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -178,6 +179,46 @@ func TestHostRulesJudgeEachRequestInsideTheTunnel(t *testing.T) {
 	}
 }
 
+// TestHostRulesRefuseAPathNotInNormalForm: beside an allow-all rule, a deny on /admin. An upstream that
+// resolves /admin//../users by RFC 3986 reads /admin/users, so on a rule host a path with an empty, "."
+// or ".." segment is refused rather than judged in a form the host does not read. ";" is part of the
+// segment, so /admin;x=1 is judged as written: not under /admin.
+func TestHostRulesRefuseAPathNotInNormalForm(t *testing.T) {
+	for _, tc := range []struct {
+		path  string
+		want  int
+		cause string
+	}{
+		{"/admin//../users", http.StatusForbidden, "not in normal form"},
+		{"/users/./x", http.StatusForbidden, "not in normal form"},
+		{"/admin", http.StatusForbidden, "rule 0 denies"},
+		{"/admin;x=1", http.StatusOK, ""},
+		{"/users", http.StatusOK, ""},
+	} {
+		cu := captureUpstream(t, true, "ok")
+		p, buf, caPEM := hrProxy(t, hrOpts{}, cu.srv)
+		p.policy.hostRules = []types.HostRuleSet{{Rules: []types.HostRule{
+			{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
+			{Host: hrHost, Effect: types.HostRuleAllow},
+		}}}
+		srv := httptest.NewServer(p)
+		status, conn, _ := hrConnect(t, srv.URL, "443")
+		if status != http.StatusOK {
+			t.Fatalf("CONNECT = %d, want 200", status)
+		}
+		got := hrInner(t, conn, caPEM, http.MethodGet, tc.path)
+		srv.Close()
+		if got != tc.want || (got == http.StatusForbidden) == cu.reached {
+			t.Errorf("GET %s = %d reached=%v, want %d", tc.path, got, cu.reached, tc.want)
+		}
+		if tc.cause != "" && !slices.ContainsFunc(hrRows(t, buf), func(d egress.DecisionLog) bool {
+			return d.RuleSource == ruleSourceHostRule && strings.Contains(d.Cause, tc.cause)
+		}) {
+			t.Errorf("GET %s: no policy:host-rule row with %q:\n%s", tc.path, tc.cause, buf.String())
+		}
+	}
+}
+
 // TestHostRulesRefuseAnUninspectedConnect: no CA, a port the proxy does not open for the host, and a VM
 // proxy each refuse the CONNECT with policy:host-rule-needs-inspection, never an opaque tunnel.
 func TestHostRulesRefuseAnUninspectedConnect(t *testing.T) {
@@ -221,7 +262,7 @@ func TestHostRulesJudgePlainHTTP(t *testing.T) {
 		{"GET", "/public", http.StatusOK},
 		{"GET", "/admin", http.StatusForbidden},
 		{"GET", "/public/%2e%2e/admin", http.StatusForbidden},
-		{"GET", "/public//x", http.StatusOK},
+		{"GET", "/public//x", http.StatusForbidden}, // an empty segment is not normal form
 		{"GET", "/public%00", http.StatusForbidden},
 	} {
 		cu := captureUpstream(t, false, "ok")
@@ -258,22 +299,20 @@ func TestHostRulesImposeNothingOnOtherHosts(t *testing.T) {
 	}
 }
 
-// TestConfigRefusesHostRulesABrokerServes: a broker re-originates outside the judged lanes, so a rule on a
-// host one serves is refused at load, as are rules on a VM run.
-func TestConfigRefusesHostRulesABrokerServes(t *testing.T) {
+// TestConfigRefusesHostRulesAViaOrgRouteServes: a via_org route is sent to the organisation, so a rule on a
+// host one serves is refused at load, as are rules on a VM run. A rule on a host a broker serves is judged
+// on each forward (host_rules_broker_test.go), so it loads.
+func TestConfigRefusesHostRulesAViaOrgRouteServes(t *testing.T) {
 	rule := func(h string) []types.HostRuleSet {
 		return []types.HostRuleSet{{Rules: []types.HostRule{{Host: h, Effect: types.HostRuleAllow}}}}
 	}
+	gitGrant := uuid.New()
 	for name, tc := range map[string]struct {
 		c    Config
 		want string
 	}{
-		"model route": {Config{Policy: types.RunPolicySpec{HostRules: rule("api.anthropic.com")}}, "brokered model route"},
-		"git broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}}, "git broker"},
-		"pat broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}}, "git credential broker"},
-		"mcp broker":  {Config{Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}}, "MCP broker"},
 		"via_org":     {Config{Policy: types.RunPolicySpec{HostRules: rule("corp.example.com")}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}}, "via_org route"},
-		"local model": {Config{Policy: types.RunPolicySpec{HostRules: rule("models.internal")}, LocalModels: map[string]types.LocalModelSettings{"models.internal:11434": {}}}, "brokered model route"},
+		"via_org git": {Config{Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": gitGrant}, ViaOrgRoutes: []ViaOrgRoute{{GrantID: gitGrant}}}, "via_org route"},
 		"vm":          {Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, VM: true}, "VM run"},
 	} {
 		err := tc.c.validateHostRules()
@@ -281,8 +320,16 @@ func TestConfigRefusesHostRulesABrokerServes(t *testing.T) {
 			t.Errorf("%s: err = %v, want one naming %q", name, err, tc.want)
 		}
 	}
-	ok := Config{Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}}
-	if err := ok.validateHostRules(); err != nil {
-		t.Errorf("a rule on a host no broker serves was refused: %v", err)
+	for name, c := range map[string]Config{
+		"model route": {Policy: types.RunPolicySpec{HostRules: rule("api.anthropic.com")}},
+		"git broker":  {Policy: types.RunPolicySpec{HostRules: rule("github.com")}, GitGrants: map[string]uuid.UUID{"o/r": uuid.New()}},
+		"pat broker":  {Policy: types.RunPolicySpec{HostRules: rule("dev.azure.com")}, PATGrants: map[string]PATGrant{"dev.azure.com": {}}},
+		"mcp broker":  {Policy: types.RunPolicySpec{HostRules: rule("mcp.example.com")}, MCPServers: []MCPServerConfig{{URL: "https://mcp.example.com/mcp"}}},
+		"local model": {Policy: types.RunPolicySpec{HostRules: rule("models.internal")}, LocalModels: map[string]types.LocalModelSettings{"models.internal:11434": {}}},
+		"other host":  {Policy: types.RunPolicySpec{HostRules: rule(hrHost)}, ViaOrgRoutes: []ViaOrgRoute{{Host: "corp.example.com"}}},
+	} {
+		if err := c.validateHostRules(); err != nil {
+			t.Errorf("%s: a rule on a host judged per forward was refused: %v", name, err)
+		}
 	}
 }

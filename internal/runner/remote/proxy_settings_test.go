@@ -46,6 +46,9 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingRefuseIPLiterals: func(pc *runner.ProxyConfig) {
 		pc.Policy.RefuseIPLiterals, pc.Policy.AllowAllEgress = true, true
 	},
+	runnerwire.ProxySettingHostRules: func(pc *runner.ProxyConfig) {
+		pc.Policy.HostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: "api.example.com", Effect: types.HostRuleDeny}}}}
+	},
 	runnerwire.ProxySettingLLMHeaders: func(pc *runner.ProxyConfig) {
 		pc.LLMHeaders = map[string]map[string]string{"gw.corp.example": {"X-Team": "platform"}}
 	},
@@ -201,6 +204,33 @@ func TestCreateSandboxRefusesALaptopModelOnARunnerWithoutTheRelay(t *testing.T) 
 	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"relay","proxy_settings":`+string(named)+`,"local_model_ports":[11434]}`)
 	if _, err := rig.Sub.CreateSandbox(ctxT(t), laptop(true)); err != nil {
 		t.Fatalf("a runner naming %s was refused: %v", runnerwire.ProxySettingLocalModelRelay, err)
+	}
+}
+
+// A runner that names every other setting but predates host_rules (an rc.17 runnerd) would rebuild the
+// run's proxy without the rules and forward what they deny: a run with rules is refused before anything is
+// sent, and one without them is admitted.
+func TestCreateSandboxRefusesHostRulesOnARunnerWithoutThem(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	older := slices.DeleteFunc(slices.Clone(runnerwire.ProxySettings), func(s string) bool { return s == runnerwire.ProxySettingHostRules })
+	named, err := json.Marshal(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"0.10.0-rc.17","proxy_settings":`+string(named)+`}`)
+	spec := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1}
+	spec.ProxyConfig.Policy.HostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: "api.example.com", Methods: []string{"GET"}, Effect: types.HostRuleAllow}}}}
+	_, err = rig.Sub.CreateSandbox(ctxT(t), spec)
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingHostRules {
+		t.Fatalf("create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingHostRules)
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("the refused create reached the runner")
+	}
+	spec.RunID, spec.ProxyConfig.Policy.HostRules = uuid.New(), nil
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
+		t.Fatalf("a run without host rules was refused: %v", err)
 	}
 }
 
