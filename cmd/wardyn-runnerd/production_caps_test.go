@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -77,16 +78,92 @@ func TestRunnerRuntimeResendsCapsOnNetPolChange(t *testing.T) {
 	}
 }
 
+// A verdict change with no session only marks the caps unsent; the next session's caps carry it
+// (afterOnline and Replay send on the mark).
+func TestNetPolChangeWithNoSessionMarksCapsUnsent(t *testing.T) {
+	c := &capsReporter{netPol: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); c.resendNetPol(ctx) }()
+	c.netPolChanged()
+	c.netPolChanged() // coalesced with the first; never blocks
+	for deadline := time.Now().Add(5 * time.Second); !c.dirty.Load(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a change with no session did not mark the caps unsent")
+		}
+	}
+	cancel()
+	<-done
+}
+
+// A send that captured its caps and then paused holds every other send until it is acked, so its older
+// capture never lands after a newer one: here a relay change's send captures "enforced" and pauses, a
+// re-check changes the verdict to "refused" meanwhile, and the organisation ends on "refused".
+func TestCapsSendsNeverAckAnOlderCapture(t *testing.T) {
+	sub := &netPolFake{Fake: runnertest.NewFake()}
+	sub.check.Store(&runner.NetPolCheck{Verdict: runner.NetPolEnforced, At: time.Now().UTC()})
+	var unreachable atomic.Bool
+	tick := make(chan time.Time)
+	relay := newRelayWatch(func(context.Context) error {
+		if unreachable.Load() {
+			return errors.New("relay down")
+		}
+		return nil
+	}, nil)
+	relay.ticker = func(time.Duration) (<-chan time.Time, func()) { return tick, func() {} }
+	var hook func()
+	org := composedRuntime(t, sub, runtimeExtras{noPosture: true, arch: "amd64", report: connectReport{relay: relay},
+		netPolWatch: func(f func()) { hook = f }})
+
+	gate := &capsGate{paused: make(chan struct{}), release: make(chan struct{})}
+	sub.gate.Store(gate)
+	unreachable.Store(true)
+	tick <- time.Now() // the relay's send captures "enforced", then pauses
+	<-gate.paused
+	calls := sub.calls.Load()
+	sub.check.Store(&runner.NetPolCheck{Verdict: runner.NetPolRefused, At: time.Now().UTC()})
+	hook()
+	time.Sleep(200 * time.Millisecond)
+	if got := sub.calls.Load(); got != calls {
+		t.Fatalf("a second send captured caps (%d captures, want %d) while the first had not been acked", got, calls)
+	}
+	close(gate.release)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		c, _ := org.Caps()
+		if c.Support.NetworkPolicyCheck.Verdict == runner.NetPolRefused && c.Relay != nil && c.Relay.State == types.RelayUnreachable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the organisation's caps carry %q (relay %+v), want refused with the relay unreachable", c.Support.NetworkPolicyCheck.Verdict, c.Relay)
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // nothing later may put the older capture back
+	if c, _ := org.Caps(); c.Support.NetworkPolicyCheck.Verdict != runner.NetPolRefused {
+		t.Fatalf("the organisation's caps went back to %q", c.Support.NetworkPolicyCheck.Verdict)
+	}
+}
+
+// capsGate pauses the next caps capture after it took its values, until release closes.
+type capsGate struct{ paused, release chan struct{} }
+
 // netPolFake is the fake substrate with a NetworkPolicy verdict a test changes while the runtime reads it.
 type netPolFake struct {
 	*runnertest.Fake
 	check atomic.Pointer[runner.NetPolCheck]
+	// calls counts captures (Classes calls); gate, when set, pauses the next one.
+	calls atomic.Int32
+	gate  atomic.Pointer[capsGate]
 }
 
 func (f *netPolFake) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 	cs, err := f.Fake.Classes(ctx)
 	if c := f.check.Load(); c != nil {
 		cs.NetworkPolicyCheck = *c
+	}
+	f.calls.Add(1)
+	if g := f.gate.Swap(nil); g != nil {
+		g.paused <- struct{}{}
+		<-g.release
 	}
 	return cs, err
 }

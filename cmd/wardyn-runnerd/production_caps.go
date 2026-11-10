@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -64,6 +65,10 @@ type capsReporter struct {
 	last atomic.Pointer[runnerwire.Caps]
 	// netPol holds one mark from netPolChanged until resendNetPol takes it.
 	netPol chan struct{}
+	// sendMu holds each send from capturing its caps through their ack, whatever triggered it (a
+	// session, a resume, the relay, a macOS VM or a NetworkPolicy change), so an older capture is never
+	// acked after a newer one.
+	sendMu sync.Mutex
 }
 
 func (c *capsReporter) ack(ctx context.Context, peer *runnerwire.Peer, caps runnerwire.Caps) error {
@@ -82,6 +87,8 @@ func (c *capsReporter) ack(ctx context.Context, peer *runnerwire.Peer, caps runn
 // send reports the runner's caps on peer; reprobe re-checks the relay first, and always sends even when
 // nothing in the report is new (a fresh session's caps are required).
 func (c *capsReporter) send(ctx context.Context, peer *runnerwire.Peer, reprobe, always bool) (err error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	if c.dirty.Swap(false) {
 		always = true
 	}
@@ -121,7 +128,14 @@ func (c *capsReporter) afterOnline(ctx context.Context, peer *runnerwire.Peer, r
 
 // resendMacOS is the macOS VM handle's callback after its state changed.
 func (c *capsReporter) resendMacOS(ctx context.Context) {
-	resendMacOSCaps(ctx, c.online.Load(), &c.dirty, &c.last, c.send, c.ack, c.extra.macOSVM.current)
+	resendMacOSCaps(ctx, c.online.Load(), &c.dirty, &c.last, c.send, c.ackAlone, c.extra.macOSVM.current)
+}
+
+// ackAlone is ack under sendMu, for the macOS VM fallback that acks caps send did not capture.
+func (c *capsReporter) ackAlone(ctx context.Context, peer *runnerwire.Peer, caps runnerwire.Caps) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	return c.ack(ctx, peer, caps)
 }
 
 // resendRelay sends the caps again after the relay's status changed.
