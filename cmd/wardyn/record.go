@@ -171,10 +171,11 @@ func templateHint(err error) error {
 // narrowing result must be written even when it is empty or false: an absent eligible_grants would
 // keep every grant the source policy holds, and an absent allowed_domains its whole allowlist.
 // Every other key is left out so it still inherits: denied_domains, resources and the rest are not
-// something a recording can know, and allowed_methods is left empty by design ("do not
-// over-restrict"), which in a template would mean every method over a source that limits them.
+// something a recording can know. allowed_methods is kept only when the proposal lists methods
+// (the clamp fills it from the person's ceiling): the synthesizer leaves it empty by design, and an
+// empty list in a template means every method, which would widen a source policy that limits them.
 var recordedPolicyKeys = []string{
-	"allowed_domains", "allow_all_egress", "first_use_approval",
+	"allowed_domains", "allow_all_egress", "first_use_approval", "allowed_methods",
 	"min_confinement_class", "eligible_grants", "auto_stop_after_sec",
 }
 

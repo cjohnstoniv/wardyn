@@ -193,7 +193,7 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 	// A recorded grant is kept as it is, and the keys a recording never decides stay out even when the proposal fills them.
 	profile = `{"proposed":{"inline_policy":{"allowed_domains":[],"min_confinement_class":"CC2","auto_stop_after_sec":3600,` +
 		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.example.com","header":"x-api-key"},"ttl_seconds":600},{"kind":"api_key","scope":null}],` +
-		`"denied_domains":["bad.example.com"],"resources":{"cpu_millis":2000},"workspace_mounts":[{"host_path":"/srv"}]}}}`
+		`"allowed_methods":["GET"],"denied_domains":["bad.example.com"],"resources":{"cpu_millis":2000},"workspace_mounts":[{"host_path":"/srv"}]}}}`
 	if _, err := run("record", "save", runID.String(), "--name", "learned", "--template"); err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +214,10 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 		if _, has := pol[key]; has {
 			t.Errorf("inline_policy carries %q, which a recording never decides", key)
 		}
+	}
+	// The proposal is post-clamp: methods the clamp filled in from the ceiling are kept, never dropped.
+	if m, _ := pol["allowed_methods"].([]any); len(m) != 1 || m[0] != "GET" {
+		t.Errorf("allowed_methods = %v, want the proposal's [GET] kept", pol["allowed_methods"])
 	}
 
 	_, err = run("record", "save", runID.String(), "--name", "learned")

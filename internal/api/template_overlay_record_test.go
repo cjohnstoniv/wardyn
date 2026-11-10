@@ -41,3 +41,21 @@ func TestRecordedTemplatePolicyDoesNotKeepTheSourcePoliciesGrants(t *testing.T) 
 		t.Errorf("an overlay without eligible_grants gave %+v, %v; the test no longer shows why the key must be written", widened.EligibleGrants, err)
 	}
 }
+
+// TestRecordedTemplateKeepsOrInheritsAllowedMethods: the proposal is post-clamp, so a ceiling's methods
+// can be in it. Written to the template they stay GET over an unrestricted source; a proposal with none
+// leaves the key out, so a GET-only source keeps GET rather than widening to every method.
+func TestRecordedTemplateKeepsOrInheritsAllowedMethods(t *testing.T) {
+	open := types.RunPolicySpec{AllowedDomains: []string{"wide.example.com"}}
+	withMethods := json.RawMessage(`{"allowed_domains":["pypi.org"],"allowed_methods":["GET"],"eligible_grants":[]}`)
+	got, err := templatePolicyOverlay(open, withMethods)
+	if err != nil || !slices.Equal(got.AllowedMethods, []string{"GET"}) {
+		t.Errorf("a recorded [GET] over an unrestricted source gave %v, %v; want GET kept", got.AllowedMethods, err)
+	}
+	getOnly := types.RunPolicySpec{AllowedDomains: []string{"wide.example.com"}, AllowedMethods: []string{"GET"}}
+	noMethods := json.RawMessage(`{"allowed_domains":["pypi.org"],"eligible_grants":[]}`)
+	kept, err := templatePolicyOverlay(getOnly, noMethods)
+	if err != nil || !slices.Equal(kept.AllowedMethods, []string{"GET"}) {
+		t.Errorf("a proposal with no methods over a GET-only source gave %v, %v; want GET inherited", kept.AllowedMethods, err)
+	}
+}
