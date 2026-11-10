@@ -229,12 +229,12 @@ func (s *Server) egressEditSupported(ctx context.Context, run types.AgentRun) *r
 // no-op before that deadline). Any other end is stopped here: a start that ran unconfirmed or that
 // another start superseded, or one still pending when the wait runs out (a store that did not answer).
 func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, gen int) string {
-	st, ok := s.cfg.Store.(store.RunProxyStarts)
-	if !ok || gen < 1 {
-		return "readback_unavailable" // egressEditSupported refused this already; never confirmed by default
-	}
 	why := "readback_wait_timeout"
-	for ctx.Err() == nil {
+	st, ok := s.cfg.Store.(store.RunProxyStarts)
+	if !ok || gen < 1 { // egressEditSupported refuses this before any change; never confirmed by default
+		why = "readback_unavailable"
+	}
+	for ok && gen >= 1 && ctx.Err() == nil {
 		p, found, err := st.ActiveProxyStart(ctx, runID)
 		switch {
 		case err != nil: // read again until the wait runs out
