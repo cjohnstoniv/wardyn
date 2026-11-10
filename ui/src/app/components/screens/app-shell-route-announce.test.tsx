@@ -81,6 +81,15 @@ describe("AppShell route announcement", () => {
     await waitFor(() => expect(document.title).toMatch(/^Screen B - /));
   });
 
+  // A sign-out switches to the sign-in gate without a reload, so the shell unmounting must reset the title.
+  it("hands the tab its plain title back when the shell unmounts", async () => {
+    const view = renderShell();
+    await screen.findByRole("heading", { name: "Screen A" });
+    await waitFor(() => expect(document.title).toMatch(/^Screen A - /));
+    view.unmount();
+    expect(document.title).toBe(CONSOLE_VIEW.TITLE_USER);
+  });
+
   it("moves focus to the new page's heading after a navigation, not on first load", async () => {
     renderShell();
     const a = await screen.findByRole("heading", { name: "Screen A" });

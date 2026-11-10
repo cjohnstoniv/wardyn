@@ -546,6 +546,10 @@ export function AppShell({
     return () => observer.disconnect();
   }, [view, location.pathname, navigationType]);
 
+  // Leaving the shell (a sign-out switches to the gate without a reload) hands the tab back its plain title, so the
+  // sign-in page does not keep the last page's name or the Admin cue.
+  React.useEffect(() => () => setConsoleTitle(CONSOLE_VIEW.TITLE_USER), []);
+
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
   const [focus, setFocus] = React.useState(false);
