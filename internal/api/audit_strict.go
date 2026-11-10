@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -22,7 +23,7 @@ import (
 // handler's own detailed row is unchanged: it is written after the change, and can still spool.
 
 // auditStrictRoutes is every covered change, keyed as chi.Walk reports a route: each POST, PUT, PATCH
-// and DELETE under /policies, /governance, /approvals, /permissions/grants, /drives/grants,
+// and DELETE under /policies, /governance, /approvals, /permissions, /drives/grants,
 // /wall-presets, /templates and /me/walls, less auditStrictExcluded. Wall presets, templates and a
 // person's own walls carry policy, so they are covered. TestAuditStrictCensus fails on a change under
 // those prefixes that is in neither table, and on a covered route auditStrictIntent does not wrap.
@@ -65,10 +66,12 @@ var auditStrictRoutes = map[string]bool{
 	"POST /api/v1/approvals/{id}/hand-back": true,
 	"POST /api/v1/approvals/{id}/decline":   true,
 
-	"POST /api/v1/permissions/grants":        true,
-	"DELETE /api/v1/permissions/grants/{id}": true,
-	"POST /api/v1/drives/grants":             true,
-	"DELETE /api/v1/drives/grants/{id}":      true,
+	"POST /api/v1/permissions/grants":               true,
+	"DELETE /api/v1/permissions/grants/{id}":        true,
+	"PUT /api/v1/permissions/enforcement":           true,
+	"PUT /api/v1/permissions/availability/{kind}/*": true,
+	"POST /api/v1/drives/grants":                    true,
+	"DELETE /api/v1/drives/grants/{id}":             true,
 
 	"POST /api/v1/wall-presets":        true,
 	"PUT /api/v1/wall-presets/{id}":    true,
@@ -137,8 +140,13 @@ func (s *Server) recordStrictIntent(r *http.Request, rctx *chi.Context, body []b
 			params[k] = rctx.URLParams.Values[i]
 		}
 	}
-	sum := sha256.Sum256(body)
+	// A route ending in a wildcard names its target there (an image ref, with its slashes); the mount's
+	// own "*" entries are routing, not a parameter.
 	route := rctx.RoutePattern()
+	if strings.HasSuffix(route, "/*") {
+		params["*"] = rctx.URLParam("*")
+	}
+	sum := sha256.Sum256(body)
 	at, actor := actorFromRequest(r)
 	ev := s.stampAuditEvent(ctx, s.auditEvent(nil, at, actor, "audit.intent.record", r.URL.Path, "success", mustJSON(map[string]any{
 		"method":      r.Method,

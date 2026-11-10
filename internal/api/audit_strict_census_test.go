@@ -16,7 +16,7 @@ import (
 // auditStrictPrefixes are the families strict audit covers, under /api/v1. Every POST, PUT, PATCH and
 // DELETE under one is a covered change unless auditStrictExcluded names it.
 var auditStrictPrefixes = []string{
-	"/policies", "/governance", "/approvals", "/permissions/grants", "/drives/grants",
+	"/policies", "/governance", "/approvals", "/permissions", "/drives/grants",
 	"/wall-presets", "/templates", "/me/walls",
 }
 

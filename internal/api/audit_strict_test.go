@@ -169,3 +169,25 @@ func TestAuditStrictLeavesTheRestAlone(t *testing.T) {
 		t.Errorf("PUT /me/walls with strict off = %d %s, want 200", w.Code, w.Body)
 	}
 }
+
+// TestAuditStrictIntentNamesTheWildcardTarget: a capability availability change names its target in the
+// route's wildcard (an image ref, slashes and all), and the intent row carries it.
+func TestAuditStrictIntentNamesTheWildcardTarget(t *testing.T) {
+	srv, _, _, _ := newAuthzMatrixServer(t)
+	strict := &strictRecorder{}
+	srv.cfg.AuditStrict = strict
+	admin := ssoSession(t, "strict-admin", "strict-admin@corp.example", oidc.RoleAdmin)
+	_ = doSSO(t, srv, http.MethodPut, "/api/v1/permissions/availability/image/ghcr.io/acme/tool:1", admin, `{}`)
+	intents := strict.snapshot()
+	if len(intents) != 1 {
+		t.Fatalf("strict rows = %v, want one", intents)
+	}
+	var data struct {
+		Route  string            `json:"route"`
+		Params map[string]string `json:"params"`
+	}
+	if err := json.Unmarshal(intents[0].Data, &data); err != nil || data.Route != "/api/v1/permissions/availability/{kind}/*" ||
+		data.Params["kind"] != "image" || data.Params["*"] != "ghcr.io/acme/tool:1" {
+		t.Errorf("intent data = %s (%v), want the availability route with kind image and * the image ref", intents[0].Data, err)
+	}
+}

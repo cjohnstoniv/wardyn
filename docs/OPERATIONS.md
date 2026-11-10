@@ -726,7 +726,7 @@ commands are the ones in "Back them up" and "Restore them", and in
     body's SHA-256, never the body.
   - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
   - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
-  - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions/grants`,
+  - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
     `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`.
   - Not covered, because each reads and answers: `POST /policies/grade`, `/governance/check`, `/governance/dry-run` and
     `/governance/approval-rules/dry-run`.
