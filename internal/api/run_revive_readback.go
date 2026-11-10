@@ -120,19 +120,6 @@ func (s *Server) settleRevivedProxy(ctx context.Context, run types.AgentRun, dat
 	return rerr
 }
 
-// reloseFate is what reloseRun persisted for a run: nothing (no reloseRun ran), lost again (the mark written), the mark
-// not written (unresolved), the mark not applied (another writer moved the run first), or the run ended as unkeepable
-// (also when the mark landed on a substrate that cannot keep a sandbox, so loseRunStopped tore it down).
-type reloseFate int
-
-const (
-	relostNone reloseFate = iota
-	relostLost
-	relostUnwritten
-	relostUnknown
-	relostEnded
-)
-
 // readbackFateClause is reviveFailedAfterClaim's fate wording for a failed readback, so the stop clause
 // settleRevivedProxy adds never replaces what reloseRun persisted.
 func readbackFateClause(fate reloseFate) string {
