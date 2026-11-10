@@ -320,13 +320,22 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
+      # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
+      # extra swap lets that peak page out instead of the runner being shut down.
+      - name: Add swap for the coverage compile
+        if: needs.changes.outputs.backend != 'false'
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
-          # The coverage compile of internal/api is the job's memory peak; collect twice as often.
-          GOGC: "50"
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under one of its tags (their packages run with -tags; the rest

@@ -705,14 +705,22 @@ jobs:
       # suite "docker" (below) is what turns a silent skip back into red.
       - name: Build agent-aws-sso image (local only — the real AWS CLI these tests drive)
         run: docker build -f deploy/images/aws-sso/Dockerfile -t wardyn/agent-aws-sso:local .
+      # The coverage compile of internal/api peaks near 13 GB, about all the hosted runner's memory, and the
+      # runner was shut down mid-suite on the rc.17 candidate. Collecting garbage more often did not lower the
+      # peak (the MON lines below measured it), so extra swap lets the peak page out instead.
+      - name: Add swap for the coverage compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
           # the relay test runs the proxy image built above (cmd/wardyn-runnerd/relay_docker_live_test.go)
           WARDYN_TEST_PROXY_IMAGE: wardyn/wardyn-proxy:local
-          # The coverage compile of internal/api peaked near 13 GB on the rc.17 candidate and the runner
-          # was shut down mid-suite; collecting twice as often lowers that peak (the MON lines measure it).
-          GOGC: "50"
         shell: bash
         run: |
           set -euo pipefail
