@@ -739,9 +739,26 @@ func TestSweepOrphanedSandboxes_RemovesLeftoverDNSSeeds(t *testing.T) {
 		{ID: dnsSeedName(otherRunner), Created: old, Labels: wardynLabels(otherRunner, componentDNSSeed, map[string]string{runner.LabelRunnerID: "runner-2", labelDeployment: "wardyn-internal"})},
 		{ID: dnsSeedName(otherDeployment), Created: old, Labels: wardynLabels(otherDeployment, componentDNSSeed, map[string]string{runner.LabelRunnerID: "runner-1", labelDeployment: "elsewhere"})},
 	}
+	// Aged, managed, this runner's, but not provably this deployment's or a run's: a missing deployment label,
+	// a missing run id and a malformed one. The age sweep leaves them, as the teardown would.
+	noDeployment := uuid.New()
+	unprovable := map[string]map[string]string{
+		dnsSeedName(noDeployment): wardynLabels(noDeployment, componentDNSSeed, map[string]string{runner.LabelRunnerID: "runner-1"}),
+		"seed-no-run":             {labelManaged: "true", labelComponent: componentDNSSeed, labelDeployment: "wardyn-internal", runner.LabelRunnerID: "runner-1"},
+		"seed-bad-run":            {labelManaged: "true", labelComponent: componentDNSSeed, labelRun: "not-a-uuid", labelDeployment: "wardyn-internal", runner.LabelRunnerID: "runner-1"},
+	}
+	for name, labels := range unprovable {
+		f.containers[name] = &createdContainer{name: name}
+		f.listItems = append(f.listItems, container.Summary{ID: name, Created: old, Labels: labels})
+	}
 	swept, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return false })
 	if err != nil {
 		t.Fatal(err)
+	}
+	for name := range unprovable {
+		if f.containers[name].removed {
+			t.Errorf("the sweep removed %s, which has no provable deployment or run", name)
+		}
 	}
 	if swept != 1 || !f.containers[dnsSeedName(oldRun)].removed {
 		t.Errorf("swept %d, aged seed removed = %v; want just the aged seed", swept, f.containers[dnsSeedName(oldRun)].removed)

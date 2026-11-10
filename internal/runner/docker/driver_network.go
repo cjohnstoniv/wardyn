@@ -712,6 +712,13 @@ func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI,
 				d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
 				continue
 			}
+			// A DNS seed is removed only on the same label test as its teardown: a deployment label that is
+			// present and ours, and a valid run id. The drive seed keeps its older rule above.
+			if component == componentDNSSeed {
+				if runID, perr := uuid.Parse(c.Labels[labelRun]); perr != nil || !d.dnsSeedLabelsOwned(c.Labels, runID) {
+					continue
+				}
+			}
 			if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !isNotFound(err) {
 				errs = append(errs, fmt.Errorf("docker: remove leftover %s %s: %w", component, c.ID, err))
 				continue

@@ -139,12 +139,18 @@ func (d *Driver) dnsSeedOwned(insp container.InspectResponse, runID uuid.UUID) e
 	if insp.Config != nil {
 		l = insp.Config.Labels
 	}
-	deployment, hasDeployment := l[labelDeployment]
-	if l[labelManaged] != "true" || l[labelComponent] != componentDNSSeed || l[labelRun] != runID.String() ||
-		!hasDeployment || deployment != d.cfg.InternalNetwork || l[runner.LabelRunnerID] != d.cfg.RunnerID {
+	if !d.dnsSeedLabelsOwned(l, runID) {
 		return fmt.Errorf("%w: %q", errDNSSeedNotOurs, dnsSeedName(runID))
 	}
 	return nil
+}
+
+// dnsSeedLabelsOwned is the label half of dnsSeedOwned, shared with the age sweep: the DNS seed component,
+// managed, runID's, a deployment label that is present and this deployment's, and this runner's.
+func (d *Driver) dnsSeedLabelsOwned(l map[string]string, runID uuid.UUID) bool {
+	deployment, hasDeployment := l[labelDeployment]
+	return l[labelManaged] == "true" && l[labelComponent] == componentDNSSeed && l[labelRun] == runID.String() &&
+		hasDeployment && deployment == d.cfg.InternalNetwork && l[runner.LabelRunnerID] == d.cfg.RunnerID
 }
 
 // removeDNSSeed removes runID's DNS seed if one is there: inspected by name, judged by dnsSeedOwned, and removed
