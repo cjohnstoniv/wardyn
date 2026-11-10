@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -305,10 +307,22 @@ func TestUnnarrowedPATGrantRendersNoScopeKeys(t *testing.T) {
 	}
 }
 
+// routePathOverrideProbes are spellings of path, prefix and host overrides (armscope.RouteOverrideHeader),
+// canonical and folded; TestRoutePathOverrideProbes keeps them in its set.
+var routePathOverrideProbes = []string{"X-Original-URL", "X-Rewrite-URL", "X-Override-URL", "X-Forwarded-Prefix",
+	"X-Script-Name", "X-Forwarded-Host", "X_Script_Name", "X_Forwarded_Host", "X-Original-URI", "X-Forwarded-Uri", "X-Forwarded-Path"}
+
 // routeOverrideHeaders are the method- and path-override headers neither git
 // broker lane forwards.
-var routeOverrideHeaders = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override",
-	"X-Original-URL", "X-Rewrite-URL", "X-Forwarded-Prefix", "X-Script-Name", "X-Forwarded-Host"}
+var routeOverrideHeaders = slices.Concat(patAPIMethodOverrides, routePathOverrideProbes)
+
+func TestRoutePathOverrideProbes(t *testing.T) {
+	for _, h := range routePathOverrideProbes {
+		if !armscope.RouteOverrideHeader(h) {
+			t.Errorf("%s is no route override to armscope.RouteOverrideHeader", h)
+		}
+	}
+}
 
 // patGitRepoForges is the column order of TestPATGitRepoPerForge's verdicts.
 var patGitRepoForges = []string{"generic", "gitlab", "gitea", "bitbucket_server"}

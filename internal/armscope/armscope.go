@@ -74,17 +74,20 @@ func methodOverride(header string) bool {
 	return strings.Contains(normalizedHeader(header), "method")
 }
 
-// pathOverride reports whether a header name asks a front end to act on another
-// path than the request line's: X-Original-URL, X-Original-URI, X-Original-Path,
-// X-Envoy-Original-Path, X-Rewrite-URL, X-Rewrite-URI, X-Rewrite-Path, X-Forwarded-Prefix,
-// X-Forwarded-URL, X-Forwarded-Uri, X-Forwarded-Path, X-Override-URL, X-Override-URI,
-// X-Override-Path, in any case and with hyphens or underscores. Refused for the same reason as methodOverride: the path Azure would
-// act on is not knowable.
-func pathOverride(header string) bool {
+// RouteOverrideHeader reports whether a header name asks a front end to act on another path, path prefix
+// or host than the request line's: X-Original-URL, X-Original-URI, X-Original-Path, X-Envoy-Original-Path,
+// X-Rewrite-URL, X-Rewrite-URI, X-Rewrite-Path, X-Forwarded-Prefix, X-Forwarded-URL, X-Forwarded-Uri,
+// X-Forwarded-Path, X-Forwarded-Host, X-Override-URL, X-Override-URI, X-Override-Path, X-Script-Name, in any
+// case and with hyphens or underscores (the name, so folded, contains one of them). Resource Manager refuses
+// one for the same reason as methodOverride: the path Azure would act on is not knowable. It is the one
+// list: the egress proxy's host-rule gate refuses such a header, its git routes strip one, and a gateway's
+// extra headers may not name one.
+func RouteOverrideHeader(header string) bool {
 	name := normalizedHeader(header)
 	for _, part := range []string{
 		"originalurl", "originaluri", "originalpath", "rewriteurl", "rewriteuri", "rewritepath",
-		"forwardedprefix", "forwardedurl", "forwardeduri", "forwardedpath", "overrideurl", "overrideuri", "overridepath",
+		"forwardedprefix", "forwardedurl", "forwardeduri", "forwardedpath", "forwardedhost",
+		"overrideurl", "overrideuri", "overridepath", "scriptname",
 	} {
 		if strings.Contains(name, part) {
 			return true
@@ -150,7 +153,7 @@ func (s Scope) Admit(method, rawPath string, h http.Header) error {
 // DELETE write, and anything else is refused.
 func readMethod(method string, h http.Header) (bool, error) {
 	for k := range h {
-		if methodOverride(k) || pathOverride(k) {
+		if methodOverride(k) || RouteOverrideHeader(k) {
 			return false, fmt.Errorf("%w: it carries %s", ErrUnreadable, k)
 		}
 	}

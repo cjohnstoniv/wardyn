@@ -22,11 +22,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
@@ -288,8 +288,13 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 // brokered git request: the checks judged the request line's method and path,
 // and a forge that honoured an override would run another route.
 func stripRouteOverrides(h http.Header) {
-	for _, k := range slices.Concat(patAPIMethodOverrides, pathOverrideHeaders) {
+	for _, k := range patAPIMethodOverrides {
 		h.Del(k)
+	}
+	for k := range h { // every spelling, so by the header's own key (armscope.RouteOverrideHeader)
+		if armscope.RouteOverrideHeader(k) {
+			delete(h, k)
+		}
 	}
 }
 
