@@ -68,9 +68,7 @@ func (s *Server) routes() chi.Router {
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
-			// auditStrictIntent (audit_strict.go) writes a covered change's intent row before its
-			// handler runs, when WARDYN_AUDIT_STRICT is on; it is after the caller is known.
-			r.Use(s.humanOrAdminAuth, s.expectedPrincipalGuard, s.auditStrictIntent)
+			r.Use(s.humanOrAdminAuth, s.expectedPrincipalGuard, s.auditStrictIntent) // strict audit's intent row, once the caller is known (audit_strict.go)
 			// operatorOnly and securityOps are the two gate values over this one
 			// authenticated group (chi's With is what Group is built from):
 			// operatorOnly is the super-admin role gate (requireOperator, which reads
@@ -231,8 +229,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
 			r.Post("/runs/{id}/resume", s.handleResumeRun)
-			// One command in a running run, as an SSH exec runs it: the person who may enter the run (run_exec.go).
-			r.Post("/runs/{id}/exec", s.handleRunExec)
+			r.Post("/runs/{id}/exec", s.handleRunExec) // one command, as an SSH exec runs it, by the person who may enter the run (run_exec.go)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)

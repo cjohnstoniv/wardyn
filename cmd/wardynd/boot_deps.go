@@ -300,24 +300,6 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true, resealed: resealed}, nil
 }
 
-// strictAuditRecorder is WARDYN_AUDIT_STRICT's recorder (api.Config.AuditStrict), nil when off. It is
-// buildAuditChain's chain with no spool and no coalescer: the delegation and dry-run stamps, the policy
-// digest, masking and sealing every row gets, then the store, and the sinks when configured. A failed
-// store write comes back to the caller, which refuses the change, instead of being spooled. A row whose
-// subject key cannot be had fails too, since sealingRecorder holds such a row only in a spool.
-func strictAuditRecorder(on bool, pool *pgxpool.Pool, fan *sinks.Fanout, maskReg *secretmask.Registry, seal *auditSealSource, scope *maskScope) audit.Recorder {
-	if !on {
-		return nil
-	}
-	storeRec := store.Recorder{Pool: pool}
-	var rec audit.Recorder = storeRec
-	if fan != nil {
-		rec = fanoutRecorder{primary: storeRec, fanout: fan}
-	}
-	masked := maskingRecorder{inner: sealingRecorder{inner: rec, src: seal}, reg: maskReg, scope: scope}
-	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: withPolicyStamp(pool, masked)}}
-}
-
 // substrateDeps is the registration Deps every substrate constructor receives,
 // split out of buildRunnerFromFlags so a test can pin it (Record in particular)
 // without registering a spy substrate in the process-global registry.
