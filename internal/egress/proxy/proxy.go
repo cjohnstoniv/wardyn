@@ -50,6 +50,8 @@ type Proxy struct {
 	vm       bool
 	portRule string
 	vmFlows  vmFlows
+	// engine: this proxy is a via_org engine's (serverHooks.start); its relay lane is WithRelayLane's.
+	engine bool
 	// evaluator decides the host allow/deny/unknown verdict + method (pluggable
 	// seam). Defaults to the builtin RunPolicySpec evaluator. The IP guard,
 	// approval FSM, IP vetting, and injection stay hardwired in evaluate().
