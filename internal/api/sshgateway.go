@@ -649,7 +649,6 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	if err != nil {
 		return // unreachable in practice: sshAuth only succeeds after parsing this
 	}
-	principal := sconn.Permissions.Extensions["principal"]
 
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
