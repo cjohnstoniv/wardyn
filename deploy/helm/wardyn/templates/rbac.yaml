@@ -234,7 +234,7 @@ rules:
     resources: ["sandboxes"]
     verbs: ["create", "get", "list", "delete"]
 {{- with $agentSandbox.template }}
-  # The one SandboxTemplate the agent pod takes its scheduling from (k8s.agentSandbox.template): read only.
+  # The one SandboxTemplate the agent pod takes its annotations from (k8s.agentSandbox.template): read only.
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxtemplates"]
     resourceNames: [{{ . | quote }}]

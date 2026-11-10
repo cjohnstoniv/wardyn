@@ -48,7 +48,7 @@
 | `k8s.agentSandbox.enabled` | `false` by default | The switch (`WARDYN_K8S_AGENT_SANDBOX`). Needs `k8s.enabled=true` and an enforced NetworkPolicy. |
 | `k8s.agentSandbox.controller.namespace` | `agent-sandbox-system` | The namespace the controller runs in. |
 | `k8s.agentSandbox.controller.serviceAccount` | `agent-sandbox-controller` | The ServiceAccount it runs as. Change both values if you installed it elsewhere. |
-| `k8s.agentSandbox.template` | empty by default | Experimental. A `SandboxTemplate` in the runs namespace that the agent pod takes its scheduling from (`WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`). See [A platform template](#a-platform-template). Needs `enabled=true`. |
+| `k8s.agentSandbox.template` | empty by default | Experimental. A `SandboxTemplate` in the runs namespace whose `sandbox-template.wardyn.dev/` annotations the agent pod takes (`WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`). See [A platform template](#a-platform-template). Needs `enabled=true`. |
 
 - The chart refuses `k8s.allowUnenforcedNetPol`, `k8s.ackAmbientDefaultDeny`, and a controller identity equal to wardynd's own ServiceAccount.
 - Needs Kubernetes 1.30 or later. Scheduling readiness and ValidatingAdmissionPolicy are both stable since v1.30 ([pod scheduling readiness](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-scheduling-readiness/), [ValidatingAdmissionPolicy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/), read 2026-11-03).
@@ -59,8 +59,8 @@
 
 ## A platform template
 
-- A platform team can own where agent pods are scheduled, through an agent-sandbox `SandboxTemplate` that Wardyn reads. Experimental, off by default.
-- Wardyn still builds the whole agent pod: its containers, env, Secret references, security context, resources, volumes, DNS, `hostAliases`, deadline, gate, labels and ServiceAccount settings.
+- A platform team can own an agent-sandbox `SandboxTemplate` that Wardyn reads for the agent pod. Experimental, off by default.
+- What this delivers: templates, contributing annotations under `sandbox-template.wardyn.dev/` only, with claims and warm pools as a written design (below). Placement comes only from Wardyn's own settings, and a template's own placement fields are refused. Wardyn still builds the whole agent pod: its containers, env, Secret references, security context, resources, volumes, DNS, `hostAliases`, deadline, gate, labels, ServiceAccount settings, placement and runtime.
 
 ### Install the template's CRD only
 
@@ -76,22 +76,14 @@
 
 | Template field | How it is used |
 | --- | --- |
-| `nodeSelector` | Keys added. A key the placement already sets must have the same value. |
-| `tolerations` | Added. |
-| `affinity` | Used when the placement sets none, or the same one. |
-| `topologySpreadConstraints` | Used. |
-| `priorityClassName` | Used when the placement sets none, or the same one. |
-| `schedulerName` | Used. |
-| `runtimeClassName` | Used when the run's confinement class sets none, or the same one. A different one is refused. |
 | `metadata.annotations` under `sandbox-template.wardyn.dev/` | Added. A key Wardyn already set must have the same value. |
 
-- Anything else the template sets refuses the run before any `Sandbox` is created. That includes `nodeName`, containers, init and ephemeral containers, volumes, security contexts, `serviceAccountName`, token automount, host namespaces, `hostUsers`, `shareProcessNamespace`, DNS fields, `hostAliases`, `restartPolicy`, lifetime fields, `schedulingGates` and `resources`.
+- Placement and runtime come only from Wardyn's own settings: `k8s.sandbox.*` (`WARDYN_K8S_SANDBOX_PLACEMENT`) and the confinement class's RuntimeClass. The boot canary proves NetworkPolicy enforcement on that placement, so a template could move agent pods to nodes it did not check.
+- So template placement is refused until the canary covers it: `nodeName`, `nodeSelector`, `affinity`, `tolerations`, `topologySpreadConstraints`, `priorityClassName`, `schedulerName` and `runtimeClassName`. The template does not supply a confinement class.
+- Anything else the template sets refuses the run before any `Sandbox` is created too. That includes containers, init and ephemeral containers, volumes, security contexts, `serviceAccountName`, token automount, host namespaces, `hostUsers`, `shareProcessNamespace`, DNS fields, `hostAliases`, `restartPolicy`, lifetime fields, `schedulingGates` and `resources`.
 - Pod labels are refused: a label can match a NetworkPolicy that allows the pod more egress.
 - The template's own fields (`networkPolicy`, `service`, `volumeClaimTemplates`, and the four policy fields away from their defaults) are refused too. They are read only by the extensions controller, which is not installed.
 - An empty value (`""`, `[]`, `{}`) sets nothing and is accepted. `false` and `0` are settings, and are refused.
-- Resources stay set by Wardyn's policy, not by the template.
-- The boot canary runs with the chart placement, not the template. Keep the template's nodes inside the placement's nodes, so the NetworkPolicy check covers the nodes runs use.
-- A custom `schedulerName` is trusted to respect the scheduling gate. The default scheduler does.
 - Tested with fake clients only. CI installs no `SandboxTemplate` CRD.
 
 ### Claims and warm pools
@@ -102,10 +94,11 @@
   - A warm pod is already scheduled and running when it is claimed. The read-back checks a held pod, so it could not say that nothing ran before the check.
   - The v1.0.9 `SandboxClaim` spec offers `additionalPodMetadata`, plain-value `env`, `lifecycle`, `volumeClaimTemplates` and `warmPoolRef`: no scheduling gate, no Secret reference, no `hostAliases`.
   - Its controller's ClusterRole adds NetworkPolicy write rights in every namespace.
-- What would change it, any one of:
-  - an upstream claim that keeps a warm pod behind a gate the claimant removes, and carries the per-run pod fields;
-  - Wardyn delivering its per-run parts after start (Secrets, files, the proxy address), so a warm pod could run under a deny-all policy and an agreed image until claimed; the gate claim would then change to "ran only under deny-all before the run";
-  - an extensions controller whose NetworkPolicy rights are limited to the runs namespace.
+- What it would take. No single item is enough; it needs one design from the first list and the boundary in the second.
+  - A design that delivers both the gate and the per-run fields, either:
+    - an upstream claim that keeps a warm pod behind a gate the claimant removes, and carries the per-run pod fields; or
+    - Wardyn delivering its per-run parts after start (Secrets, files, the proxy address), with the warm pod running under a deny-all policy and an agreed image until claimed. The gate claim would then change to "ran only under deny-all before the run".
+  - In addition, an acceptable controller boundary: an extensions controller whose NetworkPolicy and pod rights are limited to the runs namespace. On its own this fixes neither problem above.
 
 ## What turning it on widens
 
@@ -167,7 +160,7 @@
 | At boot, a placement label key (podLabels) in the controller's group (`agents.x-k8s.io/`) | k8s: WARDYN_K8S_SANDBOX_PLACEMENT: podLabels key "`<key>`" is refused: kubernetes.io/ and k8s.io/ keys can loosen confinement (only cluster-autoscaler.kubernetes.io/safe-to-evict is allowed) |
 | `linux_vm` | k8s: a "linux_vm" sandbox runs only on a registered runner that offers it |
 | Under `wardyn-runnerd`, at boot | k8s: the agent-sandbox backend does not run under wardyn-runnerd; unset WARDYN_K8S_AGENT_SANDBOX |
-| The template sets a refused field | k8s: agent sandbox: SandboxTemplate `<namespace>`/`<name>`: spec.podTemplate.spec.`<field>` is refused: Wardyn builds the agent pod itself and takes only nodeSelector, tolerations, affinity, topologySpreadConstraints, priorityClassName, schedulerName, runtimeClassName from a template |
+| The template sets a pod field | k8s: agent sandbox: SandboxTemplate `<namespace>`/`<name>`: spec.podTemplate.spec.`<field>` is refused: Wardyn builds the whole agent pod and takes its placement and runtime only from its own settings, where the boot canary proves NetworkPolicy enforcement; a template sets only annotations under sandbox-template.wardyn.dev/ |
 
 ## Switching it off with live runs
 

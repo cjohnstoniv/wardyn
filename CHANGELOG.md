@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- Experimental: with the agent-sandbox backend on, `k8s.agentSandbox.template` (`WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`) names a platform-owned `SandboxTemplate` in the runs namespace. The agent pod takes only its node selector, tolerations, affinity, topology spread, priority class, scheduler, RuntimeClass (only one matching the run's confinement class) and annotations under `sandbox-template.wardyn.dev/`. Any other field, pod labels and resources included, refuses the run before the `Sandbox` is created, and boot refuses a template it cannot read or accept. Install only the template's CRD from agent-sandbox v1.0.9, not the extensions controller. Claims and warm pools stay unsupported; the agent-sandbox page says why.
+- Experimental: with the agent-sandbox backend on, `k8s.agentSandbox.template` (`WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`) names a platform-owned `SandboxTemplate` in the runs namespace. The agent pod takes only its annotations under `sandbox-template.wardyn.dev/`; claims and warm pools are a written design, not code. Placement comes only from Wardyn's own settings (where the boot canary checks NetworkPolicy enforcement), and a template's own placement fields are refused: node selectors, affinity, tolerations, topology spread, priority class, scheduler and RuntimeClass. Any other pod field is refused too, pod labels and resources included. The refusal comes before the `Sandbox` is created, and boot refuses a template it cannot read or accept. Install only the template's CRD from agent-sandbox v1.0.9, not the extensions controller. The agent-sandbox page says why claims and warm pools wait.
 
 ### Fixed
 
