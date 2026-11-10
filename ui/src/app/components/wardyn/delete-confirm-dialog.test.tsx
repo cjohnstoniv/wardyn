@@ -210,6 +210,6 @@ describe("DeleteConfirmDialog — a very long name", () => {
       <DeleteConfirmDialog name={name} entity="secret" description="test" onOpenChange={() => {}} onDelete={vi.fn()} onDeleted={() => {}} />,
     );
     expect(screen.getByRole("alertdialog").className).toContain("grid-cols-[minmax(0,1fr)]");
-    expect(screen.getByRole("heading", { name: new RegExp(name.replace(/\./g, "\\.")) }).className).toContain("break-words");
+    expect(screen.getByRole("heading", { name: (accessible) => accessible.includes(name) }).className).toContain("break-words");
   });
 });

@@ -64,7 +64,7 @@ test.describe("Runs list: scheduled runs", () => {
     await expect(row.getByText("Queued", { exact: true })).toHaveCount(0);
     await row.getByRole("button", { name: SCHEDULED_RUN.CANCEL_RUN }).click();
     expect(kills).toEqual([]);
-    await page.getByRole("button", { name: "End run" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Cancel run", exact: true }).click();
     await expect.poll(() => kills).toEqual(["POST"]);
   });
 
@@ -74,7 +74,7 @@ test.describe("Runs list: scheduled runs", () => {
     const row = page.getByTestId("run-row");
     await expect(row.getByText("Waiting for sign-in", { exact: true })).toBeVisible();
     await expect(row.getByText(SCHEDULED_RUN.ROW_DUE("Wed 21 Oct, 02:00 (UTC)"), { exact: false })).toBeVisible();
-    await expect(row.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Sign in: Nightly dependency bump", exact: true })).toBeVisible();
   });
 
   test("a run that waited out its sign-in is Failed, with the board's sentence in place of its times", async ({ page }) => {

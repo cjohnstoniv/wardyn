@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	pkillTerm = []string{"/usr/bin/pkill", "-TERM", "-U", "502", "-x", "Setup Assistant"}
-	noMatch   = errors.New("exit status 1")
+	pkillTerm  = []string{"/usr/bin/pkill", "-TERM", "-U", "502", "-x", "Setup Assistant"}
+	errNoMatch = errors.New("exit status 1")
 )
 
 // setupAssistantOnDesktop is a Desktop whose step is turned on by a switch file, with short polls.
@@ -135,9 +135,9 @@ func TestEndSetupAssistantSendsNothingUntilDockAndFinderRun(t *testing.T) {
 		{"at the login window", []fakeConsole{{err: ErrNoConsoleUser}}, always(nil), always(nil)},
 		{"another account at the console", []fakeConsole{{uid: 501}}, always(nil), always(nil)},
 		{"console read fails", []fakeConsole{{err: errors.New("stat /dev/console: boom")}}, always(nil), always(nil)},
-		{"agent at the console, no Dock or Finder", []fakeConsole{{uid: 502}}, always(noMatch), always(noMatch)},
-		{"agent at the console, Dock but no Finder", []fakeConsole{{uid: 502}}, always(nil), always(noMatch)},
-		{"agent at the console, Finder but no Dock", []fakeConsole{{uid: 502}}, always(noMatch), always(nil)},
+		{"agent at the console, no Dock or Finder", []fakeConsole{{uid: 502}}, always(errNoMatch), always(errNoMatch)},
+		{"agent at the console, Dock but no Finder", []fakeConsole{{uid: 502}}, always(nil), always(errNoMatch)},
+		{"agent at the console, Finder but no Dock", []fakeConsole{{uid: 502}}, always(errNoMatch), always(nil)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -164,11 +164,11 @@ func TestEndSetupAssistantQuitsGentlyOnceTheDesktopIsUp(t *testing.T) {
 		quit         error
 	}{
 		{"desktop up from the start, pane there", []fakeConsole{{uid: 502}}, always(nil), always(nil), nil},
-		{"desktop up from the start, no pane", []fakeConsole{{uid: 502}}, always(nil), always(nil), noMatch},
+		{"desktop up from the start, no pane", []fakeConsole{{uid: 502}}, always(nil), always(nil), errNoMatch},
 		{"login window, then the agent, then Dock, then Finder",
 			[]fakeConsole{{err: ErrNoConsoleUser}, {err: ErrNoConsoleUser}, {uid: 502}},
-			func(n int) error { return map[bool]error{true: noMatch}[n < 3] },
-			func(n int) error { return map[bool]error{true: noMatch}[n < 3] }, nil},
+			func(n int) error { return map[bool]error{true: errNoMatch}[n < 3] },
+			func(n int) error { return map[bool]error{true: errNoMatch}[n < 3] }, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -131,20 +131,20 @@ test.describe("Run detail — Files panel under review", () => {
     await expect(row(panel, "q3-forecast.xlsx").getByRole("button", { name: C.requestDownload })).toBeVisible();
     const waiting = row(panel, "build-logs.tar.gz");
     await expect(waiting).toContainText(C.stateWaiting);
-    await expect(waiting).toContainText(/Asked \d\d:\d\d · sha256 9f2c…41ab/);
+    await expect(waiting).toContainText(/Asked \d{1,2}:\d\d(?: [AP]M)? · sha256 9f2c…41ab/);
     await expect(waiting).toContainText("a security admin");
     await expect(waiting.getByRole("button")).toHaveCount(0);
     const approved = row(panel, "invoice-export.csv");
-    await expect(approved).toContainText(/Approved by lee\.chen@acme\.example · \d\d:\d\d/);
+    await expect(approved).toContainText(/Approved by lee\.chen@acme\.example · \d{1,2}:\d\d(?: [AP]M)?/);
     await expect(approved.getByRole("button", { name: C.downloadApproved })).toBeVisible();
     const denied = row(panel, "customer-dump.sql");
-    await expect(denied).toContainText(/sam\.okafor@acme\.example: “Customer records leave through the data team\.” · \d\d:\d\d/);
+    await expect(denied).toContainText(/sam\.okafor@acme\.example: “Customer records leave through the data team\.” · \d{1,2}:\d\d(?: [AP]M)?/);
     await expect(denied.getByRole("button", { name: C.requestDownload })).toBeVisible();
     const released = row(panel, "notes.md");
-    await expect(released).toContainText(/Downloaded \d\d:\d\d · sha256 9f2c…41ab/);
+    await expect(released).toContainText(/Downloaded \d{1,2}:\d\d(?: [AP]M)? · sha256 9f2c…41ab/);
     await expect(released.getByRole("button", { name: C.requestDownload })).toBeVisible();
     const expired = row(panel, "screenshot.png");
-    await expect(expired).toContainText(/Nobody decided it in time · \d\d:\d\d/);
+    await expect(expired).toContainText(/Nobody decided it in time · \d{1,2}:\d\d(?: [AP]M)?/);
     await expect(expired.getByRole("button", { name: C.requestDownload })).toBeVisible();
     await expect(panel.getByText(C.reviewFooter, { exact: true })).toBeVisible();
   });
@@ -164,7 +164,7 @@ test.describe("Run detail — Files panel under review", () => {
     const download = page.waitForEvent("download");
     await row(panel, "invoice-export.csv").getByRole("button", { name: C.downloadApproved }).click();
     expect((await download).suggestedFilename()).toBe("invoice-export.csv");
-    await expect(row(panel, "invoice-export.csv")).toContainText(/Downloaded \d\d:\d\d · sha256 [0-9a-f]{4}…[0-9a-f]{4}/);
+    await expect(row(panel, "invoice-export.csv")).toContainText(/Downloaded \d{1,2}:\d\d(?: [AP]M)? · sha256 [0-9a-f]{4}…[0-9a-f]{4}/);
     expect(calls.gets.some((g) => g === "invoice-export.csv?approval=ap_3")).toBe(true);
   });
 
