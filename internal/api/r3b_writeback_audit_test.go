@@ -116,7 +116,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		if len(fake.ws.Requirements) != 0 {
 			t.Fatalf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
 		}
-		fails := r3bRequirementWriteFailures(h.audit.events)
+		fails := r3bRequirementWriteFailures(h.audit.snapshot())
 		if len(fails) != 1 {
 			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the run-read error", len(fails))
 		}
@@ -141,7 +141,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		if len(fake.ws.Requirements) != 0 {
 			t.Fatalf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
 		}
-		fails := r3bRequirementWriteFailures(h.audit.events)
+		fails := r3bRequirementWriteFailures(h.audit.snapshot())
 		if len(fails) != 1 {
 			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the run-read error", len(fails))
 		}
@@ -157,7 +157,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		srv := New(cfg)
 
 		srv.learnVerifyEgress(context.Background(), decided(uuid.New()), types.ActorHuman, "admin@corp.example")
-		fails := r3bRequirementWriteFailures(h.audit.events)
+		fails := r3bRequirementWriteFailures(h.audit.snapshot())
 		if len(fails) != 1 {
 			t.Fatalf("workspace.requirement.write failure rows = %d, want exactly 1 naming the missing store", len(fails))
 		}
@@ -185,7 +185,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 		if len(fake.ws.Requirements) != 0 {
 			t.Errorf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
 		}
-		if fails := r3bRequirementWriteFailures(h.audit.events); len(fails) != 0 {
+		if fails := r3bRequirementWriteFailures(h.audit.snapshot()); len(fails) != 0 {
 			t.Errorf("workspace.requirement.write failure rows = %d, want 0: no decision, so no write-back", len(fails))
 		}
 	})
@@ -218,7 +218,7 @@ func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("approve: code = %d, body=%s", w.Code, w.Body.String())
 			}
-			if fails := r3bRequirementWriteFailures(h.audit.events); len(fails) != 0 {
+			if fails := r3bRequirementWriteFailures(h.audit.snapshot()); len(fails) != 0 {
 				t.Errorf("workspace.requirement.write failure rows = %d, want 0 — a not-applicable "+
 					"condition must not be recorded as a miss (detail=%q)", len(fails), r3bAuditDetail(t, fails[0]))
 			}
