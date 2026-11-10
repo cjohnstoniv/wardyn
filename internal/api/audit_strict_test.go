@@ -11,9 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -189,5 +192,36 @@ func TestAuditStrictIntentNamesTheWildcardTarget(t *testing.T) {
 	if err := json.Unmarshal(intents[0].Data, &data); err != nil || data.Route != "/api/v1/permissions/availability/{kind}/*" ||
 		data.Params["kind"] != "image" || data.Params["*"] != "ghcr.io/acme/tool:1" {
 		t.Errorf("intent data = %s (%v), want the availability route with kind image and * the image ref", intents[0].Data, err)
+	}
+}
+
+// TestAuditStrictIntentCapsTheCallersURL: a member with no role on the route sends a covered change with a
+// 100 KiB id and a 100 KiB request id. The intent row is written before the role gate, so each value the
+// caller chose is cut to the audit target's cap; the row still names the route and the body's hash.
+func TestAuditStrictIntentCapsTheCallersURL(t *testing.T) {
+	srv, _, _, _ := newAuthzMatrixServer(t)
+	strict := &strictRecorder{}
+	srv.cfg.AuditStrict = strict
+	member := ssoSession(t, wallsSub, "walls@corp.example", oidc.RoleUser)
+	long := strings.Repeat("a", 100<<10)
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/policies/"+long, strings.NewReader(`{}`))
+	r.Header.Set(middleware.RequestIDHeader, long)
+	r.AddCookie(member)
+	panicFails(t, srv.Handler()).ServeHTTP(httptest.NewRecorder(), r)
+
+	intents := strict.snapshot()
+	if len(intents) != 1 {
+		t.Fatalf("strict rows = %d, want one", len(intents))
+	}
+	if n := len(intents[0].Data) + len(intents[0].Target); n > 4<<10 {
+		t.Errorf("the intent row carries %d bytes of the caller's URL, want the capped few", n)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(intents[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(`{}`))
+	if data["route"] != "/api/v1/policies/{id}" || data["body_sha256"] != hex.EncodeToString(sum[:]) {
+		t.Errorf("intent data lost the route or the body hash: route %v, body_sha256 %v", data["route"], data["body_sha256"])
 	}
 }

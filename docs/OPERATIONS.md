@@ -724,6 +724,7 @@ commands are the ones in "Back them up" and "Restore them", and in
     fallback.
   - The row names the method, the resolved path, the route, the path's ids, the caller (`actor`), the request id and the
     body's SHA-256, never the body.
+  - The path, each id and the request id come from the caller, so each is cut to 512 bytes, as an audit target is.
   - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
   - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
   - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),

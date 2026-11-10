@@ -14,6 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // Strict audit (WARDYN_AUDIT_STRICT, Config.AuditStrict): with strict mode on, a covered change is
@@ -131,29 +133,32 @@ func (s *Server) auditStrictIntent(next http.Handler) http.Handler {
 // recordStrictIntent writes the change's audit.intent.record row through the strict recorder, and
 // reports whether the store took it. The row names the change, never its body: the method, the
 // resolved path, the route, the path's parameters, the request id and the body's SHA-256. The actor is
-// the caller, as on the handler's own row.
+// the caller, as on the handler's own row. The path, each parameter and the request id come from the
+// caller, who may not even hold the route's role yet, so each is cut to the audit target's cap
+// (store.CapAuditTarget): the route pattern names the change, and the cut value still names the target.
 func (s *Server) recordStrictIntent(r *http.Request, rctx *chi.Context, body []byte) bool {
 	ctx := r.Context()
 	params := map[string]string{}
 	for i, k := range rctx.URLParams.Keys {
 		if k != "*" && i < len(rctx.URLParams.Values) {
-			params[k] = rctx.URLParams.Values[i]
+			params[k] = store.CapAuditTarget(rctx.URLParams.Values[i])
 		}
 	}
 	// A route ending in a wildcard names its target there (an image ref, with its slashes); the mount's
 	// own "*" entries are routing, not a parameter.
 	route := rctx.RoutePattern()
 	if strings.HasSuffix(route, "/*") {
-		params["*"] = rctx.URLParam("*")
+		params["*"] = store.CapAuditTarget(rctx.URLParam("*"))
 	}
 	sum := sha256.Sum256(body)
 	at, actor := actorFromRequest(r)
-	ev := s.stampAuditEvent(ctx, s.auditEvent(nil, at, actor, "audit.intent.record", r.URL.Path, "success", mustJSON(map[string]any{
+	path := store.CapAuditTarget(r.URL.Path)
+	ev := s.stampAuditEvent(ctx, s.auditEvent(nil, at, actor, "audit.intent.record", path, "success", mustJSON(map[string]any{
 		"method":      r.Method,
-		"path":        r.URL.Path,
+		"path":        path,
 		"route":       route,
 		"params":      params,
-		"request_id":  middleware.GetReqID(ctx),
+		"request_id":  store.CapAuditTarget(middleware.GetReqID(ctx)),
 		"body_sha256": hex.EncodeToString(sum[:]),
 	})))
 	if err := s.cfg.AuditStrict.Record(ctx, ev); err != nil {
