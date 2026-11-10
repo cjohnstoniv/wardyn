@@ -249,7 +249,7 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	d, runID, sb := createNetworkSandbox(t, ctx)
 
 	// Stand up a live in-segment peer (busybox httpd) on the per-run internal
-	// network, reachable by the alias "wardyn-egress-peer". This models the proxy
+	// network, under the alias "wardyn-egress-peer". This models the proxy
 	// as a reachable L4 endpoint on the agent's only network.
 	intNet := internalNetName(runID)
 	const peerAlias = "wardyn-egress-peer"
@@ -289,8 +289,24 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	if _, err := d.cli.ContainerStart(ctx, peerResp.ID, client.ContainerStartOptions{}); err != nil {
 		t.Fatalf("start egress peer: %v", err)
 	}
+	// The agent's only nameserver is its proxy (resolvConfMount), which does not answer for Docker's
+	// container aliases, so the agent probes the peer by its address on the per-run net, as it reaches
+	// its real proxy by the pinned address and never by a lookup.
+	peerInsp, err := d.cli.ContainerInspect(ctx, peerResp.ID, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect egress peer: %v", err)
+	}
+	var peerAddr string
+	if ns := peerInsp.Container.NetworkSettings; ns != nil {
+		if ep := ns.Networks[intNet]; ep != nil && ep.IPAddress.IsValid() {
+			peerAddr = ep.IPAddress.String()
+		}
+	}
+	if peerAddr == "" {
+		t.Fatalf("egress peer has no address on %s", intNet)
+	}
 	// Give httpd a moment to bind before the agent probes it.
-	waitListening(ctx, t, d, sb.Ref, peerAlias, 3128)
+	waitListening(ctx, t, d, sb.Ref, peerAddr, 3128)
 
 	// (1) Egress to the in-segment peer WORKS: a connect that completes the TCP
 	// handshake and gets an HTTP reply (404 is fine — busybox httpd has no
@@ -299,7 +315,7 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	// its own segment.
 	peer := execInSandbox(ctx, t, d, sb.Ref, []string{
 		"sh", "-c",
-		"wget -q -T 5 -O - http://" + peerAlias + ":3128/ 2>&1; echo RC=$?",
+		"wget -q -T 5 -O - http://" + peerAddr + ":3128/ 2>&1; echo RC=$?",
 	})
 	low := strings.ToLower(peer)
 	if strings.Contains(low, "unreachable") || strings.Contains(low, "can't connect") || strings.Contains(low, "bad address") {
