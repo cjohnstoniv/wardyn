@@ -325,6 +325,8 @@ jobs:
         run: make ${{ matrix.target }}
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
+          # The coverage compile of internal/api is the job's memory peak; collect twice as often.
+          GOGC: "50"
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under one of its tags (their packages run with -tags; the rest
