@@ -108,3 +108,101 @@ func TestListenDNSServesOnlyAllowedPeers(t *testing.T) {
 		})
 	}
 }
+
+// textAddr is an address that prints exactly as given, so an IPv4-mapped spelling reaches the filter as written
+// (net's own address types print it unmapped).
+type textAddr string
+
+func (a textAddr) Network() string { return "udp" }
+func (a textAddr) String() string  { return string(a) }
+
+// stubPacketConn hands out one datagram from a chosen source, then fails.
+type stubPacketConn struct {
+	net.PacketConn
+	from []net.Addr
+}
+
+func (c *stubPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	if len(c.from) == 0 {
+		return 0, nil, net.ErrClosed
+	}
+	a := c.from[0]
+	c.from = c.from[1:]
+	return copy(b, "x"), a, nil
+}
+
+// TestPeerPacketConnFiltersLikeThePeerListener: a datagram from inside AllowedPeers is delivered, an IPv4-mapped
+// form of an allowed address is too (as peerListener treats it), and one from a foreign address on the run's
+// shared network is dropped before the reader sees it.
+func TestPeerPacketConnFiltersLikeThePeerListener(t *testing.T) {
+	allowed := []netip.Prefix{netip.MustParsePrefix("172.20.0.0/16")}
+	addr := func(s string) net.Addr { return textAddr(s) }
+	c := &peerPacketConn{
+		PacketConn: &stubPacketConn{from: []net.Addr{
+			addr("10.9.9.9:5000"),            // foreign wardyn-internal source: dropped
+			addr("[::ffff:10.9.9.9]:5000"),   // the same, IPv4-mapped: dropped
+			addr("172.20.0.2:5000"),          // allowed
+			addr("[::ffff:172.20.0.3]:5000"), // allowed, IPv4-mapped
+		}},
+		allowed: allowed,
+	}
+	var got []string
+	buf := make([]byte, 16)
+	for {
+		_, from, err := c.ReadFrom(buf)
+		if err != nil {
+			break
+		}
+		got = append(got, from.String())
+	}
+	if len(got) != 2 || got[0] != "172.20.0.2:5000" || got[1] != "[::ffff:172.20.0.3]:5000" {
+		t.Fatalf("delivered %v, want only the two sources inside the peers", got)
+	}
+}
+
+type stubConn struct {
+	net.Conn
+	remote net.Addr
+	closed bool
+}
+
+func (c *stubConn) RemoteAddr() net.Addr { return c.remote }
+func (c *stubConn) Close() error         { c.closed = true; return nil }
+
+type stubListener struct {
+	net.Listener
+	conns []*stubConn
+}
+
+func (l *stubListener) Accept() (net.Conn, error) {
+	if len(l.conns) == 0 {
+		return nil, net.ErrClosed
+	}
+	c := l.conns[0]
+	l.conns = l.conns[1:]
+	return c, nil
+}
+
+// TestPeerListenerFiltersDNSConnections: the same sources over TCP: a foreign one is closed before a byte is read,
+// an allowed one and its IPv4-mapped form are accepted.
+func TestPeerListenerFiltersDNSConnections(t *testing.T) {
+	tcp := func(s string) *stubConn {
+		return &stubConn{remote: net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s))}
+	}
+	foreign, mappedForeign, ok, mapped := tcp("10.9.9.9:5000"), tcp("[::ffff:10.9.9.9]:5000"), tcp("172.20.0.2:5000"), tcp("[::ffff:172.20.0.3]:5000")
+	l := &peerListener{
+		Listener: &stubListener{conns: []*stubConn{foreign, mappedForeign, ok, mapped}},
+		allowed:  []netip.Prefix{netip.MustParsePrefix("172.20.0.0/16")},
+	}
+	var got []net.Conn
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			break
+		}
+		got = append(got, c)
+	}
+	if len(got) != 2 || got[0] != net.Conn(ok) || got[1] != net.Conn(mapped) || !foreign.closed || !mappedForeign.closed || ok.closed || mapped.closed {
+		t.Fatalf("accepted %d; foreign closed %v/%v, allowed closed %v/%v; want only the two inside the peers", len(got), foreign.closed, mappedForeign.closed, ok.closed, mapped.closed)
+	}
+}
