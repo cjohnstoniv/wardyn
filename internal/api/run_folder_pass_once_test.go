@@ -109,3 +109,31 @@ func TestPassBack_ARecordThatMovedFirstRunsNoPass(t *testing.T) {
 		t.Error("a bump from a generation the record is not at landed")
 	}
 }
+
+// A delayed owner whose generation another owner moved on writes nothing and leaves the sandbox up: owner
+// A's pass is held while owner B moves the record on, passes and settles; A's record then does not land,
+// and A does not let its caller stop B's sandbox.
+func TestPassBack_ADelayedOwnerNeitherWritesNorStops(t *testing.T) {
+	s, cs, _, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+		t.Fatal(cs.FailureHint())
+	}
+	agentWrites(t, sb, "a.txt")
+	var nested atomic.Bool
+	var bKept atomic.Bool
+	sb.onPass = func() {
+		if nested.Swap(true) {
+			return
+		}
+		bKept.Store(s.bringComputerFolderBack(context.Background(), run.ID, "sbx"))
+	}
+	if !s.bringComputerFolderBack(context.Background(), run.ID, "sbx") {
+		t.Error("the delayed owner let its caller stop the sandbox")
+	}
+	if bKept.Load() {
+		t.Error("owner B's completed pass kept the sandbox")
+	}
+	if st := cs.folderStatus(); st.Gen != 2 || st.Settled != 2 || st.Back == nil || st.Back.Error != "" {
+		t.Errorf("record %+v, want owner B's settled pass at gen 2 and nothing from A", st)
+	}
+}

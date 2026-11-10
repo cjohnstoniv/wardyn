@@ -21,7 +21,7 @@ import (
 // settled: one it may still be running would run beside the new one.
 
 // folderPassBusyMsg is the record of a pass a runner refused while it runs another for the run.
-const folderPassBusyMsg = "the runner is still running this run's last pass back; a later sweep tries again"
+const folderPassBusyMsg = "The runner is still running this run's last pass back; a later sweep tries again"
 
 // folderPassUnconfirmed reports a pass back that must not be sent: the run's folder runner does not run
 // one pass per run at a time, and the last pass is not settled. A runner that cannot be asked sends
@@ -58,17 +58,18 @@ func (s *Server) bumpComputerFolderGen(ctx context.Context, id uuid.UUID, gen in
 }
 
 // recordFolderPassBusy records a pass back the runner refused as busy, at the generation it owned: settled,
-// since the runner answered, and kept for a resume so a later sweep tries again. It reports whether the
-// sandbox stays up for that.
+// since the runner answered, and kept for a resume so a later sweep tries again. The sandbox stays up
+// either way: a record that did not land is another owner's to decide.
 func (s *Server) recordFolderPassBusy(ctx context.Context, id uuid.UUID, folder types.RunLocalFolder, gen int) bool {
 	rctx, cancel := teardownCtx(ctx)
 	defer cancel()
-	recorded := s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
+	if s.writeComputerFolderStatus(rctx, id, gen, func(st *types.RunLocalFolderStatus) {
 		if st.Resume == nil {
 			st.Resume = &types.FolderResume{}
 		}
 		st.Settled = gen
-	})
-	s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, folderPassBusyMsg)
-	return recorded
+	}) {
+		s.auditComputerFolderPass(rctx, id, folder, true, runnerwire.FolderPass{}, folderPassBusyMsg)
+	}
+	return true
 }

@@ -125,7 +125,7 @@ func TestPG_FolderGen_NullAndLegacyRows(t *testing.T) {
 	}
 
 	legacy := newFolderRun()
-	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = '{"back":{"at":"2026-11-01T00:00:00Z","files":4,"bytes":9,"refused":[]}}'::jsonb WHERE id = $1`, legacy); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = jsonb_build_object('back', jsonb_build_object('at', now(), 'files', 4, 'bytes', 9, 'refused', '[]'::jsonb)) WHERE id = $1`, legacy); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := pg.RunLocalFolderStatus(ctx, legacy); err != nil || st.Gen != 0 || st.Back == nil {
