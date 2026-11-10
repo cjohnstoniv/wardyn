@@ -892,3 +892,40 @@ func TestGitBrokerPollsPendingApproval(t *testing.T) {
 		t.Fatalf("pollCalls = %d, want >= 3 (two PENDING + the APPROVED that releases it)", up.pollCalls)
 	}
 }
+
+// The GitHub lane forwards only the query a smart-HTTP request needs (the
+// service on refs discovery, nothing on a pack POST) and never a method
+// override.
+func TestGitBrokerForwardsOnlyTheServiceQueryAndNoMethodOverride(t *testing.T) {
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack&ref=main&service=git-receive-pack", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("info/refs status = %d body=%q", rec.Code, rec.Body.String())
+	}
+	if up.gitQuery != "service=git-upload-pack" {
+		t.Fatalf("forwarded query = %q, want only the checked service", up.gitQuery)
+	}
+
+	req := mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/hello-world.git/git-upload-pack?x=1", strings.NewReader("0011command=fetch"))
+	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+		req.Header.Set(h, http.MethodDelete)
+	}
+	rec = httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("git-upload-pack status = %d body=%q", rec.Code, rec.Body.String())
+	}
+	if up.gitQuery != "" {
+		t.Fatalf("forwarded query = %q, want none on a pack POST", up.gitQuery)
+	}
+	for _, h := range []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"} {
+		if v := up.gitHeaders.Values(h); len(v) != 0 {
+			t.Errorf("github saw %s: %q, want it stripped", h, v)
+		}
+	}
+}

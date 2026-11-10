@@ -316,6 +316,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - So list the spelling each door uses.
 - The PAT stays exactly as broad as its issuer made it everywhere outside Wardyn, and a request to the plain forward lane for the host is refused whatever its path.
 - The broker admits the same smart-HTTP surface the GitHub lane does — refs discovery and the two pack endpoints, nothing else.
+- It judges the whole path, not its last segment: the repository path before the endpoint must be one the forge serves git on, so a path with an `api`, `rest` or `contents` segment before the repository's own name, an `_apis` or `-` segment, or (on `bitbucket_server`) no `/scm/` prefix is refused whatever it ends in. Method-override headers are not forwarded.
 - A broker that forwarded arbitrary paths would be a credentialed proxy to the whole forge, REST API included.
 - `WARDYN_GIT_PAT_BROKER=off` restores the pre-0.7 resident lane.
 - It exists because the broker changes the git transport for those hosts, and a forge that behaves unexpectedly under the rewrite must not leave a fleet unable to clone.

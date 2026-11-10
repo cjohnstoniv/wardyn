@@ -81,15 +81,9 @@ func validPATGrants(grants map[string]PATGrant) error {
 // Server serves its repositories under /scm/<project>/<repo>, so that prefix is
 // part of the request form and not of the key.
 func patRequestRepoKey(forge, rest, verb string) (string, bool) {
-	repo, ok := strings.CutSuffix(rest, "/"+verb)
+	repo, ok := patRepoPath(forge, rest, verb)
 	if !ok {
 		return "", false
-	}
-	repo = strings.TrimPrefix(repo, "/")
-	if forge == types.PATForgeBitbucketServer {
-		if repo, ok = strings.CutPrefix(repo, "scm/"); !ok {
-			return "", false
-		}
 	}
 	key, ok := types.PATRepoKey(forge, repo)
 	// A request names one concrete repository, never a wildcard.
@@ -97,6 +91,50 @@ func patRequestRepoKey(forge, rest, verb string) (string, bool) {
 		return "", false
 	}
 	return key, true
+}
+
+// patRepoPath cuts the repository path out of rest ("/<repo path>/<tail>") in
+// the form the forge serves git on: Bitbucket Server under scm/.
+func patRepoPath(forge, rest, verb string) (string, bool) {
+	repo, ok := strings.CutSuffix(rest, "/"+verb)
+	if !ok {
+		return "", false
+	}
+	repo = strings.TrimPrefix(repo, "/")
+	if forge == types.PATForgeBitbucketServer {
+		return strings.CutPrefix(repo, "scm/")
+	}
+	return repo, true
+}
+
+// patAPISegments name where a forge serves its REST or web routes on the git
+// host: /api/v1 (Gitea, Forgejo), /api/v3 (GitHub Enterprise), /api/v4
+// (GitLab), /rest/ (Bitbucket Server), _apis (Azure DevOps), GitLab's "/-/"
+// route scope and Gitea's contents route. _apis and "-" never name a
+// repository; the others may only as the repository's own name.
+var patAPISegments = []string{"api", "rest", "contents", "_apis", "-"}
+
+// patGitPath reports whether rest is a git smart-HTTP path for the forge,
+// "/<repo path>/<tail>", tail being the verb the caller validated: the
+// repository path is non-empty, in the forge's form, and holds no segment
+// patAPISegments lists, compared case-folded and up to a ";" or trailing dots
+// or spaces, as servers read them. Every forge serves git at such a path, so
+// anything else on this route is a forge route the PAT must not reach,
+// whatever its last segment spells.
+func patGitPath(forge, rest, verb string) bool {
+	repo, ok := patRepoPath(forge, rest, verb)
+	if !ok || strings.Trim(repo, "/") == "" {
+		return false
+	}
+	segs := strings.Split(repo, "/")
+	for i, seg := range segs {
+		seg, _, _ = strings.Cut(seg, ";")
+		seg = strings.ToLower(strings.TrimRight(seg, ". "))
+		if seg == "_apis" || seg == "-" || (i < len(segs)-1 && slices.Contains(patAPISegments, seg)) {
+			return false
+		}
+	}
+	return true
 }
 
 // patRepoAllowed reports whether the grant's repos cover the repository the

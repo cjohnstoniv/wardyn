@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- The `git_pat` broker route (`/wardyn/git/<host>/`) now judges the whole request path, not only its last segment, and forwards the PAT only to a repository's refs discovery and its fetch and push endpoints. Before, a forge API path that happened to end in `git-upload-pack` was forwarded with the PAT, so on Gitea or Forgejo a run could write a file to any branch past `api: false`, `access: read` and every push rule. A path under the forge's API (`api/`, `rest/`, `_apis`, GitLab's `/-/`) is refused, and so is a Bitbucket Server path outside `/scm/`. Both git broker routes also stop forwarding method-override headers and any query beyond the refs discovery `service`.
+
 ## [0.10.0-rc.17] — 2026-11-09
 
 ### Before you upgrade
