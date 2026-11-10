@@ -128,3 +128,25 @@ func TestHoldKubeCallBounded(t *testing.T) {
 		t.Error("held after its window")
 	}
 }
+
+func hostCallRow(t *testing.T, requested time.Time) types.ApprovalRequest {
+	t.Helper()
+	scope := map[string]any{"host": "api.example.com", "method": "POST", "path": "/admin", "call_sha256": callKey, "hold_seconds": 90}
+	return types.ApprovalRequest{Kind: types.ApprovalToolCall, State: types.ApprovalPending, RequestedAt: requested, RequestedScope: mustScope(t, scope)}
+}
+
+// TestTallyKeyHostCall: a host rule hold is its own tally key, never an MCP call's, and is held for its
+// window like a kubectl write.
+func TestTallyKeyHostCall(t *testing.T) {
+	now := time.Now().UTC()
+	row := hostCallRow(t, now.Add(-10*time.Second))
+	if got := TallyKey(row); got != TallyToolCallHost {
+		t.Fatalf("TallyKey(host call) = %q, want %s", got, TallyToolCallHost)
+	}
+	if held, until := Hold(row, now); !held || !until.Equal(row.RequestedAt.Add(90*time.Second)) {
+		t.Fatalf("held=%v until=%v, want held until requested_at+90s", held, until)
+	}
+	if held, _ := Hold(row, now.Add(100*time.Second)); held {
+		t.Error("held after its window")
+	}
+}

@@ -333,7 +333,7 @@ func (s *Server) approvalResolved(ctx context.Context, approved bool, runID uuid
 func (s *Server) decisionScopeForKind(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest,
 	scope types.ApprovalScope, approve bool,
 ) (types.ApprovalScope, bool) {
-	var isADO, isMCP, isFD, isKube, ok bool
+	var isADO, isMCP, isFD, isKube, isHost, ok bool
 	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok { // an Azure DevOps escalation
 		return scope, false
 	}
@@ -346,7 +346,10 @@ func (s *Server) decisionScopeForKind(w http.ResponseWriter, r *http.Request, ap
 	if scope, isKube, ok = kubeCallDecisionRule(w, ap, scope); !ok { // one kubectl write is decided once (approvals_kube_call.go)
 		return scope, false
 	}
-	if !isADO && !isMCP && !isKube && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
+	if scope, isHost, ok = hostCallDecisionRule(w, ap, scope); !ok { // one host rule hold is decided once (approvals_host_call.go)
+		return scope, false
+	}
+	if !isADO && !isMCP && !isKube && !isHost && !isFD && !decisionScopeFitsKind(w, ap.Kind, scope) {
 		return scope, false
 	}
 	return scope, true

@@ -190,6 +190,13 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 			data["call_sha256"] = call.CallSHA256
 		}
 	}
+	// A host rule hold names its host, method, path and call hash.
+	if TallyKey(result) == TallyToolCallHost {
+		var call types.HostCallScope
+		if json.Unmarshal(result.RequestedScope, &call) == nil {
+			data["host"], data["method"], data["path"], data["call_sha256"] = call.Host, call.Method, call.Path, call.CallSHA256
+		}
+	}
 	if decision.ExpiresAt != nil {
 		data["decision_expires_at"] = decision.ExpiresAt.UTC()
 	}
@@ -379,6 +386,9 @@ const (
 	// TallyToolCallKube is one kubectl write a person approves with its exact request (a
 	// kubectl row's approve_each): a tool_call known by call_sha256 and cluster, with no grant.
 	TallyToolCallKube = "tool_call:kube_call"
+	// TallyToolCallHost is one host rule hold a person decides (a host rule with effect hold):
+	// a tool_call known by call_sha256 and host, with no grant.
+	TallyToolCallHost = "tool_call:host_call"
 	// TallyReauthAWSSSO is a lapsed captured AWS SSO session's re-auth.
 	TallyReauthAWSSSO = "credential_reauth:aws_sso"
 	// TallyReauthADOSignIn is an Azure DevOps sign-in request.
@@ -409,6 +419,9 @@ func TallyKey(ap types.ApprovalRequest) string {
 		if sc.CallSHA256 != "" && (ap.GrantID == nil || *ap.GrantID == uuid.Nil) {
 			if types.IsKubeCallScope(ap.RequestedScope) {
 				return TallyToolCallKube
+			}
+			if types.IsHostCallScope(ap.RequestedScope) {
+				return TallyToolCallHost
 			}
 			return TallyToolCallMCP
 		}
