@@ -45,6 +45,7 @@ vi.mock("../../lib/api/providers", () => ({
 import { SecretsScreen, AddSecretDialog } from "./secrets";
 import { LANE_META } from "../../lib/scm-provider";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -390,8 +391,9 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     expect(await screen.findByText(/Couldn't check how stored Git tokens are handled/)).toBeInTheDocument();
     expect(screen.queryByText(/A stored git access token is attached/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
-    // What a stored value is does not depend on the broker, so it stays; only the Git-token sentence waits.
-    expect(screen.getByText(/A stored value stays in Wardyn, unless a run delivers it/)).toBeInTheDocument();
+    // Unknown: only the line that is true either way. "Stays in Wardyn, unless…" is false for a Git token with the broker off.
+    expect(screen.getByText(new RegExp(SECRETS_BROKER_UNCHECKED.VALUE_DELIVERABLE))).toBeInTheDocument();
+    expect(screen.queryByText(/stays in Wardyn/)).not.toBeInTheDocument();
     getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText(/Exception: A git access token is handed to git inside the sandbox/)).toBeInTheDocument();
@@ -436,9 +438,9 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
     );
     await screen.findByText("my-key");
     expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
-    // The header still says what a stored value is; only the Git-token sentence needs the switch.
-    expect(screen.getByText(/A stored value stays in Wardyn, unless a run delivers it/)).toBeInTheDocument();
-    expect(screen.queryByText(/stored git access token|Exception:/)).toBeNull();
+    // The member never reads the switch, so the header makes only the line that is true either way.
+    expect(screen.getByText(new RegExp(SECRETS_BROKER_UNCHECKED.VALUE_DELIVERABLE))).toBeInTheDocument();
+    expect(screen.queryByText(/stays in Wardyn|stored git access token|Exception:/)).toBeNull();
     await openAdd();
     noExclusiveClaim();
   });
@@ -671,10 +673,11 @@ describe("Secrets copy — a stored value can enter the sandbox (docs/CREDENTIAL
   it("the page header says the exception and no longer promises a short-lived credential", async () => {
     listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
     listSecretsMineMock.mockResolvedValue([]);
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
     render(<SecretsScreen />);
     await screen.findByText("anthropic-api-key");
     expect(
-      screen.getByText(/unless a run delivers it as a variable or a file inside its sandbox/i),
+      await screen.findByText(/A stored value stays in Wardyn, unless a run delivers it as a variable or a file inside its sandbox/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/short-lived, scoped credential/i)).not.toBeInTheDocument();
   });
