@@ -351,9 +351,10 @@ func (s *Server) containProxyStartLocked(ctx context.Context, runID uuid.UUID, g
 // stopUnconfirmedProxy stops the proxy of a run whose start failed after its driver answered, and
 // answers nil only once that stop is confirmed. A run still being dispatched fails, its sandbox
 // stopped (the dispatch's own RUNNING write then loses); a running run is lost (outage) with its
-// proxy stopped, or torn down when it cannot be kept, as the lapsed-token sweep does. A run kept lost
-// has its proxy stopped again, and any other run its sandbox (one torn down with its lost_at kept
-// among them, whose substrate may refuse a proxy stop): what a retry does.
+// proxy stopped, or ended when it cannot be kept (endUnconfirmedRun). A run kept lost has its proxy
+// stopped again, and any other run its sandbox through its computer folder's keep decision
+// (stopTerminalSandbox; one torn down with its lost_at kept among them, whose substrate may refuse a
+// proxy stop): what a retry does.
 func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) error {
 	switch {
 	case run.State == types.RunStarting:
@@ -369,17 +370,60 @@ func (s *Server) stopUnconfirmedProxy(ctx context.Context, run types.AgentRun) e
 		if handled, err := s.loseUnconfirmedRun(ctx, run); handled {
 			return err
 		}
-		ok := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
-		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(ok))
-		if !ok {
+		return s.endUnconfirmedRun(ctx, run)
+	}
+	return s.stopTerminalSandbox(ctx, run, "run.reconcile")
+}
+
+// endUnconfirmedRun ends a running run that cannot be kept through the finalize that owns its computer
+// folder's keep decision. A hosted sandbox has its proxy stopped first, so a pass back runs with no
+// egress, and the end then keeps the sandbox for that pass or stops it (stopTerminalSandbox confirms
+// which). Where the proxy cannot be stopped alone the sandbox is stopped first: egress is cut before
+// anything is brought back.
+func (s *Server) endUnconfirmedRun(ctx context.Context, run types.AgentRun) error {
+	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
+	if !ok || run.RunnerID != nil || stopper.StopProxy(ctx, run.SandboxRef) != nil {
+		stopped := s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile")
+		s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(stopped))
+		if !stopped {
 			return errProxyStopUnconfirmed
 		}
 		return nil
 	}
-	if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "run.reconcile") {
-		return errProxyStopUnconfirmed
+	s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, unconfirmedHint(true))
+	cur, err := s.cfg.Store.GetRun(ctx, run.ID)
+	switch {
+	case err != nil:
+		return err
+	case !isTerminalRunState(cur.State):
+		return errors.New("the run's proxy was stopped, but its end did not land")
 	}
-	return nil
+	return s.stopTerminalSandbox(ctx, cur, "run.reconcile")
+}
+
+// stopTerminalSandbox stops a terminal run's sandbox through its computer folder's keep decision
+// (computerFolderKept). A sandbox kept for its pass back stays, and only its proxy is stopped: nil once
+// that stop is confirmed. A record that cannot be read leaves the sandbox too, with its proxy stopped
+// where it can be, and stays unresolved so a later pass reads it again. Any other sandbox is stopped.
+func (s *Server) stopTerminalSandbox(ctx context.Context, run types.AgentRun, action string) error {
+	if run.SandboxRef == "" {
+		return nil
+	}
+	kept, ferr := s.computerFolderKeptRead(ctx, run.ID)
+	if !kept && ferr == nil {
+		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, action) {
+			return errProxyStopUnconfirmed
+		}
+		return nil
+	}
+	stopErr := errProxyStopUnconfirmed
+	if stopper, ok := s.cfg.Runner.(runner.ProxyStopper); ok {
+		stopErr = stopper.StopProxy(ctx, run.SandboxRef)
+	}
+	if ferr != nil {
+		return errors.Join(fmt.Errorf("its computer folder's record could not be read, so its sandbox is kept: %w", ferr), stopErr)
+	}
+	return stopErr
 }
 
 // errProxyStopUnconfirmed is a sandbox stop that failed (its teardown_error is audited).

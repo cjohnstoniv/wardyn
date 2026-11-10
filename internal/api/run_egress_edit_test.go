@@ -833,7 +833,7 @@ func TestRestart_FailureAfterTheClaimAnswersThePersistedFate(t *testing.T) {
 			{"unknown", false, "being lost or ended by another operation", true, true, false},
 			{"ended", false, "being ended", false, false, true},
 			{"ended, stop fails", false, "being ended", true, true, true},
-			{"ended, end refused", false, "being lost or ended by another operation", true, false, false},
+			{"ended, end refused", false, "being lost or ended by another operation", true, true, false},
 			{"torn down", false, "being ended", false, false, true},
 			{"torn down, end not applied", true, "lost until revived", true, true, false},
 		} {
