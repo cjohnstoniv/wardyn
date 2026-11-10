@@ -161,15 +161,39 @@ func (s *Server) sshPerPrincipalCap() int {
 	return DefaultSSHMaxConnectionsPerPrincipal
 }
 
+// sshRefuseChannels services a connection that is about to be closed without being served:
+// ssh.NewServerConn hands back a global-request channel and a new-channel channel that the mux
+// writes to with blocking sends into 16-slot buffers, so a client pipelining more than that would
+// otherwise park the mux goroutine for good. Requests are discarded, and every channel opened is
+// rejected with msg. Both goroutines end when the caller closes the connection, which closes both
+// channels. The returned channel is closed once the first channel has been rejected.
+func sshRefuseChannels(chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, msg string) <-chan struct{} {
+	go ssh.DiscardRequests(reqs)
+	first := make(chan struct{})
+	go func() {
+		once := sync.OnceFunc(func() { close(first) })
+		defer once() // the connection closing ends the wait too
+		for ch := range chans {
+			_ = ch.Reject(ssh.ResourceShortage, msg)
+			once()
+		}
+	}()
+	return first
+}
+
 // sshRefuseOverPrincipalCap ends a connection that authenticated over its person's share. It holds
-// no established slot, and its caller still holds the connection's handshake and source slots, so
-// everything here is under those bounds. The whole path is bounded by the refusal grace: the timer
-// that closes the connection is armed first, and the ssh.connection.reject row is written under a
-// context of that length. If the refusal pool admits the connection (one per person, sshRefusalPool
-// in all) it is kept so the first channel it opens is rejected with a message (an interactive ssh
-// opens one at once). Otherwise it is closed at once, before its row is written: the message is
-// best-effort, the row and the metric are not.
+// no authenticated-connection slot; it keeps its handshake slot until closed, and its caller still
+// holds the source slot, so everything here is under those bounds. The refusal handling is bounded
+// by the refusal grace: the timer that closes the connection is armed first, and the
+// ssh.connection.reject row is written under a context of that length. The number of such
+// connections in flight is bounded by the handshake slots, not by the grace, since the audit spool
+// fsyncs without honouring its context. If the refusal pool admits the connection (one per person,
+// sshRefusalPool in all) it is kept so the first channel it opens is rejected with a message (an
+// interactive ssh opens one at once). Otherwise it is closed at once, before its row is written:
+// the message is best-effort, the row and the metric are not. Requests and channels are serviced
+// from the start, so the client cannot park the mux however much it pipelines.
 func (s *Server) sshRefuseOverPrincipalCap(ctx context.Context, sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, lim *sshConnLimits, principal string) {
+	first := sshRefuseChannels(chans, reqs, fmt.Sprintf("too many SSH connections for this person (max %d); close one and try again", lim.perPrincipal))
 	grace := sshRefusalGraceFor()
 	t := time.AfterFunc(grace, func() { _ = sconn.Close() })
 	defer t.Stop()
@@ -189,9 +213,6 @@ func (s *Server) sshRefuseOverPrincipalCap(ctx context.Context, sconn *ssh.Serve
 	if !admitted {
 		return
 	}
-	go ssh.DiscardRequests(reqs)
-	if newCh, ok := <-chans; ok {
-		_ = newCh.Reject(ssh.ResourceShortage, fmt.Sprintf("too many SSH connections for this person (max %d); close one and try again", lim.perPrincipal))
-	}
+	<-first // the grace timer's close ends the wait if no channel comes
 	_ = sconn.Close()
 }

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -591,25 +592,21 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	defer nc.Close()
 	_ = nc.SetDeadline(time.Now().Add(sshHandshakeTimeout()))
 
-	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
 	// The handshake and source slots are given back as soon as the connection is admitted or dropped.
 	// A connection refused over its person's share keeps them through its refusal handling (its audit
-	// write and wait), so that work stays under the existing handshake bounds.
-	held := true
-	release := func() {
-		if held {
-			held = false
-			<-lim.handshakes
-			lim.leaveSource(src)
-		}
-	}
+	// write and wait), so that work stays under the existing handshake bounds. The deferred release
+	// is armed before the handshake so a panic in an auth callback cannot leak them.
+	release := sync.OnceFunc(func() {
+		<-lim.handshakes
+		lim.leaveSource(src)
+	})
 	defer release()
+	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {
 		// sshAuth already audited a specific reason when PublicKeyCallback was
 		// reached; a pure transport failure (bad version string, KEX failure)
 		// never identified a run/principal to attribute to, so it is not
 		// separately audited here.
-		release()
 		return
 	}
 	// One person's share is judged BEFORE a global slot is taken, so a connection over it never
@@ -631,6 +628,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		defer func() { <-lim.established }()
 	default:
 		lim.refused(sshBoundEstablished, cap(lim.established))
+		sshRefuseChannels(chans, globalReqs, "too many SSH connections; try again later")
 		_ = sconn.Close()
 		return
 	}

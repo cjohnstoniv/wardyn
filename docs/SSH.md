@@ -703,7 +703,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` sets the per-source bound and `WARDYN_SSH_MAX_CONNECTIONS` the authenticated one; the total of 64 handshakes is fixed. Behind a NAT, raise the per-source one.
   - Over a handshake bound a connection is closed before any byte; over the authenticated one, once it authenticates.
   - One person holds at most 8 authenticated connections, or all of `WARDYN_SSH_MAX_CONNECTIONS` without SSO, where every key is one person. `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` sets it.
-  - A connection over a person's share holds no slot and writes an `ssh.connection.reject` row. If the refusal pool admits it and it opens a channel within 5 seconds, it is told why.
+  - A connection over a person's share holds no authenticated-connection slot (it keeps its handshake slot until closed) and writes an `ssh.connection.reject` row. If the refusal pool admits it and it opens a channel within 5 seconds, it is told why.
   - The pool holds 8 such connections, one per person; any other is closed at once.
   - Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and logs a `connection refused at a cap` warning, at most once a minute.
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.

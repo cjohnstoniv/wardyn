@@ -5,9 +5,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,12 +95,13 @@ func TestSSHGateway_MaxConnectionsConfigurableAndCounted(t *testing.T) {
 		t.Fatalf("first session: %v", err)
 	}
 	defer first.Close()
-	if second, err := sshDial(t, h, runID.String(), priv); err == nil {
-		_, _, serr := second.SendRequest("keepalive@openssh.com", true, nil)
-		_ = second.Close()
-		if serr == nil {
-			t.Fatal("second session over a ceiling of 1 was served, want it closed")
-		}
+	second, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatalf("second dial: %v", err)
+	}
+	defer second.Close()
+	if sshServed(second) {
+		t.Fatal("second session over a ceiling of 1 was served, want it closed")
 	}
 	h.srv.metrics.mu.Lock()
 	got := h.srv.metrics.sshRefused[sshBoundEstablished]
@@ -105,8 +109,8 @@ func TestSSHGateway_MaxConnectionsConfigurableAndCounted(t *testing.T) {
 	if got != 1 {
 		t.Fatalf("established refusals counted = %d, want 1", got)
 	}
-	if _, _, err := first.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-		t.Fatalf("first session after the refusal: %v", err)
+	if !sshServed(first) {
+		t.Fatal("first session was not served after the refusal")
 	}
 }
 
@@ -122,10 +126,7 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 	// No SSO is configured, so the one principal's share is the whole ceiling: all 64 are served.
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
-	served := func(c *ssh.Client) bool {
-		_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
-		return err == nil
-	}
+	served := sshServed
 	var clients []*ssh.Client
 	defer func() {
 		for _, c := range clients {
@@ -145,13 +146,14 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 		}
 	}
 
-	if over, err := sshDial(t, h, runID.String(), priv); err == nil {
-		ok := served(over)
-		_ = over.Close()
-		if ok {
-			t.Fatalf("session %d was served, want it closed", DefaultSSHMaxConnections+1)
-		}
+	over, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatalf("session %d: %v", DefaultSSHMaxConnections+1, err)
 	}
+	if served(over) {
+		t.Fatalf("session %d was served, want it closed", DefaultSSHMaxConnections+1)
+	}
+	_ = over.Close()
 	h.srv.metrics.mu.Lock()
 	got := h.srv.metrics.sshRefused[sshBoundEstablished]
 	h.srv.metrics.mu.Unlock()
@@ -193,10 +195,7 @@ func TestSSHGateway_ConnectionsPerPrincipalBounded(t *testing.T) {
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(bobPub), Principal: "bob@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(bobPub))})
 	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) { c.SSHMaxConnectionsPerPrincipal = 2 })
 
-	served := func(c *ssh.Client) bool {
-		_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
-		return err == nil
-	}
+	served := sshServed
 	for i := range 2 {
 		c, err := sshDial(t, h, runID.String(), alicePriv)
 		if err != nil {
@@ -207,13 +206,14 @@ func TestSSHGateway_ConnectionsPerPrincipalBounded(t *testing.T) {
 			t.Fatalf("alice connection %d was not served", i+1)
 		}
 	}
-	if over, err := sshDial(t, h, runID.String(), alicePriv); err == nil {
-		ok := served(over)
-		_ = over.Close()
-		if ok {
-			t.Fatal("alice's third connection was served, want it closed at her share")
-		}
+	over, err := sshDial(t, h, runID.String(), alicePriv)
+	if err != nil {
+		t.Fatalf("alice's third connection: %v", err)
 	}
+	if served(over) {
+		t.Fatal("alice's third connection was served, want it closed at her share")
+	}
+	_ = over.Close()
 	h.srv.metrics.mu.Lock()
 	got, global := h.srv.metrics.sshRefused[sshBoundPrincipal], h.srv.metrics.sshRefused[sshBoundEstablished]
 	h.srv.metrics.mu.Unlock()
@@ -272,9 +272,9 @@ func TestSSHGateway_DeletedKeyClosesIdleConnectionsAndFreesSlots(t *testing.T) {
 	for {
 		c, err := sshDial(t, h, runID.String(), newPriv)
 		if err == nil {
-			_, _, serr := c.SendRequest("keepalive@openssh.com", true, nil)
+			ok := sshServed(c)
 			_ = c.Close()
-			if serr == nil {
+			if ok {
 				return
 			}
 		}
@@ -327,8 +327,8 @@ func TestSSHGateway_NoSSONinthConnectionServed(t *testing.T) {
 			t.Fatalf("connection %d: %v", i+1, err)
 		}
 		defer c.Close()
-		if _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-			t.Fatalf("connection %d was not served: %v", i+1, err)
+		if !sshServed(c) {
+			t.Fatalf("connection %d was not served", i+1)
 		}
 	}
 }
@@ -348,8 +348,8 @@ func TestSSHGateway_OverPrincipalCapIsToldAndAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	if _, _, err := first.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-		t.Fatal(err)
+	if !sshServed(first) {
+		t.Fatal("connection was not served")
 	}
 	over, err := sshDial(t, h, runID.String(), priv)
 	if err != nil {
@@ -408,8 +408,8 @@ func TestSSHGateway_ExcessConnectionsDoNotStarveAnotherPerson(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	if _, _, err := first.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-		t.Fatal(err)
+	if !sshServed(first) {
+		t.Fatal("connection was not served")
 	}
 	for i := range 2 { // no channel opened: they sit in the refusal wait or are closed at once
 		c, err := sshDial(t, h, aliceRun.String(), alicePriv)
@@ -427,8 +427,8 @@ func TestSSHGateway_ExcessConnectionsDoNotStarveAnotherPerson(t *testing.T) {
 		t.Fatalf("bob: %v", err)
 	}
 	defer bob.Close()
-	if _, _, err := bob.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-		t.Fatalf("bob was refused while alice's excess connections waited: %v", err)
+	if !sshServed(bob) {
+		t.Fatal("bob was refused while alice's excess connections waited")
 	}
 }
 
@@ -447,8 +447,8 @@ func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	if _, _, err := held.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-		t.Fatal(err)
+	if !sshServed(held) {
+		t.Fatal("connection was not served")
 	}
 	told := func(c *ssh.Client) bool {
 		_, err := c.NewSession()
@@ -504,6 +504,17 @@ func TestSSHGateway_RefusalWaitIsReleased(t *testing.T) {
 	if !told(after) {
 		t.Fatal("after the grace timed out the person's wait slot was not free")
 	}
+}
+
+// sshServed reports whether the gateway serves c as an established connection. A probe channel of
+// an unknown type is refused by an established connection with UnknownChannelType; a connection
+// refused at a cap is closed or told ResourceShortage instead. (A keepalive request cannot tell
+// them apart: the gateway answers every request with a failure reply, which SendRequest reports
+// as no error on a refused connection too.)
+func sshServed(c *ssh.Client) bool {
+	_, _, err := c.OpenChannel("probe@wardyn.invalid", nil)
+	var oce *ssh.OpenChannelError
+	return errors.As(err, &oce) && oce.Reason == ssh.UnknownChannelType
 }
 
 // rejectRows counts the recorded ssh.connection.reject rows.
@@ -581,8 +592,8 @@ func TestSSHGateway_StalledRejectAuditStaysBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close()
-	if _, _, err := held.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-		t.Fatal(err)
+	if !sshServed(held) {
+		t.Fatal("connection was not served")
 	}
 	// Far more valid over-share handshakes than the per-source handshake bound allows at once.
 	for range 3 * DefaultSSHMaxHandshakesPerSource {
@@ -595,5 +606,109 @@ func TestSSHGateway_StalledRejectAuditStaysBounded(t *testing.T) {
 	}
 	if !waitUntil(5*time.Second, func() bool { return blocker.inflight.Load() == 0 && refusalWaiting(h) == 0 }) {
 		t.Fatalf("after the deadline %d reject handlers and %d refusal slots are still held", blocker.inflight.Load(), refusalWaiting(h))
+	}
+}
+
+// sshFlood pipelines far more global requests and channel opens than the mux's 16-slot buffers
+// hold, waits for the channel opens to be answered (or the connection to close), then closes c.
+func sshFlood(c *ssh.Client) {
+	for range 40 {
+		_, _, _ = c.SendRequest("flood@wardyn.invalid", false, nil)
+	}
+	var wg sync.WaitGroup
+	for range 40 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, _ = c.OpenChannel("flood@wardyn.invalid", nil)
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+	}
+	_ = c.Close()
+}
+
+// A connection closed without being served must still have its global requests and channel opens
+// serviced: the mux sends into 16-slot buffers and blocks, so a client pipelining more than that
+// parked the gateway's mux goroutine for good. With the audit write stalled, a refused connection
+// sits in the refusal wait while the flood arrives; afterwards the server's goroutines return to
+// where they were.
+func TestSSHGateway_RefusedConnectionPipeliningDoesNotLeakGoroutines(t *testing.T) {
+	prev := setSSHRefusalGrace(300 * time.Millisecond)
+	t.Cleanup(func() { setSSHRefusalGrace(prev) })
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	blocker := &blockOnReject{}
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) {
+		c.SSHMaxConnectionsPerPrincipal = 1
+		blocker.Recorder = c.Audit
+		c.Audit = blocker
+	})
+	held, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if !sshServed(held) {
+		t.Fatal("connection was not served")
+	}
+	baseline := runtime.NumGoroutine()
+	for i := range 4 {
+		over, err := sshDial(t, h, runID.String(), priv)
+		if err != nil {
+			t.Fatalf("refused dial %d: %v", i+1, err)
+		}
+		sshFlood(over)
+	}
+	if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline+2 }) {
+		t.Fatalf("goroutines = %d after four flooded refused connections closed, baseline %d", runtime.NumGoroutine(), baseline)
+	}
+	if !sshServed(held) {
+		t.Fatal("the held connection stopped being served")
+	}
+}
+
+// The same for a connection closed because the whole established ceiling is taken by other people.
+func TestSSHGateway_CeilingRefusedConnectionPipeliningDoesNotLeakGoroutines(t *testing.T) {
+	st := newSSHMemStore()
+	aliceRun, bobRun := uuid.New(), uuid.New()
+	st.putRun(types.AgentRun{ID: aliceRun, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	st.putRun(types.AgentRun{ID: bobRun, CreatedBy: "bob@example.com", State: types.RunRunning, SandboxRef: "sbx-2"})
+	alicePriv, alicePub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(alicePub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(alicePub))})
+	bobPriv, bobPub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(bobPub), Principal: "bob@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(bobPub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{}, func(c *Config) {
+		c.SSHMaxConnections = 1
+		c.SSHMaxConnectionsPerPrincipal = 1
+	})
+	alice, err := sshDial(t, h, aliceRun.String(), alicePriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+	if !sshServed(alice) {
+		t.Fatal("alice was not served")
+	}
+	baseline := runtime.NumGoroutine()
+	for i := range 4 {
+		bob, err := sshDial(t, h, bobRun.String(), bobPriv)
+		if err != nil {
+			t.Fatalf("bob dial %d: %v", i+1, err)
+		}
+		if sshServed(bob) {
+			t.Fatalf("bob dial %d was served over a full ceiling", i+1)
+		}
+		sshFlood(bob)
+	}
+	if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline+2 }) {
+		t.Fatalf("goroutines = %d after four ceiling-refused connections closed, baseline %d", runtime.NumGoroutine(), baseline)
 	}
 }
