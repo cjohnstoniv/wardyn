@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, TIMEOUT_STATUS } from "../../lib/api/core";
 import { EmptyState, ErrorState, STATES, failureSentence } from "./states";
 
 // #457 (docs/design/signin-first-contact-canon.md): the shared default —
@@ -99,6 +99,9 @@ describe("failureSentence", () => {
 
   it("leaves a network failure to the isn't-answering default", () => {
     expect(failureSentence(new TypeError("Failed to fetch"))).toBeUndefined();
-    expect(failureSentence(new DOMException("timed out", "TimeoutError"))).toBeUndefined();
+  });
+
+  it("leaves a request that timed out (wfetch's HttpError with the timeout status) to the isn't-answering default", () => {
+    expect(failureSentence(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."))).toBeUndefined();
   });
 });

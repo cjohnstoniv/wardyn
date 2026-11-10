@@ -7,7 +7,7 @@ import * as React from "react";
 import { AlertTriangle, RotateCw } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, TIMEOUT_STATUS } from "../../lib/api/core";
 
 // #457 (docs/design/signin-first-contact-canon.md): ErrorState's default
 // message was "We couldn't reach the Wardyn control plane. Please try
@@ -29,7 +29,8 @@ export const STALE_NOTE = "Couldn't refresh. Showing the last list that loaded."
  *  a handler name like "list", so it does not count); the neutral ERROR_ANSWERED for any other answered HTTP failure;
  *  undefined for no answer at all (network, timeout), so the caller shows the "isn't answering" default. */
 export function failureSentence(e: unknown): string | undefined {
-  if (!(e instanceof HttpError)) return undefined;
+  // A request that ran out of time got no answer: wfetch turns it into an HttpError with this status and no reason.
+  if (!(e instanceof HttpError) || e.status === TIMEOUT_STATUS) return undefined;
   return e.reason && e.reason !== "internal_error" ? e.message : STATES.ERROR_ANSWERED;
 }
 
