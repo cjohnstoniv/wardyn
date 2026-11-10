@@ -627,15 +627,14 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText("Allowed inbound to api")).toBeInTheDocument();
   });
 
-  it("lets the sentence-and-detail column shrink instead of holding its own minimum width", async () => {
+  it("keeps the sentence-and-detail column's floor (#1878), as the plain row does", async () => {
     const id = "3f2a1c70-8e4b-4d19-a6f2-5b0c7de19a44";
     listAuditMock.mockResolvedValue([
       ev({ id: "e1", action: "egress.allow", target: "gateway.example.com", data: { gateway_call_id: id } }),
     ]);
     renderScreen();
     const column = (await screen.findByText("Allowed egress to gateway.example.com")).parentElement!;
-    expect(column).toHaveClass("min-w-0", "flex-1");
-    expect(column.className).not.toContain("min-w-[10rem]");
+    expect(column).toHaveClass("min-w-0", "flex-1", "sm:min-w-[10rem]");
   });
 
   // The call id a row went to a gateway under. Untrusted text: shown only as a UUID, only as text, and copied whole.

@@ -798,7 +798,7 @@ function EventRow({
       ) : (
         <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
           {detail || callId ? (
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:min-w-[10rem]">
               <span className="truncate text-sm text-foreground" title={`${describeEvent(event)}\n${event.action}`}>
                 {describeEvent(event)}
               </span>
