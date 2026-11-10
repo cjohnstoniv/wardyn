@@ -66,7 +66,7 @@ func (s *Server) DecisionIngestFromRunner(ctx context.Context, runnerID uuid.UUI
 	// decision moves the same counters and run hint a direct one does. The idle clock is
 	// not touched: the spool is audit only.
 	d := row.Decision
-	if d.Scan != nil && d.Scan.Action == "bypass" {
+	if d.DNS != nil || (d.Scan != nil && d.Scan.Action == "bypass") {
 		return nil
 	}
 	if d.Decision == egress.Deny && row.Count == 0 && isPolicyDeny(d.RuleSource) {

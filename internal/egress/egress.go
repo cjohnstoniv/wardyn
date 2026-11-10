@@ -148,6 +148,31 @@ type DNSQuery struct {
 	Repeat  int    `json:"repeat,omitempty"`
 }
 
+// DNSQueryAction is the audit action of a DNS query row.
+const DNSQueryAction = "run.dns.query"
+
+// AuditFields adds q's fields to a run.dns.query row's data.
+func (q *DNSQuery) AuditFields(data map[string]any) {
+	data["name"], data["type"], data["outcome"], data["via"] = q.Name, q.Type, q.Outcome, q.Via
+	if q.Cause != "" {
+		data["cause"] = q.Cause
+	}
+	if q.Answer != "" {
+		data["answer"] = q.Answer
+	}
+	if q.Repeat > 0 {
+		data["repeat"] = q.Repeat
+	}
+}
+
+// AuditOutcome is the row's outcome: success for an answered query, denied for a refused one.
+func (q *DNSQuery) AuditOutcome() string {
+	if q.Outcome == "answered" {
+		return "success"
+	}
+	return "denied"
+}
+
 // ModelUsage is one model call's token counts, read from the provider's own
 // answer and never estimated. Numbers, a model name and a host only: no
 // content, no headers. Counts are as the provider reports them: Anthropic and

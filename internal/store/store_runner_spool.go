@@ -223,6 +223,19 @@ func runnerDecisionEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.U
 		return nil, err
 	}
 	d := r.Decision
+	if d.DNS != nil {
+		data := map[string]any{"observed_at": d.Request.Time, "spooled": true, "evidence_source": types.RunEvidenceRunnerAsserted, "spool_id": r.SpoolID, "spool_seq": r.Seq, "spool_hash": r.Hash}
+		if r.Count > 0 {
+			data["count"] = r.Count
+		}
+		d.DNS.AuditFields(data)
+		b, err := json.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
+		return []types.AuditEvent{{ID: uuid.New(), Time: at, RunID: &runID, ActorType: types.ActorAgent, Actor: "runner:" + runnerID.String(),
+			Target: d.DNS.Name, Action: egress.DNSQueryAction, Outcome: d.DNS.AuditOutcome(), Data: b}}, nil
+	}
 	data := map[string]any{"host": d.Request.Host, "port": d.Request.Port, "method": d.Request.Method, "path": d.Request.Path, "rule_source": d.RuleSource, "approval_id": d.ApprovalID, "observed_at": d.Request.Time, "spooled": true, "evidence_source": types.RunEvidenceRunnerAsserted, "spool_id": r.SpoolID, "spool_seq": r.Seq, "spool_hash": r.Hash}
 	if r.Count > 0 {
 		data["count"] = r.Count
