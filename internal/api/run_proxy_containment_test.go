@@ -294,3 +294,51 @@ func TestReadback_UnrecordedAnswerFailsTheStartForTheSweep(t *testing.T) {
 		t.Errorf("start = %s (contained %v), want failed and contained", p.State, p.ContainedAt)
 	}
 }
+
+// An answer that committed (a report already held, the hashes equal) but whose write returned an
+// error is read back, not inferred: the start is enforced and the revive succeeds, with no stop.
+func TestReadback_AnswerCommittedDespiteItsErrorStands(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.rr.onReplace = func(cfg []byte) {
+		var c struct {
+			RunToken string `json:"run_token"`
+		}
+		_ = json.Unmarshal(cfg, &c)
+		claims, err := f.srv.cfg.Identity.Verify(context.Background(), c.RunToken, internalAudience)
+		if err != nil {
+			t.Errorf("verify the new token: %v", err)
+			return
+		}
+		postLoaded(t, f.srv, f.run.ID, claims.JTI, hashHex(cfg))
+	}
+	f.rb.commitThenFailAnswers = 1
+	f.setProxyStopErr(errors.New("daemon down"))
+	stops := f.lr.proxyStopCount()
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200 (the answer committed)", code)
+	}
+	if p := f.active(t); p.State != types.ProxyStartEnforced {
+		t.Errorf("start = %s, want enforced", p.State)
+	}
+	if f.lr.proxyStopCount() != stops {
+		t.Error("a committed matching answer must not stop the proxy")
+	}
+}
+
+// An answer refused twice (the answer, then the failing retry) leaves the start pending, and the
+// revive's answer promises no sweep for it.
+func TestReadback_AnswerRefusedTwicePromisesNoSweep(t *testing.T) {
+	f := newReadbackFixture(t)
+	f.rb.failAnswers = 2
+	f.setProxyStopErr(errors.New("daemon down"))
+	rec := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), reasonRevivePolicyUnconfirmedLost) {
+		t.Fatalf("revive = %d %s, want 502 %s", rec.Code, rec.Body.String(), reasonRevivePolicyUnconfirmedLost)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "not confirmed yet") || strings.Contains(body, "sweep") {
+		t.Errorf("the answer promises a sweep for a start that stays pending: %s", body)
+	}
+	if p := f.active(t); p.State != types.ProxyStartPending || p.Deadline != nil {
+		t.Errorf("start = %s (deadline %v), want pending with no deadline", p.State, p.Deadline)
+	}
+}
