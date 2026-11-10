@@ -130,11 +130,12 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 	runID, tplID := uuid.New(), uuid.New()
 	var tplBody map[string]any
 	var policyPosts int
+	profile := profileBody
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/runs/" + runID.String() + "/profile/synthesize":
-			fmt.Fprint(w, profileBody)
+			fmt.Fprint(w, profile)
 		case "POST /api/v1/policies":
 			policyPosts++
 			w.WriteHeader(http.StatusForbidden)
@@ -175,13 +176,43 @@ func TestRecordSaveAsTemplate(t *testing.T) {
 	if pol["min_confinement_class"] != "CC2" || pol["allow_all_egress"] != false {
 		t.Errorf("inline_policy %v, want the confinement floor and allow_all_egress false", pol)
 	}
-	for _, zero := range []string{"auto_stop_after_sec", "workspace_mounts", "resources", "llm_inspection", "eligible_grants"} {
+	// A recording with no grants decides "no grant": the key is written empty, or the source policy's grants survive.
+	if g, has := pol["eligible_grants"].([]any); !has || len(g) != 0 {
+		t.Errorf("inline_policy eligible_grants = %v (present %v), want an explicit empty list", pol["eligible_grants"], has)
+	}
+	for _, zero := range []string{"workspace_mounts", "resources", "llm_inspection", "denied_domains", "allowed_methods"} {
 		if _, has := pol[zero]; has {
-			t.Errorf("inline_policy carries the unset key %q: a template reads a present key as a choice", zero)
+			t.Errorf("inline_policy carries the key %q a recording never decides: it must inherit", zero)
 		}
 	}
 	if doc["kind"] != "RunTemplate" || doc["coverage"] != "partial" {
 		t.Errorf("document = %v, want a partial RunTemplate", doc)
+	}
+
+	// A recorded grant is kept as it is, and the keys a recording never decides stay out even when the proposal fills them.
+	profile = `{"proposed":{"inline_policy":{"allowed_domains":[],"min_confinement_class":"CC2","auto_stop_after_sec":3600,` +
+		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.example.com","header":"x-api-key"},"ttl_seconds":600}],` +
+		`"denied_domains":["bad.example.com"],"resources":{"cpu_millis":2000},"workspace_mounts":[{"host_path":"/srv"}]}}}`
+	if _, err := run("record", "save", runID.String(), "--name", "learned", "--template"); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ = tplBody["document"].(map[string]any)
+	intent, _ = doc["intent"].(map[string]any)
+	pol, _ = intent["inline_policy"].(map[string]any)
+	grants, _ := pol["eligible_grants"].([]any)
+	if len(grants) != 1 {
+		t.Fatalf("eligible_grants = %v, want the one recorded grant", pol["eligible_grants"])
+	}
+	if g, _ := grants[0].(map[string]any); g["kind"] != "api_key" || g["ttl_seconds"] != float64(600) {
+		t.Errorf("grant = %v, want it unchanged", grants[0])
+	}
+	if d, has := pol["allowed_domains"].([]any); !has || len(d) != 0 || pol["auto_stop_after_sec"] != float64(3600) {
+		t.Errorf("inline_policy = %v, want allowed_domains [] and auto_stop_after_sec 3600 kept", pol)
+	}
+	for _, key := range []string{"denied_domains", "resources", "workspace_mounts"} {
+		if _, has := pol[key]; has {
+			t.Errorf("inline_policy carries %q, which a recording never decides", key)
+		}
 	}
 
 	_, err = run("record", "save", runID.String(), "--name", "learned")

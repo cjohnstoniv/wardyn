@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -151,31 +150,53 @@ func recordCmd(client clientFn) *cobra.Command {
 	return subcommandGroup(cmd)
 }
 
-// profileTemplateDocument is the personal template a synthesized profile
-// becomes: a partial template whose inline_policy is the profile. A template
-// reads a key that is present as a choice, so the keys the profile leaves at
-// their zero value are dropped (a zero auto_stop_after_sec would mean "never
-// stop"). allowed_domains and allow_all_egress are always kept: an empty list
-// and a false are the recording's own choice to allow nothing more.
+// recordedPolicyKeys are the inline_policy keys a recording decides, and so the only ones a saved
+// template carries (internal/recordmode Synthesize sets exactly these). A template lays each present
+// key onto the person's source policy and keeps the source's value for a key it leaves out, so a
+// narrowing result must be written even when it is empty or false: an absent eligible_grants would
+// keep every grant the source policy holds, and an absent allowed_domains its whole allowlist.
+// Every other key is left out so it still inherits: denied_domains, resources and the rest are not
+// something a recording can know, and allowed_methods is left empty by design ("do not
+// over-restrict"), which in a template would mean every method over a source that limits them.
+var recordedPolicyKeys = []string{
+	"allowed_domains", "allow_all_egress", "first_use_approval",
+	"min_confinement_class", "eligible_grants", "auto_stop_after_sec",
+}
+
+// recordedEmptyKeys are the recorded keys whose empty value is itself the decision, with the
+// value to write when the proposal carries none: nothing reachable, no allow-all, no grant.
+var recordedEmptyKeys = map[string]json.RawMessage{
+	"allowed_domains":  json.RawMessage("[]"),
+	"allow_all_egress": json.RawMessage("false"),
+	"eligible_grants":  json.RawMessage("[]"),
+}
+
+// profileTemplateDocument is the personal template a synthesized profile becomes: a partial
+// template whose inline_policy holds the recorded keys (recordedPolicyKeys) and no others.
 func profileTemplateDocument(spec sdk.RunPolicySpec) (sdk.TemplateDocument, error) {
 	body, err := json.Marshal(spec)
 	if err != nil {
 		return sdk.TemplateDocument{}, err
 	}
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(body, &keys); err != nil {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(body, &all); err != nil {
 		return sdk.TemplateDocument{}, err
 	}
-	for k, v := range keys {
+	keys := map[string]json.RawMessage{}
+	for _, k := range recordedPolicyKeys {
+		v, has := all[k]
 		switch string(v) {
-		case "null", `""`, "0", "[]", "{}":
-			delete(keys, k)
+		case "null", `""`, "0":
+			has = false
 		}
+		if !has {
+			if empty, decided := recordedEmptyKeys[k]; decided {
+				keys[k] = empty
+			}
+			continue
+		}
+		keys[k] = v
 	}
-	if _, ok := keys["allowed_domains"]; !ok {
-		keys["allowed_domains"] = json.RawMessage("[]")
-	}
-	keys["allow_all_egress"] = json.RawMessage(strconv.FormatBool(spec.AllowAllEgress))
 	var intent sdk.TemplateIntent
 	if err := intent.Set("inline_policy", keys); err != nil {
 		return sdk.TemplateDocument{}, err
