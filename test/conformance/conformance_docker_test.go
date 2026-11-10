@@ -75,6 +75,7 @@ func TestConformanceDocker(t *testing.T) {
 		// fast to pull.
 		SandboxImage:      "busybox:latest",
 		DefaultRouteProbe: dockerRouteProbe,
+		DNSProbe:          dockerDNSProbe,
 		Timeout:           3 * time.Minute,
 		// busybox's sh can exit with an explicit code; the Wait conformance case
 		// Execs this and asserts Wait returns the same code.
@@ -251,6 +252,88 @@ func dockerRouteProbe(t *testing.T, ref string) {
 	}
 	if err := routeProbeVerdict(stdout.String()+stderr.String(), inspect.Running, inspect.ExitCode); err != nil {
 		t.Errorf("%v (container %q)", err, ref)
+	}
+}
+
+// dockerDNSProbe is the DNSAudit case's probe for the docker driver: inside the agent container ref, the
+// resolver file names the run proxy's address (the one the agent's hosts file pins for "wardyn-proxy") and
+// nothing else, and a lookup of an external name does not succeed. Under runsc (the nightly leg) it also proves
+// the file mount reaches that runtime. The proxy here is a placeholder that does not answer on 53, so the
+// lookup fails by timing out; the REFUSED answer and its audit row are TestL0_DNSQueryIsRecorded's, on the
+// real proxy image.
+func dockerDNSProbe(t *testing.T, ref string) {
+	t.Helper()
+	cli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		t.Fatalf("dockerDNSProbe: create client: %v", err)
+	}
+	defer cli.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	created, err := cli.ExecCreate(ctx, ref, dockerclient.ExecCreateOptions{
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd: []string{"sh", "-c", "cat /etc/resolv.conf; echo ---; awk '$2==\"wardyn-proxy\"{print $1}' /etc/hosts; echo ---; " +
+			"nslookup -type=a wardyn-conformance-dns-probe.example.com 2>&1; echo RC=$?"},
+	})
+	if err != nil {
+		t.Fatalf("dockerDNSProbe: exec create: %v", err)
+	}
+	attachRes, err := cli.ExecAttach(ctx, created.ID, dockerclient.ExecAttachOptions{})
+	if err != nil {
+		t.Fatalf("dockerDNSProbe: exec attach: %v", err)
+	}
+	resp := attachRes.HijackedResponse
+	defer resp.Close()
+	var stdout, stderr bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, resp.Reader); err != nil && err != io.EOF {
+		t.Fatalf("dockerDNSProbe: reading the exec stream: %v", err)
+	}
+	if err := dnsProbeVerdict(stdout.String() + stderr.String()); err != nil {
+		t.Errorf("%v (container %q)", err, ref)
+	}
+}
+
+// dnsProbeVerdict judges dockerDNSProbe's output: the resolver file, the proxy's address, the lookup.
+func dnsProbeVerdict(out string) error {
+	parts := strings.Split(out, "\n---\n")
+	if len(parts) != 3 {
+		return fmt.Errorf("the DNS probe printed %d sections, want 3 (resolver file, proxy address, lookup):\n%s", len(parts), out)
+	}
+	resolv, proxyIP, lookup := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), parts[2]
+	if proxyIP == "" {
+		return fmt.Errorf("the agent's hosts file pins no wardyn-proxy address, so the resolver file proves nothing:\n%s", out)
+	}
+	if resolv != "nameserver "+proxyIP {
+		return fmt.Errorf("the agent's /etc/resolv.conf is %q, want exactly %q (its run proxy and no other nameserver)", resolv, "nameserver "+proxyIP)
+	}
+	if !strings.Contains(lookup, "RC=") || strings.Contains(lookup, "RC=0") {
+		return fmt.Errorf("an external name resolved from inside the sandbox, or the probe printed no exit code:\n%s", lookup)
+	}
+	return nil
+}
+
+// TestDNSProbeVerdict: the probe passes a resolver file that names only the proxy and a lookup that fails, and
+// fails the embedded resolver, an extra nameserver, a missing proxy address and a lookup that resolved.
+func TestDNSProbeVerdict(t *testing.T) {
+	const proxy = "172.20.0.2"
+	for name, tc := range map[string]struct {
+		out     string
+		wantErr bool
+	}{
+		"the proxy alone, the lookup fails": {"nameserver " + proxy + "\n---\n" + proxy + "\n---\n;; timed out\nRC=1\n", false},
+		"docker's embedded resolver":        {"nameserver 127.0.0.11\n---\n" + proxy + "\n---\nRC=1\n", true},
+		"the proxy and another":             {"nameserver " + proxy + "\nnameserver 8.8.8.8\n---\n" + proxy + "\n---\nRC=1\n", true},
+		"no proxy address":                  {"nameserver " + proxy + "\n---\n\n---\nRC=1\n", true},
+		"the lookup resolved":               {"nameserver " + proxy + "\n---\n" + proxy + "\n---\nAddress: 1.2.3.4\nRC=0\n", true},
+		"no exit code":                      {"nameserver " + proxy + "\n---\n" + proxy + "\n---\n", true},
+		"not three sections":                {"nameserver " + proxy + "\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := dnsProbeVerdict(tc.out); (err != nil) != tc.wantErr {
+				t.Errorf("dnsProbeVerdict = %v, want error %v", err, tc.wantErr)
+			}
+		})
 	}
 }
 

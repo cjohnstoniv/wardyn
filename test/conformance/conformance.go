@@ -65,6 +65,11 @@ type Options struct {
 	// "scratch" is used (drivers that cannot pull scratch should substitute
 	// their own minimal image).
 	SandboxImage string
+	// DNSProbe, when non-nil, is called with the ref of a sandbox at the strongest class. It must read that
+	// sandbox's resolver and look an external name up from inside it, and assert that the agent's only
+	// nameserver is its run proxy and that the lookup does not succeed. Injected for DefaultRouteProbe's
+	// reason: only the substrate knows how to run a command in its own sandbox. Nil skips the DNSAudit case.
+	DNSProbe func(t *testing.T, ref string)
 	// Timeout is applied to each individual operation. Defaults to 30s.
 	Timeout time.Duration
 	// ExitArgv, when non-nil, builds the argv for a short-lived in-sandbox
@@ -125,6 +130,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("CreateStatusStop", func(t *testing.T) { testCreateStatusStop(t, r, opts) })
 	t.Run("KillMissingRef", func(t *testing.T) { testKillMissingRef(t, r, opts) })
 	t.Run("L0StructuralEgress", func(t *testing.T) { testL0StructuralEgress(t, r, opts) })
+	t.Run("DNSAudit", func(t *testing.T) { testDNSAudit(t, r, opts) })
 	t.Run("WaitExitCode", func(t *testing.T) { testWaitExitCode(t, r, opts) })
 	t.Run("InteractiveAttach", func(t *testing.T) { testInteractiveAttach(t, r, opts) })
 	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })
@@ -303,6 +309,29 @@ func testL0StructuralEgress(t *testing.T, r runner.Runner, opts Options) {
 
 	// Delegate to the injected probe; it calls t.Errorf if a default route exists.
 	opts.DefaultRouteProbe(t, sb.Ref)
+}
+
+// testDNSAudit asserts the agent's resolver is its run proxy: the sandbox's lookups reach the proxy's DNS
+// listener, which records each and answers none, instead of a resolver of the substrate's own. The
+// substrate's probe runs in a sandbox at the strongest class, so the nightly gVisor leg proves the resolver
+// file under runsc. Skipped when the driver declares no confinement classes or injects no probe.
+func testDNSAudit(t *testing.T, r runner.Runner, opts Options) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout())
+	defer cancel()
+
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skipf("driver %q declares no confinement classes; the resolver is not testable without a sandbox", r.Name())
+	}
+	if opts.DNSProbe == nil {
+		t.Skipf("no DNSProbe supplied for driver %q; DNSAudit case skipped", r.Name())
+	}
+	sb := createStrongestSandbox(t, ctx, r, caps, opts, "DNS audit case")
+	opts.DNSProbe(t, sb.Ref)
 }
 
 // testWaitExitCode asserts the Wait exit-code propagation contract: after Exec
