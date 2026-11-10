@@ -160,10 +160,13 @@ describe("ConfinementPostureBanner — failed re-check", () => {
   });
 
   it("renders the refused strip as danger, with the check time from /healthz", async () => {
-    vi.spyOn(api, "health").mockResolvedValue({ network_policy: "refused", network_policy_checked_at: "2026-11-09T12:34:56Z" });
+    const at = new Date();
+    const iso = at.toISOString(); // RFC 3339, UTC, as /healthz sends it
+    const shown = `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}-${String(at.getUTCDate()).padStart(2, "0")} ${String(at.getUTCHours()).padStart(2, "0")}:${String(at.getUTCMinutes()).padStart(2, "0")} UTC`;
+    vi.spyOn(api, "health").mockResolvedValue({ network_policy: "refused", network_policy_checked_at: iso });
     const { container } = renderBanner("refused");
     expect(screen.getByText(POSTURE_REFUSED_BANNER.TITLE)).toBeInTheDocument();
-    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY("2026-11-09 12:34 UTC"))).toBeInTheDocument();
+    expect(await screen.findByText(POSTURE_REFUSED_BANNER.BODY(shown))).toBeInTheDocument();
     expect(screen.getByText(POSTURE_REFUSED_BANNER.ACTION)).toBeInTheDocument();
     expect(container.firstElementChild).toHaveClass("bg-danger-subtle");
   });
