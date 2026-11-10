@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,8 +71,9 @@ func TestVMNetDNSRowsFromARealRelay(t *testing.T) {
 			break
 		}
 	}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("DNS rows %+v, want %+v", got, want)
+	// The relay sends each record on its own goroutine, so rows arrive in either order.
+	if len(got) != len(want) || !slices.Contains(got, want[0]) || !slices.Contains(got, want[1]) {
+		t.Fatalf("DNS rows %+v, want %+v in any order", got, want)
 	}
 }
 
