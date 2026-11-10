@@ -125,8 +125,13 @@ func TestReadback_ContainmentPausedAcrossARevive(t *testing.T) {
 	old := proxyContainPaused
 	proxyContainPaused = func() {
 		proxyContainPaused = func() {}
+		// The proof: containment holds the run's lock across its read and its stop.
+		if _, unlock, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID); ok {
+			unlock()
+			t.Error("the run's lock is free between containment's generation read and its stop")
+		}
 		go func() { revived <- f.revive(t) }()
-		select { // without the lock the revive completes here, before the stop
+		select { // without the lock the revive would complete here, before the stop
 		case code := <-revived:
 			revived <- code
 		case <-time.After(500 * time.Millisecond):
