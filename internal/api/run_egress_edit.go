@@ -32,11 +32,13 @@ import (
 // CLI and kubectl doors). A removed host is denied as well, so a later first-use approval in this run
 // cannot reopen it; widening the run again is a new run or an approval of another host.
 //
-// The answer waits for the new proxy's own readback (run_proxy_readback.go) of the start the edit
-// recorded: 200 only once that start is enforced. Any other end (no report by the start's deadline,
-// a hash that differs or is missing, a start another revive superseded, one that ran unconfirmed, or
-// an edited config that could not be stored) leaves the run with no proxy and answers 503
-// egress_edit_unconfirmed. A report under the pre-edit
+// The edited config is stored before the new proxy's start is settled, so every later revive starts
+// from it. The answer waits for the new proxy's own readback (run_proxy_readback.go) of the start the
+// edit recorded: 200 only once that start is enforced. Otherwise the answer names what is known:
+// egress_edit_unconfirmed once the new proxy's stop is confirmed (its containment recorded on the
+// start, or confirmed by the edit's own stop), egress_edit_containment_unresolved while it is not, and
+// egress_edit_superseded when another revive replaced the start. A config that could not be stored
+// fails the start, which the readback contains like any failed start. A report under the pre-edit
 // proxy's token is stale for that start, so it can never confirm the edit. An edit is never a legacy
 // start: a run whose runner or proxy image predates the readback is refused before anything changes.
 
@@ -294,10 +296,7 @@ func (s *Server) egressEditSupported(ctx context.Context, run types.AgentRun) *r
 // revive superseded is that start's to settle and stops nothing here. A start still unresolved when
 // the wait runs out is the reconcile sweep's to fail and contain.
 func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, gen int) *reviveError {
-	st, ok := s.cfg.Store.(store.RunProxyStarts)
-	if !ok || gen < 1 { // egressEditSupported refuses this before any change; never confirmed by default
-		return s.stopEditStart(ctx, runID, 0, "readback_unavailable")
-	}
+	st, _ := s.cfg.Store.(store.RunProxyStarts) // egressEditSupported refused a store without starts
 	why := "readback_wait_timeout"
 	for ctx.Err() == nil {
 		p, found, err := st.ActiveProxyStart(ctx, runID)
@@ -318,8 +317,8 @@ func (s *Server) awaitEgressEditReadback(ctx context.Context, runID uuid.UUID, g
 			if rerr, done := s.containEditStart(ctx, runID, gen); done {
 				return rerr
 			}
-		case p.State != types.ProxyStartPending: // unconfirmed or abandoned: no readback contains it
-			return s.stopEditStart(ctx, runID, gen, "start_"+string(p.State))
+		case p.State == types.ProxyStartUnconfirmed: // a legacy start, if the runner changed since egressEditSupported
+			return s.stopEditStart(ctx, runID, gen, "start_unconfirmed")
 		default:
 			s.expireProxyStart(ctx, runID, gen) // a no-op before the deadline
 		}
@@ -355,8 +354,8 @@ func (s *Server) containEditStart(ctx context.Context, runID uuid.UUID, gen int)
 
 // stopEditStart stops the proxy of an edit's start that no readback contains (one that ran
 // unconfirmed, or one abandoned when its replace failed), under the run's lock, which a revive holds
-// from its claim to its settle, and only while no start newer than gen began (gen 0: no start table
-// to fence on). It claims the stop only once stopUnconfirmedProxy confirms it.
+// from its claim to its settle, and only while no start newer than gen began. It claims the stop
+// only once stopUnconfirmedProxy confirms it.
 func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, why string) *reviveError {
 	ctx, cancel := stopCtx(ctx)
 	defer cancel()
@@ -365,14 +364,12 @@ func (s *Server) stopEditStart(ctx context.Context, runID uuid.UUID, gen int, wh
 		return egressEditUnresolved(why, err)
 	}
 	defer unlock()
-	if st, ok := s.cfg.Store.(store.RunProxyStarts); ok && gen > 0 {
-		p, found, err := st.ActiveProxyStart(lctx, runID)
-		switch {
-		case err != nil:
-			return egressEditUnresolved(why, err)
-		case found && p.Generation > gen:
-			return egressEditSuperseded()
-		}
+	st, _ := s.cfg.Store.(store.RunProxyStarts) // egressEditSupported refused a store without starts
+	switch p, found, err := st.ActiveProxyStart(lctx, runID); {
+	case err != nil:
+		return egressEditUnresolved(why, err)
+	case found && p.Generation > gen:
+		return egressEditSuperseded()
 	}
 	run, err := s.cfg.Store.GetRun(lctx, runID)
 	if err != nil {
