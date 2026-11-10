@@ -47,6 +47,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - New Run: Review shows "Barrier · The virtual machine" for a Linux or macOS VM, and the Barrier row says The virtual machine, instead of a container barrier chip.
 - New Run: a main drive size kept from a template, a run again or a pool change that is over the pool's cap now says "{size} is over the {cap} cap. The run gets {cap}." under the Size field, and the Files summary shows the size the run gets and no longer shows the check. Review shows that size too.
 - New Run: when the chosen pool cannot run macOS VMs, "Pools that offer macOS" lists the pools that can, as buttons. Picking one chooses that pool and macOS, with the CPU and memory minimum of the picked pool.
+- An open terminal, web-app session or VM desktop session now ends when the API token or CLI sign-in that opened it is revoked, expires or is signed out (a terminal within 30 seconds); before, only a person-level revoke ended it. A token presented directly on the terminal socket is still checked at the handshake only, and terminals and web-app sessions opened before the upgrade keep the old behaviour until they end. A migration (`0274_attach_ticket_credential`) adds two nullable columns to `attach_tickets` and deletes the dead access-token rows earlier CLI refreshes left in `api_tokens`.
+- Revoking a CLI sign-in's access token, or demoting a person on the People page, now ends their CLI sign-ins, so the next refresh can no longer mint a token with the old user type and groups. They sign in again from the browser.
+- A CLI refresh no longer leaves a revoked access-token row behind, so the token lists and the role-mapping edit no longer read one dead row per CLI user per hour.
+- Anyone who knew a CLI session id could use up that computer's hourly refresh allowance by sending bad requests; only a request with the right device proof now counts against it.
 
 ### Security
 
