@@ -6,10 +6,7 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
-
-	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -143,26 +140,7 @@ func readbackFateClause(fate reloseFate) string {
 	case relostEnded:
 		return "the run cannot be kept, so it is being ended"
 	case relostUnknown:
-		return "this revive's lost mark or end did not land, so the run is being lost or ended by another operation"
+		return "this revive's lost mark did not land, so the run is being lost or ended by another operation"
 	}
 	return "the run is lost until revived"
-}
-
-// reloseEnded is the fate of a run reloseRun asked to end (reconcileFinalize, or loseRunStopped's teardown on a
-// substrate that cannot keep a sandbox), read back rather than assumed: ended only once the store has it terminal,
-// its stop confirmed only once its sandbox ref is cleared (finalizeRunEffects clears it only after its own stop
-// succeeded). A run still kept is lost with its stop unconfirmed; any other is left to whatever moves it.
-func (s *Server) reloseEnded(ctx context.Context, runID uuid.UUID) (reloseFate, error) {
-	cur, err := s.cfg.Store.GetRun(ctx, runID)
-	switch {
-	case err != nil:
-		return relostUnknown, fmt.Errorf("the run could not be read back after its end: %w", err)
-	case isTerminalRunState(cur.State) && cur.SandboxRef != "":
-		return relostEnded, errors.New("the run was ended, but its sandbox stop is not confirmed (its ref is still recorded)")
-	case isTerminalRunState(cur.State):
-		return relostEnded, nil
-	case runIsKept(cur):
-		return relostLost, errors.New("the run is lost, but its end did not land on a substrate that cannot stop its proxy alone")
-	}
-	return relostUnknown, errors.New("this revive's end of the run did not land, so it did not stop its proxy")
 }
