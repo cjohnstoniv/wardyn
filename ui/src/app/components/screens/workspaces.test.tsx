@@ -59,6 +59,8 @@ import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { setField } from "../../../test/set-field";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 function renderScreen(path = "/") {
   return render(
@@ -85,6 +87,13 @@ function ws(profile: WorkspaceProfile, over: Partial<Workspace> = {}): Workspace
 describe("WorkspacesScreen — list columns", () => {
   beforeEach(() => {
     listWorkspacesMock.mockReset();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listWorkspacesMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("Workspace + Source columns: the kind icon and name in one cell, the mono sub-line in another", async () => {

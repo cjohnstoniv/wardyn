@@ -25,6 +25,7 @@ import { HttpError } from "../../lib/api/core";
 import type { KeyDomains } from "../../lib/api/key-domains";
 import { KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { KeyDomainsSection } from "./credentials-key-domains";
+import { STATES } from "../wardyn/states";
 
 function renderCard() {
   return render(
@@ -81,6 +82,13 @@ describe("the domains table", () => {
     const { container } = renderCard();
     await waitFor(() => expect(listMock).toHaveBeenCalled());
     await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderCard();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("a failed read gets the error state with Retry", async () => {

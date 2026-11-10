@@ -39,7 +39,7 @@ import {
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
@@ -109,6 +109,7 @@ export function SecretsScreen() {
   }, [operator]);
   React.useEffect(loadBroker, [loadBroker]);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
     (operator
@@ -119,7 +120,10 @@ export function SecretsScreen() {
         setMine(r.mine);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, [operator]);
   React.useEffect(load, [load]);
 
@@ -185,7 +189,7 @@ export function SecretsScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={2} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : shown.length === 0 ? (
           <EmptyState
             icon={KeyRound}

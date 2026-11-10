@@ -44,6 +44,8 @@ vi.mock("../../lib/api/health", () => ({
 }));
 
 import { AuditScreen } from "./audit";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 function ev(partial: Partial<AuditEvent> & { id: string }): AuditEvent {
   return {
@@ -88,6 +90,13 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     healthMock.mockResolvedValue({});
     whoamiMock.mockReset();
     whoamiMock.mockResolvedValue(null);
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listAuditMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("re-queries the server with run_id when a run is selected from a row", async () => {

@@ -10,6 +10,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AdminMintedToken } from "../../lib/api/credentials";
 import { aheadByHours } from "../../lib/test-clock";
+import { STATES } from "../wardyn/states";
 import { MINTED } from "../wardyn/copy/credentials";
 
 const listMintedMock = vi.fn();
@@ -22,6 +23,7 @@ vi.mock("../../lib/api/credentials", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { AdminMintedTokens } from "./credentials-minted-tokens";
+import { HttpError } from "../../lib/api/core";
 
 const token = (id: string, person: string, disposition: AdminMintedToken["disposition"], over: Partial<AdminMintedToken> = {}): AdminMintedToken => ({
   id,
@@ -58,6 +60,13 @@ it("heads the section with the shared eyebrow style", async () => {
   const h = await screen.findByRole("heading", { name: MINTED.TITLE });
   expect(h).toHaveClass("label-eyebrow");
   expect(h).not.toHaveClass("font-semibold");
+});
+
+it("a read the server worded shows its sentence, not the default line", async () => {
+  listMintedMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+  render(<AdminMintedTokens />);
+  expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+  expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
 });
 
 describe("the State column", () => {

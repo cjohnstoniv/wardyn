@@ -46,6 +46,8 @@ import { SecretsScreen, AddSecretDialog } from "./secrets";
 import { LANE_META } from "../../lib/scm-provider";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { SECRETS_BROKER_UNCHECKED } from "../wardyn/copy/lookup-failures";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 describe("SecretsScreen — delete error handling", () => {
   beforeEach(() => {
@@ -68,6 +70,13 @@ describe("SecretsScreen — delete error handling", () => {
     const confirm = await screen.findByRole("button", { name: /delete secret/i });
     await user.click(confirm);
   }
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listSecretsMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    render(<SecretsScreen />);
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
 
   it("names each row's actions menu after the secret", async () => {
     render(<SecretsScreen />);

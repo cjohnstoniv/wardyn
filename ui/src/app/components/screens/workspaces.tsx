@@ -40,7 +40,7 @@ import { Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { Chip } from "../wardyn/primitives";
 import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
@@ -144,6 +144,7 @@ export function WorkspacesScreen() {
   // which useCanMutate reads as "not mine" for a member.
   const canDeleteSelected = useCanMutate(toDelete?.owned_by);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
     api
@@ -152,7 +153,10 @@ export function WorkspacesScreen() {
         setWorkspaces(ws);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
@@ -226,7 +230,7 @@ export function WorkspacesScreen() {
         {status === "loading" ? (
           <TableSkeleton rows={5} cols={4} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         ) : workspaces.length === 0 ? (
           <EmptyState
             icon={FolderOpen}

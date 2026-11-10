@@ -55,6 +55,8 @@ import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 import { MemoryRouter } from "react-router-dom";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { BOUNDARY } from "../../lib/boundary-copy";
+import { STATES } from "../wardyn/states";
+import { HttpError } from "../../lib/api/core";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -127,6 +129,13 @@ describe("PoliciesScreen — toolbar gating + count (ui-secretsPolicies-5)", () 
     listPoliciesMock.mockReturnValue(new Promise(() => {})); // never resolves
     render(<PoliciesScreen />);
     expect(screen.queryByPlaceholderText(/search policies/i)).not.toBeInTheDocument();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listPoliciesMock.mockRejectedValue(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    render(<PoliciesScreen />);
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("hides the toolbar (and its duplicate Refresh) on error, leaving only ErrorState's retry", async () => {

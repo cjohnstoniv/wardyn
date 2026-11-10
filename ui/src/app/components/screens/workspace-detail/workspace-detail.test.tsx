@@ -59,6 +59,8 @@ vi.mock("../../../lib/api/permissions", async () => {
 import { toast } from "sonner";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
+import { STATES } from "../../wardyn/states";
+import { HttpError } from "../../../lib/api/core";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -161,6 +163,13 @@ afterEach(() => {
 });
 
 describe("WorkspaceDetailScreen — not found", () => {
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    getWorkspaceMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderDetail();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
+  });
+
   it("shows a not-found state and navigates back to the list", async () => {
     getWorkspaceMock.mockResolvedValue(undefined);
     const user = userEvent.setup({ pointerEventsCheck: 0 });

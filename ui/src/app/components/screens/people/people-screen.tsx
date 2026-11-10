@@ -26,7 +26,7 @@ import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { Chip } from "../../wardyn/primitives";
 import { Segmented } from "../../wardyn/segmented";
-import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { AccessPanel, type AccessLoadState } from "../setup/access-panel";
 import { ScimCard } from "../settings/scim-card";
 import { AddPersonDialog } from "./add-person-dialog";
@@ -71,6 +71,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
   const [rows, setRows] = React.useState<PersonSummary[]>([]);
   const [cursor, setCursor] = React.useState<string | undefined>(undefined);
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const [search, setSearch] = React.useState("");
   const [q, setQ] = React.useState("");
   const [filter, setFilter] = React.useState<StateFilter>("all");
@@ -103,7 +104,10 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
         .catch((e) => {
           if (mine !== seq.current) return;
           if (after) setMore("failed");
-          else setStatus(loadFailStatus(e));
+          else {
+            setLoadMessage(failureSentence(e));
+            setStatus(loadFailStatus(e));
+          }
         });
     },
     [q, filter],
@@ -141,7 +145,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
       ) : status === "forbidden" ? (
         <p className="p-4 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
       ) : status === "error" ? (
-        <ErrorState as="h3" onRetry={() => load()} />
+        <ErrorState as="h3" message={loadMessage} onRetry={() => load()} />
       ) : rows.length === 0 ? (
         // The unfiltered title is not "People": it would repeat the section label right above (#2902).
         <EmptyState

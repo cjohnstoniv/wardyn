@@ -50,7 +50,7 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
-import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState, failureSentence, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
@@ -285,6 +285,7 @@ export function AuditScreen() {
   // (CONSOLE-RULES §10 — a result verb needs a real result behind it).
   const [pollStale, setPollStale] = React.useState(false);
 
+  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
     fetchEvents()
@@ -292,7 +293,10 @@ export function AuditScreen() {
         setPollStale(false);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => {
+        setLoadMessage(failureSentence(e));
+        setStatus("error");
+      });
   }, [fetchEvents]);
   React.useEffect(load, [load]);
 
@@ -525,7 +529,7 @@ export function AuditScreen() {
         </div>
       ) : status === "error" ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <ErrorState onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={load} />
         </div>
       ) : filtered.length === 0 ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">

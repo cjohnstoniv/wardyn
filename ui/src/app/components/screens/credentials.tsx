@@ -20,7 +20,7 @@ import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, StaleNote, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { EmptyState, ErrorState, StaleNote, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
@@ -99,6 +99,7 @@ export function CredentialsScreen() {
   const [inv, setInv] = React.useState<CredentialInventory | null>(null);
   const [screenStatus, setStatus] = React.useState<ScreenStatus | "no_meta">("loading");
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>(undefined);
+  const [loadSentence, setLoadSentence] = React.useState<string | undefined>(undefined);
   const [filter, setFilter] = React.useState<string | null>(null);
   // A quiet re-read (after an erase) failed: the list on screen is the last one that loaded.
   const [stale, setStale] = React.useState(false);
@@ -126,6 +127,7 @@ export function CredentialsScreen() {
         }
         const msg = getErrorMessage(e);
         setErrorMessage(msg);
+        setLoadSentence(failureSentence(e));
         setStatus(msg === NO_META_ERROR ? "no_meta" : loadFailStatus(e));
       });
   }, []);
@@ -188,7 +190,7 @@ export function CredentialsScreen() {
           ) : screenStatus === "no_meta" ? (
             <EmptyState icon={KeyRound} title={INVENTORY.NO_META_TITLE} description={errorMessage} />
           ) : screenStatus === "error" ? (
-            <ErrorState onRetry={() => load()} />
+            <ErrorState message={loadSentence} onRetry={() => load()} />
           ) : noProvidersConfigured ? (
             <EmptyState
               icon={KeyRound}

@@ -49,6 +49,7 @@ import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { INVENTORY, ERASE, ERASE_DATA, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
 import { aheadByHours } from "../../lib/test-clock";
+import { STATES } from "../wardyn/states";
 
 function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean } = {}) {
   const { status = null, operator = true, securityOperator = true } = opts;
@@ -137,6 +138,13 @@ describe("the inventory", () => {
     expect(screen.getByText(INVENTORY.NO_META_TITLE)).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("a read the server worded shows its sentence, not the default line", async () => {
+    listInventoryMock.mockRejectedValueOnce(new HttpError(500, "Your sentence from the server.", "load_failed"));
+    renderScreen();
+    expect(await screen.findByText("Your sentence from the server.")).toBeTruthy();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
   it("a read failure gets the generic error state, with Retry", async () => {
