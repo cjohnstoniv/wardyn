@@ -687,3 +687,146 @@ func TestRunsOnePassPerRun_UnreadCapsAreAnOlderRunner(t *testing.T) {
 		}
 	}
 }
+
+// holdsAPass has the folder's runner run a pass for the run that nothing finishes: its stream is never
+// read, so the runner holds the run's slot, and a pass sent next is refused as busy (folder_pass_busy).
+func (f *passFixture) holdsAPass(t *testing.T) {
+	t.Helper()
+	sub := f.s.runnerStreams.subs[*f.cs.folder.RunnerID].sub
+	pass, err := sub.SyncFolder(context.Background(), runnerwire.SyncFolderArgs{
+		RunID: f.run.ID, Path: f.cs.folder.Path, RemoteDir: f.cs.folder.RemoteDir, Pull: true,
+	})
+	if err != nil {
+		t.Fatalf("the runner would not start the pass that is to stay open: %v", err)
+	}
+	t.Cleanup(func() { _ = pass.Stream.Close() })
+}
+
+// finalizeWithin is one finalize whose caller allows limit, as a runner exit (30 s) or a lease end (60 s)
+// does, so the pass back's budget is the caller's deadline less the teardown's: 15 s and 45 s.
+func (f *passFixture) finalizeWithin(limit time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	return f.s.finalizeRunEffects(ctx, f.run.ID, "sbx", "run.complete", nil, false, false)
+}
+
+// backRows counts the audit rows of passes back.
+func (f *passFixture) backRows() int {
+	n := 0
+	for _, ev := range f.audit.snapshot() {
+		if ev.RunID != nil && *ev.RunID == f.run.ID && ev.Action == "run.folder.transfer" && strings.Contains(string(ev.Data), `"direction":"back"`) {
+			n++
+		}
+	}
+	return n
+}
+
+// A pass back the runner refuses as busy, because it still runs the run's last, keeps a sandbox that can be
+// held (a runner's, whose agent can be stopped alone): its agent is stopped alone, the record keeps a resume
+// with no stall counted, and neither the sandbox is stopped nor its ref cleared.
+func TestPassBack_ABusyHoldableSandboxIsKeptWithAResumeAndNoStall(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	ag := f.onARunner(t, false)
+	f.s.cfg.Store = refStore{f.cs}
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.SandboxRef = "sbx"
+	ds.mu.Unlock()
+	f.holdsAPass(t)
+	if err := f.finalizeWithin(30 * time.Second); !errors.Is(err, errComputerFolderResumes) {
+		t.Fatalf("finalize = %v, want the kept sandbox's errComputerFolderResumes", err)
+	}
+	if n := f.sb.stopCount(); n != 0 {
+		t.Errorf("StopSandbox succeeded %d times at a busy visit on a holdable sandbox, want 0", n)
+	}
+	ds.mu.Lock()
+	ref := ds.run.SandboxRef
+	ds.mu.Unlock()
+	if ref != "sbx" {
+		t.Errorf("sandbox ref = %q, want it kept", ref)
+	}
+	if ag.stops != 1 || !ag.agentDown {
+		t.Errorf("agent stops %d, down %v; want the agent stopped alone once", ag.stops, ag.agentDown)
+	}
+	if st := f.cs.folderStatus(); st.Resume == nil || st.Resume.Stalled != 0 || st.Gen != 2 || st.Settled != 2 || st.Back != nil {
+		t.Errorf("record %+v, want gen 2 settled with a resume, no stall and no back", st)
+	}
+	if ev := findAuditData(f.audit.snapshot(), f.run.ID, "run.folder.transfer", "tries again"); ev == nil || ev.Outcome != "failure" {
+		t.Error("the busy visit is not audited")
+	}
+	if n := f.backRows(); n != 1 {
+		t.Errorf("%d audit rows of passes back, want 1", n)
+	}
+}
+
+// busyStopped is the checks of a busy visit on a sandbox that cannot be held: the sandbox is stopped
+// once, the record is settled at the visit's generation with no resume and says the changes were not
+// brought back, and one audit row says so.
+func (f *passFixture) busyStopped(t *testing.T, err error, why string) {
+	t.Helper()
+	if errors.Is(err, errComputerFolderResumes) {
+		t.Errorf("finalize = %v, want the sandbox left to its stop", err)
+	}
+	for _, want := range []string{"no pass ran; the runner is still running this run's last pass back", why, "its changes not brought back yet, uncounted"} {
+		assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, want)
+	}
+	if st := f.cs.folderStatus(); st.Gen != 2 || st.Settled != 2 {
+		t.Errorf("record %+v, want gen 2 settled", st)
+	}
+	if n := f.backRows(); n != 1 {
+		t.Errorf("%d audit rows of passes back, want 1", n)
+	}
+}
+
+// A busy visit on a virtual machine, whose agent cannot be stopped alone, stops the sandbox once and
+// records that the changes were not brought back: the loss a busy re-visit costs is explicit.
+func TestPassBack_ABusyVirtualMachineIsStoppedOnceWithItsChangesNotBroughtBack(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	ds := f.cs.localFolderStore.dispatchTestStore
+	ds.mu.Lock()
+	ds.run.MachineKind = types.MachineLinuxVM
+	ds.mu.Unlock()
+	f.holdsAPass(t)
+	err := f.finalizeWithin(30 * time.Second)
+	f.busyStopped(t, err, "a virtual machine's agent cannot be stopped alone")
+}
+
+// A busy visit on a runner's sandbox whose agent cannot be stopped alone is stopped once, not kept.
+func TestPassBack_ABusyAgentThatCannotBeStoppedAloneIsStoppedOnce(t *testing.T) {
+	f := newPassFixture(t, 1, 1, nil)
+	ag := f.onARunner(t, false)
+	ag.pid1 = "agent\x00"
+	f.holdsAPass(t)
+	err := f.finalizeWithin(30 * time.Second)
+	f.busyStopped(t, err, "its agent is not one that can be stopped alone")
+	if ag.stops != 0 {
+		t.Errorf("agent stops %d, want the agent not stopped alone", ag.stops)
+	}
+}
+
+// An open last pass on an older runner, found at a run's first visit on a runner's sandbox whose agent
+// cannot be stopped alone, sends no pass: the sandbox is stopped once and the record says the changes were
+// not brought back.
+func TestPassBack_AnOpenPassOnAnUnholdableSandboxStopsOnceNotBroughtBack(t *testing.T) {
+	f := newPassFixture(t, 0, 0, nil)
+	f.rc17Record()
+	f.runnerAs(t, &olderRunnerCaps)
+	ag := f.onARunner(t, false)
+	ag.pid1 = "agent\x00"
+	seen := passSeen(f.sb)
+	if err := f.finalizeWithin(30 * time.Second); errors.Is(err, errComputerFolderResumes) {
+		t.Errorf("finalize = %v, want the sandbox left to its stop", err)
+	}
+	if seen.Load() {
+		t.Error("a pass was sent while the last may still run")
+	}
+	for _, want := range []string{"no pass ran; the runner may still be running its last pass back", "its agent is not one that can be stopped alone", "its changes not brought back yet, uncounted"} {
+		assertFolderBackTornDown(t, f.cs, f.audit, f.run, f.sb, want)
+	}
+	if st := f.cs.folderStatus(); st.Gen != 0 || st.Settled != 0 || ag.stops != 0 {
+		t.Errorf("record %+v, agent stops %d; want gen 0 unsettled and the agent not stopped alone", st, ag.stops)
+	}
+	if n := f.backRows(); n != 1 {
+		t.Errorf("%d audit rows of passes back, want 1", n)
+	}
+}
